@@ -9,8 +9,7 @@ from typing import Type
 
 from spicelib.sim.sim_runner import SimRunner
 
-from ltspice_mcp.errors import SimulationError
-from ltspice_mcp.lib.log_parser import extract_error_context, parse_success_summary
+from ltspice_mcp.lib.log_parser import extract_error_context
 from ltspice_mcp.lib.wsl import to_windows_path
 from ltspice_mcp.state import SessionState, SimulationJob
 
@@ -123,7 +122,7 @@ class SimulationRunner:
 
             # Submit simulation (returns RunTask immediately)
             # run_filename parameter controls output naming: {job_id}.raw, {job_id}.log
-            task = runner.run(
+            runner.run(
                 netlist_str,
                 run_filename=job_id,
                 callback=completion_callback,

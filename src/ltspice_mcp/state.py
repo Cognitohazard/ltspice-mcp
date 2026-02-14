@@ -31,7 +31,7 @@ class SimulationJob:
     job_id: str
     netlist: Path
     simulator: str
-    status: Literal["queued", "running", "completed", "failed", "timeout"]
+    status: Literal["queued", "running", "completed", "failed", "timeout", "cancelled"]
     started_at: datetime
     completed_at: datetime | None = None
     raw_file: Path | None = None
