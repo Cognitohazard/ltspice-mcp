@@ -401,6 +401,106 @@ async def handle_set_parameter(
     return [types.TextContent(type="text", text=result)]
 
 
+async def handle_add_instruction(
+    arguments: dict, state: SessionState
+) -> list[types.TextContent]:
+    """Add a SPICE directive to a netlist.
+
+    Args:
+        arguments: Contains 'netlist' (path) and 'instruction' (directive text)
+        state: Session state with editors cache
+
+    Returns:
+        List with single TextContent confirming the addition
+
+    Raises:
+        PathSecurityError: Path outside sandbox
+        NetlistError: File not found, invalid directive, or write error
+    """
+    netlist_path = safe_path(arguments["netlist"], state)
+
+    # Verify file exists
+    if not await run_sync(netlist_path.exists):
+        raise NetlistError(f"Netlist not found: {netlist_path}")
+
+    # Get cached editor
+    editor = await run_sync(
+        state.editors.get, netlist_path, lambda p: SpiceEditor(str(p))
+    )
+
+    instruction = arguments["instruction"]
+
+    # Validate directive starts with dot
+    if not instruction.strip().startswith("."):
+        raise NetlistError(
+            "SPICE directives must start with '.' (e.g. .tran, .ac, .param)"
+        )
+
+    # Add directive (in-memory operation)
+    # Note: spicelib automatically replaces unique directives of the same type
+    editor.add_instruction(instruction)
+
+    # Save to disk
+    await run_sync(editor.save_netlist, str(netlist_path))
+
+    # Invalidate cache
+    state.editors.invalidate(netlist_path)
+
+    result = f"Added directive: {instruction}"
+    return [types.TextContent(type="text", text=result)]
+
+
+async def handle_remove_instruction(
+    arguments: dict, state: SessionState
+) -> list[types.TextContent]:
+    """Remove a SPICE directive from a netlist.
+
+    Args:
+        arguments: Contains 'netlist' (path) and 'instruction' (directive text or regex)
+        state: Session state with editors cache
+
+    Returns:
+        List with single TextContent confirming the removal
+
+    Raises:
+        PathSecurityError: Path outside sandbox
+        NetlistError: File not found, directive not found, or write error
+    """
+    netlist_path = safe_path(arguments["netlist"], state)
+
+    # Verify file exists
+    if not await run_sync(netlist_path.exists):
+        raise NetlistError(f"Netlist not found: {netlist_path}")
+
+    # Get cached editor
+    editor = await run_sync(
+        state.editors.get, netlist_path, lambda p: SpiceEditor(str(p))
+    )
+
+    instruction = arguments["instruction"]
+
+    # Determine removal strategy
+    if instruction.startswith("regex:"):
+        # Regex pattern removal
+        pattern = instruction[6:]  # Strip "regex:" prefix
+        editor.remove_Xinstruction(pattern)
+    elif any(char in instruction for char in r"\[]().*+?^${}|"):
+        # Contains regex metacharacters, use regex removal
+        editor.remove_Xinstruction(instruction)
+    else:
+        # Exact match removal
+        editor.remove_instruction(instruction)
+
+    # Save to disk
+    await run_sync(editor.save_netlist, str(netlist_path))
+
+    # Invalidate cache
+    state.editors.invalidate(netlist_path)
+
+    result = f"Removed directive: {instruction}"
+    return [types.TextContent(type="text", text=result)]
+
+
 # Tool definitions for MCP
 TOOL_DEFS: list[types.Tool] = [
     types.Tool(
@@ -548,6 +648,42 @@ TOOL_DEFS: list[types.Tool] = [
             "required": ["netlist", "name", "value"],
         },
     ),
+    types.Tool(
+        name="add_instruction",
+        description="Add a SPICE directive to a netlist (e.g., .tran, .ac, .param). If a unique directive of the same type already exists (e.g., .tran), it is replaced automatically. Changes are persisted to disk immediately.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "netlist": {
+                    "type": "string",
+                    "description": "Path to .net or .cir file",
+                },
+                "instruction": {
+                    "type": "string",
+                    "description": "SPICE directive to add e.g. '.tran 0 10m 0 1u', '.ac dec 100 1 1Meg', '.param R_val=1k'. Must start with a dot.",
+                },
+            },
+            "required": ["netlist", "instruction"],
+        },
+    ),
+    types.Tool(
+        name="remove_instruction",
+        description="Remove a SPICE directive from a netlist. Uses exact text match by default (whitespace-sensitive). For regex patterns, prefix with 'regex:' or include regex metacharacters. Use read_netlist first to see exact directive text. Changes are persisted to disk immediately.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "netlist": {
+                    "type": "string",
+                    "description": "Path to .net or .cir file",
+                },
+                "instruction": {
+                    "type": "string",
+                    "description": "Directive text to remove (exact match) or regex pattern prefixed with 'regex:' e.g. 'regex:\\.tran\\s+.*'",
+                },
+            },
+            "required": ["netlist", "instruction"],
+        },
+    ),
 ]
 
 TOOL_HANDLERS: dict[str, object] = {
@@ -559,4 +695,6 @@ TOOL_HANDLERS: dict[str, object] = {
     "set_component_value": handle_set_component_value,
     "set_component_values": handle_set_component_values,
     "set_parameter": handle_set_parameter,
+    "add_instruction": handle_add_instruction,
+    "remove_instruction": handle_remove_instruction,
 }
