@@ -249,6 +249,158 @@ async def handle_get_parameters(
     return [types.TextContent(type="text", text=result)]
 
 
+async def handle_set_component_value(
+    arguments: dict, state: SessionState
+) -> list[types.TextContent]:
+    """Set the value of a single component.
+
+    Args:
+        arguments: Contains 'netlist' (path), 'reference' (component), 'value' (new value)
+        state: Session state with editors cache
+
+    Returns:
+        List with single TextContent confirming the change
+
+    Raises:
+        PathSecurityError: Path outside sandbox
+        NetlistError: File not found, component not found, or write error
+    """
+    netlist_path = safe_path(arguments["netlist"], state)
+
+    # Verify file exists
+    if not await run_sync(netlist_path.exists):
+        raise NetlistError(f"Netlist not found: {netlist_path}")
+
+    # Get cached editor
+    editor = await run_sync(
+        state.editors.get, netlist_path, lambda p: SpiceEditor(str(p))
+    )
+
+    reference = arguments["reference"]
+    new_value = arguments["value"]
+
+    # Get old value first for confirmation
+    try:
+        old_value = editor.get_component_value(reference)
+    except Exception:
+        # Component not found - try case-insensitive search for suggestions
+        all_components = editor.get_components()
+        matches = [c for c in all_components if c.upper() == reference.upper()]
+        if matches:
+            raise NetlistError(
+                f"Component '{reference}' not found. Did you mean '{matches[0]}'? "
+                f"(Component names are case-preserving)"
+            )
+        else:
+            raise NetlistError(f"Component '{reference}' not found in netlist")
+
+    # Set new value (in-memory operation)
+    editor.set_component_value(reference, new_value)
+
+    # Save to disk
+    await run_sync(editor.save_netlist, str(netlist_path))
+
+    # Invalidate cache to prevent stale reads
+    state.editors.invalidate(netlist_path)
+
+    result = f"Set {reference}: {old_value} -> {new_value}"
+    return [types.TextContent(type="text", text=result)]
+
+
+async def handle_set_component_values(
+    arguments: dict, state: SessionState
+) -> list[types.TextContent]:
+    """Set values for multiple components in one call.
+
+    Args:
+        arguments: Contains 'netlist' (path) and 'values' (dict of reference->value)
+        state: Session state with editors cache
+
+    Returns:
+        List with single TextContent listing all changes
+
+    Raises:
+        PathSecurityError: Path outside sandbox
+        NetlistError: File not found, invalid values format, or write error
+    """
+    netlist_path = safe_path(arguments["netlist"], state)
+
+    # Verify file exists
+    if not await run_sync(netlist_path.exists):
+        raise NetlistError(f"Netlist not found: {netlist_path}")
+
+    # Get cached editor
+    editor = await run_sync(
+        state.editors.get, netlist_path, lambda p: SpiceEditor(str(p))
+    )
+
+    values = arguments["values"]
+
+    # Validate that values is a dict
+    if not isinstance(values, dict):
+        raise NetlistError("Values must be an object mapping component references to new values")
+
+    # Set component values using spicelib's batch API
+    editor.set_component_values(**values)
+
+    # Save to disk
+    await run_sync(editor.save_netlist, str(netlist_path))
+
+    # Invalidate cache
+    state.editors.invalidate(netlist_path)
+
+    # Format result
+    changes = []
+    for ref, val in values.items():
+        changes.append(f"{ref}: {val}")
+    result = f"Updated {len(values)} component(s):\n" + "\n".join(changes)
+
+    return [types.TextContent(type="text", text=result)]
+
+
+async def handle_set_parameter(
+    arguments: dict, state: SessionState
+) -> list[types.TextContent]:
+    """Set a .PARAM directive value.
+
+    Args:
+        arguments: Contains 'netlist' (path), 'name' (parameter), 'value' (new value)
+        state: Session state with editors cache
+
+    Returns:
+        List with single TextContent confirming the change
+
+    Raises:
+        PathSecurityError: Path outside sandbox
+        NetlistError: File not found or write error
+    """
+    netlist_path = safe_path(arguments["netlist"], state)
+
+    # Verify file exists
+    if not await run_sync(netlist_path.exists):
+        raise NetlistError(f"Netlist not found: {netlist_path}")
+
+    # Get cached editor
+    editor = await run_sync(
+        state.editors.get, netlist_path, lambda p: SpiceEditor(str(p))
+    )
+
+    param_name = arguments["name"]
+    param_value = arguments["value"]
+
+    # Set parameter (in-memory operation)
+    editor.set_parameter(param_name, param_value)
+
+    # Save to disk
+    await run_sync(editor.save_netlist, str(netlist_path))
+
+    # Invalidate cache
+    state.editors.invalidate(netlist_path)
+
+    result = f"Set .PARAM {param_name} = {param_value}"
+    return [types.TextContent(type="text", text=result)]
+
+
 # Tool definitions for MCP
 TOOL_DEFS: list[types.Tool] = [
     types.Tool(
@@ -333,6 +485,69 @@ TOOL_DEFS: list[types.Tool] = [
             "required": ["netlist"],
         },
     ),
+    types.Tool(
+        name="set_component_value",
+        description="Set the value of a single component. Changes are persisted to disk immediately. SPICE notation: k=1e3, M=1e-3 (milli, NOT mega), Meg=1e6, u=1e-6, n=1e-9, p=1e-12.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "netlist": {
+                    "type": "string",
+                    "description": "Path to .net or .cir file",
+                },
+                "reference": {
+                    "type": "string",
+                    "description": "Component reference designator e.g. R1, XU1:C2",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "New value e.g. 10k, 100n, LM358. In SPICE: M=milli and Meg=mega",
+                },
+            },
+            "required": ["netlist", "reference", "value"],
+        },
+    ),
+    types.Tool(
+        name="set_component_values",
+        description="Set values for multiple components in one call. Changes are persisted to disk immediately. SPICE notation: k=1e3, M=1e-3 (milli, NOT mega), Meg=1e6, u=1e-6, n=1e-9, p=1e-12.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "netlist": {
+                    "type": "string",
+                    "description": "Path to .net or .cir file",
+                },
+                "values": {
+                    "type": "object",
+                    "description": 'Map of reference to new value e.g. {"R1": "10k", "C1": "100n"}. In SPICE: M=milli and Meg=mega',
+                    "additionalProperties": {"type": "string"},
+                },
+            },
+            "required": ["netlist", "values"],
+        },
+    ),
+    types.Tool(
+        name="set_parameter",
+        description="Set a .PARAM directive value. If the parameter does not exist, it is created. Changes are persisted to disk immediately.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "netlist": {
+                    "type": "string",
+                    "description": "Path to .net or .cir file",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Parameter name",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "Parameter value",
+                },
+            },
+            "required": ["netlist", "name", "value"],
+        },
+    ),
 ]
 
 TOOL_HANDLERS: dict[str, object] = {
@@ -341,4 +556,7 @@ TOOL_HANDLERS: dict[str, object] = {
     "list_components": handle_list_components,
     "get_component_value": handle_get_component_value,
     "get_parameters": handle_get_parameters,
+    "set_component_value": handle_set_component_value,
+    "set_component_values": handle_set_component_values,
+    "set_parameter": handle_set_parameter,
 }
