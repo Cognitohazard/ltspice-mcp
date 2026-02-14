@@ -1,7 +1,5 @@
 """Circuit management tools. (Phase 2)"""
 
-from pathlib import Path
-
 from mcp import types
 from spicelib import SpiceEditor
 
@@ -50,7 +48,7 @@ async def handle_create_netlist(
         comp_count = len(components)
     except Exception as e:
         # Clean up invalid file
-        await run_sync(target_path.unlink, missing_ok=True)
+        await run_sync(lambda: target_path.unlink(missing_ok=True))
         raise NetlistError(f"Invalid netlist syntax: {e}")
 
     result = f"Created netlist: {target_path}\nComponents: {comp_count}"
@@ -193,7 +191,7 @@ async def handle_get_component_value(
     try:
         value = await run_sync(editor.get_component_value, reference)
         result = f"{reference} = {value}"
-    except Exception as e:
+    except Exception:
         # Component not found - try case-insensitive search for suggestions (Pitfall 1)
         all_components = await run_sync(editor.get_components)
         matches = [c for c in all_components if c.upper() == reference.upper()]
