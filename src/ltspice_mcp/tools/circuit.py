@@ -108,6 +108,149 @@ async def handle_read_netlist(
     return [types.TextContent(type="text", text=result)]
 
 
+async def handle_list_components(
+    arguments: dict, state: SessionState
+) -> list[types.TextContent]:
+    """List all components in a netlist, optionally filtered by prefix.
+
+    Args:
+        arguments: Contains 'netlist' (path) and optional 'prefix' (component type filter)
+        state: Session state with editors cache
+
+    Returns:
+        List with single TextContent containing component list with values
+
+    Raises:
+        PathSecurityError: Path outside sandbox
+        NetlistError: File not found or parse error
+    """
+    netlist_path = safe_path(arguments["netlist"], state)
+
+    # Verify file exists
+    if not await run_sync(netlist_path.exists):
+        raise NetlistError(f"Netlist not found: {netlist_path}")
+
+    # Get cached editor
+    editor = await run_sync(
+        state.editors.get, netlist_path, lambda p: SpiceEditor(str(p))
+    )
+
+    # Build prefix filter
+    prefix = arguments.get("prefix")
+    if prefix:
+        # get_components() accepts list of prefixes
+        components = await run_sync(editor.get_components, [prefix])
+    else:
+        # None or empty list returns all components
+        components = await run_sync(editor.get_components)
+
+    # Format component list
+    if components:
+        comp_lines = []
+        for comp_ref in components:
+            value = editor.get_component_value(comp_ref)
+            comp_lines.append(f"{comp_ref}  {value}")
+        result = "\n".join(comp_lines)
+    else:
+        if prefix:
+            result = f"No components matching prefix '{prefix}' found"
+        else:
+            result = "No components found"
+
+    return [types.TextContent(type="text", text=result)]
+
+
+async def handle_get_component_value(
+    arguments: dict, state: SessionState
+) -> list[types.TextContent]:
+    """Get the value of a specific component by reference.
+
+    Args:
+        arguments: Contains 'netlist' (path) and 'reference' (component designator)
+        state: Session state with editors cache
+
+    Returns:
+        List with single TextContent containing component value
+
+    Raises:
+        PathSecurityError: Path outside sandbox
+        NetlistError: File not found, component not found, or parse error
+    """
+    netlist_path = safe_path(arguments["netlist"], state)
+
+    # Verify file exists
+    if not await run_sync(netlist_path.exists):
+        raise NetlistError(f"Netlist not found: {netlist_path}")
+
+    # Get cached editor
+    editor = await run_sync(
+        state.editors.get, netlist_path, lambda p: SpiceEditor(str(p))
+    )
+
+    reference = arguments["reference"]
+
+    # Try to get component value
+    try:
+        value = await run_sync(editor.get_component_value, reference)
+        result = f"{reference} = {value}"
+    except Exception as e:
+        # Component not found - try case-insensitive search for suggestions (Pitfall 1)
+        all_components = await run_sync(editor.get_components)
+        matches = [c for c in all_components if c.upper() == reference.upper()]
+        if matches:
+            raise NetlistError(
+                f"Component '{reference}' not found. Did you mean '{matches[0]}'? "
+                f"(Component names are case-preserving)"
+            )
+        else:
+            raise NetlistError(f"Component '{reference}' not found in netlist")
+
+    return [types.TextContent(type="text", text=result)]
+
+
+async def handle_get_parameters(
+    arguments: dict, state: SessionState
+) -> list[types.TextContent]:
+    """Get all .PARAM names and values from a netlist.
+
+    Args:
+        arguments: Contains 'netlist' (path)
+        state: Session state with editors cache
+
+    Returns:
+        List with single TextContent containing parameter list
+
+    Raises:
+        PathSecurityError: Path outside sandbox
+        NetlistError: File not found or parse error
+    """
+    netlist_path = safe_path(arguments["netlist"], state)
+
+    # Verify file exists
+    if not await run_sync(netlist_path.exists):
+        raise NetlistError(f"Netlist not found: {netlist_path}")
+
+    # Get cached editor
+    editor = await run_sync(
+        state.editors.get, netlist_path, lambda p: SpiceEditor(str(p))
+    )
+
+    # Get parameter names
+    param_names = await run_sync(editor.get_all_parameter_names)
+
+    # Format parameter list
+    if param_names:
+        param_lines = []
+        for name in param_names:
+            value = await run_sync(editor.get_parameter, name)
+            param_lines.append(f".PARAM {name} = {value}")
+        result = "\n".join(param_lines)
+    else:
+        result = "No .PARAM directives found"
+
+    return [types.TextContent(type="text", text=result)]
+
+
 # Tool definitions for MCP
 TOOL_DEFS: list[types.Tool] = [
     types.Tool(
@@ -142,9 +285,62 @@ TOOL_DEFS: list[types.Tool] = [
             "required": ["path"],
         },
     ),
+    types.Tool(
+        name="list_components",
+        description="List all components in a netlist, optionally filtered by component type prefix (R, C, L, Q, M, X, V, I, etc.). Component names are case-preserving.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "netlist": {
+                    "type": "string",
+                    "description": "Path to .net or .cir file",
+                },
+                "prefix": {
+                    "type": "string",
+                    "description": "Optional component prefix filter (e.g., 'R' for resistors, 'C' for capacitors, 'Q' for transistors)",
+                },
+            },
+            "required": ["netlist"],
+        },
+    ),
+    types.Tool(
+        name="get_component_value",
+        description="Get the value of a specific component by reference designator. Supports hierarchical references (e.g., 'X1:C2' for component inside subcircuit). Component names are case-preserving.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "netlist": {
+                    "type": "string",
+                    "description": "Path to .net or .cir file",
+                },
+                "reference": {
+                    "type": "string",
+                    "description": "Component reference designator (e.g., 'R1', 'C2', 'X1:R5')",
+                },
+            },
+            "required": ["netlist", "reference"],
+        },
+    ),
+    types.Tool(
+        name="get_parameters",
+        description="Get all .PARAM names and values from a netlist. Parameters defined inside subcircuits are scoped locally to that subcircuit.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "netlist": {
+                    "type": "string",
+                    "description": "Path to .net or .cir file",
+                },
+            },
+            "required": ["netlist"],
+        },
+    ),
 ]
 
 TOOL_HANDLERS: dict[str, object] = {
     "create_netlist": handle_create_netlist,
     "read_netlist": handle_read_netlist,
+    "list_components": handle_list_components,
+    "get_component_value": handle_get_component_value,
+    "get_parameters": handle_get_parameters,
 }
