@@ -1,0 +1,38 @@
+# LTSpice MCP Server Configuration
+# All settings have sensible defaults and can be overridden with environment variables
+
+[simulator]
+# Preferred simulator: ltspice, ngspice, qspice, xyce
+# Leave empty or set to null for auto-detection (prefers LTSpice if available)
+default = "ltspice"
+
+# Explicit path to simulator executable (overrides auto-detection)
+# Leave empty for auto-detection
+path = ""
+
+[security]
+# Paths accessible to the server (sandbox)
+# Default: ["."] (current working directory)
+allowed_paths = ["."]
+
+[simulation]
+# Maximum number of concurrent simulations
+max_parallel = 4
+
+# Default simulation timeout in seconds
+timeout = 300.0
+
+[analysis]
+# Maximum waveform data points to return per trace
+max_points = 10000
+
+[plotting]
+# Plot resolution in DPI
+dpi = 150
+
+# Matplotlib style (e.g., seaborn-v0_8-darkgrid, ggplot, bmh)
+style = "seaborn-v0_8-darkgrid"
+
+[logging]
+# Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+level = "INFO"
