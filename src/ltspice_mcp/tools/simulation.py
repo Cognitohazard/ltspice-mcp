@@ -346,6 +346,119 @@ async def handle_check_job(arguments: dict, state: SessionState) -> list[types.T
         ]
 
 
+async def handle_list_jobs(arguments: dict, state: SessionState) -> list[types.TextContent]:
+    """List simulation jobs with optional status filter.
+
+    Shows active jobs (running/queued) by default.
+
+    Args:
+        arguments: Tool arguments with optional status filter
+        state: Current session state
+
+    Returns:
+        List containing TextContent with formatted job list
+    """
+    status_filter = arguments.get("status")
+
+    # Determine which jobs to show
+    if status_filter == "all":
+        # Show all jobs
+        jobs_to_show = list(state.jobs.values())
+    elif status_filter:
+        # Filter by specific status
+        jobs_to_show = [job for job in state.jobs.values() if job.status == status_filter]
+    else:
+        # Default: show active jobs only (running/queued)
+        jobs_to_show = [
+            job for job in state.jobs.values() if job.status in ("running", "queued")
+        ]
+
+    # Sort by started_at (most recent first)
+    jobs_to_show.sort(key=lambda j: j.started_at, reverse=True)
+
+    # Format response
+    if not jobs_to_show:
+        if status_filter == "all" or not status_filter:
+            message = "No active jobs" if not status_filter else "No jobs found"
+        else:
+            message = f"No jobs with status '{status_filter}'"
+        return [types.TextContent(type="text", text=message)]
+
+    # Build job table
+    lines = [f"Simulation Jobs ({len(jobs_to_show)}):\n"]
+    lines.append(
+        f"{'ID':<28} | {'Status':<10} | {'Netlist':<20} | {'Started':<17} | Duration"
+    )
+    lines.append("-" * 100)
+
+    for job in jobs_to_show:
+        # Format duration/elapsed
+        if job.completed_at:
+            duration = (job.completed_at - job.started_at).total_seconds()
+            duration_str = f"{duration:.1f}s"
+        else:
+            # Still running - show elapsed
+            elapsed = (datetime.now() - job.started_at).total_seconds()
+            duration_str = f"{elapsed:.1f}s (running)"
+
+        # Format started time
+        started_str = job.started_at.strftime("%Y-%m-%d %H:%M")
+
+        # Format netlist name (truncate if too long)
+        netlist_name = job.netlist.name
+        if len(netlist_name) > 20:
+            netlist_name = netlist_name[:17] + "..."
+
+        lines.append(
+            f"{job.job_id:<28} | {job.status:<10} | {netlist_name:<20} | {started_str:<17} | {duration_str}"
+        )
+
+    return [types.TextContent(type="text", text="\n".join(lines))]
+
+
+async def handle_cancel_job(arguments: dict, state: SessionState) -> list[types.TextContent]:
+    """Cancel a running simulation job.
+
+    Args:
+        arguments: Tool arguments with job_id
+        state: Current session state
+
+    Returns:
+        List containing TextContent with cancellation result
+    """
+    job_id = arguments["job_id"]
+
+    # Look up job
+    job = state.jobs.get(job_id)
+    if not job:
+        return [
+            types.TextContent(
+                type="text",
+                text=f"Job not found: {job_id}\n\nUse list_jobs() to see all jobs",
+            )
+        ]
+
+    # Check if job is running
+    if job.status not in ("running", "queued"):
+        return [
+            types.TextContent(
+                type="text",
+                text=f"Job {job_id} is not running (status: {job.status})",
+            )
+        ]
+
+    # Cancel the job
+    runner = _get_or_create_runner(state)
+    await runner.cancel(job)
+
+    return [
+        types.TextContent(
+            type="text",
+            text=f"Job {job_id} cancelled",
+        )
+    ]
+
+
 # Tool definitions
 TOOL_DEFS: list[types.Tool] = [
     types.Tool(
@@ -394,9 +507,43 @@ TOOL_DEFS: list[types.Tool] = [
             "required": ["job_id"],
         },
     ),
+    types.Tool(
+        name="list_jobs",
+        description=(
+            "List simulation jobs. Shows active jobs (running/queued) by default. "
+            "Use status filter to see completed, failed, or all jobs."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "description": "Filter by status: 'running', 'completed', 'failed', 'timeout', 'cancelled', or 'all'. Default: shows active jobs only.",
+                    "enum": ["running", "queued", "completed", "failed", "timeout", "cancelled", "all"],
+                }
+            },
+            "required": [],
+        },
+    ),
+    types.Tool(
+        name="cancel_job",
+        description="Cancel a running simulation job. Kills the simulator process and marks the job as cancelled.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string",
+                    "description": "Job ID of the running simulation to cancel",
+                }
+            },
+            "required": ["job_id"],
+        },
+    ),
 ]
 
 TOOL_HANDLERS: dict[str, object] = {
     "run_simulation": handle_run_simulation,
     "check_job": handle_check_job,
+    "list_jobs": handle_list_jobs,
+    "cancel_job": handle_cancel_job,
 }

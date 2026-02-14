@@ -100,9 +100,13 @@ class SessionState:
     def shutdown(self) -> None:
         """Clean up session resources at server shutdown.
 
-        Clears file caches and prepares for graceful shutdown.
-        Future phases will add job cancellation logic here.
+        Clears file caches and cancels running jobs for graceful shutdown.
         """
         self.editors.clear()
         self.results.clear()
-        # TODO Phase 3: Cancel pending jobs and wait for running jobs to complete
+        # Cancel any running jobs
+        for job in self.jobs.values():
+            if job.status in ("running", "queued"):
+                job.status = "cancelled"
+                job.completed_at = datetime.now()
+                job.done_event.set()
