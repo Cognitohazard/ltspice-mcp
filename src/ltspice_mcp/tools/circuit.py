@@ -501,6 +501,63 @@ async def handle_remove_instruction(
     return [types.TextContent(type="text", text=result)]
 
 
+async def handle_convert_schematic(
+    arguments: dict, state: SessionState
+) -> list[types.TextContent]:
+    """Convert a .asc schematic to .net netlist using LTSpice.
+
+    Args:
+        arguments: Contains 'asc_path' (path to .asc schematic file)
+        state: Session state with available_simulators
+
+    Returns:
+        List with single TextContent containing conversion results
+
+    Raises:
+        PathSecurityError: Path outside sandbox
+        NetlistError: File not found, not .asc file, LTSpice unavailable, or conversion failed
+    """
+    asc_path = safe_path(arguments["asc_path"], state)
+
+    # Verify file exists
+    if not await run_sync(asc_path.exists):
+        raise NetlistError(f"Schematic file not found: {asc_path}")
+
+    # Validate .asc extension (case-insensitive)
+    if asc_path.suffix.lower() != ".asc":
+        raise NetlistError(f"Expected .asc file, got {asc_path.suffix}")
+
+    # Check LTSpice availability
+    if "ltspice" not in state.available_simulators:
+        available = list(state.available_simulators.keys())
+        raise NetlistError(
+            f"convert_schematic requires LTSpice. Available simulators: {available}"
+        )
+
+    # Convert via SpiceEditor (LTSpice auto-converts .asc to .net)
+    try:
+        editor = await run_sync(SpiceEditor, str(asc_path))
+    except Exception as e:
+        raise NetlistError(f"LTSpice conversion failed: {e}")
+
+    # Calculate expected output path
+    net_path = asc_path.with_suffix(".net")
+
+    # Save netlist to ensure .net file is written
+    await run_sync(editor.save_netlist, str(net_path))
+
+    # Verify .net file was created
+    if not await run_sync(net_path.exists):
+        raise NetlistError("Conversion failed: .net file not created")
+
+    # Get component summary
+    components = editor.get_components()
+    comp_count = len(components)
+
+    result = f"Converted {asc_path.name} -> {net_path.name}\nComponents: {comp_count}\nOutput: {net_path}"
+    return [types.TextContent(type="text", text=result)]
+
+
 # Tool definitions for MCP
 TOOL_DEFS: list[types.Tool] = [
     types.Tool(
@@ -684,6 +741,20 @@ TOOL_DEFS: list[types.Tool] = [
             "required": ["netlist", "instruction"],
         },
     ),
+    types.Tool(
+        name="convert_schematic",
+        description="Convert a .asc schematic file to .net netlist using LTSpice. LTSpice must be available on the system. The .net file is created in the same directory as the .asc file.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "asc_path": {
+                    "type": "string",
+                    "description": "Path to .asc schematic file. LTSpice must be available for conversion.",
+                },
+            },
+            "required": ["asc_path"],
+        },
+    ),
 ]
 
 TOOL_HANDLERS: dict[str, object] = {
@@ -697,4 +768,5 @@ TOOL_HANDLERS: dict[str, object] = {
     "set_parameter": handle_set_parameter,
     "add_instruction": handle_add_instruction,
     "remove_instruction": handle_remove_instruction,
+    "convert_schematic": handle_convert_schematic,
 }
