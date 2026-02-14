@@ -4,15 +4,13 @@ import asyncio
 import logging
 import time
 from datetime import datetime
-from pathlib import Path
-
 from mcp import types
 
 from ltspice_mcp.errors import SimulationError
 from ltspice_mcp.lib.log_parser import extract_error_context, parse_success_summary
 from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
 from ltspice_mcp.state import SessionState, SimulationJob
-from ltspice_mcp.tools._base import safe_path, run_sync
+from ltspice_mcp.tools._base import safe_path
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +222,7 @@ def _format_success_response(job_id: str, summary: dict) -> types.TextContent:
     # Format signal list (first 20 signals)
     signals = summary["trace_names"]
     signal_list = []
-    for i, sig in enumerate(signals[:20]):
+    for sig in signals[:20]:
         signal_list.append(f"  - {sig}")
     if len(signals) > 20:
         signal_list.append(f"  ... and {len(signals) - 20} more")
@@ -291,7 +289,7 @@ async def handle_check_job(arguments: dict, state: SessionState) -> list[types.T
         ]
     elif job.status == "completed":
         # Return same format as sync completion
-        duration = (job.completed_at - job.started_at).total_seconds()
+        duration = (job.completed_at - job.started_at).total_seconds() if job.completed_at else 0
         summary = parse_success_summary(job.raw_file, job.log_file, duration)
         return [_format_success_response(job_id, summary)]
     elif job.status == "failed":
