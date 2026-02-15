@@ -13,7 +13,6 @@ from ltspice_mcp.lib.result_parser import (
     extract_operating_point,
     get_step_count,
     get_trace_names,
-    parse_fourier_data,
     parse_measurements,
     query_point_value,
 )
