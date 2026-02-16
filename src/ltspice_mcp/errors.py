@@ -31,3 +31,7 @@ class MissingModelError(SimulationError):
 
 class ResultError(LTSpiceMCPError):
     """Error reading simulation results."""
+
+
+class LibraryError(LTSpiceMCPError):
+    """Component library error (load, parse, or lookup failure)."""
