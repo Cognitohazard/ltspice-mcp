@@ -8,6 +8,7 @@ from typing import Any, Literal, Type
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.cache import FileCache
+from ltspice_mcp.lib.library_manager import LibraryManager
 
 
 @dataclass
@@ -65,7 +66,7 @@ class SessionState:
     editors: FileCache  # FileCache[SpiceEditor] - type parameter for documentation
     results: FileCache  # FileCache[RawRead]
     jobs: dict[str, SimulationJob]
-    libraries: dict[Path, Any]  # Will be dict[Path, LoadedLibrary] in Phase 6
+    libraries: LibraryManager
     working_dir: Path
 
     @classmethod
@@ -93,7 +94,7 @@ class SessionState:
             editors=FileCache(),
             results=FileCache(),
             jobs={},
-            libraries={},
+            libraries=LibraryManager(available),
             working_dir=config.working_dir,
         )
 
