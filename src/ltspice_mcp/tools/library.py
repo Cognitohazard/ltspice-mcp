@@ -178,12 +178,12 @@ async def handle_unload_library(
 
 
 async def handle_list_libraries(
-    arguments: dict, state: SessionState
+    _arguments: dict, state: SessionState
 ) -> list[types.TextContent]:
     """List all loaded libraries.
 
     Args:
-        arguments: Empty dict
+        _arguments: Empty dict
         state: Session state with library manager
 
     Returns:
