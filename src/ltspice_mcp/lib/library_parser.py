@@ -190,7 +190,6 @@ def parse_library_file(path: Path) -> LibraryIndex:
         model_match = model_pattern.match(line)
         if model_match:
             name = model_match.group(1)
-            model_type = model_match.group(2)
             param_text = model_match.group(3) or ""
 
             # .MODEL definitions are typically single-line (after continuation merge)
