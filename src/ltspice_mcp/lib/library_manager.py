@@ -1,6 +1,5 @@
 """SPICE library session management with built-in detection."""
 
-import glob
 import logging
 import os
 import sys
@@ -282,7 +281,8 @@ class LibraryManager:
         all_matches = []
 
         # Search each loaded library
-        for lib_path, (mtime, index) in self._user_libs._entries.items():
+        for entry in self._user_libs._entries.values():
+            index = entry[1]
             matches, _ = index.search(query, offset=0, limit=999999)  # Get all matches
             all_matches.extend(matches)
 
@@ -368,7 +368,8 @@ class LibraryManager:
             optionally raw_text. Returns None if not found.
         """
         # Search user libraries first
-        for lib_path, (mtime, index) in self._user_libs._entries.items():
+        for entry in self._user_libs._entries.values():
+            index = entry[1]
             model = index.get_model(name)
             if model:
                 return self._format_model_info(model, full)
