@@ -35,3 +35,7 @@ class ResultError(LTSpiceMCPError):
 
 class LibraryError(LTSpiceMCPError):
     """Component library error (load, parse, or lookup failure)."""
+
+
+class BatchJobError(LTSpiceMCPError):
+    """Batch job error (config not found, job not found, invalid config, etc.)."""
