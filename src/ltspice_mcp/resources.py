@@ -2,14 +2,12 @@
 
 import json
 import logging
-from pathlib import Path
 from typing import Any
 
 from mcp import types
 from pydantic import AnyUrl
 
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.tools._base import run_sync
 
 logger = logging.getLogger(__name__)
@@ -324,9 +322,7 @@ async def _read_measurements(
                     ):
                         python_values.append(None)
                     else:
-                        python_values.append(
-                            float(val.item()) if hasattr(val, "item") else float(val)
-                        )
+                        python_values.append(float(val))  # type: ignore[arg-type]
                 measurements[name] = python_values
             return measurements
 
@@ -363,7 +359,7 @@ def _read_models(uri_str: str, state: SessionState) -> types.ReadResourceResult:
 
         for path, entry in state.libraries._user_libs._entries.items():
             # entry is (mtime, LibraryIndex)
-            _mtime, index = entry
+            _, index = entry
             models = [
                 {
                     "name": m.name,
