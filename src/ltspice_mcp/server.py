@@ -15,6 +15,9 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.tools import ALL_MODULES
 from ltspice_mcp.errors import LTSpiceMCPError
+from ltspice_mcp.resources import get_static_resources, get_resource_templates, handle_read_resource
+from ltspice_mcp.prompts import get_prompt_definitions, handle_get_prompt
+from pydantic import AnyUrl
 
 # Build unified dispatch table at module level
 _DISPATCH: dict[str, Any] = {}
@@ -152,3 +155,62 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         # Validation errors
         return [types.TextContent(type="text", text=f"ERROR: {e}")]
     # Let other exceptions propagate - MCP SDK handles them
+
+
+@server.list_resources()
+async def list_resources() -> list[types.Resource]:
+    """Return all static MCP resources."""
+    return get_static_resources()
+
+
+@server.list_resource_templates()
+async def list_resource_templates() -> list[types.ResourceTemplate]:
+    """Return all dynamic MCP resource templates."""
+    return get_resource_templates()
+
+
+@server.read_resource()
+async def read_resource(uri: AnyUrl) -> types.ReadResourceResult:
+    """Read a specific resource by URI.
+
+    Dispatches to appropriate handler based on URI scheme and path.
+
+    Args:
+        uri: Resource URI to read (ltspice://...)
+
+    Returns:
+        ReadResourceResult with resource contents
+
+    Raises:
+        ValueError: If URI is unknown or resource not found
+    """
+    # Get session state from lifespan context
+    try:
+        state = server.request_context.lifespan_context["state"]
+    except (AttributeError, KeyError) as e:
+        raise ValueError(f"Internal error: Session state not available ({e})")
+
+    return await handle_read_resource(str(uri), state)
+
+
+@server.list_prompts()
+async def list_prompts() -> list[types.Prompt]:
+    """Return all available MCP prompts."""
+    return get_prompt_definitions()
+
+
+@server.get_prompt()
+async def get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptResult:
+    """Get a specific prompt by name with arguments.
+
+    Args:
+        name: Prompt name to retrieve
+        arguments: Prompt-specific arguments dict
+
+    Returns:
+        GetPromptResult with prompt messages
+
+    Raises:
+        ValueError: If prompt name is unknown
+    """
+    return await handle_get_prompt(name, arguments)
