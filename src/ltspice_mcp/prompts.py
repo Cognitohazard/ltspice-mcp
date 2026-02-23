@@ -155,14 +155,15 @@ Use `create_netlist` to start the circuit, then `set_component_value` for each c
 
 **AC frequency sweep (primary verification):**
 
-Add to netlist: `.ac dec 100 {{target_frequency_decade_below}} {{target_frequency_decade_above}}`
+Add to netlist: `.ac dec 100 <lower_freq> <upper_freq>`
 Example for 1 kHz filter: `.ac dec 100 10 100k`
+Start at least 2 decades below fc, stop at least 2 decades above fc.
 
 Use `run_simulation` to execute. The `.ac` analysis sweeps frequency and gives magnitude/phase response.
 
 **Transient verification (optional but recommended):**
 
-Add: `.tran 0 {{10_periods}} 0 {{period/1000}}`
+Add: `.tran 0 <stop_time> 0 <timestep>` (e.g., `.tran 0 10m 0 1u` for a 1 kHz filter: 10 ms span, 1 µs timestep)
 Apply a sine wave at the cutoff frequency and verify -3 dB attenuation. Apply a step and observe the transient response (overshoot indicates Q > 0.707).
 
 ---
@@ -261,7 +262,7 @@ Run: `get_operating_point` on the circuit.
 
 **Purpose:** Measure voltage gain and bandwidth.
 
-Add to netlist: `.ac dec 100 1 {{appropriate_upper_frequency}}`
+Add to netlist: `.ac dec 100 1 <upper_freq>` (e.g., `.ac dec 100 1 100Meg` for an audio/RF amplifier)
 Use `run_simulation`. Probe the output node.
 
 **Voltage gain formulas (for manual verification):**
@@ -289,7 +290,7 @@ Use `run_simulation`. Probe the output node.
 
 **Purpose:** Verify time-domain behavior and check for stability issues.
 
-Add: `.tran 0 {{10_signal_periods}} 0 {{period/100}}`
+Add: `.tran 0 <stop_time> 0 <timestep>` (e.g., `.tran 0 10u 0 100n` for a 1 MHz signal: 10 µs span, 100 ns timestep)
 Apply a sine wave at midband frequency at the expected input amplitude.
 
 **Check:**
@@ -615,7 +616,7 @@ Use `get_model_info` to confirm the transistor or op-amp model is loaded correct
 
 ### A. Oscillating circuit
 A circuit that oscillates will run forever in transient simulation (the solver keeps time-stepping).
-- Add `.options maxstep={{period/20}}` where period is the expected oscillation period.
+- Add `.options maxstep=<T/20>` where T is the expected oscillation period (e.g., `.options maxstep=50n` for a 1 µs period).
 - If the circuit should NOT oscillate, check for stability (see amplifier_analysis prompt).
 
 ### B. Transient simulation end time too long
