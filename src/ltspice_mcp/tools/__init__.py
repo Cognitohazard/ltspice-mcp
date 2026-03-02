@@ -7,6 +7,6 @@ Each tool module exports:
 The server iterates ALL_MODULES to build the complete tool dispatch table.
 """
 
-from . import advanced, analysis, circuit, library, simulation, status, visualization
+from . import advanced, analysis, circuit, library, simulation, status
 
-ALL_MODULES = [circuit, simulation, analysis, visualization, advanced, library, status]
+ALL_MODULES = [circuit, simulation, analysis, advanced, library, status]
