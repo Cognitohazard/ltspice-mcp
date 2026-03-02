@@ -2,6 +2,7 @@
 
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from mcp import types
@@ -251,26 +252,66 @@ def _read_results_list(uri_str: str, state: SessionState) -> types.ReadResourceR
         raise ValueError(f"Failed to list results: {e}") from e
 
 
+def _resolve_raw_file(job_id: str, state: SessionState) -> Path:
+    """Resolve raw_file from a regular job or the first run of a batch job."""
+    job = state.jobs.get(job_id)
+    if job is not None:
+        if job.status != "completed" or job.raw_file is None:
+            raise ValueError(
+                f"Job is not completed (status={job.status!r}) or has no raw file"
+            )
+        return job.raw_file
+
+    batch_job = state.batch_jobs.get(job_id)
+    if batch_job is not None:
+        if batch_job.status != "completed":
+            raise ValueError(
+                f"Batch job is not completed (status={batch_job.status!r})"
+            )
+        if not batch_job.run_results:
+            raise ValueError(f"Batch job {job_id!r} has no run results")
+        first_run = batch_job.run_results[min(batch_job.run_results)]
+        raw_file = first_run.get("raw_file")
+        if raw_file is None:
+            raise ValueError(f"Batch job {job_id!r} first run has no raw file")
+        return Path(raw_file) if not isinstance(raw_file, Path) else raw_file
+
+    raise ValueError(f"Job not found: {job_id!r}")
+
+
+def _resolve_log_file(job_id: str, state: SessionState) -> Path:
+    """Resolve log_file from a regular job or the first run of a batch job."""
+    job = state.jobs.get(job_id)
+    if job is not None:
+        if job.status != "completed" or job.log_file is None:
+            raise ValueError(
+                f"Job is not completed (status={job.status!r}) or has no log file"
+            )
+        return job.log_file
+
+    batch_job = state.batch_jobs.get(job_id)
+    if batch_job is not None:
+        if batch_job.status != "completed":
+            raise ValueError(
+                f"Batch job is not completed (status={batch_job.status!r})"
+            )
+        if not batch_job.run_results:
+            raise ValueError(f"Batch job {job_id!r} has no run results")
+        first_run = batch_job.run_results[min(batch_job.run_results)]
+        log_file = first_run.get("log_file")
+        if log_file is None:
+            raise ValueError(f"Batch job {job_id!r} first run has no log file")
+        return Path(log_file) if not isinstance(log_file, Path) else log_file
+
+    raise ValueError(f"Job not found: {job_id!r}")
+
+
 async def _read_signals(
     uri_str: str, job_id: str, state: SessionState
 ) -> types.ReadResourceResult:
     """List signal/trace names from a completed simulation's .raw file."""
     try:
-        job = state.jobs.get(job_id)
-        if job is None:
-            raise ValueError(f"Job not found: {job_id!r}")
-
-        if job.status != "completed" or job.raw_file is None:
-            data = {
-                "job_id": job_id,
-                "error": (
-                    f"Job is not completed (status={job.status!r}) "
-                    "or has no raw file"
-                ),
-            }
-            return _make_result(uri_str, json.dumps(data, indent=2))
-
-        raw_file = job.raw_file
+        raw_file = _resolve_raw_file(job_id, state)
 
         def _load_signals() -> list[str]:
             from spicelib.raw.raw_read import RawRead
@@ -292,21 +333,7 @@ async def _read_measurements(
 ) -> types.ReadResourceResult:
     """Return .MEAS measurement results from a completed simulation's log file."""
     try:
-        job = state.jobs.get(job_id)
-        if job is None:
-            raise ValueError(f"Job not found: {job_id!r}")
-
-        if job.status != "completed" or job.log_file is None:
-            data = {
-                "job_id": job_id,
-                "error": (
-                    f"Job is not completed (status={job.status!r}) "
-                    "or has no log file"
-                ),
-            }
-            return _make_result(uri_str, json.dumps(data, indent=2))
-
-        log_file = job.log_file
+        log_file = _resolve_log_file(job_id, state)
 
         def _load_measurements() -> dict:
             from spicelib.log.ltsteps import LTSpiceLogReader
@@ -357,9 +384,7 @@ def _read_models(uri_str: str, state: SessionState) -> types.ReadResourceResult:
     try:
         libraries: list[dict] = []
 
-        for path, entry in state.libraries._user_libs._entries.items():
-            # entry is (mtime, LibraryIndex)
-            _, index = entry
+        for path, index in state.libraries.get_loaded_libraries():
             models = [
                 {
                     "name": m.name,

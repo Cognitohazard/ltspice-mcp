@@ -210,7 +210,7 @@ class LibraryManager:
             try:
                 index = parse_library_file(lib_file)
                 # Store in cache
-                self._user_libs._entries[lib_file] = (lib_file.stat().st_mtime, index)
+                self._user_libs._entries[lib_file] = (lib_file.stat().st_mtime, index)  # noqa: direct cache population
 
                 # Count models vs subcircuits
                 for model in index.models:
@@ -245,7 +245,7 @@ class LibraryManager:
         # If it's a directory, remove all files under it
         if path.is_dir():
             removed_count = 0
-            for cached_path in list(self._user_libs._entries.keys()):
+            for cached_path in self._user_libs.keys():
                 if cached_path.is_relative_to(path):
                     self._user_libs.invalidate(cached_path)
                     removed_count += 1
@@ -253,11 +253,19 @@ class LibraryManager:
             return {"path": str(path), "removed": removed_count > 0, "warning": None}
         else:
             # Single file
-            if path in self._user_libs._entries:
+            if path in self._user_libs:
                 self._user_libs.invalidate(path)
                 return {"path": str(path), "removed": True, "warning": None}
             else:
                 return {"path": str(path), "removed": False, "warning": "Library not loaded"}
+
+    def get_loaded_libraries(self) -> list[tuple[Path, LibraryIndex]]:
+        """Return all loaded user libraries as (path, index) pairs.
+
+        Returns:
+            List of (path, LibraryIndex) tuples for all loaded libraries
+        """
+        return [(path, entry[1]) for path, entry in self._user_libs.items()]
 
     def list_libraries(self) -> list[str]:
         """List all loaded user library paths.
@@ -265,7 +273,7 @@ class LibraryManager:
         Returns:
             List of library path strings
         """
-        return [str(path) for path in self._user_libs._entries.keys()]
+        return [str(path) for path, _ in self.get_loaded_libraries()]
 
     def search_user_libraries(self, query: str, offset: int = 0, limit: int = 50) -> dict:
         """Search across all loaded user libraries.
@@ -281,8 +289,7 @@ class LibraryManager:
         all_matches = []
 
         # Search each loaded library
-        for entry in self._user_libs._entries.values():
-            index = entry[1]
+        for _, index in self.get_loaded_libraries():
             matches, _ = index.search(query, offset=0, limit=999999)  # Get all matches
             all_matches.extend(matches)
 
@@ -368,8 +375,7 @@ class LibraryManager:
             optionally raw_text. Returns None if not found.
         """
         # Search user libraries first
-        for entry in self._user_libs._entries.values():
-            index = entry[1]
+        for _, index in self.get_loaded_libraries():
             model = index.get_model(name)
             if model:
                 return self._format_model_info(model, full)

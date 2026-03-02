@@ -60,6 +60,18 @@ class FileCache(Generic[T]):
         """Remove all cached entries."""
         self._entries.clear()
 
+    def items(self) -> list[tuple[Path, tuple[float, T]]]:
+        """Return all cached entries as (path, (mtime, value)) pairs."""
+        return list(self._entries.items())
+
+    def keys(self) -> list[Path]:
+        """Return all cached paths."""
+        return list(self._entries.keys())
+
+    def __contains__(self, path: Path) -> bool:
+        """Check if a path is in the cache."""
+        return path in self._entries
+
     def __len__(self) -> int:
         """Return number of cached entries."""
         return len(self._entries)
