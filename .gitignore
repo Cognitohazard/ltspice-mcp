@@ -13,3 +13,5 @@ wheels/
 .claude/
 
 .planning/
+
+mcp.json
