@@ -12,7 +12,6 @@ from spicelib.sim.sim_stepping import SimStepper
 
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.sweep_utils import generate_sweep_range
-from ltspice_mcp.lib.wsl import to_windows_path
 from ltspice_mcp.state import BatchJob, SessionState
 
 logger = logging.getLogger(__name__)
@@ -99,15 +98,9 @@ class SweepRunner:
 
         def execute_sweep() -> None:
             """Execute SimStepper in thread pool (blocking call - safe in worker thread)."""
-            # Convert netlist path to Windows format if using LTSpice in WSL
+            # Pass Linux path — WSL path conversion is handled by the simulator
             netlist_path = batch_job.netlist
-            if self.simulator_class.__name__ == "LTspice":
-                netlist_str = to_windows_path(netlist_path)
-                logger.debug(
-                    f"Converted netlist path for LTSpice: {netlist_path} -> {netlist_str}"
-                )
-            else:
-                netlist_str = str(netlist_path)
+            netlist_str = str(netlist_path)
 
             # Create fresh SpiceEditor per batch to avoid race conditions
             # (anti-pattern: sharing SpiceEditor across concurrent batch jobs)
@@ -118,13 +111,14 @@ class SweepRunner:
                 simulator=self.simulator_class,
                 output_folder=str(self.output_folder),
                 parallel_sims=self.max_parallel,
-                timeout=None,  # Tool layer handles timeout via asyncio.wait_for()
+                timeout=600,  # Tool layer handles timeout via asyncio.wait_for()
             )
 
             # Create SimStepper wrapping editor + runner
-            stepper = SimStepper(editor, runner)
+            stepper = SimStepper(editor, runner)  # type: ignore[abstract]
 
             # Add each sweep dimension
+            assert batch_job.sweep_config is not None
             for dim in batch_job.sweep_config.dimensions:
                 values = generate_sweep_range(
                     dim.start, dim.stop, dim.step, dim.points, dim.scale

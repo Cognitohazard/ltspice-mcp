@@ -1,8 +1,10 @@
-"""Result file parsing and waveform analysis.
+""".raw file parsing and waveform analysis.
 
 Provides core functions for parsing .raw files, extracting trace names,
 computing statistics, and querying data points. All functions work with
 spicelib's RawRead objects and return Python primitives (no numpy types).
+
+For .log file parsing (measurements, Fourier data), see log_parser.py.
 
 Functions are synchronous and CPU-bound - callers must wrap in run_sync().
 """
@@ -13,7 +15,7 @@ import numpy as np
 from spicelib.log.ltsteps import LTSpiceLogReader
 from spicelib.raw.raw_read import RawRead
 
-from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib.log_parser import parse_fourier_data, parse_measurements
 
 
 def detect_sim_type(raw: RawRead) -> str:
@@ -69,7 +71,7 @@ def get_step_count(raw: RawRead) -> int:
         Number of steps (defaults to 1 if detection fails)
     """
     try:
-        return raw.get_steps()
+        return len(raw.get_steps())
     except Exception:
         return 1
 
@@ -175,53 +177,6 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
     return result
 
 
-def parse_measurements(log_path: Path) -> dict:
-    """Parse .MEAS measurement results from simulation log file.
-
-    Args:
-        log_path: Path to .log file
-
-    Returns:
-        Dictionary with measurements dict (name -> list of values) and step_count.
-        Values are Python float (or None for failed measurements).
-
-    Raises:
-        ResultError: If log file cannot be parsed
-    """
-    try:
-        reader = LTSpiceLogReader(str(log_path))
-    except Exception as e:
-        raise ResultError(f"Could not parse log file: {e}")
-
-    # Get measurement names
-    measure_names = reader.get_measure_names()
-    if not measure_names:
-        return {"measurements": {}, "step_count": 0}
-
-    # Extract values for each measurement
-    measurements = {}
-    for name in measure_names:
-        # LTSpiceLogReader.dataset uses lowercase keys
-        values = reader.dataset.get(name.lower(), [])
-        # Convert numpy types to Python float, handle None/FAILED
-        python_values = []
-        for val in values:
-            if val is None or (isinstance(val, str) and val.upper() == "FAILED"):
-                python_values.append(None)
-            else:
-                # Handle numpy types
-                if hasattr(val, "item"):
-                    python_values.append(float(val.item()))
-                else:
-                    python_values.append(float(val))
-        measurements[name] = python_values
-
-    # Determine step count from first measurement
-    step_count = len(measurements[measure_names[0]]) if measurements else 0
-
-    return {"measurements": measurements, "step_count": step_count}
-
-
 def extract_operating_point(raw: RawRead) -> dict:
     """Extract DC operating point data (all node voltages and branch currents).
 
@@ -254,75 +209,6 @@ def extract_operating_point(raw: RawRead) -> dict:
     return {"voltages": voltages, "currents": currents}
 
 
-def parse_fourier_data(log_path: Path) -> list[dict]:
-    """Extract Fourier analysis (.FOUR) results from log file.
-
-    Args:
-        log_path: Path to .log file
-
-    Returns:
-        List of dicts, each containing signal name, THD, fundamental frequency,
-        and list of harmonics (number, frequency, magnitude, phase).
-        All values are Python float.
-    """
-    try:
-        reader = LTSpiceLogReader(str(log_path))
-    except Exception:
-        # If log parsing fails, return empty (graceful degradation)
-        return []
-
-    # Access Fourier data
-    if not hasattr(reader, "fourier") or not reader.fourier:
-        return []
-
-    results = []
-    try:
-        for signal_name, fourier_data in reader.fourier.items():
-            # Extract THD if available
-            thd = None
-            if hasattr(fourier_data, "thd"):
-                thd = float(fourier_data.thd) if fourier_data.thd is not None else None
-
-            # Extract fundamental frequency
-            fundamental_freq = None
-            if hasattr(fourier_data, "fundamental_frequency"):
-                fundamental_freq = (
-                    float(fourier_data.fundamental_frequency)
-                    if fourier_data.fundamental_frequency is not None
-                    else None
-                )
-
-            # Extract harmonics
-            harmonics = []
-            if hasattr(fourier_data, "harmonics") and fourier_data.harmonics:
-                for harmonic in fourier_data.harmonics:
-                    harm_dict = {
-                        "number": int(harmonic.number) if hasattr(harmonic, "number") else None,
-                        "frequency": (
-                            float(harmonic.frequency) if hasattr(harmonic, "frequency") else None
-                        ),
-                        "magnitude": (
-                            float(harmonic.magnitude) if hasattr(harmonic, "magnitude") else None
-                        ),
-                        "phase": float(harmonic.phase) if hasattr(harmonic, "phase") else None,
-                    }
-                    harmonics.append(harm_dict)
-
-            results.append(
-                {
-                    "signal": signal_name,
-                    "thd": thd,
-                    "fundamental_frequency": fundamental_freq,
-                    "harmonics": harmonics,
-                }
-            )
-    except Exception:
-        # Graceful degradation - return partial data if format is unexpected
-        pass
-
-    return results
-
-
 def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -> dict:
     """Compute AC bandwidth metrics (best-effort).
 
@@ -345,7 +231,7 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     magnitude_db = 20 * np.log10(np.abs(wave))
     phase_deg = np.angle(wave, deg=True)
 
-    metrics = {
+    metrics: dict[str, float | None] = {
         "bandwidth_3db": None,
         "unity_gain_freq": None,
         "phase_margin": None,
@@ -443,7 +329,8 @@ def build_simulation_summary(
     if "Transient" in sim_type:
         range_info = {"time_start": float(axis[0]), "time_end": float(axis[-1])}
     elif "AC" in sim_type.upper():
-        range_info = {"freq_start": float(axis[0]), "freq_end": float(axis[-1])}
+        # AC axis values may be complex (frequency + j0); take real part
+        range_info = {"freq_start": float(axis[0].real), "freq_end": float(axis[-1].real)}
     elif "DC" in sim_type.upper():
         range_info = {"sweep_start": float(axis[0]), "sweep_end": float(axis[-1])}
     # Operating Point has no range (single point)
@@ -458,13 +345,21 @@ def build_simulation_summary(
 
     # Add optional data from log file
     if log_path and log_path.exists():
-        # Parse measurements
+        # Create a single LTSpiceLogReader for both measurements and Fourier
+        log_reader: LTSpiceLogReader | None = None
         try:
-            meas_data = parse_measurements(log_path)
-            if meas_data["measurements"]:
-                summary["measurements"] = meas_data["measurements"]
+            log_reader = LTSpiceLogReader(str(log_path))
         except Exception:
             pass
+
+        # Parse measurements
+        if log_reader is not None:
+            try:
+                meas_data = parse_measurements(log_path, reader=log_reader)
+                if meas_data["measurements"]:
+                    summary["measurements"] = meas_data["measurements"]
+            except Exception:
+                pass
 
         # Parse warnings from log content
         try:
@@ -479,12 +374,13 @@ def build_simulation_summary(
             pass
 
         # Parse Fourier data
-        try:
-            fourier_data = parse_fourier_data(log_path)
-            if fourier_data:
-                summary["fourier"] = fourier_data
-        except Exception:
-            pass
+        if log_reader is not None:
+            try:
+                fourier_data = parse_fourier_data(log_path, reader=log_reader)
+                if fourier_data:
+                    summary["fourier"] = fourier_data
+            except Exception:
+                pass
 
     # Add duration if provided
     if duration is not None:

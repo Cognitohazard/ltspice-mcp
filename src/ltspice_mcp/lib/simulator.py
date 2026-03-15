@@ -9,29 +9,79 @@ from spicelib.simulators.qspice_simulator import Qspice
 from spicelib.simulators.xyce_simulator import XyceSimulator
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib.wsl import is_wsl
 
 logger = logging.getLogger(__name__)
 
+
+def _get_ltspice_class() -> Type:
+    """Return the appropriate LTspice class for the current platform.
+
+    On WSL, returns LTspiceWSL which overrides run() to convert paths
+    via wslpath instead of using Wine's Z: drive mapping.
+    """
+    if is_wsl():
+        from ltspice_mcp.lib.ltspice_wsl import LTspiceWSL
+        return LTspiceWSL
+    return LTspice
+
+
 # Map simulator names to spicelib classes
 SIMULATORS: dict[str, Type] = {
-    "ltspice": LTspice,
+    "ltspice": _get_ltspice_class(),
     "ngspice": NGspiceSimulator,
     "qspice": Qspice,
     "xyce": XyceSimulator,
 }
 
 
-def detect_simulators() -> dict[str, Type]:
+def _apply_simulator_exe(config: ServerConfig) -> None:
+    """Apply config.simulator_exe to the appropriate spicelib simulator class.
+
+    If the user has configured an explicit simulator executable path,
+    use spicelib's create_from() to register it before auto-detection.
+    This is essential for WSL where LTspice lives on the Windows side
+    and spicelib's default search paths won't find it.
+    """
+    if not config.simulator_exe:
+        return
+
+    exe_path = config.simulator_exe
+    if not exe_path.exists():
+        logger.warning(f"Configured simulator_exe does not exist: {exe_path}")
+        return
+
+    # Determine which simulator class to configure
+    target_name = config.simulator or "ltspice"
+    target_cls = SIMULATORS.get(target_name)
+    if target_cls is None:
+        logger.warning(f"Unknown simulator '{target_name}' for exe override")
+        return
+
+    try:
+        target_cls.create_from(str(exe_path))
+        logger.info(f"Applied simulator_exe override for {target_name}: {exe_path}")
+    except Exception as e:
+        logger.warning(f"Failed to apply simulator_exe for {target_name}: {e}")
+
+
+def detect_simulators(config: ServerConfig | None = None) -> dict[str, Type]:
     """Detect available SPICE simulators on the system.
 
-    Iterates through all known simulators and checks if they are available
-    by calling their is_available() method. Handles platform-specific
-    import errors gracefully.
+    If config is provided and has simulator_exe set, applies that override
+    before running auto-detection. This allows WSL users to point to the
+    Windows-side LTspice executable.
+
+    Args:
+        config: Optional server config with simulator_exe override.
 
     Returns:
         Dictionary mapping simulator name to class for all available simulators.
         Returns empty dict if no simulators are detected (server can still start).
     """
+    if config is not None:
+        _apply_simulator_exe(config)
+
     available: dict[str, Type] = {}
 
     for name, cls in SIMULATORS.items():

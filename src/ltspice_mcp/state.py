@@ -9,6 +9,7 @@ from typing import Any, Literal, Type
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.library_manager import LibraryManager
+from ltspice_mcp.lib.runner_manager import RunnerManager
 
 
 @dataclass
@@ -58,14 +59,12 @@ class MonteCarloConfig:
         component_overrides: Per-component tolerances: ref -> (tolerance, distribution)
             e.g. {"R1": (0.01, "normal")} overrides R1 with 1% normal distribution
         num_runs: Number of Monte Carlo runs (default 100)
-        seed: Optional RNG seed for reproducibility
     """
 
     netlist: Path
     type_tolerances: dict[str, tuple[float, str]] = field(default_factory=dict)
     component_overrides: dict[str, tuple[float, str]] = field(default_factory=dict)
     num_runs: int = 100
-    seed: int | None = None
 
 
 @dataclass
@@ -164,7 +163,11 @@ class SessionState:
     results: FileCache  # FileCache[RawRead]
     jobs: dict[str, SimulationJob]
     libraries: LibraryManager
+    runners: RunnerManager
     working_dir: Path
+    asc_editor_available: bool = False
+    """Whether AscEditor is configured with symbol library paths.
+    False on Linux without LTspice (no .asy files available)."""
     sweep_configs: dict[str, SweepConfig] = field(default_factory=dict)
     mc_configs: dict[str, MonteCarloConfig] = field(default_factory=dict)
     batch_jobs: dict[str, BatchJob] = field(default_factory=dict)
@@ -195,6 +198,7 @@ class SessionState:
             results=FileCache(),
             jobs={},
             libraries=LibraryManager(available),
+            runners=RunnerManager(),
             working_dir=config.working_dir,
         )
 

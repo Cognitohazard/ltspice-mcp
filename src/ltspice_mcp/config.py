@@ -49,6 +49,13 @@ class ServerConfig:
     log_level: str = "INFO"
     """Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)."""
 
+    symbol_paths: list[Path] = field(default_factory=list)
+    """Custom paths to LTspice symbol (.asy) files for .asc schematic support.
+    On Windows and WSL these are auto-detected; set this to override."""
+
+    config_path: Path = field(default_factory=lambda: Path.cwd() / "ltspice-mcp.toml")
+    """Path that was resolved for the config file (set by load())."""
+
     def __post_init__(self) -> None:
         """Ensure allowed_paths defaults to [working_dir] if not set."""
         if not self.allowed_paths:
@@ -70,7 +77,11 @@ class ServerConfig:
 
         # Load from TOML if it exists
         if config_path is None:
-            config_path = Path.cwd() / "ltspice-mcp.toml"
+            env_config = os.getenv("LTSPICE_MCP_CONFIG")
+            if env_config:
+                config_path = Path(env_config)
+            else:
+                config_path = Path.cwd() / "ltspice-mcp.toml"
 
         if config_path.exists():
             with open(config_path, "rb") as f:
@@ -106,6 +117,11 @@ class ServerConfig:
             if "logging" in toml_data and "level" in toml_data["logging"]:
                 config_dict["log_level"] = toml_data["logging"]["level"]
 
+            if "schematic" in toml_data and "symbol_paths" in toml_data["schematic"]:
+                config_dict["symbol_paths"] = [
+                    Path(p) for p in toml_data["schematic"]["symbol_paths"]
+                ]
+
         # Override with environment variables (highest precedence)
         if env_sim := os.getenv("LTSPICE_MCP_SIMULATOR"):
             config_dict["simulator"] = env_sim
@@ -137,6 +153,10 @@ class ServerConfig:
         if env_log := os.getenv("LTSPICE_MCP_LOG_LEVEL"):
             config_dict["log_level"] = env_log
 
+        if env_sym := os.getenv("LTSPICE_MCP_SYMBOL_PATHS"):
+            config_dict["symbol_paths"] = [Path(p) for p in env_sym.split(":")]
+
+        config_dict["config_path"] = config_path
         return cls(**config_dict)
 
 
@@ -197,6 +217,16 @@ def generate_default_config(path: Path) -> None:
     plotting.add(comment("Matplotlib style (e.g., seaborn-v0_8-darkgrid, ggplot, bmh)"))
     plotting.add("style", "seaborn-v0_8-darkgrid")
     doc.add("plotting", plotting)
+    doc.add(nl())
+
+    # Schematic section
+    schem = table()
+    schem.add(comment("Custom paths to LTspice symbol (.asy) files for .asc schematic support"))
+    schem.add(comment("On Windows and WSL these are auto-detected from the LTspice installation"))
+    schem.add(comment("Set this to override auto-detection or for non-standard installs"))
+    schem.add(comment('Example: symbol_paths = ["/path/to/LTspice/lib/sym"]'))
+    schem.add("symbol_paths", [])
+    doc.add("schematic", schem)
     doc.add(nl())
 
     # Logging section
