@@ -10,7 +10,6 @@ from typing import Type
 from spicelib.sim.sim_runner import SimRunner
 
 from ltspice_mcp.lib.log_parser import extract_error_context
-from ltspice_mcp.lib.wsl import to_windows_path
 from ltspice_mcp.state import SessionState, SimulationJob
 
 logger = logging.getLogger(__name__)
@@ -106,26 +105,29 @@ class SimulationRunner:
 
         def submit_sim() -> SimRunner:
             """Submit simulation to SimRunner (runs in thread pool)."""
-            # Convert netlist path to Windows format if using LTSpice in WSL
+            # Pass Linux path to spicelib — path conversion for WSL/Wine
+            # is handled by the simulator class's run() method
             netlist_str = str(netlist_path)
-            if self.simulator_class.__name__ == "LTspice":
-                netlist_str = to_windows_path(netlist_path)
-                logger.debug(f"Converted netlist path for LTSpice: {netlist_str}")
 
             # Create new SimRunner instance for this job
             runner = SimRunner(
                 simulator=self.simulator_class,
                 output_folder=str(self.output_folder),
                 parallel_sims=self.max_parallel,
-                timeout=None,  # We handle timeout at tool layer with asyncio.wait_for()
+                timeout=600,  # Generous fallback; real timeout is at tool layer via asyncio.wait_for()
             )
 
             # Submit simulation (returns RunTask immediately)
-            # run_filename parameter controls output naming: {job_id}.raw, {job_id}.log
+            # run_filename must keep a netlist extension — LTspice ignores
+            # files without .cir/.net/.sp extension (exits with code 1).
+            # Preserve the original extension for compatibility.
+            ext = netlist_path.suffix or ".net"
+            run_name = f"{job_id}{ext}"
             runner.run(
                 netlist_str,
-                run_filename=job_id,
+                run_filename=run_name,
                 callback=completion_callback,
+                callback_on_error=True,
             )
 
             logger.info(
@@ -265,13 +267,14 @@ class SimulationRunner:
             logger.warning(f"Cannot cancel job {job_id}: runner not found")
             return
 
-        # Try to stop the runner
+        # Try to kill the simulator processes
         try:
-            # SimRunner.stop() exists but may not immediately kill processes
-            await asyncio.to_thread(runner.stop)
+            # spicelib SimRunner has no stop() method — use kill_all_spice()
+            # which terminates processes by name via psutil
+            await asyncio.to_thread(runner.kill_all_spice)
             logger.info(f"Cancelled simulation {job_id}")
         except Exception as e:
-            logger.warning(f"Error stopping simulation {job_id}: {e}")
+            logger.warning(f"Error cancelling simulation {job_id}: {e}")
 
         # Update job state
         from datetime import datetime

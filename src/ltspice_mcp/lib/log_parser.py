@@ -1,9 +1,15 @@
-"""Log file parsing and error context extraction."""
+"""Log file (.log) parsing: error extraction, success summaries, measurements, Fourier.
+
+For .raw file parsing (waveform data, statistics), see raw_parser.py.
+"""
 
 import logging
 from pathlib import Path
 
+from spicelib.log.ltsteps import LTSpiceLogReader
 from spicelib.raw.raw_read import RawRead
+
+from ltspice_mcp.errors import ResultError
 
 logger = logging.getLogger(__name__)
 
@@ -176,3 +182,126 @@ def parse_success_summary(raw_file: Path, log_file: Path, duration: float) -> di
             # Continue with empty warnings list
 
     return result
+
+
+def parse_measurements(log_path: Path, reader: LTSpiceLogReader | None = None) -> dict:
+    """Parse .MEAS measurement results from simulation log file.
+
+    Args:
+        log_path: Path to .log file
+        reader: Optional pre-built LTSpiceLogReader (avoids re-parsing)
+
+    Returns:
+        Dictionary with measurements dict (name -> list of values) and step_count.
+        Values are Python float (or None for failed measurements).
+
+    Raises:
+        ResultError: If log file cannot be parsed
+    """
+    if reader is None:
+        try:
+            reader = LTSpiceLogReader(str(log_path))
+        except Exception as e:
+            raise ResultError(f"Could not parse log file: {e}")
+
+    # Get measurement names
+    measure_names = reader.get_measure_names()
+    if not measure_names:
+        return {"measurements": {}, "step_count": 0}
+
+    # Extract values for each measurement
+    measurements = {}
+    for name in measure_names:
+        # LTSpiceLogReader.dataset uses lowercase keys
+        values = reader.dataset.get(name.lower(), [])
+        # Convert to Python float, handling complex (AC), numpy, None/FAILED
+        python_values = []
+        for val in values:
+            if val is None or (isinstance(val, str) and val.upper() == "FAILED"):
+                python_values.append(None)
+            elif isinstance(val, complex):
+                # AC measurements return LTComplex (complex subclass).
+                # Extract magnitude as the scalar value.
+                python_values.append(float(abs(val)))
+            elif hasattr(val, "item") and not isinstance(val, str):
+                # numpy scalar types
+                python_values.append(float(val.item()))
+            else:
+                python_values.append(float(val))
+        measurements[name] = python_values
+
+    # Determine step count from first measurement
+    step_count = len(measurements[measure_names[0]]) if measurements else 0
+
+    return {"measurements": measurements, "step_count": step_count}
+
+
+def parse_fourier_data(log_path: Path, reader: LTSpiceLogReader | None = None) -> list[dict]:
+    """Extract Fourier analysis (.FOUR) results from log file.
+
+    Args:
+        log_path: Path to .log file
+        reader: Optional pre-built LTSpiceLogReader (avoids re-parsing)
+
+    Returns:
+        List of dicts, each containing signal name, THD, fundamental frequency,
+        and list of harmonics (number, frequency, magnitude, phase).
+        All values are Python float.
+    """
+    if reader is None:
+        try:
+            reader = LTSpiceLogReader(str(log_path))
+        except Exception:
+            # If log parsing fails, return empty (graceful degradation)
+            return []
+
+    # Access Fourier data
+    if not hasattr(reader, "fourier") or not reader.fourier:
+        return []
+
+    results = []
+    try:
+        for signal_name, fourier_data in reader.fourier.items():
+            # Extract THD if available
+            thd = None
+            if hasattr(fourier_data, "thd"):
+                thd = float(fourier_data.thd) if fourier_data.thd is not None else None
+
+            # Extract fundamental frequency
+            fundamental_freq = None
+            if hasattr(fourier_data, "fundamental_frequency"):
+                fundamental_freq = (
+                    float(fourier_data.fundamental_frequency)
+                    if fourier_data.fundamental_frequency is not None
+                    else None
+                )
+
+            # Extract harmonics
+            harmonics = []
+            if hasattr(fourier_data, "harmonics") and fourier_data.harmonics:
+                for harmonic in fourier_data.harmonics:
+                    harm_dict = {
+                        "number": int(harmonic.number) if hasattr(harmonic, "number") else None,
+                        "frequency": (
+                            float(harmonic.frequency) if hasattr(harmonic, "frequency") else None
+                        ),
+                        "magnitude": (
+                            float(harmonic.magnitude) if hasattr(harmonic, "magnitude") else None
+                        ),
+                        "phase": float(harmonic.phase) if hasattr(harmonic, "phase") else None,
+                    }
+                    harmonics.append(harm_dict)
+
+            results.append(
+                {
+                    "signal": signal_name,
+                    "thd": thd,
+                    "fundamental_frequency": fundamental_freq,
+                    "harmonics": harmonics,
+                }
+            )
+    except Exception:
+        # Graceful degradation - return partial data if format is unexpected
+        pass
+
+    return results

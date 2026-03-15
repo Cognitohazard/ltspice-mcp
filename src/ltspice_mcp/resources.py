@@ -398,7 +398,7 @@ def _read_models(uri_str: str, state: SessionState) -> types.ReadResourceResult:
         data = {
             "libraries": libraries,
             "note": (
-                "Use the search_library tool to find models in built-in libraries."
+                "Use the ltspice_search_library tool to find models in built-in libraries."
             ),
         }
         return _make_result(uri_str, json.dumps(data, indent=2))

@@ -3,6 +3,7 @@
 from mcp import types
 
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools._base import text_response
 
 
 async def handle_get_server_status(
@@ -72,13 +73,13 @@ async def handle_get_server_status(
     lines.append(f"  Loaded libraries: {len(state.libraries)}")
 
     status_text = "\n".join(lines)
-    return [types.TextContent(type="text", text=status_text)]
+    return text_response(status_text)
 
 
 # Tool definitions
 TOOL_DEFS: list[types.Tool] = [
     types.Tool(
-        name="get_server_status",
+        name="ltspice_get_server_status",
         description=(
             "Get comprehensive server status including detected simulators, "
             "configuration settings, security sandbox paths, and runtime state. "
@@ -89,10 +90,16 @@ TOOL_DEFS: list[types.Tool] = [
             "properties": {},
             "required": [],
         },
+        annotations=types.ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
     )
 ]
 
 # Tool handler mapping
 TOOL_HANDLERS: dict[str, object] = {
-    "get_server_status": handle_get_server_status,
+    "ltspice_get_server_status": handle_get_server_status,
 }
