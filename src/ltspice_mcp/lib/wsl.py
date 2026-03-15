@@ -69,6 +69,7 @@ def to_windows_path(linux_path: Path) -> str:
             capture_output=True,
             text=True,
             check=True,
+            stdin=subprocess.DEVNULL,
         )
         windows_path = result.stdout.strip()
         logger.debug(f"Converted path: {linux_path} -> {windows_path}")
@@ -83,3 +84,111 @@ def to_windows_path(linux_path: Path) -> str:
             f"Path conversion failed for {linux_path}: {e.stderr.strip() if e.stderr else str(e)}"
         )
         return str(linux_path)
+
+
+def _resolve_win_env(var: str) -> Path | None:
+    """Resolve a Windows environment variable to a WSL path.
+
+    Runs cmd.exe to echo the variable, then wslpath to convert.
+    Returns None if resolution fails.
+    """
+    try:
+        win_result = subprocess.run(
+            ["cmd.exe", "/C", "echo", f"%{var}%"],
+            capture_output=True, text=True, check=True,
+            stdin=subprocess.DEVNULL,
+        )
+        wsl_result = subprocess.run(
+            ["wslpath", "-u", win_result.stdout.strip()],
+            capture_output=True, text=True, check=True,
+            stdin=subprocess.DEVNULL,
+        )
+        return Path(wsl_result.stdout.strip())
+    except Exception as e:
+        logger.debug(f"Could not resolve Windows %{var}%: {e}")
+        return None
+
+
+# Cache for Windows temp dir
+_win_temp_dir: Path | None = None
+
+
+def get_windows_output_dir() -> Path | None:
+    """Get a Windows-native temp directory for LTspice output on WSL.
+
+    LTspice writes .db (SQLite) files alongside simulation output.
+    SQLite fails on UNC paths (\\\\wsl.localhost\\...), which causes .MEAS
+    results to be lost from .log files. Using a Windows-native output dir
+    (under /mnt/c/) avoids this issue.
+
+    Returns:
+        Path under /mnt/c/ for simulation output, or None if not on WSL
+        or if the Windows temp dir can't be resolved.
+    """
+    global _win_temp_dir
+
+    if not is_wsl():
+        return None
+
+    if _win_temp_dir is not None:
+        return _win_temp_dir
+
+    temp_path = _resolve_win_env("TEMP")
+    if temp_path is not None:
+        win_temp = temp_path / "ltspice-mcp"
+    else:
+        win_temp = Path("/mnt/c/temp/ltspice-mcp")
+
+    try:
+        win_temp.mkdir(parents=True, exist_ok=True)
+        _win_temp_dir = win_temp
+        logger.info(f"WSL output directory: {win_temp}")
+        return _win_temp_dir
+    except OSError as e:
+        logger.warning(f"Failed to create Windows output dir {win_temp}: {e}")
+        return None
+
+
+def is_windows_native_path(path: Path) -> bool:
+    """Check if a path is on the Windows filesystem (under /mnt/)."""
+    try:
+        return str(path.resolve()).startswith("/mnt/")
+    except OSError:
+        return False
+
+
+def get_ltspice_lib_paths() -> list[str]:
+    """Discover LTspice symbol library paths on WSL.
+
+    spicelib's AscEditor needs .asy symbol files to parse .asc schematics.
+    On WSL, spicelib's default path expansion fails because it only handles
+    Wine paths (/drive_c/), not WSL's /mnt/c/ mount. This function probes
+    the standard LTspice library locations via the Windows user profile.
+
+    Returns:
+        List of existing library paths (may be empty if not on WSL or
+        LTspice libs aren't found).
+    """
+    if not is_wsl():
+        return []
+
+    local_appdata = _resolve_win_env("LOCALAPPDATA")
+    if local_appdata is None:
+        return []
+
+    # LTspice stores symbols under <LOCALAPPDATA>/LTspice/lib/sym
+    candidates = [
+        local_appdata / "LTspice" / "lib",
+        local_appdata / "LTspice" / "lib" / "sym",
+    ]
+
+    found = []
+    for candidate in candidates:
+        if candidate.is_dir():
+            found.append(str(candidate))
+            logger.debug(f"Found LTspice library path: {candidate}")
+
+    if not found:
+        logger.debug("No LTspice library paths found on WSL")
+
+    return found
