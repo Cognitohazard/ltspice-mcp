@@ -89,6 +89,7 @@ def generate_sweep_range(
         if points is not None:
             arr = np.linspace(start, stop, int(points))
         else:
+            assert step is not None
             # Epsilon guard: extend stop slightly so np.arange includes stop
             arr = np.arange(start, stop + step * 1e-10, step)
     elif scale == "log":
@@ -100,6 +101,7 @@ def generate_sweep_range(
         if points is not None:
             arr = np.geomspace(start, stop, int(points))
         else:
+            assert step is not None
             # Compute n from the log ratio: n = log(stop/start) / log(step) + 1
             # step here is treated as the multiplicative factor per step
             if step <= 0:

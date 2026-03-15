@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import random
 from datetime import datetime
 from pathlib import Path
 from typing import Type
@@ -10,60 +9,9 @@ from typing import Type
 from spicelib.sim.sim_runner import SimRunner
 from spicelib.sim.tookit.montecarlo import Montecarlo
 
-from ltspice_mcp.lib.wsl import to_windows_path
 from ltspice_mcp.state import BatchJob, SessionState
 
 logger = logging.getLogger(__name__)
-
-
-class SeededMontecarlo(Montecarlo):
-    """Montecarlo subclass that supports best-effort reproducible seeding.
-
-    spicelib's Montecarlo._get_sim_value() creates new random.Random() instances
-    on each call without arguments, so they seed themselves from os.urandom(),
-    ignoring module-level random.seed() in most Python implementations.
-
-    This subclass calls random.seed(seed) before run_analysis() as a best-effort
-    reproducibility measure. Note that this does NOT guarantee reproducibility
-    across different Python versions or spicelib versions since the internal
-    random.Random() instances use os.urandom() seeding.
-
-    Limitation: True reproducibility requires patching spicelib's _get_sim_value
-    to use a seeded Random instance. This is left for a future enhancement.
-    """
-
-    def __init__(self, circuit_file, runner=None, seed: int | None = None):
-        """Initialize SeededMontecarlo.
-
-        Args:
-            circuit_file: Path to the netlist file (str)
-            runner: SimRunner instance for executing simulations
-            seed: Optional RNG seed for best-effort reproducibility
-        """
-        super().__init__(circuit_file, runner)
-        self._seed = seed
-
-    def run_analysis(self, **kwargs):
-        """Run Monte Carlo analysis with optional best-effort seeding.
-
-        If a seed was provided, calls random.seed(seed) before running to seed
-        the module-level random state. This provides best-effort reproducibility
-        in Python implementations where random.Random() without args uses module-
-        level state (not guaranteed across all Python versions).
-
-        Args:
-            **kwargs: Passed directly to Montecarlo.run_analysis()
-        """
-        if self._seed is not None:
-            # Best-effort: seed module-level random state before run_analysis.
-            # NOTE: spicelib internally creates random.Random() instances without
-            # a seed argument, which use os.urandom() in CPython. This seed call
-            # may not achieve full reproducibility across all Python implementations.
-            random.seed(self._seed)
-            logger.debug(
-                f"SeededMontecarlo: applied seed={self._seed} (best-effort reproducibility)"
-            )
-        super().run_analysis(**kwargs)
 
 
 class MonteCarloRunner:
@@ -109,7 +57,7 @@ class MonteCarloRunner:
     async def start_montecarlo(self, batch_job: BatchJob, state: SessionState) -> None:
         """Start Monte Carlo analysis in background thread with asyncio integration.
 
-        Creates a SeededMontecarlo instance, applies tolerances from mc_config,
+        Creates a Montecarlo instance, applies tolerances from mc_config,
         and executes all runs in a thread pool. Per-run callbacks bridge to the
         event loop via call_soon_threadsafe().
 
@@ -147,32 +95,23 @@ class MonteCarloRunner:
 
         def execute_montecarlo() -> None:
             """Execute Montecarlo in thread pool (blocking call - safe in worker thread)."""
-            # Convert netlist path to Windows format if using LTSpice in WSL
+            # Pass Linux path — WSL path conversion is handled by the simulator
             netlist_path = batch_job.netlist
-            if self.simulator_class.__name__ == "LTspice":
-                netlist_str = to_windows_path(netlist_path)
-                logger.debug(
-                    f"Converted netlist path for LTSpice: {netlist_path} -> {netlist_str}"
-                )
-            else:
-                netlist_str = str(netlist_path)
+            netlist_str = str(netlist_path)
 
             # Create SimRunner for this Monte Carlo execution
             runner = SimRunner(
                 simulator=self.simulator_class,
                 output_folder=str(self.output_folder),
                 parallel_sims=self.max_parallel,
-                timeout=None,  # Tool layer handles timeout via asyncio.wait_for()
+                timeout=600,  # Tool layer handles timeout via asyncio.wait_for()
             )
 
-            # Create SeededMontecarlo - takes circuit_file str (not SpiceEditor)
-            # It manages its own editor internally (research pattern 3)
+            # Create Montecarlo - takes circuit_file str (not SpiceEditor)
+            # It manages its own editor internally
+            assert batch_job.mc_config is not None
             mc_config = batch_job.mc_config
-            mc = SeededMontecarlo(
-                netlist_str,
-                runner,
-                seed=mc_config.seed if mc_config.seed is not None else None,
-            )
+            mc = Montecarlo(netlist_str, runner)
 
             # Apply type-level tolerances first (prefix like "R", "C", "L")
             # These set defaults for all components of that type
@@ -193,7 +132,6 @@ class MonteCarloRunner:
             logger.info(
                 f"Starting Monte Carlo job {batch_job.job_id}: "
                 f"{batch_job.total_runs} runs, "
-                f"seed={mc_config.seed}, "
                 f"type_tolerances={list(mc_config.type_tolerances.keys())}, "
                 f"component_overrides={list(mc_config.component_overrides.keys())}"
             )

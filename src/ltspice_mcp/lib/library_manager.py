@@ -32,6 +32,10 @@ class LibraryManager:
         self._builtin_paths: list[Path] | None = None
         self._available_simulators = available_simulators
 
+    def __len__(self) -> int:
+        """Return number of loaded user libraries."""
+        return len(self._user_libs)
+
     def _detect_builtin_paths(self) -> list[Path]:
         """Detect built-in library directories for available simulators.
 

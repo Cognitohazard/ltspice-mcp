@@ -420,7 +420,6 @@ Use the `configure_montecarlo` tool to set up the analysis.
   - 500 runs: Good statistical confidence. Yield estimate ±2-3%. Recommended starting point.
   - 1000+ runs: High confidence yield estimates. Required for >99% yield claims.
   - For 99.9% yield (mil/aero), use ≥ 5000 runs.
-- `seed`: Set an integer seed for reproducibility (e.g., `seed=42`). Allows re-running identical analysis.
 - `type_tolerances`: Dictionary of component type to tolerance percentage (e.g., `{{"R": 1, "C": 5}}`)
 
 **Rule of thumb:** If you need to claim X% yield, you need at least 10/(1-X/100) runs. For 99% yield claim: 1000 runs minimum.
@@ -429,7 +428,7 @@ Use the `configure_montecarlo` tool to set up the analysis.
 
 ## Step 3: Analyze Results
 
-Use `check_batch_job` to monitor progress, then `get_batch_results` when complete.
+Use `get_batch_results` (without signal) to monitor progress, then `get_batch_results` with a signal name when complete.
 
 **Interpret the statistical output:**
 

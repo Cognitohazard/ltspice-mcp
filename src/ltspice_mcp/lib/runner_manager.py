@@ -1,0 +1,127 @@
+"""Centralized runner lifecycle management.
+
+Owns SimulationRunner, SweepRunner, and MonteCarloRunner instances.
+Replaces the fragile module-level singleton pattern where each tool module
+independently checked for staleness (event loop, simulator, output folder).
+
+All three runners share the same constructor signature and staleness
+conditions. This class provides a single invalidation mechanism.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Type
+
+if TYPE_CHECKING:
+    from ltspice_mcp.lib.montecarlo_runner import MonteCarloRunner
+    from ltspice_mcp.lib.sim_runner import SimulationRunner
+    from ltspice_mcp.lib.sweep_runner import SweepRunner
+
+logger = logging.getLogger(__name__)
+
+# Import paths for lazy loading (avoids circular imports with state.py)
+_RUNNER_IMPORTS: dict[str, tuple[str, str]] = {
+    "sim": ("ltspice_mcp.lib.sim_runner", "SimulationRunner"),
+    "sweep": ("ltspice_mcp.lib.sweep_runner", "SweepRunner"),
+    "mc": ("ltspice_mcp.lib.montecarlo_runner", "MonteCarloRunner"),
+}
+
+
+class RunnerManager:
+    """Creates and caches runner instances, invalidating when context changes.
+
+    A runner is stale when any of these change:
+    - The asyncio event loop (e.g., between test runs)
+    - The simulator class (e.g., user switches from LTspice to ngspice)
+    - The output folder (e.g., WSL temp dir changes)
+    """
+
+    def __init__(self) -> None:
+        self._runners: dict[str, Any] = {}
+
+        # Track the context that runners were created with
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._simulator_class: Type | None = None
+        self._output_folder: Path | None = None
+
+    def _ensure_fresh(
+        self, loop: asyncio.AbstractEventLoop, simulator_class: Type, output_folder: Path
+    ) -> None:
+        """Invalidate all runners if context has changed."""
+        if (
+            self._loop is None
+            or self._loop is not loop
+            or self._simulator_class is not simulator_class
+            or self._output_folder != output_folder
+        ):
+            self._runners.clear()
+            self._loop = loop
+            self._simulator_class = simulator_class
+            self._output_folder = output_folder
+
+    def _get_or_create(
+        self,
+        key: str,
+        loop: asyncio.AbstractEventLoop,
+        simulator_class: Type,
+        output_folder: Path,
+        max_parallel: int,
+    ) -> Any:
+        """Get a cached runner or create a new one."""
+        self._ensure_fresh(loop, simulator_class, output_folder)
+
+        if key not in self._runners:
+            module_path, class_name = _RUNNER_IMPORTS[key]
+            import importlib
+            mod = importlib.import_module(module_path)
+            cls = getattr(mod, class_name)
+
+            self._runners[key] = cls(
+                loop=loop,
+                simulator_class=simulator_class,
+                output_folder=output_folder,
+                max_parallel=max_parallel,
+            )
+            logger.debug(f"Created {class_name}: output={output_folder}")
+
+        return self._runners[key]
+
+    def reset(self) -> None:
+        """Force-invalidate all runners. Used by test fixtures."""
+        self._runners.clear()
+        self._loop = None
+        self._simulator_class = None
+        self._output_folder = None
+
+    def get_sim_runner(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        simulator_class: Type,
+        output_folder: Path,
+        max_parallel: int = 4,
+    ) -> SimulationRunner:
+        """Get or create a SimulationRunner."""
+        return self._get_or_create("sim", loop, simulator_class, output_folder, max_parallel)
+
+    def get_sweep_runner(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        simulator_class: Type,
+        output_folder: Path,
+        max_parallel: int = 4,
+    ) -> SweepRunner:
+        """Get or create a SweepRunner."""
+        return self._get_or_create("sweep", loop, simulator_class, output_folder, max_parallel)
+
+    def get_mc_runner(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        simulator_class: Type,
+        output_folder: Path,
+        max_parallel: int = 4,
+    ) -> MonteCarloRunner:
+        """Get or create a MonteCarloRunner."""
+        return self._get_or_create("mc", loop, simulator_class, output_folder, max_parallel)
