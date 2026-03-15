@@ -15,9 +15,18 @@ wheels/
 
 .planning/
 
-mcp.json
+.mcp.json
 
 CLAUDE.md
 
 .chunkhound/
 .chunkhound.json
+
+# Runtime artifacts
+workspace/
+ltspice-mcp.toml
+*.raw
+*.log
+*.op.raw
+*.net
+*.exe.log
