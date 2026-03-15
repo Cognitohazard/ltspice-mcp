@@ -1,0 +1,44 @@
+# LTSpice MCP Server Configuration
+# Copy to ltspice-mcp.toml and edit for your environment.
+# All settings have sensible defaults and can be overridden with
+# LTSPICE_MCP_* environment variables.
+
+[simulator]
+# Preferred simulator: ltspice, ngspice, qspice, xyce
+# Leave empty for auto-detection (prefers LTSpice if available)
+default = "ltspice"
+
+# Explicit path to simulator executable (overrides auto-detection)
+# Leave empty for auto-detection. Required on WSL (Windows path via /mnt/c/).
+# Examples:
+#   WSL:     "/mnt/c/Program Files/ADI/LTspice/LTspice.exe"
+#   Windows: "C:\\Program Files\\ADI\\LTspice\\LTspice.exe"
+#   Linux:   "" (auto-detect via Wine or PATH)
+path = ""
+
+[security]
+# Paths accessible to the server (sandbox)
+# Default: ["."] (current working directory)
+allowed_paths = ["."]
+
+[simulation]
+# Maximum number of concurrent simulations
+max_parallel = 4
+
+# Default simulation timeout in seconds
+timeout = 300.0
+
+[analysis]
+# Maximum waveform data points to return per trace
+max_points = 10000
+
+[plotting]
+# Plot resolution in DPI
+dpi = 150
+
+# Matplotlib style (e.g., seaborn-v0_8-darkgrid, ggplot, bmh)
+style = "seaborn-v0_8-darkgrid"
+
+[logging]
+# Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+level = "INFO"
