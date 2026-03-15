@@ -4,18 +4,17 @@ import asyncio
 import logging
 import time
 from datetime import datetime
+from pathlib import Path
 from mcp import types
 
-from ltspice_mcp.errors import SimulationError
 from ltspice_mcp.lib.log_parser import extract_error_context, parse_success_summary
 from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
 from ltspice_mcp.state import SessionState, SimulationJob
-from ltspice_mcp.tools._base import safe_path
+from ltspice_mcp.tools._base import (
+    require_simulator, resolve_netlist_path, resolve_output_folder, text_response,
+)
 
 logger = logging.getLogger(__name__)
-
-# Module-level SimulationRunner instance (lazy initialization)
-_sim_runner: SimulationRunner | None = None
 
 # Constants for timeout behavior
 SYNC_TIMEOUT_THRESHOLD = 30.0  # Simulations <= 30s run synchronously by default
@@ -23,29 +22,14 @@ HARD_MAX_TIMEOUT = 600.0  # 10 minutes - max for wait=true mode
 
 
 def _get_or_create_runner(state: SessionState) -> SimulationRunner:
-    """Get or create module-level SimulationRunner instance.
-
-    Creates a new runner if none exists or if simulator has changed.
-
-    Args:
-        state: SessionState containing simulator and configuration
-
-    Returns:
-        SimulationRunner instance
-    """
-    global _sim_runner
-
-    # Create new runner if needed
-    if _sim_runner is None:
-        _sim_runner = SimulationRunner(
-            loop=asyncio.get_running_loop(),
-            simulator_class=state.default_simulator,
-            output_folder=state.working_dir,
-            max_parallel=state.config.max_parallel_sims,
-        )
-        logger.debug("Created new SimulationRunner instance")
-
-    return _sim_runner
+    """Get or create a SimulationRunner via the centralized RunnerManager."""
+    assert state.default_simulator is not None
+    return state.runners.get_sim_runner(
+        loop=asyncio.get_running_loop(),
+        simulator_class=state.default_simulator,
+        output_folder=resolve_output_folder(state),
+        max_parallel=state.config.max_parallel_sims,
+    )
 
 
 async def handle_run_simulation(arguments: dict, state: SessionState) -> list[types.TextContent]:
@@ -66,21 +50,8 @@ async def handle_run_simulation(arguments: dict, state: SessionState) -> list[ty
     timeout = arguments.get("timeout", state.config.default_timeout)
     wait = arguments.get("wait", False)
 
-    # Resolve and validate netlist path
-    try:
-        netlist_path = safe_path(netlist_str, state)
-    except Exception as e:
-        raise SimulationError(f"Invalid netlist path: {e}")
-
-    if not netlist_path.exists():
-        raise SimulationError(f"Netlist file not found: {netlist_path}")
-
-    # Check simulator is available
-    if state.default_simulator is None:
-        raise SimulationError(
-            "No simulator available. Check server status.\n\n"
-            f"Available simulators: {list(state.available_simulators.keys())}"
-        )
+    netlist_path = resolve_netlist_path(netlist_str, state)
+    require_simulator(state)
 
     # Generate job ID and create job
     job_id = generate_job_id()
@@ -108,20 +79,15 @@ async def handle_run_simulation(arguments: dict, state: SessionState) -> list[ty
         return await _wait_for_completion(job, timeout, runner)
     else:
         # Async path - return job ID immediately
-        return [
-            types.TextContent(
-                type="text",
-                text=(
-                    f"Simulation started in background\n"
-                    f"Job ID: {job_id}\n"
-                    f"Netlist: {netlist_path}\n"
-                    f"Simulator: {state.default_simulator.__name__}\n\n"
-                    f"Use check_job('{job_id}') to check status\n"
-                    f"Use list_jobs() to see all jobs\n"
-                    f"Use cancel_job('{job_id}') to cancel"
-                ),
-            )
-        ]
+        return text_response(
+            f"Simulation started in background\n"
+            f"Job ID: {job_id}\n"
+            f"Netlist: {netlist_path}\n"
+            f"Simulator: {state.default_simulator.__name__}\n\n"
+            f"Use ltspice_check_job('{job_id}') to check status\n"
+            f"Use ltspice_check_job() to see all jobs\n"
+            f"Use ltspice_cancel_job('{job_id}') to cancel"
+        )
 
 
 async def _wait_for_completion(
@@ -156,24 +122,21 @@ async def _wait_for_completion(
         if job.log_file and job.log_file.exists():
             log_excerpt = f"\n\nLog excerpt:\n{extract_error_context(job.log_file, max_lines=20)}"
 
-        return [
-            types.TextContent(
-                type="text",
-                text=(
-                    f"Simulation timed out after {duration:.1f}s (killed by server)\n"
-                    f"Job ID: {job.job_id}\n"
-                    f"Netlist: {job.netlist}{log_excerpt}"
-                ),
-            )
-        ]
+        return text_response(
+            f"Simulation timed out after {duration:.1f}s (killed by server)\n"
+            f"Job ID: {job.job_id}\n"
+            f"Netlist: {job.netlist}{log_excerpt}"
+        )
 
     # Simulation completed (success or failure)
     duration = time.time() - start_time
 
     if job.status == "completed":
         # Parse success summary
+        assert job.raw_file is not None
+        assert job.log_file is not None
         summary = parse_success_summary(job.raw_file, job.log_file, duration)
-        return [_format_success_response(job.job_id, summary)]
+        return _format_success_response(job.job_id, summary)
     elif job.status == "failed":
         # Extract error context
         error_msg = job.error or "Unknown error"
@@ -181,35 +144,20 @@ async def _wait_for_completion(
             log_excerpt = extract_error_context(job.log_file, max_lines=20)
             error_msg = f"{error_msg}\n\nLog excerpt:\n{log_excerpt}"
 
-        return [
-            types.TextContent(
-                type="text",
-                text=(
-                    f"Simulation failed\n"
-                    f"Job ID: {job.job_id}\n"
-                    f"Duration: {duration:.2f}s\n\n"
-                    f"{error_msg}"
-                ),
-            )
-        ]
+        return text_response(
+            f"Simulation failed\n"
+            f"Job ID: {job.job_id}\n"
+            f"Duration: {duration:.2f}s\n\n"
+            f"{error_msg}"
+        )
     elif job.status == "cancelled":
-        return [
-            types.TextContent(
-                type="text",
-                text=f"Simulation cancelled\nJob ID: {job.job_id}",
-            )
-        ]
+        return text_response(f"Simulation cancelled\nJob ID: {job.job_id}")
     else:
         # Unexpected status
-        return [
-            types.TextContent(
-                type="text",
-                text=f"Simulation ended with unexpected status: {job.status}",
-            )
-        ]
+        return text_response(f"Simulation ended with unexpected status: {job.status}")
 
 
-def _format_success_response(job_id: str, summary: dict) -> types.TextContent:
+def _format_success_response(job_id: str, summary: dict) -> list[types.TextContent]:
     """Format simulation success response.
 
     Args:
@@ -217,7 +165,7 @@ def _format_success_response(job_id: str, summary: dict) -> types.TextContent:
         summary: Parsed summary dict from parse_success_summary
 
     Returns:
-        TextContent with formatted success message
+        Single-item TextContent list with formatted success message
     """
     # Format signal list (first 20 signals)
     signals = summary["trace_names"]
@@ -246,52 +194,51 @@ def _format_success_response(job_id: str, summary: dict) -> types.TextContent:
         f"Available signals ({len(signals)}):\n{signal_text}{warning_text}"
     )
 
-    return types.TextContent(type="text", text=text)
+    return text_response(text)
 
 
 async def handle_check_job(arguments: dict, state: SessionState) -> list[types.TextContent]:
-    """Check status of an async simulation job.
+    """Check status of a simulation job, or list all jobs.
+
+    Without job_id: lists active jobs (filter with status param).
+    With job_id: returns detailed status or completion results.
 
     Args:
-        arguments: Tool arguments with job_id
+        arguments: Tool arguments with optional job_id and status
         state: Current session state
 
     Returns:
-        List containing TextContent with job status or results
+        List containing TextContent with job status, results, or job list
     """
-    job_id = arguments["job_id"]
+    job_id = arguments.get("job_id")
 
-    # Look up job
+    # If no job_id provided, list jobs
+    if not job_id:
+        return _list_jobs(arguments, state)
+
+    # Look up specific job
     job = state.jobs.get(job_id)
     if not job:
-        return [
-            types.TextContent(
-                type="text",
-                text=f"Job not found: {job_id}\n\nUse list_jobs() to see all jobs",
-            )
-        ]
+        return text_response(f"Job not found: {job_id}\n\nUse ltspice_check_job() with no arguments to see all jobs")
 
     # Check status
     if job.status == "running":
         # Calculate elapsed time
         elapsed = (datetime.now() - job.started_at).total_seconds()
-        return [
-            types.TextContent(
-                type="text",
-                text=(
-                    f"Job {job_id} is still running\n"
-                    f"Netlist: {job.netlist}\n"
-                    f"Simulator: {job.simulator}\n"
-                    f"Elapsed: {elapsed:.1f}s\n\n"
-                    f"Use cancel_job('{job_id}') to cancel"
-                ),
-            )
-        ]
+        return text_response(
+            f"Job {job_id} is still running\n"
+            f"Netlist: {job.netlist}\n"
+            f"Simulator: {job.simulator}\n"
+            f"Elapsed: {elapsed:.1f}s\n\n"
+            f"Use ltspice_cancel_job('{job_id}') to cancel"
+        )
     elif job.status == "completed":
         # Return same format as sync completion
         duration = (job.completed_at - job.started_at).total_seconds() if job.completed_at else 0
+        assert job.raw_file is not None
+        assert job.log_file is not None
         summary = parse_success_summary(job.raw_file, job.log_file, duration)
-        return [_format_success_response(job_id, summary)]
+        return _format_success_response(job_id, summary)
     elif job.status == "failed":
         # Return error with log excerpt
         duration = (job.completed_at - job.started_at).total_seconds() if job.completed_at else 0
@@ -300,17 +247,12 @@ async def handle_check_job(arguments: dict, state: SessionState) -> list[types.T
             log_excerpt = extract_error_context(job.log_file, max_lines=20)
             error_msg = f"{error_msg}\n\nLog excerpt:\n{log_excerpt}"
 
-        return [
-            types.TextContent(
-                type="text",
-                text=(
-                    f"Simulation failed\n"
-                    f"Job ID: {job_id}\n"
-                    f"Duration: {duration:.2f}s\n\n"
-                    f"{error_msg}"
-                ),
-            )
-        ]
+        return text_response(
+            f"Simulation failed\n"
+            f"Job ID: {job_id}\n"
+            f"Duration: {duration:.2f}s\n\n"
+            f"{error_msg}"
+        )
     elif job.status == "timeout":
         # Return timeout message with log excerpt
         duration = (job.completed_at - job.started_at).total_seconds() if job.completed_at else 0
@@ -318,52 +260,28 @@ async def handle_check_job(arguments: dict, state: SessionState) -> list[types.T
         if job.log_file and job.log_file.exists():
             log_excerpt = f"\n\nLog excerpt:\n{extract_error_context(job.log_file, max_lines=20)}"
 
-        return [
-            types.TextContent(
-                type="text",
-                text=(
-                    f"Simulation timed out after {duration:.1f}s (killed by server)\n"
-                    f"Job ID: {job_id}\n"
-                    f"Netlist: {job.netlist}{log_excerpt}"
-                ),
-            )
-        ]
+        return text_response(
+            f"Simulation timed out after {duration:.1f}s (killed by server)\n"
+            f"Job ID: {job_id}\n"
+            f"Netlist: {job.netlist}{log_excerpt}"
+        )
     elif job.status == "cancelled":
-        return [
-            types.TextContent(
-                type="text",
-                text=f"Job {job_id} was cancelled\nNetlist: {job.netlist}",
-            )
-        ]
+        return text_response(f"Job {job_id} was cancelled\nNetlist: {job.netlist}")
     else:
-        return [
-            types.TextContent(
-                type="text",
-                text=f"Job {job_id} has unexpected status: {job.status}",
-            )
-        ]
+        return text_response(f"Job {job_id} has unexpected status: {job.status}")
 
 
-async def handle_list_jobs(arguments: dict, state: SessionState) -> list[types.TextContent]:
+def _list_jobs(arguments: dict, state: SessionState) -> list[types.TextContent]:
     """List simulation jobs with optional status filter.
 
     Shows active jobs (running/queued) by default.
-
-    Args:
-        arguments: Tool arguments with optional status filter
-        state: Current session state
-
-    Returns:
-        List containing TextContent with formatted job list
     """
     status_filter = arguments.get("status")
 
     # Determine which jobs to show
     if status_filter == "all":
-        # Show all jobs
         jobs_to_show = list(state.jobs.values())
     elif status_filter:
-        # Filter by specific status
         jobs_to_show = [job for job in state.jobs.values() if job.status == status_filter]
     else:
         # Default: show active jobs only (running/queued)
@@ -380,7 +298,7 @@ async def handle_list_jobs(arguments: dict, state: SessionState) -> list[types.T
             message = "No active jobs" if not status_filter else "No jobs found"
         else:
             message = f"No jobs with status '{status_filter}'"
-        return [types.TextContent(type="text", text=message)]
+        return text_response(message)
 
     # Build job table
     lines = [f"Simulation Jobs ({len(jobs_to_show)}):\n"]
@@ -395,14 +313,11 @@ async def handle_list_jobs(arguments: dict, state: SessionState) -> list[types.T
             duration = (job.completed_at - job.started_at).total_seconds()
             duration_str = f"{duration:.1f}s"
         else:
-            # Still running - show elapsed
             elapsed = (datetime.now() - job.started_at).total_seconds()
             duration_str = f"{elapsed:.1f}s (running)"
 
-        # Format started time
         started_str = job.started_at.strftime("%Y-%m-%d %H:%M")
 
-        # Format netlist name (truncate if too long)
         netlist_name = job.netlist.name
         if len(netlist_name) > 20:
             netlist_name = netlist_name[:17] + "..."
@@ -411,7 +326,7 @@ async def handle_list_jobs(arguments: dict, state: SessionState) -> list[types.T
             f"{job.job_id:<28} | {job.status:<10} | {netlist_name:<20} | {started_str:<17} | {duration_str}"
         )
 
-    return [types.TextContent(type="text", text="\n".join(lines))]
+    return text_response("\n".join(lines))
 
 
 async def handle_cancel_job(arguments: dict, state: SessionState) -> list[types.TextContent]:
@@ -429,38 +344,23 @@ async def handle_cancel_job(arguments: dict, state: SessionState) -> list[types.
     # Look up job
     job = state.jobs.get(job_id)
     if not job:
-        return [
-            types.TextContent(
-                type="text",
-                text=f"Job not found: {job_id}\n\nUse list_jobs() to see all jobs",
-            )
-        ]
+        return text_response(f"Job not found: {job_id}\n\nUse ltspice_check_job() with no arguments to see all jobs")
 
     # Check if job is running
     if job.status not in ("running", "queued"):
-        return [
-            types.TextContent(
-                type="text",
-                text=f"Job {job_id} is not running (status: {job.status})",
-            )
-        ]
+        return text_response(f"Job {job_id} is not running (status: {job.status})")
 
     # Cancel the job
     runner = _get_or_create_runner(state)
     await runner.cancel(job)
 
-    return [
-        types.TextContent(
-            type="text",
-            text=f"Job {job_id} cancelled",
-        )
-    ]
+    return text_response(f"Job {job_id} cancelled")
 
 
 # Tool definitions
 TOOL_DEFS: list[types.Tool] = [
     types.Tool(
-        name="run_simulation",
+        name="ltspice_run_simulation",
         description=(
             "Run a SPICE simulation on a netlist file. "
             "Automatically runs synchronously for short simulations (<=30s timeout) "
@@ -486,45 +386,44 @@ TOOL_DEFS: list[types.Tool] = [
             },
             "required": ["netlist"],
         },
+        annotations=types.ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
     ),
     types.Tool(
-        name="check_job",
+        name="ltspice_check_job",
         description=(
-            "Check the status of an async simulation job. "
-            "Returns completion results (same format as synchronous run) if finished, "
-            "or current status with elapsed time if still running."
+            "Check status of a simulation job by ID, or list all jobs. "
+            "Without job_id: lists active jobs (filter with status param). "
+            "With job_id: returns detailed status or completion results."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "job_id": {
                     "type": "string",
-                    "description": "Job ID returned by run_simulation",
-                }
-            },
-            "required": ["job_id"],
-        },
-    ),
-    types.Tool(
-        name="list_jobs",
-        description=(
-            "List simulation jobs. Shows active jobs (running/queued) by default. "
-            "Use status filter to see completed, failed, or all jobs."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
+                    "description": "Job ID returned by ltspice_run_simulation. Omit to list all jobs.",
+                },
                 "status": {
                     "type": "string",
-                    "description": "Filter by status: 'running', 'completed', 'failed', 'timeout', 'cancelled', or 'all'. Default: shows active jobs only.",
+                    "description": "Filter by status when listing jobs (no job_id). Default: shows active jobs only.",
                     "enum": ["running", "queued", "completed", "failed", "timeout", "cancelled", "all"],
-                }
+                },
             },
             "required": [],
         },
+        annotations=types.ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
     ),
     types.Tool(
-        name="cancel_job",
+        name="ltspice_cancel_job",
         description="Cancel a running simulation job. Kills the simulator process and marks the job as cancelled.",
         inputSchema={
             "type": "object",
@@ -536,12 +435,17 @@ TOOL_DEFS: list[types.Tool] = [
             },
             "required": ["job_id"],
         },
+        annotations=types.ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
     ),
 ]
 
 TOOL_HANDLERS: dict[str, object] = {
-    "run_simulation": handle_run_simulation,
-    "check_job": handle_check_job,
-    "list_jobs": handle_list_jobs,
-    "cancel_job": handle_cancel_job,
+    "ltspice_run_simulation": handle_run_simulation,
+    "ltspice_check_job": handle_check_job,
+    "ltspice_cancel_job": handle_cancel_job,
 }

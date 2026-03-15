@@ -4,7 +4,7 @@ from mcp import types
 
 from ltspice_mcp.errors import LibraryError
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import run_sync, safe_path
+from ltspice_mcp.tools._base import run_sync, safe_path, text_response
 
 
 async def handle_search_library(
@@ -49,7 +49,7 @@ async def handle_search_library(
 
     # Format response
     if not results:
-        return [types.TextContent(type="text", text=f"No models found matching '{query}'")]
+        return text_response(f"No models found matching '{query}'")
 
     lines = [f"Found {total} model(s) matching '{query}'"]
     lines.append(f"Showing {offset + 1}-{offset + len(results)} of {total}")
@@ -58,7 +58,7 @@ async def handle_search_library(
     for r in results:
         lines.append(f"  {r['name']} ({r['type']}) - {r['source_path']}")
 
-    return [types.TextContent(type="text", text="\n".join(lines))]
+    return text_response("\n".join(lines))
 
 
 async def handle_get_model_info(
@@ -87,7 +87,7 @@ async def handle_get_model_info(
     if info is None:
         raise LibraryError(
             f"Model '{name}' not found in loaded or built-in libraries. "
-            "Use search_library to find models."
+            "Use ltspice_search_library to find models."
         )
 
     # Format response
@@ -111,7 +111,7 @@ async def handle_get_model_info(
         lines.append("Full SPICE definition:")
         lines.append(info["raw_text"])
 
-    return [types.TextContent(type="text", text="\n".join(lines))]
+    return text_response("\n".join(lines))
 
 
 async def handle_load_library(
@@ -145,7 +145,7 @@ async def handle_load_library(
         f"from {summary['files_loaded']} file(s)"
     )
 
-    return [types.TextContent(type="text", text=result)]
+    return text_response(result)
 
 
 async def handle_unload_library(
@@ -174,53 +174,49 @@ async def handle_unload_library(
     if not result["removed"]:
         raise LibraryError(f"Library not loaded: {path}")
 
-    return [types.TextContent(type="text", text=f"Unloaded library: {path}")]
+    return text_response(f"Unloaded library: {path}")
 
 
 async def handle_list_libraries(
-    _arguments: dict, state: SessionState
-) -> list[types.TextContent]:
-    """List all loaded libraries.
-
-    Args:
-        _arguments: Empty dict
-        state: Session state with library manager
-
-    Returns:
-        List with single TextContent containing library paths
-    """
-    libs = await run_sync(state.libraries.list_libraries)
-
-    if not libs:
-        return [types.TextContent(type="text", text="No libraries loaded")]
-
-    lines = [f"Loaded libraries ({len(libs)}):"]
-    for lib_path in libs:
-        lines.append(f"  {lib_path}")
-
-    return [types.TextContent(type="text", text="\n".join(lines))]
-
-
-async def handle_list_subcircuits(
     arguments: dict, state: SessionState
 ) -> list[types.TextContent]:
-    """List subcircuit models from loaded libraries.
+    """List loaded libraries, optionally with subcircuit detail.
 
     Args:
-        arguments: Optional 'path' (string) to filter to specific library
+        arguments: Optional 'detail' (bool) to include subcircuit names,
+                   optional 'path' (string) to filter to specific library
         state: Session state with library manager
 
     Returns:
-        List with single TextContent containing subcircuit names
+        List with single TextContent containing library info
 
     Raises:
         PathSecurityError: Path outside sandbox (if path provided)
     """
+    detail = arguments.get("detail", False)
     filter_path = None
     if "path" in arguments:
         filter_path = safe_path(arguments["path"], state)
 
-    # Search for all subcircuits (empty query, filter to .SUBCKT type)
+    libs = await run_sync(state.libraries.list_libraries)
+
+    if not libs:
+        return text_response("No libraries loaded")
+
+    # Apply path filter
+    if filter_path:
+        libs = [lp for lp in libs if str(filter_path) in str(lp)]
+
+    if not libs:
+        return text_response(f"No libraries matching {filter_path}")
+
+    if not detail:
+        lines = [f"Loaded libraries ({len(libs)}):"]
+        for lib_path in libs:
+            lines.append(f"  {lib_path}")
+        return text_response("\n".join(lines))
+
+    # Detail mode: include subcircuit names per library
     try:
         result = await run_sync(
             state.libraries.search_user_libraries, "", 0, 999999
@@ -234,30 +230,41 @@ async def handle_list_subcircuits(
         if r["type"] == ".SUBCKT"
     ]
 
-    # Apply path filter if specified
-    if filter_path:
-        subcircuits = [
-            r for r in subcircuits
-            if str(filter_path) in r["source_path"]
-        ]
-
-    if not subcircuits:
-        msg = "No subcircuits found"
-        if filter_path:
-            msg += f" in {filter_path}"
-        return [types.TextContent(type="text", text=msg)]
-
-    lines = [f"Subcircuits ({len(subcircuits)}):"]
+    # Group subcircuits by source path
+    subcircuits_by_path: dict[str, list[str]] = {}
     for sc in subcircuits:
-        lines.append(f"  {sc['name']} - {sc['source_path']}")
+        src = sc["source_path"]
+        subcircuits_by_path.setdefault(src, []).append(sc["name"])
 
-    return [types.TextContent(type="text", text="\n".join(lines))]
+    lines = [f"Loaded libraries ({len(libs)}):"]
+    for lib_path in libs:
+        lib_str = str(lib_path)
+        # Find subcircuits whose source_path contains this library path
+        matching_subs: list[str] = []
+        for src, names in subcircuits_by_path.items():
+            if lib_str in src:
+                matching_subs.extend(names)
+        lines.append(f"  {lib_path}")
+        if matching_subs:
+            for name in sorted(matching_subs):
+                lines.append(f"    .SUBCKT {name}")
+        else:
+            lines.append("    (no subcircuits)")
+
+    return text_response("\n".join(lines))
 
 
 # Tool definitions
+_RO_ANNOTATIONS = types.ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+
 TOOL_DEFS: list[types.Tool] = [
     types.Tool(
-        name="search_library",
+        name="ltspice_search_library",
         description="Search component libraries for models and subcircuits by name (case-insensitive substring match). Search 'user' for loaded libraries or 'builtin' for simulator built-in libraries. Results include model name, type (.MODEL/.SUBCKT), and source file.",
         inputSchema={
             "type": "object",
@@ -282,9 +289,10 @@ TOOL_DEFS: list[types.Tool] = [
             },
             "required": ["query"],
         },
+        annotations=_RO_ANNOTATIONS,
     ),
     types.Tool(
-        name="get_model_info",
+        name="ltspice_get_model_info",
         description="Get SPICE model/subcircuit details including parameters and ready-to-use .include directive. Set full=true to get the complete SPICE definition text. Searches both user-loaded and built-in libraries.",
         inputSchema={
             "type": "object",
@@ -300,10 +308,11 @@ TOOL_DEFS: list[types.Tool] = [
             },
             "required": ["name"],
         },
+        annotations=_RO_ANNOTATIONS,
     ),
     types.Tool(
-        name="load_library",
-        description="Load a SPICE library file (.lib, .mod) or directory of library files into the session. Loaded libraries are searchable via search_library. Accepts file or directory path — directories are scanned recursively for .lib/.mod files.",
+        name="ltspice_load_library",
+        description="Load a SPICE library file (.lib, .mod) or directory of library files into the session. Loaded libraries are searchable via ltspice_search_library. Accepts file or directory path — directories are scanned recursively for .lib/.mod files.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -314,9 +323,15 @@ TOOL_DEFS: list[types.Tool] = [
             },
             "required": ["path"],
         },
+        annotations=types.ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
     ),
     types.Tool(
-        name="unload_library",
+        name="ltspice_unload_library",
         description="Unload a previously loaded library from the session. The library will no longer appear in search results.",
         inputSchema={
             "type": "object",
@@ -328,38 +343,39 @@ TOOL_DEFS: list[types.Tool] = [
             },
             "required": ["path"],
         },
+        annotations=types.ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
     ),
     types.Tool(
-        name="list_libraries",
-        description="List all user-loaded library file paths in the current session.",
-        inputSchema={
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    ),
-    types.Tool(
-        name="list_subcircuits",
-        description="List available subcircuit models from loaded libraries. Optionally filter to a specific library file path.",
+        name="ltspice_list_libraries",
+        description="List loaded libraries. With detail=true, also shows subcircuit models from each library.",
         inputSchema={
             "type": "object",
             "properties": {
+                "detail": {
+                    "type": "boolean",
+                    "description": "If true, include subcircuit model names from each library",
+                },
                 "path": {
                     "type": "string",
-                    "description": "Optional: filter to specific library file path",
+                    "description": "Filter to a specific library file path",
                 },
             },
             "required": [],
         },
+        annotations=_RO_ANNOTATIONS,
     ),
 ]
 
 # Handler mapping
 TOOL_HANDLERS: dict[str, object] = {
-    "search_library": handle_search_library,
-    "get_model_info": handle_get_model_info,
-    "load_library": handle_load_library,
-    "unload_library": handle_unload_library,
-    "list_libraries": handle_list_libraries,
-    "list_subcircuits": handle_list_subcircuits,
+    "ltspice_search_library": handle_search_library,
+    "ltspice_get_model_info": handle_get_model_info,
+    "ltspice_load_library": handle_load_library,
+    "ltspice_unload_library": handle_unload_library,
+    "ltspice_list_libraries": handle_list_libraries,
 }
