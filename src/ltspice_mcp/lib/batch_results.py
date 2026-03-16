@@ -58,15 +58,13 @@ def compute_batch_stats(run_results: dict[int, dict], signal: str) -> dict:
             raw = RawRead(raw_path, traces_to_read=signal)
             wave = raw.get_wave(signal, step=0)
 
-            # Use absolute values for both AC (complex) and transient
+            # AC (complex): use magnitude; transient: use raw values
             if np.iscomplexobj(wave):
-                abs_wave = np.abs(wave)
-            else:
-                abs_wave = np.abs(wave)
+                wave = np.abs(wave)
 
-            peak = float(np.max(abs_wave))
-            mean_val = float(np.mean(abs_wave))
-            min_val = float(np.min(abs_wave))
+            peak = float(np.max(wave))
+            mean_val = float(np.mean(wave))
+            min_val = float(np.min(wave))
 
             per_run_summaries.append({
                 "run_index": run_index,

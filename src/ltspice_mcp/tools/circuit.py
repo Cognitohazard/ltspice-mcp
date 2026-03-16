@@ -6,6 +6,8 @@ operations (position, rotation, attributes, export) validate the extension
 and raise NetlistError if given a non-.asc file.
 """
 
+import asyncio
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator, Union
@@ -16,6 +18,9 @@ from spicelib import AscEditor, SpiceEditor
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import run_sync, safe_path, text_response
+
+# Per-file locks to prevent concurrent edits to the same circuit file
+_edit_locks: dict[Path, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 # Type alias for the union returned by _make_editor / _get_editor.
 # Schematic-only handlers narrow this to AscEditor after _require_asc.
@@ -75,11 +80,13 @@ async def _editing(path: Path, state: SessionState) -> AsyncIterator[Editor]:
     """Get a cached editor, yield it, then save and invalidate on success.
 
     If the caller raises, changes are not saved (fail-safe).
+    Uses per-file locking to prevent concurrent edits to the same file.
     """
-    editor = await _get_editor(path, state)
-    yield editor
-    await run_sync(editor.save_netlist, str(path))
-    state.editors.invalidate(path)
+    async with _edit_locks[path]:
+        editor = await _get_editor(path, state)
+        yield editor
+        await run_sync(editor.save_netlist, str(path))
+        state.editors.invalidate(path)
 
 
 @asynccontextmanager
@@ -87,10 +94,12 @@ async def _editing_asc(path: Path, state: SessionState) -> AsyncIterator[AscEdit
     """Get a cached AscEditor, yield it, then save and invalidate on success.
 
     Caller must have validated _require_asc first.
+    Uses per-file locking to prevent concurrent edits to the same file.
     """
-    editor = await _get_asc_editor(path, state)
-    yield editor
-    await run_sync(editor.save_netlist, str(path))
+    async with _edit_locks[path]:
+        editor = await _get_asc_editor(path, state)
+        yield editor
+        await run_sync(editor.save_netlist, str(path))
     state.editors.invalidate(path)
 
 

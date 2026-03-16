@@ -658,6 +658,9 @@ async def handle_get_batch_results(
             "-" * 60,
         ]
 
+        def _fmt_col(v: float | None) -> str:
+            return f"{v:>12.6g}" if v is not None else f"{'N/A':>12}"
+
         for run_summary in page_stats["runs"]:
             run_idx = run_summary["run_index"]
             params = run_summary.get("params", {})
@@ -665,8 +668,8 @@ async def handle_get_batch_results(
                 " ".join(f"{k}={v}" for k, v in params.items()) if params else "-"
             )
             lines.append(
-                f"{run_idx:<6} {run_summary['peak']:>12.6g} {run_summary['mean']:>12.6g} "
-                f"{run_summary['min']:>12.6g}  {params_str}"
+                f"{run_idx:<6} {_fmt_col(run_summary.get('peak'))} {_fmt_col(run_summary.get('mean'))} "
+                f"{_fmt_col(run_summary.get('min'))}  {params_str}"
             )
 
         if offset + shown < total_matching:
