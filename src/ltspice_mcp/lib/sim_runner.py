@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Type
 
@@ -152,12 +153,8 @@ class SimulationRunner:
             logger.error(f"Failed to submit simulation {job_id}: {e}", exc_info=True)
             job.status = "failed"
             job.error = f"Submission failed: {e}"
+            job.completed_at = datetime.now()
             job.done_event.set()
-
-            # Bridge error to event loop
-            self.loop.call_soon_threadsafe(
-                self._handle_error, job_id, f"Submission failed: {e}", state
-            )
 
     def _handle_completion(
         self, job_id: str, raw_file: str, log_file: str, state: SessionState
@@ -184,8 +181,6 @@ class SimulationRunner:
             return
 
         # Store file paths
-        from datetime import datetime
-
         job.completed_at = datetime.now()
         job.raw_file = Path(raw_file)
         job.log_file = Path(log_file)
@@ -230,8 +225,6 @@ class SimulationRunner:
         if not job:
             logger.warning(f"Error for unknown job {job_id}: {error}")
             return
-
-        from datetime import datetime
 
         job.status = "failed"
         job.error = error

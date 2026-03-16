@@ -62,10 +62,10 @@ async def handle_run_simulation(arguments: dict, state: SessionState) -> list[ty
         status="running",
         started_at=datetime.now(),
     )
-    state.jobs[job_id] = job
-
-    # Get SimulationRunner and start simulation
+    # Get SimulationRunner before storing job — if this fails, we don't
+    # leave an orphaned "running" job with no task to advance it
     runner = _get_or_create_runner(state)
+    state.jobs[job_id] = job
     asyncio.create_task(runner.start_simulation(netlist_path, job, state))
 
     # Decide sync vs async
@@ -235,8 +235,16 @@ async def handle_check_job(arguments: dict, state: SessionState) -> list[types.T
     elif job.status == "completed":
         # Return same format as sync completion
         duration = (job.completed_at - job.started_at).total_seconds() if job.completed_at else 0
-        assert job.raw_file is not None
-        assert job.log_file is not None
+        if job.raw_file is None or job.log_file is None:
+            return text_response(
+                f"Job {job_id} completed but result files are missing.\n"
+                f"raw_file: {job.raw_file}, log_file: {job.log_file}"
+            )
+        if not job.raw_file.exists() or not job.log_file.exists():
+            return text_response(
+                f"Job {job_id} completed but result files have been removed.\n"
+                f"raw: {job.raw_file.exists()}, log: {job.log_file.exists()}"
+            )
         summary = parse_success_summary(job.raw_file, job.log_file, duration)
         return _format_success_response(job_id, summary)
     elif job.status == "failed":
@@ -351,6 +359,7 @@ async def handle_cancel_job(arguments: dict, state: SessionState) -> list[types.
         return text_response(f"Job {job_id} is not running (status: {job.status})")
 
     # Cancel the job
+    require_simulator(state)
     runner = _get_or_create_runner(state)
     await runner.cancel(job)
 

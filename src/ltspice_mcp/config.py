@@ -133,7 +133,7 @@ class ServerConfig:
             config_dict["working_dir"] = Path(env_wd)
 
         if env_paths := os.getenv("LTSPICE_MCP_ALLOWED_PATHS"):
-            config_dict["allowed_paths"] = [Path(p) for p in env_paths.split(":")]
+            config_dict["allowed_paths"] = [Path(p) for p in env_paths.split(os.pathsep)]
 
         if env_parallel := os.getenv("LTSPICE_MCP_MAX_PARALLEL"):
             config_dict["max_parallel_sims"] = int(env_parallel)
@@ -154,7 +154,7 @@ class ServerConfig:
             config_dict["log_level"] = env_log
 
         if env_sym := os.getenv("LTSPICE_MCP_SYMBOL_PATHS"):
-            config_dict["symbol_paths"] = [Path(p) for p in env_sym.split(":")]
+            config_dict["symbol_paths"] = [Path(p) for p in env_sym.split(os.pathsep)]
 
         config_dict["config_path"] = config_path
         return cls(**config_dict)

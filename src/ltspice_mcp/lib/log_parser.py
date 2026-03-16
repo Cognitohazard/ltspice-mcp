@@ -157,7 +157,7 @@ def parse_success_summary(raw_file: Path, log_file: Path, duration: float) -> di
         try:
             n_steps = raw_read.get_steps()
             if n_steps is not None:
-                result["step_count"] = n_steps
+                result["step_count"] = len(n_steps)
         except Exception:
             # Default to 1 if step count unavailable
             pass
