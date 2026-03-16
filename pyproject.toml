@@ -3,6 +3,7 @@ name = "ltspice-mcp"
 version = "0.1.0"
 description = "MCP server for LTSpice circuit simulation"
 readme = "README.md"
+license = "GPL-3.0-or-later"
 requires-python = ">=3.13"
 dependencies = [
     "mcp[cli]>=1.0,<2.0",
