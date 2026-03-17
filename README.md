@@ -1,5 +1,7 @@
 # ltspice-mcp
 
+> **Work in progress.** Core functionality is usable but expect rough edges, missing features, and breaking changes.
+
 MCP server that exposes LTspice circuit simulation to LLMs via the [Model Context Protocol](https://modelcontextprotocol.io/). Create netlists, edit schematics, run simulations, and analyze results through MCP tool calls.
 
 Built on the low-level `mcp.server.lowlevel.Server` API with [spicelib](https://github.com/nunobrum/spicelib) as the simulation backend.
@@ -216,4 +218,4 @@ uv run ltspice-mcp             # Run server (stdio)
 
 ## License
 
-MIT
+GPL-3.0
