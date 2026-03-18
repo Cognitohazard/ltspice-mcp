@@ -45,11 +45,16 @@ class TestResourceTemplates:
 class TestReadResource:
 
     async def test_read_config(self, state_no_sim: SessionState):
+        import json
+
         result = await handle_read_resource("ltspice://config", state_no_sim)
         assert result.contents
         text = result.contents[0].text
-        assert "working_dir" in text
-        assert "detected_simulators" in text
+        data = json.loads(text)
+        assert "working_dir" in data
+        assert "allowed_paths" in data
+        assert str(state_no_sim.config.working_dir) in data["working_dir"]
+        assert "detected_simulators" in data
 
     async def test_read_netlists_empty(self, state_no_sim: SessionState):
         result = await handle_read_resource("ltspice://netlists/", state_no_sim)
