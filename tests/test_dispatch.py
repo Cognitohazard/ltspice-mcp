@@ -33,6 +33,22 @@ class TestDispatchTable:
         for name, handler in _DISPATCH.items():
             assert callable(handler), f"{name} handler is not callable"
 
+    def test_handlers_reject_missing_args(self):
+        """Each handler raises on empty args — no silent success on bad input."""
+        import asyncio
+
+        loop = asyncio.new_event_loop()
+        try:
+            for name, handler in _DISPATCH.items():
+                raised = False
+                try:
+                    loop.run_until_complete(handler({}, None))
+                except Exception:
+                    raised = True
+                assert raised, f"{name} handler accepted empty args without raising"
+        finally:
+            loop.close()
+
 
 class TestToolSchemas:
 

@@ -25,7 +25,11 @@ class TestCreateNetlist:
             {"name": "test", "content": "* test\nR1 1 0 1k\nV1 1 0 1\n"},
             state_no_sim,
         )
-        assert (work_dir / "test.cir").exists()
+        created = work_dir / "test.cir"
+        assert created.exists()
+        content = created.read_text()
+        assert content.startswith("* test")
+        assert "R1 1 0 1k" in content
         assert "test.cir" in result[0].text
 
     async def test_appends_end_directive(self, state_no_sim: SessionState, work_dir: Path):
@@ -68,6 +72,9 @@ class TestReadCircuit:
         assert "R1" in text
         assert "C1" in text
         assert "V1" in text
+        # Verify actual component values from the parsed netlist
+        assert "1k" in text
+        assert "100n" in text
 
     async def test_file_not_found(self, state_no_sim: SessionState):
         with pytest.raises(NetlistError, match="not found"):
