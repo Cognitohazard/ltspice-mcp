@@ -17,34 +17,46 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-
 # ---------------------------------------------------------------------------
 # Response helpers — standardize tool output format
+#
+# All helpers return types.CallToolResult, the MCP protocol's canonical
+# response type.  text_response() returns text-only (for confirmations).
+# format_response() returns both human-readable text content AND structured
+# data via structuredContent (for data-returning tools).
 # ---------------------------------------------------------------------------
 
-def text_response(text: str) -> list[types.TextContent]:
-    """Return a single-item TextContent list (the standard tool response)."""
-    return [types.TextContent(type="text", text=text)]
+def text_response(text: str) -> types.CallToolResult:
+    """Return a text-only CallToolResult (confirmations, simple messages)."""
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=text)],
+    )
 
 
-def json_response(data: Any) -> list[types.TextContent]:
-    """Return data as a JSON-formatted TextContent response."""
-    return [types.TextContent(type="text", text=json.dumps(data, indent=2))]
+def json_response(data: Any) -> types.CallToolResult:
+    """Return data as JSON text + structuredContent."""
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=json.dumps(data, indent=2))],
+        structuredContent=data,
+    )
 
 
 def format_response(
-    text: str, data: Any, fmt: str | None
-) -> list[types.TextContent]:
-    """Return text or JSON based on the format parameter.
+    text: str, data: dict[str, Any], fmt: str | None = None
+) -> types.CallToolResult:
+    """Return a CallToolResult with text content and structuredContent.
 
-    Args:
-        text: Human-readable markdown/plain text response
-        data: Structured data dict for JSON mode
-        fmt: "json" for structured data, anything else for text (default)
+    Always populates structuredContent for programmatic access.
+    The format param controls the text representation:
+    - "json": text is JSON-formatted (for clients that parse text)
+    - "text" or None: text is human-readable (default)
     """
     if fmt == "json":
         return json_response(data)
-    return text_response(text)
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=text)],
+        structuredContent=data,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +67,17 @@ FORMAT_PROP: dict[str, Any] = {
     "type": "string",
     "enum": ["json", "text"],
     "description": "Response format: 'json' for structured data, 'text' for human-readable (default: text)",
+}
+
+PAGINATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "total": {"type": "integer"},
+        "offset": {"type": "integer"},
+        "limit": {"type": "integer"},
+        "has_more": {"type": "boolean"},
+        "next_offset": {"type": ["integer", "null"]},
+    },
 }
 
 RO_ANNOTATIONS = types.ToolAnnotations(
@@ -81,6 +104,18 @@ def paginate(
     offset = int(arguments.get("offset", 0))
     limit = min(int(arguments.get("limit", cap)), cap)
     return items[offset: offset + limit], total, offset, limit
+
+
+def pagination_metadata(total: int, offset: int, limit: int) -> dict[str, Any]:
+    """Build structured pagination metadata for JSON responses."""
+    has_more = offset + limit < total
+    return {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": has_more,
+        "next_offset": offset + limit if has_more else None,
+    }
 
 
 # ---------------------------------------------------------------------------

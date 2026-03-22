@@ -226,19 +226,11 @@ async def list_tools() -> list[types.Tool]:
 
 
 @server.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+async def call_tool(name: str, arguments: dict):
     """Dispatch tool calls to registered handlers.
 
-    Args:
-        name: Tool name to invoke
-        arguments: Tool-specific arguments dict
-
-    Returns:
-        List of TextContent responses from the tool handler
-
-    Raises:
-        ValueError: If tool name is unknown
-        LTSpiceMCPError: Tool-specific errors (returned as error text)
+    All handlers return types.CallToolResult (the MCP protocol's canonical
+    response type). Data-returning tools populate structuredContent.
     """
     # Look up handler in dispatch table
     handler = _DISPATCH.get(name)

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
+
 from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.circuit import (
@@ -30,7 +31,7 @@ class TestCreateNetlist:
         content = created.read_text()
         assert content.startswith("* test")
         assert "R1 1 0 1k" in content
-        assert "test.cir" in result[0].text
+        assert "test.cir" in result.content[0].text
 
     async def test_appends_end_directive(self, state_no_sim: SessionState, work_dir: Path):
         await handle_create_netlist(
@@ -68,7 +69,7 @@ class TestReadCircuit:
         result = await handle_read_circuit(
             {"path": sample_netlist.name}, state_no_sim
         )
-        text = result[0].text
+        text = result.content[0].text
         assert "R1" in text
         assert "C1" in text
         assert "V1" in text
@@ -92,7 +93,7 @@ class TestListComponents:
         result = await handle_list_components(
             {"path": sample_netlist.name}, state_no_sim
         )
-        text = result[0].text
+        text = result.content[0].text
         assert "R1" in text
         assert "C1" in text
         assert "V1" in text
@@ -101,7 +102,7 @@ class TestListComponents:
         result = await handle_list_components(
             {"path": sample_netlist.name, "prefix": "R"}, state_no_sim
         )
-        text = result[0].text
+        text = result.content[0].text
         assert "R1" in text
         assert "C1" not in text
 
@@ -109,20 +110,20 @@ class TestListComponents:
         result = await handle_list_components(
             {"path": sample_netlist.name, "prefix": "Q"}, state_no_sim
         )
-        assert "No components" in result[0].text
+        assert "No components" in result.content[0].text
 
     async def test_single_reference(self, state_no_sim: SessionState, sample_netlist: Path):
         """Single-component lookup via 'reference' parameter."""
         result = await handle_list_components(
             {"path": sample_netlist.name, "reference": "R1"}, state_no_sim
         )
-        assert "1k" in result[0].text
+        assert "1k" in result.content[0].text
 
     async def test_case_insensitive_reference(self, state_no_sim: SessionState, sample_netlist: Path):
         result = await handle_list_components(
             {"path": sample_netlist.name, "reference": "r1"}, state_no_sim
         )
-        assert "1k" in result[0].text
+        assert "1k" in result.content[0].text
 
     async def test_nonexistent_reference(
         self, state_no_sim: SessionState, sample_netlist: Path
@@ -141,27 +142,27 @@ class TestParameter:
         result = await handle_parameter(
             {"path": sample_netlist.name}, state_no_sim
         )
-        text = result[0].text
+        text = result.content[0].text
         assert "RVAL" in text or "Rval" in text
 
     async def test_no_params(self, state_no_sim: SessionState, work_dir: Path):
         p = work_dir / "noparam.cir"
         p.write_text("* test\nR1 1 0 1k\n.END\n")
         result = await handle_parameter({"path": "noparam.cir"}, state_no_sim)
-        assert "No .PARAM" in result[0].text
+        assert "No .PARAM" in result.content[0].text
 
     async def test_set_param(self, state_no_sim: SessionState, sample_netlist: Path):
         result = await handle_parameter(
             {"path": sample_netlist.name, "name": "Rval", "value": "2k"},
             state_no_sim,
         )
-        assert "Rval" in result[0].text
+        assert "Rval" in result.content[0].text
 
         # Verify value was actually written
         params = await handle_parameter(
             {"path": sample_netlist.name}, state_no_sim
         )
-        assert "2k" in params[0].text
+        assert "2k" in params.content[0].text
 
 
 @pytest.mark.asyncio
@@ -172,13 +173,13 @@ class TestSetComponentValue:
             {"path": sample_netlist.name, "reference": "R1", "value": "4.7k"},
             state_no_sim,
         )
-        assert "4.7k" in result[0].text
+        assert "4.7k" in result.content[0].text
 
         # Verify persisted
         result2 = await handle_list_components(
             {"path": sample_netlist.name, "reference": "R1"}, state_no_sim
         )
-        assert "4.7k" in result2[0].text
+        assert "4.7k" in result2.content[0].text
 
     async def test_batch_set(self, state_no_sim: SessionState, sample_netlist: Path):
         result = await handle_set_component_value(
@@ -188,16 +189,16 @@ class TestSetComponentValue:
             },
             state_no_sim,
         )
-        assert "2 component" in result[0].text
+        assert "2 component" in result.content[0].text
 
         r1 = await handle_list_components(
             {"path": sample_netlist.name, "reference": "R1"}, state_no_sim
         )
-        assert "10k" in r1[0].text
+        assert "10k" in r1.content[0].text
         c1 = await handle_list_components(
             {"path": sample_netlist.name, "reference": "C1"}, state_no_sim
         )
-        assert "47n" in c1[0].text
+        assert "47n" in c1.content[0].text
 
     async def test_invalid_values_type(self, state_no_sim: SessionState, sample_netlist: Path):
         with pytest.raises(NetlistError, match="must be an object"):
@@ -222,7 +223,7 @@ class TestEditDirective:
             {"path": sample_netlist.name, "action": "add", "instruction": ".tran 0 10m 0 1u"},
             state_no_sim,
         )
-        assert ".tran" in result[0].text
+        assert ".tran" in result.content[0].text
 
     async def test_rejects_non_dot_directive(
         self, state_no_sim: SessionState, sample_netlist: Path
@@ -238,4 +239,4 @@ class TestEditDirective:
             {"path": sample_netlist.name, "action": "remove", "instruction": ".ac dec 100 1 1Meg"},
             state_no_sim,
         )
-        assert "Removed" in result[0].text
+        assert "Removed" in result.content[0].text

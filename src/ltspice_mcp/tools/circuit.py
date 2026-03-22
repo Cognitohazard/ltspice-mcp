@@ -17,7 +17,10 @@ from spicelib import AscEditor, SpiceEditor
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import paginate, run_sync, safe_path, text_response
+from ltspice_mcp.tools._base import (
+    FORMAT_PROP, PAGINATION_SCHEMA, format_response, paginate,
+    pagination_metadata, run_sync, safe_path, text_response,
+)
 
 # Per-file locks to prevent concurrent edits to the same circuit file
 _edit_locks: dict[Path, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -110,7 +113,7 @@ async def _editing_asc(path: Path, state: SessionState) -> AsyncIterator[AscEdit
 
 async def handle_create_netlist(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+) -> types.CallToolResult:
     """Create a new SPICE netlist file from content string."""
     name = arguments["name"]
     content = arguments["content"]
@@ -137,12 +140,13 @@ async def handle_create_netlist(
 
 async def handle_read_circuit(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+):
     """Read and parse a circuit file. For .asc schematics, returns component
     positions, net labels, wires, and directives. For .cir/.net, returns raw
     content and component list with values.
     """
     file_path = safe_path(arguments["path"], state)
+    fmt = arguments.get("format")
 
     if _is_asc(file_path):
         # Schematic info path (formerly get_schematic_info)
@@ -152,19 +156,24 @@ async def handle_read_circuit(
 
         lines = [f"=== {file_path.name} ===", ""]
 
+        comp_data = []
         lines.append(f"Components ({len(components)}):")
         for ref in components:
             value = editor.get_component_value(ref)
             pos, rot = editor.get_component_position(ref)
             rot_str = f"R{rot.value}" if rot.value < 360 else f"M{rot.value - 360}"
             lines.append(f"  {ref:<8} {value:<20} pos=({pos.X},{pos.Y}) {rot_str}")
+            comp_data.append({"reference": ref, "value": value, "x": pos.X, "y": pos.Y, "rotation": rot_str})
 
+        label_data = []
         if editor.labels:
             lines.append("")
             lines.append(f"Net Labels ({len(editor.labels)}):")
             for label in editor.labels:
                 lines.append(f"  {label.text:<16} at ({label.coord.X},{label.coord.Y})")
+                label_data.append({"text": label.text, "x": label.coord.X, "y": label.coord.Y})
 
+        directive_data = []
         lines.append("")
         lines.append(f"Wires: {len(editor.wires)}")
         lines.append(f"Directives: {len(editor.directives)}")
@@ -174,35 +183,53 @@ async def handle_read_circuit(
             lines.append("SPICE Directives:")
             for d in editor.directives:
                 lines.append(f"  {d.text}")
+                directive_data.append(d.text)
 
-        return text_response("\n".join(lines))
+        data = {
+            "file": str(file_path),
+            "type": "asc",
+            "components": comp_data,
+            "labels": label_data,
+            "wire_count": len(editor.wires),
+            "directives": directive_data,
+        }
+        return format_response("\n".join(lines), data, fmt)
     else:
         # Netlist read path — editor load catches FileNotFoundError
         editor = await _get_editor(file_path, state)
         content = await run_sync(file_path.read_text)
         components = editor.get_components()
 
+        comp_list = []
         if components:
             comp_lines = []
             for comp_ref in components:
                 value = editor.get_component_value(comp_ref)
                 comp_lines.append(f"{comp_ref}  {value}")
+                comp_list.append({"reference": comp_ref, "value": value})
             comp_summary = "\n".join(comp_lines)
         else:
             comp_summary = "(no components)"
 
         result = f"=== {file_path.name} ===\n\n{content}\n\n=== Components ({len(components)}) ===\n{comp_summary}"
-        return text_response(result)
+        data = {
+            "file": str(file_path),
+            "type": "netlist",
+            "content": content,
+            "components": comp_list,
+        }
+        return format_response(result, data, fmt)
 
 
 async def handle_list_components(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+):
     """List all components, optionally filtered by prefix. If a single
     reference is provided, return just that component's value.
     Works on .cir/.net and .asc.
     """
     file_path = safe_path(arguments["path"], state)
+    fmt = arguments.get("format")
 
     editor = await _get_editor(file_path, state)
 
@@ -211,10 +238,10 @@ async def handle_list_components(
     if reference is not None:
         try:
             value = await run_sync(editor.get_component_value, reference)
-            result = f"{reference} = {value}"
         except Exception:
             raise NetlistError(f"Component '{reference}' not found")
-        return text_response(result)
+        data = {"reference": reference, "value": value}
+        return format_response(f"{reference} = {value}", data, fmt)
 
     # List mode
     prefix = arguments.get("prefix")
@@ -224,16 +251,17 @@ async def handle_list_components(
         components = await run_sync(editor.get_components)
 
     if not components:
-        if prefix:
-            return text_response(f"No components matching prefix '{prefix}' found")
-        return text_response("No components found")
+        msg = f"No components matching prefix '{prefix}' found" if prefix else "No components found"
+        return format_response(msg, {"components": [], "pagination": pagination_metadata(0, 0, 50)}, fmt)
 
     page, total, offset, limit = paginate(components, arguments)
 
+    comp_list = []
     comp_lines = []
     for comp_ref in page:
         value = editor.get_component_value(comp_ref)
         comp_lines.append(f"{comp_ref}  {value}")
+        comp_list.append({"reference": comp_ref, "value": value})
 
     header = f"Showing {offset + 1}-{offset + len(page)} of {total} components"
     if prefix:
@@ -243,12 +271,18 @@ async def handle_list_components(
     if offset + len(page) < total:
         result += f"\n\nNext page: ltspice_list_components(path=..., offset={offset + limit})"
 
-    return text_response(result)
+    data = {
+        "components": comp_list,
+        "pagination": pagination_metadata(total, offset, limit),
+    }
+    if prefix:
+        data["prefix"] = prefix
+    return format_response(result, data, fmt)
 
 
 async def handle_set_component_value(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+) -> types.CallToolResult:
     """Set component value(s). Accepts single or batch mode.
 
     Single mode: provide 'reference' and 'value'.
@@ -287,41 +321,44 @@ async def handle_set_component_value(
 
 async def handle_parameter(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+):
     """Get or set .PARAM directive values. Without name/value: returns all
     parameters. With name and value: sets the parameter.
     Works on .cir/.net and .asc.
     """
     file_path = safe_path(arguments["path"], state)
+    fmt = arguments.get("format")
 
     param_name = arguments.get("name")
     param_value = arguments.get("value")
 
     if param_name is not None and param_value is not None:
-        # Set mode (formerly set_parameter)
+        # Set mode — confirmation only, no structured data needed
         async with _editing(file_path, state) as editor:
             editor.set_parameter(param_name, param_value)
-        result = f"Set .PARAM {param_name} = {param_value}"
+        return text_response(f"Set .PARAM {param_name} = {param_value}")
+
+    # Get mode (formerly get_parameters) — read-only, no _editing needed
+    editor = await _get_editor(file_path, state)
+    param_names = await run_sync(editor.get_all_parameter_names)
+
+    params = {}
+    if param_names:
+        param_lines = []
+        for name in param_names:
+            value = await run_sync(editor.get_parameter, name)
+            param_lines.append(f".PARAM {name} = {value}")
+            params[name] = value
+        result = "\n".join(param_lines)
     else:
-        # Get mode (formerly get_parameters) — read-only, no _editing needed
-        editor = await _get_editor(file_path, state)
-        param_names = await run_sync(editor.get_all_parameter_names)
+        result = "No .PARAM directives found"
 
-        if param_names:
-            param_lines = []
-            for name in param_names:
-                value = await run_sync(editor.get_parameter, name)
-                param_lines.append(f".PARAM {name} = {value}")
-            result = "\n".join(param_lines)
-        else:
-            result = "No .PARAM directives found"
-
-    return text_response(result)
+    return format_response(result, {"parameters": params}, fmt)
 
 
 async def handle_edit_directive(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+) -> types.CallToolResult:
     """Add or remove a SPICE directive. Works on .cir/.net and .asc."""
     file_path = safe_path(arguments["path"], state)
 
@@ -360,7 +397,7 @@ async def handle_edit_directive(
 
 async def handle_remove_component(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+) -> types.CallToolResult:
     """Remove a component from a schematic by reference designator."""
     asc_path = safe_path(arguments["path"], state)
     _require_asc(asc_path)
@@ -382,7 +419,7 @@ async def handle_remove_component(
 
 async def handle_move_component(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+) -> types.CallToolResult:
     """Move or rotate a component in a schematic."""
     from spicelib.editor.base_schematic import ERotation, Point
 
@@ -423,7 +460,7 @@ async def handle_move_component(
 
 async def handle_set_component_attribute(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+) -> types.CallToolResult:
     """Set an attribute on a schematic component (e.g., SpiceLine, SpiceModel)."""
     asc_path = safe_path(arguments["path"], state)
     _require_asc(asc_path)
@@ -441,7 +478,7 @@ async def handle_set_component_attribute(
 
 async def handle_export_netlist(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+) -> types.CallToolResult:
     """Export an .asc schematic to a SPICE netlist (.net) using LTspice."""
     asc_path = safe_path(arguments["path"], state)
     _require_asc(asc_path)
@@ -513,6 +550,7 @@ TOOL_DEFS: list[types.Tool] = [
                     "type": "string",
                     "description": _PATH_DESC,
                 },
+                "format": FORMAT_PROP,
             },
             "required": ["path"],
         },
@@ -553,8 +591,25 @@ TOOL_DEFS: list[types.Tool] = [
                     "type": "integer",
                     "description": "Maximum components to return (default: 50, max: 50)",
                 },
+                "format": FORMAT_PROP,
             },
             "required": ["path"],
+        },
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "components": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "reference": {"type": "string"},
+                            "value": {"type": "string"},
+                        },
+                    },
+                },
+                "pagination": PAGINATION_SCHEMA,
+            },
         },
         annotations=types.ToolAnnotations(
             readOnlyHint=True,
@@ -605,8 +660,9 @@ TOOL_DEFS: list[types.Tool] = [
     types.Tool(
         name="ltspice_parameter",
         description=(
-            "Get or set .PARAM directive values. Without name/value: returns all parameters. "
-            "With name and value: sets the parameter (creates if missing). "
+            "Read or write .PARAM directive values in a circuit file. "
+            "Without name/value: lists all parameters and their current values. "
+            "With name and value: sets the parameter (creates directive if missing). "
             "Changes saved immediately."
         ),
         inputSchema={
@@ -624,6 +680,7 @@ TOOL_DEFS: list[types.Tool] = [
                     "type": "string",
                     "description": "Parameter value (required for set mode)",
                 },
+                "format": FORMAT_PROP,
             },
             "required": ["path"],
         },
