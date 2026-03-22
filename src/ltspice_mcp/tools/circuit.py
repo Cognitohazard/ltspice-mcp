@@ -17,7 +17,7 @@ from spicelib import AscEditor, SpiceEditor
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import run_sync, safe_path, text_response
+from ltspice_mcp.tools._base import paginate, run_sync, safe_path, text_response
 
 # Per-file locks to prevent concurrent edits to the same circuit file
 _edit_locks: dict[Path, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -223,17 +223,25 @@ async def handle_list_components(
     else:
         components = await run_sync(editor.get_components)
 
-    if components:
-        comp_lines = []
-        for comp_ref in components:
-            value = editor.get_component_value(comp_ref)
-            comp_lines.append(f"{comp_ref}  {value}")
-        result = "\n".join(comp_lines)
-    else:
+    if not components:
         if prefix:
-            result = f"No components matching prefix '{prefix}' found"
-        else:
-            result = "No components found"
+            return text_response(f"No components matching prefix '{prefix}' found")
+        return text_response("No components found")
+
+    page, total, offset, limit = paginate(components, arguments)
+
+    comp_lines = []
+    for comp_ref in page:
+        value = editor.get_component_value(comp_ref)
+        comp_lines.append(f"{comp_ref}  {value}")
+
+    header = f"Showing {offset + 1}-{offset + len(page)} of {total} components"
+    if prefix:
+        header += f" (prefix '{prefix}')"
+    result = header + "\n\n" + "\n".join(comp_lines)
+
+    if offset + len(page) < total:
+        result += f"\n\nNext page: ltspice_list_components(path=..., offset={offset + limit})"
 
     return text_response(result)
 
@@ -536,6 +544,14 @@ TOOL_DEFS: list[types.Tool] = [
                 "reference": {
                     "type": "string",
                     "description": "Optional: get a single component's value by reference designator (e.g., 'R1', 'C2', 'X1:R5'). Supports hierarchical references. Case-insensitive.",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Number of components to skip for pagination (default: 0)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum components to return (default: 50, max: 50)",
                 },
             },
             "required": ["path"],

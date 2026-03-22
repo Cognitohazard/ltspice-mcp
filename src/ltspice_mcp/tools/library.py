@@ -4,7 +4,7 @@ from mcp import types
 
 from ltspice_mcp.errors import LibraryError
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import run_sync, safe_path, text_response
+from ltspice_mcp.tools._base import RO_ANNOTATIONS, paginate, run_sync, safe_path, text_response
 
 
 async def handle_search_library(
@@ -210,10 +210,16 @@ async def handle_list_libraries(
     if not libs:
         return text_response(f"No libraries matching {filter_path}")
 
+    libs_page, total, offset, limit = paginate(libs, arguments)
+    has_more = offset + len(libs_page) < total
+    header = f"Loaded libraries: showing {offset + 1}-{offset + len(libs_page)} of {total}"
+
     if not detail:
-        lines = [f"Loaded libraries ({len(libs)}):"]
-        for lib_path in libs:
+        lines = [header]
+        for lib_path in libs_page:
             lines.append(f"  {lib_path}")
+        if has_more:
+            lines.append(f"\nNext page: ltspice_list_libraries(offset={offset + limit})")
         return text_response("\n".join(lines))
 
     # Detail mode: include subcircuit names per library
@@ -236,10 +242,9 @@ async def handle_list_libraries(
         src = sc["source_path"]
         subcircuits_by_path.setdefault(src, []).append(sc["name"])
 
-    lines = [f"Loaded libraries ({len(libs)}):"]
-    for lib_path in libs:
+    lines = [header]
+    for lib_path in libs_page:
         lib_str = str(lib_path)
-        # Find subcircuits whose source_path contains this library path
         matching_subs: list[str] = []
         for src, names in subcircuits_by_path.items():
             if lib_str in src:
@@ -251,16 +256,13 @@ async def handle_list_libraries(
         else:
             lines.append("    (no subcircuits)")
 
+    if has_more:
+        lines.append(f"\nNext page: ltspice_list_libraries(detail=true, offset={offset + limit})")
+
     return text_response("\n".join(lines))
 
 
 # Tool definitions
-_RO_ANNOTATIONS = types.ToolAnnotations(
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=False,
-)
 
 TOOL_DEFS: list[types.Tool] = [
     types.Tool(
@@ -289,7 +291,7 @@ TOOL_DEFS: list[types.Tool] = [
             },
             "required": ["query"],
         },
-        annotations=_RO_ANNOTATIONS,
+        annotations=RO_ANNOTATIONS,
     ),
     types.Tool(
         name="ltspice_get_model_info",
@@ -308,7 +310,7 @@ TOOL_DEFS: list[types.Tool] = [
             },
             "required": ["name"],
         },
-        annotations=_RO_ANNOTATIONS,
+        annotations=RO_ANNOTATIONS,
     ),
     types.Tool(
         name="ltspice_load_library",
@@ -364,10 +366,18 @@ TOOL_DEFS: list[types.Tool] = [
                     "type": "string",
                     "description": "Filter to a specific library file path",
                 },
+                "offset": {
+                    "type": "integer",
+                    "description": "Number of libraries to skip for pagination (default: 0)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum libraries to return (default: 50, max: 50)",
+                },
             },
             "required": [],
         },
-        annotations=_RO_ANNOTATIONS,
+        annotations=RO_ANNOTATIONS,
     ),
 ]
 

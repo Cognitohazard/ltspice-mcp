@@ -25,8 +25,8 @@ from ltspice_mcp.state import (
     SweepDimension,
 )
 from ltspice_mcp.tools._base import (
-    require_simulator, resolve_netlist_path, resolve_output_folder,
-    run_sync, text_response,
+    FORMAT_PROP, format_response, require_simulator, resolve_netlist_path,
+    resolve_output_folder, run_sync, text_response,
 )
 
 logger = logging.getLogger(__name__)
@@ -545,6 +545,7 @@ async def handle_get_batch_results(
     offset = int(arguments.get("offset", 0))
     limit = min(int(arguments.get("limit", 50)), 50)  # Capped at 50 per Phase 5 convention
     raw_mode = bool(arguments.get("raw", False))
+    fmt = arguments.get("format")
 
     if batch_job.completed_runs == 0:
         return text_response(
@@ -632,7 +633,17 @@ async def handle_get_batch_results(
             )
             lines.append(f"Best-case run:  #{best_run} ({params_str})")
 
-        return text_response("\n".join(lines))
+        json_data = {
+            "job_id": job_id,
+            "job_type": batch_job.job_type,
+            "signal": signal,
+            "run_count": run_count,
+            "filtered": filter_applied,
+            "stats": stats,
+            "worst_case_run": worst_run,
+            "best_case_run": best_run,
+        }
+        return format_response("\n".join(lines), json_data, fmt)
 
     else:
         # Raw per-run mode with pagination
@@ -902,6 +913,7 @@ TOOL_DEFS: list[types.Tool] = [
                     "type": "boolean",
                     "description": "If true, return per-run data instead of aggregated stats. Default: false.",
                 },
+                "format": FORMAT_PROP,
             },
             "required": ["job_id"],
         },

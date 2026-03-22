@@ -32,6 +32,57 @@ def json_response(data: Any) -> list[types.TextContent]:
     return [types.TextContent(type="text", text=json.dumps(data, indent=2))]
 
 
+def format_response(
+    text: str, data: Any, fmt: str | None
+) -> list[types.TextContent]:
+    """Return text or JSON based on the format parameter.
+
+    Args:
+        text: Human-readable markdown/plain text response
+        data: Structured data dict for JSON mode
+        fmt: "json" for structured data, anything else for text (default)
+    """
+    if fmt == "json":
+        return json_response(data)
+    return text_response(text)
+
+
+# ---------------------------------------------------------------------------
+# Shared tool schema fragments and annotations
+# ---------------------------------------------------------------------------
+
+FORMAT_PROP: dict[str, Any] = {
+    "type": "string",
+    "enum": ["json", "text"],
+    "description": "Response format: 'json' for structured data, 'text' for human-readable (default: text)",
+}
+
+RO_ANNOTATIONS = types.ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+
+
+# ---------------------------------------------------------------------------
+# Pagination helper
+# ---------------------------------------------------------------------------
+
+def paginate(
+    items: list, arguments: dict, cap: int = 50
+) -> tuple[list, int, int, int]:
+    """Slice a list according to offset/limit from tool arguments.
+
+    Returns:
+        (page, total, offset, limit) tuple
+    """
+    total = len(items)
+    offset = int(arguments.get("offset", 0))
+    limit = min(int(arguments.get("limit", cap)), cap)
+    return items[offset: offset + limit], total, offset, limit
+
+
 # ---------------------------------------------------------------------------
 # Analysis helpers — shared raw-file loading and validation
 # ---------------------------------------------------------------------------

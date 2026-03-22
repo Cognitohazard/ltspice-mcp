@@ -11,6 +11,8 @@ from mcp.server.lowlevel import Server
 from mcp import types
 
 from ltspice_mcp.config import ServerConfig, generate_default_config
+from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
+from ltspice_mcp import errors as _err
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.tools import ALL_MODULES
@@ -87,6 +89,40 @@ def _configure_asc_editor(config: ServerConfig, available: dict) -> bool:
 _DISPATCH: dict[str, Any] = {}
 for _mod in ALL_MODULES:
     _DISPATCH.update(_mod.TOOL_HANDLERS)
+
+# Error type → actionable hint appended to error messages.
+# PathSecurityError is handled separately (needs dynamic allowed_paths).
+_ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
+    _err.MissingModelError: (
+        "Try ltspice_search_library to find the model, or "
+        "ltspice_load_library to load a library file containing it."
+    ),
+    _err.ConvergenceError: (
+        "Suggestions:\n"
+        "  - Add .OPTIONS (e.g., .OPTIONS reltol=0.003 or .OPTIONS method=gear)\n"
+        "  - Use ltspice_edit_directive to add a .OPTIONS directive\n"
+        "  - Check component values for very large/small ratios"
+    ),
+    _err.SingularMatrixError: (
+        "This usually means a floating node or short circuit.\n"
+        "Use ltspice_read_circuit to inspect the netlist for connectivity issues."
+    ),
+    _err.SimulationError: (
+        "Use ltspice_get_server_status to verify simulator availability."
+    ),
+    _err.NetlistError: (
+        "Use ltspice_read_circuit to inspect the file, or "
+        "ltspice_list_components to verify component references."
+    ),
+    _err.ResultError: (
+        "Verify the simulation completed successfully with ltspice_check_job, "
+        "and check signal names with ltspice_get_simulation_summary."
+    ),
+    _err.LibraryError: (
+        "Use ltspice_list_libraries to see loaded libraries, or "
+        "ltspice_load_library to load a new one."
+    ),
+}
 
 
 @asynccontextmanager
@@ -215,9 +251,21 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     except (AttributeError, KeyError) as e:
         raise RuntimeError(f"Session state not available: {e}")
 
-    # Invoke handler — exceptions propagate to the MCP SDK, which
-    # wraps them in CallToolResult(isError=True) automatically.
-    return await handler(arguments, state)
+    # Invoke handler — enrich known errors with actionable guidance.
+    # Exceptions propagate to the MCP SDK which sets isError=True.
+    try:
+        return await handler(arguments, state)
+    except PathSecurityError as e:
+        allowed = ", ".join(str(p) for p in state.config.allowed_paths)
+        raise PathSecurityError(
+            f"{e}\n\nAllowed paths: {allowed}\n"
+            f"Use ltspice_get_server_status to see full sandbox configuration."
+        ) from None
+    except LTSpiceMCPError as e:
+        hint = _ERROR_HINTS.get(type(e))
+        if hint:
+            raise type(e)(f"{e}\n\n{hint}") from None
+        raise
 
 
 @server.list_resources()

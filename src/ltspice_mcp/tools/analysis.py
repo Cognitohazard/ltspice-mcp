@@ -15,10 +15,12 @@ from ltspice_mcp.lib.raw_parser import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    FORMAT_PROP,
+    RO_ANNOTATIONS,
+    format_response,
     load_raw,
     run_sync,
     safe_path,
-    text_response,
     validate_signal,
     validate_step,
 )
@@ -31,6 +33,7 @@ async def handle_get_signal_stats(
     raw_path = safe_path(arguments["raw_file"], state)
     signal = arguments["signal"]
     step = arguments.get("step", 0)
+    fmt = arguments.get("format")
 
     raw = await load_raw(raw_path, state)
     await validate_signal(raw, signal)
@@ -67,7 +70,7 @@ async def handle_get_signal_stats(
             f"Data Points: {stats['point_count']}",
         ]
 
-    return text_response("\n".join(lines))
+    return format_response("\n".join(lines), {"signal": signal, **stats}, fmt)
 
 
 async def handle_query_value(
@@ -78,6 +81,7 @@ async def handle_query_value(
     signal = arguments["signal"]
     at_str = arguments["at"]
     step = arguments.get("step", 0)
+    fmt = arguments.get("format")
 
     try:
         target_x = parse_spice_value(at_str)
@@ -112,7 +116,7 @@ async def handle_query_value(
             f"Value: {result_data['value']:.6g}",
         ]
 
-    return text_response("\n".join(lines))
+    return format_response("\n".join(lines), {"signal": signal, **result_data}, fmt)
 
 
 def _format_measurements(measurements: dict, step_count: int) -> str:
@@ -147,6 +151,7 @@ async def handle_get_measurements(
 ) -> list[types.TextContent]:
     """Extract .MEAS measurement results from simulation log file."""
     log_path = safe_path(arguments["log_file"], state)
+    fmt = arguments.get("format")
 
     try:
         meas_data = await run_sync(parse_measurements, log_path)
@@ -155,8 +160,10 @@ async def handle_get_measurements(
     except Exception as e:
         raise ResultError(f"Failed to parse log file: {e}")
 
-    return text_response(
-        _format_measurements(meas_data["measurements"], meas_data["step_count"])
+    return format_response(
+        _format_measurements(meas_data["measurements"], meas_data["step_count"]),
+        meas_data,
+        fmt,
     )
 
 
@@ -165,6 +172,7 @@ async def handle_get_operating_point(
 ) -> list[types.TextContent]:
     """Read DC operating point data (all node voltages and branch currents)."""
     raw_path = safe_path(arguments["raw_file"], state)
+    fmt = arguments.get("format")
     raw = await load_raw(raw_path, state)
 
     try:
@@ -185,7 +193,7 @@ async def handle_get_operating_point(
         for name, value in op_data["currents"].items():
             lines.append(f"  {name} = {value:.6g}")
 
-    return text_response("\n".join(lines))
+    return format_response("\n".join(lines), op_data, fmt)
 
 
 async def handle_get_simulation_summary(
@@ -193,6 +201,7 @@ async def handle_get_simulation_summary(
 ) -> list[types.TextContent]:
     """Get comprehensive simulation summary."""
     raw_path = safe_path(arguments["raw_file"], state)
+    fmt = arguments.get("format")
     log_path = None
     if "log_file" in arguments:
         log_path = safe_path(arguments["log_file"], state)
@@ -216,10 +225,17 @@ async def handle_get_simulation_summary(
             except Exception:
                 pass
 
-    # Format response
+    # Build JSON data dict (always needed for json mode, cheap to build)
+    json_data = dict(summary)
+    if ac_metrics:
+        json_data["ac_bandwidth_metrics"] = ac_metrics
+
+    if fmt == "json":
+        return format_response("", json_data, fmt)
+
+    # Text formatting (skip when json)
     lines = [f"Simulation Summary: {summary['sim_type']}", ""]
 
-    # Range information
     if "time_start" in summary["range"]:
         lines.append(
             f"Time span: {summary['range']['time_start']:.6g} to {summary['range']['time_end']:.6g}"
@@ -243,7 +259,6 @@ async def handle_get_simulation_summary(
         lines.append(f"  - {signal}")
     lines.append("")
 
-    # Measurements (uses shared formatter)
     if "measurements" in summary:
         lines.append(_format_measurements(
             summary["measurements"],
@@ -251,7 +266,6 @@ async def handle_get_simulation_summary(
         ))
         lines.append("")
 
-    # Fourier analysis
     if "fourier" in summary:
         lines.append("Fourier Analysis:")
         for fourier in summary["fourier"]:
@@ -271,7 +285,6 @@ async def handle_get_simulation_summary(
                     lines.append(f"    ... ({len(fourier['harmonics'])} total)")
         lines.append("")
 
-    # AC bandwidth metrics
     if ac_metrics:
         lines.append("AC Bandwidth Metrics:")
         if ac_metrics["bandwidth_3db"] is not None:
@@ -284,24 +297,16 @@ async def handle_get_simulation_summary(
             lines.append(f"  Gain margin: {ac_metrics['gain_margin']:.2f} dB")
         lines.append("")
 
-    # Warnings
     if "warnings" in summary:
         lines.append(f"Warnings ({len(summary['warnings'])}):")
         for warning in summary["warnings"]:
             lines.append(f"  {warning}")
         lines.append("")
 
-    return text_response("\n".join(lines))
+    return format_response("\n".join(lines), json_data, fmt)
 
 
 # Tool definitions
-_RO_ANNOTATIONS = types.ToolAnnotations(
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=False,
-)
-
 TOOL_DEFS: list[types.Tool] = [
     types.Tool(
         name="ltspice_get_signal_stats",
@@ -321,10 +326,11 @@ TOOL_DEFS: list[types.Tool] = [
                     "type": "integer",
                     "description": "Step index for .step directives (default 0)",
                 },
+                "format": FORMAT_PROP,
             },
             "required": ["raw_file", "signal"],
         },
-        annotations=_RO_ANNOTATIONS,
+        annotations=RO_ANNOTATIONS,
     ),
     types.Tool(
         name="ltspice_query_value",
@@ -348,10 +354,11 @@ TOOL_DEFS: list[types.Tool] = [
                     "type": "integer",
                     "description": "Step index for .step directives (default 0)",
                 },
+                "format": FORMAT_PROP,
             },
             "required": ["raw_file", "signal", "at"],
         },
-        annotations=_RO_ANNOTATIONS,
+        annotations=RO_ANNOTATIONS,
     ),
     types.Tool(
         name="ltspice_get_measurements",
@@ -363,10 +370,11 @@ TOOL_DEFS: list[types.Tool] = [
                     "type": "string",
                     "description": "Path to .log file from simulation",
                 },
+                "format": FORMAT_PROP,
             },
             "required": ["log_file"],
         },
-        annotations=_RO_ANNOTATIONS,
+        annotations=RO_ANNOTATIONS,
     ),
     types.Tool(
         name="ltspice_get_operating_point",
@@ -378,10 +386,11 @@ TOOL_DEFS: list[types.Tool] = [
                     "type": "string",
                     "description": "Path to .raw result file from simulation",
                 },
+                "format": FORMAT_PROP,
             },
             "required": ["raw_file"],
         },
-        annotations=_RO_ANNOTATIONS,
+        annotations=RO_ANNOTATIONS,
     ),
     types.Tool(
         name="ltspice_get_simulation_summary",
@@ -397,10 +406,11 @@ TOOL_DEFS: list[types.Tool] = [
                     "type": "string",
                     "description": "Optional path to .log file for measurements and warnings",
                 },
+                "format": FORMAT_PROP,
             },
             "required": ["raw_file"],
         },
-        annotations=_RO_ANNOTATIONS,
+        annotations=RO_ANNOTATIONS,
     ),
 ]
 
