@@ -6,7 +6,6 @@ from ltspice_mcp.lib.sweep_utils import generate_sweep_range
 
 
 class TestLinearSweep:
-
     def test_linear_with_points(self):
         values = generate_sweep_range(0, 10, None, 5, "linear")
         assert len(values) == 5
@@ -30,7 +29,6 @@ class TestLinearSweep:
 
 
 class TestLogSweep:
-
     def test_log_with_points(self):
         values = generate_sweep_range(1, 1000, None, 4, "log")
         assert len(values) == 4
@@ -54,7 +52,6 @@ class TestLogSweep:
 
 
 class TestValidation:
-
     def test_neither_step_nor_points(self):
         with pytest.raises(ValueError, match="neither"):
             generate_sweep_range(0, 10, None, None, "linear")

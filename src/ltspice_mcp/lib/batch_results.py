@@ -66,13 +66,15 @@ def compute_batch_stats(run_results: dict[int, dict], signal: str) -> dict:
             mean_val = float(np.mean(wave))
             min_val = float(np.min(wave))
 
-            per_run_summaries.append({
-                "run_index": run_index,
-                "params": run.get("params", {}),
-                "peak": peak,
-                "mean": mean_val,
-                "min": min_val,
-            })
+            per_run_summaries.append(
+                {
+                    "run_index": run_index,
+                    "params": run.get("params", {}),
+                    "peak": peak,
+                    "mean": mean_val,
+                    "min": min_val,
+                }
+            )
             peak_values.append(peak)
 
         except Exception:

@@ -1,12 +1,10 @@
 """Generic file cache with mtime-based invalidation."""
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Generic, TypeVar
-
-T = TypeVar("T")
 
 
-class FileCache(Generic[T]):
+class FileCache[T]:
     """Generic cache for file-derived data with mtime-based invalidation.
 
     The cache stores values keyed by file path and automatically invalidates

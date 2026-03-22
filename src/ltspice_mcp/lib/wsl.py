@@ -33,7 +33,7 @@ def is_wsl() -> bool:
 
     # Fallback: check for "microsoft" in kernel version
     try:
-        with open("/proc/version", "r") as f:
+        with open("/proc/version") as f:
             version_info = f.read().lower()
             if "microsoft" in version_info:
                 logger.debug("WSL detected via /proc/version")
@@ -95,12 +95,16 @@ def _resolve_win_env(var: str) -> Path | None:
     try:
         win_result = subprocess.run(
             ["cmd.exe", "/C", "echo", f"%{var}%"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
             stdin=subprocess.DEVNULL,
         )
         wsl_result = subprocess.run(
             ["wslpath", "-u", win_result.stdout.strip()],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
             stdin=subprocess.DEVNULL,
         )
         return Path(wsl_result.stdout.strip())

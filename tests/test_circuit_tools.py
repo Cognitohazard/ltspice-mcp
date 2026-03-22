@@ -3,8 +3,6 @@
 from pathlib import Path
 
 import pytest
-import pytest_asyncio
-
 
 from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.state import SessionState
@@ -20,7 +18,6 @@ from ltspice_mcp.tools.circuit import (
 
 @pytest.mark.asyncio
 class TestCreateNetlist:
-
     async def test_creates_file(self, state_no_sim: SessionState, work_dir: Path):
         result = await handle_create_netlist(
             {"name": "test", "content": "* test\nR1 1 0 1k\nV1 1 0 1\n"},
@@ -62,13 +59,10 @@ class TestCreateNetlist:
 
 @pytest.mark.asyncio
 class TestReadCircuit:
-
     async def test_reads_content_and_components(
         self, state_no_sim: SessionState, sample_netlist: Path
     ):
-        result = await handle_read_circuit(
-            {"path": sample_netlist.name}, state_no_sim
-        )
+        result = await handle_read_circuit({"path": sample_netlist.name}, state_no_sim)
         text = result.content[0].text
         assert "R1" in text
         assert "C1" in text
@@ -88,11 +82,8 @@ class TestReadCircuit:
 
 @pytest.mark.asyncio
 class TestListComponents:
-
     async def test_lists_all(self, state_no_sim: SessionState, sample_netlist: Path):
-        result = await handle_list_components(
-            {"path": sample_netlist.name}, state_no_sim
-        )
+        result = await handle_list_components({"path": sample_netlist.name}, state_no_sim)
         text = result.content[0].text
         assert "R1" in text
         assert "C1" in text
@@ -119,15 +110,15 @@ class TestListComponents:
         )
         assert "1k" in result.content[0].text
 
-    async def test_case_insensitive_reference(self, state_no_sim: SessionState, sample_netlist: Path):
+    async def test_case_insensitive_reference(
+        self, state_no_sim: SessionState, sample_netlist: Path
+    ):
         result = await handle_list_components(
             {"path": sample_netlist.name, "reference": "r1"}, state_no_sim
         )
         assert "1k" in result.content[0].text
 
-    async def test_nonexistent_reference(
-        self, state_no_sim: SessionState, sample_netlist: Path
-    ):
+    async def test_nonexistent_reference(self, state_no_sim: SessionState, sample_netlist: Path):
         with pytest.raises(NetlistError, match="not found"):
             await handle_list_components(
                 {"path": sample_netlist.name, "reference": "R99"},
@@ -137,11 +128,8 @@ class TestListComponents:
 
 @pytest.mark.asyncio
 class TestParameter:
-
     async def test_get_params(self, state_no_sim: SessionState, sample_netlist: Path):
-        result = await handle_parameter(
-            {"path": sample_netlist.name}, state_no_sim
-        )
+        result = await handle_parameter({"path": sample_netlist.name}, state_no_sim)
         text = result.content[0].text
         assert "RVAL" in text or "Rval" in text
 
@@ -159,15 +147,12 @@ class TestParameter:
         assert "Rval" in result.content[0].text
 
         # Verify value was actually written
-        params = await handle_parameter(
-            {"path": sample_netlist.name}, state_no_sim
-        )
+        params = await handle_parameter({"path": sample_netlist.name}, state_no_sim)
         assert "2k" in params.content[0].text
 
 
 @pytest.mark.asyncio
 class TestSetComponentValue:
-
     async def test_set_single(self, state_no_sim: SessionState, sample_netlist: Path):
         result = await handle_set_component_value(
             {"path": sample_netlist.name, "reference": "R1", "value": "4.7k"},
@@ -217,7 +202,6 @@ class TestSetComponentValue:
 
 @pytest.mark.asyncio
 class TestEditDirective:
-
     async def test_add_directive(self, state_no_sim: SessionState, sample_netlist: Path):
         result = await handle_edit_directive(
             {"path": sample_netlist.name, "action": "add", "instruction": ".tran 0 10m 0 1u"},
@@ -228,7 +212,7 @@ class TestEditDirective:
     async def test_rejects_non_dot_directive(
         self, state_no_sim: SessionState, sample_netlist: Path
     ):
-        with pytest.raises(NetlistError, match="must start with '.'"):
+        with pytest.raises(NetlistError, match=r"must start with '\.'"):
             await handle_edit_directive(
                 {"path": sample_netlist.name, "action": "add", "instruction": "tran 0 10m"},
                 state_no_sim,

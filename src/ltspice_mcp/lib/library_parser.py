@@ -213,7 +213,7 @@ def parse_library_file(path: Path) -> LibraryIndex:
                 models.append(entry)
                 logger.debug(f"Parsed .MODEL {name} from {path.name}")
             except Exception as e:
-                logger.warning(f"Malformed .MODEL at line {i+1} in {path}: {e}")
+                logger.warning(f"Malformed .MODEL at line {i + 1} in {path}: {e}")
 
             i += 1
             continue
@@ -240,7 +240,9 @@ def parse_library_file(path: Path) -> LibraryIndex:
                 i += 1
 
             if not found_ends:
-                logger.warning(f"Malformed .SUBCKT {name} at line {start_line+1} in {path}: missing .ENDS")
+                logger.warning(
+                    f"Malformed .SUBCKT {name} at line {start_line + 1} in {path}: missing .ENDS"
+                )
                 continue
 
             raw_text = "\n".join(raw_lines)
@@ -250,7 +252,7 @@ def parse_library_file(path: Path) -> LibraryIndex:
             # .SUBCKT name node1 node2 node3 ...
             parts = line.split()
             nodes = parts[2:7] if len(parts) > 2 else []  # First 5 nodes
-            parameters = {f"node{i+1}": node for i, node in enumerate(nodes)}
+            parameters = {f"node{i + 1}": node for i, node in enumerate(nodes)}
 
             try:
                 entry = ModelEntry(
@@ -266,7 +268,7 @@ def parse_library_file(path: Path) -> LibraryIndex:
                 models.append(entry)
                 logger.debug(f"Parsed .SUBCKT {name} from {path.name}")
             except Exception as e:
-                logger.warning(f"Malformed .SUBCKT at line {start_line+1} in {path}: {e}")
+                logger.warning(f"Malformed .SUBCKT at line {start_line + 1} in {path}: {e}")
 
             continue
 

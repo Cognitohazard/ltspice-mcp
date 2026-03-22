@@ -78,10 +78,7 @@ class ServerConfig:
         # Load from TOML if it exists
         if config_path is None:
             env_config = os.getenv("LTSPICE_MCP_CONFIG")
-            if env_config:
-                config_path = Path(env_config)
-            else:
-                config_path = Path.cwd() / "ltspice-mcp.toml"
+            config_path = Path(env_config) if env_config else Path.cwd() / "ltspice-mcp.toml"
 
         if config_path.exists():
             with open(config_path, "rb") as f:
@@ -170,12 +167,18 @@ def generate_default_config(path: Path) -> None:
 
     # Simulator section
     doc.add(comment("LTSpice MCP Server Configuration"))
-    doc.add(comment("All settings have sensible defaults and can be overridden with environment variables"))
+    doc.add(
+        comment(
+            "All settings have sensible defaults and can be overridden with environment variables"
+        )
+    )
     doc.add(nl())
 
     sim = table()
     sim.add(comment("Preferred simulator: ltspice, ngspice, qspice, xyce"))
-    sim.add(comment("Leave empty or set to null for auto-detection (prefers LTSpice if available)"))
+    sim.add(
+        comment("Leave empty or set to null for auto-detection (prefers LTSpice if available)")
+    )
     sim.add("default", "ltspice")
     sim.add(nl())
     sim.add(comment("Explicit path to simulator executable (overrides auto-detection)"))
@@ -187,7 +190,7 @@ def generate_default_config(path: Path) -> None:
     # Security section
     sec = table()
     sec.add(comment("Paths accessible to the server (sandbox)"))
-    sec.add(comment("Default: [\".\"] (current working directory)"))
+    sec.add(comment('Default: ["."] (current working directory)'))
     sec.add("allowed_paths", ["."])
     doc.add("security", sec)
     doc.add(nl())

@@ -4,7 +4,6 @@ import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Type
 
 from spicelib.sim.sim_runner import SimRunner
 from spicelib.sim.tookit.montecarlo import Montecarlo
@@ -32,7 +31,7 @@ class MonteCarloRunner:
     def __init__(
         self,
         loop: asyncio.AbstractEventLoop,
-        simulator_class: Type,
+        simulator_class: type,
         output_folder: Path,
         max_parallel: int = 4,
     ):
@@ -117,9 +116,7 @@ class MonteCarloRunner:
             # These set defaults for all components of that type
             for ref, (tol, dist) in mc_config.type_tolerances.items():
                 mc.set_tolerance(ref, tol, distribution=dist)
-                logger.debug(
-                    f"MC job {batch_job.job_id}: set type tolerance {ref}={tol} ({dist})"
-                )
+                logger.debug(f"MC job {batch_job.job_id}: set type tolerance {ref}={tol} ({dist})")
 
             # Apply component-level overrides (specific refs like "R1", "C3")
             # These override the type-level defaults for individual components
@@ -155,9 +152,7 @@ class MonteCarloRunner:
             await asyncio.to_thread(execute_montecarlo)
         except Exception as e:
             # Submission or execution failed - update batch job status
-            logger.error(
-                f"Monte Carlo job {batch_job.job_id} failed: {e}", exc_info=True
-            )
+            logger.error(f"Monte Carlo job {batch_job.job_id} failed: {e}", exc_info=True)
             batch_job.status = "failed"
             batch_job.error = f"Monte Carlo execution failed: {e}"
             batch_job.completed_at = datetime.now()

@@ -9,6 +9,7 @@ For .log file parsing (measurements, Fourier data), see log_parser.py.
 Functions are synchronous and CPU-bound - callers must wrap in run_sync().
 """
 
+import contextlib
 from pathlib import Path
 
 import numpy as np
@@ -151,10 +152,7 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
         closest_idx = len(axis) - 1
     else:
         # Choose closer of idx-1 or idx
-        if abs(axis[idx - 1] - target_x) < abs(axis[idx] - target_x):
-            closest_idx = idx - 1
-        else:
-            closest_idx = idx
+        closest_idx = idx - 1 if abs(axis[idx - 1] - target_x) < abs(axis[idx] - target_x) else idx
 
     actual_x = float(axis[closest_idx])
 
@@ -286,9 +284,7 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
         # Find where phase crosses -180 degrees
         phase_target = -180
         # Look for crossings near -180
-        crossings = np.where(
-            (phase_deg[:-1] > phase_target) & (phase_deg[1:] <= phase_target)
-        )[0]
+        crossings = np.where((phase_deg[:-1] > phase_target) & (phase_deg[1:] <= phase_target))[0]
         if len(crossings) > 0:
             idx = crossings[0]
             # Read gain at that frequency
@@ -347,10 +343,8 @@ def build_simulation_summary(
     if log_path and log_path.exists():
         # Create a single LTSpiceLogReader for both measurements and Fourier
         log_reader: LTSpiceLogReader | None = None
-        try:
+        with contextlib.suppress(Exception):
             log_reader = LTSpiceLogReader(str(log_path))
-        except Exception:
-            pass
 
         # Parse measurements
         if log_reader is not None:

@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import pytest
-import pytest_asyncio
 
 from ltspice_mcp.resources import (
     get_resource_templates,
@@ -14,7 +13,6 @@ from ltspice_mcp.state import SessionState
 
 
 class TestStaticResources:
-
     def test_returns_four_resources(self):
         resources = get_static_resources()
         assert len(resources) == 4
@@ -28,7 +26,6 @@ class TestStaticResources:
 
 
 class TestResourceTemplates:
-
     def test_returns_three_templates(self):
         templates = get_resource_templates()
         assert len(templates) == 3
@@ -43,7 +40,6 @@ class TestResourceTemplates:
 
 @pytest.mark.asyncio
 class TestReadResource:
-
     async def test_read_config(self, state_no_sim: SessionState):
         import json
 
@@ -69,9 +65,7 @@ class TestReadResource:
         assert "rc_filter.cir" in text
         assert '"count": 1' in text
 
-    async def test_read_netlist_content(
-        self, state_no_sim: SessionState, sample_netlist: Path
-    ):
+    async def test_read_netlist_content(self, state_no_sim: SessionState, sample_netlist: Path):
         result = await handle_read_resource(
             f"ltspice://netlists/{sample_netlist.name}", state_no_sim
         )
@@ -92,18 +86,12 @@ class TestReadResource:
 
     async def test_netlist_path_escape_blocked(self, state_no_sim: SessionState):
         with pytest.raises(ValueError):
-            await handle_read_resource(
-                "ltspice://netlists/../../etc/passwd", state_no_sim
-            )
+            await handle_read_resource("ltspice://netlists/../../etc/passwd", state_no_sim)
 
     async def test_signals_no_job(self, state_no_sim: SessionState):
         with pytest.raises(ValueError, match="Job not found"):
-            await handle_read_resource(
-                "ltspice://results/fake_job_id/signals", state_no_sim
-            )
+            await handle_read_resource("ltspice://results/fake_job_id/signals", state_no_sim)
 
     async def test_measurements_no_job(self, state_no_sim: SessionState):
         with pytest.raises(ValueError, match="Job not found"):
-            await handle_read_resource(
-                "ltspice://results/fake_job_id/measurements", state_no_sim
-            )
+            await handle_read_resource("ltspice://results/fake_job_id/measurements", state_no_sim)

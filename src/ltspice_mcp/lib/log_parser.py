@@ -202,7 +202,7 @@ def parse_measurements(log_path: Path, reader: LTSpiceLogReader | None = None) -
         try:
             reader = LTSpiceLogReader(str(log_path))
         except Exception as e:
-            raise ResultError(f"Could not parse log file: {e}")
+            raise ResultError(f"Could not parse log file: {e}") from e
 
     # Get measurement names
     measure_names = reader.get_measure_names()

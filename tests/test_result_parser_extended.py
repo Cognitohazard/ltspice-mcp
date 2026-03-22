@@ -9,8 +9,8 @@ import pytest
 from ltspice_mcp.lib.log_parser import parse_fourier_data
 from ltspice_mcp.lib.raw_parser import build_simulation_summary
 
-
 # --- Helpers ---
+
 
 def _make_raw_mock(
     trace_names: list[str],
@@ -35,18 +35,15 @@ def _make_raw_mock(
 
 # --- parse_fourier_data tests ---
 
-class TestParseFourierData:
 
+class TestParseFourierData:
     def test_nonexistent_file_returns_empty(self):
         result = parse_fourier_data(Path("/nonexistent/file.log"))
         assert result == []
 
     def test_log_without_fourier_returns_empty(self, work_dir: Path):
         log = work_dir / "no_fourier.log"
-        log.write_text(
-            "Circuit: test.cir\n"
-            "Total elapsed time: 0.01 seconds.\n"
-        )
+        log.write_text("Circuit: test.cir\nTotal elapsed time: 0.01 seconds.\n")
         result = parse_fourier_data(log)
         assert result == []
 
@@ -67,11 +64,7 @@ class TestParseFourierData:
         # with Fourier data without knowing the exact format, we test the graceful
         # degradation path.
         log = work_dir / "fourier.log"
-        log.write_text(
-            "Circuit: test.cir\n"
-            ".tran 0 10m 0 1u\n"
-            "Total elapsed time: 0.5 seconds.\n"
-        )
+        log.write_text("Circuit: test.cir\n.tran 0 10m 0 1u\nTotal elapsed time: 0.5 seconds.\n")
         result = parse_fourier_data(log)
         # LTSpiceLogReader won't find Fourier data here — returns empty
         assert isinstance(result, list)
@@ -79,8 +72,8 @@ class TestParseFourierData:
 
 # --- build_simulation_summary tests ---
 
-class TestBuildSimulationSummary:
 
+class TestBuildSimulationSummary:
     def test_transient_summary(self):
         axis = np.linspace(0, 0.01, 1000)  # 10ms transient
         wave = np.sin(2 * np.pi * 1000 * axis)

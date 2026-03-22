@@ -11,7 +11,6 @@ from ltspice_mcp.state import BatchJob, MonteCarloConfig, SessionState, Simulati
 
 
 class TestSessionStateCreate:
-
     def test_create_no_simulators(self, config: ServerConfig):
         state = SessionState.create(config, {})
         assert state.default_simulator is None
@@ -30,7 +29,6 @@ class TestSessionStateCreate:
 
 
 class TestSessionStateShutdown:
-
     def test_shutdown_clears_caches(self, config: ServerConfig, tmp_path: Path):
         state = SessionState.create(config, {})
         p = tmp_path / "dummy.txt"
@@ -89,7 +87,6 @@ class TestSessionStateShutdown:
 
 
 class TestDataclassDefaults:
-
     def test_montecarlo_config_defaults(self):
         mc = MonteCarloConfig(netlist=Path("/tmp/test.cir"))
         assert mc.num_runs == 100

@@ -3,8 +3,8 @@
 from ltspice_mcp.errors import (
     BatchJobError,
     ConvergenceError,
-    LTSpiceMCPError,
     LibraryError,
+    LTSpiceMCPError,
     MissingModelError,
     NetlistError,
     PathSecurityError,
@@ -15,7 +15,6 @@ from ltspice_mcp.errors import (
 
 
 class TestErrorHierarchy:
-
     def test_all_inherit_base(self):
         """Every error class is a subtype of LTSpiceMCPError."""
         for cls in (

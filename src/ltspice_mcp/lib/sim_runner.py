@@ -6,7 +6,6 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Type
 
 from spicelib.sim.sim_runner import SimRunner
 
@@ -46,7 +45,7 @@ class SimulationRunner:
     def __init__(
         self,
         loop: asyncio.AbstractEventLoop,
-        simulator_class: Type,
+        simulator_class: type,
         output_folder: Path,
         max_parallel: int = 4,
     ):
@@ -100,9 +99,7 @@ class SimulationRunner:
                 )
             except RuntimeError as e:
                 # Event loop was closed - graceful shutdown in progress
-                logger.warning(
-                    f"Event loop closed, job {job_id} completion not recorded: {e}"
-                )
+                logger.warning(f"Event loop closed, job {job_id} completion not recorded: {e}")
 
         def submit_sim() -> SimRunner:
             """Submit simulation to SimRunner (runs in thread pool)."""
@@ -191,7 +188,9 @@ class SimulationRunner:
             job.status = "failed"
             if job.log_file.exists():
                 error_context = extract_error_context(job.log_file, max_lines=20)
-                job.error = f"Simulation failed (no output generated)\n\nLog excerpt:\n{error_context}"
+                job.error = (
+                    f"Simulation failed (no output generated)\n\nLog excerpt:\n{error_context}"
+                )
             else:
                 job.error = "Simulation failed (no output generated, log file missing)"
 

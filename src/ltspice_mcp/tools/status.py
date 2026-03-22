@@ -6,9 +6,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import FORMAT_PROP, RO_ANNOTATIONS, format_response
 
 
-async def handle_get_server_status(
-    arguments: dict, state: SessionState
-):
+async def handle_get_server_status(arguments: dict, state: SessionState):
     """Get comprehensive server status information."""
     fmt = arguments.get("format")
 
@@ -26,7 +24,9 @@ async def handle_get_server_status(
             sim_info: dict = {"available": True, "default": is_default}
             try:
                 if hasattr(cls, "spice_exe"):
-                    exe_path = cls.spice_exe[0] if isinstance(cls.spice_exe, list) else cls.spice_exe
+                    exe_path = (
+                        cls.spice_exe[0] if isinstance(cls.spice_exe, list) else cls.spice_exe
+                    )
                     lines.append(f"    Executable: {exe_path}")
                     sim_info["executable"] = str(exe_path)
             except Exception:
@@ -35,7 +35,9 @@ async def handle_get_server_status(
     else:
         lines.append("  No simulators detected (server running in degraded mode)")
 
-    lines.append(f"\nDefault simulator: {state.default_simulator.__name__ if state.default_simulator else 'None'}")
+    lines.append(
+        f"\nDefault simulator: {state.default_simulator.__name__ if state.default_simulator else 'None'}"
+    )
 
     lines.append("\nConfiguration:")
     lines.append(f"  Working directory: {state.working_dir}")

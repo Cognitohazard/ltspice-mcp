@@ -10,7 +10,6 @@ from ltspice_mcp.lib.library_parser import (
 
 
 class TestMergeContinuationLines:
-
     def test_basic(self):
         lines = [".MODEL Q1 NPN", "+ BF=200 IS=1e-14"]
         result = _merge_continuation_lines(lines)
@@ -34,7 +33,6 @@ class TestMergeContinuationLines:
 
 
 class TestExtractParameters:
-
     def test_basic(self):
         params = _extract_parameters("BF=200 IS=1e-14")
         assert params == {"BF": "200", "IS": "1e-14"}
@@ -49,7 +47,6 @@ class TestExtractParameters:
 
 
 class TestParseLibraryFile:
-
     def test_parse_model_entry(self, tmp_path: Path):
         lib = tmp_path / "models.lib"
         # Space before '(' is required — regex group(2) captures \S+ which
@@ -67,11 +64,7 @@ class TestParseLibraryFile:
 
     def test_parse_subckt_with_ends(self, tmp_path: Path):
         lib = tmp_path / "sub.lib"
-        lib.write_text(
-            ".SUBCKT opamp in+ in- out vcc vee\n"
-            "R1 in+ in- 1Meg\n"
-            ".ENDS\n"
-        )
+        lib.write_text(".SUBCKT opamp in+ in- out vcc vee\nR1 in+ in- 1Meg\n.ENDS\n")
 
         index = parse_library_file(lib)
         assert len(index.models) == 1
@@ -105,7 +98,7 @@ class TestParseLibraryFile:
 
     def test_search_pagination(self, tmp_path: Path):
         lib = tmp_path / "many.lib"
-        lines = [f".MODEL M{i:02d} NPN(BF={100+i})\n" for i in range(10)]
+        lines = [f".MODEL M{i:02d} NPN(BF={100 + i})\n" for i in range(10)]
         lib.write_text("".join(lines))
 
         index = parse_library_file(lib)

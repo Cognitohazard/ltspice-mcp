@@ -68,9 +68,7 @@ async def _run(real_stdin_fd: int):
     """
     # Wrap the saved fd into a file object for the MCP transport
     real_stdin_file = os.fdopen(real_stdin_fd, "rb")
-    real_stdin = anyio.wrap_file(
-        TextIOWrapper(real_stdin_file, encoding="utf-8")
-    )
+    real_stdin = anyio.wrap_file(TextIOWrapper(real_stdin_file, encoding="utf-8"))
 
     async with stdio_server(stdin=real_stdin) as (read_stream, write_stream):
         await server.run(

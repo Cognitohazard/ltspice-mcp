@@ -1,7 +1,6 @@
 """Simulator detection and selection logic."""
 
 import logging
-from typing import Type
 
 from spicelib.simulators.ltspice_simulator import LTspice
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
@@ -14,7 +13,7 @@ from ltspice_mcp.lib.wsl import is_wsl
 logger = logging.getLogger(__name__)
 
 
-def _get_ltspice_class() -> Type:
+def _get_ltspice_class() -> type:
     """Return the appropriate LTspice class for the current platform.
 
     On WSL, returns LTspiceWSL which overrides run() to convert paths
@@ -22,12 +21,13 @@ def _get_ltspice_class() -> Type:
     """
     if is_wsl():
         from ltspice_mcp.lib.ltspice_wsl import LTspiceWSL
+
         return LTspiceWSL
     return LTspice
 
 
 # Map simulator names to spicelib classes
-SIMULATORS: dict[str, Type] = {
+SIMULATORS: dict[str, type] = {
     "ltspice": _get_ltspice_class(),
     "ngspice": NGspiceSimulator,
     "qspice": Qspice,
@@ -65,7 +65,7 @@ def _apply_simulator_exe(config: ServerConfig) -> None:
         logger.warning(f"Failed to apply simulator_exe for {target_name}: {e}")
 
 
-def detect_simulators(config: ServerConfig | None = None) -> dict[str, Type]:
+def detect_simulators(config: ServerConfig | None = None) -> dict[str, type]:
     """Detect available SPICE simulators on the system.
 
     If config is provided and has simulator_exe set, applies that override
@@ -82,7 +82,7 @@ def detect_simulators(config: ServerConfig | None = None) -> dict[str, Type]:
     if config is not None:
         _apply_simulator_exe(config)
 
-    available: dict[str, Type] = {}
+    available: dict[str, type] = {}
 
     for name, cls in SIMULATORS.items():
         try:
@@ -103,9 +103,7 @@ def detect_simulators(config: ServerConfig | None = None) -> dict[str, Type]:
     return available
 
 
-def select_default_simulator(
-    available: dict[str, Type], config: ServerConfig
-) -> Type | None:
+def select_default_simulator(available: dict[str, type], config: ServerConfig) -> type | None:
     """Select the default simulator based on config and availability.
 
     Selection logic:
