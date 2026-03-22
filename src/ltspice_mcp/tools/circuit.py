@@ -14,6 +14,7 @@ from pathlib import Path
 
 from mcp import types
 from spicelib import AscEditor, SpiceEditor
+from spicelib.editor.base_schematic import ERotation, Line, Point, SchematicComponent
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.state import SessionState
@@ -30,6 +31,28 @@ from ltspice_mcp.tools._base import (
 
 # Per-file locks to prevent concurrent edits to the same circuit file
 _edit_locks: dict[Path, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+# Rotation string -> ERotation enum mapping (shared by move/add handlers)
+_ROTATION_MAP: dict[str, ERotation] = {
+    "R0": ERotation.R0,
+    "R90": ERotation.R90,
+    "R180": ERotation.R180,
+    "R270": ERotation.R270,
+    "M0": ERotation.M0,
+    "M90": ERotation.M90,
+    "M180": ERotation.M180,
+    "M270": ERotation.M270,
+}
+
+
+def _parse_rotation(rotation: str) -> ERotation:
+    """Parse a rotation string to ERotation enum. Raises NetlistError if invalid."""
+    erot = _ROTATION_MAP.get(rotation)
+    if erot is None:
+        raise NetlistError(
+            f"Invalid rotation '{rotation}'. Valid: {', '.join(_ROTATION_MAP.keys())}"
+        )
+    return erot
 
 # Type alias for the union returned by _make_editor / _get_editor.
 # Schematic-only handlers narrow this to AscEditor after _require_asc.
@@ -414,8 +437,6 @@ async def handle_remove_component(arguments: dict, state: SessionState) -> types
 
 async def handle_move_component(arguments: dict, state: SessionState) -> types.CallToolResult:
     """Move or rotate a component in a schematic."""
-    from spicelib.editor.base_schematic import ERotation, Point
-
     asc_path = safe_path(arguments["path"], state)
     _require_asc(asc_path)
 
@@ -427,24 +448,7 @@ async def handle_move_component(arguments: dict, state: SessionState) -> types.C
     async with _editing_asc(asc_path, state) as editor:
         old_pos, old_rot = editor.get_component_position(reference)
 
-        if rotation is not None:
-            rot_map = {
-                "R0": ERotation.R0,
-                "R90": ERotation.R90,
-                "R180": ERotation.R180,
-                "R270": ERotation.R270,
-                "M0": ERotation.M0,
-                "M90": ERotation.M90,
-                "M180": ERotation.M180,
-                "M270": ERotation.M270,
-            }
-            new_rot = rot_map.get(rotation)
-            if new_rot is None:
-                raise NetlistError(
-                    f"Invalid rotation '{rotation}'. Valid: {', '.join(rot_map.keys())}"
-                )
-        else:
-            new_rot = old_rot
+        new_rot = _parse_rotation(rotation) if rotation is not None else old_rot
 
         new_pos = Point(x, y)
         editor.set_component_position(reference, new_pos, new_rot)
@@ -468,6 +472,66 @@ async def handle_set_component_attribute(
         await run_sync(editor.set_component_attribute, reference, attribute, value)
 
     return text_response(f"Set {reference}.{attribute} = {value}")
+
+
+async def handle_add_component(arguments: dict, state: SessionState) -> types.CallToolResult:
+    """Add a new component to an .asc schematic."""
+    asc_path = safe_path(arguments["path"], state)
+    _require_asc(asc_path)
+
+    reference = arguments["reference"]
+    symbol = arguments["symbol"]
+    x = int(arguments["x"])
+    y = int(arguments["y"])
+    value = arguments.get("value")
+    rotation = arguments.get("rotation", "R0")
+    erot = _parse_rotation(rotation)
+
+    async with _editing_asc(asc_path, state) as editor:
+        if reference in editor.components:
+            raise NetlistError(
+                f"Component '{reference}' already exists. "
+                "Use ltspice_set_component_value to modify it, "
+                "or ltspice_remove_component to remove it first."
+            )
+
+        comp = SchematicComponent(editor, "")
+        comp.reference = reference
+        comp.symbol = symbol
+        comp.position = Point(x, y)
+        comp.rotation = erot
+        if value is not None:
+            comp.attributes["Value"] = value
+
+        await run_sync(editor.add_component, comp)
+
+    result = f"Added {reference} ({symbol}) at ({x},{y})"
+    if value is not None:
+        result += f" = {value}"
+    return text_response(result)
+
+
+async def handle_add_wire(arguments: dict, state: SessionState) -> types.CallToolResult:
+    """Add wire segment(s) to an .asc schematic."""
+    asc_path = safe_path(arguments["path"], state)
+    _require_asc(asc_path)
+
+    wires = arguments["wires"]
+    if not wires:
+        raise NetlistError("At least one wire segment is required")
+
+    async with _editing_asc(asc_path, state) as editor:
+        for i, w in enumerate(wires):
+            try:
+                x1, y1 = int(w["x1"]), int(w["y1"])
+                x2, y2 = int(w["x2"]), int(w["y2"])
+            except (KeyError, TypeError, ValueError) as e:
+                raise NetlistError(
+                    f"Wire segment {i}: requires integer x1, y1, x2, y2: {e}"
+                ) from e
+            editor.wires.append(Line(Point(x1, y1), Point(x2, y2)))
+
+    return text_response(f"Added {len(wires)} wire segment(s) to {asc_path.name}")
 
 
 async def handle_export_netlist(arguments: dict, state: SessionState) -> types.CallToolResult:
@@ -848,6 +912,114 @@ TOOL_DEFS: list[types.Tool] = [
             openWorldHint=False,
         ),
     ),
+    types.Tool(
+        name="ltspice_add_component",
+        description=(
+            "Add a new component to an .asc schematic at a specified grid position. "
+            "Coordinates are in LTspice grid units (multiples of 16). "
+            "Common symbol names: res/res2 (resistor), cap/cap2 (capacitor), ind/ind2 (inductor), "
+            "voltage (voltage source), current (current source), diode, nmos, pmos, npn, pnp, "
+            "opamp/opamp2 (3/5-pin), zener, LED, schottky, polcap. "
+            "Pin spacing is typically 64 units (e.g., a resistor's pins are 64 apart vertically). "
+            "Use ltspice_read_circuit to inspect existing component positions before placing. "
+            "Use ltspice_add_wire to connect components after placing them."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to .asc schematic file",
+                },
+                "reference": {
+                    "type": "string",
+                    "description": "Reference designator (e.g., 'R1', 'C2', 'U1', 'V1')",
+                },
+                "symbol": {
+                    "type": "string",
+                    "description": "LTspice symbol name (e.g., 'res', 'cap', 'voltage', 'nmos', 'opamp2'). This is the .asy filename without extension.",
+                },
+                "x": {
+                    "type": "integer",
+                    "description": "X position in grid units (multiples of 16)",
+                },
+                "y": {
+                    "type": "integer",
+                    "description": "Y position in grid units (multiples of 16)",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "Component value (e.g., '10k', '100n', 'AC 1'). Optional for sources and subcircuits.",
+                },
+                "rotation": {
+                    "type": "string",
+                    "description": "Rotation/mirror: R0 (default), R90, R180, R270, M0, M90, M180, M270",
+                    "enum": ["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"],
+                },
+            },
+            "required": ["path", "reference", "symbol", "x", "y"],
+        },
+        annotations=types.ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+    ),
+    types.Tool(
+        name="ltspice_add_wire",
+        description=(
+            "Add wire segment(s) to an .asc schematic to connect components. "
+            "Each wire is a straight line between two points (x1,y1) to (x2,y2). "
+            "Wires should be axis-aligned (horizontal or vertical). "
+            "For L-shaped connections, use two segments. For Z-shaped, use three. "
+            "Coordinates are in LTspice grid units (multiples of 16). "
+            "Wires connect when they share an endpoint with a component pin or another wire. "
+            "Use ltspice_read_circuit to inspect existing positions and plan connections."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to .asc schematic file",
+                },
+                "wires": {
+                    "type": "array",
+                    "description": "Array of wire segments to add",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x1": {
+                                "type": "integer",
+                                "description": "Start X coordinate (grid units)",
+                            },
+                            "y1": {
+                                "type": "integer",
+                                "description": "Start Y coordinate (grid units)",
+                            },
+                            "x2": {
+                                "type": "integer",
+                                "description": "End X coordinate (grid units)",
+                            },
+                            "y2": {
+                                "type": "integer",
+                                "description": "End Y coordinate (grid units)",
+                            },
+                        },
+                        "required": ["x1", "y1", "x2", "y2"],
+                    },
+                },
+            },
+            "required": ["path", "wires"],
+        },
+        annotations=types.ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+    ),
 ]
 
 TOOL_HANDLERS: dict[str, object] = {
@@ -861,4 +1033,6 @@ TOOL_HANDLERS: dict[str, object] = {
     "ltspice_move_component": handle_move_component,
     "ltspice_set_component_attribute": handle_set_component_attribute,
     "ltspice_export_netlist": handle_export_netlist,
+    "ltspice_add_component": handle_add_component,
+    "ltspice_add_wire": handle_add_wire,
 }
