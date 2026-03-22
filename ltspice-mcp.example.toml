@@ -42,3 +42,11 @@ style = "seaborn-v0_8-darkgrid"
 [logging]
 # Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
 level = "INFO"
+
+[schematic]
+# Additional paths to .asy symbol files (auto-detected on Windows/WSL)
+symbol_paths = []
+
+[tools]
+# Tool profile: "full" (all tools) or "agentic" (reduced set for capable LLM agents)
+profile = "full"
