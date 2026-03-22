@@ -3,48 +3,40 @@
 from mcp import types
 
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import text_response
+from ltspice_mcp.tools._base import FORMAT_PROP, RO_ANNOTATIONS, format_response
 
 
 async def handle_get_server_status(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
-    """Get comprehensive server status information.
+):
+    """Get comprehensive server status information."""
+    fmt = arguments.get("format")
 
-    Returns detailed information about detected simulators, configuration,
-    sandbox settings, and runtime state. This tool allows the LLM to check
-    what capabilities are available before attempting operations.
-
-    Args:
-        arguments: Empty dict (no parameters required)
-        state: Current session state
-
-    Returns:
-        List containing a single TextContent with formatted status information
-    """
     lines = ["=== LTSpice MCP Server Status ===\n"]
 
-    # Detected simulators
+    # Build structured data alongside text
+    simulators_data = {}
+
     lines.append("Simulators:")
     if state.available_simulators:
         for name, cls in state.available_simulators.items():
             is_default = cls == state.default_simulator
             default_marker = " (default)" if is_default else ""
             lines.append(f"  - {name}: available{default_marker}")
+            sim_info: dict = {"available": True, "default": is_default}
             try:
-                # Try to get executable path if available
                 if hasattr(cls, "spice_exe"):
                     exe_path = cls.spice_exe[0] if isinstance(cls.spice_exe, list) else cls.spice_exe
                     lines.append(f"    Executable: {exe_path}")
+                    sim_info["executable"] = str(exe_path)
             except Exception:
                 pass
+            simulators_data[name] = sim_info
     else:
         lines.append("  No simulators detected (server running in degraded mode)")
 
-    # Default simulator
     lines.append(f"\nDefault simulator: {state.default_simulator.__name__ if state.default_simulator else 'None'}")
 
-    # Configuration
     lines.append("\nConfiguration:")
     lines.append(f"  Working directory: {state.working_dir}")
     lines.append(f"  Max parallel simulations: {state.config.max_parallel_sims}")
@@ -52,28 +44,43 @@ async def handle_get_server_status(
     lines.append(f"  Max points returned: {state.config.max_points_returned}")
     lines.append(f"  Log level: {state.config.log_level}")
 
-    # Security sandbox
+    allowed_paths_list = [str(p) for p in state.config.allowed_paths]
     lines.append("\nSecurity (Sandbox):")
     lines.append("  Allowed paths:")
     for allowed_path in state.config.allowed_paths:
         lines.append(f"    - {allowed_path}")
 
-    # Config source
     config_file = state.working_dir / "ltspice-mcp.toml"
     if config_file.exists():
         lines.append(f"\n  Config file: {config_file}")
     else:
         lines.append("\n  Config file: Not found (using defaults)")
 
-    # Runtime state
     lines.append("\nRuntime State:")
     lines.append(f"  Active jobs: {len(state.jobs)}")
     lines.append(f"  Cached editors: {len(state.editors)}")
     lines.append(f"  Cached results: {len(state.results)}")
     lines.append(f"  Loaded libraries: {len(state.libraries)}")
 
-    status_text = "\n".join(lines)
-    return text_response(status_text)
+    data = {
+        "simulators": simulators_data,
+        "default_simulator": state.default_simulator.__name__ if state.default_simulator else None,
+        "configuration": {
+            "working_directory": str(state.working_dir),
+            "max_parallel_sims": state.config.max_parallel_sims,
+            "default_timeout": state.config.default_timeout,
+            "max_points_returned": state.config.max_points_returned,
+            "log_level": state.config.log_level,
+        },
+        "allowed_paths": allowed_paths_list,
+        "runtime": {
+            "active_jobs": len(state.jobs),
+            "cached_editors": len(state.editors),
+            "cached_results": len(state.results),
+            "loaded_libraries": len(state.libraries),
+        },
+    }
+    return format_response("\n".join(lines), data, fmt)
 
 
 # Tool definitions
@@ -87,15 +94,22 @@ TOOL_DEFS: list[types.Tool] = [
         ),
         inputSchema={
             "type": "object",
-            "properties": {},
+            "properties": {
+                "format": FORMAT_PROP,
+            },
             "required": [],
         },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=False,
-        ),
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "simulators": {"type": "object"},
+                "default_simulator": {"type": ["string", "null"]},
+                "configuration": {"type": "object"},
+                "allowed_paths": {"type": "array", "items": {"type": "string"}},
+                "runtime": {"type": "object"},
+            },
+        },
+        annotations=RO_ANNOTATIONS,
     )
 ]
 

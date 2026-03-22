@@ -28,7 +28,7 @@ from ltspice_mcp.tools._base import (
 
 async def handle_get_signal_stats(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+):
     """Get statistics for a signal/trace."""
     raw_path = safe_path(arguments["raw_file"], state)
     signal = arguments["signal"]
@@ -75,7 +75,7 @@ async def handle_get_signal_stats(
 
 async def handle_query_value(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+):
     """Query signal value at a specific time or frequency."""
     raw_path = safe_path(arguments["raw_file"], state)
     signal = arguments["signal"]
@@ -148,7 +148,7 @@ def _format_measurements(measurements: dict, step_count: int) -> str:
 
 async def handle_get_measurements(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+):
     """Extract .MEAS measurement results from simulation log file."""
     log_path = safe_path(arguments["log_file"], state)
     fmt = arguments.get("format")
@@ -169,7 +169,7 @@ async def handle_get_measurements(
 
 async def handle_get_operating_point(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+):
     """Read DC operating point data (all node voltages and branch currents)."""
     raw_path = safe_path(arguments["raw_file"], state)
     fmt = arguments.get("format")
@@ -198,7 +198,7 @@ async def handle_get_operating_point(
 
 async def handle_get_simulation_summary(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+):
     """Get comprehensive simulation summary."""
     raw_path = safe_path(arguments["raw_file"], state)
     fmt = arguments.get("format")
@@ -330,11 +330,29 @@ TOOL_DEFS: list[types.Tool] = [
             },
             "required": ["raw_file", "signal"],
         },
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "signal": {"type": "string"},
+                "analysis_type": {"type": "string"},
+                "min": {"type": "number"},
+                "max": {"type": "number"},
+                "mean": {"type": "number"},
+                "rms": {"type": "number"},
+                "peak_to_peak": {"type": "number"},
+                "point_count": {"type": "integer"},
+                "min_db": {"type": "number"},
+                "max_db": {"type": "number"},
+                "mean_db": {"type": "number"},
+                "min_phase": {"type": "number"},
+                "max_phase": {"type": "number"},
+            },
+        },
         annotations=RO_ANNOTATIONS,
     ),
     types.Tool(
         name="ltspice_query_value",
-        description="Query the value of a signal at a specific time (transient) or frequency (AC). Returns the nearest data point without interpolation. Accepts SPICE notation for the 'at' parameter: k=1e3, Meg=1e6, m=1e-3, u=1e-6, n=1e-9, p=1e-12, f=1e-15 (e.g., '1k' for 1kHz, '10m' for 10ms).",
+        description="Look up the value of a signal at a specific time point (transient) or frequency (AC). Returns the nearest data point without interpolation. Accepts SPICE notation for the 'at' parameter: k=1e3, Meg=1e6, m=1e-3, u=1e-6, n=1e-9, p=1e-12, f=1e-15 (e.g., '1k' for 1kHz, '10m' for 10ms).",
         inputSchema={
             "type": "object",
             "properties": {
@@ -358,6 +376,17 @@ TOOL_DEFS: list[types.Tool] = [
             },
             "required": ["raw_file", "signal", "at"],
         },
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "signal": {"type": "string"},
+                "requested_x": {"type": "number"},
+                "actual_x": {"type": "number"},
+                "value": {"type": "number"},
+                "magnitude_db": {"type": "number"},
+                "phase_deg": {"type": "number"},
+            },
+        },
         annotations=RO_ANNOTATIONS,
     ),
     types.Tool(
@@ -374,6 +403,19 @@ TOOL_DEFS: list[types.Tool] = [
             },
             "required": ["log_file"],
         },
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "measurements": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {"type": ["number", "null"]},
+                    },
+                },
+                "step_count": {"type": "integer"},
+            },
+        },
         annotations=RO_ANNOTATIONS,
     ),
     types.Tool(
@@ -389,6 +431,19 @@ TOOL_DEFS: list[types.Tool] = [
                 "format": FORMAT_PROP,
             },
             "required": ["raw_file"],
+        },
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "voltages": {
+                    "type": "object",
+                    "additionalProperties": {"type": "number"},
+                },
+                "currents": {
+                    "type": "object",
+                    "additionalProperties": {"type": "number"},
+                },
+            },
         },
         annotations=RO_ANNOTATIONS,
     ),

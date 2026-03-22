@@ -25,7 +25,8 @@ from ltspice_mcp.state import (
     SweepDimension,
 )
 from ltspice_mcp.tools._base import (
-    FORMAT_PROP, format_response, require_simulator, resolve_netlist_path,
+    FORMAT_PROP, format_response, pagination_metadata,
+    require_simulator, resolve_netlist_path,
     resolve_output_folder, run_sync, text_response,
 )
 
@@ -95,7 +96,7 @@ def _resolve_mc_ref(ref: str) -> tuple[str, bool]:
 # ---------------------------------------------------------------------------
 # Handler 1: configure_sweep
 # ---------------------------------------------------------------------------
-async def handle_configure_sweep(arguments: dict, state: SessionState) -> list[types.TextContent]:
+async def handle_configure_sweep(arguments: dict, state: SessionState):
     """Configure a multi-parameter sweep and store it for later execution.
 
     Validates all parameters, creates SweepDimension objects, computes total
@@ -203,7 +204,7 @@ async def handle_configure_sweep(arguments: dict, state: SessionState) -> list[t
 # ---------------------------------------------------------------------------
 # Handler 2: run_sweep
 # ---------------------------------------------------------------------------
-async def handle_run_sweep(arguments: dict, state: SessionState) -> list[types.TextContent]:
+async def handle_run_sweep(arguments: dict, state: SessionState):
     """Start a previously configured parameter sweep.
 
     Looks up the sweep config, creates a BatchJob, and starts execution
@@ -275,7 +276,7 @@ async def handle_run_sweep(arguments: dict, state: SessionState) -> list[types.T
 # ---------------------------------------------------------------------------
 async def handle_configure_montecarlo(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+):
     """Configure a Monte Carlo analysis and store it for later execution.
 
     Parses tolerances with type-name-to-prefix mapping, validates distribution
@@ -372,7 +373,7 @@ async def handle_configure_montecarlo(
 # ---------------------------------------------------------------------------
 # Handler 4: run_montecarlo
 # ---------------------------------------------------------------------------
-async def handle_run_montecarlo(arguments: dict, state: SessionState) -> list[types.TextContent]:
+async def handle_run_montecarlo(arguments: dict, state: SessionState):
     """Start a previously configured Monte Carlo analysis.
 
     Looks up the MC config, creates a BatchJob, and starts execution
@@ -438,7 +439,7 @@ async def handle_run_montecarlo(arguments: dict, state: SessionState) -> list[ty
 # ---------------------------------------------------------------------------
 async def handle_get_batch_results(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+):
     """Query a batch simulation job — status/progress or signal results.
 
     Without signal: returns job status and progress (running/completed/failed).
@@ -455,6 +456,7 @@ async def handle_get_batch_results(
     """
     job_id = arguments["job_id"]
     signal = arguments.get("signal")
+    fmt = arguments.get("format")
 
     # Look up batch job
     batch_job = state.batch_jobs.get(job_id)
@@ -473,7 +475,6 @@ async def handle_get_batch_results(
         netlist_name = batch_job.netlist.name
 
         if batch_job.status == "running":
-            # Compute progress snapshot for ETA
             start_ts = batch_job.started_at.timestamp()
             snap = get_progress_snapshot(batch_job, start_ts)
 
@@ -482,24 +483,24 @@ async def handle_get_batch_results(
             failed = snap["failed"]
             eta_s = snap["eta_s"]
 
-            # Format ETA
             if eta_s is not None:
-                if eta_s >= 60:
-                    eta_str = f", ~{int(eta_s // 60)}m remaining"
-                else:
-                    eta_str = f", ~{int(eta_s)}s remaining"
+                eta_str = f", ~{int(eta_s // 60)}m remaining" if eta_s >= 60 else f", ~{int(eta_s)}s remaining"
             else:
                 eta_str = ""
 
             progress_str = f"{completed}/{total} runs complete{eta_str}"
 
-            return text_response(
-                        f"Batch job {job_id} is running\n"
-                        f"Type: {batch_job.job_type}\n"
-                        f"Progress: {progress_str}\n"
-                        f"Failed: {failed}\n"
-                        f"Netlist: {netlist_name}\n\n"
-                        f"Use ltspice_get_batch_results('{job_id}', signal='...') to query partial results"
+            data = {"job_id": job_id, "status": "running", "job_type": batch_job.job_type,
+                    "completed": completed, "total": total, "failed": failed, "eta_s": eta_s,
+                    "netlist": netlist_name}
+            return format_response(
+                f"Batch job {job_id} is running\n"
+                f"Type: {batch_job.job_type}\n"
+                f"Progress: {progress_str}\n"
+                f"Failed: {failed}\n"
+                f"Netlist: {netlist_name}\n\n"
+                f"Use ltspice_get_batch_results('{job_id}', signal='...') to query partial results",
+                data, fmt,
             )
 
         elif batch_job.status == "completed":
@@ -509,43 +510,51 @@ async def handle_get_batch_results(
 
             successful = batch_job.completed_runs - batch_job.failed_runs
 
-            return text_response(
-                        f"Batch job {job_id} completed\n"
-                        f"Type: {batch_job.job_type}\n"
-                        f"Total runs: {batch_job.total_runs}\n"
-                        f"Successful: {successful}\n"
-                        f"Failed: {batch_job.failed_runs}\n"
-                        f"Duration: {duration:.1f}s\n\n"
-                        f"Use ltspice_get_batch_results('{job_id}', signal='V(out)') to query results"
+            data = {"job_id": job_id, "status": "completed", "job_type": batch_job.job_type,
+                    "total_runs": batch_job.total_runs, "successful": successful,
+                    "failed": batch_job.failed_runs, "duration": duration}
+            return format_response(
+                f"Batch job {job_id} completed\n"
+                f"Type: {batch_job.job_type}\n"
+                f"Total runs: {batch_job.total_runs}\n"
+                f"Successful: {successful}\n"
+                f"Failed: {batch_job.failed_runs}\n"
+                f"Duration: {duration:.1f}s\n\n"
+                f"Use ltspice_get_batch_results('{job_id}', signal='V(out)') to query results",
+                data, fmt,
             )
 
         elif batch_job.status == "failed":
             error_msg = batch_job.error or "Unknown error"
-            return text_response(
-                        f"Batch job {job_id} failed\n"
-                        f"Type: {batch_job.job_type}\n"
-                        f"Netlist: {netlist_name}\n"
-                        f"Error: {error_msg}"
+            data = {"job_id": job_id, "status": "failed", "job_type": batch_job.job_type,
+                    "netlist": netlist_name, "error": error_msg}
+            return format_response(
+                f"Batch job {job_id} failed\n"
+                f"Type: {batch_job.job_type}\n"
+                f"Netlist: {netlist_name}\n"
+                f"Error: {error_msg}",
+                data, fmt,
             )
 
         elif batch_job.status == "cancelled":
-            return text_response(
-                        f"Batch job {job_id} was cancelled\n"
-                        f"Type: {batch_job.job_type}\n"
-                        f"Completed {batch_job.completed_runs} of {batch_job.total_runs} before cancellation. "
-                        f"Partial results available via get_batch_results."
+            data = {"job_id": job_id, "status": "cancelled", "job_type": batch_job.job_type,
+                    "completed_runs": batch_job.completed_runs, "total_runs": batch_job.total_runs}
+            return format_response(
+                f"Batch job {job_id} was cancelled\n"
+                f"Type: {batch_job.job_type}\n"
+                f"Completed {batch_job.completed_runs} of {batch_job.total_runs} before cancellation. "
+                f"Partial results available via get_batch_results.",
+                data, fmt,
             )
 
         else:
-            return text_response(f"Batch job {job_id} has unexpected status: {batch_job.status}",
-            )
+            return text_response(f"Batch job {job_id} has unexpected status: {batch_job.status}")
 
     # --- Signal provided: return results ---
     filters = arguments.get("filters")
     offset = int(arguments.get("offset", 0))
     limit = min(int(arguments.get("limit", 50)), 50)  # Capped at 50 per Phase 5 convention
     raw_mode = bool(arguments.get("raw", False))
-    fmt = arguments.get("format")
 
     if batch_job.completed_runs == 0:
         return text_response(
@@ -687,7 +696,13 @@ async def handle_get_batch_results(
             next_offset = offset + limit
             lines.append(f"\nNext page: ltspice_get_batch_results('{job_id}', signal='{signal}', raw=true, offset={next_offset})")
 
-        return text_response("\n".join(lines))
+        json_data = {
+            "job_id": job_id,
+            "signal": signal,
+            "runs": page_stats["runs"],
+            "pagination": pagination_metadata(total_matching, offset, limit),
+        }
+        return format_response("\n".join(lines), json_data, fmt)
 
 
 # ---------------------------------------------------------------------------

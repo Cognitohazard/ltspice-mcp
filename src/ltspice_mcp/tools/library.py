@@ -4,29 +4,21 @@ from mcp import types
 
 from ltspice_mcp.errors import LibraryError
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import RO_ANNOTATIONS, paginate, run_sync, safe_path, text_response
+from ltspice_mcp.tools._base import (
+    FORMAT_PROP, PAGINATION_SCHEMA, RO_ANNOTATIONS, format_response, paginate,
+    pagination_metadata, run_sync, safe_path, text_response,
+)
 
 
 async def handle_search_library(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
-    """Search component libraries by name.
-
-    Args:
-        arguments: Contains 'query' (string), 'source' ('user' | 'builtin'),
-                   'offset' (int), 'limit' (int)
-        state: Session state with library manager
-
-    Returns:
-        List with single TextContent containing search results
-
-    Raises:
-        LibraryError: Search failed
-    """
+):
+    """Search component libraries by name."""
     query = arguments["query"]
     source = arguments.get("source", "user")
     offset = arguments.get("offset", 0)
-    limit = min(arguments.get("limit", 50), 50)  # Cap at 50
+    limit = min(arguments.get("limit", 50), 50)
+    fmt = arguments.get("format")
 
     try:
         if source == "user":
@@ -47,9 +39,12 @@ async def handle_search_library(
     results = result["results"]
     total = result["total"]
 
-    # Format response
     if not results:
-        return text_response(f"No models found matching '{query}'")
+        return format_response(
+            f"No models found matching '{query}'",
+            {"results": [], "pagination": pagination_metadata(0, offset, limit)},
+            fmt,
+        )
 
     lines = [f"Found {total} model(s) matching '{query}'"]
     lines.append(f"Showing {offset + 1}-{offset + len(results)} of {total}")
@@ -58,26 +53,20 @@ async def handle_search_library(
     for r in results:
         lines.append(f"  {r['name']} ({r['type']}) - {r['source_path']}")
 
-    return text_response("\n".join(lines))
+    data = {
+        "results": results,
+        "pagination": pagination_metadata(total, offset, limit),
+    }
+    return format_response("\n".join(lines), data, fmt)
 
 
 async def handle_get_model_info(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
-    """Get SPICE model/subcircuit details.
-
-    Args:
-        arguments: Contains 'name' (string), 'full' (bool)
-        state: Session state with library manager
-
-    Returns:
-        List with single TextContent containing model details
-
-    Raises:
-        LibraryError: Model not found or lookup failed
-    """
+):
+    """Get SPICE model/subcircuit details."""
     name = arguments["name"]
     full = arguments.get("full", False)
+    fmt = arguments.get("format")
 
     try:
         info = await run_sync(state.libraries.get_model_info, name, full)
@@ -90,7 +79,6 @@ async def handle_get_model_info(
             "Use ltspice_search_library to find models."
         )
 
-    # Format response
     lines = [
         f"Model: {info['name']}",
         f"Type: {info['type']}",
@@ -111,12 +99,12 @@ async def handle_get_model_info(
         lines.append("Full SPICE definition:")
         lines.append(info["raw_text"])
 
-    return text_response("\n".join(lines))
+    return format_response("\n".join(lines), info, fmt)
 
 
 async def handle_load_library(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+) -> types.CallToolResult:
     """Load a SPICE library file or directory.
 
     Args:
@@ -150,7 +138,7 @@ async def handle_load_library(
 
 async def handle_unload_library(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
+) -> types.CallToolResult:
     """Unload a library from the session.
 
     Args:
@@ -179,21 +167,10 @@ async def handle_unload_library(
 
 async def handle_list_libraries(
     arguments: dict, state: SessionState
-) -> list[types.TextContent]:
-    """List loaded libraries, optionally with subcircuit detail.
-
-    Args:
-        arguments: Optional 'detail' (bool) to include subcircuit names,
-                   optional 'path' (string) to filter to specific library
-        state: Session state with library manager
-
-    Returns:
-        List with single TextContent containing library info
-
-    Raises:
-        PathSecurityError: Path outside sandbox (if path provided)
-    """
+):
+    """List loaded libraries, optionally with subcircuit detail."""
     detail = arguments.get("detail", False)
+    fmt = arguments.get("format")
     filter_path = None
     if "path" in arguments:
         filter_path = safe_path(arguments["path"], state)
@@ -201,14 +178,14 @@ async def handle_list_libraries(
     libs = await run_sync(state.libraries.list_libraries)
 
     if not libs:
-        return text_response("No libraries loaded")
+        return format_response("No libraries loaded", {"libraries": []}, fmt)
 
     # Apply path filter
     if filter_path:
         libs = [lp for lp in libs if str(filter_path) in str(lp)]
 
     if not libs:
-        return text_response(f"No libraries matching {filter_path}")
+        return format_response(f"No libraries matching {filter_path}", {"libraries": []}, fmt)
 
     libs_page, total, offset, limit = paginate(libs, arguments)
     has_more = offset + len(libs_page) < total
@@ -216,11 +193,14 @@ async def handle_list_libraries(
 
     if not detail:
         lines = [header]
+        lib_data = []
         for lib_path in libs_page:
             lines.append(f"  {lib_path}")
+            lib_data.append({"path": str(lib_path)})
         if has_more:
             lines.append(f"\nNext page: ltspice_list_libraries(offset={offset + limit})")
-        return text_response("\n".join(lines))
+        data = {"libraries": lib_data, "pagination": pagination_metadata(total, offset, limit)}
+        return format_response("\n".join(lines), data, fmt)
 
     # Detail mode: include subcircuit names per library
     try:
@@ -230,19 +210,15 @@ async def handle_list_libraries(
     except Exception as e:
         raise LibraryError(f"Failed to list subcircuits: {e}")
 
-    # Filter to .SUBCKT type only
-    subcircuits = [
-        r for r in result["results"]
-        if r["type"] == ".SUBCKT"
-    ]
+    subcircuits = [r for r in result["results"] if r["type"] == ".SUBCKT"]
 
-    # Group subcircuits by source path
     subcircuits_by_path: dict[str, list[str]] = {}
     for sc in subcircuits:
         src = sc["source_path"]
         subcircuits_by_path.setdefault(src, []).append(sc["name"])
 
     lines = [header]
+    lib_data = []
     for lib_path in libs_page:
         lib_str = str(lib_path)
         matching_subs: list[str] = []
@@ -255,11 +231,13 @@ async def handle_list_libraries(
                 lines.append(f"    .SUBCKT {name}")
         else:
             lines.append("    (no subcircuits)")
+        lib_data.append({"path": str(lib_path), "subcircuits": sorted(matching_subs)})
 
     if has_more:
         lines.append(f"\nNext page: ltspice_list_libraries(detail=true, offset={offset + limit})")
 
-    return text_response("\n".join(lines))
+    data = {"libraries": lib_data, "pagination": pagination_metadata(total, offset, limit)}
+    return format_response("\n".join(lines), data, fmt)
 
 
 # Tool definitions
@@ -288,8 +266,26 @@ TOOL_DEFS: list[types.Tool] = [
                     "type": "integer",
                     "description": "Maximum results to return (default: 50, max: 50)",
                 },
+                "format": FORMAT_PROP,
             },
             "required": ["query"],
+        },
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "type": {"type": "string"},
+                            "source_path": {"type": "string"},
+                        },
+                    },
+                },
+                "pagination": PAGINATION_SCHEMA,
+            },
         },
         annotations=RO_ANNOTATIONS,
     ),
@@ -307,6 +303,7 @@ TOOL_DEFS: list[types.Tool] = [
                     "type": "boolean",
                     "description": "Include full SPICE definition text (default: false)",
                 },
+                "format": FORMAT_PROP,
             },
             "required": ["name"],
         },
@@ -374,6 +371,7 @@ TOOL_DEFS: list[types.Tool] = [
                     "type": "integer",
                     "description": "Maximum libraries to return (default: 50, max: 50)",
                 },
+                "format": FORMAT_PROP,
             },
             "required": [],
         },
