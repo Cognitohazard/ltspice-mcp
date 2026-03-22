@@ -3,7 +3,7 @@ as a client would.
 
 These tests launch the server as a subprocess via the MCP SDK's stdio_client,
 then use ClientSession to send real MCP protocol messages.  No simulator is
-expected to be available — circuit editing, status, resources, prompts, and
+expected to be available — circuit editing, status, resources, and
 error-path tests all work without one.
 """
 
@@ -120,7 +120,7 @@ class TestServerLifecycle:
             assert caps is not None
             assert caps.tools is not None
             assert caps.resources is not None
-            assert caps.prompts is not None
+            # prompts capability removed (domain knowledge belongs in the client)
 
     async def test_list_tools_contains_all_modules(self, tmp_path):
         """Every module's tools appear in the dispatch table."""
@@ -581,52 +581,6 @@ class TestResources:
             assert data["libraries"] == []
 
 
-# ---------------------------------------------------------------------------
-# 10. Prompts — verify content is meaningful
-# ---------------------------------------------------------------------------
-
-class TestPrompts:
-    async def test_list_prompts_returns_all_four(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await session.list_prompts()
-            prompts = {p.name: p for p in result.prompts}
-            assert set(prompts.keys()) == {
-                "filter_design", "amplifier_analysis",
-                "tolerance_analysis", "simulation_debugging",
-            }
-            # filter_design has required arguments
-            fd_args = prompts["filter_design"].arguments or []
-            required_names = {a.name for a in fd_args if a.required}
-            assert "filter_type" in required_names
-            assert "target_frequency" in required_names
-
-    async def test_get_filter_design_prompt_includes_args(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await session.get_prompt(
-                "filter_design",
-                {"filter_type": "lowpass", "target_frequency": "1kHz"},
-            )
-            assert len(result.messages) > 0
-            msg = result.messages[0]
-            text = msg.content if isinstance(msg.content, str) else msg.content.text  # type: ignore[union-attr]
-            assert "lowpass" in text.lower()
-            assert "1khz" in text.lower() or "1kHz" in text
-
-    async def test_get_amplifier_analysis_prompt(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await session.get_prompt(
-                "amplifier_analysis",
-                {"topology": "common-emitter", "supply_voltage": "12V"},
-            )
-            assert len(result.messages) > 0
-            msg = result.messages[0]
-            text = msg.content if isinstance(msg.content, str) else msg.content.text  # type: ignore[union-attr]
-            assert "common-emitter" in text.lower()
-
-    async def test_get_prompt_unknown_raises(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            with pytest.raises(Exception):
-                await session.get_prompt("nonexistent_prompt", {})
 
 
 # ---------------------------------------------------------------------------

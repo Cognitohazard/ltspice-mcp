@@ -16,7 +16,6 @@ from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.tools import ALL_MODULES
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from ltspice_mcp.resources import get_static_resources, get_resource_templates, handle_read_resource
-from ltspice_mcp.prompts import get_prompt_definitions, handle_get_prompt
 from pydantic import AnyUrl
 
 logger = logging.getLogger(__name__)
@@ -275,24 +274,3 @@ async def read_resource(uri: AnyUrl) -> Iterable[ReadResourceContents]:
     return converted
 
 
-@server.list_prompts()
-async def list_prompts() -> list[types.Prompt]:
-    """Return all available MCP prompts."""
-    return get_prompt_definitions()
-
-
-@server.get_prompt()
-async def get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptResult:
-    """Get a specific prompt by name with arguments.
-
-    Args:
-        name: Prompt name to retrieve
-        arguments: Prompt-specific arguments dict
-
-    Returns:
-        GetPromptResult with prompt messages
-
-    Raises:
-        ValueError: If prompt name is unknown
-    """
-    return await handle_get_prompt(name, arguments)

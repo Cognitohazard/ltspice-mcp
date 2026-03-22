@@ -64,97 +64,92 @@ Simulation output is automatically redirected to a Windows temp directory. LTspi
 
 ## Tools
 
-All 29 tools are prefixed with `ltspice_` to avoid namespace conflicts with other MCP servers.
+All 29 tools are prefixed with `ltspice_` to avoid namespace conflicts with other MCP servers. Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) for client auto-approval decisions.
 
 ### Circuit editing (10 tools)
 
-Work on both `.cir`/`.net` netlists and `.asc` schematics.
+Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispatch picks the right editor automatically.
 
 | Tool | Description |
 |-|-|
-| `ltspice_create_netlist` | Create a new netlist from content string |
-| `ltspice_read_circuit` | Read and parse a circuit file |
-| `ltspice_list_components` | List components, optionally filtered by prefix |
-| `ltspice_set_component_value` | Set one or many component values |
-| `ltspice_parameter` | Get or set `.PARAM` directive values |
-| `ltspice_edit_directive` | Add or remove SPICE directives |
-| `ltspice_remove_component` | Remove component from `.asc` schematic |
-| `ltspice_move_component` | Move/rotate component in `.asc` schematic |
-| `ltspice_set_component_attribute` | Set component attribute (SpiceLine, etc.) |
-| `ltspice_export_netlist` | Export `.asc` schematic to `.net` netlist |
+| `ltspice_create_netlist` | Create a new netlist from a content string |
+| `ltspice_read_circuit` | Read and parse a circuit file (netlist text for `.cir`, schematic layout for `.asc`) |
+| `ltspice_list_components` | List components (optionally filtered by prefix) or look up a single component by reference |
+| `ltspice_set_component_value` | Set one component value, or batch-set many via a `values` dict |
+| `ltspice_parameter` | Get all `.PARAM` values (no args) or set one (`name` + `value`) |
+| `ltspice_edit_directive` | Add or remove SPICE directives (`.tran`, `.ac`, `.lib`, etc.) |
+| `ltspice_remove_component` | Remove a component from an `.asc` schematic |
+| `ltspice_move_component` | Move or rotate a component in an `.asc` schematic |
+| `ltspice_set_component_attribute` | Set a component attribute (SpiceLine, Value2, etc.) |
+| `ltspice_export_netlist` | Export an `.asc` schematic to a `.net` netlist |
+
+`.asc` schematic editing requires `.asy` symbol files. These are auto-detected on Windows and WSL; override with `[schematic] symbol_paths` in TOML or the `LTSPICE_MCP_SYMBOL_PATHS` env var.
 
 ### Simulation (3 tools)
 
 | Tool | Description |
 |-|-|
-| `ltspice_run_simulation` | Run simulation (sync for short, async for long) |
-| `ltspice_check_job` | Check job status or list all jobs |
+| `ltspice_run_simulation` | Run a simulation — sync for short runs, async (returns job ID) for long ones |
+| `ltspice_check_job` | Check a job's status by ID, or list all jobs |
 | `ltspice_cancel_job` | Cancel a running simulation |
 
 ### Analysis (5 tools)
 
 | Tool | Description |
 |-|-|
-| `ltspice_get_signal_stats` | Signal statistics (min, max, mean, RMS, dB/phase for AC) |
-| `ltspice_query_value` | Query signal value at a specific time or frequency |
-| `ltspice_get_measurements` | Extract `.MEAS` results from log file |
-| `ltspice_get_operating_point` | DC operating point (node voltages, branch currents) |
-| `ltspice_get_simulation_summary` | Full summary: signals, measurements, bandwidth, warnings |
+| `ltspice_get_signal_stats` | Signal statistics: min, max, mean, RMS, peak-to-peak (dB/phase for AC) |
+| `ltspice_query_value` | Query a signal's value at a specific time or frequency |
+| `ltspice_get_measurements` | Extract `.MEAS` directive results from the simulation log |
+| `ltspice_get_operating_point` | DC operating point: all node voltages and branch currents |
+| `ltspice_get_simulation_summary` | Full summary: simulation type, signals, measurements, warnings |
 
 ### Parametric analysis (5 tools)
 
 | Tool | Description |
 |-|-|
-| `ltspice_configure_sweep` | Configure multi-parameter sweep |
-| `ltspice_run_sweep` | Execute sweep (async, returns job ID) |
-| `ltspice_configure_montecarlo` | Configure Monte Carlo with component tolerances |
-| `ltspice_run_montecarlo` | Execute Monte Carlo analysis (async) |
-| `ltspice_get_batch_results` | Query sweep/MC status, statistics, or per-run data |
+| `ltspice_configure_sweep` | Configure a multi-parameter sweep (linear or log, by step size or point count) |
+| `ltspice_run_sweep` | Execute a configured sweep (async, returns job ID) |
+| `ltspice_configure_montecarlo` | Configure Monte Carlo analysis with per-type component tolerances |
+| `ltspice_run_montecarlo` | Execute a configured Monte Carlo analysis (async, returns job ID) |
+| `ltspice_get_batch_results` | Query sweep/MC job progress, per-signal statistics, or per-run data |
 
 ### Library management (5 tools)
 
 | Tool | Description |
 |-|-|
-| `ltspice_search_library` | Search models/subcircuits by name |
-| `ltspice_get_model_info` | Get model details and `.include` directive |
-| `ltspice_load_library` | Load `.lib`/`.mod` file or directory |
-| `ltspice_unload_library` | Unload a library from the session |
-| `ltspice_list_libraries` | List loaded libraries |
+| `ltspice_search_library` | Search loaded libraries for models/subcircuits by name |
+| `ltspice_get_model_info` | Get model parameters and the `.include` directive to use it |
+| `ltspice_load_library` | Load a `.lib`/`.mod` file or a directory of library files |
+| `ltspice_unload_library` | Unload a previously loaded library |
+| `ltspice_list_libraries` | List loaded libraries, optionally with their model names |
 
 ### Status (1 tool)
 
 | Tool | Description |
 |-|-|
-| `ltspice_get_server_status` | Server status: simulators, config, sandbox, runtime state |
+| `ltspice_get_server_status` | Server status: detected simulators, config, sandbox paths, runtime state |
 
 ## Resources
 
+Static resources and URI templates for browsing circuit files and simulation results.
+
 | URI | Description |
 |-|-|
-| `ltspice://netlists/` | List netlist files in working directory |
-| `ltspice://netlists/{filename}` | Read a specific netlist file |
-| `ltspice://results/` | List simulation jobs and results |
-| `ltspice://results/{job_id}/signals` | Signal data for a completed job |
-| `ltspice://results/{job_id}/measurements` | Measurement data for a completed job |
-| `ltspice://models/` | List available model libraries |
-| `ltspice://config` | Current server configuration |
-
-## Prompts
-
-Guided workflow prompts for common circuit design tasks:
-
-- **`filter_design`** — Design filters (lowpass, highpass, bandpass, bandstop, allpass) with topology and order selection
-- **`amplifier_analysis`** — Analyze amplifier circuits (common-emitter, common-source, op-amp) for bias, gain, and stability
-- **`tolerance_analysis`** — Monte Carlo yield estimation with component tolerances
-- **`simulation_debugging`** — Diagnose simulation errors (convergence, singular matrix, missing models)
+| `ltspice://netlists/` | List netlist files in the working directory |
+| `ltspice://netlists/{filename}` | Read the full text of a specific netlist |
+| `ltspice://results/` | List all simulation and batch jobs with their status |
+| `ltspice://results/{job_id}/signals` | Signal/trace names from a completed job's `.raw` file |
+| `ltspice://results/{job_id}/measurements` | `.MEAS` results from a completed job's log |
+| `ltspice://models/` | List loaded model libraries and their models |
+| `ltspice://config` | Current server configuration and detected simulators |
 
 ## Configuration
 
-Copy `ltspice-mcp.example.toml` to `ltspice-mcp.toml` and edit. All settings can be overridden with `LTSPICE_MCP_*` environment variables.
+Copy `ltspice-mcp.example.toml` to `ltspice-mcp.toml` and edit. All settings can be overridden with `LTSPICE_MCP_` prefixed environment variables (highest precedence). The config file path itself can be set with `--config PATH` or the `LTSPICE_MCP_CONFIG` env var.
 
 ```toml
 [simulator]
-default = "ltspice"            # ltspice, ngspice, qspice, xyce
+default = "ltspice"            # ltspice, ngspice, qspice, xyce (null = auto-detect)
 path = ""                      # Explicit executable path (required on WSL)
 
 [security]
@@ -167,6 +162,13 @@ timeout = 300.0                # Default timeout in seconds
 [analysis]
 max_points = 10000             # Max waveform data points per trace
 
+[plotting]
+dpi = 150                      # Plot resolution
+style = "seaborn-v0_8-darkgrid"  # Matplotlib style
+
+[schematic]
+symbol_paths = []              # Custom .asy symbol paths (auto-detected on Windows/WSL)
+
 [logging]
 level = "INFO"                 # DEBUG, INFO, WARNING, ERROR, CRITICAL
 ```
@@ -175,8 +177,7 @@ level = "INFO"                 # DEBUG, INFO, WARNING, ERROR, CRITICAL
 
 ```
 MCP Protocol    server.py         — lifespan, dispatch, request routing
-                resources.py      — MCP resources
-                prompts.py        — MCP prompts
+                resources.py      — MCP resources and URI templates
 
 Tools           tools/circuit.py     — netlist and schematic editing
                 tools/simulation.py  — simulation execution and job management
@@ -188,12 +189,20 @@ Tools           tools/circuit.py     — netlist and schematic editing
 Core            lib/sim_runner.py        — spicelib SimRunner async integration
                 lib/sweep_runner.py      — parametric sweep execution
                 lib/montecarlo_runner.py — Monte Carlo execution
+                lib/runner_manager.py    — centralized runner lifecycle and caching
                 lib/raw_parser.py        — .raw file parsing and statistics
                 lib/log_parser.py        — .log parsing (errors, measurements, Fourier)
+                lib/batch_results.py     — sweep/MC batch result extraction
                 lib/ltspice_wsl.py       — WSL-aware LTspice subclass
                 lib/wsl.py               — WSL detection and path conversion
                 lib/simulator.py         — simulator detection and selection
                 lib/library_manager.py   — SPICE model library management
+                lib/library_parser.py    — .lib/.mod file parsing
+                lib/cache.py             — FileCache for editor and result instances
+                lib/pathutil.py          — path security (safe_path, resolve_safe_path)
+                lib/format.py            — output formatting helpers
+                lib/plotting.py          — matplotlib plot generation
+                lib/sweep_utils.py       — sweep parameter utilities
 
 Config          config.py  — TOML + env var configuration
                 state.py   — session state (jobs, editors, caches)
@@ -204,8 +213,10 @@ Config          config.py  — TOML + env var configuration
 
 - **Async wrapping**: All spicelib operations are synchronous. They run in `asyncio.to_thread()` via `run_sync()` to avoid blocking the event loop.
 - **Path sandbox**: User-provided paths are validated against `config.allowed_paths`. Paths outside the sandbox raise `PathSecurityError`.
+- **Runner lifecycle**: `RunnerManager` owns all runner instances (sim, sweep, MC). It auto-invalidates cached runners when the event loop, simulator class, or output folder changes. Runners are never created directly.
 - **stdin protection**: `main.py` redirects fd 0 to `/dev/null` before starting the server, passing the real stdin only to the MCP transport. This prevents subprocesses from consuming MCP protocol bytes — a workaround for [python-sdk#671](https://github.com/modelcontextprotocol/python-sdk/issues/671).
 - **Tool annotations**: Every tool declares `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` for client auto-approval decisions.
+- **Structured errors**: Typed error hierarchy (`PathSecurityError`, `NetlistError`, `SimulationError` variants) in `errors.py`. Handlers catch `LTSpiceMCPError` subtypes and return error text; unknown exceptions propagate to the MCP SDK.
 
 ## Development
 
@@ -214,6 +225,7 @@ uv sync                        # Install dependencies
 uv run pytest tests/ -v        # Run tests
 uv run pyright                 # Type checking
 uv run ltspice-mcp             # Run server (stdio)
+uv run ltspice-mcp --config /path/to/config.toml  # Custom config
 ```
 
 ## License
