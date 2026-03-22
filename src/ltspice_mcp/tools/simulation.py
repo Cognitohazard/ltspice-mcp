@@ -4,14 +4,19 @@ import asyncio
 import logging
 import time
 from datetime import datetime
+
 from mcp import types
 
 from ltspice_mcp.lib.log_parser import extract_error_context, parse_success_summary
 from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
 from ltspice_mcp.state import SessionState, SimulationJob
 from ltspice_mcp.tools._base import (
-    FORMAT_PROP, format_response,
-    require_simulator, resolve_netlist_path, resolve_output_folder, text_response,
+    FORMAT_PROP,
+    format_response,
+    require_simulator,
+    resolve_netlist_path,
+    resolve_output_folder,
+    text_response,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,7 +65,7 @@ async def handle_run_simulation(arguments: dict, state: SessionState):
     # leave an orphaned "running" job with no task to advance it
     runner = _get_or_create_runner(state)
     state.jobs[job_id] = job
-    asyncio.create_task(runner.start_simulation(netlist_path, job, state))
+    job.task = asyncio.create_task(runner.start_simulation(netlist_path, job, state))
 
     # Decide sync vs async
     # If wait=true: force sync with hard max timeout
@@ -87,12 +92,15 @@ async def handle_run_simulation(arguments: dict, state: SessionState):
             f"Use ltspice_check_job('{job_id}') to check status\n"
             f"Use ltspice_check_job() to see all jobs\n"
             f"Use ltspice_cancel_job('{job_id}') to cancel",
-            data, fmt,
+            data,
+            fmt,
         )
 
 
 async def _wait_for_completion(
-    job: SimulationJob, timeout: float, runner: SimulationRunner,
+    job: SimulationJob,
+    timeout: float,
+    runner: SimulationRunner,
     fmt: str | None = None,
 ):
     """Wait for simulation to complete (sync mode)."""
@@ -101,7 +109,7 @@ async def _wait_for_completion(
     try:
         # Wait for completion with timeout
         await asyncio.wait_for(job.done_event.wait(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         # Timeout - this is NOT a simulator error, it's a tool-level kill
         duration = time.time() - start_time
         job.status = "timeout"
@@ -115,12 +123,18 @@ async def _wait_for_completion(
         if job.log_file and job.log_file.exists():
             log_excerpt = f"\n\nLog excerpt:\n{extract_error_context(job.log_file, max_lines=20)}"
 
-        data = {"job_id": job.job_id, "status": "timeout", "duration": duration, "netlist": str(job.netlist)}
+        data = {
+            "job_id": job.job_id,
+            "status": "timeout",
+            "duration": duration,
+            "netlist": str(job.netlist),
+        }
         return format_response(
             f"Simulation timed out after {duration:.1f}s (killed by server)\n"
             f"Job ID: {job.job_id}\n"
             f"Netlist: {job.netlist}{log_excerpt}",
-            data, fmt,
+            data,
+            fmt,
         )
 
     # Simulation completed (success or failure)
@@ -141,11 +155,9 @@ async def _wait_for_completion(
 
         data = {"job_id": job.job_id, "status": "failed", "duration": duration, "error": job.error}
         return format_response(
-            f"Simulation failed\n"
-            f"Job ID: {job.job_id}\n"
-            f"Duration: {duration:.2f}s\n\n"
-            f"{error_msg}",
-            data, fmt,
+            f"Simulation failed\nJob ID: {job.job_id}\nDuration: {duration:.2f}s\n\n{error_msg}",
+            data,
+            fmt,
         )
     elif job.status == "cancelled":
         data = {"job_id": job.job_id, "status": "cancelled"}
@@ -210,20 +222,28 @@ async def handle_check_job(arguments: dict, state: SessionState):
     # Look up specific job
     job = state.jobs.get(job_id)
     if not job:
-        return text_response(f"Job not found: {job_id}\n\nUse ltspice_check_job() with no arguments to see all jobs")
+        return text_response(
+            f"Job not found: {job_id}\n\nUse ltspice_check_job() with no arguments to see all jobs"
+        )
 
     # Check status
     if job.status == "running":
         elapsed = (datetime.now() - job.started_at).total_seconds()
-        data = {"job_id": job_id, "status": "running", "netlist": str(job.netlist),
-                "simulator": job.simulator, "elapsed": elapsed}
+        data = {
+            "job_id": job_id,
+            "status": "running",
+            "netlist": str(job.netlist),
+            "simulator": job.simulator,
+            "elapsed": elapsed,
+        }
         return format_response(
             f"Job {job_id} is still running\n"
             f"Netlist: {job.netlist}\n"
             f"Simulator: {job.simulator}\n"
             f"Elapsed: {elapsed:.1f}s\n\n"
             f"Use ltspice_cancel_job('{job_id}') to cancel",
-            data, fmt,
+            data,
+            fmt,
         )
     elif job.status == "completed":
         duration = (job.completed_at - job.started_at).total_seconds() if job.completed_at else 0
@@ -248,11 +268,9 @@ async def handle_check_job(arguments: dict, state: SessionState):
 
         data = {"job_id": job_id, "status": "failed", "duration": duration, "error": job.error}
         return format_response(
-            f"Simulation failed\n"
-            f"Job ID: {job_id}\n"
-            f"Duration: {duration:.2f}s\n\n"
-            f"{error_msg}",
-            data, fmt,
+            f"Simulation failed\nJob ID: {job_id}\nDuration: {duration:.2f}s\n\n{error_msg}",
+            data,
+            fmt,
         )
     elif job.status == "timeout":
         duration = (job.completed_at - job.started_at).total_seconds() if job.completed_at else 0
@@ -260,12 +278,18 @@ async def handle_check_job(arguments: dict, state: SessionState):
         if job.log_file and job.log_file.exists():
             log_excerpt = f"\n\nLog excerpt:\n{extract_error_context(job.log_file, max_lines=20)}"
 
-        data = {"job_id": job_id, "status": "timeout", "duration": duration, "netlist": str(job.netlist)}
+        data = {
+            "job_id": job_id,
+            "status": "timeout",
+            "duration": duration,
+            "netlist": str(job.netlist),
+        }
         return format_response(
             f"Simulation timed out after {duration:.1f}s (killed by server)\n"
             f"Job ID: {job_id}\n"
             f"Netlist: {job.netlist}{log_excerpt}",
-            data, fmt,
+            data,
+            fmt,
         )
     elif job.status == "cancelled":
         data = {"job_id": job_id, "status": "cancelled", "netlist": str(job.netlist)}
@@ -284,9 +308,7 @@ def _list_jobs(arguments: dict, state: SessionState, fmt: str | None = None):
     elif status_filter:
         jobs_to_show = [job for job in state.jobs.values() if job.status == status_filter]
     else:
-        jobs_to_show = [
-            job for job in state.jobs.values() if job.status in ("running", "queued")
-        ]
+        jobs_to_show = [job for job in state.jobs.values() if job.status in ("running", "queued")]
 
     # Sort by started_at (most recent first)
     jobs_to_show.sort(key=lambda j: j.started_at, reverse=True)
@@ -301,9 +323,7 @@ def _list_jobs(arguments: dict, state: SessionState, fmt: str | None = None):
     # Build structured data
     jobs_data = []
     lines = [f"Simulation Jobs ({len(jobs_to_show)}):\n"]
-    lines.append(
-        f"{'ID':<28} | {'Status':<10} | {'Netlist':<20} | {'Started':<17} | Duration"
-    )
+    lines.append(f"{'ID':<28} | {'Status':<10} | {'Netlist':<20} | {'Started':<17} | Duration")
     lines.append("-" * 100)
 
     for job in jobs_to_show:
@@ -322,13 +342,15 @@ def _list_jobs(arguments: dict, state: SessionState, fmt: str | None = None):
         lines.append(
             f"{job.job_id:<28} | {job.status:<10} | {netlist_name:<20} | {started_str:<17} | {duration_str}"
         )
-        jobs_data.append({
-            "job_id": job.job_id,
-            "status": job.status,
-            "netlist": str(job.netlist),
-            "started_at": job.started_at.isoformat(),
-            "duration": duration,
-        })
+        jobs_data.append(
+            {
+                "job_id": job.job_id,
+                "status": job.status,
+                "netlist": str(job.netlist),
+                "started_at": job.started_at.isoformat(),
+                "duration": duration,
+            }
+        )
 
     return format_response("\n".join(lines), {"jobs": jobs_data, "count": len(jobs_data)}, fmt)
 
@@ -348,7 +370,9 @@ async def handle_cancel_job(arguments: dict, state: SessionState) -> types.CallT
     # Look up job
     job = state.jobs.get(job_id)
     if not job:
-        return text_response(f"Job not found: {job_id}\n\nUse ltspice_check_job() with no arguments to see all jobs")
+        return text_response(
+            f"Job not found: {job_id}\n\nUse ltspice_check_job() with no arguments to see all jobs"
+        )
 
     # Check if job is running
     if job.status not in ("running", "queued"):
@@ -416,7 +440,15 @@ TOOL_DEFS: list[types.Tool] = [
                 "status": {
                     "type": "string",
                     "description": "Filter by status when listing jobs (no job_id). Default: shows active jobs only.",
-                    "enum": ["running", "queued", "completed", "failed", "timeout", "cancelled", "all"],
+                    "enum": [
+                        "running",
+                        "queued",
+                        "completed",
+                        "failed",
+                        "timeout",
+                        "cancelled",
+                        "all",
+                    ],
                 },
                 "format": FORMAT_PROP,
             },

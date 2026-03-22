@@ -70,9 +70,7 @@ def get_resource_templates() -> list[types.ResourceTemplate]:
     ]
 
 
-async def handle_read_resource(
-    uri_str: str, state: SessionState
-) -> types.ReadResourceResult:
+async def handle_read_resource(uri_str: str, state: SessionState) -> types.ReadResourceResult:
     """Dispatch read request to the appropriate handler based on URI.
 
     Args:
@@ -90,18 +88,18 @@ async def handle_read_resource(
     elif uri_str == "ltspice://netlists/":
         return await _read_netlists_list(uri_str, state)
     elif uri_str.startswith("ltspice://netlists/"):
-        filename = uri_str[len("ltspice://netlists/"):]
+        filename = uri_str[len("ltspice://netlists/") :]
         return await _read_netlist_content(uri_str, filename, state)
     elif uri_str == "ltspice://results/":
         return _read_results_list(uri_str, state)
     elif uri_str == "ltspice://models/":
         return _read_models(uri_str, state)
     elif uri_str.startswith("ltspice://results/") and uri_str.endswith("/signals"):
-        parts = uri_str[len("ltspice://results/"):].split("/")
+        parts = uri_str[len("ltspice://results/") :].split("/")
         job_id = parts[0]
         return await _read_signals(uri_str, job_id, state)
     elif uri_str.startswith("ltspice://results/") and uri_str.endswith("/measurements"):
-        parts = uri_str[len("ltspice://results/"):].split("/")
+        parts = uri_str[len("ltspice://results/") :].split("/")
         job_id = parts[0]
         return await _read_measurements(uri_str, job_id, state)
     else:
@@ -134,9 +132,7 @@ def _read_config(uri_str: str, state: SessionState) -> types.ReadResourceResult:
             "simulator_exe": str(cfg.simulator_exe) if cfg.simulator_exe else None,
             "detected_simulators": list(state.available_simulators.keys()),
             "default_simulator": (
-                state.default_simulator.__name__
-                if state.default_simulator is not None
-                else None
+                state.default_simulator.__name__ if state.default_simulator is not None else None
             ),
             "max_parallel_sims": cfg.max_parallel_sims,
             "default_timeout": cfg.default_timeout,
@@ -151,9 +147,7 @@ def _read_config(uri_str: str, state: SessionState) -> types.ReadResourceResult:
         raise ValueError(f"Failed to read config: {e}") from e
 
 
-async def _read_netlists_list(
-    uri_str: str, state: SessionState
-) -> types.ReadResourceResult:
+async def _read_netlists_list(uri_str: str, state: SessionState) -> types.ReadResourceResult:
     """List all netlist files in the working directory."""
     try:
         working_dir = state.working_dir
@@ -184,9 +178,7 @@ async def _read_netlist_content(
         resolved = file_path.resolve()
         working_resolved = state.working_dir.resolve()
         if not resolved.is_relative_to(working_resolved):
-            raise ValueError(
-                f"File {filename!r} is outside the working directory"
-            )
+            raise ValueError(f"File {filename!r} is outside the working directory")
 
         def _read() -> str:
             return resolved.read_text(encoding="utf-8", errors="replace")
@@ -214,9 +206,7 @@ def _read_results_list(uri_str: str, state: SessionState) -> types.ReadResourceR
                     "simulator": j.simulator,
                     "status": j.status,
                     "started_at": j.started_at.isoformat() if j.started_at else None,
-                    "completed_at": (
-                        j.completed_at.isoformat() if j.completed_at else None
-                    ),
+                    "completed_at": (j.completed_at.isoformat() if j.completed_at else None),
                 }
             )
 
@@ -230,12 +220,8 @@ def _read_results_list(uri_str: str, state: SessionState) -> types.ReadResourceR
                     "total_runs": bj.total_runs,
                     "completed_runs": bj.completed_runs,
                     "failed_runs": bj.failed_runs,
-                    "started_at": (
-                        bj.started_at.isoformat() if bj.started_at else None
-                    ),
-                    "completed_at": (
-                        bj.completed_at.isoformat() if bj.completed_at else None
-                    ),
+                    "started_at": (bj.started_at.isoformat() if bj.started_at else None),
+                    "completed_at": (bj.completed_at.isoformat() if bj.completed_at else None),
                 }
             )
 
@@ -257,17 +243,13 @@ def _resolve_raw_file(job_id: str, state: SessionState) -> Path:
     job = state.jobs.get(job_id)
     if job is not None:
         if job.status != "completed" or job.raw_file is None:
-            raise ValueError(
-                f"Job is not completed (status={job.status!r}) or has no raw file"
-            )
+            raise ValueError(f"Job is not completed (status={job.status!r}) or has no raw file")
         return job.raw_file
 
     batch_job = state.batch_jobs.get(job_id)
     if batch_job is not None:
         if batch_job.status != "completed":
-            raise ValueError(
-                f"Batch job is not completed (status={batch_job.status!r})"
-            )
+            raise ValueError(f"Batch job is not completed (status={batch_job.status!r})")
         if not batch_job.run_results:
             raise ValueError(f"Batch job {job_id!r} has no run results")
         first_run = batch_job.run_results[min(batch_job.run_results)]
@@ -284,17 +266,13 @@ def _resolve_log_file(job_id: str, state: SessionState) -> Path:
     job = state.jobs.get(job_id)
     if job is not None:
         if job.status != "completed" or job.log_file is None:
-            raise ValueError(
-                f"Job is not completed (status={job.status!r}) or has no log file"
-            )
+            raise ValueError(f"Job is not completed (status={job.status!r}) or has no log file")
         return job.log_file
 
     batch_job = state.batch_jobs.get(job_id)
     if batch_job is not None:
         if batch_job.status != "completed":
-            raise ValueError(
-                f"Batch job is not completed (status={batch_job.status!r})"
-            )
+            raise ValueError(f"Batch job is not completed (status={batch_job.status!r})")
         if not batch_job.run_results:
             raise ValueError(f"Batch job {job_id!r} has no run results")
         first_run = batch_job.run_results[min(batch_job.run_results)]
@@ -315,6 +293,7 @@ async def _read_signals(
 
         def _load_signals() -> list[str]:
             from spicelib.raw.raw_read import RawRead
+
             raw = RawRead(str(raw_file))
             return raw.get_trace_names()
 
@@ -337,6 +316,7 @@ async def _read_measurements(
 
         def _load_measurements() -> dict:
             from spicelib.log.ltsteps import LTSpiceLogReader
+
             reader = LTSpiceLogReader(str(log_file))
             measure_names = reader.get_measure_names()
             measurements: dict[str, Any] = {}
@@ -344,9 +324,7 @@ async def _read_measurements(
                 values = reader.dataset.get(name.lower(), [])
                 python_values = []
                 for val in values:
-                    if val is None or (
-                        isinstance(val, str) and val.upper() == "FAILED"
-                    ):
+                    if val is None or (isinstance(val, str) and val.upper() == "FAILED"):
                         python_values.append(None)
                     else:
                         python_values.append(float(val))  # type: ignore[arg-type]
@@ -374,9 +352,7 @@ async def _read_measurements(
         raise
     except Exception as e:
         logger.error(f"Failed to read measurements for job {job_id!r}: {e}")
-        raise ValueError(
-            f"Failed to read measurements for job {job_id!r}: {e}"
-        ) from e
+        raise ValueError(f"Failed to read measurements for job {job_id!r}: {e}") from e
 
 
 def _read_models(uri_str: str, state: SessionState) -> types.ReadResourceResult:
@@ -397,9 +373,7 @@ def _read_models(uri_str: str, state: SessionState) -> types.ReadResourceResult:
 
         data = {
             "libraries": libraries,
-            "note": (
-                "Use the ltspice_search_library tool to find models in built-in libraries."
-            ),
+            "note": ("Use the ltspice_search_library tool to find models in built-in libraries."),
         }
         return _make_result(uri_str, json.dumps(data, indent=2))
     except Exception as e:

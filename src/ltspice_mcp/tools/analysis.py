@@ -1,5 +1,7 @@
 """Waveform analysis tools. (Phase 4)"""
 
+import contextlib
+
 from mcp import types
 
 from ltspice_mcp.errors import ResultError
@@ -26,9 +28,7 @@ from ltspice_mcp.tools._base import (
 )
 
 
-async def handle_get_signal_stats(
-    arguments: dict, state: SessionState
-):
+async def handle_get_signal_stats(arguments: dict, state: SessionState):
     """Get statistics for a signal/trace."""
     raw_path = safe_path(arguments["raw_file"], state)
     signal = arguments["signal"]
@@ -42,7 +42,7 @@ async def handle_get_signal_stats(
     try:
         stats = await run_sync(compute_signal_stats, raw, signal, step)
     except Exception as e:
-        raise ResultError(f"Failed to compute statistics: {e}")
+        raise ResultError(f"Failed to compute statistics: {e}") from e
 
     if stats["analysis_type"] == "ac":
         lines = [
@@ -73,9 +73,7 @@ async def handle_get_signal_stats(
     return format_response("\n".join(lines), {"signal": signal, **stats}, fmt)
 
 
-async def handle_query_value(
-    arguments: dict, state: SessionState
-):
+async def handle_query_value(arguments: dict, state: SessionState):
     """Query signal value at a specific time or frequency."""
     raw_path = safe_path(arguments["raw_file"], state)
     signal = arguments["signal"]
@@ -86,7 +84,7 @@ async def handle_query_value(
     try:
         target_x = parse_spice_value(at_str)
     except ValueError as e:
-        raise ResultError(f"Invalid 'at' value: {e}")
+        raise ResultError(f"Invalid 'at' value: {e}") from e
 
     raw = await load_raw(raw_path, state)
     await validate_signal(raw, signal)
@@ -95,7 +93,7 @@ async def handle_query_value(
     try:
         result_data = await run_sync(query_point_value, raw, signal, target_x, step)
     except Exception as e:
-        raise ResultError(f"Failed to query value: {e}")
+        raise ResultError(f"Failed to query value: {e}") from e
 
     sim_type = await run_sync(detect_sim_type, raw)
     x_unit = "f" if "AC" in sim_type.upper() else "t"
@@ -146,9 +144,7 @@ def _format_measurements(measurements: dict, step_count: int) -> str:
     return "\n".join(lines)
 
 
-async def handle_get_measurements(
-    arguments: dict, state: SessionState
-):
+async def handle_get_measurements(arguments: dict, state: SessionState):
     """Extract .MEAS measurement results from simulation log file."""
     log_path = safe_path(arguments["log_file"], state)
     fmt = arguments.get("format")
@@ -158,7 +154,7 @@ async def handle_get_measurements(
     except ResultError:
         raise
     except Exception as e:
-        raise ResultError(f"Failed to parse log file: {e}")
+        raise ResultError(f"Failed to parse log file: {e}") from e
 
     return format_response(
         _format_measurements(meas_data["measurements"], meas_data["step_count"]),
@@ -167,9 +163,7 @@ async def handle_get_measurements(
     )
 
 
-async def handle_get_operating_point(
-    arguments: dict, state: SessionState
-):
+async def handle_get_operating_point(arguments: dict, state: SessionState):
     """Read DC operating point data (all node voltages and branch currents)."""
     raw_path = safe_path(arguments["raw_file"], state)
     fmt = arguments.get("format")
@@ -178,7 +172,7 @@ async def handle_get_operating_point(
     try:
         op_data = await run_sync(extract_operating_point, raw)
     except Exception as e:
-        raise ResultError(f"Failed to extract operating point: {e}")
+        raise ResultError(f"Failed to extract operating point: {e}") from e
 
     lines = ["DC Operating Point", ""]
 
@@ -196,9 +190,7 @@ async def handle_get_operating_point(
     return format_response("\n".join(lines), op_data, fmt)
 
 
-async def handle_get_simulation_summary(
-    arguments: dict, state: SessionState
-):
+async def handle_get_simulation_summary(arguments: dict, state: SessionState):
     """Get comprehensive simulation summary."""
     raw_path = safe_path(arguments["raw_file"], state)
     fmt = arguments.get("format")
@@ -211,19 +203,17 @@ async def handle_get_simulation_summary(
     try:
         summary = await run_sync(build_simulation_summary, raw, log_path, None)
     except Exception as e:
-        raise ResultError(f"Failed to build summary: {e}")
+        raise ResultError(f"Failed to build summary: {e}") from e
 
     # Compute AC bandwidth metrics if applicable
     ac_metrics = None
     if "AC" in summary["sim_type"].upper():
         voltage_signals = [s for s in summary["signals"] if s.startswith("V(")]
         if voltage_signals:
-            try:
+            with contextlib.suppress(Exception):
                 ac_metrics = await run_sync(
                     compute_ac_bandwidth_metrics, raw, voltage_signals[0], 0
                 )
-            except Exception:
-                pass
 
     # Build JSON data dict (always needed for json mode, cheap to build)
     json_data = dict(summary)
@@ -260,10 +250,12 @@ async def handle_get_simulation_summary(
     lines.append("")
 
     if "measurements" in summary:
-        lines.append(_format_measurements(
-            summary["measurements"],
-            summary.get("step_count", 1),
-        ))
+        lines.append(
+            _format_measurements(
+                summary["measurements"],
+                summary.get("step_count", 1),
+            )
+        )
         lines.append("")
 
     if "fourier" in summary:

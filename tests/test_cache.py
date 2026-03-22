@@ -7,7 +7,6 @@ from ltspice_mcp.lib.cache import FileCache
 
 
 class TestFileCache:
-
     def test_cache_hit_avoids_factory(self, tmp_path: Path):
         cache: FileCache[str] = FileCache()
         p = tmp_path / "a.txt"

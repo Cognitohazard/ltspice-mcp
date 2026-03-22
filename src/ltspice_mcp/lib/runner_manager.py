@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Type
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.montecarlo_runner import MonteCarloRunner
@@ -44,11 +44,11 @@ class RunnerManager:
 
         # Track the context that runners were created with
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._simulator_class: Type | None = None
+        self._simulator_class: type | None = None
         self._output_folder: Path | None = None
 
     def _ensure_fresh(
-        self, loop: asyncio.AbstractEventLoop, simulator_class: Type, output_folder: Path
+        self, loop: asyncio.AbstractEventLoop, simulator_class: type, output_folder: Path
     ) -> None:
         """Invalidate all runners if context has changed."""
         if (
@@ -66,7 +66,7 @@ class RunnerManager:
         self,
         key: str,
         loop: asyncio.AbstractEventLoop,
-        simulator_class: Type,
+        simulator_class: type,
         output_folder: Path,
         max_parallel: int,
     ) -> Any:
@@ -76,6 +76,7 @@ class RunnerManager:
         if key not in self._runners:
             module_path, class_name = _RUNNER_IMPORTS[key]
             import importlib
+
             mod = importlib.import_module(module_path)
             cls = getattr(mod, class_name)
 
@@ -99,7 +100,7 @@ class RunnerManager:
     def get_sim_runner(
         self,
         loop: asyncio.AbstractEventLoop,
-        simulator_class: Type,
+        simulator_class: type,
         output_folder: Path,
         max_parallel: int = 4,
     ) -> SimulationRunner:
@@ -109,7 +110,7 @@ class RunnerManager:
     def get_sweep_runner(
         self,
         loop: asyncio.AbstractEventLoop,
-        simulator_class: Type,
+        simulator_class: type,
         output_folder: Path,
         max_parallel: int = 4,
     ) -> SweepRunner:
@@ -119,7 +120,7 @@ class RunnerManager:
     def get_mc_runner(
         self,
         loop: asyncio.AbstractEventLoop,
-        simulator_class: Type,
+        simulator_class: type,
         output_folder: Path,
         max_parallel: int = 4,
     ) -> MonteCarloRunner:

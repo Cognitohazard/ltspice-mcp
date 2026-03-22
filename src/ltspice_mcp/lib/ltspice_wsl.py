@@ -7,7 +7,6 @@ This subclass overrides run() to use wslpath for proper path conversion.
 
 import subprocess
 from pathlib import Path
-from typing import Optional, Union
 
 from spicelib.simulators.ltspice_simulator import LTspice
 
@@ -25,12 +24,12 @@ class LTspiceWSL(LTspice):
     @classmethod
     def run(
         cls,
-        netlist_file: Union[str, Path],
-        cmd_line_switches: Optional[list] = None,
-        timeout: Optional[float] = None,
+        netlist_file: str | Path,
+        cmd_line_switches: list | None = None,
+        timeout: float | None = None,
         stdout=None,
         stderr=None,
-        cwd: Union[str, Path, None] = None,
+        cwd: str | Path | None = None,
         exe_log: bool = False,
     ) -> int:
         if not is_wsl():
@@ -48,7 +47,7 @@ class LTspiceWSL(LTspice):
             cmd_line_switches = []
 
         # Use the exe path as-is (already set via create_from with Linux path)
-        cmd_run = cls.spice_exe + ["-Run", "-b", win_path] + cmd_line_switches
+        cmd_run = [*cls.spice_exe, "-Run", "-b", win_path, *cmd_line_switches]
 
         from spicelib.sim.simulator import run_function
 
@@ -63,7 +62,5 @@ class LTspiceWSL(LTspice):
                     cwd=cwd,
                 )
         else:
-            error = run_function(
-                cmd_run, timeout=timeout, stdout=stdout, stderr=stderr, cwd=cwd
-            )
+            error = run_function(cmd_run, timeout=timeout, stdout=stdout, stderr=stderr, cwd=cwd)
         return error

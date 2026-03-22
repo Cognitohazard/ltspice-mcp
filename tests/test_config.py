@@ -1,6 +1,5 @@
 """Unit tests for configuration loading."""
 
-import os
 from pathlib import Path
 
 import pytest
@@ -28,7 +27,7 @@ class TestServerConfig:
         toml_path.write_text(
             '[simulator]\ndefault = "ltspice"\npath = "/usr/bin/ltspice"\n'
             "[simulation]\nmax_parallel = 8\ntimeout = 60.0\n"
-            "[logging]\nlevel = \"DEBUG\"\n"
+            '[logging]\nlevel = "DEBUG"\n'
         )
         config = ServerConfig.load(toml_path)
         assert config.simulator == "ltspice"
@@ -84,7 +83,7 @@ class TestSimulatorExeConfig:
             allowed_paths=[work_dir],
         )
         # Should not raise
-        available = detect_simulators(config)
+        detect_simulators(config)
         # Non-existent path should not register
         # (may or may not have ltspice depending on system)
 

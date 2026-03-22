@@ -51,6 +51,7 @@ class TestResolveSafePath:
         """Symlink pointing outside sandbox should be blocked."""
         # Create a target outside the sandbox
         import tempfile
+
         outside = Path(tempfile.mkdtemp())
         secret = outside / "secret.txt"
         secret.write_text("secret")

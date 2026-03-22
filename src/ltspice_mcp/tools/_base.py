@@ -3,8 +3,9 @@
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any
 
 from mcp import types
 from spicelib.raw.raw_read import RawRead
@@ -15,8 +16,6 @@ from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
-
 # ---------------------------------------------------------------------------
 # Response helpers — standardize tool output format
 #
@@ -25,6 +24,7 @@ T = TypeVar("T")
 # format_response() returns both human-readable text content AND structured
 # data via structuredContent (for data-returning tools).
 # ---------------------------------------------------------------------------
+
 
 def text_response(text: str) -> types.CallToolResult:
     """Return a text-only CallToolResult (confirmations, simple messages)."""
@@ -92,9 +92,8 @@ RO_ANNOTATIONS = types.ToolAnnotations(
 # Pagination helper
 # ---------------------------------------------------------------------------
 
-def paginate(
-    items: list, arguments: dict, cap: int = 50
-) -> tuple[list, int, int, int]:
+
+def paginate(items: list, arguments: dict, cap: int = 50) -> tuple[list, int, int, int]:
     """Slice a list according to offset/limit from tool arguments.
 
     Returns:
@@ -103,7 +102,7 @@ def paginate(
     total = len(items)
     offset = int(arguments.get("offset", 0))
     limit = min(int(arguments.get("limit", cap)), cap)
-    return items[offset: offset + limit], total, offset, limit
+    return items[offset : offset + limit], total, offset, limit
 
 
 def pagination_metadata(total: int, offset: int, limit: int) -> dict[str, Any]:
@@ -122,50 +121,51 @@ def pagination_metadata(total: int, offset: int, limit: int) -> dict[str, Any]:
 # Analysis helpers — shared raw-file loading and validation
 # ---------------------------------------------------------------------------
 
+
 async def load_raw(raw_path: Path, state: SessionState) -> RawRead:
     """Load and cache a RawRead instance. Raises ResultError on failure."""
     try:
         return await run_sync(
-            state.results.get, raw_path,
+            state.results.get,
+            raw_path,
             lambda p: RawRead(str(p), traces_to_read="*"),
         )
     except FileNotFoundError:
-        raise ResultError(f"Result file not found: {raw_path}")
+        raise ResultError(f"Result file not found: {raw_path}") from None
     except ResultError:
         raise
     except Exception as e:
         raise ResultError(
             f"Failed to parse result file: {e}. "
             "File may be corrupted or not a valid SPICE .raw file"
-        )
+        ) from e
 
 
 async def validate_signal(raw: RawRead, signal: str) -> None:
     """Validate that a signal exists in the raw file. Raises ResultError."""
     from ltspice_mcp.lib.raw_parser import get_trace_names
+
     trace_names = await run_sync(get_trace_names, raw)
     if signal not in trace_names:
         available = ", ".join(trace_names[:10])
         if len(trace_names) > 10:
             available += f", ... ({len(trace_names)} total)"
-        raise ResultError(
-            f"Signal '{signal}' not found. Available signals: {available}"
-        )
+        raise ResultError(f"Signal '{signal}' not found. Available signals: {available}")
 
 
 async def validate_step(raw: RawRead, step: int) -> None:
     """Validate that a step index is in range. Raises ResultError."""
     from ltspice_mcp.lib.raw_parser import get_step_count
+
     step_count = await run_sync(get_step_count, raw)
     if step < 0 or step >= step_count:
-        raise ResultError(
-            f"Step {step} out of range. Valid range: 0 to {step_count - 1}"
-        )
+        raise ResultError(f"Step {step} out of range. Valid range: 0 to {step_count - 1}")
 
 
 # ---------------------------------------------------------------------------
 # Simulation helpers — shared pre-checks
 # ---------------------------------------------------------------------------
+
 
 def require_simulator(state: SessionState) -> None:
     """Raise SimulationError if no simulator is available."""
@@ -181,7 +181,7 @@ def resolve_netlist_path(netlist_str: str, state: SessionState) -> Path:
     try:
         netlist_path = safe_path(netlist_str, state)
     except Exception as e:
-        raise SimulationError(f"Invalid netlist path: {e}")
+        raise SimulationError(f"Invalid netlist path: {e}") from e
     if not netlist_path.exists():
         raise SimulationError(f"Netlist file not found: {netlist_path}")
     return netlist_path
@@ -190,6 +190,7 @@ def resolve_netlist_path(netlist_str: str, state: SessionState) -> Path:
 # ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
+
 
 def safe_path(user_path: str, state: SessionState) -> Path:
     """Resolve and validate a user-provided path within security sandbox.
@@ -210,7 +211,7 @@ def safe_path(user_path: str, state: SessionState) -> Path:
     return resolve_safe_path(user_path, state.config.allowed_paths)
 
 
-async def run_sync(fn: Callable[..., T], *args: Any) -> T:
+async def run_sync[T](fn: Callable[..., T], *args: Any) -> T:
     """Run a synchronous blocking function in a thread pool.
 
     All blocking spicelib calls MUST go through this wrapper to avoid

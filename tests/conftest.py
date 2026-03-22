@@ -8,7 +8,6 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.state import SessionState
 
 
-
 @pytest.fixture
 def work_dir(tmp_path: Path) -> Path:
     """Temporary working directory for tests."""

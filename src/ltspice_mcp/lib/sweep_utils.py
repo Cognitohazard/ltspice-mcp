@@ -81,9 +81,7 @@ def generate_sweep_range(
     if step is None and points is None:
         raise ValueError("Either step or points must be provided, not neither.")
     if step is not None and points is not None:
-        raise ValueError(
-            "step and points are mutually exclusive — provide one, not both."
-        )
+        raise ValueError("step and points are mutually exclusive — provide one, not both.")
 
     if scale == "linear":
         if points is not None:
@@ -105,15 +103,11 @@ def generate_sweep_range(
             # Compute n from the log ratio: n = log(stop/start) / log(step) + 1
             # step here is treated as the multiplicative factor per step
             if step <= 0:
-                raise ValueError(
-                    f"Log scale step must be positive (got step={step})."
-                )
-            n = int(round(math.log(stop / start) / math.log(step))) + 1
+                raise ValueError(f"Log scale step must be positive (got step={step}).")
+            n = round(math.log(stop / start) / math.log(step)) + 1
             arr = np.geomspace(start, stop, n)
     else:
-        raise ValueError(
-            f"Unknown scale '{scale}'. Expected 'linear' or 'log'."
-        )
+        raise ValueError(f"Unknown scale '{scale}'. Expected 'linear' or 'log'.")
 
     # Convert all values to Python float for JSON serialization
     return [float(v) for v in arr]

@@ -1,12 +1,9 @@
 """Unit tests for advanced tool helpers."""
 
-import pytest
-
 from ltspice_mcp.tools.advanced import _resolve_mc_ref
 
 
 class TestResolveMcRef:
-
     def test_single_letter_is_type(self):
         assert _resolve_mc_ref("R") == ("R", True)
         assert _resolve_mc_ref("C") == ("C", True)

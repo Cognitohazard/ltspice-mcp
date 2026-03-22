@@ -8,9 +8,9 @@ and raise NetlistError if given a non-.asc file.
 
 import asyncio
 from collections import defaultdict
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator, Union
 
 from mcp import types
 from spicelib import AscEditor, SpiceEditor
@@ -18,8 +18,14 @@ from spicelib import AscEditor, SpiceEditor
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
-    FORMAT_PROP, PAGINATION_SCHEMA, format_response, paginate,
-    pagination_metadata, run_sync, safe_path, text_response,
+    FORMAT_PROP,
+    PAGINATION_SCHEMA,
+    format_response,
+    paginate,
+    pagination_metadata,
+    run_sync,
+    safe_path,
+    text_response,
 )
 
 # Per-file locks to prevent concurrent edits to the same circuit file
@@ -27,12 +33,13 @@ _edit_locks: dict[Path, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 # Type alias for the union returned by _make_editor / _get_editor.
 # Schematic-only handlers narrow this to AscEditor after _require_asc.
-Editor = Union[AscEditor, SpiceEditor]
+Editor = AscEditor | SpiceEditor
 
 
 # ---------------------------------------------------------------------------
 # Editor factory — extension-based dispatch
 # ---------------------------------------------------------------------------
+
 
 def _make_editor(path: Path) -> Editor:
     """Create an AscEditor or SpiceEditor based on file extension.
@@ -73,9 +80,7 @@ def _is_asc(path: Path) -> bool:
 def _require_asc(path: Path) -> None:
     """Raise if path is not an .asc file (for schematic-only operations)."""
     if not _is_asc(path):
-        raise NetlistError(
-            f"This operation requires an .asc schematic, got '{path.suffix}'. "
-        )
+        raise NetlistError(f"This operation requires an .asc schematic, got '{path.suffix}'. ")
 
 
 @asynccontextmanager
@@ -111,9 +116,7 @@ async def _editing_asc(path: Path, state: SessionState) -> AsyncIterator[AscEdit
 # ---------------------------------------------------------------------------
 
 
-async def handle_create_netlist(
-    arguments: dict, state: SessionState
-) -> types.CallToolResult:
+async def handle_create_netlist(arguments: dict, state: SessionState) -> types.CallToolResult:
     """Create a new SPICE netlist file from content string."""
     name = arguments["name"]
     content = arguments["content"]
@@ -133,14 +136,12 @@ async def handle_create_netlist(
         comp_count = len(components)
     except Exception as e:
         await run_sync(lambda: target_path.unlink(missing_ok=True))
-        raise NetlistError(f"Invalid netlist syntax: {e}")
+        raise NetlistError(f"Invalid netlist syntax: {e}") from e
 
     return text_response(f"Created netlist: {target_path}\nComponents: {comp_count}")
 
 
-async def handle_read_circuit(
-    arguments: dict, state: SessionState
-):
+async def handle_read_circuit(arguments: dict, state: SessionState):
     """Read and parse a circuit file. For .asc schematics, returns component
     positions, net labels, wires, and directives. For .cir/.net, returns raw
     content and component list with values.
@@ -163,7 +164,9 @@ async def handle_read_circuit(
             pos, rot = editor.get_component_position(ref)
             rot_str = f"R{rot.value}" if rot.value < 360 else f"M{rot.value - 360}"
             lines.append(f"  {ref:<8} {value:<20} pos=({pos.X},{pos.Y}) {rot_str}")
-            comp_data.append({"reference": ref, "value": value, "x": pos.X, "y": pos.Y, "rotation": rot_str})
+            comp_data.append(
+                {"reference": ref, "value": value, "x": pos.X, "y": pos.Y, "rotation": rot_str}
+            )
 
         label_data = []
         if editor.labels:
@@ -221,9 +224,7 @@ async def handle_read_circuit(
         return format_response(result, data, fmt)
 
 
-async def handle_list_components(
-    arguments: dict, state: SessionState
-):
+async def handle_list_components(arguments: dict, state: SessionState):
     """List all components, optionally filtered by prefix. If a single
     reference is provided, return just that component's value.
     Works on .cir/.net and .asc.
@@ -239,7 +240,7 @@ async def handle_list_components(
         try:
             value = await run_sync(editor.get_component_value, reference)
         except Exception:
-            raise NetlistError(f"Component '{reference}' not found")
+            raise NetlistError(f"Component '{reference}' not found") from None
         data = {"reference": reference, "value": value}
         return format_response(f"{reference} = {value}", data, fmt)
 
@@ -251,8 +252,12 @@ async def handle_list_components(
         components = await run_sync(editor.get_components)
 
     if not components:
-        msg = f"No components matching prefix '{prefix}' found" if prefix else "No components found"
-        return format_response(msg, {"components": [], "pagination": pagination_metadata(0, 0, 50)}, fmt)
+        msg = (
+            f"No components matching prefix '{prefix}' found" if prefix else "No components found"
+        )
+        return format_response(
+            msg, {"components": [], "pagination": pagination_metadata(0, 0, 50)}, fmt
+        )
 
     page, total, offset, limit = paginate(components, arguments)
 
@@ -280,9 +285,7 @@ async def handle_list_components(
     return format_response(result, data, fmt)
 
 
-async def handle_set_component_value(
-    arguments: dict, state: SessionState
-) -> types.CallToolResult:
+async def handle_set_component_value(arguments: dict, state: SessionState) -> types.CallToolResult:
     """Set component value(s). Accepts single or batch mode.
 
     Single mode: provide 'reference' and 'value'.
@@ -308,7 +311,7 @@ async def handle_set_component_value(
             try:
                 old_value = editor.get_component_value(reference)
             except Exception:
-                raise NetlistError(f"Component '{reference}' not found")
+                raise NetlistError(f"Component '{reference}' not found") from None
             editor.set_component_value(reference, value)
             result = f"Set {reference}: {old_value} -> {value}"
         else:
@@ -319,9 +322,7 @@ async def handle_set_component_value(
     return text_response(result)
 
 
-async def handle_parameter(
-    arguments: dict, state: SessionState
-):
+async def handle_parameter(arguments: dict, state: SessionState):
     """Get or set .PARAM directive values. Without name/value: returns all
     parameters. With name and value: sets the parameter.
     Works on .cir/.net and .asc.
@@ -356,9 +357,7 @@ async def handle_parameter(
     return format_response(result, {"parameters": params}, fmt)
 
 
-async def handle_edit_directive(
-    arguments: dict, state: SessionState
-) -> types.CallToolResult:
+async def handle_edit_directive(arguments: dict, state: SessionState) -> types.CallToolResult:
     """Add or remove a SPICE directive. Works on .cir/.net and .asc."""
     file_path = safe_path(arguments["path"], state)
 
@@ -395,13 +394,10 @@ async def handle_edit_directive(
 # ---------------------------------------------------------------------------
 
 
-async def handle_remove_component(
-    arguments: dict, state: SessionState
-) -> types.CallToolResult:
+async def handle_remove_component(arguments: dict, state: SessionState) -> types.CallToolResult:
     """Remove a component from a schematic by reference designator."""
     asc_path = safe_path(arguments["path"], state)
     _require_asc(asc_path)
-
 
     reference = arguments["reference"]
 
@@ -409,44 +405,43 @@ async def handle_remove_component(
         components = await run_sync(editor.get_components)
         if reference not in components:
             raise NetlistError(
-                f"Component '{reference}' not found. "
-                f"Available: {', '.join(components)}"
+                f"Component '{reference}' not found. Available: {', '.join(components)}"
             )
         await run_sync(editor.remove_component, reference)
 
     return text_response(f"Removed {reference} from {asc_path.name}")
 
 
-async def handle_move_component(
-    arguments: dict, state: SessionState
-) -> types.CallToolResult:
+async def handle_move_component(arguments: dict, state: SessionState) -> types.CallToolResult:
     """Move or rotate a component in a schematic."""
     from spicelib.editor.base_schematic import ERotation, Point
 
     asc_path = safe_path(arguments["path"], state)
     _require_asc(asc_path)
 
-
     reference = arguments["reference"]
     x = int(arguments["x"])
     y = int(arguments["y"])
-    rotation = arguments.get("rotation", None)
+    rotation = arguments.get("rotation")
 
     async with _editing_asc(asc_path, state) as editor:
         old_pos, old_rot = editor.get_component_position(reference)
 
         if rotation is not None:
             rot_map = {
-                "R0": ERotation.R0, "R90": ERotation.R90,
-                "R180": ERotation.R180, "R270": ERotation.R270,
-                "M0": ERotation.M0, "M90": ERotation.M90,
-                "M180": ERotation.M180, "M270": ERotation.M270,
+                "R0": ERotation.R0,
+                "R90": ERotation.R90,
+                "R180": ERotation.R180,
+                "R270": ERotation.R270,
+                "M0": ERotation.M0,
+                "M90": ERotation.M90,
+                "M180": ERotation.M180,
+                "M270": ERotation.M270,
             }
             new_rot = rot_map.get(rotation)
             if new_rot is None:
                 raise NetlistError(
-                    f"Invalid rotation '{rotation}'. "
-                    f"Valid: {', '.join(rot_map.keys())}"
+                    f"Invalid rotation '{rotation}'. Valid: {', '.join(rot_map.keys())}"
                 )
         else:
             new_rot = old_rot
@@ -465,7 +460,6 @@ async def handle_set_component_attribute(
     asc_path = safe_path(arguments["path"], state)
     _require_asc(asc_path)
 
-
     reference = arguments["reference"]
     attribute = arguments["attribute"]
     value = arguments["value"]
@@ -476,13 +470,10 @@ async def handle_set_component_attribute(
     return text_response(f"Set {reference}.{attribute} = {value}")
 
 
-async def handle_export_netlist(
-    arguments: dict, state: SessionState
-) -> types.CallToolResult:
+async def handle_export_netlist(arguments: dict, state: SessionState) -> types.CallToolResult:
     """Export an .asc schematic to a SPICE netlist (.net) using LTspice."""
     asc_path = safe_path(arguments["path"], state)
     _require_asc(asc_path)
-
 
     ltspice_cls = state.available_simulators.get("ltspice")
     if ltspice_cls is None:
@@ -495,7 +486,7 @@ async def handle_export_netlist(
         net_path = await run_sync(ltspice_cls.create_netlist, str(asc_path))
         net_path = Path(net_path)
     except Exception as e:
-        raise NetlistError(f"LTspice netlist export failed: {e}")
+        raise NetlistError(f"LTspice netlist export failed: {e}") from e
 
     if not await run_sync(net_path.exists):
         raise NetlistError("Export failed: .net file not created")

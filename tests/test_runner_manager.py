@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ltspice_mcp.lib.runner_manager import RunnerManager, _RUNNER_IMPORTS
+from ltspice_mcp.lib.runner_manager import _RUNNER_IMPORTS, RunnerManager
 
 
 class _StubRunner:
@@ -27,6 +27,7 @@ def _patch_runner_imports(monkeypatch):
     stub_module.MonteCarloRunner = _StubRunner
 
     import importlib
+
     original = importlib.import_module
     runner_modules = {v[0] for v in _RUNNER_IMPORTS.values()}
 
@@ -47,7 +48,6 @@ def loop():
 
 
 class TestRunnerManager:
-
     def test_same_context_returns_cached(self, loop):
         mgr = RunnerManager()
         sim_cls = type("FakeSim", (), {})

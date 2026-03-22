@@ -5,14 +5,19 @@ from mcp import types
 from ltspice_mcp.errors import LibraryError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
-    FORMAT_PROP, PAGINATION_SCHEMA, RO_ANNOTATIONS, format_response, paginate,
-    pagination_metadata, run_sync, safe_path, text_response,
+    FORMAT_PROP,
+    PAGINATION_SCHEMA,
+    RO_ANNOTATIONS,
+    format_response,
+    paginate,
+    pagination_metadata,
+    run_sync,
+    safe_path,
+    text_response,
 )
 
 
-async def handle_search_library(
-    arguments: dict, state: SessionState
-):
+async def handle_search_library(arguments: dict, state: SessionState):
     """Search component libraries by name."""
     query = arguments["query"]
     source = arguments.get("source", "user")
@@ -22,19 +27,15 @@ async def handle_search_library(
 
     try:
         if source == "user":
-            result = await run_sync(
-                state.libraries.search_user_libraries, query, offset, limit
-            )
+            result = await run_sync(state.libraries.search_user_libraries, query, offset, limit)
         elif source == "builtin":
-            result = await run_sync(
-                state.libraries.search_builtin_libraries, query, offset, limit
-            )
+            result = await run_sync(state.libraries.search_builtin_libraries, query, offset, limit)
         else:
             raise LibraryError(f"Invalid source: {source}. Must be 'user' or 'builtin'")
     except LibraryError:
         raise
     except Exception as e:
-        raise LibraryError(f"Search failed: {e}")
+        raise LibraryError(f"Search failed: {e}") from e
 
     results = result["results"]
     total = result["total"]
@@ -60,9 +61,7 @@ async def handle_search_library(
     return format_response("\n".join(lines), data, fmt)
 
 
-async def handle_get_model_info(
-    arguments: dict, state: SessionState
-):
+async def handle_get_model_info(arguments: dict, state: SessionState):
     """Get SPICE model/subcircuit details."""
     name = arguments["name"]
     full = arguments.get("full", False)
@@ -71,7 +70,7 @@ async def handle_get_model_info(
     try:
         info = await run_sync(state.libraries.get_model_info, name, full)
     except Exception as e:
-        raise LibraryError(f"Failed to get model info: {e}")
+        raise LibraryError(f"Failed to get model info: {e}") from e
 
     if info is None:
         raise LibraryError(
@@ -102,9 +101,7 @@ async def handle_get_model_info(
     return format_response("\n".join(lines), info, fmt)
 
 
-async def handle_load_library(
-    arguments: dict, state: SessionState
-) -> types.CallToolResult:
+async def handle_load_library(arguments: dict, state: SessionState) -> types.CallToolResult:
     """Load a SPICE library file or directory.
 
     Args:
@@ -125,7 +122,7 @@ async def handle_load_library(
     except LibraryError:
         raise
     except Exception as e:
-        raise LibraryError(f"Failed to load library: {e}")
+        raise LibraryError(f"Failed to load library: {e}") from e
 
     result = (
         f"Loaded {summary['path']}: "
@@ -136,9 +133,7 @@ async def handle_load_library(
     return text_response(result)
 
 
-async def handle_unload_library(
-    arguments: dict, state: SessionState
-) -> types.CallToolResult:
+async def handle_unload_library(arguments: dict, state: SessionState) -> types.CallToolResult:
     """Unload a library from the session.
 
     Args:
@@ -157,7 +152,7 @@ async def handle_unload_library(
     try:
         result = await run_sync(state.libraries.unload_library, path)
     except Exception as e:
-        raise LibraryError(f"Failed to unload library: {e}")
+        raise LibraryError(f"Failed to unload library: {e}") from e
 
     if not result["removed"]:
         raise LibraryError(f"Library not loaded: {path}")
@@ -165,9 +160,7 @@ async def handle_unload_library(
     return text_response(f"Unloaded library: {path}")
 
 
-async def handle_list_libraries(
-    arguments: dict, state: SessionState
-):
+async def handle_list_libraries(arguments: dict, state: SessionState):
     """List loaded libraries, optionally with subcircuit detail."""
     detail = arguments.get("detail", False)
     fmt = arguments.get("format")
@@ -204,11 +197,9 @@ async def handle_list_libraries(
 
     # Detail mode: include subcircuit names per library
     try:
-        result = await run_sync(
-            state.libraries.search_user_libraries, "", 0, 999999
-        )
+        result = await run_sync(state.libraries.search_user_libraries, "", 0, 999999)
     except Exception as e:
-        raise LibraryError(f"Failed to list subcircuits: {e}")
+        raise LibraryError(f"Failed to list subcircuits: {e}") from e
 
     subcircuits = [r for r in result["results"] if r["type"] == ".SUBCKT"]
 

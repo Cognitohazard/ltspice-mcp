@@ -16,7 +16,6 @@ def _make_run(params: dict, raw_file: str = "") -> dict:
 
 
 class TestFilterRunsByParams:
-
     def test_filter_exact_spice_value(self):
         runs = {0: _make_run({"R": 1000.0})}
         result = filter_runs_by_params(runs, {"R": "1k"})
@@ -63,7 +62,6 @@ class TestFilterRunsByParams:
 
 
 class TestGetProgressSnapshot:
-
     def _make_batch_job(self, total: int, completed: int, failed: int = 0) -> BatchJob:
         return BatchJob(
             job_id="test",
@@ -96,7 +94,6 @@ class TestGetProgressSnapshot:
 
 
 class TestComputeBatchStats:
-
     def test_stats_empty_runs(self):
         result = compute_batch_stats({}, "V(out)")
         assert result["run_count"] == 0

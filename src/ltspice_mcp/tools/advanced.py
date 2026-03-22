@@ -25,9 +25,14 @@ from ltspice_mcp.state import (
     SweepDimension,
 )
 from ltspice_mcp.tools._base import (
-    FORMAT_PROP, format_response, pagination_metadata,
-    require_simulator, resolve_netlist_path,
-    resolve_output_folder, run_sync, text_response,
+    FORMAT_PROP,
+    format_response,
+    pagination_metadata,
+    require_simulator,
+    resolve_netlist_path,
+    resolve_output_folder,
+    run_sync,
+    text_response,
 )
 
 logger = logging.getLogger(__name__)
@@ -134,7 +139,7 @@ async def handle_configure_sweep(arguments: dict, state: SessionState):
             start = float(param["start"])
             stop = float(param["stop"])
         except (KeyError, TypeError, ValueError) as e:
-            raise BatchJobError(f"Parameter '{name}': start and stop must be numbers: {e}")
+            raise BatchJobError(f"Parameter '{name}': start and stop must be numbers: {e}") from e
 
         step = param.get("step")
         points = param.get("points")
@@ -146,9 +151,7 @@ async def handle_configure_sweep(arguments: dict, state: SessionState):
                 f"Parameter '{name}': step and points are mutually exclusive — provide one, not both"
             )
         if step is None and points is None:
-            raise BatchJobError(
-                f"Parameter '{name}': one of step or points is required"
-            )
+            raise BatchJobError(f"Parameter '{name}': one of step or points is required")
 
         if scale not in ("linear", "log"):
             raise BatchJobError(
@@ -192,12 +195,12 @@ async def handle_configure_sweep(arguments: dict, state: SessionState):
     )
 
     return text_response(
-                f"Sweep configured\n"
-                f"Config ID: {config_id}\n"
-                f"Netlist: {netlist_path}\n"
-                f"Dimensions: {len(dimensions)}\n"
-                f"Total simulations: {total_runs}\n\n"
-                f"Use ltspice_run_sweep('{config_id}') to execute"
+        f"Sweep configured\n"
+        f"Config ID: {config_id}\n"
+        f"Netlist: {netlist_path}\n"
+        f"Dimensions: {len(dimensions)}\n"
+        f"Total simulations: {total_runs}\n\n"
+        f"Use ltspice_run_sweep('{config_id}') to execute"
     )
 
 
@@ -256,27 +259,25 @@ async def handle_run_sweep(arguments: dict, state: SessionState):
         output_folder=resolve_output_folder(state),
         max_parallel=max_parallel or state.config.max_parallel_sims,
     )
-    asyncio.create_task(runner.start_sweep(batch_job, state))
+    asyncio.create_task(runner.start_sweep(batch_job, state))  # noqa: RUF006
 
     logger.info(
         f"Sweep job started: job_id={job_id}, config_id={config_id}, total_runs={total_runs}"
     )
 
     return text_response(
-                f"Sweep started\n"
-                f"Job ID: {job_id}\n"
-                f"Total runs: {total_runs}\n\n"
-                f"Use ltspice_get_batch_results('{job_id}') to monitor progress\n"
-                f"Use ltspice_get_batch_results('{job_id}', signal='...') to query results"
+        f"Sweep started\n"
+        f"Job ID: {job_id}\n"
+        f"Total runs: {total_runs}\n\n"
+        f"Use ltspice_get_batch_results('{job_id}') to monitor progress\n"
+        f"Use ltspice_get_batch_results('{job_id}', signal='...') to query results"
     )
 
 
 # ---------------------------------------------------------------------------
 # Handler 3: configure_montecarlo
 # ---------------------------------------------------------------------------
-async def handle_configure_montecarlo(
-    arguments: dict, state: SessionState
-):
+async def handle_configure_montecarlo(arguments: dict, state: SessionState):
     """Configure a Monte Carlo analysis and store it for later execution.
 
     Parses tolerances with type-name-to-prefix mapping, validates distribution
@@ -313,7 +314,9 @@ async def handle_configure_montecarlo(
         try:
             tolerance = float(entry["tolerance"])
         except (KeyError, TypeError, ValueError) as e:
-            raise BatchJobError(f"Tolerance entry for '{ref}': tolerance must be a number: {e}")
+            raise BatchJobError(
+                f"Tolerance entry for '{ref}': tolerance must be a number: {e}"
+            ) from e
 
         # Normalize distribution name
         raw_dist = entry.get("distribution", "uniform").lower()
@@ -343,12 +346,12 @@ async def handle_configure_montecarlo(
 
     # Build summary strings
     type_summary = (
-        ", ".join(f"{k}: {v[0]*100:.1f}% {v[1]}" for k, v in type_tolerances.items())
+        ", ".join(f"{k}: {v[0] * 100:.1f}% {v[1]}" for k, v in type_tolerances.items())
         if type_tolerances
         else "none"
     )
     component_summary = (
-        ", ".join(f"{k}: {v[0]*100:.1f}% {v[1]}" for k, v in component_overrides.items())
+        ", ".join(f"{k}: {v[0] * 100:.1f}% {v[1]}" for k, v in component_overrides.items())
         if component_overrides
         else "none"
     )
@@ -359,14 +362,14 @@ async def handle_configure_montecarlo(
     )
 
     return text_response(
-                f"Monte Carlo configured\n"
-                f"Config ID: {config_id}\n"
-                f"Netlist: {netlist_path}\n"
-                f"Runs: {num_runs}\n"
-                f"Type tolerances: {type_summary}\n"
-                f"Component overrides: {component_summary}\n"
-                f"\n"
-                f"Use ltspice_run_montecarlo('{config_id}') to execute"
+        f"Monte Carlo configured\n"
+        f"Config ID: {config_id}\n"
+        f"Netlist: {netlist_path}\n"
+        f"Runs: {num_runs}\n"
+        f"Type tolerances: {type_summary}\n"
+        f"Component overrides: {component_summary}\n"
+        f"\n"
+        f"Use ltspice_run_montecarlo('{config_id}') to execute"
     )
 
 
@@ -418,7 +421,7 @@ async def handle_run_montecarlo(arguments: dict, state: SessionState):
         output_folder=resolve_output_folder(state),
         max_parallel=max_parallel or state.config.max_parallel_sims,
     )
-    asyncio.create_task(runner.start_montecarlo(batch_job, state))
+    asyncio.create_task(runner.start_montecarlo(batch_job, state))  # noqa: RUF006
 
     logger.info(
         f"Monte Carlo job started: job_id={job_id}, config_id={config_id}, "
@@ -426,20 +429,18 @@ async def handle_run_montecarlo(arguments: dict, state: SessionState):
     )
 
     return text_response(
-                f"Monte Carlo started\n"
-                f"Job ID: {job_id}\n"
-                f"Total runs: {config.num_runs}\n\n"
-                f"Use ltspice_get_batch_results('{job_id}') to monitor progress\n"
-                f"Use ltspice_get_batch_results('{job_id}', signal='...') to query results"
+        f"Monte Carlo started\n"
+        f"Job ID: {job_id}\n"
+        f"Total runs: {config.num_runs}\n\n"
+        f"Use ltspice_get_batch_results('{job_id}') to monitor progress\n"
+        f"Use ltspice_get_batch_results('{job_id}', signal='...') to query results"
     )
 
 
 # ---------------------------------------------------------------------------
 # Handler 5: get_batch_results (consolidated: status + results)
 # ---------------------------------------------------------------------------
-async def handle_get_batch_results(
-    arguments: dict, state: SessionState
-):
+async def handle_get_batch_results(arguments: dict, state: SessionState):
     """Query a batch simulation job — status/progress or signal results.
 
     Without signal: returns job status and progress (running/completed/failed).
@@ -463,7 +464,8 @@ async def handle_get_batch_results(
     if not batch_job:
         if signal is None:
             # Status mode: softer message
-            return text_response(f"Batch job not found: {job_id}\n\nUse ltspice_run_sweep() or ltspice_run_montecarlo() to start a batch job",
+            return text_response(
+                f"Batch job not found: {job_id}\n\nUse ltspice_run_sweep() or ltspice_run_montecarlo() to start a batch job",
             )
         raise BatchJobError(
             f"Batch job not found: {job_id}\n\n"
@@ -484,15 +486,26 @@ async def handle_get_batch_results(
             eta_s = snap["eta_s"]
 
             if eta_s is not None:
-                eta_str = f", ~{int(eta_s // 60)}m remaining" if eta_s >= 60 else f", ~{int(eta_s)}s remaining"
+                eta_str = (
+                    f", ~{int(eta_s // 60)}m remaining"
+                    if eta_s >= 60
+                    else f", ~{int(eta_s)}s remaining"
+                )
             else:
                 eta_str = ""
 
             progress_str = f"{completed}/{total} runs complete{eta_str}"
 
-            data = {"job_id": job_id, "status": "running", "job_type": batch_job.job_type,
-                    "completed": completed, "total": total, "failed": failed, "eta_s": eta_s,
-                    "netlist": netlist_name}
+            data = {
+                "job_id": job_id,
+                "status": "running",
+                "job_type": batch_job.job_type,
+                "completed": completed,
+                "total": total,
+                "failed": failed,
+                "eta_s": eta_s,
+                "netlist": netlist_name,
+            }
             return format_response(
                 f"Batch job {job_id} is running\n"
                 f"Type: {batch_job.job_type}\n"
@@ -500,7 +513,8 @@ async def handle_get_batch_results(
                 f"Failed: {failed}\n"
                 f"Netlist: {netlist_name}\n\n"
                 f"Use ltspice_get_batch_results('{job_id}', signal='...') to query partial results",
-                data, fmt,
+                data,
+                fmt,
             )
 
         elif batch_job.status == "completed":
@@ -510,9 +524,15 @@ async def handle_get_batch_results(
 
             successful = batch_job.completed_runs - batch_job.failed_runs
 
-            data = {"job_id": job_id, "status": "completed", "job_type": batch_job.job_type,
-                    "total_runs": batch_job.total_runs, "successful": successful,
-                    "failed": batch_job.failed_runs, "duration": duration}
+            data = {
+                "job_id": job_id,
+                "status": "completed",
+                "job_type": batch_job.job_type,
+                "total_runs": batch_job.total_runs,
+                "successful": successful,
+                "failed": batch_job.failed_runs,
+                "duration": duration,
+            }
             return format_response(
                 f"Batch job {job_id} completed\n"
                 f"Type: {batch_job.job_type}\n"
@@ -521,30 +541,43 @@ async def handle_get_batch_results(
                 f"Failed: {batch_job.failed_runs}\n"
                 f"Duration: {duration:.1f}s\n\n"
                 f"Use ltspice_get_batch_results('{job_id}', signal='V(out)') to query results",
-                data, fmt,
+                data,
+                fmt,
             )
 
         elif batch_job.status == "failed":
             error_msg = batch_job.error or "Unknown error"
-            data = {"job_id": job_id, "status": "failed", "job_type": batch_job.job_type,
-                    "netlist": netlist_name, "error": error_msg}
+            data = {
+                "job_id": job_id,
+                "status": "failed",
+                "job_type": batch_job.job_type,
+                "netlist": netlist_name,
+                "error": error_msg,
+            }
             return format_response(
                 f"Batch job {job_id} failed\n"
                 f"Type: {batch_job.job_type}\n"
                 f"Netlist: {netlist_name}\n"
                 f"Error: {error_msg}",
-                data, fmt,
+                data,
+                fmt,
             )
 
         elif batch_job.status == "cancelled":
-            data = {"job_id": job_id, "status": "cancelled", "job_type": batch_job.job_type,
-                    "completed_runs": batch_job.completed_runs, "total_runs": batch_job.total_runs}
+            data = {
+                "job_id": job_id,
+                "status": "cancelled",
+                "job_type": batch_job.job_type,
+                "completed_runs": batch_job.completed_runs,
+                "total_runs": batch_job.total_runs,
+            }
             return format_response(
                 f"Batch job {job_id} was cancelled\n"
                 f"Type: {batch_job.job_type}\n"
                 f"Completed {batch_job.completed_runs} of {batch_job.total_runs} before cancellation. "
                 f"Partial results available via get_batch_results.",
-                data, fmt,
+                data,
+                fmt,
             )
 
         else:
@@ -592,10 +625,10 @@ async def handle_get_batch_results(
 
         if run_count == 0:
             return text_response(
-                        f"Signal '{signal}' not found in any completed run.\n"
-                        f"Job ID: {job_id}\n"
-                        f"Available runs: {total_matching}\n\n"
-                        f"Verify signal name (e.g., 'V(out)', 'I(R1)')"
+                f"Signal '{signal}' not found in any completed run.\n"
+                f"Job ID: {job_id}\n"
+                f"Available runs: {total_matching}\n\n"
+                f"Verify signal name (e.g., 'V(out)', 'I(R1)')"
             )
 
         # Format stats with sensible precision
@@ -656,13 +689,13 @@ async def handle_get_batch_results(
 
     else:
         # Raw per-run mode with pagination
-        paginated_indices = matching_indices[offset: offset + limit]
+        paginated_indices = matching_indices[offset : offset + limit]
         shown = len(paginated_indices)
 
         if shown == 0:
             return text_response(
-                        f"No runs in requested page range.\n"
-                        f"Total matching: {total_matching}, offset: {offset}, limit: {limit}"
+                f"No runs in requested page range.\n"
+                f"Total matching: {total_matching}, offset: {offset}, limit: {limit}"
             )
 
         # Compute stats for the paginated subset
@@ -684,9 +717,7 @@ async def handle_get_batch_results(
         for run_summary in page_stats["runs"]:
             run_idx = run_summary["run_index"]
             params = run_summary.get("params", {})
-            params_str = (
-                " ".join(f"{k}={v}" for k, v in params.items()) if params else "-"
-            )
+            params_str = " ".join(f"{k}={v}" for k, v in params.items()) if params else "-"
             lines.append(
                 f"{run_idx:<6} {_fmt_col(run_summary.get('peak'))} {_fmt_col(run_summary.get('mean'))} "
                 f"{_fmt_col(run_summary.get('min'))}  {params_str}"
@@ -694,7 +725,9 @@ async def handle_get_batch_results(
 
         if offset + shown < total_matching:
             next_offset = offset + limit
-            lines.append(f"\nNext page: ltspice_get_batch_results('{job_id}', signal='{signal}', raw=true, offset={next_offset})")
+            lines.append(
+                f"\nNext page: ltspice_get_batch_results('{job_id}', signal='{signal}', raw=true, offset={next_offset})"
+            )
 
         json_data = {
             "job_id": job_id,
@@ -913,7 +946,7 @@ TOOL_DEFS: list[types.Tool] = [
                     "type": "object",
                     "description": (
                         "Parameter filters. Keys are parameter names, values are filter expressions. "
-                        "Exact: {\"R1\": \"1k\"}, Range: {\"R1\": \"1k..5k\"}"
+                        'Exact: {"R1": "1k"}, Range: {"R1": "1k..5k"}'
                     ),
                 },
                 "offset": {

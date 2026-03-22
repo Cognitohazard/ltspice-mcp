@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, Type
+from typing import Any, Literal
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.cache import FileCache
@@ -157,8 +157,8 @@ class SessionState:
     """
 
     config: ServerConfig
-    available_simulators: dict[str, Type]
-    default_simulator: Type | None
+    available_simulators: dict[str, type]
+    default_simulator: type | None
     editors: FileCache  # FileCache[SpiceEditor] - type parameter for documentation
     results: FileCache  # FileCache[RawRead]
     jobs: dict[str, SimulationJob]
@@ -173,7 +173,7 @@ class SessionState:
     batch_jobs: dict[str, BatchJob] = field(default_factory=dict)
 
     @classmethod
-    def create(cls, config: ServerConfig, available: dict[str, Type]) -> "SessionState":
+    def create(cls, config: ServerConfig, available: dict[str, type]) -> "SessionState":
         """Factory method to create session state at server startup.
 
         This is called by the server lifespan context manager to initialize

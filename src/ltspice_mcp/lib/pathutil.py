@@ -34,9 +34,7 @@ def resolve_safe_path(user_path: str, allowed_dirs: list[Path]) -> Path:
     # Check for explicit path traversal attempts
     # This catches patterns like "../../etc/passwd"
     if ".." in path.parts:
-        raise PathSecurityError(
-            f"Path traversal attempts (..) are not allowed: {user_path}"
-        )
+        raise PathSecurityError(f"Path traversal attempts (..) are not allowed: {user_path}")
 
     # Resolve relative paths against first allowed_dir (working directory)
     # Absolute paths are used as-is
@@ -62,6 +60,4 @@ def resolve_safe_path(user_path: str, allowed_dirs: list[Path]) -> Path:
 
     # Path is outside all allowed directories
     allowed_list = ", ".join(str(d) for d in allowed_dirs)
-    raise PathSecurityError(
-        f"Path {resolved} is outside allowed directories [{allowed_list}]"
-    )
+    raise PathSecurityError(f"Path {resolved} is outside allowed directories [{allowed_list}]")

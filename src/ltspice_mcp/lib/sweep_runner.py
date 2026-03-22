@@ -4,7 +4,6 @@ import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Type
 
 from spicelib import SpiceEditor
 from spicelib.sim.sim_runner import SimRunner
@@ -35,7 +34,7 @@ class SweepRunner:
     def __init__(
         self,
         loop: asyncio.AbstractEventLoop,
-        simulator_class: Type,
+        simulator_class: type,
         output_folder: Path,
         max_parallel: int = 4,
     ):
@@ -120,9 +119,7 @@ class SweepRunner:
             # Add each sweep dimension
             assert batch_job.sweep_config is not None
             for dim in batch_job.sweep_config.dimensions:
-                values = generate_sweep_range(
-                    dim.start, dim.stop, dim.step, dim.points, dim.scale
-                )
+                values = generate_sweep_range(dim.start, dim.stop, dim.step, dim.points, dim.scale)
                 if dim.type == "component":
                     stepper.add_value_sweep(dim.name, values)
                 elif dim.type == "parameter":
@@ -157,9 +154,7 @@ class SweepRunner:
             await asyncio.to_thread(execute_sweep)
         except Exception as e:
             # Submission or execution failed - update batch job status
-            logger.error(
-                f"Sweep job {batch_job.job_id} failed: {e}", exc_info=True
-            )
+            logger.error(f"Sweep job {batch_job.job_id} failed: {e}", exc_info=True)
             batch_job.status = "failed"
             batch_job.error = f"Sweep execution failed: {e}"
             batch_job.completed_at = datetime.now()
@@ -249,7 +244,7 @@ class SweepRunner:
         # We match by index order since both are populated in the same order
         sim_info_items = sorted(stepper.sim_info.items())  # Sort by runno for stable ordering
 
-        for order_idx, (runno, info) in enumerate(sim_info_items):
+        for order_idx, (_runno, info) in enumerate(sim_info_items):
             if order_idx in batch_job.run_results:
                 # Normalize param values to float for consistent filtering
                 # (research pitfall 4: values may be stored as engineering notation strings)

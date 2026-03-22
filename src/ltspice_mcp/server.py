@@ -1,24 +1,28 @@
 """MCP server instance with lifespan management and tool dispatch."""
 
-from collections.abc import AsyncIterator, Iterable
-from contextlib import asynccontextmanager
-from typing import Any
 import logging
 import sys
+from collections.abc import AsyncIterator, Iterable
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
-from mcp.server.lowlevel import Server
 from mcp import types
+from mcp.server.lowlevel import Server
+from mcp.server.lowlevel.helper_types import ReadResourceContents
+from pydantic import AnyUrl
 
+from ltspice_mcp import errors as _err
 from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
-from ltspice_mcp import errors as _err
-from ltspice_mcp.state import SessionState
 from ltspice_mcp.lib.simulator import detect_simulators
+from ltspice_mcp.resources import (
+    get_resource_templates,
+    get_static_resources,
+    handle_read_resource,
+)
+from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import ALL_MODULES
-from mcp.server.lowlevel.helper_types import ReadResourceContents
-from ltspice_mcp.resources import get_static_resources, get_resource_templates, handle_read_resource
-from pydantic import AnyUrl
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +60,7 @@ def _configure_asc_editor(config: ServerConfig, available: dict) -> bool:
         return False
 
     # 3. WSL + LTspice on Windows — spicelib can't auto-detect via /mnt/c/
-    from ltspice_mcp.lib.wsl import is_wsl, get_ltspice_lib_paths
+    from ltspice_mcp.lib.wsl import get_ltspice_lib_paths, is_wsl
 
     if is_wsl():
         lib_paths = get_ltspice_lib_paths()
@@ -107,9 +111,7 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
         "This usually means a floating node or short circuit.\n"
         "Use ltspice_read_circuit to inspect the netlist for connectivity issues."
     ),
-    _err.SimulationError: (
-        "Use ltspice_get_server_status to verify simulator availability."
-    ),
+    _err.SimulationError: ("Use ltspice_get_server_status to verify simulator availability."),
     _err.NetlistError: (
         "Use ltspice_read_circuit to inspect the file, or "
         "ltspice_list_components to verify component references."
@@ -173,7 +175,7 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 
     # 6. Log verbose startup summary
     logger.info("=== LTSpice MCP Server Starting ===")
-    logger.info(f"Server name: ltspice-mcp")
+    logger.info("Server name: ltspice-mcp")
     logger.info(f"Config source: {config_source}")
     logger.info(f"Working directory: {state.working_dir}")
     logger.info(f"Log level: {config.log_level}")
@@ -187,14 +189,20 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
             try:
                 # Try to get executable path if available
                 if hasattr(cls, "spice_exe"):
-                    exe_path = cls.spice_exe[0] if isinstance(cls.spice_exe, list) else cls.spice_exe
+                    exe_path = (
+                        cls.spice_exe[0] if isinstance(cls.spice_exe, list) else cls.spice_exe
+                    )
                     logger.info(f"    Executable: {exe_path}")
             except Exception:
                 pass
     else:
-        logger.warning("No simulators detected. Circuit editing will work but simulation tools will return errors.")
+        logger.warning(
+            "No simulators detected. Circuit editing will work but simulation tools will return errors."
+        )
 
-    logger.info(f"Default simulator: {state.default_simulator.__name__ if state.default_simulator else 'None'}")
+    logger.info(
+        f"Default simulator: {state.default_simulator.__name__ if state.default_simulator else 'None'}"
+    )
 
     logger.info("Allowed paths (sandbox):")
     for allowed_path in config.allowed_paths:
@@ -241,7 +249,7 @@ async def call_tool(name: str, arguments: dict):
     try:
         state = server.request_context.lifespan_context["state"]
     except (AttributeError, KeyError) as e:
-        raise RuntimeError(f"Session state not available: {e}")
+        raise RuntimeError(f"Session state not available: {e}") from e
 
     # Invoke handler — enrich known errors with actionable guidance.
     # Exceptions propagate to the MCP SDK which sets isError=True.
@@ -293,7 +301,7 @@ async def read_resource(uri: AnyUrl) -> Iterable[ReadResourceContents]:
     try:
         state = server.request_context.lifespan_context["state"]
     except (AttributeError, KeyError) as e:
-        raise ValueError(f"Internal error: Session state not available ({e})")
+        raise ValueError(f"Internal error: Session state not available ({e})") from e
 
     result = await handle_read_resource(str(uri), state)
 
@@ -302,15 +310,17 @@ async def read_resource(uri: AnyUrl) -> Iterable[ReadResourceContents]:
     converted = []
     for item in result.contents:
         if isinstance(item, types.TextResourceContents):
-            converted.append(ReadResourceContents(
-                content=item.text,
-                mime_type=item.mimeType,
-            ))
+            converted.append(
+                ReadResourceContents(
+                    content=item.text,
+                    mime_type=item.mimeType,
+                )
+            )
         elif isinstance(item, types.BlobResourceContents):
-            converted.append(ReadResourceContents(
-                content=item.blob,
-                mime_type=item.mimeType,
-            ))
+            converted.append(
+                ReadResourceContents(
+                    content=item.blob,
+                    mime_type=item.mimeType,
+                )
+            )
     return converted
-
-

@@ -4,7 +4,6 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Type
 
 from ltspice_mcp.errors import LibraryError
 from ltspice_mcp.lib.cache import FileCache
@@ -21,7 +20,7 @@ class LibraryManager:
     libraries, and model lookup with .include directive generation.
     """
 
-    def __init__(self, available_simulators: dict[str, Type]) -> None:
+    def __init__(self, available_simulators: dict[str, type]) -> None:
         """Initialize library manager.
 
         Args:
@@ -214,7 +213,10 @@ class LibraryManager:
             try:
                 index = parse_library_file(lib_file)
                 # Store in cache
-                self._user_libs._entries[lib_file] = (lib_file.stat().st_mtime, index)  # noqa: direct cache population
+                self._user_libs._entries[lib_file] = (
+                    lib_file.stat().st_mtime,
+                    index,
+                )  # direct cache population
 
                 # Count models vs subcircuits
                 for model in index.models:
@@ -249,7 +251,7 @@ class LibraryManager:
         # If it's a directory, remove all files under it
         if path.is_dir():
             removed_count = 0
-            for cached_path in self._user_libs.keys():
+            for cached_path in self._user_libs.keys():  # noqa: SIM118
                 if cached_path.is_relative_to(path):
                     self._user_libs.invalidate(cached_path)
                     removed_count += 1

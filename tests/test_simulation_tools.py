@@ -11,25 +11,14 @@ from ltspice_mcp.tools.simulation import handle_run_simulation
 
 @pytest.mark.asyncio
 class TestSimulationWithoutSimulator:
-
-    async def test_run_raises_no_simulator(
-        self, state_no_sim: SessionState, sample_netlist: Path
-    ):
+    async def test_run_raises_no_simulator(self, state_no_sim: SessionState, sample_netlist: Path):
         with pytest.raises(SimulationError, match="No simulator"):
-            await handle_run_simulation(
-                {"netlist": sample_netlist.name}, state_no_sim
-            )
+            await handle_run_simulation({"netlist": sample_netlist.name}, state_no_sim)
 
-    async def test_run_nonexistent_netlist(
-        self, state_no_sim: SessionState
-    ):
+    async def test_run_nonexistent_netlist(self, state_no_sim: SessionState):
         with pytest.raises(SimulationError, match="not found"):
-            await handle_run_simulation(
-                {"netlist": "nonexistent.cir"}, state_no_sim
-            )
+            await handle_run_simulation({"netlist": "nonexistent.cir"}, state_no_sim)
 
     async def test_run_path_escape(self, state_no_sim: SessionState):
         with pytest.raises(SimulationError):
-            await handle_run_simulation(
-                {"netlist": "/etc/passwd"}, state_no_sim
-            )
+            await handle_run_simulation({"netlist": "/etc/passwd"}, state_no_sim)
