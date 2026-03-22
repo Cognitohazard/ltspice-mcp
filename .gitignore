@@ -13,8 +13,6 @@ wheels/
 # Claude Code
 .claude/
 
-.planning/
-
 .mcp.json
 
 CLAUDE.md
