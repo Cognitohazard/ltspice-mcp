@@ -68,7 +68,7 @@ Simulation output is automatically redirected to a Windows temp directory. LTspi
 
 | Profile | Tools | Use case |
 |-|-|-|
-| `full` (default) | All 29 | Backwards-compatible default for any MCP client |
+| `full` (default) | All 31 | Backwards-compatible default for any MCP client |
 | `agentic` | 16 | **Recommended** when your client supports skill files |
 
 The **agentic** profile removes netlist-editing wrappers, sweep/MC configuration tools, niche schematic operations, and library session management — things a capable LLM agent does better through direct file editing. It keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, AscEditor-dependent ops, and library search — the tools that provide genuine leverage over what an LLM can do natively.
@@ -93,9 +93,9 @@ Copy the relevant skill into whatever location your MCP client uses for persiste
 
 ## Tools
 
-All 29 tools are prefixed with `ltspice_` to avoid namespace conflicts with other MCP servers. Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) for client auto-approval decisions.
+All 31 tools are prefixed with `ltspice_` to avoid namespace conflicts with other MCP servers. Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) for client auto-approval decisions.
 
-### Circuit editing (10 tools)
+### Circuit editing (12 tools)
 
 Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispatch picks the right editor automatically.
 
@@ -110,6 +110,8 @@ Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispa
 | `ltspice_remove_component` | Remove a component from an `.asc` schematic |
 | `ltspice_move_component` | Move or rotate a component in an `.asc` schematic |
 | `ltspice_set_component_attribute` | Set a component attribute (SpiceLine, Value2, etc.) |
+| `ltspice_add_component` | Add a new component to an `.asc` schematic at a specified grid position |
+| `ltspice_add_wire` | Add wire segment(s) to an `.asc` schematic to connect components |
 | `ltspice_export_netlist` | Export an `.asc` schematic to a `.net` netlist |
 
 `.asc` schematic editing requires `.asy` symbol files. These are auto-detected on Windows and WSL; override with `[schematic] symbol_paths` in TOML or the `LTSPICE_MCP_SYMBOL_PATHS` env var.
