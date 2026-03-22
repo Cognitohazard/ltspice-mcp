@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from mcp import types
+
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.library_manager import LibraryManager
@@ -165,6 +167,10 @@ class SessionState:
     libraries: LibraryManager
     runners: RunnerManager
     working_dir: Path
+    tool_defs: list[types.Tool] = field(default_factory=list)
+    """MCP tool definitions filtered by the active tool profile."""
+    tool_dispatch: dict[str, Any] = field(default_factory=dict)
+    """Tool name → async handler, filtered by the active tool profile."""
     asc_editor_available: bool = False
     """Whether AscEditor is configured with symbol library paths.
     False on Linux without LTspice (no .asy files available)."""
@@ -187,8 +193,10 @@ class SessionState:
             Initialized SessionState instance
         """
         from ltspice_mcp.lib.simulator import select_default_simulator
+        from ltspice_mcp.tools import get_tools_for_profile
 
         default = select_default_simulator(available, config)
+        tool_defs, tool_dispatch = get_tools_for_profile(config.tool_profile)
 
         return cls(
             config=config,
@@ -200,6 +208,8 @@ class SessionState:
             libraries=LibraryManager(available),
             runners=RunnerManager(),
             working_dir=config.working_dir,
+            tool_defs=tool_defs,
+            tool_dispatch=tool_dispatch,
         )
 
     def shutdown(self) -> None:

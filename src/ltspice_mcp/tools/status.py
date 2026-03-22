@@ -40,6 +40,8 @@ async def handle_get_server_status(arguments: dict, state: SessionState):
     )
 
     lines.append("\nConfiguration:")
+    lines.append(f"  Tool profile: {state.config.tool_profile}")
+    lines.append(f"  Tools exposed: {len(state.tool_defs)}")
     lines.append(f"  Working directory: {state.working_dir}")
     lines.append(f"  Max parallel simulations: {state.config.max_parallel_sims}")
     lines.append(f"  Default timeout: {state.config.default_timeout}s")
@@ -67,6 +69,8 @@ async def handle_get_server_status(arguments: dict, state: SessionState):
     data = {
         "simulators": simulators_data,
         "default_simulator": state.default_simulator.__name__ if state.default_simulator else None,
+        "tool_profile": state.config.tool_profile,
+        "tool_count": len(state.tool_defs),
         "configuration": {
             "working_directory": str(state.working_dir),
             "max_parallel_sims": state.config.max_parallel_sims,
@@ -106,6 +110,8 @@ TOOL_DEFS: list[types.Tool] = [
             "properties": {
                 "simulators": {"type": "object"},
                 "default_simulator": {"type": ["string", "null"]},
+                "tool_profile": {"type": "string"},
+                "tool_count": {"type": "integer"},
                 "configuration": {"type": "object"},
                 "allowed_paths": {"type": "array", "items": {"type": "string"}},
                 "runtime": {"type": "object"},

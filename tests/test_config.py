@@ -68,6 +68,50 @@ class TestServerConfig:
         assert "allowed_paths" in content
 
 
+class TestToolProfile:
+    """Tests for tool_profile configuration."""
+
+    def test_default_profile_is_full(self):
+        config = ServerConfig()
+        assert config.tool_profile == "full"
+
+    def test_profile_from_toml(self, work_dir: Path):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text('[tools]\nprofile = "agentic"\n')
+        config = ServerConfig.load(toml_path)
+        assert config.tool_profile == "agentic"
+
+    def test_invalid_profile_in_toml_falls_back(self, work_dir: Path):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text('[tools]\nprofile = "bogus"\n')
+        config = ServerConfig.load(toml_path)
+        assert config.tool_profile == "full"
+
+    def test_env_var_override(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "agentic")
+        config = ServerConfig.load(work_dir / "nonexistent.toml")
+        assert config.tool_profile == "agentic"
+
+    def test_env_var_overrides_toml(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text('[tools]\nprofile = "full"\n')
+        monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "agentic")
+        config = ServerConfig.load(toml_path)
+        assert config.tool_profile == "agentic"
+
+    def test_invalid_env_var_falls_back(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "bogus")
+        config = ServerConfig.load(work_dir / "nonexistent.toml")
+        assert config.tool_profile == "full"
+
+    def test_generated_config_includes_tools_section(self, work_dir: Path):
+        path = work_dir / "generated.toml"
+        generate_default_config(path)
+        content = path.read_text()
+        assert "[tools]" in content
+        assert "profile" in content
+
+
 class TestSimulatorExeConfig:
     """Tests for the simulator_exe config field being wired to detection."""
 
