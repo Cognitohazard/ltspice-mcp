@@ -1,12 +1,27 @@
 """Server configuration with TOML and environment variable support."""
 
+import logging
 import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import tomlkit
 from tomlkit import comment, document, nl, table
+
+logger = logging.getLogger(__name__)
+
+ToolProfile = Literal["full", "agentic"]
+VALID_PROFILES: frozenset[str] = frozenset({"full", "agentic"})
+
+
+def _validated_profile(value: str, source: str) -> str | None:
+    """Return value if it's a valid profile, else warn and return None."""
+    if value in VALID_PROFILES:
+        return value
+    logger.warning("Unknown tool profile %r in %s, using 'full'", value, source)
+    return None
 
 
 @dataclass
@@ -52,6 +67,10 @@ class ServerConfig:
     symbol_paths: list[Path] = field(default_factory=list)
     """Custom paths to LTspice symbol (.asy) files for .asc schematic support.
     On Windows and WSL these are auto-detected; set this to override."""
+
+    tool_profile: ToolProfile = "full"
+    """Tool profile: "full" exposes all tools, "agentic" exposes a subset
+    for LLM agents with native file access (Read/Edit/Write)."""
 
     config_path: Path = field(default_factory=lambda: Path.cwd() / "ltspice-mcp.toml")
     """Path that was resolved for the config file (set by load())."""
@@ -119,6 +138,13 @@ class ServerConfig:
                     Path(p) for p in toml_data["schematic"]["symbol_paths"]
                 ]
 
+            if (
+                "tools" in toml_data
+                and "profile" in toml_data["tools"]
+                and (p := _validated_profile(toml_data["tools"]["profile"], "config"))
+            ):
+                config_dict["tool_profile"] = p
+
         # Override with environment variables (highest precedence)
         if env_sim := os.getenv("LTSPICE_MCP_SIMULATOR"):
             config_dict["simulator"] = env_sim
@@ -152,6 +178,11 @@ class ServerConfig:
 
         if env_sym := os.getenv("LTSPICE_MCP_SYMBOL_PATHS"):
             config_dict["symbol_paths"] = [Path(p) for p in env_sym.split(os.pathsep)]
+
+        if (env_profile := os.getenv("LTSPICE_MCP_TOOL_PROFILE")) and (
+            p := _validated_profile(env_profile, "LTSPICE_MCP_TOOL_PROFILE")
+        ):
+            config_dict["tool_profile"] = p
 
         config_dict["config_path"] = config_path
         return cls(**config_dict)
@@ -220,6 +251,16 @@ def generate_default_config(path: Path) -> None:
     plotting.add(comment("Matplotlib style (e.g., seaborn-v0_8-darkgrid, ggplot, bmh)"))
     plotting.add("style", "seaborn-v0_8-darkgrid")
     doc.add("plotting", plotting)
+    doc.add(nl())
+
+    # Tools section
+    tools_tbl = table()
+    tools_tbl.add(comment('Tool profile: "full" (all tools) or "agentic" (subset for LLM agents)'))
+    tools_tbl.add(
+        comment('"agentic" removes netlist-editing tools that capable agents handle natively')
+    )
+    tools_tbl.add("profile", "full")
+    doc.add("tools", tools_tbl)
     doc.add(nl())
 
     # Schematic section

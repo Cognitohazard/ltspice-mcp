@@ -27,6 +27,25 @@ class TestSessionStateCreate:
         state = SessionState.create(config, {})
         assert isinstance(state.runners, RunnerManager)
 
+    def test_create_populates_tool_defs_full(self, config: ServerConfig):
+        state = SessionState.create(config, {})
+        assert len(state.tool_defs) > 0
+        assert len(state.tool_dispatch) > 0
+        # Full profile — all tools
+        assert len(state.tool_defs) == len(state.tool_dispatch)
+
+    def test_create_populates_tool_defs_agentic(self, work_dir: Path):
+        from ltspice_mcp.tools import AGENTIC_TOOLS
+
+        config = ServerConfig(
+            working_dir=work_dir,
+            allowed_paths=[work_dir],
+            tool_profile="agentic",
+        )
+        state = SessionState.create(config, {})
+        assert len(state.tool_defs) == len(AGENTIC_TOOLS)
+        assert set(state.tool_dispatch.keys()) == AGENTIC_TOOLS
+
 
 class TestSessionStateShutdown:
     def test_shutdown_clears_caches(self, config: ServerConfig, tmp_path: Path):

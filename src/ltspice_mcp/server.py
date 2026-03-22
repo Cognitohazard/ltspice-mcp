@@ -5,7 +5,7 @@ import sys
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import NamedTuple
 
 from mcp import types
 from mcp.server.lowlevel import Server
@@ -22,7 +22,6 @@ from ltspice_mcp.resources import (
     handle_read_resource,
 )
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools import ALL_MODULES
 
 logger = logging.getLogger(__name__)
 
@@ -89,42 +88,93 @@ def _configure_asc_editor(config: ServerConfig, available: dict) -> bool:
         return False
 
 
-# Build unified dispatch table at module level
-_DISPATCH: dict[str, Any] = {}
-for _mod in ALL_MODULES:
-    _DISPATCH.update(_mod.TOOL_HANDLERS)
+class _ErrorHint(NamedTuple):
+    """Profile-aware error hint: full references MCP tools, agentic gives direct guidance."""
 
-# Error type → actionable hint appended to error messages.
+    full: str
+    agentic: str
+
+
+# Error type → profile-aware hint appended to error messages.
 # PathSecurityError is handled separately (needs dynamic allowed_paths).
-_ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
-    _err.MissingModelError: (
-        "Try ltspice_search_library to find the model, or "
-        "ltspice_load_library to load a library file containing it."
+_ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
+    _err.MissingModelError: _ErrorHint(
+        full=(
+            "Try ltspice_search_library to find the model, or "
+            "ltspice_load_library to load a library file containing it."
+        ),
+        agentic=(
+            "Try ltspice_search_library to find the model, then add "
+            "the .lib directive to the netlist manually."
+        ),
     ),
-    _err.ConvergenceError: (
-        "Suggestions:\n"
-        "  - Add .OPTIONS (e.g., .OPTIONS reltol=0.003 or .OPTIONS method=gear)\n"
-        "  - Use ltspice_edit_directive to add a .OPTIONS directive\n"
-        "  - Check component values for very large/small ratios"
+    _err.ConvergenceError: _ErrorHint(
+        full=(
+            "Suggestions:\n"
+            "  - Add .OPTIONS (e.g., .OPTIONS reltol=0.003 or .OPTIONS method=gear)\n"
+            "  - Use ltspice_edit_directive to add a .OPTIONS directive\n"
+            "  - Check component values for very large/small ratios"
+        ),
+        agentic=(
+            "Suggestions:\n"
+            "  - Add a .OPTIONS directive to the netlist "
+            "(e.g., .OPTIONS reltol=0.003 or .OPTIONS method=gear)\n"
+            "  - Check component values for very large/small ratios"
+        ),
     ),
-    _err.SingularMatrixError: (
-        "This usually means a floating node or short circuit.\n"
-        "Use ltspice_read_circuit to inspect the netlist for connectivity issues."
+    _err.SingularMatrixError: _ErrorHint(
+        full=(
+            "This usually means a floating node or short circuit.\n"
+            "Use ltspice_read_circuit to inspect the netlist for connectivity issues."
+        ),
+        agentic=(
+            "This usually means a floating node or short circuit.\n"
+            "Inspect the netlist for connectivity issues."
+        ),
     ),
-    _err.SimulationError: ("Use ltspice_get_server_status to verify simulator availability."),
-    _err.NetlistError: (
-        "Use ltspice_read_circuit to inspect the file, or "
-        "ltspice_list_components to verify component references."
+    _err.SimulationError: _ErrorHint(
+        full="Use ltspice_get_server_status to verify simulator availability.",
+        agentic="Use ltspice_get_server_status to verify simulator availability.",
     ),
-    _err.ResultError: (
-        "Verify the simulation completed successfully with ltspice_check_job, "
-        "and check signal names with ltspice_get_simulation_summary."
+    _err.NetlistError: _ErrorHint(
+        full=(
+            "Use ltspice_read_circuit to inspect the file, or "
+            "ltspice_list_components to verify component references."
+        ),
+        agentic=(
+            "Inspect the netlist file directly, or use "
+            "ltspice_list_components to verify component references."
+        ),
     ),
-    _err.LibraryError: (
-        "Use ltspice_list_libraries to see loaded libraries, or "
-        "ltspice_load_library to load a new one."
+    _err.ResultError: _ErrorHint(
+        full=(
+            "Verify the simulation completed successfully with ltspice_check_job, "
+            "and check signal names with ltspice_get_simulation_summary."
+        ),
+        agentic=(
+            "Verify the simulation completed successfully with ltspice_check_job, "
+            "and check signal names with ltspice_get_simulation_summary."
+        ),
+    ),
+    _err.LibraryError: _ErrorHint(
+        full=(
+            "Use ltspice_list_libraries to see loaded libraries, or "
+            "ltspice_load_library to load a new one."
+        ),
+        agentic=(
+            "Use ltspice_search_library to find models, or add "
+            ".lib directives to the netlist manually."
+        ),
     ),
 }
+
+
+def _get_error_hint(err_type: type[LTSpiceMCPError], profile: str) -> str | None:
+    """Get the appropriate error hint for the active tool profile."""
+    hint = _ERROR_HINTS.get(err_type)
+    if hint is None:
+        return None
+    return hint.agentic if profile == "agentic" else hint.full
 
 
 @asynccontextmanager
@@ -178,6 +228,7 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     logger.info("Server name: ltspice-mcp")
     logger.info(f"Config source: {config_source}")
     logger.info(f"Working directory: {state.working_dir}")
+    logger.info(f"Tool profile: {config.tool_profile} ({len(state.tool_defs)} tools)")
     logger.info(f"Log level: {config.log_level}")
 
     logger.info("Detected simulators:")
@@ -226,11 +277,9 @@ server.lifespan = server_lifespan
 
 @server.list_tools()
 async def list_tools() -> list[types.Tool]:
-    """Return all registered MCP tools from all tool modules."""
-    tools = []
-    for mod in ALL_MODULES:
-        tools.extend(mod.TOOL_DEFS)
-    return tools
+    """Return MCP tools filtered by the active tool profile."""
+    state = server.request_context.lifespan_context["state"]
+    return state.tool_defs
 
 
 @server.call_tool()
@@ -240,16 +289,16 @@ async def call_tool(name: str, arguments: dict):
     All handlers return types.CallToolResult (the MCP protocol's canonical
     response type). Data-returning tools populate structuredContent.
     """
-    # Look up handler in dispatch table
-    handler = _DISPATCH.get(name)
-    if handler is None:
-        raise ValueError(f"Unknown tool: {name}")
-
     # Get session state from lifespan context
     try:
         state = server.request_context.lifespan_context["state"]
     except (AttributeError, KeyError) as e:
         raise RuntimeError(f"Session state not available: {e}") from e
+
+    # Look up handler in profile-filtered dispatch table
+    handler = state.tool_dispatch.get(name)
+    if handler is None:
+        raise ValueError(f"Unknown tool: {name}")
 
     # Invoke handler — enrich known errors with actionable guidance.
     # Exceptions propagate to the MCP SDK which sets isError=True.
@@ -262,7 +311,7 @@ async def call_tool(name: str, arguments: dict):
             f"Use ltspice_get_server_status to see full sandbox configuration."
         ) from None
     except LTSpiceMCPError as e:
-        hint = _ERROR_HINTS.get(type(e))
+        hint = _get_error_hint(type(e), state.config.tool_profile)
         if hint:
             raise type(e)(f"{e}\n\n{hint}") from None
         raise
