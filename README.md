@@ -4,7 +4,7 @@
 
 MCP server that exposes LTspice circuit simulation to LLMs via the [Model Context Protocol](https://modelcontextprotocol.io/). Create netlists, edit schematics, run simulations, and analyze results through MCP tool calls.
 
-Built on the low-level `mcp.server.lowlevel.Server` API with [spicelib](https://github.com/nunobrum/spicelib) as the simulation backend.
+Built on the low-level `mcp.server.lowlevel.Server` API with [spicelib](https://github.com/nunobrum/spicelib) for simulator interfacing and result parsing.
 
 ## Requirements
 
@@ -61,6 +61,35 @@ path = "/mnt/c/Program Files/ADI/LTspice/LTspice.exe"
 ```
 
 Simulation output is automatically redirected to a Windows temp directory. LTspice writes SQLite `.db` files alongside results, and these fail on UNC paths (`\\wsl.localhost\...`), which causes `.MEAS` data to be lost.
+
+## Tool Profiles
+
+`tool_profile` controls which tools the server exposes. Set via `[tools] profile` in TOML or `LTSPICE_MCP_TOOL_PROFILE` env var.
+
+| Profile | Tools | Use case |
+|-|-|-|
+| `full` (default) | All 29 | Backwards-compatible default for any MCP client |
+| `agentic` | 16 | **Recommended** when your client supports skill files |
+
+The **agentic** profile removes netlist-editing wrappers, sweep/MC configuration tools, niche schematic operations, and library session management — things a capable LLM agent does better through direct file editing. It keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, AscEditor-dependent ops, and library search — the tools that provide genuine leverage over what an LLM can do natively.
+
+```toml
+[tools]
+profile = "agentic"
+```
+
+## Skills
+
+The tools give LLMs *access* to simulation. The skills give them the *expertise* to use it well.
+
+The `skills/` directory contains structured domain knowledge that teaches LLMs how to work with SPICE circuit simulators. Each skill is a self-contained reference covering SPICE fundamentals, simulator-specific gotchas, and MCP tool workflows — the kind of knowledge that takes years to build and that LLMs don't reliably have.
+
+| Skill | Description |
+|-|-|
+| `skills/ltspice/SKILL.md` | LTspice: `.asc` schematic editing, Windows/WSL paths, LTspice-specific directives |
+| `skills/ngspice/SKILL.md` | ngspice: open-source workflow, control scripts, ngspice model compatibility |
+
+Copy the relevant skill into whatever location your MCP client uses for persistent instructions, then set the `agentic` profile. The skill provides the domain knowledge that replaces the removed wrapper tools.
 
 ## Tools
 
