@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.state import SessionState
@@ -186,7 +187,7 @@ class TestSetComponentValue:
         assert "47n" in c1.content[0].text
 
     async def test_invalid_values_type(self, state_no_sim: SessionState, sample_netlist: Path):
-        with pytest.raises(NetlistError, match="must be an object"):
+        with pytest.raises(ValidationError):
             await handle_set_component_value(
                 {"path": sample_netlist.name, "values": "not a dict"},
                 state_no_sim,

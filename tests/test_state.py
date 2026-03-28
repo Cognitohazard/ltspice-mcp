@@ -8,6 +8,7 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.state import BatchJob, MonteCarloConfig, SessionState, SimulationJob
+from ltspice_mcp.tools import get_tools_for_profile
 
 
 class TestSessionStateCreate:
@@ -35,16 +36,16 @@ class TestSessionStateCreate:
         assert len(state.tool_defs) == len(state.tool_dispatch)
 
     def test_create_populates_tool_defs_agentic(self, work_dir: Path):
-        from ltspice_mcp.tools import AGENTIC_TOOLS
-
         config = ServerConfig(
             working_dir=work_dir,
             allowed_paths=[work_dir],
             tool_profile="agentic",
         )
         state = SessionState.create(config, {})
-        assert len(state.tool_defs) == len(AGENTIC_TOOLS)
-        assert set(state.tool_dispatch.keys()) == AGENTIC_TOOLS
+        agentic_defs, _ = get_tools_for_profile("agentic")
+        agentic_names = {tool_def.name for tool_def in agentic_defs}
+        assert len(state.tool_defs) == len(agentic_names)
+        assert set(state.tool_dispatch.keys()) == agentic_names
 
 
 class TestSessionStateShutdown:
@@ -55,7 +56,7 @@ class TestSessionStateShutdown:
         state.editors.get(p, lambda path: path.read_text())
         assert len(state.editors) == 1
 
-        state.shutdown()
+        asyncio.run(state.shutdown())
         assert len(state.editors) == 0
         assert len(state.results) == 0
 
@@ -70,7 +71,7 @@ class TestSessionStateShutdown:
         )
         state.jobs["sim1"] = job
 
-        state.shutdown()
+        asyncio.run(state.shutdown())
         assert job.status == "cancelled"
         assert job.done_event.is_set()
 
@@ -85,7 +86,7 @@ class TestSessionStateShutdown:
         )
         state.batch_jobs["batch1"] = batch
 
-        state.shutdown()
+        asyncio.run(state.shutdown())
         assert batch.status == "cancelled"
         assert batch.done_event.is_set()
 
@@ -101,7 +102,7 @@ class TestSessionStateShutdown:
         )
         state.jobs["done1"] = job
 
-        state.shutdown()
+        asyncio.run(state.shutdown())
         assert job.status == "completed"
 
 
