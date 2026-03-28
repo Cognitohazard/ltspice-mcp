@@ -4,15 +4,20 @@ import asyncio
 import logging
 import time
 from datetime import datetime
+from typing import Literal
 
 from mcp import types
+from pydantic import Field
 
+from ltspice_mcp.errors import ResultError, SimulationError
+from ltspice_mcp.lib import services
 from ltspice_mcp.lib.log_parser import extract_error_context, parse_success_summary
 from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
 from ltspice_mcp.state import SessionState, SimulationJob
 from ltspice_mcp.tools._base import (
-    FORMAT_PROP,
+    ToolInput,
     format_response,
+    registry,
     require_simulator,
     resolve_netlist_path,
     resolve_output_folder,
@@ -26,38 +31,104 @@ SYNC_TIMEOUT_THRESHOLD = 30.0  # Simulations <= 30s run synchronously by default
 HARD_MAX_TIMEOUT = 600.0  # 10 minutes - max for wait=true mode
 
 
+class RunSimulationInput(ToolInput):
+    """Inputs for ltspice_run_simulation."""
+
+    netlist: str = Field(description="Path to the netlist file (.cir, .net, .asc)")
+    timeout: float | None = Field(
+        default=None,
+        description=(
+            "Timeout in seconds. Simulations exceeding 30s run asynchronously unless wait=true."
+        ),
+    )
+    wait: bool = Field(
+        default=False,
+        description="Force synchronous execution. Blocks until completion or hard timeout.",
+    )
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
+
+
+class CheckJobInput(ToolInput):
+    """Inputs for ltspice_check_job."""
+
+    job_id: str | None = Field(
+        default=None,
+        description="Job ID returned by ltspice_run_simulation. Omit to list jobs.",
+    )
+    status: Literal["running", "queued", "completed", "failed", "timeout", "cancelled", "all"] | None = Field(
+        default=None,
+        description="Filter by status when listing jobs.",
+    )
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
+
+
+class CancelJobInput(ToolInput):
+    """Inputs for ltspice_cancel_job."""
+
+    job_id: str = Field(description="Job ID of the running simulation to cancel")
+
+
 def _get_or_create_runner(state: SessionState) -> SimulationRunner:
     """Get or create a SimulationRunner via the centralized RunnerManager."""
-    assert state.default_simulator is not None
+    default_simulator = state.default_simulator
+    if default_simulator is None:
+        raise SimulationError("No simulator available. Check server status.")
     return state.runners.get_sim_runner(
         loop=asyncio.get_running_loop(),
-        simulator_class=state.default_simulator,
+        simulator_class=default_simulator,
         output_folder=resolve_output_folder(state),
         max_parallel=state.config.max_parallel_sims,
     )
 
 
-async def handle_run_simulation(arguments: dict, state: SessionState):
+@registry.tool(
+    name="ltspice_run_simulation",
+    description=(
+        "Run a SPICE simulation on a netlist file. "
+        "Automatically runs synchronously for short simulations (<=30s timeout) "
+        "or asynchronously for longer ones. Use wait=true to force synchronous execution. "
+        "Returns raw/log file paths and simulation summary on completion, "
+        "or a job ID for async tracking."
+    ),
+    input_model=RunSimulationInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    ),
+    profiles=("full", "agentic"),
+)
+async def handle_run_simulation(arguments: RunSimulationInput, state: SessionState):
     """Run a SPICE simulation synchronously or asynchronously.
 
     Automatically chooses sync vs async based on timeout threshold (30s).
     Sync mode blocks until completion, async mode returns job ID immediately.
     """
     # Extract arguments
-    netlist_str = arguments["netlist"]
-    timeout = arguments.get("timeout", state.config.default_timeout)
-    wait = arguments.get("wait", False)
-    fmt = arguments.get("format")
+    netlist_str = arguments.netlist
+    timeout = arguments.timeout if arguments.timeout is not None else state.config.default_timeout
+    wait = arguments.wait
+    fmt = arguments.format
 
     netlist_path = resolve_netlist_path(netlist_str, state)
     require_simulator(state)
+    default_simulator = state.default_simulator
+    if default_simulator is None:
+        raise SimulationError("No simulator available. Check server status.")
 
     # Generate job ID and create job
     job_id = generate_job_id()
     job = SimulationJob(
         job_id=job_id,
         netlist=netlist_path,
-        simulator=state.default_simulator.__name__,
+        simulator=default_simulator.__name__,
         status="running",
         started_at=datetime.now(),
     )
@@ -82,13 +153,13 @@ async def handle_run_simulation(arguments: dict, state: SessionState):
             "job_id": job_id,
             "status": "running",
             "netlist": str(netlist_path),
-            "simulator": state.default_simulator.__name__,
+            "simulator": default_simulator.__name__,
         }
         return format_response(
             f"Simulation started in background\n"
             f"Job ID: {job_id}\n"
             f"Netlist: {netlist_path}\n"
-            f"Simulator: {state.default_simulator.__name__}\n\n"
+            f"Simulator: {default_simulator.__name__}\n\n"
             f"Use ltspice_check_job('{job_id}') to check status\n"
             f"Use ltspice_check_job() to see all jobs\n"
             f"Use ltspice_cancel_job('{job_id}') to cancel",
@@ -142,8 +213,11 @@ async def _wait_for_completion(
 
     if job.status == "completed":
         # Parse success summary
-        assert job.raw_file is not None
-        assert job.log_file is not None
+        if job.raw_file is None or job.log_file is None:
+            raise ResultError(
+                f"Job {job.job_id} completed but result files are missing.\n"
+                f"raw_file: {job.raw_file}, log_file: {job.log_file}"
+            )
         summary = parse_success_summary(job.raw_file, job.log_file, duration)
         return _format_success_response(job.job_id, summary, fmt)
     elif job.status == "failed":
@@ -210,21 +284,33 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
     return format_response(text, data, fmt)
 
 
-async def handle_check_job(arguments: dict, state: SessionState):
+@registry.tool(
+    name="ltspice_check_job",
+    description=(
+        "Check status of a simulation job by ID, or list all jobs. "
+        "Without job_id: lists active jobs (filter with status param). "
+        "With job_id: returns detailed status or completion results."
+    ),
+    input_model=CheckJobInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+    profiles=("full", "agentic"),
+)
+async def handle_check_job(arguments: CheckJobInput, state: SessionState):
     """Check status of a simulation job, or list all jobs."""
-    job_id = arguments.get("job_id")
-    fmt = arguments.get("format")
+    job_id = arguments.job_id
+    fmt = arguments.format
 
     # If no job_id provided, list jobs
     if not job_id:
         return _list_jobs(arguments, state, fmt)
 
     # Look up specific job
-    job = state.jobs.get(job_id)
-    if not job:
-        return text_response(
-            f"Job not found: {job_id}\n\nUse ltspice_check_job() with no arguments to see all jobs"
-        )
+    job = services.resolve_simulation_job(job_id, state)
 
     # Check status
     if job.status == "running":
@@ -248,12 +334,12 @@ async def handle_check_job(arguments: dict, state: SessionState):
     elif job.status == "completed":
         duration = (job.completed_at - job.started_at).total_seconds() if job.completed_at else 0
         if job.raw_file is None or job.log_file is None:
-            return text_response(
+            raise ResultError(
                 f"Job {job_id} completed but result files are missing.\n"
                 f"raw_file: {job.raw_file}, log_file: {job.log_file}"
             )
         if not job.raw_file.exists() or not job.log_file.exists():
-            return text_response(
+            raise ResultError(
                 f"Job {job_id} completed but result files have been removed.\n"
                 f"raw: {job.raw_file.exists()}, log: {job.log_file.exists()}"
             )
@@ -298,9 +384,9 @@ async def handle_check_job(arguments: dict, state: SessionState):
         return text_response(f"Job {job_id} has unexpected status: {job.status}")
 
 
-def _list_jobs(arguments: dict, state: SessionState, fmt: str | None = None):
+def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = None):
     """List simulation jobs with optional status filter."""
-    status_filter = arguments.get("status")
+    status_filter = arguments.status
 
     # Determine which jobs to show
     if status_filter == "all":
@@ -355,7 +441,19 @@ def _list_jobs(arguments: dict, state: SessionState, fmt: str | None = None):
     return format_response("\n".join(lines), {"jobs": jobs_data, "count": len(jobs_data)}, fmt)
 
 
-async def handle_cancel_job(arguments: dict, state: SessionState) -> types.CallToolResult:
+@registry.tool(
+    name="ltspice_cancel_job",
+    description="Cancel a running simulation job. Kills the simulator process and marks the job as cancelled.",
+    input_model=CancelJobInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+    profiles=("full", "agentic"),
+)
+async def handle_cancel_job(arguments: CancelJobInput, state: SessionState) -> types.CallToolResult:
     """Cancel a running simulation job.
 
     Args:
@@ -365,18 +463,14 @@ async def handle_cancel_job(arguments: dict, state: SessionState) -> types.CallT
     Returns:
         List containing TextContent with cancellation result
     """
-    job_id = arguments["job_id"]
+    job_id = arguments.job_id
 
     # Look up job
-    job = state.jobs.get(job_id)
-    if not job:
-        return text_response(
-            f"Job not found: {job_id}\n\nUse ltspice_check_job() with no arguments to see all jobs"
-        )
+    job = services.resolve_simulation_job(job_id, state)
 
     # Check if job is running
     if job.status not in ("running", "queued"):
-        return text_response(f"Job {job_id} is not running (status: {job.status})")
+        raise SimulationError(f"Job {job_id} is not running (status: {job.status})")
 
     # Cancel the job
     require_simulator(state)
@@ -384,107 +478,3 @@ async def handle_cancel_job(arguments: dict, state: SessionState) -> types.CallT
     await runner.cancel(job)
 
     return text_response(f"Job {job_id} cancelled")
-
-
-# Tool definitions
-TOOL_DEFS: list[types.Tool] = [
-    types.Tool(
-        name="ltspice_run_simulation",
-        description=(
-            "Run a SPICE simulation on a netlist file. "
-            "Automatically runs synchronously for short simulations (<=30s timeout) "
-            "or asynchronously for longer ones. Use wait=true to force synchronous execution. "
-            "Returns raw/log file paths and simulation summary on completion, "
-            "or a job ID for async tracking."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "netlist": {
-                    "type": "string",
-                    "description": "Path to the netlist file (.cir, .net, .asc)",
-                },
-                "timeout": {
-                    "type": "number",
-                    "description": "Timeout in seconds. Default: 30. Simulations exceeding this are automatically run asynchronously unless wait=true.",
-                },
-                "wait": {
-                    "type": "boolean",
-                    "description": "Force synchronous execution. Blocks until completion or hard timeout (600s max). Default: false.",
-                },
-                "format": FORMAT_PROP,
-            },
-            "required": ["netlist"],
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=False,
-            openWorldHint=False,
-        ),
-    ),
-    types.Tool(
-        name="ltspice_check_job",
-        description=(
-            "Check status of a simulation job by ID, or list all jobs. "
-            "Without job_id: lists active jobs (filter with status param). "
-            "With job_id: returns detailed status or completion results."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "job_id": {
-                    "type": "string",
-                    "description": "Job ID returned by ltspice_run_simulation. Omit to list all jobs.",
-                },
-                "status": {
-                    "type": "string",
-                    "description": "Filter by status when listing jobs (no job_id). Default: shows active jobs only.",
-                    "enum": [
-                        "running",
-                        "queued",
-                        "completed",
-                        "failed",
-                        "timeout",
-                        "cancelled",
-                        "all",
-                    ],
-                },
-                "format": FORMAT_PROP,
-            },
-            "required": [],
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=False,
-        ),
-    ),
-    types.Tool(
-        name="ltspice_cancel_job",
-        description="Cancel a running simulation job. Kills the simulator process and marks the job as cancelled.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "job_id": {
-                    "type": "string",
-                    "description": "Job ID of the running simulation to cancel",
-                }
-            },
-            "required": ["job_id"],
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=False,
-            destructiveHint=True,
-            idempotentHint=True,
-            openWorldHint=False,
-        ),
-    ),
-]
-
-TOOL_HANDLERS: dict[str, object] = {
-    "ltspice_run_simulation": handle_run_simulation,
-    "ltspice_check_job": handle_check_job,
-    "ltspice_cancel_job": handle_cancel_job,
-}

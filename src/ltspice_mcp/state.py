@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from mcp import types
 
@@ -12,6 +12,9 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.library_manager import LibraryManager
 from ltspice_mcp.lib.runner_manager import RunnerManager
+
+if TYPE_CHECKING:
+    from ltspice_mcp.tools._base import RegisteredTool
 
 
 @dataclass
@@ -169,8 +172,8 @@ class SessionState:
     working_dir: Path
     tool_defs: list[types.Tool] = field(default_factory=list)
     """MCP tool definitions filtered by the active tool profile."""
-    tool_dispatch: dict[str, Any] = field(default_factory=dict)
-    """Tool name → async handler, filtered by the active tool profile."""
+    tool_dispatch: dict[str, "RegisteredTool"] = field(default_factory=dict)
+    """Tool name → registered tool metadata, filtered by the active tool profile."""
     asc_editor_available: bool = False
     """Whether AscEditor is configured with symbol library paths.
     False on Linux without LTspice (no .asy files available)."""
@@ -212,7 +215,7 @@ class SessionState:
             tool_dispatch=tool_dispatch,
         )
 
-    def shutdown(self) -> None:
+    async def shutdown(self) -> None:
         """Clean up session resources at server shutdown.
 
         Clears file caches and cancels running jobs for graceful shutdown.
@@ -220,14 +223,25 @@ class SessionState:
         self.editors.clear()
         self.results.clear()
         # Cancel any running simulation jobs
+        sim_runner = self.runners.get_existing_sim_runner()
         for job in self.jobs.values():
             if job.status in ("running", "queued"):
-                job.status = "cancelled"
-                job.completed_at = datetime.now()
-                job.done_event.set()
+                if sim_runner is not None:
+                    await sim_runner.cancel(job)
+                else:
+                    job.status = "cancelled"
+                    job.completed_at = datetime.now()
+                    job.done_event.set()
         # Cancel any running batch jobs
+        sweep_runner = self.runners.get_existing_sweep_runner()
+        mc_runner = self.runners.get_existing_mc_runner()
         for batch_job in self.batch_jobs.values():
             if batch_job.status == "running":
-                batch_job.status = "cancelled"
-                batch_job.completed_at = datetime.now()
-                batch_job.done_event.set()
+                if batch_job.job_type == "sweep" and sweep_runner is not None:
+                    await sweep_runner.cancel(batch_job)
+                elif batch_job.job_type == "montecarlo" and mc_runner is not None:
+                    await mc_runner.cancel(batch_job)
+                else:
+                    batch_job.status = "cancelled"
+                    batch_job.completed_at = datetime.now()
+                    batch_job.done_event.set()

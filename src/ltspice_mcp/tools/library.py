@@ -1,29 +1,90 @@
 """Component library management tools. (Phase 5)"""
 
+from typing import Literal
+
 from mcp import types
+from pydantic import Field
 
 from ltspice_mcp.errors import LibraryError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
-    FORMAT_PROP,
     PAGINATION_SCHEMA,
     RO_ANNOTATIONS,
+    ToolInput,
     format_response,
     paginate,
     pagination_metadata,
+    registry,
     run_sync,
     safe_path,
     text_response,
 )
 
 
-async def handle_search_library(arguments: dict, state: SessionState):
+class SearchLibraryInput(ToolInput):
+    query: str = Field(description="Search term (case-insensitive substring match)")
+    source: Literal["user", "builtin"] = Field(default="user")
+    offset: int = Field(default=0)
+    limit: int = Field(default=50)
+    format: Literal["json", "text"] | None = Field(default=None)
+
+
+class GetModelInfoInput(ToolInput):
+    name: str = Field(description="Model or subcircuit name (case-insensitive)")
+    full: bool = Field(default=False, description="Include full SPICE definition text")
+    format: Literal["json", "text"] | None = Field(default=None)
+
+
+class LoadLibraryInput(ToolInput):
+    path: str = Field(description="Path to library file or directory")
+
+
+class UnloadLibraryInput(ToolInput):
+    path: str = Field(description="Path to library file or directory to unload")
+
+
+class ListLibrariesInput(ToolInput):
+    detail: bool = Field(default=False)
+    path: str | None = Field(default=None)
+    offset: int = Field(default=0)
+    limit: int = Field(default=50)
+    format: Literal["json", "text"] | None = Field(default=None)
+
+
+@registry.tool(
+    name="ltspice_search_library",
+    description=(
+        "Search component libraries for models and subcircuits by name "
+        "(case-insensitive substring match). Search user-loaded or built-in libraries."
+    ),
+    input_model=SearchLibraryInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "type": {"type": "string"},
+                        "source_path": {"type": "string"},
+                    },
+                },
+            },
+            "pagination": PAGINATION_SCHEMA,
+        },
+    },
+)
+async def handle_search_library(arguments: SearchLibraryInput, state: SessionState):
     """Search component libraries by name."""
-    query = arguments["query"]
-    source = arguments.get("source", "user")
-    offset = arguments.get("offset", 0)
-    limit = min(arguments.get("limit", 50), 50)
-    fmt = arguments.get("format")
+    query = arguments.query
+    source = arguments.source
+    offset = arguments.offset
+    limit = min(arguments.limit, 50)
+    fmt = arguments.format
 
     try:
         if source == "user":
@@ -61,11 +122,21 @@ async def handle_search_library(arguments: dict, state: SessionState):
     return format_response("\n".join(lines), data, fmt)
 
 
-async def handle_get_model_info(arguments: dict, state: SessionState):
+@registry.tool(
+    name="ltspice_get_model_info",
+    description=(
+        "Get SPICE model/subcircuit details including parameters and ready-to-use "
+        ".include directive. Set full=true to get the complete SPICE definition text."
+    ),
+    input_model=GetModelInfoInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+)
+async def handle_get_model_info(arguments: GetModelInfoInput, state: SessionState):
     """Get SPICE model/subcircuit details."""
-    name = arguments["name"]
-    full = arguments.get("full", False)
-    fmt = arguments.get("format")
+    name = arguments.name
+    full = arguments.full
+    fmt = arguments.format
 
     try:
         info = await run_sync(state.libraries.get_model_info, name, full)
@@ -101,7 +172,21 @@ async def handle_get_model_info(arguments: dict, state: SessionState):
     return format_response("\n".join(lines), info, fmt)
 
 
-async def handle_load_library(arguments: dict, state: SessionState) -> types.CallToolResult:
+@registry.tool(
+    name="ltspice_load_library",
+    description=(
+        "Load a SPICE library file (.lib, .mod) or directory of library files into the session."
+    ),
+    input_model=LoadLibraryInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    ),
+    profiles=("full",),
+)
+async def handle_load_library(arguments: LoadLibraryInput, state: SessionState) -> types.CallToolResult:
     """Load a SPICE library file or directory.
 
     Args:
@@ -115,7 +200,7 @@ async def handle_load_library(arguments: dict, state: SessionState) -> types.Cal
         PathSecurityError: Path outside sandbox
         LibraryError: Load failed
     """
-    path = safe_path(arguments["path"], state)
+    path = safe_path(arguments.path, state)
 
     try:
         summary = await run_sync(state.libraries.load_library, path)
@@ -133,7 +218,19 @@ async def handle_load_library(arguments: dict, state: SessionState) -> types.Cal
     return text_response(result)
 
 
-async def handle_unload_library(arguments: dict, state: SessionState) -> types.CallToolResult:
+@registry.tool(
+    name="ltspice_unload_library",
+    description="Unload a previously loaded library from the session.",
+    input_model=UnloadLibraryInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+    profiles=("full",),
+)
+async def handle_unload_library(arguments: UnloadLibraryInput, state: SessionState) -> types.CallToolResult:
     """Unload a library from the session.
 
     Args:
@@ -147,7 +244,7 @@ async def handle_unload_library(arguments: dict, state: SessionState) -> types.C
         PathSecurityError: Path outside sandbox
         LibraryError: Library not loaded
     """
-    path = safe_path(arguments["path"], state)
+    path = safe_path(arguments.path, state)
 
     try:
         result = await run_sync(state.libraries.unload_library, path)
@@ -160,13 +257,20 @@ async def handle_unload_library(arguments: dict, state: SessionState) -> types.C
     return text_response(f"Unloaded library: {path}")
 
 
-async def handle_list_libraries(arguments: dict, state: SessionState):
+@registry.tool(
+    name="ltspice_list_libraries",
+    description="List loaded libraries. With detail=true, also shows subcircuit models from each library.",
+    input_model=ListLibrariesInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full",),
+)
+async def handle_list_libraries(arguments: ListLibrariesInput, state: SessionState):
     """List loaded libraries, optionally with subcircuit detail."""
-    detail = arguments.get("detail", False)
-    fmt = arguments.get("format")
+    detail = arguments.detail
+    fmt = arguments.format
     filter_path = None
-    if "path" in arguments:
-        filter_path = safe_path(arguments["path"], state)
+    if arguments.path is not None:
+        filter_path = safe_path(arguments.path, state)
 
     libs = await run_sync(state.libraries.list_libraries)
 
@@ -230,151 +334,3 @@ async def handle_list_libraries(arguments: dict, state: SessionState):
     data = {"libraries": lib_data, "pagination": pagination_metadata(total, offset, limit)}
     return format_response("\n".join(lines), data, fmt)
 
-
-# Tool definitions
-
-TOOL_DEFS: list[types.Tool] = [
-    types.Tool(
-        name="ltspice_search_library",
-        description="Search component libraries for models and subcircuits by name (case-insensitive substring match). Search 'user' for loaded libraries or 'builtin' for simulator built-in libraries. Results include model name, type (.MODEL/.SUBCKT), and source file.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search term (case-insensitive substring match)",
-                },
-                "source": {
-                    "type": "string",
-                    "enum": ["user", "builtin"],
-                    "description": "Library source: 'user' for loaded libraries, 'builtin' for simulator built-in libraries (default: 'user')",
-                },
-                "offset": {
-                    "type": "integer",
-                    "description": "Number of results to skip for pagination (default: 0)",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum results to return (default: 50, max: 50)",
-                },
-                "format": FORMAT_PROP,
-            },
-            "required": ["query"],
-        },
-        outputSchema={
-            "type": "object",
-            "properties": {
-                "results": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string"},
-                            "type": {"type": "string"},
-                            "source_path": {"type": "string"},
-                        },
-                    },
-                },
-                "pagination": PAGINATION_SCHEMA,
-            },
-        },
-        annotations=RO_ANNOTATIONS,
-    ),
-    types.Tool(
-        name="ltspice_get_model_info",
-        description="Get SPICE model/subcircuit details including parameters and ready-to-use .include directive. Set full=true to get the complete SPICE definition text. Searches both user-loaded and built-in libraries.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Model or subcircuit name (case-insensitive)",
-                },
-                "full": {
-                    "type": "boolean",
-                    "description": "Include full SPICE definition text (default: false)",
-                },
-                "format": FORMAT_PROP,
-            },
-            "required": ["name"],
-        },
-        annotations=RO_ANNOTATIONS,
-    ),
-    types.Tool(
-        name="ltspice_load_library",
-        description="Load a SPICE library file (.lib, .mod) or directory of library files into the session. Loaded libraries are searchable via ltspice_search_library. Accepts file or directory path — directories are scanned recursively for .lib/.mod files.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to library file or directory",
-                },
-            },
-            "required": ["path"],
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=False,
-            openWorldHint=False,
-        ),
-    ),
-    types.Tool(
-        name="ltspice_unload_library",
-        description="Unload a previously loaded library from the session. The library will no longer appear in search results.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to library file or directory to unload",
-                },
-            },
-            "required": ["path"],
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=False,
-        ),
-    ),
-    types.Tool(
-        name="ltspice_list_libraries",
-        description="List loaded libraries. With detail=true, also shows subcircuit models from each library.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "detail": {
-                    "type": "boolean",
-                    "description": "If true, include subcircuit model names from each library",
-                },
-                "path": {
-                    "type": "string",
-                    "description": "Filter to a specific library file path",
-                },
-                "offset": {
-                    "type": "integer",
-                    "description": "Number of libraries to skip for pagination (default: 0)",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum libraries to return (default: 50, max: 50)",
-                },
-                "format": FORMAT_PROP,
-            },
-            "required": [],
-        },
-        annotations=RO_ANNOTATIONS,
-    ),
-]
-
-# Handler mapping
-TOOL_HANDLERS: dict[str, object] = {
-    "ltspice_search_library": handle_search_library,
-    "ltspice_get_model_info": handle_get_model_info,
-    "ltspice_load_library": handle_load_library,
-    "ltspice_unload_library": handle_unload_library,
-    "ltspice_list_libraries": handle_list_libraries,
-}
