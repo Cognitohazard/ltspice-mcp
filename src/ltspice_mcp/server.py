@@ -10,7 +10,7 @@ from typing import NamedTuple
 from mcp import types
 from mcp.server.lowlevel import Server
 from mcp.server.lowlevel.helper_types import ReadResourceContents
-from pydantic import AnyUrl
+from pydantic import AnyUrl, ValidationError
 
 from ltspice_mcp import errors as _err
 from ltspice_mcp.config import ServerConfig, generate_default_config
@@ -266,7 +266,7 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
         yield {"state": state}
     finally:
         # 8. Cleanup on shutdown
-        state.shutdown()
+        await state.shutdown()
         logger.info("Server shutdown complete")
 
 
@@ -283,7 +283,7 @@ async def list_tools() -> list[types.Tool]:
 
 
 @server.call_tool()
-async def call_tool(name: str, arguments: dict):
+async def call_tool(name: str, arguments: dict | None):
     """Dispatch tool calls to registered handlers.
 
     All handlers return types.CallToolResult (the MCP protocol's canonical
@@ -296,14 +296,19 @@ async def call_tool(name: str, arguments: dict):
         raise RuntimeError(f"Session state not available: {e}") from e
 
     # Look up handler in profile-filtered dispatch table
-    handler = state.tool_dispatch.get(name)
-    if handler is None:
+    registered = state.tool_dispatch.get(name)
+    if registered is None:
         raise ValueError(f"Unknown tool: {name}")
 
     # Invoke handler — enrich known errors with actionable guidance.
     # Exceptions propagate to the MCP SDK which sets isError=True.
     try:
-        return await handler(arguments, state)
+        parsed_arguments = arguments or {}
+        if registered.input_model is not None:
+            parsed_arguments = registered.input_model.model_validate(parsed_arguments)
+        return await registered.handler(parsed_arguments, state)
+    except ValidationError as e:
+        raise ValueError(f"Invalid arguments for {name}: {e}") from None
     except PathSecurityError as e:
         allowed = ", ".join(str(p) for p in state.config.allowed_paths)
         raise PathSecurityError(
@@ -315,6 +320,9 @@ async def call_tool(name: str, arguments: dict):
         if hint:
             raise type(e)(f"{e}\n\n{hint}") from None
         raise
+    except Exception as e:
+        logger.exception(f"Unexpected error in tool {name}")
+        raise RuntimeError(f"Internal error in {name}: {type(e).__name__}: {e}") from e
 
 
 @server.list_resources()
@@ -352,7 +360,10 @@ async def read_resource(uri: AnyUrl) -> Iterable[ReadResourceContents]:
     except (AttributeError, KeyError) as e:
         raise ValueError(f"Internal error: Session state not available ({e})") from e
 
-    result = await handle_read_resource(str(uri), state)
+    try:
+        result = await handle_read_resource(str(uri), state)
+    except LTSpiceMCPError as e:
+        raise ValueError(str(e)) from None
 
     # Convert from types.TextResourceContents/BlobResourceContents
     # to the SDK's ReadResourceContents (which has .content not .text)

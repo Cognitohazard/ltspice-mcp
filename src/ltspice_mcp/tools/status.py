@@ -1,14 +1,53 @@
 """Server status and diagnostics tools."""
 
-from mcp import types
+from typing import Literal
+
+from pydantic import Field
 
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import FORMAT_PROP, RO_ANNOTATIONS, format_response
+from ltspice_mcp.tools._base import (
+    RO_ANNOTATIONS,
+    ToolInput,
+    format_response,
+    registry,
+)
 
 
-async def handle_get_server_status(arguments: dict, state: SessionState):
+class GetServerStatusInput(ToolInput):
+    """Inputs for the server status tool."""
+
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
+
+
+@registry.tool(
+    name="ltspice_get_server_status",
+    description=(
+        "Get comprehensive server status including detected simulators, "
+        "configuration settings, security sandbox paths, and runtime state. "
+        "Use this to check what capabilities are available before attempting operations."
+    ),
+    input_model=GetServerStatusInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "simulators": {"type": "object"},
+            "default_simulator": {"type": ["string", "null"]},
+            "tool_profile": {"type": "string"},
+            "tool_count": {"type": "integer"},
+            "configuration": {"type": "object"},
+            "allowed_paths": {"type": "array", "items": {"type": "string"}},
+            "runtime": {"type": "object"},
+        },
+    },
+)
+async def handle_get_server_status(arguments: GetServerStatusInput, state: SessionState):
     """Get comprehensive server status information."""
-    fmt = arguments.get("format")
+    fmt = arguments.format
 
     lines = ["=== LTSpice MCP Server Status ===\n"]
 
@@ -87,41 +126,3 @@ async def handle_get_server_status(arguments: dict, state: SessionState):
         },
     }
     return format_response("\n".join(lines), data, fmt)
-
-
-# Tool definitions
-TOOL_DEFS: list[types.Tool] = [
-    types.Tool(
-        name="ltspice_get_server_status",
-        description=(
-            "Get comprehensive server status including detected simulators, "
-            "configuration settings, security sandbox paths, and runtime state. "
-            "Use this to check what capabilities are available before attempting operations."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "format": FORMAT_PROP,
-            },
-            "required": [],
-        },
-        outputSchema={
-            "type": "object",
-            "properties": {
-                "simulators": {"type": "object"},
-                "default_simulator": {"type": ["string", "null"]},
-                "tool_profile": {"type": "string"},
-                "tool_count": {"type": "integer"},
-                "configuration": {"type": "object"},
-                "allowed_paths": {"type": "array", "items": {"type": "string"}},
-                "runtime": {"type": "object"},
-            },
-        },
-        annotations=RO_ANNOTATIONS,
-    )
-]
-
-# Tool handler mapping
-TOOL_HANDLERS: dict[str, object] = {
-    "ltspice_get_server_status": handle_get_server_status,
-}

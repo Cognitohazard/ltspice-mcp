@@ -1,10 +1,12 @@
 """Waveform analysis tools. (Phase 4)"""
 
 import contextlib
+from typing import Literal
 
-from mcp import types
+from pydantic import Field
 
 from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib import services
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.log_parser import parse_measurements
 from ltspice_mcp.lib.raw_parser import (
@@ -17,27 +19,85 @@ from ltspice_mcp.lib.raw_parser import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
-    FORMAT_PROP,
     RO_ANNOTATIONS,
+    ToolInput,
     format_response,
-    load_raw,
+    registry,
     run_sync,
     safe_path,
-    validate_signal,
-    validate_step,
 )
 
 
-async def handle_get_signal_stats(arguments: dict, state: SessionState):
-    """Get statistics for a signal/trace."""
-    raw_path = safe_path(arguments["raw_file"], state)
-    signal = arguments["signal"]
-    step = arguments.get("step", 0)
-    fmt = arguments.get("format")
+class SignalStatsInput(ToolInput):
+    raw_file: str = Field(description="Path to .raw result file from simulation")
+    signal: str = Field(description="Signal/trace name (e.g., 'V(out)', 'I(R1)').")
+    step: int = Field(default=0, description="Step index for .step directives")
+    format: Literal["json", "text"] | None = Field(default=None)
 
-    raw = await load_raw(raw_path, state)
-    await validate_signal(raw, signal)
-    await validate_step(raw, step)
+
+class QueryValueInput(ToolInput):
+    raw_file: str = Field(description="Path to .raw result file from simulation")
+    signal: str = Field(description="Signal/trace name (e.g., 'V(out)', 'I(R1)').")
+    at: str = Field(description="Time or frequency to query, accepts SPICE notation")
+    step: int = Field(default=0, description="Step index for .step directives")
+    format: Literal["json", "text"] | None = Field(default=None)
+
+
+class MeasurementsInput(ToolInput):
+    log_file: str = Field(description="Path to .log file from simulation")
+    format: Literal["json", "text"] | None = Field(default=None)
+
+
+class OperatingPointInput(ToolInput):
+    raw_file: str = Field(description="Path to .raw result file from simulation")
+    format: Literal["json", "text"] | None = Field(default=None)
+
+
+class SimulationSummaryInput(ToolInput):
+    raw_file: str = Field(description="Path to .raw result file from simulation")
+    log_file: str | None = Field(default=None, description="Optional path to .log file")
+    format: Literal["json", "text"] | None = Field(default=None)
+
+
+@registry.tool(
+    name="ltspice_get_signal_stats",
+    description=(
+        "Get statistical summary of a signal/trace. For transient/DC analysis: "
+        "returns min, max, mean, RMS, and peak-to-peak values. For AC analysis: "
+        "returns magnitude (dB) and phase statistics."
+    ),
+    input_model=SignalStatsInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "signal": {"type": "string"},
+            "analysis_type": {"type": "string"},
+            "min": {"type": "number"},
+            "max": {"type": "number"},
+            "mean": {"type": "number"},
+            "rms": {"type": "number"},
+            "peak_to_peak": {"type": "number"},
+            "point_count": {"type": "integer"},
+            "min_db": {"type": "number"},
+            "max_db": {"type": "number"},
+            "mean_db": {"type": "number"},
+            "min_phase": {"type": "number"},
+            "max_phase": {"type": "number"},
+        },
+    },
+)
+async def handle_get_signal_stats(arguments: SignalStatsInput, state: SessionState):
+    """Get statistics for a signal/trace."""
+    raw_path = safe_path(arguments.raw_file, state)
+    signal = arguments.signal
+    step = arguments.step
+    fmt = arguments.format
+
+    raw = await services.load_raw(raw_path, state)
+    await services.validate_signal(raw, signal)
+    await services.validate_step(raw, step)
 
     try:
         stats = await run_sync(compute_signal_stats, raw, signal, step)
@@ -73,22 +133,43 @@ async def handle_get_signal_stats(arguments: dict, state: SessionState):
     return format_response("\n".join(lines), {"signal": signal, **stats}, fmt)
 
 
-async def handle_query_value(arguments: dict, state: SessionState):
+@registry.tool(
+    name="ltspice_query_value",
+    description=(
+        "Look up the value of a signal at a specific time point (transient) or "
+        "frequency (AC). Returns the nearest data point without interpolation."
+    ),
+    input_model=QueryValueInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "signal": {"type": "string"},
+            "requested_x": {"type": "number"},
+            "actual_x": {"type": "number"},
+            "value": {"type": "number"},
+            "magnitude_db": {"type": "number"},
+            "phase_deg": {"type": "number"},
+        },
+    },
+)
+async def handle_query_value(arguments: QueryValueInput, state: SessionState):
     """Query signal value at a specific time or frequency."""
-    raw_path = safe_path(arguments["raw_file"], state)
-    signal = arguments["signal"]
-    at_str = arguments["at"]
-    step = arguments.get("step", 0)
-    fmt = arguments.get("format")
+    raw_path = safe_path(arguments.raw_file, state)
+    signal = arguments.signal
+    at_str = arguments.at
+    step = arguments.step
+    fmt = arguments.format
 
     try:
         target_x = parse_spice_value(at_str)
     except ValueError as e:
         raise ResultError(f"Invalid 'at' value: {e}") from e
 
-    raw = await load_raw(raw_path, state)
-    await validate_signal(raw, signal)
-    await validate_step(raw, step)
+    raw = await services.load_raw(raw_path, state)
+    await services.validate_signal(raw, signal)
+    await services.validate_step(raw, step)
 
     try:
         result_data = await run_sync(query_point_value, raw, signal, target_x, step)
@@ -144,10 +225,33 @@ def _format_measurements(measurements: dict, step_count: int) -> str:
     return "\n".join(lines)
 
 
-async def handle_get_measurements(arguments: dict, state: SessionState):
+@registry.tool(
+    name="ltspice_get_measurements",
+    description=(
+        "Extract .MEAS measurement results from a simulation log file. "
+        "Returns all measurements exactly as computed by the simulator."
+    ),
+    input_model=MeasurementsInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "measurements": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {"type": ["number", "null"]},
+                },
+            },
+            "step_count": {"type": "integer"},
+        },
+    },
+)
+async def handle_get_measurements(arguments: MeasurementsInput, state: SessionState):
     """Extract .MEAS measurement results from simulation log file."""
-    log_path = safe_path(arguments["log_file"], state)
-    fmt = arguments.get("format")
+    log_path = safe_path(arguments.log_file, state)
+    fmt = arguments.format
 
     try:
         meas_data = await run_sync(parse_measurements, log_path)
@@ -163,11 +267,33 @@ async def handle_get_measurements(arguments: dict, state: SessionState):
     )
 
 
-async def handle_get_operating_point(arguments: dict, state: SessionState):
+@registry.tool(
+    name="ltspice_get_operating_point",
+    description=(
+        "Read DC operating point data showing all node voltages and branch currents."
+    ),
+    input_model=OperatingPointInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "voltages": {
+                "type": "object",
+                "additionalProperties": {"type": "number"},
+            },
+            "currents": {
+                "type": "object",
+                "additionalProperties": {"type": "number"},
+            },
+        },
+    },
+)
+async def handle_get_operating_point(arguments: OperatingPointInput, state: SessionState):
     """Read DC operating point data (all node voltages and branch currents)."""
-    raw_path = safe_path(arguments["raw_file"], state)
-    fmt = arguments.get("format")
-    raw = await load_raw(raw_path, state)
+    raw_path = safe_path(arguments.raw_file, state)
+    fmt = arguments.format
+    raw = await services.load_raw(raw_path, state)
 
     try:
         op_data = await run_sync(extract_operating_point, raw)
@@ -190,15 +316,25 @@ async def handle_get_operating_point(arguments: dict, state: SessionState):
     return format_response("\n".join(lines), op_data, fmt)
 
 
-async def handle_get_simulation_summary(arguments: dict, state: SessionState):
+@registry.tool(
+    name="ltspice_get_simulation_summary",
+    description=(
+        "Get a comprehensive simulation summary including type, signal list, data size, "
+        ".MEAS results, Fourier analysis, AC bandwidth metrics, and warnings."
+    ),
+    input_model=SimulationSummaryInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+)
+async def handle_get_simulation_summary(arguments: SimulationSummaryInput, state: SessionState):
     """Get comprehensive simulation summary."""
-    raw_path = safe_path(arguments["raw_file"], state)
-    fmt = arguments.get("format")
+    raw_path = safe_path(arguments.raw_file, state)
+    fmt = arguments.format
     log_path = None
-    if "log_file" in arguments:
-        log_path = safe_path(arguments["log_file"], state)
+    if arguments.log_file is not None:
+        log_path = safe_path(arguments.log_file, state)
 
-    raw = await load_raw(raw_path, state)
+    raw = await services.load_raw(raw_path, state)
 
     try:
         summary = await run_sync(build_simulation_summary, raw, log_path, None)
@@ -296,176 +432,3 @@ async def handle_get_simulation_summary(arguments: dict, state: SessionState):
         lines.append("")
 
     return format_response("\n".join(lines), json_data, fmt)
-
-
-# Tool definitions
-TOOL_DEFS: list[types.Tool] = [
-    types.Tool(
-        name="ltspice_get_signal_stats",
-        description="Get statistical summary of a signal/trace. For transient/DC analysis: returns min, max, mean, RMS, and peak-to-peak values. For AC analysis: returns magnitude (dB) and phase (degrees) statistics. All values are computed from the full waveform data.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "raw_file": {
-                    "type": "string",
-                    "description": "Path to .raw result file from simulation",
-                },
-                "signal": {
-                    "type": "string",
-                    "description": "Signal/trace name (e.g., 'V(out)', 'I(R1)'). Use ltspice_get_simulation_summary to see available signals.",
-                },
-                "step": {
-                    "type": "integer",
-                    "description": "Step index for .step directives (default 0)",
-                },
-                "format": FORMAT_PROP,
-            },
-            "required": ["raw_file", "signal"],
-        },
-        outputSchema={
-            "type": "object",
-            "properties": {
-                "signal": {"type": "string"},
-                "analysis_type": {"type": "string"},
-                "min": {"type": "number"},
-                "max": {"type": "number"},
-                "mean": {"type": "number"},
-                "rms": {"type": "number"},
-                "peak_to_peak": {"type": "number"},
-                "point_count": {"type": "integer"},
-                "min_db": {"type": "number"},
-                "max_db": {"type": "number"},
-                "mean_db": {"type": "number"},
-                "min_phase": {"type": "number"},
-                "max_phase": {"type": "number"},
-            },
-        },
-        annotations=RO_ANNOTATIONS,
-    ),
-    types.Tool(
-        name="ltspice_query_value",
-        description="Look up the value of a signal at a specific time point (transient) or frequency (AC). Returns the nearest data point without interpolation. Accepts SPICE notation for the 'at' parameter: k=1e3, Meg=1e6, m=1e-3, u=1e-6, n=1e-9, p=1e-12, f=1e-15 (e.g., '1k' for 1kHz, '10m' for 10ms).",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "raw_file": {
-                    "type": "string",
-                    "description": "Path to .raw result file from simulation",
-                },
-                "signal": {
-                    "type": "string",
-                    "description": "Signal/trace name (e.g., 'V(out)', 'I(R1)'). Use ltspice_get_simulation_summary to see available signals.",
-                },
-                "at": {
-                    "type": "string",
-                    "description": "Time or frequency value to query. Accepts numbers or SPICE notation (e.g., '1k', '10Meg', '100m')",
-                },
-                "step": {
-                    "type": "integer",
-                    "description": "Step index for .step directives (default 0)",
-                },
-                "format": FORMAT_PROP,
-            },
-            "required": ["raw_file", "signal", "at"],
-        },
-        outputSchema={
-            "type": "object",
-            "properties": {
-                "signal": {"type": "string"},
-                "requested_x": {"type": "number"},
-                "actual_x": {"type": "number"},
-                "value": {"type": "number"},
-                "magnitude_db": {"type": "number"},
-                "phase_deg": {"type": "number"},
-            },
-        },
-        annotations=RO_ANNOTATIONS,
-    ),
-    types.Tool(
-        name="ltspice_get_measurements",
-        description="Extract .MEAS measurement results from a simulation log file. Returns all measurements exactly as computed by the simulator. For stepped simulations, returns values for each step.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "log_file": {
-                    "type": "string",
-                    "description": "Path to .log file from simulation",
-                },
-                "format": FORMAT_PROP,
-            },
-            "required": ["log_file"],
-        },
-        outputSchema={
-            "type": "object",
-            "properties": {
-                "measurements": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "array",
-                        "items": {"type": ["number", "null"]},
-                    },
-                },
-                "step_count": {"type": "integer"},
-            },
-        },
-        annotations=RO_ANNOTATIONS,
-    ),
-    types.Tool(
-        name="ltspice_get_operating_point",
-        description="Read DC operating point data showing all node voltages and branch currents. Returns values directly (DC operating point data is small). Works best with .OP simulation results.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "raw_file": {
-                    "type": "string",
-                    "description": "Path to .raw result file from simulation",
-                },
-                "format": FORMAT_PROP,
-            },
-            "required": ["raw_file"],
-        },
-        outputSchema={
-            "type": "object",
-            "properties": {
-                "voltages": {
-                    "type": "object",
-                    "additionalProperties": {"type": "number"},
-                },
-                "currents": {
-                    "type": "object",
-                    "additionalProperties": {"type": "number"},
-                },
-            },
-        },
-        annotations=RO_ANNOTATIONS,
-    ),
-    types.Tool(
-        name="ltspice_get_simulation_summary",
-        description="Get a comprehensive simulation summary including type, signal list, data size, .MEAS results, Fourier analysis, AC bandwidth metrics, and all warnings. Type-aware: AC shows frequency range and bandwidth metrics, transient shows time span, DC shows sweep range.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "raw_file": {
-                    "type": "string",
-                    "description": "Path to .raw result file from simulation",
-                },
-                "log_file": {
-                    "type": "string",
-                    "description": "Optional path to .log file for measurements and warnings",
-                },
-                "format": FORMAT_PROP,
-            },
-            "required": ["raw_file"],
-        },
-        annotations=RO_ANNOTATIONS,
-    ),
-]
-
-# Handler mapping
-TOOL_HANDLERS: dict[str, object] = {
-    "ltspice_get_signal_stats": handle_get_signal_stats,
-    "ltspice_query_value": handle_query_value,
-    "ltspice_get_measurements": handle_get_measurements,
-    "ltspice_get_operating_point": handle_get_operating_point,
-    "ltspice_get_simulation_summary": handle_get_simulation_summary,
-}

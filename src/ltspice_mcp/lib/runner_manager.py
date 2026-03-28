@@ -97,6 +97,18 @@ class RunnerManager:
         self._simulator_class = None
         self._output_folder = None
 
+    def get_existing_sim_runner(self) -> SimulationRunner | None:
+        """Return the currently cached ``SimulationRunner`` if present."""
+        return self._runners.get("sim")
+
+    def get_existing_sweep_runner(self) -> SweepRunner | None:
+        """Return the currently cached ``SweepRunner`` if present."""
+        return self._runners.get("sweep")
+
+    def get_existing_mc_runner(self) -> MonteCarloRunner | None:
+        """Return the currently cached ``MonteCarloRunner`` if present."""
+        return self._runners.get("mc")
+
     def get_sim_runner(
         self,
         loop: asyncio.AbstractEventLoop,

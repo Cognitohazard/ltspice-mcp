@@ -1,16 +1,18 @@
 """Shared utilities for tool handlers."""
 
-import asyncio
+import copy
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
 from mcp import types
-from spicelib.raw.raw_read import RawRead
+from pydantic import BaseModel, ConfigDict
 
-from ltspice_mcp.errors import ResultError, SimulationError
+from ltspice_mcp.errors import SimulationError
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.state import SessionState
 
@@ -88,20 +90,145 @@ RO_ANNOTATIONS = types.ToolAnnotations(
 )
 
 
+class ToolInput(BaseModel):
+    """Base model for all tool inputs."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+    )
+
+
+@dataclass(frozen=True)
+class RegisteredTool:
+    """Tool registration metadata used by the dispatch layer."""
+
+    definition: types.Tool
+    handler: Callable
+    input_model: type[ToolInput] | None
+    profiles: frozenset[str]
+
+
+def _strip_titles(node: Any) -> Any:
+    """Recursively remove Pydantic title metadata from a JSON schema node."""
+    if isinstance(node, dict):
+        node = {k: _strip_titles(v) for k, v in node.items() if k != "title"}
+        return node
+    if isinstance(node, list):
+        return [_strip_titles(item) for item in node]
+    return node
+
+
+def _inline_json_schema(node: Any, defs: dict[str, Any]) -> Any:
+    """Inline ``$defs`` references in a Pydantic-generated schema."""
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            name = ref.split("/")[-1]
+            resolved = copy.deepcopy(defs[name])
+            return _inline_json_schema(resolved, defs)
+        return {key: _inline_json_schema(value, defs) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_inline_json_schema(item, defs) for item in node]
+    return node
+
+
+def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
+    """Generate a cleaned MCP-ready JSON schema from a Pydantic model."""
+    schema = input_model.model_json_schema()
+    defs = schema.pop("$defs", {})
+    schema = _inline_json_schema(schema, defs)
+    return _strip_titles(schema)
+
+
+class ToolRegistry:
+    """Registry for tool definitions and handlers."""
+
+    def __init__(self) -> None:
+        self._registered: list[RegisteredTool] = []
+
+    def tool(
+        self,
+        *,
+        name: str,
+        description: str,
+        input_model: type[ToolInput] | None,
+        annotations: types.ToolAnnotations,
+        profiles: tuple[str, ...] = ("full",),
+        output_schema: dict[str, Any] | None = None,
+    ) -> Callable[[Callable], Callable]:
+        """Register a tool and derive its schema from the input model."""
+
+        def decorator(handler: Callable) -> Callable:
+            if any(rt.definition.name == name for rt in self._registered):
+                raise ValueError(f"Tool already registered: {name}")
+
+            @wraps(handler)
+            async def wrapped(arguments: Any, state: SessionState) -> types.CallToolResult:
+                parsed_arguments = arguments
+                if input_model is not None and not isinstance(arguments, input_model):
+                    parsed_arguments = input_model.model_validate(arguments or {})
+                return await handler(parsed_arguments, state)
+
+            definition_kwargs: dict[str, Any] = {
+                "name": name,
+                "description": description,
+                "inputSchema": (
+                    _build_input_schema(input_model)
+                    if input_model is not None
+                    else {"type": "object", "properties": {}, "additionalProperties": False}
+                ),
+                "annotations": annotations,
+            }
+            if output_schema is not None:
+                definition_kwargs["outputSchema"] = output_schema
+
+            self._registered.append(
+                RegisteredTool(
+                    definition=types.Tool(**definition_kwargs),
+                    handler=wrapped,
+                    input_model=input_model,
+                    profiles=frozenset(profiles),
+                )
+            )
+            return wrapped
+
+        return decorator
+
+    def get_for_profile(self, profile: str) -> tuple[list[types.Tool], dict[str, RegisteredTool]]:
+        """Return the tool list and dispatch map for a profile."""
+        effective_profile = profile if profile in {"full", "agentic"} else "full"
+        tool_defs: list[types.Tool] = []
+        tool_dispatch: dict[str, RegisteredTool] = {}
+        for registered in self._registered:
+            if effective_profile in registered.profiles:
+                tool_defs.append(registered.definition)
+                tool_dispatch[registered.definition.name] = registered
+        return tool_defs, tool_dispatch
+
+
+registry = ToolRegistry()
+
+
 # ---------------------------------------------------------------------------
 # Pagination helper
 # ---------------------------------------------------------------------------
 
 
-def paginate(items: list, arguments: dict, cap: int = 50) -> tuple[list, int, int, int]:
+def paginate(items: list, arguments: Any, cap: int = 50) -> tuple[list, int, int, int]:
     """Slice a list according to offset/limit from tool arguments.
 
     Returns:
         (page, total, offset, limit) tuple
     """
     total = len(items)
-    offset = int(arguments.get("offset", 0))
-    limit = min(int(arguments.get("limit", cap)), cap)
+    if hasattr(arguments, "get"):
+        offset = int(arguments.get("offset", 0))
+        limit = min(int(arguments.get("limit", cap)), cap)
+    else:
+        offset = int(getattr(arguments, "offset", 0))
+        limit = min(int(getattr(arguments, "limit", cap)), cap)
     return items[offset : offset + limit], total, offset, limit
 
 
@@ -115,51 +242,6 @@ def pagination_metadata(total: int, offset: int, limit: int) -> dict[str, Any]:
         "has_more": has_more,
         "next_offset": offset + limit if has_more else None,
     }
-
-
-# ---------------------------------------------------------------------------
-# Analysis helpers — shared raw-file loading and validation
-# ---------------------------------------------------------------------------
-
-
-async def load_raw(raw_path: Path, state: SessionState) -> RawRead:
-    """Load and cache a RawRead instance. Raises ResultError on failure."""
-    try:
-        return await run_sync(
-            state.results.get,
-            raw_path,
-            lambda p: RawRead(str(p), traces_to_read="*"),
-        )
-    except FileNotFoundError:
-        raise ResultError(f"Result file not found: {raw_path}") from None
-    except ResultError:
-        raise
-    except Exception as e:
-        raise ResultError(
-            f"Failed to parse result file: {e}. "
-            "File may be corrupted or not a valid SPICE .raw file"
-        ) from e
-
-
-async def validate_signal(raw: RawRead, signal: str) -> None:
-    """Validate that a signal exists in the raw file. Raises ResultError."""
-    from ltspice_mcp.lib.raw_parser import get_trace_names
-
-    trace_names = await run_sync(get_trace_names, raw)
-    if signal not in trace_names:
-        available = ", ".join(trace_names[:10])
-        if len(trace_names) > 10:
-            available += f", ... ({len(trace_names)} total)"
-        raise ResultError(f"Signal '{signal}' not found. Available signals: {available}")
-
-
-async def validate_step(raw: RawRead, step: int) -> None:
-    """Validate that a step index is in range. Raises ResultError."""
-    from ltspice_mcp.lib.raw_parser import get_step_count
-
-    step_count = await run_sync(get_step_count, raw)
-    if step < 0 or step >= step_count:
-        raise ResultError(f"Step {step} out of range. Valid range: 0 to {step_count - 1}")
 
 
 # ---------------------------------------------------------------------------
@@ -212,11 +294,13 @@ def safe_path(user_path: str, state: SessionState) -> Path:
 
 
 async def run_sync[T](fn: Callable[..., T], *args: Any) -> T:
-    """Run a synchronous blocking function in a thread pool.
+    """Run a synchronous helper through the shared async boundary.
 
-    All blocking spicelib calls MUST go through this wrapper to avoid
-    blocking the asyncio event loop. This is critical for server responsiveness
-    when multiple operations are happening concurrently.
+    In this environment, threaded filesystem access can deadlock for the
+    parser/editor codepaths used throughout the server. The dedicated
+    simulation runners still use their own background threads for long-lived
+    simulator work; this wrapper keeps adapter/service helpers reliable by
+    executing inline.
 
     Args:
         fn: Synchronous function to call
@@ -225,7 +309,7 @@ async def run_sync[T](fn: Callable[..., T], *args: Any) -> T:
     Returns:
         Result from the function call
     """
-    return await asyncio.to_thread(fn, *args)
+    return fn(*args)
 
 
 def resolve_output_folder(state: SessionState) -> Path:

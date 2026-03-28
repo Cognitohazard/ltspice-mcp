@@ -11,19 +11,23 @@ from collections import defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 from mcp import types
+from pydantic import Field
 from spicelib import AscEditor, SpiceEditor
 from spicelib.editor.base_schematic import ERotation, Line, Point, SchematicComponent
 
 from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.lib import services
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
-    FORMAT_PROP,
     PAGINATION_SCHEMA,
+    ToolInput,
     format_response,
     paginate,
     pagination_metadata,
+    registry,
     run_sync,
     safe_path,
     text_response,
@@ -59,6 +63,91 @@ def _parse_rotation(rotation: str) -> ERotation:
 Editor = AscEditor | SpiceEditor
 
 
+class CreateNetlistInput(ToolInput):
+    name: str = Field(description="File name without extension")
+    content: str = Field(description="Complete SPICE netlist content")
+
+
+class CircuitReadInput(ToolInput):
+    path: str = Field(description="Path to circuit file (.cir, .net, or .asc schematic)")
+    format: Literal["json", "text"] | None = Field(default=None)
+
+
+class ListComponentsInput(ToolInput):
+    path: str
+    prefix: str | None = None
+    reference: str | None = None
+    offset: int = 0
+    limit: int = 50
+    format: Literal["json", "text"] | None = None
+
+
+class SetComponentValueInput(ToolInput):
+    path: str
+    reference: str | None = None
+    value: str | None = None
+    values: dict[str, str] | None = None
+
+
+class ParameterInput(ToolInput):
+    path: str
+    name: str | None = None
+    value: str | None = None
+    format: Literal["json", "text"] | None = None
+
+
+class EditDirectiveInput(ToolInput):
+    path: str
+    action: Literal["add", "remove"]
+    instruction: str
+
+
+class RemoveComponentInput(ToolInput):
+    path: str
+    reference: str
+
+
+class MoveComponentInput(ToolInput):
+    path: str
+    reference: str
+    x: int
+    y: int
+    rotation: Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"] | None = None
+
+
+class SetComponentAttributeInput(ToolInput):
+    path: str
+    reference: str
+    attribute: str
+    value: str
+
+
+class ExportNetlistInput(ToolInput):
+    path: str
+
+
+class AddComponentInput(ToolInput):
+    path: str
+    reference: str
+    symbol: str
+    x: int
+    y: int
+    value: str | None = None
+    rotation: Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"] = "R0"
+
+
+class WireSegmentInput(ToolInput):
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
+
+class AddWireInput(ToolInput):
+    path: str
+    wires: list[WireSegmentInput]
+
+
 # ---------------------------------------------------------------------------
 # Editor factory — extension-based dispatch
 # ---------------------------------------------------------------------------
@@ -92,7 +181,8 @@ async def _get_editor(path: Path, state: SessionState) -> Editor:
 async def _get_asc_editor(path: Path, state: SessionState) -> AscEditor:
     """Get a cached AscEditor. Caller must have validated _require_asc first."""
     editor = await _get_editor(path, state)
-    assert isinstance(editor, AscEditor)
+    if not isinstance(editor, AscEditor):
+        raise NetlistError(f"This operation requires an .asc schematic, got '{path.suffix}'. ")
     return editor
 
 
@@ -139,10 +229,24 @@ async def _editing_asc(path: Path, state: SessionState) -> AsyncIterator[AscEdit
 # ---------------------------------------------------------------------------
 
 
-async def handle_create_netlist(arguments: dict, state: SessionState) -> types.CallToolResult:
+@registry.tool(
+    name="ltspice_create_netlist",
+    description=(
+        "Create a new SPICE netlist file from content string. Automatically appends .END if missing."
+    ),
+    input_model=CreateNetlistInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    ),
+    profiles=("full",),
+)
+async def handle_create_netlist(arguments: CreateNetlistInput, state: SessionState) -> types.CallToolResult:
     """Create a new SPICE netlist file from content string."""
-    name = arguments["name"]
-    content = arguments["content"]
+    name = arguments.name
+    content = arguments.content
     target_path = safe_path(f"{name}.cir", state)
 
     if await run_sync(target_path.exists):
@@ -164,101 +268,119 @@ async def handle_create_netlist(arguments: dict, state: SessionState) -> types.C
     return text_response(f"Created netlist: {target_path}\nComponents: {comp_count}")
 
 
-async def handle_read_circuit(arguments: dict, state: SessionState):
+@registry.tool(
+    name="ltspice_read_circuit",
+    description=(
+        "Read and parse a circuit file (.cir/.net or .asc). For netlists: returns content "
+        "and component values. For schematics: returns layout and directives."
+    ),
+    input_model=CircuitReadInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+    profiles=("full",),
+)
+async def handle_read_circuit(arguments: CircuitReadInput, state: SessionState):
     """Read and parse a circuit file. For .asc schematics, returns component
     positions, net labels, wires, and directives. For .cir/.net, returns raw
     content and component list with values.
     """
-    file_path = safe_path(arguments["path"], state)
-    fmt = arguments.get("format")
+    file_path = safe_path(arguments.path, state)
+    fmt = arguments.format
 
     if _is_asc(file_path):
-        # Schematic info path (formerly get_schematic_info)
-        editor = await _get_asc_editor(file_path, state)
+        data = await services.extract_asc_info(await _get_asc_editor(file_path, state), file_path)
+    else:
+        data = await services.extract_netlist_info(await _get_editor(file_path, state), file_path)
+    return format_response(_format_circuit_text(file_path, data), data, fmt)
 
-        components = await run_sync(editor.get_components)
 
+def _format_circuit_text(file_path: Path, data: dict) -> str:
+    """Build the human-readable circuit summary from structured data."""
+    if data["type"] == "asc":
         lines = [f"=== {file_path.name} ===", ""]
-
-        comp_data = []
+        components = data["components"]
         lines.append(f"Components ({len(components)}):")
-        for ref in components:
-            value = editor.get_component_value(ref)
-            pos, rot = editor.get_component_position(ref)
-            rot_str = f"R{rot.value}" if rot.value < 360 else f"M{rot.value - 360}"
-            lines.append(f"  {ref:<8} {value:<20} pos=({pos.X},{pos.Y}) {rot_str}")
-            comp_data.append(
-                {"reference": ref, "value": value, "x": pos.X, "y": pos.Y, "rotation": rot_str}
+        for comp in components:
+            lines.append(
+                f"  {comp['reference']:<8} {comp['value']:<20} "
+                f"pos=({comp['x']},{comp['y']}) {comp['rotation']}"
             )
 
-        label_data = []
-        if editor.labels:
+        labels = data["labels"]
+        if labels:
             lines.append("")
-            lines.append(f"Net Labels ({len(editor.labels)}):")
-            for label in editor.labels:
-                lines.append(f"  {label.text:<16} at ({label.coord.X},{label.coord.Y})")
-                label_data.append({"text": label.text, "x": label.coord.X, "y": label.coord.Y})
+            lines.append(f"Net Labels ({len(labels)}):")
+            for label in labels:
+                lines.append(f"  {label['text']:<16} at ({label['x']},{label['y']})")
 
-        directive_data = []
         lines.append("")
-        lines.append(f"Wires: {len(editor.wires)}")
-        lines.append(f"Directives: {len(editor.directives)}")
-
-        if editor.directives:
+        lines.append(f"Wires: {data['wire_count']}")
+        lines.append(f"Directives: {len(data['directives'])}")
+        if data["directives"]:
             lines.append("")
             lines.append("SPICE Directives:")
-            for d in editor.directives:
-                lines.append(f"  {d.text}")
-                directive_data.append(d.text)
+            for directive in data["directives"]:
+                lines.append(f"  {directive}")
+        return "\n".join(lines)
 
-        data = {
-            "file": str(file_path),
-            "type": "asc",
-            "components": comp_data,
-            "labels": label_data,
-            "wire_count": len(editor.wires),
-            "directives": directive_data,
-        }
-        return format_response("\n".join(lines), data, fmt)
+    components = data["components"]
+    if components:
+        comp_summary = "\n".join(f"{comp['reference']}  {comp['value']}" for comp in components)
     else:
-        # Netlist read path — editor load catches FileNotFoundError
-        editor = await _get_editor(file_path, state)
-        content = await run_sync(file_path.read_text)
-        components = editor.get_components()
-
-        comp_list = []
-        if components:
-            comp_lines = []
-            for comp_ref in components:
-                value = editor.get_component_value(comp_ref)
-                comp_lines.append(f"{comp_ref}  {value}")
-                comp_list.append({"reference": comp_ref, "value": value})
-            comp_summary = "\n".join(comp_lines)
-        else:
-            comp_summary = "(no components)"
-
-        result = f"=== {file_path.name} ===\n\n{content}\n\n=== Components ({len(components)}) ===\n{comp_summary}"
-        data = {
-            "file": str(file_path),
-            "type": "netlist",
-            "content": content,
-            "components": comp_list,
-        }
-        return format_response(result, data, fmt)
+        comp_summary = "(no components)"
+    return (
+        f"=== {file_path.name} ===\n\n{data['content']}\n\n"
+        f"=== Components ({len(components)}) ===\n{comp_summary}"
+    )
 
 
-async def handle_list_components(arguments: dict, state: SessionState):
+@registry.tool(
+    name="ltspice_list_components",
+    description=(
+        "List components in a circuit file, optionally filtered by type prefix, or "
+        "return a single component value by reference."
+    ),
+    input_model=ListComponentsInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+    profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "components": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "reference": {"type": "string"},
+                        "value": {"type": "string"},
+                    },
+                },
+            },
+            "pagination": PAGINATION_SCHEMA,
+        },
+    },
+)
+async def handle_list_components(arguments: ListComponentsInput, state: SessionState):
     """List all components, optionally filtered by prefix. If a single
     reference is provided, return just that component's value.
     Works on .cir/.net and .asc.
     """
-    file_path = safe_path(arguments["path"], state)
-    fmt = arguments.get("format")
+    file_path = safe_path(arguments.path, state)
+    fmt = arguments.format
 
     editor = await _get_editor(file_path, state)
 
     # Single-component lookup mode (absorbed from get_component_value)
-    reference = arguments.get("reference")
+    reference = arguments.reference
     if reference is not None:
         try:
             value = await run_sync(editor.get_component_value, reference)
@@ -268,7 +390,7 @@ async def handle_list_components(arguments: dict, state: SessionState):
         return format_response(f"{reference} = {value}", data, fmt)
 
     # List mode
-    prefix = arguments.get("prefix")
+    prefix = arguments.prefix
     if prefix:
         components = await run_sync(editor.get_components, [prefix])
     else:
@@ -308,18 +430,30 @@ async def handle_list_components(arguments: dict, state: SessionState):
     return format_response(result, data, fmt)
 
 
-async def handle_set_component_value(arguments: dict, state: SessionState) -> types.CallToolResult:
+@registry.tool(
+    name="ltspice_set_component_value",
+    description="Set component value(s) in a circuit file. Supports single or batch mode.",
+    input_model=SetComponentValueInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+    profiles=("full",),
+)
+async def handle_set_component_value(arguments: SetComponentValueInput, state: SessionState) -> types.CallToolResult:
     """Set component value(s). Accepts single or batch mode.
 
     Single mode: provide 'reference' and 'value'.
     Batch mode: provide 'values' dict mapping references to new values.
     Works on .cir/.net and .asc.
     """
-    file_path = safe_path(arguments["path"], state)
+    file_path = safe_path(arguments.path, state)
 
-    values_dict = arguments.get("values")
-    reference = arguments.get("reference")
-    value = arguments.get("value")
+    values_dict = arguments.values
+    reference = arguments.reference
+    value = arguments.value
 
     async with _editing(file_path, state) as editor:
         if values_dict is not None:
@@ -345,16 +479,28 @@ async def handle_set_component_value(arguments: dict, state: SessionState) -> ty
     return text_response(result)
 
 
-async def handle_parameter(arguments: dict, state: SessionState):
+@registry.tool(
+    name="ltspice_parameter",
+    description="Read or write .PARAM directive values in a circuit file.",
+    input_model=ParameterInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+    profiles=("full",),
+)
+async def handle_parameter(arguments: ParameterInput, state: SessionState):
     """Get or set .PARAM directive values. Without name/value: returns all
     parameters. With name and value: sets the parameter.
     Works on .cir/.net and .asc.
     """
-    file_path = safe_path(arguments["path"], state)
-    fmt = arguments.get("format")
+    file_path = safe_path(arguments.path, state)
+    fmt = arguments.format
 
-    param_name = arguments.get("name")
-    param_value = arguments.get("value")
+    param_name = arguments.name
+    param_value = arguments.value
 
     if param_name is not None and param_value is not None:
         # Set mode — confirmation only, no structured data needed
@@ -380,12 +526,24 @@ async def handle_parameter(arguments: dict, state: SessionState):
     return format_response(result, {"parameters": params}, fmt)
 
 
-async def handle_edit_directive(arguments: dict, state: SessionState) -> types.CallToolResult:
+@registry.tool(
+    name="ltspice_edit_directive",
+    description="Add or remove a SPICE directive (.tran, .ac, .param, etc.).",
+    input_model=EditDirectiveInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    ),
+    profiles=("full",),
+)
+async def handle_edit_directive(arguments: EditDirectiveInput, state: SessionState) -> types.CallToolResult:
     """Add or remove a SPICE directive. Works on .cir/.net and .asc."""
-    file_path = safe_path(arguments["path"], state)
+    file_path = safe_path(arguments.path, state)
 
-    action = arguments["action"]
-    instruction = arguments["instruction"]
+    action = arguments.action
+    instruction = arguments.instruction
 
     async with _editing(file_path, state) as editor:
         if action == "add":
@@ -417,12 +575,24 @@ async def handle_edit_directive(arguments: dict, state: SessionState) -> types.C
 # ---------------------------------------------------------------------------
 
 
-async def handle_remove_component(arguments: dict, state: SessionState) -> types.CallToolResult:
+@registry.tool(
+    name="ltspice_remove_component",
+    description="Remove a component from an .asc schematic by reference designator.",
+    input_model=RemoveComponentInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=False,
+    ),
+    profiles=("full",),
+)
+async def handle_remove_component(arguments: RemoveComponentInput, state: SessionState) -> types.CallToolResult:
     """Remove a component from a schematic by reference designator."""
-    asc_path = safe_path(arguments["path"], state)
+    asc_path = safe_path(arguments.path, state)
     _require_asc(asc_path)
 
-    reference = arguments["reference"]
+    reference = arguments.reference
 
     async with _editing_asc(asc_path, state) as editor:
         components = await run_sync(editor.get_components)
@@ -435,15 +605,27 @@ async def handle_remove_component(arguments: dict, state: SessionState) -> types
     return text_response(f"Removed {reference} from {asc_path.name}")
 
 
-async def handle_move_component(arguments: dict, state: SessionState) -> types.CallToolResult:
+@registry.tool(
+    name="ltspice_move_component",
+    description="Move and/or rotate a component in an .asc schematic.",
+    input_model=MoveComponentInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    ),
+    profiles=("full",),
+)
+async def handle_move_component(arguments: MoveComponentInput, state: SessionState) -> types.CallToolResult:
     """Move or rotate a component in a schematic."""
-    asc_path = safe_path(arguments["path"], state)
+    asc_path = safe_path(arguments.path, state)
     _require_asc(asc_path)
 
-    reference = arguments["reference"]
-    x = int(arguments["x"])
-    y = int(arguments["y"])
-    rotation = arguments.get("rotation")
+    reference = arguments.reference
+    x = arguments.x
+    y = arguments.y
+    rotation = arguments.rotation
 
     async with _editing_asc(asc_path, state) as editor:
         old_pos, old_rot = editor.get_component_position(reference)
@@ -457,16 +639,28 @@ async def handle_move_component(arguments: dict, state: SessionState) -> types.C
     return text_response(f"Moved {reference}: ({old_pos.X},{old_pos.Y}) -> ({x},{y}) {rot_str}")
 
 
+@registry.tool(
+    name="ltspice_set_component_attribute",
+    description="Set a schematic-only component attribute such as SpiceLine or SpiceModel.",
+    input_model=SetComponentAttributeInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+    profiles=("full",),
+)
 async def handle_set_component_attribute(
-    arguments: dict, state: SessionState
+    arguments: SetComponentAttributeInput, state: SessionState
 ) -> types.CallToolResult:
     """Set an attribute on a schematic component (e.g., SpiceLine, SpiceModel)."""
-    asc_path = safe_path(arguments["path"], state)
+    asc_path = safe_path(arguments.path, state)
     _require_asc(asc_path)
 
-    reference = arguments["reference"]
-    attribute = arguments["attribute"]
-    value = arguments["value"]
+    reference = arguments.reference
+    attribute = arguments.attribute
+    value = arguments.value
 
     async with _editing_asc(asc_path, state) as editor:
         await run_sync(editor.set_component_attribute, reference, attribute, value)
@@ -474,17 +668,29 @@ async def handle_set_component_attribute(
     return text_response(f"Set {reference}.{attribute} = {value}")
 
 
-async def handle_add_component(arguments: dict, state: SessionState) -> types.CallToolResult:
+@registry.tool(
+    name="ltspice_add_component",
+    description="Add a new component to an .asc schematic at a specified grid position.",
+    input_model=AddComponentInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    ),
+    profiles=("full",),
+)
+async def handle_add_component(arguments: AddComponentInput, state: SessionState) -> types.CallToolResult:
     """Add a new component to an .asc schematic."""
-    asc_path = safe_path(arguments["path"], state)
+    asc_path = safe_path(arguments.path, state)
     _require_asc(asc_path)
 
-    reference = arguments["reference"]
-    symbol = arguments["symbol"]
-    x = int(arguments["x"])
-    y = int(arguments["y"])
-    value = arguments.get("value")
-    rotation = arguments.get("rotation", "R0")
+    reference = arguments.reference
+    symbol = arguments.symbol
+    x = arguments.x
+    y = arguments.y
+    value = arguments.value
+    rotation = arguments.rotation
     erot = _parse_rotation(rotation)
 
     async with _editing_asc(asc_path, state) as editor:
@@ -497,7 +703,7 @@ async def handle_add_component(arguments: dict, state: SessionState) -> types.Ca
 
         comp = SchematicComponent(editor, "")
         comp.reference = reference
-        comp.symbol = symbol
+        comp.symbol = symbol  # pyright: ignore[reportAttributeAccessIssue]
         comp.position = Point(x, y)
         comp.rotation = erot
         if value is not None:
@@ -511,32 +717,54 @@ async def handle_add_component(arguments: dict, state: SessionState) -> types.Ca
     return text_response(result)
 
 
-async def handle_add_wire(arguments: dict, state: SessionState) -> types.CallToolResult:
+@registry.tool(
+    name="ltspice_add_wire",
+    description="Add wire segment(s) to an .asc schematic to connect components.",
+    input_model=AddWireInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    ),
+    profiles=("full",),
+)
+async def handle_add_wire(arguments: AddWireInput, state: SessionState) -> types.CallToolResult:
     """Add wire segment(s) to an .asc schematic."""
-    asc_path = safe_path(arguments["path"], state)
+    asc_path = safe_path(arguments.path, state)
     _require_asc(asc_path)
 
-    wires = arguments["wires"]
+    wires = arguments.wires
     if not wires:
         raise NetlistError("At least one wire segment is required")
 
     async with _editing_asc(asc_path, state) as editor:
         for i, w in enumerate(wires):
             try:
-                x1, y1 = int(w["x1"]), int(w["y1"])
-                x2, y2 = int(w["x2"]), int(w["y2"])
-            except (KeyError, TypeError, ValueError) as e:
-                raise NetlistError(
-                    f"Wire segment {i}: requires integer x1, y1, x2, y2: {e}"
-                ) from e
+                x1, y1 = w.x1, w.y1
+                x2, y2 = w.x2, w.y2
+            except Exception as e:
+                raise NetlistError(f"Wire segment {i}: requires integer x1, y1, x2, y2: {e}") from e
             editor.wires.append(Line(Point(x1, y1), Point(x2, y2)))
 
     return text_response(f"Added {len(wires)} wire segment(s) to {asc_path.name}")
 
 
-async def handle_export_netlist(arguments: dict, state: SessionState) -> types.CallToolResult:
+@registry.tool(
+    name="ltspice_export_netlist",
+    description="Export an .asc schematic to a SPICE netlist (.net) using LTspice.",
+    input_model=ExportNetlistInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+    profiles=("full", "agentic"),
+)
+async def handle_export_netlist(arguments: ExportNetlistInput, state: SessionState) -> types.CallToolResult:
     """Export an .asc schematic to a SPICE netlist (.net) using LTspice."""
-    asc_path = safe_path(arguments["path"], state)
+    asc_path = safe_path(arguments.path, state)
     _require_asc(asc_path)
 
     ltspice_cls = state.available_simulators.get("ltspice")
@@ -558,481 +786,3 @@ async def handle_export_netlist(arguments: dict, state: SessionState) -> types.C
     content = await run_sync(net_path.read_text)
 
     return text_response(f"=== {net_path.name} ===\n\n{content}")
-
-
-# ---------------------------------------------------------------------------
-# Tool definitions
-# ---------------------------------------------------------------------------
-
-_PATH_DESC = "Path to circuit file (.cir, .net, or .asc schematic)"
-
-TOOL_DEFS: list[types.Tool] = [
-    types.Tool(
-        name="ltspice_create_netlist",
-        description="Create a new SPICE netlist file from content string. Automatically appends .END if missing. File is created in working directory with .cir extension.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "File name without extension (e.g., 'rc_filter')",
-                },
-                "content": {
-                    "type": "string",
-                    "description": "Complete SPICE netlist content including components and directives",
-                },
-            },
-            "required": ["name", "content"],
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=False,
-            openWorldHint=False,
-        ),
-    ),
-    types.Tool(
-        name="ltspice_read_circuit",
-        description=(
-            "Read and parse a circuit file (.cir/.net or .asc). "
-            "For .cir/.net: returns raw netlist content and component list with values. "
-            "For .asc: returns component positions, net labels, wire count, and SPICE directives."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": _PATH_DESC,
-                },
-                "format": FORMAT_PROP,
-            },
-            "required": ["path"],
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=False,
-        ),
-    ),
-    types.Tool(
-        name="ltspice_list_components",
-        description=(
-            "List components in a circuit file (.cir/.net or .asc), optionally filtered by type prefix "
-            "(R, C, L, Q, M, X, V, I, etc.). If 'reference' is provided, returns just that component's "
-            "value (e.g., 'R1 = 10k'). Component lookups are case-insensitive."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": _PATH_DESC,
-                },
-                "prefix": {
-                    "type": "string",
-                    "description": "Optional component prefix filter (e.g., 'R' for resistors, 'C' for capacitors, 'Q' for transistors)",
-                },
-                "reference": {
-                    "type": "string",
-                    "description": "Optional: get a single component's value by reference designator (e.g., 'R1', 'C2', 'X1:R5'). Supports hierarchical references. Case-insensitive.",
-                },
-                "offset": {
-                    "type": "integer",
-                    "description": "Number of components to skip for pagination (default: 0)",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum components to return (default: 50, max: 50)",
-                },
-                "format": FORMAT_PROP,
-            },
-            "required": ["path"],
-        },
-        outputSchema={
-            "type": "object",
-            "properties": {
-                "components": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "reference": {"type": "string"},
-                            "value": {"type": "string"},
-                        },
-                    },
-                },
-                "pagination": PAGINATION_SCHEMA,
-            },
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=False,
-        ),
-    ),
-    types.Tool(
-        name="ltspice_set_component_value",
-        description=(
-            "Set component value(s) in a circuit file (.cir/.net or .asc). "
-            "Single mode: provide 'reference' and 'value'. "
-            "Batch mode: provide 'values' dict. "
-            "SPICE notation: k=1e3, M=1e-3 (milli, NOT mega), Meg=1e6, u=1e-6, n=1e-9, p=1e-12. "
-            "Changes are saved immediately."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": _PATH_DESC,
-                },
-                "reference": {
-                    "type": "string",
-                    "description": "Component reference designator (e.g., 'R1'). Use with 'value' for single mode.",
-                },
-                "value": {
-                    "type": "string",
-                    "description": "New value (e.g., '10k', '100n', 'LM358'). Use with 'reference' for single mode.",
-                },
-                "values": {
-                    "type": "object",
-                    "description": 'Batch mode: map of reference to value, e.g. {"R1": "10k", "C1": "100n"}.',
-                    "additionalProperties": {"type": "string"},
-                },
-            },
-            "required": ["path"],
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=False,
-        ),
-    ),
-    types.Tool(
-        name="ltspice_parameter",
-        description=(
-            "Read or write .PARAM directive values in a circuit file. "
-            "Without name/value: lists all parameters and their current values. "
-            "With name and value: sets the parameter (creates directive if missing). "
-            "Changes saved immediately."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": _PATH_DESC,
-                },
-                "name": {
-                    "type": "string",
-                    "description": "Parameter name (required for set mode)",
-                },
-                "value": {
-                    "type": "string",
-                    "description": "Parameter value (required for set mode)",
-                },
-                "format": FORMAT_PROP,
-            },
-            "required": ["path"],
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=False,
-        ),
-    ),
-    types.Tool(
-        name="ltspice_edit_directive",
-        description=(
-            "Add or remove a SPICE directive (.tran, .ac, .param, etc.). "
-            "Action 'add' replaces existing unique directives of the same type. "
-            "Action 'remove' supports exact match or regex (prefix with 'regex:')."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": _PATH_DESC,
-                },
-                "action": {
-                    "type": "string",
-                    "description": "Whether to 'add' or 'remove' the directive",
-                    "enum": ["add", "remove"],
-                },
-                "instruction": {
-                    "type": "string",
-                    "description": "SPICE directive (e.g. '.tran 0 10m 0 1u', '.ac dec 100 1 1Meg'). Must start with '.' for add. For remove, use exact text or prefix with 'regex:' for pattern match.",
-                },
-            },
-            "required": ["path", "action", "instruction"],
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=False,
-            openWorldHint=False,
-        ),
-    ),
-    # --- Schematic-only operations (.asc) ---
-    types.Tool(
-        name="ltspice_remove_component",
-        description=(
-            "Remove a component from an .asc schematic by reference designator "
-            "(e.g., R1, C2, U1). The component and symbol are removed; wires remain. "
-            "Changes are saved immediately."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to .asc schematic file",
-                },
-                "reference": {
-                    "type": "string",
-                    "description": "Component reference designator to remove (e.g., 'R1', 'C2')",
-                },
-            },
-            "required": ["path", "reference"],
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=False,
-            destructiveHint=True,
-            idempotentHint=False,
-            openWorldHint=False,
-        ),
-    ),
-    types.Tool(
-        name="ltspice_move_component",
-        description=(
-            "Move and/or rotate a component in an .asc schematic. "
-            "Coordinates are in LTspice's grid units (typically multiples of 16). "
-            "Changes are saved immediately."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to .asc schematic file",
-                },
-                "reference": {
-                    "type": "string",
-                    "description": "Component reference designator (e.g., 'R1')",
-                },
-                "x": {
-                    "type": "integer",
-                    "description": "New X position in grid units",
-                },
-                "y": {
-                    "type": "integer",
-                    "description": "New Y position in grid units",
-                },
-                "rotation": {
-                    "type": "string",
-                    "description": "Rotation/mirror: R0, R90, R180, R270, M0, M90, M180, M270. If omitted, keeps current rotation.",
-                    "enum": ["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"],
-                },
-            },
-            "required": ["path", "reference", "x", "y"],
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=False,
-            openWorldHint=False,
-        ),
-    ),
-    types.Tool(
-        name="ltspice_set_component_attribute",
-        description=(
-            "Set an attribute on a component in an .asc schematic. "
-            "Common attributes: Value, Value2, SpiceLine, SpiceLine2, SpiceModel. "
-            "Use this for advanced configuration beyond simple value changes "
-            "(e.g., setting MOSFET model parameters via SpiceLine). "
-            "Changes are saved immediately."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to .asc schematic file",
-                },
-                "reference": {
-                    "type": "string",
-                    "description": "Component reference designator (e.g., 'M1', 'U1')",
-                },
-                "attribute": {
-                    "type": "string",
-                    "description": "Attribute name (e.g., 'Value', 'Value2', 'SpiceLine', 'SpiceModel')",
-                },
-                "value": {
-                    "type": "string",
-                    "description": "Attribute value to set",
-                },
-            },
-            "required": ["path", "reference", "attribute", "value"],
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=False,
-            openWorldHint=False,
-        ),
-    ),
-    types.Tool(
-        name="ltspice_export_netlist",
-        description=(
-            "Export an .asc schematic to a SPICE netlist (.net) using the LTspice binary. "
-            "Returns the generated netlist content. LTspice must be available. "
-            "Use this when you need the SPICE netlist for a schematic, "
-            "or before running simulation on a schematic."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to .asc schematic file",
-                },
-            },
-            "required": ["path"],
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=False,
-        ),
-    ),
-    types.Tool(
-        name="ltspice_add_component",
-        description=(
-            "Add a new component to an .asc schematic at a specified grid position. "
-            "Coordinates are in LTspice grid units (multiples of 16). "
-            "Common symbol names: res/res2 (resistor), cap/cap2 (capacitor), ind/ind2 (inductor), "
-            "voltage (voltage source), current (current source), diode, nmos, pmos, npn, pnp, "
-            "opamp/opamp2 (3/5-pin), zener, LED, schottky, polcap. "
-            "Pin spacing is typically 64 units (e.g., a resistor's pins are 64 apart vertically). "
-            "Use ltspice_read_circuit to inspect existing component positions before placing. "
-            "Use ltspice_add_wire to connect components after placing them."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to .asc schematic file",
-                },
-                "reference": {
-                    "type": "string",
-                    "description": "Reference designator (e.g., 'R1', 'C2', 'U1', 'V1')",
-                },
-                "symbol": {
-                    "type": "string",
-                    "description": "LTspice symbol name (e.g., 'res', 'cap', 'voltage', 'nmos', 'opamp2'). This is the .asy filename without extension.",
-                },
-                "x": {
-                    "type": "integer",
-                    "description": "X position in grid units (multiples of 16)",
-                },
-                "y": {
-                    "type": "integer",
-                    "description": "Y position in grid units (multiples of 16)",
-                },
-                "value": {
-                    "type": "string",
-                    "description": "Component value (e.g., '10k', '100n', 'AC 1'). Optional for sources and subcircuits.",
-                },
-                "rotation": {
-                    "type": "string",
-                    "description": "Rotation/mirror: R0 (default), R90, R180, R270, M0, M90, M180, M270",
-                    "enum": ["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"],
-                },
-            },
-            "required": ["path", "reference", "symbol", "x", "y"],
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=False,
-            openWorldHint=False,
-        ),
-    ),
-    types.Tool(
-        name="ltspice_add_wire",
-        description=(
-            "Add wire segment(s) to an .asc schematic to connect components. "
-            "Each wire is a straight line between two points (x1,y1) to (x2,y2). "
-            "Wires should be axis-aligned (horizontal or vertical). "
-            "For L-shaped connections, use two segments. For Z-shaped, use three. "
-            "Coordinates are in LTspice grid units (multiples of 16). "
-            "Wires connect when they share an endpoint with a component pin or another wire. "
-            "Use ltspice_read_circuit to inspect existing positions and plan connections."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to .asc schematic file",
-                },
-                "wires": {
-                    "type": "array",
-                    "description": "Array of wire segments to add",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "x1": {
-                                "type": "integer",
-                                "description": "Start X coordinate (grid units)",
-                            },
-                            "y1": {
-                                "type": "integer",
-                                "description": "Start Y coordinate (grid units)",
-                            },
-                            "x2": {
-                                "type": "integer",
-                                "description": "End X coordinate (grid units)",
-                            },
-                            "y2": {
-                                "type": "integer",
-                                "description": "End Y coordinate (grid units)",
-                            },
-                        },
-                        "required": ["x1", "y1", "x2", "y2"],
-                    },
-                },
-            },
-            "required": ["path", "wires"],
-        },
-        annotations=types.ToolAnnotations(
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=False,
-            openWorldHint=False,
-        ),
-    ),
-]
-
-TOOL_HANDLERS: dict[str, object] = {
-    "ltspice_create_netlist": handle_create_netlist,
-    "ltspice_read_circuit": handle_read_circuit,
-    "ltspice_list_components": handle_list_components,
-    "ltspice_set_component_value": handle_set_component_value,
-    "ltspice_parameter": handle_parameter,
-    "ltspice_edit_directive": handle_edit_directive,
-    "ltspice_remove_component": handle_remove_component,
-    "ltspice_move_component": handle_move_component,
-    "ltspice_set_component_attribute": handle_set_component_attribute,
-    "ltspice_export_netlist": handle_export_netlist,
-    "ltspice_add_component": handle_add_component,
-    "ltspice_add_wire": handle_add_wire,
-}

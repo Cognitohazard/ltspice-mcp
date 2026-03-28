@@ -2,18 +2,80 @@
 
 import json
 import logging
-from pathlib import Path
-from typing import Any
+import re
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any, cast
 
 from mcp import types
 from pydantic import AnyUrl
 
+from ltspice_mcp.lib import services
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import run_sync
 
 logger = logging.getLogger(__name__)
 
 NETLIST_EXTENSIONS = {".asc", ".net", ".sp", ".cir", ".spice"}
+SyncRouteHandler = Callable[[str, dict[str, str], SessionState], types.ReadResourceResult]
+AsyncRouteHandler = Callable[
+    [str, dict[str, str], SessionState], Awaitable[types.ReadResourceResult]
+]
+
+
+@dataclass(frozen=True)
+class _Route:
+    pattern: re.Pattern[str]
+    handler: SyncRouteHandler | AsyncRouteHandler
+    is_async: bool
+
+
+class ResourceRouter:
+    """Simple URI-template router for MCP resources."""
+
+    def __init__(self) -> None:
+        self._routes: list[_Route] = []
+
+    def route(self, template: str, *, is_async: bool = True) -> Callable[[Callable], Callable]:
+        """Register a URI template and convert it to a regex route."""
+        pattern = self._compile_template(template)
+
+        def decorator(handler: Callable) -> Callable:
+            self._routes.append(_Route(pattern=pattern, handler=handler, is_async=is_async))
+            return handler
+
+        return decorator
+
+    async def dispatch(self, uri_str: str, state: SessionState) -> types.ReadResourceResult:
+        """Dispatch a URI to the first matching route."""
+        for route in self._routes:
+            match = route.pattern.fullmatch(uri_str)
+            if match is None:
+                continue
+            params = match.groupdict()
+            if route.is_async:
+                handler = cast(AsyncRouteHandler, route.handler)
+                return await handler(uri_str, params, state)
+            handler = cast(SyncRouteHandler, route.handler)
+            return handler(uri_str, params, state)
+        raise ValueError(f"Unknown resource URI: {uri_str}")
+
+    @staticmethod
+    def _compile_template(template: str) -> re.Pattern[str]:
+        parts = re.split(r"(\{[^}]+\})", template)
+        pattern = ""
+        for part in parts:
+            if not part:
+                continue
+            if part.startswith("{") and part.endswith("}"):
+                name = part[1:-1]
+                pattern += f"(?P<{name}>[^/]+)"
+            else:
+                pattern += re.escape(part)
+        return re.compile(pattern)
+
+
+_router = ResourceRouter()
 
 
 def get_static_resources() -> list[types.Resource]:
@@ -83,27 +145,7 @@ async def handle_read_resource(uri_str: str, state: SessionState) -> types.ReadR
     Raises:
         ValueError: If the URI is unknown or resource cannot be loaded
     """
-    if uri_str == "ltspice://config":
-        return _read_config(uri_str, state)
-    elif uri_str == "ltspice://netlists/":
-        return await _read_netlists_list(uri_str, state)
-    elif uri_str.startswith("ltspice://netlists/"):
-        filename = uri_str[len("ltspice://netlists/") :]
-        return await _read_netlist_content(uri_str, filename, state)
-    elif uri_str == "ltspice://results/":
-        return _read_results_list(uri_str, state)
-    elif uri_str == "ltspice://models/":
-        return _read_models(uri_str, state)
-    elif uri_str.startswith("ltspice://results/") and uri_str.endswith("/signals"):
-        parts = uri_str[len("ltspice://results/") :].split("/")
-        job_id = parts[0]
-        return await _read_signals(uri_str, job_id, state)
-    elif uri_str.startswith("ltspice://results/") and uri_str.endswith("/measurements"):
-        parts = uri_str[len("ltspice://results/") :].split("/")
-        job_id = parts[0]
-        return await _read_measurements(uri_str, job_id, state)
-    else:
-        raise ValueError(f"Unknown resource URI: {uri_str}")
+    return await _router.dispatch(uri_str, state)
 
 
 def _make_result(
@@ -121,8 +163,12 @@ def _make_result(
     )
 
 
-def _read_config(uri_str: str, state: SessionState) -> types.ReadResourceResult:
+@_router.route("ltspice://config", is_async=False)
+def _read_config(
+    uri_str: str, params: dict[str, str], state: SessionState
+) -> types.ReadResourceResult:
     """Return full server configuration and detected simulator info."""
+    del params
     try:
         cfg = state.config
         data = {
@@ -147,8 +193,12 @@ def _read_config(uri_str: str, state: SessionState) -> types.ReadResourceResult:
         raise ValueError(f"Failed to read config: {e}") from e
 
 
-async def _read_netlists_list(uri_str: str, state: SessionState) -> types.ReadResourceResult:
+@_router.route("ltspice://netlists/")
+async def _read_netlists_list(
+    uri_str: str, params: dict[str, str], state: SessionState
+) -> types.ReadResourceResult:
     """List all netlist files in the working directory."""
+    del params
     try:
         working_dir = state.working_dir
 
@@ -168,10 +218,12 @@ async def _read_netlists_list(uri_str: str, state: SessionState) -> types.ReadRe
         raise ValueError(f"Failed to list netlists: {e}") from e
 
 
+@_router.route("ltspice://netlists/{filename}")
 async def _read_netlist_content(
-    uri_str: str, filename: str, state: SessionState
+    uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
     """Read the full text of a specific netlist file."""
+    filename = params["filename"]
     try:
         # Security: validate filename is safe and within working dir
         file_path = state.working_dir / filename
@@ -192,8 +244,12 @@ async def _read_netlist_content(
         raise ValueError(f"Failed to read netlist {filename!r}: {e}") from e
 
 
-def _read_results_list(uri_str: str, state: SessionState) -> types.ReadResourceResult:
+@_router.route("ltspice://results/", is_async=False)
+def _read_results_list(
+    uri_str: str, params: dict[str, str], state: SessionState
+) -> types.ReadResourceResult:
     """List all simulation and batch jobs with their status."""
+    del params
     try:
         items: list[dict] = []
 
@@ -238,125 +294,44 @@ def _read_results_list(uri_str: str, state: SessionState) -> types.ReadResourceR
         raise ValueError(f"Failed to list results: {e}") from e
 
 
-def _resolve_raw_file(job_id: str, state: SessionState) -> Path:
-    """Resolve raw_file from a regular job or the first run of a batch job."""
-    job = state.jobs.get(job_id)
-    if job is not None:
-        if job.status != "completed" or job.raw_file is None:
-            raise ValueError(f"Job is not completed (status={job.status!r}) or has no raw file")
-        return job.raw_file
-
-    batch_job = state.batch_jobs.get(job_id)
-    if batch_job is not None:
-        if batch_job.status != "completed":
-            raise ValueError(f"Batch job is not completed (status={batch_job.status!r})")
-        if not batch_job.run_results:
-            raise ValueError(f"Batch job {job_id!r} has no run results")
-        first_run = batch_job.run_results[min(batch_job.run_results)]
-        raw_file = first_run.get("raw_file")
-        if raw_file is None:
-            raise ValueError(f"Batch job {job_id!r} first run has no raw file")
-        return Path(raw_file) if not isinstance(raw_file, Path) else raw_file
-
-    raise ValueError(f"Job not found: {job_id!r}")
-
-
-def _resolve_log_file(job_id: str, state: SessionState) -> Path:
-    """Resolve log_file from a regular job or the first run of a batch job."""
-    job = state.jobs.get(job_id)
-    if job is not None:
-        if job.status != "completed" or job.log_file is None:
-            raise ValueError(f"Job is not completed (status={job.status!r}) or has no log file")
-        return job.log_file
-
-    batch_job = state.batch_jobs.get(job_id)
-    if batch_job is not None:
-        if batch_job.status != "completed":
-            raise ValueError(f"Batch job is not completed (status={batch_job.status!r})")
-        if not batch_job.run_results:
-            raise ValueError(f"Batch job {job_id!r} has no run results")
-        first_run = batch_job.run_results[min(batch_job.run_results)]
-        log_file = first_run.get("log_file")
-        if log_file is None:
-            raise ValueError(f"Batch job {job_id!r} first run has no log file")
-        return Path(log_file) if not isinstance(log_file, Path) else log_file
-
-    raise ValueError(f"Job not found: {job_id!r}")
-
-
+@_router.route("ltspice://results/{job_id}/signals")
 async def _read_signals(
-    uri_str: str, job_id: str, state: SessionState
+    uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
     """List signal/trace names from a completed simulation's .raw file."""
+    job_id = params["job_id"]
     try:
-        raw_file = _resolve_raw_file(job_id, state)
-
-        def _load_signals() -> list[str]:
-            from spicelib.raw.raw_read import RawRead
-
-            raw = RawRead(str(raw_file))
-            return raw.get_trace_names()
-
-        signal_names = await run_sync(_load_signals)
+        signal_names = await services.load_signal_names(job_id, state)
         data = {"job_id": job_id, "signals": signal_names}
         return _make_result(uri_str, json.dumps(data, indent=2))
-    except ValueError:
-        raise
     except Exception as e:
         logger.error(f"Failed to read signals for job {job_id!r}: {e}")
         raise ValueError(f"Failed to read signals for job {job_id!r}: {e}") from e
 
 
+@_router.route("ltspice://results/{job_id}/measurements")
 async def _read_measurements(
-    uri_str: str, job_id: str, state: SessionState
+    uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
     """Return .MEAS measurement results from a completed simulation's log file."""
+    job_id = params["job_id"]
     try:
-        log_file = _resolve_log_file(job_id, state)
-
-        def _load_measurements() -> dict:
-            from spicelib.log.ltsteps import LTSpiceLogReader
-
-            reader = LTSpiceLogReader(str(log_file))
-            measure_names = reader.get_measure_names()
-            measurements: dict[str, Any] = {}
-            for name in measure_names:
-                values = reader.dataset.get(name.lower(), [])
-                python_values = []
-                for val in values:
-                    if val is None or (isinstance(val, str) and val.upper() == "FAILED"):
-                        python_values.append(None)
-                    else:
-                        python_values.append(float(val))  # type: ignore[arg-type]
-                measurements[name] = python_values
-            return measurements
-
-        def _read_log_text() -> str:
-            return log_file.read_text(encoding="utf-8", errors="replace")
-
-        measurements = await run_sync(_load_measurements)
-
-        log_text: str | None = None
-        if log_file.exists():
-            log_text = await run_sync(_read_log_text)
-
-        data: dict[str, Any] = {
-            "job_id": job_id,
-            "measurements": measurements,
-        }
-        if log_text is not None:
-            data["log_text"] = log_text
-
+        meas_data = await services.load_measurements(job_id, state, include_log_text=True)
+        data: dict[str, Any] = {"job_id": job_id, "measurements": meas_data["measurements"]}
+        if "log_text" in meas_data:
+            data["log_text"] = meas_data["log_text"]
         return _make_result(uri_str, json.dumps(data, indent=2))
-    except ValueError:
-        raise
     except Exception as e:
         logger.error(f"Failed to read measurements for job {job_id!r}: {e}")
         raise ValueError(f"Failed to read measurements for job {job_id!r}: {e}") from e
 
 
-def _read_models(uri_str: str, state: SessionState) -> types.ReadResourceResult:
+@_router.route("ltspice://models/", is_async=False)
+def _read_models(
+    uri_str: str, params: dict[str, str], state: SessionState
+) -> types.ReadResourceResult:
     """List user-loaded libraries and their models (not built-ins)."""
+    del params
     try:
         libraries: list[dict] = []
 
