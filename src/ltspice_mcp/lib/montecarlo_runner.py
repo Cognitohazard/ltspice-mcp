@@ -2,12 +2,14 @@
 
 import asyncio
 import logging
+import threading
 from datetime import datetime
 from pathlib import Path
 
 from spicelib.sim.sim_runner import SimRunner
 from spicelib.sim.tookit.montecarlo import Montecarlo
 
+from ltspice_mcp.errors import BatchJobError
 from ltspice_mcp.state import BatchJob, SessionState
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,8 @@ class MonteCarloRunner:
         self.simulator_class = simulator_class
         self.output_folder = output_folder
         self.max_parallel = max_parallel
+        self._cancel_events: dict[str, threading.Event] = {}
+        self._active_runners: dict[str, SimRunner] = {}
 
         logger.debug(
             f"MonteCarloRunner initialized: simulator={simulator_class.__name__}, "
@@ -68,6 +72,8 @@ class MonteCarloRunner:
             This method returns after submitting the analysis to the thread pool.
             Completion is signaled via batch_job.done_event.set() in the completion handler.
         """
+        cancel_event = threading.Event()
+        self._cancel_events[batch_job.job_id] = cancel_event
 
         def run_completion_callback(raw_file, log_file) -> None:
             """Called by SimRunner for each completed run (in worker thread).
@@ -76,6 +82,8 @@ class MonteCarloRunner:
             raw_file and log_file may be Path or str depending on spicelib version.
             """
             try:
+                if cancel_event.is_set():
+                    return
                 raw_file = Path(raw_file)
                 log_file = Path(log_file)
                 self.loop.call_soon_threadsafe(
@@ -105,10 +113,14 @@ class MonteCarloRunner:
                 parallel_sims=self.max_parallel,
                 timeout=600,  # Tool layer handles timeout via asyncio.wait_for()
             )
+            self._active_runners[batch_job.job_id] = runner
 
             # Create Montecarlo - takes circuit_file str (not SpiceEditor)
             # It manages its own editor internally
-            assert batch_job.mc_config is not None
+            if batch_job.mc_config is None:
+                raise BatchJobError(
+                    f"Monte Carlo job {batch_job.job_id} has no Monte Carlo configuration"
+                )
             mc_config = batch_job.mc_config
             mc = Montecarlo(netlist_str, runner)
 
@@ -140,23 +152,30 @@ class MonteCarloRunner:
             )
 
             # Bridge Monte Carlo completion to event loop for final state update
-            self.loop.call_soon_threadsafe(
-                self._handle_mc_completion,
-                batch_job.job_id,
-                state,
-            )
+            if not cancel_event.is_set():
+                self.loop.call_soon_threadsafe(
+                    self._handle_mc_completion,
+                    batch_job.job_id,
+                    state,
+                )
 
         # Submit to thread pool using asyncio.to_thread (non-blocking)
         try:
             batch_job.status = "running"
             await asyncio.to_thread(execute_montecarlo)
         except Exception as e:
+            if batch_job.status == "cancelled":
+                logger.info(f"Monte Carlo job {batch_job.job_id} stopped after cancellation")
+                return
             # Submission or execution failed - update batch job status
             logger.error(f"Monte Carlo job {batch_job.job_id} failed: {e}", exc_info=True)
             batch_job.status = "failed"
             batch_job.error = f"Monte Carlo execution failed: {e}"
             batch_job.completed_at = datetime.now()
             batch_job.done_event.set()
+        finally:
+            self._active_runners.pop(batch_job.job_id, None)
+            self._cancel_events.pop(batch_job.job_id, None)
 
     def _handle_run_completion(
         self,
@@ -253,6 +272,17 @@ class MonteCarloRunner:
             batch_job: BatchJob to cancel
         """
         logger.info(f"Cancelling Monte Carlo job {batch_job.job_id}")
+
+        cancel_event = self._cancel_events.get(batch_job.job_id)
+        if cancel_event is not None:
+            cancel_event.set()
+
+        runner = self._active_runners.get(batch_job.job_id)
+        if runner is not None:
+            try:
+                await asyncio.to_thread(runner.kill_all_spice)
+            except Exception as e:
+                logger.warning(f"Error killing Monte Carlo job {batch_job.job_id}: {e}")
 
         # Update job state - partial results preserved (run_results keeps completed entries)
         batch_job.status = "cancelled"
