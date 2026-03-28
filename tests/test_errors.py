@@ -67,7 +67,7 @@ class TestErrorHints:
     def test_agentic_hints_no_filtered_tools(self):
         """Agentic hints should not reference tools excluded from the profile."""
         from ltspice_mcp.server import _get_error_hint
-        from ltspice_mcp.tools import AGENTIC_TOOLS
+        from ltspice_mcp.tools import get_tools_for_profile
 
         filtered_tools = {
             "ltspice_edit_directive",
@@ -76,6 +76,8 @@ class TestErrorHints:
             "ltspice_unload_library",
             "ltspice_list_libraries",
         }
+        agentic_defs, _ = get_tools_for_profile("agentic")
+        agentic_tools = {tool_def.name for tool_def in agentic_defs}
         for err_type in (
             ConvergenceError,
             SingularMatrixError,
@@ -87,7 +89,7 @@ class TestErrorHints:
             if hint is None:
                 continue
             for tool_name in filtered_tools:
-                if tool_name not in AGENTIC_TOOLS:
+                if tool_name not in agentic_tools:
                     assert tool_name not in hint, (
                         f"Agentic hint for {err_type.__name__} references "
                         f"filtered tool {tool_name}"

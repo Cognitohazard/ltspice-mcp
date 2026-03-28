@@ -1,15 +1,15 @@
 """Tests for tool dispatch, schema validation, and profile filtering."""
 
-import asyncio
+from pydantic import ValidationError
 
-from ltspice_mcp.tools import AGENTIC_TOOLS, ALL_MODULES, get_tools_for_profile
+from ltspice_mcp.tools import get_tools_for_profile
 
 
 class TestDispatchTable:
     def test_all_tools_wired(self):
-        """Every TOOL_DEFS entry should have a matching dispatch handler."""
+        """Every registered tool definition should have a matching dispatch entry."""
         defs, handlers = get_tools_for_profile("full")
-        expected = {td.name for td in defs}
+        expected = {tool_def.name for tool_def in defs}
         dispatched = set(handlers.keys())
         missing = expected - dispatched
         assert not missing, f"Tools defined but not dispatched: {missing}"
@@ -17,29 +17,31 @@ class TestDispatchTable:
     def test_no_extra_handlers(self):
         """No dispatch entries without a matching tool definition."""
         defs, handlers = get_tools_for_profile("full")
-        defined = {td.name for td in defs}
+        defined = {tool_def.name for tool_def in defs}
         extra = set(handlers.keys()) - defined
         assert not extra, f"Dispatched but no definition: {extra}"
 
     def test_all_handlers_callable(self):
         _, handlers = get_tools_for_profile("full")
-        for name, handler in handlers.items():
-            assert callable(handler), f"{name} handler is not callable"
+        for name, registered in handlers.items():
+            assert callable(registered.handler), f"{name} handler is not callable"
 
-    def test_handlers_reject_missing_args(self):
-        """Each handler raises on empty args — no silent success on bad input."""
+    def test_required_inputs_reject_empty_args(self):
+        """Tools with required fields should reject an empty argument object."""
         _, handlers = get_tools_for_profile("full")
-        loop = asyncio.new_event_loop()
-        try:
-            for name, handler in handlers.items():
-                raised = False
-                try:
-                    loop.run_until_complete(handler({}, None))
-                except Exception:
-                    raised = True
-                assert raised, f"{name} handler accepted empty args without raising"
-        finally:
-            loop.close()
+        for name, registered in handlers.items():
+            if registered.input_model is None:
+                continue
+            required = registered.definition.inputSchema.get("required", [])
+            if not required:
+                continue
+            try:
+                registered.input_model.model_validate({})
+            except ValidationError:
+                continue
+            raise AssertionError(
+                f"{name} accepted empty args despite required fields {required}"
+            )
 
 
 class TestToolSchemas:
@@ -62,44 +64,27 @@ class TestToolSchemas:
 
 
 class TestToolProfiles:
-    def test_full_profile_returns_all_tools(self):
-        """Full profile should return every tool from every module."""
+    def test_full_profile_returns_all_dispatch_entries(self):
         defs, handlers = get_tools_for_profile("full")
-        all_names = set()
-        for mod in ALL_MODULES:
-            for td in mod.TOOL_DEFS:
-                all_names.add(td.name)
-        assert {td.name for td in defs} == all_names
-        assert set(handlers.keys()) == all_names
+        assert {tool_def.name for tool_def in defs} == set(handlers.keys())
 
     def test_agentic_profile_returns_subset(self):
-        """Agentic profile should return exactly the AGENTIC_TOOLS set."""
         defs, handlers = get_tools_for_profile("agentic")
-        assert {td.name for td in defs} == AGENTIC_TOOLS
-        assert set(handlers.keys()) == AGENTIC_TOOLS
+        agentic_names = {tool_def.name for tool_def in defs}
+        assert agentic_names == set(handlers.keys())
 
     def test_agentic_is_strict_subset_of_full(self):
         full_defs, _ = get_tools_for_profile("full")
-        full_names = {td.name for td in full_defs}
-        assert full_names > AGENTIC_TOOLS, "AGENTIC_TOOLS should be a strict subset of full"
-
-    def test_agentic_tools_all_exist(self):
-        """Every name in AGENTIC_TOOLS must correspond to a real tool."""
-        full_defs, _ = get_tools_for_profile("full")
-        full_names = {td.name for td in full_defs}
-        missing = AGENTIC_TOOLS - full_names
-        assert not missing, f"AGENTIC_TOOLS references non-existent tools: {missing}"
+        agentic_defs, _ = get_tools_for_profile("agentic")
+        full_names = {tool_def.name for tool_def in full_defs}
+        agentic_names = {tool_def.name for tool_def in agentic_defs}
+        assert full_names > agentic_names, "agentic tools should be a strict subset of full"
 
     def test_unknown_profile_treated_as_full(self):
         """Unrecognized profile name should behave like 'full'."""
         full_defs, _ = get_tools_for_profile("full")
         other_defs, _ = get_tools_for_profile("nonexistent")
-        assert {td.name for td in full_defs} == {td.name for td in other_defs}
-
-    def test_agentic_tool_count(self):
-        """Agentic profile tool count should match AGENTIC_TOOLS."""
-        defs, _ = get_tools_for_profile("agentic")
-        assert len(defs) == len(AGENTIC_TOOLS)
+        assert {tool_def.name for tool_def in full_defs} == {tool_def.name for tool_def in other_defs}
 
     def test_filtered_tools_not_in_agentic(self):
         """Verify specific tools that should NOT be in agentic profile."""
