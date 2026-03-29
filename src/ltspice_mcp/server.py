@@ -361,9 +361,12 @@ async def read_resource(uri: AnyUrl) -> Iterable[ReadResourceContents]:
         raise ValueError(f"Internal error: Session state not available ({e})") from e
 
     try:
-        result = await handle_read_resource(str(uri), state)
+        result = handle_read_resource(str(uri), state)
     except LTSpiceMCPError as e:
         raise ValueError(str(e)) from None
+    except Exception as e:
+        logger.exception(f"Unexpected error reading resource {uri}")
+        raise ValueError(f"Internal error reading resource: {type(e).__name__}: {e}") from e
 
     # Convert from types.TextResourceContents/BlobResourceContents
     # to the SDK's ReadResourceContents (which has .content not .text)

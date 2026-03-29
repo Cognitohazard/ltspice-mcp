@@ -23,6 +23,7 @@ from ltspice_mcp.state import (
     SweepDimension,
 )
 from ltspice_mcp.tools._base import (
+    StrictModel,
     ToolInput,
     format_response,
     pagination_metadata,
@@ -36,7 +37,7 @@ from ltspice_mcp.tools._base import (
 logger = logging.getLogger(__name__)
 
 
-class SweepParameter(ToolInput):
+class SweepParameter(StrictModel):
     """Nested sweep parameter definition."""
 
     name: str
@@ -58,7 +59,7 @@ class RunBatchInput(ToolInput):
     max_parallel: int | None = None
 
 
-class MonteCarloTolerance(ToolInput):
+class MonteCarloTolerance(StrictModel):
     ref: str
     tolerance: float
     distribution: Literal["uniform", "gaussian", "normal"] = "uniform"
@@ -581,10 +582,9 @@ async def handle_get_batch_results(arguments: GetBatchResultsInput, state: Sessi
     offset = arguments.offset
     limit = min(arguments.limit, 50)
     raw_mode = arguments.raw
-    data = await services.get_batch_signal_data(
+    data = services.get_batch_signal_data(
         batch_job,
         signal,
-        state,
         filters=filters,
         raw=raw_mode,
         offset=offset,

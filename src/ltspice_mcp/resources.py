@@ -3,31 +3,26 @@
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 from mcp import types
 from pydantic import AnyUrl
 
 from ltspice_mcp.lib import services
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import run_sync
 
 logger = logging.getLogger(__name__)
 
 NETLIST_EXTENSIONS = {".asc", ".net", ".sp", ".cir", ".spice"}
-SyncRouteHandler = Callable[[str, dict[str, str], SessionState], types.ReadResourceResult]
-AsyncRouteHandler = Callable[
-    [str, dict[str, str], SessionState], Awaitable[types.ReadResourceResult]
-]
+RouteHandler = Callable[[str, dict[str, str], SessionState], types.ReadResourceResult]
 
 
 @dataclass(frozen=True)
 class _Route:
     pattern: re.Pattern[str]
-    handler: SyncRouteHandler | AsyncRouteHandler
-    is_async: bool
+    handler: RouteHandler
 
 
 class ResourceRouter:
@@ -36,28 +31,24 @@ class ResourceRouter:
     def __init__(self) -> None:
         self._routes: list[_Route] = []
 
-    def route(self, template: str, *, is_async: bool = True) -> Callable[[Callable], Callable]:
+    def route(self, template: str) -> Callable[[Callable], Callable]:
         """Register a URI template and convert it to a regex route."""
         pattern = self._compile_template(template)
 
         def decorator(handler: Callable) -> Callable:
-            self._routes.append(_Route(pattern=pattern, handler=handler, is_async=is_async))
+            self._routes.append(_Route(pattern=pattern, handler=handler))
             return handler
 
         return decorator
 
-    async def dispatch(self, uri_str: str, state: SessionState) -> types.ReadResourceResult:
+    def dispatch(self, uri_str: str, state: SessionState) -> types.ReadResourceResult:
         """Dispatch a URI to the first matching route."""
         for route in self._routes:
             match = route.pattern.fullmatch(uri_str)
             if match is None:
                 continue
             params = match.groupdict()
-            if route.is_async:
-                handler = cast(AsyncRouteHandler, route.handler)
-                return await handler(uri_str, params, state)
-            handler = cast(SyncRouteHandler, route.handler)
-            return handler(uri_str, params, state)
+            return route.handler(uri_str, params, state)
         raise ValueError(f"Unknown resource URI: {uri_str}")
 
     @staticmethod
@@ -132,7 +123,7 @@ def get_resource_templates() -> list[types.ResourceTemplate]:
     ]
 
 
-async def handle_read_resource(uri_str: str, state: SessionState) -> types.ReadResourceResult:
+def handle_read_resource(uri_str: str, state: SessionState) -> types.ReadResourceResult:
     """Dispatch read request to the appropriate handler based on URI.
 
     Args:
@@ -145,7 +136,7 @@ async def handle_read_resource(uri_str: str, state: SessionState) -> types.ReadR
     Raises:
         ValueError: If the URI is unknown or resource cannot be loaded
     """
-    return await _router.dispatch(uri_str, state)
+    return _router.dispatch(uri_str, state)
 
 
 def _make_result(
@@ -163,194 +154,151 @@ def _make_result(
     )
 
 
-@_router.route("ltspice://config", is_async=False)
+@_router.route("ltspice://config")
 def _read_config(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
     """Return full server configuration and detected simulator info."""
     del params
-    try:
-        cfg = state.config
-        data = {
-            "working_dir": str(cfg.working_dir),
-            "allowed_paths": [str(p) for p in cfg.allowed_paths],
-            "simulator": cfg.simulator,
-            "simulator_exe": str(cfg.simulator_exe) if cfg.simulator_exe else None,
-            "detected_simulators": list(state.available_simulators.keys()),
-            "default_simulator": (
-                state.default_simulator.__name__ if state.default_simulator is not None else None
-            ),
-            "max_parallel_sims": cfg.max_parallel_sims,
-            "default_timeout": cfg.default_timeout,
-            "max_points_returned": cfg.max_points_returned,
-            "plot_dpi": cfg.plot_dpi,
-            "plot_style": cfg.plot_style,
-            "log_level": cfg.log_level,
-        }
-        return _make_result(uri_str, json.dumps(data, indent=2))
-    except Exception as e:
-        logger.error(f"Failed to read config resource: {e}")
-        raise ValueError(f"Failed to read config: {e}") from e
+    cfg = state.config
+    data = {
+        "working_dir": str(cfg.working_dir),
+        "allowed_paths": [str(p) for p in cfg.allowed_paths],
+        "simulator": cfg.simulator,
+        "simulator_exe": str(cfg.simulator_exe) if cfg.simulator_exe else None,
+        "detected_simulators": list(state.available_simulators.keys()),
+        "default_simulator": (
+            state.default_simulator.__name__ if state.default_simulator is not None else None
+        ),
+        "max_parallel_sims": cfg.max_parallel_sims,
+        "default_timeout": cfg.default_timeout,
+        "max_points_returned": cfg.max_points_returned,
+        "plot_dpi": cfg.plot_dpi,
+        "plot_style": cfg.plot_style,
+        "log_level": cfg.log_level,
+    }
+    return _make_result(uri_str, json.dumps(data, indent=2))
 
 
 @_router.route("ltspice://netlists/")
-async def _read_netlists_list(
+def _read_netlists_list(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
     """List all netlist files in the working directory."""
     del params
-    try:
-        working_dir = state.working_dir
-
-        def _scan() -> list[dict]:
-            return [
-                {"name": f.name, "uri": f"ltspice://netlists/{f.name}"}
-                for f in working_dir.iterdir()
-                if f.is_file() and f.suffix.lower() in NETLIST_EXTENSIONS
-            ]
-
-        netlists = await run_sync(_scan)
-        netlists.sort(key=lambda x: x["name"])
-        data = {"netlists": netlists, "count": len(netlists)}
-        return _make_result(uri_str, json.dumps(data, indent=2))
-    except Exception as e:
-        logger.error(f"Failed to list netlists: {e}")
-        raise ValueError(f"Failed to list netlists: {e}") from e
+    working_dir = state.working_dir
+    netlists = [
+        {"name": f.name, "uri": f"ltspice://netlists/{f.name}"}
+        for f in working_dir.iterdir()
+        if f.is_file() and f.suffix.lower() in NETLIST_EXTENSIONS
+    ]
+    netlists.sort(key=lambda x: x["name"])
+    data = {"netlists": netlists, "count": len(netlists)}
+    return _make_result(uri_str, json.dumps(data, indent=2))
 
 
 @_router.route("ltspice://netlists/{filename}")
-async def _read_netlist_content(
+def _read_netlist_content(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
     """Read the full text of a specific netlist file."""
     filename = params["filename"]
-    try:
-        # Security: validate filename is safe and within working dir
-        file_path = state.working_dir / filename
-        resolved = file_path.resolve()
-        working_resolved = state.working_dir.resolve()
-        if not resolved.is_relative_to(working_resolved):
-            raise ValueError(f"File {filename!r} is outside the working directory")
-
-        def _read() -> str:
-            return resolved.read_text(encoding="utf-8", errors="replace")
-
-        text = await run_sync(_read)
-        return _make_result(uri_str, text, mime="text/plain")
-    except ValueError:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to read netlist {filename!r}: {e}")
-        raise ValueError(f"Failed to read netlist {filename!r}: {e}") from e
+    # Security: validate filename is safe and within working dir
+    file_path = state.working_dir / filename
+    resolved = file_path.resolve()
+    working_resolved = state.working_dir.resolve()
+    if not resolved.is_relative_to(working_resolved):
+        raise ValueError(f"File {filename!r} is outside the working directory")
+    text = resolved.read_text(encoding="utf-8", errors="replace")
+    return _make_result(uri_str, text, mime="text/plain")
 
 
-@_router.route("ltspice://results/", is_async=False)
+@_router.route("ltspice://results/")
 def _read_results_list(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
     """List all simulation and batch jobs with their status."""
     del params
-    try:
-        items: list[dict] = []
+    items: list[dict] = []
 
-        for j in state.jobs.values():
-            items.append(
-                {
-                    "job_id": j.job_id,
-                    "type": "simulation",
-                    "netlist": j.netlist.name,
-                    "simulator": j.simulator,
-                    "status": j.status,
-                    "started_at": j.started_at.isoformat() if j.started_at else None,
-                    "completed_at": (j.completed_at.isoformat() if j.completed_at else None),
-                }
-            )
-
-        for bj in state.batch_jobs.values():
-            items.append(
-                {
-                    "job_id": bj.job_id,
-                    "type": bj.job_type,
-                    "netlist": bj.netlist.name,
-                    "status": bj.status,
-                    "total_runs": bj.total_runs,
-                    "completed_runs": bj.completed_runs,
-                    "failed_runs": bj.failed_runs,
-                    "started_at": (bj.started_at.isoformat() if bj.started_at else None),
-                    "completed_at": (bj.completed_at.isoformat() if bj.completed_at else None),
-                }
-            )
-
-        # Sort by started_at descending (most recent first)
-        items.sort(
-            key=lambda x: x.get("started_at") or "",
-            reverse=True,
+    for j in state.jobs.values():
+        items.append(
+            {
+                "job_id": j.job_id,
+                "type": "simulation",
+                "netlist": j.netlist.name,
+                "simulator": j.simulator,
+                "status": j.status,
+                "started_at": j.started_at.isoformat() if j.started_at else None,
+                "completed_at": (j.completed_at.isoformat() if j.completed_at else None),
+            }
         )
 
-        data = {"jobs": items, "count": len(items)}
-        return _make_result(uri_str, json.dumps(data, indent=2))
-    except Exception as e:
-        logger.error(f"Failed to list results: {e}")
-        raise ValueError(f"Failed to list results: {e}") from e
+    for bj in state.batch_jobs.values():
+        items.append(
+            {
+                "job_id": bj.job_id,
+                "type": bj.job_type,
+                "netlist": bj.netlist.name,
+                "status": bj.status,
+                "total_runs": bj.total_runs,
+                "completed_runs": bj.completed_runs,
+                "failed_runs": bj.failed_runs,
+                "started_at": (bj.started_at.isoformat() if bj.started_at else None),
+                "completed_at": (bj.completed_at.isoformat() if bj.completed_at else None),
+            }
+        )
+
+    items.sort(key=lambda x: x.get("started_at") or "", reverse=True)
+    data = {"jobs": items, "count": len(items)}
+    return _make_result(uri_str, json.dumps(data, indent=2))
 
 
 @_router.route("ltspice://results/{job_id}/signals")
-async def _read_signals(
+def _read_signals(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
     """List signal/trace names from a completed simulation's .raw file."""
     job_id = params["job_id"]
-    try:
-        signal_names = await services.load_signal_names(job_id, state)
-        data = {"job_id": job_id, "signals": signal_names}
-        return _make_result(uri_str, json.dumps(data, indent=2))
-    except Exception as e:
-        logger.error(f"Failed to read signals for job {job_id!r}: {e}")
-        raise ValueError(f"Failed to read signals for job {job_id!r}: {e}") from e
+    signal_names = services.load_signal_names(job_id, state)
+    data = {"job_id": job_id, "signals": signal_names}
+    return _make_result(uri_str, json.dumps(data, indent=2))
 
 
 @_router.route("ltspice://results/{job_id}/measurements")
-async def _read_measurements(
+def _read_measurements(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
     """Return .MEAS measurement results from a completed simulation's log file."""
     job_id = params["job_id"]
-    try:
-        meas_data = await services.load_measurements(job_id, state, include_log_text=True)
-        data: dict[str, Any] = {"job_id": job_id, "measurements": meas_data["measurements"]}
-        if "log_text" in meas_data:
-            data["log_text"] = meas_data["log_text"]
-        return _make_result(uri_str, json.dumps(data, indent=2))
-    except Exception as e:
-        logger.error(f"Failed to read measurements for job {job_id!r}: {e}")
-        raise ValueError(f"Failed to read measurements for job {job_id!r}: {e}") from e
+    meas_data = services.load_measurements(job_id, state, include_log_text=True)
+    data: dict[str, Any] = {"job_id": job_id, "measurements": meas_data["measurements"]}
+    if "log_text" in meas_data:
+        data["log_text"] = meas_data["log_text"]
+    return _make_result(uri_str, json.dumps(data, indent=2))
 
 
-@_router.route("ltspice://models/", is_async=False)
+@_router.route("ltspice://models/")
 def _read_models(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
     """List user-loaded libraries and their models (not built-ins)."""
     del params
-    try:
-        libraries: list[dict] = []
+    libraries: list[dict] = []
 
-        for path, index in state.libraries.get_loaded_libraries():
-            models = [
-                {
-                    "name": m.name,
-                    "type": m.model_type,
-                    "parameters": m.parameters,
-                }
-                for m in index.models
-            ]
-            libraries.append({"path": str(path), "models": models})
+    for path, index in state.libraries.get_loaded_libraries():
+        models = [
+            {
+                "name": m.name,
+                "type": m.model_type,
+                "parameters": m.parameters,
+            }
+            for m in index.models
+        ]
+        libraries.append({"path": str(path), "models": models})
 
-        data = {
-            "libraries": libraries,
-            "note": ("Use the ltspice_search_library tool to find models in built-in libraries."),
-        }
-        return _make_result(uri_str, json.dumps(data, indent=2))
-    except Exception as e:
-        logger.error(f"Failed to read models resource: {e}")
-        raise ValueError(f"Failed to read models: {e}") from e
+    data = {
+        "libraries": libraries,
+        "note": ("Use the ltspice_search_library tool to find models in built-in libraries."),
+    }
+    return _make_result(uri_str, json.dumps(data, indent=2))

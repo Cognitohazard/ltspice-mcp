@@ -3,8 +3,8 @@
 Provides functions for computing aggregate statistics across batch simulation
 runs, filtering runs by parameter values, and querying job progress.
 
-All functions are synchronous (CPU-bound). Callers that perform raw file I/O
-must wrap in run_sync() / asyncio.to_thread() to avoid blocking the event loop.
+All functions are synchronous — callers invoke them directly
+(see concurrency contract in tools/_base.py).
 """
 
 import time

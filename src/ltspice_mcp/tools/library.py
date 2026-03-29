@@ -15,7 +15,6 @@ from ltspice_mcp.tools._base import (
     paginate,
     pagination_metadata,
     registry,
-    run_sync,
     safe_path,
     text_response,
 )
@@ -88,9 +87,9 @@ async def handle_search_library(arguments: SearchLibraryInput, state: SessionSta
 
     try:
         if source == "user":
-            result = await run_sync(state.libraries.search_user_libraries, query, offset, limit)
+            result = state.libraries.search_user_libraries(query, offset, limit)
         elif source == "builtin":
-            result = await run_sync(state.libraries.search_builtin_libraries, query, offset, limit)
+            result = state.libraries.search_builtin_libraries(query, offset, limit)
         else:
             raise LibraryError(f"Invalid source: {source}. Must be 'user' or 'builtin'")
     except LibraryError:
@@ -139,7 +138,7 @@ async def handle_get_model_info(arguments: GetModelInfoInput, state: SessionStat
     fmt = arguments.format
 
     try:
-        info = await run_sync(state.libraries.get_model_info, name, full)
+        info = state.libraries.get_model_info(name, full)
     except Exception as e:
         raise LibraryError(f"Failed to get model info: {e}") from e
 
@@ -203,7 +202,7 @@ async def handle_load_library(arguments: LoadLibraryInput, state: SessionState) 
     path = safe_path(arguments.path, state)
 
     try:
-        summary = await run_sync(state.libraries.load_library, path)
+        summary = state.libraries.load_library(path)
     except LibraryError:
         raise
     except Exception as e:
@@ -247,7 +246,7 @@ async def handle_unload_library(arguments: UnloadLibraryInput, state: SessionSta
     path = safe_path(arguments.path, state)
 
     try:
-        result = await run_sync(state.libraries.unload_library, path)
+        result = state.libraries.unload_library(path)
     except Exception as e:
         raise LibraryError(f"Failed to unload library: {e}") from e
 
@@ -272,7 +271,7 @@ async def handle_list_libraries(arguments: ListLibrariesInput, state: SessionSta
     if arguments.path is not None:
         filter_path = safe_path(arguments.path, state)
 
-    libs = await run_sync(state.libraries.list_libraries)
+    libs = state.libraries.list_libraries()
 
     if not libs:
         return format_response("No libraries loaded", {"libraries": []}, fmt)
@@ -301,7 +300,7 @@ async def handle_list_libraries(arguments: ListLibrariesInput, state: SessionSta
 
     # Detail mode: include subcircuit names per library
     try:
-        result = await run_sync(state.libraries.search_user_libraries, "", 0, 999999)
+        result = state.libraries.search_user_libraries("", 0, 999999)
     except Exception as e:
         raise LibraryError(f"Failed to list subcircuits: {e}") from e
 

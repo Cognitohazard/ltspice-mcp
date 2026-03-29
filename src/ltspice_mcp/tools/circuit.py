@@ -23,12 +23,12 @@ from ltspice_mcp.lib import services
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     PAGINATION_SCHEMA,
+    StrictModel,
     ToolInput,
     format_response,
     paginate,
     pagination_metadata,
     registry,
-    run_sync,
     safe_path,
     text_response,
 )
@@ -136,7 +136,7 @@ class AddComponentInput(ToolInput):
     rotation: Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"] = "R0"
 
 
-class WireSegmentInput(ToolInput):
+class WireSegmentInput(StrictModel):
     x1: int
     y1: int
     x2: int
@@ -173,14 +173,14 @@ def _make_editor(path: Path) -> Editor:
         raise NetlistError(f"File not found: {path}") from e
 
 
-async def _get_editor(path: Path, state: SessionState) -> Editor:
+def _get_editor(path: Path, state: SessionState) -> Editor:
     """Get a cached editor instance, creating via _make_editor if needed."""
-    return await run_sync(state.editors.get, path, lambda p: _make_editor(p))
+    return state.editors.get(path, lambda p: _make_editor(p))
 
 
-async def _get_asc_editor(path: Path, state: SessionState) -> AscEditor:
+def _get_asc_editor(path: Path, state: SessionState) -> AscEditor:
     """Get a cached AscEditor. Caller must have validated _require_asc first."""
-    editor = await _get_editor(path, state)
+    editor = _get_editor(path, state)
     if not isinstance(editor, AscEditor):
         raise NetlistError(f"This operation requires an .asc schematic, got '{path.suffix}'. ")
     return editor
@@ -204,9 +204,9 @@ async def _editing(path: Path, state: SessionState) -> AsyncIterator[Editor]:
     Uses per-file locking to prevent concurrent edits to the same file.
     """
     async with _edit_locks[path]:
-        editor = await _get_editor(path, state)
+        editor = _get_editor(path, state)
         yield editor
-        await run_sync(editor.save_netlist, str(path))
+        editor.save_netlist(str(path))
         state.editors.invalidate(path)
 
 
@@ -218,9 +218,9 @@ async def _editing_asc(path: Path, state: SessionState) -> AsyncIterator[AscEdit
     Uses per-file locking to prevent concurrent edits to the same file.
     """
     async with _edit_locks[path]:
-        editor = await _get_asc_editor(path, state)
+        editor = _get_asc_editor(path, state)
         yield editor
-        await run_sync(editor.save_netlist, str(path))
+        editor.save_netlist(str(path))
     state.editors.invalidate(path)
 
 
@@ -249,20 +249,20 @@ async def handle_create_netlist(arguments: CreateNetlistInput, state: SessionSta
     content = arguments.content
     target_path = safe_path(f"{name}.cir", state)
 
-    if await run_sync(target_path.exists):
+    if target_path.exists():
         raise NetlistError(f"File already exists: {target_path}")
 
     if not content.strip().upper().endswith(".END"):
         content = content.rstrip() + "\n.END\n"
 
-    await run_sync(target_path.write_text, content)
+    target_path.write_text(content)
 
     try:
-        editor = await run_sync(SpiceEditor, str(target_path))
-        components = await run_sync(editor.get_components)
+        editor = SpiceEditor(str(target_path))
+        components = editor.get_components()
         comp_count = len(components)
     except Exception as e:
-        await run_sync(lambda: target_path.unlink(missing_ok=True))
+        target_path.unlink(missing_ok=True)
         raise NetlistError(f"Invalid netlist syntax: {e}") from e
 
     return text_response(f"Created netlist: {target_path}\nComponents: {comp_count}")
@@ -292,9 +292,9 @@ async def handle_read_circuit(arguments: CircuitReadInput, state: SessionState):
     fmt = arguments.format
 
     if _is_asc(file_path):
-        data = await services.extract_asc_info(await _get_asc_editor(file_path, state), file_path)
+        data = services.extract_asc_info(_get_asc_editor(file_path, state), file_path)
     else:
-        data = await services.extract_netlist_info(await _get_editor(file_path, state), file_path)
+        data = services.extract_netlist_info(_get_editor(file_path, state), file_path)
     return format_response(_format_circuit_text(file_path, data), data, fmt)
 
 
@@ -377,13 +377,13 @@ async def handle_list_components(arguments: ListComponentsInput, state: SessionS
     file_path = safe_path(arguments.path, state)
     fmt = arguments.format
 
-    editor = await _get_editor(file_path, state)
+    editor = _get_editor(file_path, state)
 
     # Single-component lookup mode (absorbed from get_component_value)
     reference = arguments.reference
     if reference is not None:
         try:
-            value = await run_sync(editor.get_component_value, reference)
+            value = editor.get_component_value(reference)
         except Exception:
             raise NetlistError(f"Component '{reference}' not found") from None
         data = {"reference": reference, "value": value}
@@ -391,10 +391,7 @@ async def handle_list_components(arguments: ListComponentsInput, state: SessionS
 
     # List mode
     prefix = arguments.prefix
-    if prefix:
-        components = await run_sync(editor.get_components, [prefix])
-    else:
-        components = await run_sync(editor.get_components)
+    components = editor.get_components(prefix) if prefix else editor.get_components()
 
     if not components:
         msg = (
@@ -509,14 +506,14 @@ async def handle_parameter(arguments: ParameterInput, state: SessionState):
         return text_response(f"Set .PARAM {param_name} = {param_value}")
 
     # Get mode (formerly get_parameters) — read-only, no _editing needed
-    editor = await _get_editor(file_path, state)
-    param_names = await run_sync(editor.get_all_parameter_names)
+    editor = _get_editor(file_path, state)
+    param_names = editor.get_all_parameter_names()
 
     params = {}
     if param_names:
         param_lines = []
         for name in param_names:
-            value = await run_sync(editor.get_parameter, name)
+            value = editor.get_parameter(name)
             param_lines.append(f".PARAM {name} = {value}")
             params[name] = value
         result = "\n".join(param_lines)
@@ -595,12 +592,12 @@ async def handle_remove_component(arguments: RemoveComponentInput, state: Sessio
     reference = arguments.reference
 
     async with _editing_asc(asc_path, state) as editor:
-        components = await run_sync(editor.get_components)
+        components = editor.get_components()
         if reference not in components:
             raise NetlistError(
                 f"Component '{reference}' not found. Available: {', '.join(components)}"
             )
-        await run_sync(editor.remove_component, reference)
+        editor.remove_component(reference)
 
     return text_response(f"Removed {reference} from {asc_path.name}")
 
@@ -663,7 +660,7 @@ async def handle_set_component_attribute(
     value = arguments.value
 
     async with _editing_asc(asc_path, state) as editor:
-        await run_sync(editor.set_component_attribute, reference, attribute, value)
+        editor.set_component_attribute(reference, attribute, value)
 
     return text_response(f"Set {reference}.{attribute} = {value}")
 
@@ -709,7 +706,7 @@ async def handle_add_component(arguments: AddComponentInput, state: SessionState
         if value is not None:
             comp.attributes["Value"] = value
 
-        await run_sync(editor.add_component, comp)
+        editor.add_component(comp)
 
     result = f"Added {reference} ({symbol}) at ({x},{y})"
     if value is not None:
@@ -775,14 +772,14 @@ async def handle_export_netlist(arguments: ExportNetlistInput, state: SessionSta
         )
 
     try:
-        net_path = await run_sync(ltspice_cls.create_netlist, str(asc_path))
+        net_path = ltspice_cls.create_netlist(str(asc_path))
         net_path = Path(net_path)
     except Exception as e:
         raise NetlistError(f"LTspice netlist export failed: {e}") from e
 
-    if not await run_sync(net_path.exists):
+    if not net_path.exists():
         raise NetlistError("Export failed: .net file not created")
 
-    content = await run_sync(net_path.read_text)
+    content = net_path.read_text()
 
     return text_response(f"=== {net_path.name} ===\n\n{content}")

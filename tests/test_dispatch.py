@@ -1,5 +1,7 @@
 """Tests for tool dispatch, schema validation, and profile filtering."""
 
+import json
+
 from pydantic import ValidationError
 
 from ltspice_mcp.tools import get_tools_for_profile
@@ -106,3 +108,50 @@ class TestToolProfiles:
         _, handlers = get_tools_for_profile("agentic")
         present = filtered_out & set(handlers.keys())
         assert not present, f"Tools that should be filtered out are present: {present}"
+
+
+def _assert_no_key_at_depth(node, key: str, tool_name: str, path: str) -> None:
+    """Recursively assert a key does not exist at any depth."""
+    if isinstance(node, dict):
+        assert key not in node, f"{tool_name}: '{key}' found at {path}"
+        for k, v in node.items():
+            _assert_no_key_at_depth(v, key, tool_name, f"{path}.{k}")
+    elif isinstance(node, list):
+        for i, item in enumerate(node):
+            _assert_no_key_at_depth(item, key, tool_name, f"{path}[{i}]")
+
+
+class TestSchemaPostProcessing:
+    """Verify that Pydantic-generated schemas are cleaned for MCP compatibility."""
+
+    def test_no_defs_in_any_schema(self):
+        """No tool schema should contain $defs after inlining."""
+        defs, _ = get_tools_for_profile("full")
+        for tool_def in defs:
+            assert "$defs" not in tool_def.inputSchema, (
+                f"{tool_def.name}: schema still contains $defs"
+            )
+
+    def test_no_title_at_any_depth(self):
+        """No 'title' key should exist at any depth in any tool schema."""
+        defs, _ = get_tools_for_profile("full")
+        for tool_def in defs:
+            _assert_no_key_at_depth(tool_def.inputSchema, "title", tool_def.name, "root")
+
+    def test_no_ref_at_any_depth(self):
+        """No '$ref' key should exist after inlining."""
+        defs, _ = get_tools_for_profile("full")
+        for tool_def in defs:
+            schema_str = json.dumps(tool_def.inputSchema)
+            assert "$ref" not in schema_str, f"{tool_def.name}: schema contains un-inlined $ref"
+
+    def test_nested_model_inlining(self):
+        """Tools with nested models should have schemas fully inlined."""
+        defs, _ = get_tools_for_profile("full")
+        sweep_tools = [d for d in defs if d.name == "ltspice_configure_sweep"]
+        assert sweep_tools, "ltspice_configure_sweep not found"
+        schema = sweep_tools[0].inputSchema
+        # parameters property should have inlined items schema
+        params_prop = schema["properties"]["parameters"]
+        assert "items" in params_prop, "parameters should have items schema"
+        assert "properties" in params_prop["items"], "nested items should have inlined properties"
