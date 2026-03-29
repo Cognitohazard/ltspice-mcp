@@ -362,17 +362,15 @@ class TestSimulationDegraded:
             result = await _call(session, "ltspice_run_simulation", {"netlist": "sim.cir"})
             _assert_tool_error(result, "simulator")
 
-    async def test_check_job_nonexistent_returns_not_found(self, tmp_path):
+    async def test_check_job_nonexistent_returns_error(self, tmp_path):
         async with mcp_session(tmp_path) as session:
             result = await _call(session, "ltspice_check_job", {"job_id": "nonexistent-123"})
-            assert not result.isError  # info text, not error
-            assert "Job not found: nonexistent-123" in _text(result)
+            _assert_tool_error(result, "Job not found: nonexistent-123")
 
-    async def test_cancel_job_nonexistent_returns_not_found(self, tmp_path):
+    async def test_cancel_job_nonexistent_returns_error(self, tmp_path):
         async with mcp_session(tmp_path) as session:
             result = await _call(session, "ltspice_cancel_job", {"job_id": "nonexistent-456"})
-            assert not result.isError
-            assert "Job not found: nonexistent-456" in _text(result)
+            _assert_tool_error(result, "Job not found: nonexistent-456")
 
     async def test_check_job_list_empty(self, tmp_path):
         async with mcp_session(tmp_path) as session:
@@ -490,12 +488,11 @@ class TestAdvancedTools:
             result = await _call(session, "ltspice_run_sweep", {"config_id": "sweep_bogus"})
             _assert_tool_error(result, "not found")
 
-    async def test_get_batch_results_invalid_job_returns_not_found(self, tmp_path):
-        """get_batch_results returns info text (not error) for missing jobs."""
+    async def test_get_batch_results_invalid_job_returns_error(self, tmp_path):
+        """get_batch_results returns error for missing jobs."""
         async with mcp_session(tmp_path) as session:
             result = await _call(session, "ltspice_get_batch_results", {"job_id": "batch_bogus"})
-            assert not result.isError
-            assert "Batch job not found: batch_bogus" in _text(result)
+            _assert_tool_error(result, "Batch job not found: batch_bogus")
 
 
 # ---------------------------------------------------------------------------

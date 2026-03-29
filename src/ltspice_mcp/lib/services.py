@@ -23,7 +23,6 @@ from ltspice_mcp.lib.batch_results import (
 from ltspice_mcp.lib.log_parser import parse_measurements
 from ltspice_mcp.lib.raw_parser import get_step_count, get_trace_names
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
-from ltspice_mcp.tools._base import run_sync
 
 Editor = AscEditor | SpiceEditor
 
@@ -55,17 +54,19 @@ def resolve_job(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
     raise ResultError(f"Job not found: {job_id}")
 
 
-def resolve_raw_file(job_id: str, state: SessionState) -> Path:
-    """Get the raw result file for a completed simulation or batch job."""
+def _resolve_result_file(
+    job_id: str, state: SessionState, field: str, label: str
+) -> Path:
+    """Resolve a result file (raw or log) from a simulation or batch job."""
     job = resolve_job(job_id, state)
 
     if isinstance(job, SimulationJob):
-        sim_job = job
-        if sim_job.status != "completed" or sim_job.raw_file is None:
+        file_path = getattr(job, field)
+        if job.status != "completed" or file_path is None:
             raise ResultError(
-                f"Job is not completed (status={sim_job.status!r}) or has no raw file"
+                f"Job is not completed (status={job.status!r}) or has no {label} file"
             )
-        return sim_job.raw_file
+        return file_path
 
     batch_job = job
     if batch_job.status != "completed":
@@ -73,34 +74,20 @@ def resolve_raw_file(job_id: str, state: SessionState) -> Path:
     if not batch_job.run_results:
         raise ResultError(f"Batch job {job_id!r} has no run results")
     first_run = batch_job.run_results[min(batch_job.run_results)]
-    raw_file = first_run.get("raw_file")
-    if raw_file is None:
-        raise ResultError(f"Batch job {job_id!r} first run has no raw file")
-    return Path(raw_file) if not isinstance(raw_file, Path) else raw_file
+    result_file = first_run.get(field)
+    if result_file is None:
+        raise ResultError(f"Batch job {job_id!r} first run has no {label} file")
+    return Path(result_file) if not isinstance(result_file, Path) else result_file
+
+
+def resolve_raw_file(job_id: str, state: SessionState) -> Path:
+    """Get the raw result file for a completed simulation or batch job."""
+    return _resolve_result_file(job_id, state, "raw_file", "raw")
 
 
 def resolve_log_file(job_id: str, state: SessionState) -> Path:
     """Get the log file for a completed simulation or batch job."""
-    job = resolve_job(job_id, state)
-
-    if isinstance(job, SimulationJob):
-        sim_job = job
-        if sim_job.status != "completed" or sim_job.log_file is None:
-            raise ResultError(
-                f"Job is not completed (status={sim_job.status!r}) or has no log file"
-            )
-        return sim_job.log_file
-
-    batch_job = job
-    if batch_job.status != "completed":
-        raise ResultError(f"Batch job is not completed (status={batch_job.status!r})")
-    if not batch_job.run_results:
-        raise ResultError(f"Batch job {job_id!r} has no run results")
-    first_run = batch_job.run_results[min(batch_job.run_results)]
-    log_file = first_run.get("log_file")
-    if log_file is None:
-        raise ResultError(f"Batch job {job_id!r} first run has no log file")
-    return Path(log_file) if not isinstance(log_file, Path) else log_file
+    return _resolve_result_file(job_id, state, "log_file", "log")
 
 
 def job_to_dict(job: SimulationJob) -> dict[str, Any]:
@@ -123,11 +110,10 @@ def job_to_dict(job: SimulationJob) -> dict[str, Any]:
     }
 
 
-async def load_raw(raw_path: Path, state: SessionState) -> RawRead:
+def load_raw(raw_path: Path, state: SessionState) -> RawRead:
     """Load and cache a ``RawRead`` instance."""
     try:
-        return await run_sync(
-            state.results.get,
+        return state.results.get(
             raw_path,
             lambda p: RawRead(str(p), traces_to_read="*"),
         )
@@ -142,9 +128,9 @@ async def load_raw(raw_path: Path, state: SessionState) -> RawRead:
         ) from e
 
 
-async def validate_signal(raw: RawRead, signal: str) -> None:
+def validate_signal(raw: RawRead, signal: str) -> None:
     """Validate that a signal exists in a raw result."""
-    trace_names = await run_sync(get_trace_names, raw)
+    trace_names = get_trace_names(raw)
     if signal not in trace_names:
         available = ", ".join(trace_names[:10])
         if len(trace_names) > 10:
@@ -152,31 +138,29 @@ async def validate_signal(raw: RawRead, signal: str) -> None:
         raise ResultError(f"Signal '{signal}' not found. Available signals: {available}")
 
 
-async def validate_step(raw: RawRead, step: int) -> None:
+def validate_step(raw: RawRead, step: int) -> None:
     """Validate that a step index exists in a raw result."""
-    step_count = await run_sync(get_step_count, raw)
+    step_count = get_step_count(raw)
     if step < 0 or step >= step_count:
         raise ResultError(f"Step {step} out of range. Valid range: 0 to {step_count - 1}")
 
 
-async def load_signal_names(job_id: str, state: SessionState) -> list[str]:
+def load_signal_names(job_id: str, state: SessionState) -> list[str]:
     """Load signal names from a completed job."""
     raw_path = resolve_raw_file(job_id, state)
-    raw = await load_raw(raw_path, state)
-    return await run_sync(get_trace_names, raw)
+    raw = load_raw(raw_path, state)
+    return get_trace_names(raw)
 
 
-async def load_measurements(
+def load_measurements(
     job_id: str, state: SessionState, *, include_log_text: bool = False
 ) -> dict[str, Any]:
     """Load measurements from a completed job."""
     log_path = resolve_log_file(job_id, state)
-    data = await run_sync(parse_measurements, log_path)
+    data = parse_measurements(log_path)
     if include_log_text and log_path.exists():
         data = dict(data)
-        data["log_text"] = await run_sync(
-            lambda: log_path.read_text(encoding="utf-8", errors="replace")
-        )
+        data["log_text"] = log_path.read_text(encoding="utf-8", errors="replace")
     return data
 
 
@@ -215,10 +199,9 @@ def get_batch_status(batch_job: BatchJob) -> dict[str, Any]:
     }
 
 
-async def get_batch_signal_data(
+def get_batch_signal_data(
     batch_job: BatchJob,
     signal: str,
-    state: SessionState,
     *,
     filters: dict[str, str] | None = None,
     raw: bool = False,
@@ -226,8 +209,6 @@ async def get_batch_signal_data(
     limit: int = 50,
 ) -> dict[str, Any]:
     """Extract structured batch signal data for aggregated or raw mode."""
-    del state  # Reserved for future service-layer expansion; current helpers read files directly.
-
     if batch_job.completed_runs == 0:
         raise BatchJobError(f"No completed runs yet for job {batch_job.job_id}")
 
@@ -252,7 +233,7 @@ async def get_batch_signal_data(
                 f"offset={offset}, limit={limit}"
             )
         paginated_run_results = {idx: batch_job.run_results[idx] for idx in paginated_indices}
-        page_stats = await run_sync(compute_batch_stats, paginated_run_results, signal)
+        page_stats = compute_batch_stats(paginated_run_results, signal)
         return {
             "mode": "raw",
             "job_id": batch_job.job_id,
@@ -266,7 +247,7 @@ async def get_batch_signal_data(
             "limit": limit,
         }
 
-    batch_stats = await run_sync(compute_batch_stats, matching_run_results, signal)
+    batch_stats = compute_batch_stats(matching_run_results, signal)
     if batch_stats["run_count"] == 0:
         raise ResultError(f"Signal '{signal}' not found in any completed run")
 
@@ -285,9 +266,9 @@ async def get_batch_signal_data(
     }
 
 
-async def extract_asc_info(editor: AscEditor, file_path: Path) -> dict[str, Any]:
+def extract_asc_info(editor: AscEditor, file_path: Path) -> dict[str, Any]:
     """Extract structured schematic data from an ``AscEditor``."""
-    components = await run_sync(editor.get_components)
+    components = editor.get_components()
     comp_data = []
     for ref in components:
         value = editor.get_component_value(ref)
@@ -313,13 +294,13 @@ async def extract_asc_info(editor: AscEditor, file_path: Path) -> dict[str, Any]
     }
 
 
-async def extract_netlist_info(editor: Editor, file_path: Path) -> dict[str, Any]:
+def extract_netlist_info(editor: Editor, file_path: Path) -> dict[str, Any]:
     """Extract structured netlist data from a ``SpiceEditor``-compatible editor."""
-    content = await run_sync(file_path.read_text)
-    components = await run_sync(editor.get_components)
+    content = file_path.read_text()
+    components = editor.get_components()
     comp_list = []
     for comp_ref in components:
-        value = await run_sync(editor.get_component_value, comp_ref)
+        value = editor.get_component_value(comp_ref)
         comp_list.append({"reference": comp_ref, "value": value})
 
     return {

@@ -6,7 +6,7 @@ spicelib's RawRead objects and return Python primitives (no numpy types).
 
 For .log file parsing (measurements, Fourier data), see log_parser.py.
 
-Functions are synchronous and CPU-bound - callers must wrap in run_sync().
+Functions are synchronous — callers invoke them directly (see concurrency contract in tools/_base.py).
 """
 
 import contextlib

@@ -273,7 +273,7 @@ class TestResourcesWithResults:
     ):
         from ltspice_mcp.resources import handle_read_resource
 
-        result = await handle_read_resource("ltspice://netlists/", ltspice_state)
+        result = handle_read_resource("ltspice://netlists/", ltspice_state)
         text = result.contents[0].text
         assert "rc_filter.cir" in text
 
@@ -286,7 +286,7 @@ class TestResourcesWithResults:
             ltspice_state,
         )
 
-        result = await handle_read_resource("ltspice://results/", ltspice_state)
+        result = handle_read_resource("ltspice://results/", ltspice_state)
         text = result.contents[0].text
         assert '"count": 1' in text or "simulation" in text.lower()
 
@@ -306,7 +306,7 @@ class TestResourcesWithResults:
         if job.status != "completed" or job.raw_file is None:
             pytest.skip(f"Job not completed: status={job.status}")
 
-        result = await handle_read_resource(f"ltspice://results/{job_id}/signals", ltspice_state)
+        result = handle_read_resource(f"ltspice://results/{job_id}/signals", ltspice_state)
         text = result.contents[0].text
         assert "signals" in text.lower()
 

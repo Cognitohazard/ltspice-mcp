@@ -120,8 +120,7 @@ async def handle_run_simulation(arguments: RunSimulationInput, state: SessionSta
     netlist_path = resolve_netlist_path(netlist_str, state)
     require_simulator(state)
     default_simulator = state.default_simulator
-    if default_simulator is None:
-        raise SimulationError("No simulator available. Check server status.")
+    assert default_simulator is not None  # guaranteed by require_simulator
 
     # Generate job ID and create job
     job_id = generate_job_id()

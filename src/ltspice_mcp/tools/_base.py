@@ -65,12 +65,6 @@ def format_response(
 # Shared tool schema fragments and annotations
 # ---------------------------------------------------------------------------
 
-FORMAT_PROP: dict[str, Any] = {
-    "type": "string",
-    "enum": ["json", "text"],
-    "description": "Response format: 'json' for structured data, 'text' for human-readable (default: text)",
-}
-
 PAGINATION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -90,14 +84,20 @@ RO_ANNOTATIONS = types.ToolAnnotations(
 )
 
 
-class ToolInput(BaseModel):
-    """Base model for all tool inputs."""
+class StrictModel(BaseModel):
+    """Shared Pydantic config for all strict models (tool inputs and nested schemas)."""
 
     model_config = ConfigDict(
         extra="forbid",
         str_strip_whitespace=True,
         validate_assignment=True,
     )
+
+
+class ToolInput(StrictModel):
+    """Base for top-level tool input models registered via @registry.tool(input_model=...)."""
+
+    pass
 
 
 @dataclass(frozen=True)
@@ -166,10 +166,9 @@ class ToolRegistry:
 
             @wraps(handler)
             async def wrapped(arguments: Any, state: SessionState) -> types.CallToolResult:
-                parsed_arguments = arguments
                 if input_model is not None and not isinstance(arguments, input_model):
-                    parsed_arguments = input_model.model_validate(arguments or {})
-                return await handler(parsed_arguments, state)
+                    arguments = input_model.model_validate(arguments or {})
+                return await handler(arguments, state)
 
             definition_kwargs: dict[str, Any] = {
                 "name": name,
@@ -223,12 +222,8 @@ def paginate(items: list, arguments: Any, cap: int = 50) -> tuple[list, int, int
         (page, total, offset, limit) tuple
     """
     total = len(items)
-    if hasattr(arguments, "get"):
-        offset = int(arguments.get("offset", 0))
-        limit = min(int(arguments.get("limit", cap)), cap)
-    else:
-        offset = int(getattr(arguments, "offset", 0))
-        limit = min(int(getattr(arguments, "limit", cap)), cap)
+    offset = int(getattr(arguments, "offset", 0))
+    limit = min(int(getattr(arguments, "limit", cap)), cap)
     return items[offset : offset + limit], total, offset, limit
 
 
@@ -293,23 +288,15 @@ def safe_path(user_path: str, state: SessionState) -> Path:
     return resolve_safe_path(user_path, state.config.allowed_paths)
 
 
-async def run_sync[T](fn: Callable[..., T], *args: Any) -> T:
-    """Run a synchronous helper through the shared async boundary.
-
-    In this environment, threaded filesystem access can deadlock for the
-    parser/editor codepaths used throughout the server. The dedicated
-    simulation runners still use their own background threads for long-lived
-    simulator work; this wrapper keeps adapter/service helpers reliable by
-    executing inline.
-
-    Args:
-        fn: Synchronous function to call
-        *args: Arguments to pass to the function
-
-    Returns:
-        Result from the function call
-    """
-    return fn(*args)
+# ---------------------------------------------------------------------------
+# Concurrency contract
+#
+# MCP stdio transport processes one request at a time — tool handlers run
+# synchronously on the event loop.  All spicelib parser/editor calls are
+# fast enough to run inline.  Long-lived simulation work uses
+# asyncio.to_thread() in the runner layer (sim_runner, sweep_runner,
+# montecarlo_runner), not here.
+# ---------------------------------------------------------------------------
 
 
 def resolve_output_folder(state: SessionState) -> Path:
@@ -328,12 +315,11 @@ def resolve_output_folder(state: SessionState) -> Path:
     if is_wsl() and not is_windows_native_path(state.working_dir):
         win_dir = get_windows_output_dir()
         if win_dir is not None:
-            logger.info(
-                f"WSL: using Windows output dir {win_dir} "
-                f"(working_dir {state.working_dir} is on Linux filesystem)"
-            )
-            resolved = win_dir.resolve()
-            if not any(p.resolve() == resolved for p in state.config.allowed_paths):
+            if win_dir not in state.config.allowed_paths:
+                logger.info(
+                    f"WSL: using Windows output dir {win_dir} "
+                    f"(working_dir {state.working_dir} is on Linux filesystem)"
+                )
                 state.config.allowed_paths.append(win_dir)
             return win_dir
 

@@ -23,7 +23,6 @@ from ltspice_mcp.tools._base import (
     ToolInput,
     format_response,
     registry,
-    run_sync,
     safe_path,
 )
 
@@ -95,12 +94,12 @@ async def handle_get_signal_stats(arguments: SignalStatsInput, state: SessionSta
     step = arguments.step
     fmt = arguments.format
 
-    raw = await services.load_raw(raw_path, state)
-    await services.validate_signal(raw, signal)
-    await services.validate_step(raw, step)
+    raw = services.load_raw(raw_path, state)
+    services.validate_signal(raw, signal)
+    services.validate_step(raw, step)
 
     try:
-        stats = await run_sync(compute_signal_stats, raw, signal, step)
+        stats = compute_signal_stats(raw, signal, step)
     except Exception as e:
         raise ResultError(f"Failed to compute statistics: {e}") from e
 
@@ -167,16 +166,16 @@ async def handle_query_value(arguments: QueryValueInput, state: SessionState):
     except ValueError as e:
         raise ResultError(f"Invalid 'at' value: {e}") from e
 
-    raw = await services.load_raw(raw_path, state)
-    await services.validate_signal(raw, signal)
-    await services.validate_step(raw, step)
+    raw = services.load_raw(raw_path, state)
+    services.validate_signal(raw, signal)
+    services.validate_step(raw, step)
 
     try:
-        result_data = await run_sync(query_point_value, raw, signal, target_x, step)
+        result_data = query_point_value(raw, signal, target_x, step)
     except Exception as e:
         raise ResultError(f"Failed to query value: {e}") from e
 
-    sim_type = await run_sync(detect_sim_type, raw)
+    sim_type = detect_sim_type(raw)
     x_unit = "f" if "AC" in sim_type.upper() else "t"
 
     if "magnitude_db" in result_data:
@@ -254,7 +253,7 @@ async def handle_get_measurements(arguments: MeasurementsInput, state: SessionSt
     fmt = arguments.format
 
     try:
-        meas_data = await run_sync(parse_measurements, log_path)
+        meas_data = parse_measurements(log_path)
     except ResultError:
         raise
     except Exception as e:
@@ -293,10 +292,10 @@ async def handle_get_operating_point(arguments: OperatingPointInput, state: Sess
     """Read DC operating point data (all node voltages and branch currents)."""
     raw_path = safe_path(arguments.raw_file, state)
     fmt = arguments.format
-    raw = await services.load_raw(raw_path, state)
+    raw = services.load_raw(raw_path, state)
 
     try:
-        op_data = await run_sync(extract_operating_point, raw)
+        op_data = extract_operating_point(raw)
     except Exception as e:
         raise ResultError(f"Failed to extract operating point: {e}") from e
 
@@ -334,10 +333,10 @@ async def handle_get_simulation_summary(arguments: SimulationSummaryInput, state
     if arguments.log_file is not None:
         log_path = safe_path(arguments.log_file, state)
 
-    raw = await services.load_raw(raw_path, state)
+    raw = services.load_raw(raw_path, state)
 
     try:
-        summary = await run_sync(build_simulation_summary, raw, log_path, None)
+        summary = build_simulation_summary(raw, log_path, None)
     except Exception as e:
         raise ResultError(f"Failed to build summary: {e}") from e
 
@@ -347,9 +346,7 @@ async def handle_get_simulation_summary(arguments: SimulationSummaryInput, state
         voltage_signals = [s for s in summary["signals"] if s.startswith("V(")]
         if voltage_signals:
             with contextlib.suppress(Exception):
-                ac_metrics = await run_sync(
-                    compute_ac_bandwidth_metrics, raw, voltage_signals[0], 0
-                )
+                ac_metrics = compute_ac_bandwidth_metrics(raw, voltage_signals[0], 0)
 
     # Build JSON data dict (always needed for json mode, cheap to build)
     json_data = dict(summary)
