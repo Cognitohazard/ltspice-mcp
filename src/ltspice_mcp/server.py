@@ -302,11 +302,10 @@ async def call_tool(name: str, arguments: dict | None):
 
     # Invoke handler — enrich known errors with actionable guidance.
     # Exceptions propagate to the MCP SDK which sets isError=True.
+    # Input validation (Pydantic model_validate) is handled by the registry
+    # wrapper in _base.py — no need to validate here.
     try:
-        parsed_arguments = arguments or {}
-        if registered.input_model is not None:
-            parsed_arguments = registered.input_model.model_validate(parsed_arguments)
-        return await registered.handler(parsed_arguments, state)
+        return await registered.handler(arguments or {}, state)
     except ValidationError as e:
         raise ValueError(f"Invalid arguments for {name}: {e}") from None
     except PathSecurityError as e:
