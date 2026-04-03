@@ -85,7 +85,7 @@ class TestReadResource:
             handle_read_resource("ltspice://nonexistent", state_no_sim)
 
     def test_netlist_path_escape_blocked(self, state_no_sim: SessionState):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Unknown resource URI"):
             handle_read_resource("ltspice://netlists/../../etc/passwd", state_no_sim)
 
     def test_signals_no_job(self, state_no_sim: SessionState):

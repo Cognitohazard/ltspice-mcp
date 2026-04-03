@@ -446,8 +446,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "mcp", extras = ["cli"], specifier = ">=1.0,<2.0" },
-    { name = "spicelib", specifier = ">=1.4.9" },
-    { name = "tomlkit", specifier = ">=0.14.0" },
+    { name = "spicelib", specifier = ">=1.4.9,<2.0" },
+    { name = "tomlkit", specifier = ">=0.14.0,<1.0" },
 ]
 
 [package.metadata.requires-dev]

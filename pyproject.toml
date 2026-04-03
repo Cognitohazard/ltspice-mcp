@@ -7,8 +7,8 @@ license = "GPL-3.0-or-later"
 requires-python = ">=3.13"
 dependencies = [
     "mcp[cli]>=1.0,<2.0",
-    "spicelib>=1.4.9",
-    "tomlkit>=0.14.0",
+    "spicelib>=1.4.9,<2.0",
+    "tomlkit>=0.14.0,<1.0",
 ]
 
 [project.scripts]
@@ -44,9 +44,19 @@ select = [
     "B",     # flake8-bugbear
     "SIM",   # flake8-simplify
     "RUF",   # ruff-specific
+    "ASYNC", # async correctness
+    "TRY",   # exception handling
+    "PERF",  # performance anti-patterns
+    "PT",    # pytest style
 ]
 ignore = [
-    "E501",  # line length (handled by formatter)
+    "E501",    # line length (handled by formatter)
+    "TRY003",  # long exception messages are fine for a CLI tool
+    "TRY300",  # return-in-try is fine when the logic reads better inline
+    "TRY301",  # raise-within-try is used intentionally for re-raising with context
+    "TRY400",  # logger.error in except is acceptable
+    "PERF401", # list-comprehension rewrites often hurt readability for filtering+appending
+    "PT018",   # compound assertions are acceptable when testing related properties
 ]
 
 [tool.ruff.lint.isort]
@@ -55,3 +65,4 @@ known-first-party = ["ltspice_mcp"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "--strict-markers --tb=short"

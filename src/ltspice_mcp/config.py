@@ -16,6 +16,33 @@ ToolProfile = Literal["full", "agentic"]
 VALID_PROFILES: frozenset[str] = frozenset({"full", "agentic"})
 
 
+def _load_bounded_env(
+    env_var: str,
+    config_dict: dict,
+    key: str,
+    type_fn: type,
+    min_val: float,
+    max_val: float,
+    *,
+    exclusive_min: bool = False,
+) -> None:
+    """Load a numeric env var into *config_dict* if it passes bounds validation."""
+    raw = os.getenv(env_var)
+    if raw is None:
+        return
+    try:
+        val = type_fn(raw)
+    except (ValueError, TypeError):
+        logger.warning("%s: invalid value %r; ignoring", env_var, raw)
+        return
+    too_low = val <= min_val if exclusive_min else val < min_val
+    if too_low or val > max_val:
+        low = f">{min_val}" if exclusive_min else str(min_val)
+        logger.warning("%s must be %s-%s, got %s; ignoring", env_var, low, max_val, val)
+    else:
+        config_dict[key] = val
+
+
 def _validated_profile(value: str, source: str) -> str | None:
     """Return value if it's a valid profile, else warn and return None."""
     if value in VALID_PROFILES:
@@ -158,17 +185,16 @@ class ServerConfig:
         if env_paths := os.getenv("LTSPICE_MCP_ALLOWED_PATHS"):
             config_dict["allowed_paths"] = [Path(p) for p in env_paths.split(os.pathsep)]
 
-        if env_parallel := os.getenv("LTSPICE_MCP_MAX_PARALLEL"):
-            config_dict["max_parallel_sims"] = int(env_parallel)
-
-        if env_timeout := os.getenv("LTSPICE_MCP_TIMEOUT"):
-            config_dict["default_timeout"] = float(env_timeout)
-
-        if env_points := os.getenv("LTSPICE_MCP_MAX_POINTS"):
-            config_dict["max_points_returned"] = int(env_points)
-
-        if env_dpi := os.getenv("LTSPICE_MCP_PLOT_DPI"):
-            config_dict["plot_dpi"] = int(env_dpi)
+        _load_bounded_env(
+            "LTSPICE_MCP_MAX_PARALLEL", config_dict, "max_parallel_sims", int, 1, 128
+        )
+        _load_bounded_env(
+            "LTSPICE_MCP_TIMEOUT", config_dict, "default_timeout", float, 0, 86400, exclusive_min=True
+        )
+        _load_bounded_env(
+            "LTSPICE_MCP_MAX_POINTS", config_dict, "max_points_returned", int, 1, 10_000_000
+        )
+        _load_bounded_env("LTSPICE_MCP_PLOT_DPI", config_dict, "plot_dpi", int, 50, 600)
 
         if env_style := os.getenv("LTSPICE_MCP_PLOT_STYLE"):
             config_dict["plot_style"] = env_style

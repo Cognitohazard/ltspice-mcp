@@ -1,6 +1,7 @@
 """Session state management and simulation job tracking."""
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -114,6 +115,7 @@ class BatchJob:
     run_results: dict[int, dict] = field(default_factory=dict)
     sweep_config: SweepConfig | None = None
     mc_config: MonteCarloConfig | None = None
+    task: asyncio.Task | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -276,3 +278,8 @@ class SessionState:
                     batch_job.status = "cancelled"
                     batch_job.completed_at = now()
                     batch_job.done_event.set()
+            # Ensure the background task is awaited so exceptions aren't lost
+            if batch_job.task is not None and not batch_job.task.done():
+                batch_job.task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await batch_job.task

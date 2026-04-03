@@ -46,6 +46,19 @@ class FileCache[T]:
         self._entries[path] = (mtime, value)
         return value
 
+    def set(self, path: Path, value: T) -> None:
+        """Store a value in the cache with the file's current mtime.
+
+        Args:
+            path: File path to associate the value with
+            value: The value to cache
+        """
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        self._entries[path] = (mtime, value)
+
     def invalidate(self, path: Path) -> None:
         """Remove a specific entry from cache.
 

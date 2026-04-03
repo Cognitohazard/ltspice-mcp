@@ -2,6 +2,9 @@
   "venvPath": ".",
   "venv": ".venv",
   "pythonVersion": "3.13",
-  "include": ["src"],
-  "reportMissingImports": true
+  "include": ["src", "tests"],
+  "typeCheckingMode": "standard",
+  "reportMissingImports": true,
+  "reportUnusedVariable": "warning",
+  "reportPrivateUsage": "warning"
 }

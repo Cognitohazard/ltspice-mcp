@@ -183,16 +183,25 @@ class SimulationRunner:
         job.log_file = Path(log_file)
 
         # Check if simulation actually succeeded (raw file exists and has content)
-        if not job.raw_file.exists() or job.raw_file.stat().st_size == 0:
+        try:
+            raw_size = job.raw_file.stat().st_size if job.raw_file else 0
+        except OSError as e:
+            logger.debug("Could not stat raw file %s: %s", job.raw_file, e)
+            raw_size = 0
+
+        if raw_size == 0:
             # Simulation failed - extract error from log
             job.status = "failed"
-            if job.log_file.exists():
-                error_context = extract_error_context(job.log_file, max_lines=20)
-                job.error = (
-                    f"Simulation failed (no output generated)\n\nLog excerpt:\n{error_context}"
-                )
-            else:
-                job.error = "Simulation failed (no output generated, log file missing)"
+            try:
+                if job.log_file and job.log_file.exists():
+                    error_context = extract_error_context(job.log_file, max_lines=20)
+                    job.error = (
+                        f"Simulation failed (no output generated)\n\nLog excerpt:\n{error_context}"
+                    )
+                else:
+                    job.error = "Simulation failed (no output generated, log file missing)"
+            except OSError:
+                job.error = "Simulation failed (no output generated, log file not accessible)"
 
             logger.warning(f"Simulation {job_id} failed: {job.error}")
         else:

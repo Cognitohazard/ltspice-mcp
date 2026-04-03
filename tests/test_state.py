@@ -49,18 +49,18 @@ class TestSessionStateCreate:
 
 
 class TestSessionStateShutdown:
-    def test_shutdown_clears_caches(self, config: ServerConfig, tmp_path: Path):
+    async def test_shutdown_clears_caches(self, config: ServerConfig, tmp_path: Path):
         state = SessionState.create(config, {})
         p = tmp_path / "dummy.txt"
         p.write_text("data")
         state.editors.get(p, lambda path: path.read_text())
         assert len(state.editors) == 1
 
-        asyncio.run(state.shutdown())
+        await state.shutdown()
         assert len(state.editors) == 0
         assert len(state.results) == 0
 
-    def test_shutdown_cancels_running_sim_jobs(self, config: ServerConfig):
+    async def test_shutdown_cancels_running_sim_jobs(self, config: ServerConfig):
         state = SessionState.create(config, {})
         job = SimulationJob(
             job_id="sim1",
@@ -71,11 +71,11 @@ class TestSessionStateShutdown:
         )
         state.jobs["sim1"] = job
 
-        asyncio.run(state.shutdown())
+        await state.shutdown()
         assert job.status == "cancelled"
         assert job.done_event.is_set()
 
-    def test_shutdown_cancels_running_batch_jobs(self, config: ServerConfig):
+    async def test_shutdown_cancels_running_batch_jobs(self, config: ServerConfig):
         state = SessionState.create(config, {})
         batch = BatchJob(
             job_id="batch1",
@@ -86,11 +86,11 @@ class TestSessionStateShutdown:
         )
         state.batch_jobs["batch1"] = batch
 
-        asyncio.run(state.shutdown())
+        await state.shutdown()
         assert batch.status == "cancelled"
         assert batch.done_event.is_set()
 
-    def test_shutdown_ignores_completed_jobs(self, config: ServerConfig):
+    async def test_shutdown_ignores_completed_jobs(self, config: ServerConfig):
         state = SessionState.create(config, {})
         job = SimulationJob(
             job_id="done1",
@@ -102,7 +102,7 @@ class TestSessionStateShutdown:
         )
         state.jobs["done1"] = job
 
-        asyncio.run(state.shutdown())
+        await state.shutdown()
         assert job.status == "completed"
 
 
