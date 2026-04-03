@@ -18,6 +18,16 @@ from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.lib.log_parser import parse_fourier_data, parse_measurements
 
+# Smallest positive normal float — floor for magnitude before log10 to avoid -inf
+_FLOAT_TINY = np.finfo(float).tiny
+
+
+def _safe_magnitude_db(wave: np.ndarray) -> np.ndarray:
+    """Convert complex waveform to magnitude in dB, clamping zeros to avoid -inf."""
+    magnitude = np.abs(wave)
+    magnitude = np.where(magnitude > 0, magnitude, _FLOAT_TINY)
+    return 20 * np.log10(magnitude)
+
 
 def detect_sim_type(raw: RawRead) -> str:
     """Detect simulation type from raw file metadata.
@@ -97,7 +107,7 @@ def compute_signal_stats(raw: RawRead, trace_name: str, step: int = 0) -> dict:
     # Detect if this is AC data (complex array)
     if np.iscomplexobj(wave):
         # AC Analysis - compute magnitude and phase stats
-        magnitude_db = 20 * np.log10(np.abs(wave))
+        magnitude_db = _safe_magnitude_db(wave)
         phase_deg = np.angle(wave, deg=True)
 
         return {
@@ -226,7 +236,7 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     wave = raw.get_wave(trace_name, step=step)
 
     # Convert to magnitude and phase
-    magnitude_db = 20 * np.log10(np.abs(wave))
+    magnitude_db = _safe_magnitude_db(wave)
     phase_deg = np.angle(wave, deg=True)
 
     metrics: dict[str, float | None] = {

@@ -7,7 +7,6 @@ and raise NetlistError if given a non-.asc file.
 """
 
 import asyncio
-from collections import defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -33,8 +32,27 @@ from ltspice_mcp.tools._base import (
     text_response,
 )
 
-# Per-file locks to prevent concurrent edits to the same circuit file
-_edit_locks: dict[Path, asyncio.Lock] = defaultdict(asyncio.Lock)
+# Per-file locks to prevent concurrent edits to the same circuit file.
+# Bounded to avoid unbounded growth; only evicts *unheld* locks.
+_MAX_EDIT_LOCKS = 64
+_edit_locks: dict[Path, asyncio.Lock] = {}
+
+
+def _get_edit_lock(path: Path) -> asyncio.Lock:
+    """Get or create a per-file edit lock, evicting oldest unheld lock if at capacity."""
+    if path in _edit_locks:
+        # Move to end (most recently used) for LRU ordering
+        _edit_locks[path] = _edit_locks.pop(path)
+        return _edit_locks[path]
+    if len(_edit_locks) >= _MAX_EDIT_LOCKS:
+        # Evict the oldest *unheld* lock to avoid breaking mutual exclusion
+        for candidate in list(_edit_locks):
+            if not _edit_locks[candidate].locked():
+                del _edit_locks[candidate]
+                break
+        # If all locks are held, allow temporary overshoot rather than break safety
+    _edit_locks[path] = asyncio.Lock()
+    return _edit_locks[path]
 
 # Rotation string -> ERotation enum mapping (shared by move/add handlers)
 _ROTATION_MAP: dict[str, ERotation] = {
@@ -203,7 +221,7 @@ async def _editing(path: Path, state: SessionState) -> AsyncIterator[Editor]:
     If the caller raises, changes are not saved (fail-safe).
     Uses per-file locking to prevent concurrent edits to the same file.
     """
-    async with _edit_locks[path]:
+    async with _get_edit_lock(path):
         editor = _get_editor(path, state)
         yield editor
         editor.save_netlist(str(path))
@@ -217,11 +235,11 @@ async def _editing_asc(path: Path, state: SessionState) -> AsyncIterator[AscEdit
     Caller must have validated _require_asc first.
     Uses per-file locking to prevent concurrent edits to the same file.
     """
-    async with _edit_locks[path]:
+    async with _get_edit_lock(path):
         editor = _get_asc_editor(path, state)
         yield editor
         editor.save_netlist(str(path))
-    state.editors.invalidate(path)
+        state.editors.invalidate(path)
 
 
 # ---------------------------------------------------------------------------

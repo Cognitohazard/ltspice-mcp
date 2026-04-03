@@ -9,12 +9,19 @@ from typing import TYPE_CHECKING, Any, Literal
 from mcp import types
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib import now
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.library_manager import LibraryManager
 from ltspice_mcp.lib.runner_manager import RunnerManager
 
 if TYPE_CHECKING:
     from ltspice_mcp.tools._base import RegisteredTool
+
+# Terminal job statuses — jobs in these states are eligible for eviction.
+TERMINAL_STATUSES: frozenset[str] = frozenset({"completed", "failed", "timeout", "cancelled"})
+
+# Maximum finished jobs to retain per dict (jobs, batch_jobs).
+_MAX_FINISHED_JOBS = 200
 
 
 @dataclass
@@ -100,7 +107,7 @@ class BatchJob:
     completed_runs: int = 0
     failed_runs: int = 0
     status: Literal["running", "completed", "failed", "cancelled"] = "running"
-    started_at: datetime = field(default_factory=datetime.now)
+    started_at: datetime = field(default_factory=now)
     completed_at: datetime | None = None
     error: str | None = None
     done_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -215,6 +222,30 @@ class SessionState:
             tool_dispatch=tool_dispatch,
         )
 
+    @staticmethod
+    def _evict_from(jobs_dict: dict) -> None:
+        """Evict oldest terminal jobs from a single dict when over the limit."""
+        finished = [
+            (jid, j)
+            for jid, j in jobs_dict.items()
+            if j.status in TERMINAL_STATUSES
+        ]
+        overflow = len(finished) - _MAX_FINISHED_JOBS
+        if overflow > 0:
+            finished.sort(key=lambda pair: pair[1].started_at)
+            for jid, _ in finished[:overflow]:
+                del jobs_dict[jid]
+
+    def add_job(self, job: SimulationJob) -> None:
+        """Register a simulation job and evict old finished jobs if needed."""
+        self.jobs[job.job_id] = job
+        self._evict_from(self.jobs)
+
+    def add_batch_job(self, batch_job: BatchJob) -> None:
+        """Register a batch job and evict old finished batch jobs if needed."""
+        self.batch_jobs[batch_job.job_id] = batch_job
+        self._evict_from(self.batch_jobs)
+
     async def shutdown(self) -> None:
         """Clean up session resources at server shutdown.
 
@@ -230,7 +261,7 @@ class SessionState:
                     await sim_runner.cancel(job)
                 else:
                     job.status = "cancelled"
-                    job.completed_at = datetime.now()
+                    job.completed_at = now()
                     job.done_event.set()
         # Cancel any running batch jobs
         sweep_runner = self.runners.get_existing_sweep_runner()
@@ -243,5 +274,5 @@ class SessionState:
                     await mc_runner.cancel(batch_job)
                 else:
                     batch_job.status = "cancelled"
-                    batch_job.completed_at = datetime.now()
+                    batch_job.completed_at = now()
                     batch_job.done_event.set()

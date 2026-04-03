@@ -4,11 +4,11 @@ import asyncio
 import logging
 import time
 import uuid
-from datetime import datetime
 from pathlib import Path
 
 from spicelib.sim.sim_runner import SimRunner
 
+from ltspice_mcp.lib import now
 from ltspice_mcp.lib.log_parser import extract_error_context
 from ltspice_mcp.state import SessionState, SimulationJob
 
@@ -150,7 +150,7 @@ class SimulationRunner:
             logger.error(f"Failed to submit simulation {job_id}: {e}", exc_info=True)
             job.status = "failed"
             job.error = f"Submission failed: {e}"
-            job.completed_at = datetime.now()
+            job.completed_at = now()
             job.done_event.set()
 
     def _handle_completion(
@@ -178,7 +178,7 @@ class SimulationRunner:
             return
 
         # Store file paths
-        job.completed_at = datetime.now()
+        job.completed_at = now()
         job.raw_file = Path(raw_file)
         job.log_file = Path(log_file)
 
@@ -227,7 +227,7 @@ class SimulationRunner:
 
         job.status = "failed"
         job.error = error
-        job.completed_at = datetime.now()
+        job.completed_at = now()
 
         # Clean up runner reference
         if job_id in self._runners:
@@ -269,10 +269,8 @@ class SimulationRunner:
             logger.warning(f"Error cancelling simulation {job_id}: {e}")
 
         # Update job state
-        from datetime import datetime
-
         job.status = "cancelled"
-        job.completed_at = datetime.now()
+        job.completed_at = now()
         job.error = "Cancelled by user"
 
         # Clean up runner reference
