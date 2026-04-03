@@ -11,6 +11,7 @@ from mcp import types
 from pydantic import AnyUrl
 
 from ltspice_mcp.lib import services
+from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
@@ -203,13 +204,11 @@ def _read_netlist_content(
 ) -> types.ReadResourceResult:
     """Read the full text of a specific netlist file."""
     filename = params["filename"]
-    # Security: validate filename is safe and within working dir
-    file_path = state.working_dir / filename
-    resolved = file_path.resolve()
-    working_resolved = state.working_dir.resolve()
-    if not resolved.is_relative_to(working_resolved):
-        raise ValueError(f"File {filename!r} is outside the working directory")
-    text = resolved.read_text(encoding="utf-8", errors="replace")
+    resolved = resolve_safe_path(filename, state.config.allowed_paths)
+    try:
+        text = resolved.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        raise ValueError(f"Netlist file not found: {filename!r}") from None
     return _make_result(uri_str, text, mime="text/plain")
 
 

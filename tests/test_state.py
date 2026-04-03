@@ -1,10 +1,10 @@
 """Tests for SessionState lifecycle and dataclass defaults."""
 
 import asyncio
-from datetime import datetime
 from pathlib import Path
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib import now
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.state import BatchJob, MonteCarloConfig, SessionState, SimulationJob
@@ -67,7 +67,7 @@ class TestSessionStateShutdown:
             netlist=Path("/tmp/test.cir"),
             simulator="ltspice",
             status="running",
-            started_at=datetime.now(),
+            started_at=now(),
         )
         state.jobs["sim1"] = job
 
@@ -97,8 +97,8 @@ class TestSessionStateShutdown:
             netlist=Path("/tmp/test.cir"),
             simulator="ltspice",
             status="completed",
-            started_at=datetime.now(),
-            completed_at=datetime.now(),
+            started_at=now(),
+            completed_at=now(),
         )
         state.jobs["done1"] = job
 
@@ -128,7 +128,7 @@ class TestDataclassDefaults:
             netlist=Path("/tmp/test.cir"),
             simulator="ltspice",
             status="queued",
-            started_at=datetime.now(),
+            started_at=now(),
         )
         assert isinstance(job.done_event, asyncio.Event)
         assert not job.done_event.is_set()

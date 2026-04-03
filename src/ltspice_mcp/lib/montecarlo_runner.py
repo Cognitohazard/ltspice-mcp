@@ -3,13 +3,13 @@
 import asyncio
 import logging
 import threading
-from datetime import datetime
 from pathlib import Path
 
 from spicelib.sim.sim_runner import SimRunner
 from spicelib.sim.tookit.montecarlo import Montecarlo
 
 from ltspice_mcp.errors import BatchJobError
+from ltspice_mcp.lib import now
 from ltspice_mcp.state import BatchJob, SessionState
 
 logger = logging.getLogger(__name__)
@@ -171,7 +171,7 @@ class MonteCarloRunner:
             logger.error(f"Monte Carlo job {batch_job.job_id} failed: {e}", exc_info=True)
             batch_job.status = "failed"
             batch_job.error = f"Monte Carlo execution failed: {e}"
-            batch_job.completed_at = datetime.now()
+            batch_job.completed_at = now()
             batch_job.done_event.set()
         finally:
             self._active_runners.pop(batch_job.job_id, None)
@@ -254,7 +254,7 @@ class MonteCarloRunner:
 
         # Mark job as completed
         batch_job.status = "completed"
-        batch_job.completed_at = datetime.now()
+        batch_job.completed_at = now()
         batch_job.done_event.set()
 
         logger.info(
@@ -286,7 +286,7 @@ class MonteCarloRunner:
 
         # Update job state - partial results preserved (run_results keeps completed entries)
         batch_job.status = "cancelled"
-        batch_job.completed_at = datetime.now()
+        batch_job.completed_at = now()
         batch_job.done_event.set()
 
         logger.info(
