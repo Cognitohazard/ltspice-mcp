@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import threading
-from datetime import datetime
 from pathlib import Path
 
 from spicelib import SpiceEditor
@@ -11,6 +10,7 @@ from spicelib.sim.sim_runner import SimRunner
 from spicelib.sim.sim_stepping import SimStepper
 
 from ltspice_mcp.errors import BatchJobError
+from ltspice_mcp.lib import now
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.sweep_utils import generate_sweep_range
 from ltspice_mcp.state import BatchJob, SessionState
@@ -171,7 +171,7 @@ class SweepRunner:
             logger.error(f"Sweep job {batch_job.job_id} failed: {e}", exc_info=True)
             batch_job.status = "failed"
             batch_job.error = f"Sweep execution failed: {e}"
-            batch_job.completed_at = datetime.now()
+            batch_job.completed_at = now()
             batch_job.done_event.set()
         finally:
             self._active_runners.pop(batch_job.job_id, None)
@@ -279,7 +279,7 @@ class SweepRunner:
 
         # Mark job as completed
         batch_job.status = "completed"
-        batch_job.completed_at = datetime.now()
+        batch_job.completed_at = now()
         batch_job.done_event.set()
 
         logger.info(
@@ -311,7 +311,7 @@ class SweepRunner:
 
         # Update job state - partial results preserved (run_results keeps completed entries)
         batch_job.status = "cancelled"
-        batch_job.completed_at = datetime.now()
+        batch_job.completed_at = now()
         batch_job.done_event.set()
 
         logger.info(

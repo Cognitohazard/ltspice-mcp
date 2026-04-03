@@ -3,14 +3,13 @@
 import asyncio
 import logging
 import time
-from datetime import datetime
 from typing import Literal
 
 from mcp import types
 from pydantic import Field
 
 from ltspice_mcp.errors import ResultError, SimulationError
-from ltspice_mcp.lib import services
+from ltspice_mcp.lib import now, services
 from ltspice_mcp.lib.log_parser import extract_error_context, parse_success_summary
 from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
 from ltspice_mcp.state import SessionState, SimulationJob
@@ -129,12 +128,12 @@ async def handle_run_simulation(arguments: RunSimulationInput, state: SessionSta
         netlist=netlist_path,
         simulator=default_simulator.__name__,
         status="running",
-        started_at=datetime.now(),
+        started_at=now(),
     )
     # Get SimulationRunner before storing job — if this fails, we don't
     # leave an orphaned "running" job with no task to advance it
     runner = _get_or_create_runner(state)
-    state.jobs[job_id] = job
+    state.add_job(job)
     job.task = asyncio.create_task(runner.start_simulation(netlist_path, job, state))
 
     # Decide sync vs async
@@ -183,7 +182,7 @@ async def _wait_for_completion(
         # Timeout - this is NOT a simulator error, it's a tool-level kill
         duration = time.time() - start_time
         job.status = "timeout"
-        job.completed_at = datetime.now()
+        job.completed_at = now()
 
         # Cancel the simulation
         await runner.cancel(job)
@@ -313,7 +312,7 @@ async def handle_check_job(arguments: CheckJobInput, state: SessionState):
 
     # Check status
     if job.status == "running":
-        elapsed = (datetime.now() - job.started_at).total_seconds()
+        elapsed = (now() - job.started_at).total_seconds()
         data = {
             "job_id": job_id,
             "status": "running",
@@ -416,7 +415,7 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
             duration = (job.completed_at - job.started_at).total_seconds()
             duration_str = f"{duration:.1f}s"
         else:
-            duration = (datetime.now() - job.started_at).total_seconds()
+            duration = (now() - job.started_at).total_seconds()
             duration_str = f"{duration:.1f}s (running)"
 
         started_str = job.started_at.strftime("%Y-%m-%d %H:%M")

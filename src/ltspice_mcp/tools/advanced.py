@@ -318,7 +318,7 @@ async def handle_run_sweep(arguments: RunBatchInput, state: SessionState):
         total_runs=total_runs,
         sweep_config=config,
     )
-    state.batch_jobs[job_id] = batch_job
+    state.add_batch_job(batch_job)
 
     # Get sweep runner and start async task
     default_simulator = state.default_simulator
@@ -507,7 +507,7 @@ async def handle_run_montecarlo(arguments: RunBatchInput, state: SessionState):
         total_runs=config.num_runs,
         mc_config=config,
     )
-    state.batch_jobs[job_id] = batch_job
+    state.add_batch_job(batch_job)
 
     # Get MC runner and start async task
     default_simulator = state.default_simulator
