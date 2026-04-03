@@ -321,7 +321,7 @@ async def call_tool(name: str, arguments: dict | None):
         raise
     except Exception as e:
         logger.exception(f"Unexpected error in tool {name}")
-        raise RuntimeError(f"Internal error in {name}: {type(e).__name__}: {e}") from e
+        raise RuntimeError(f"Internal error in {name}. Check server logs for details.") from e
 
 
 @server.list_resources()
