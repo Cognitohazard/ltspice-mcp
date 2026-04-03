@@ -212,11 +212,15 @@ async def handle_configure_sweep(arguments: ConfigureSweepInput, state: SessionS
                 f"Parameter '{name}': scale must be 'linear' or 'log', got '{scale}'"
             )
 
-        # Convert types
+        # Convert and validate types
         if step is not None:
             step = float(step)
+            if step <= 0:
+                raise BatchJobError(f"Parameter '{name}': step must be > 0, got {step}")
         if points is not None:
             points = int(points)
+            if points < 2:
+                raise BatchJobError(f"Parameter '{name}': points must be >= 2, got {points}")
 
         dimensions.append(
             SweepDimension(
@@ -330,7 +334,7 @@ async def handle_run_sweep(arguments: RunBatchInput, state: SessionState):
         output_folder=resolve_output_folder(state),
         max_parallel=max_parallel or state.config.max_parallel_sims,
     )
-    asyncio.create_task(runner.start_sweep(batch_job, state))  # noqa: RUF006
+    batch_job.task = asyncio.create_task(runner.start_sweep(batch_job, state))
 
     logger.info(
         f"Sweep job started: job_id={job_id}, config_id={config_id}, total_runs={total_runs}"
@@ -385,8 +389,8 @@ async def handle_configure_montecarlo(arguments: ConfigureMonteCarloInput, state
     if not tolerances_list:
         raise BatchJobError("At least one tolerance entry is required")
 
-    if num_runs < 1:
-        raise BatchJobError(f"num_runs must be >= 1, got {num_runs}")
+    if num_runs < 1 or num_runs > 10_000:
+        raise BatchJobError(f"num_runs must be 1-10000, got {num_runs}")
 
     # Parse tolerances into type_tolerances and component_overrides
     type_tolerances: dict[str, tuple[float, str]] = {}
@@ -519,7 +523,7 @@ async def handle_run_montecarlo(arguments: RunBatchInput, state: SessionState):
         output_folder=resolve_output_folder(state),
         max_parallel=max_parallel or state.config.max_parallel_sims,
     )
-    asyncio.create_task(runner.start_montecarlo(batch_job, state))  # noqa: RUF006
+    batch_job.task = asyncio.create_task(runner.start_montecarlo(batch_job, state))
 
     logger.info(
         f"Monte Carlo job started: job_id={job_id}, config_id={config_id}, "
