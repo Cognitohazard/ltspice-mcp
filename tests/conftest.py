@@ -39,7 +39,7 @@ def _reset_runners():
     as a guard — if runner management ever regresses to globals, tests
     will still pass.
     """
-    yield
+    return
 
 
 @pytest.fixture

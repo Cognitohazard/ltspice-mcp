@@ -296,7 +296,7 @@ def extract_asc_info(editor: AscEditor, file_path: Path) -> dict[str, Any]:
 
 def extract_netlist_info(editor: Editor, file_path: Path) -> dict[str, Any]:
     """Extract structured netlist data from a ``SpiceEditor``-compatible editor."""
-    content = file_path.read_text()
+    content = file_path.read_text(encoding="utf-8", errors="replace")
     components = editor.get_components()
     comp_list = []
     for comp_ref in components:

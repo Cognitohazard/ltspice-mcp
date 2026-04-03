@@ -168,7 +168,7 @@ async def handle_run_simulation(arguments: RunSimulationInput, state: SessionSta
 
 async def _wait_for_completion(
     job: SimulationJob,
-    timeout: float,
+    timeout: float,  # noqa: ASYNC109
     runner: SimulationRunner,
     fmt: str | None = None,
 ):
