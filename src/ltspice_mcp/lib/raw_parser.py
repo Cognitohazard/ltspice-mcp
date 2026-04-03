@@ -277,15 +277,15 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
                 x0, x1 = axis[idx], axis[idx + 1]
                 y0, y1 = magnitude_db[idx], magnitude_db[idx + 1]
                 # Interpolate to find exact 0dB crossing
-                unity_freq = x0 + (0 - y0) * (x1 - x0) / (y1 - y0)
-                metrics["unity_gain_freq"] = float(unity_freq)
+                if y1 != y0:
+                    unity_freq = x0 + (0 - y0) * (x1 - x0) / (y1 - y0)
+                    metrics["unity_gain_freq"] = float(unity_freq)
 
-                # 3. Phase margin at unity-gain frequency
-                # Find phase at unity-gain frequency
-                ugf_idx = np.searchsorted(axis, unity_freq)
-                if ugf_idx < len(phase_deg):
-                    phase_at_ugf = phase_deg[ugf_idx]
-                    metrics["phase_margin"] = float(180 + phase_at_ugf)
+                    # 3. Phase margin at unity-gain frequency
+                    ugf_idx = np.searchsorted(axis, unity_freq)
+                    if ugf_idx < len(phase_deg):
+                        phase_at_ugf = phase_deg[ugf_idx]
+                        metrics["phase_margin"] = float(180 + phase_at_ugf)
     except Exception:
         pass
 
@@ -368,10 +368,11 @@ def build_simulation_summary(
         # Parse warnings from log content
         try:
             log_content = log_path.read_text()
-            warnings = []
-            for line in log_content.splitlines():
-                if "warning" in line.lower():
-                    warnings.append(line.strip())
+            warnings = [
+                line.strip()
+                for line in log_content.splitlines()
+                if "warning" in line.lower()
+            ]
             if warnings:
                 summary["warnings"] = warnings
         except Exception:

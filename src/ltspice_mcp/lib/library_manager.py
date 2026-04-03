@@ -213,10 +213,7 @@ class LibraryManager:
             try:
                 index = parse_library_file(lib_file)
                 # Store in cache
-                self._user_libs._entries[lib_file] = (
-                    lib_file.stat().st_mtime,
-                    index,
-                )  # direct cache population
+                self._user_libs.set(lib_file, index)
 
                 # Count models vs subcircuits
                 for model in index.models:
