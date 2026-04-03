@@ -274,10 +274,10 @@ def generate_default_config(path: Path) -> None:
     doc.add(nl())
 
     # Logging section
-    logging = table()
-    logging.add(comment("Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL"))
-    logging.add("level", "INFO")
-    doc.add("logging", logging)
+    logging_tbl = table()
+    logging_tbl.add(comment("Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL"))
+    logging_tbl.add("level", "INFO")
+    doc.add("logging", logging_tbl)
 
     # Write to file
     path.write_text(tomlkit.dumps(doc))
