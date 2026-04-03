@@ -222,7 +222,7 @@ def paginate(items: list, arguments: Any, cap: int = 50) -> tuple[list, int, int
         (page, total, offset, limit) tuple
     """
     total = len(items)
-    offset = int(getattr(arguments, "offset", 0))
+    offset = max(0, min(int(getattr(arguments, "offset", 0)), total))
     limit = min(int(getattr(arguments, "limit", cap)), cap)
     return items[offset : offset + limit], total, offset, limit
 
