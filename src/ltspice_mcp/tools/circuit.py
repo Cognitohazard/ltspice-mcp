@@ -1288,8 +1288,13 @@ async def handle_connect(
                     )
 
     # Wire junction check (error — will create unintended junction)
+    # Allow overlaps where the existing wire connects to one of our endpoints
+    # (e.g., T-junction onto a power rail that reaches the target net label)
     for sx1, sy1, sx2, sy2 in segments:
         for ex1, ey1, ex2, ey2 in existing_wires:
+            ext_endpoints = {(ex1, ey1), (ex2, ey2)}
+            if ext_endpoints & endpoints:
+                continue  # existing wire shares an endpoint — intentional junction
             if sx1 == sx2 and ex1 == ex2 and sx1 == ex1:
                 new_min, new_max = min(sy1, sy2), max(sy1, sy2)
                 ext_min, ext_max = min(ey1, ey2), max(ey1, ey2)
