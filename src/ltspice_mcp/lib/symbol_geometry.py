@@ -67,6 +67,31 @@ def _apply_rotation(x: int, y: int, rotation: str) -> tuple[int, int]:
     return (a * x + b * y, c * x + d * y)
 
 
+_DIRECTION_NAMES = {(0, -1): "up", (0, 1): "down", (-1, 0): "left", (1, 0): "right"}
+
+
+def _pin_direction(px: int, py: int, bbox_w: int, bbox_h: int, rotation: str) -> str:
+    """Determine which direction a pin's lead extends for external wiring.
+
+    Computed from the pin's position relative to the bounding box center,
+    then transformed by the rotation.
+    """
+    cx = bbox_w / 2
+    cy = bbox_h / 2
+    dx = px - cx
+    dy = py - cy
+
+    # Determine primary axis (which edge the pin is closest to)
+    if abs(dx) / max(bbox_w, 1) >= abs(dy) / max(bbox_h, 1):
+        raw = (1 if dx > 0 else -1, 0)
+    else:
+        raw = (0, 1 if dy > 0 else -1)
+
+    # Apply rotation to direction vector
+    rx, ry = _apply_rotation(raw[0], raw[1], rotation)
+    return _DIRECTION_NAMES.get((rx, ry), "unknown")
+
+
 def _find_asy_file(symbol: str) -> Path | None:
     """Find a .asy symbol file in AscEditor's configured library paths."""
     search_paths: list[str] = []
@@ -189,6 +214,7 @@ def compute_placed_geometry(
     """
     # Transform pins
     placed_pins = []
+    bw, bh = symbol_info.bbox_width, symbol_info.bbox_height
     for pin in symbol_info.pins:
         rx, ry = _apply_rotation(pin.x, pin.y, rotation)
         placed_pins.append({
@@ -196,6 +222,7 @@ def compute_placed_geometry(
             "order": pin.order,
             "x": origin_x + rx,
             "y": origin_y + ry,
+            "dir": _pin_direction(pin.x, pin.y, bw, bh, rotation),
         })
 
     # Transform bounding box corners
