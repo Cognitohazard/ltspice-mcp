@@ -1268,12 +1268,23 @@ async def handle_connect(
             errors.append(f"Diagonal wire ({sx1},{sy1})->({sx2},{sy2}): not orthogonal")
 
     # Pin collision check (error — will create unintended connection)
+    # A pin is safe if it's already wired to the same net as our target
+    # (i.e., an existing wire connects both the pin and one of our endpoints).
+    def _pin_on_target_net(px: int, py: int) -> bool:
+        for ex1, ey1, ex2, ey2 in existing_wires:
+            wire_pts = {(ex1, ey1), (ex2, ey2)}
+            if (px, py) in wire_pts and wire_pts & endpoints:
+                return True
+        return False
+
     for cg in component_geo:
         if cg["ref"] in skip_refs:
             continue
         for pin in cg["pins"]:
             px, py = pin["x"], pin["y"]
             if (px, py) in endpoints:
+                continue
+            if _pin_on_target_net(px, py):
                 continue
             for sx1, sy1, sx2, sy2 in segments:
                 on_wire = False
