@@ -290,14 +290,16 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 - **Tier alignment**: Matched/mirrored transistors (diff pairs, current mirrors, bias mirrors) MUST share the same y-coordinate. Plan horizontal tiers: VDD rail → PMOS loads → diff pair → tail/bias → VSS.
 - **Drain/source alignment on each branch**: Within a vertical branch (e.g., PMOS load stacked above NMOS input), position components so the drain pin of the upper device is on the same x-column as the drain pin of the lower device. This eliminates horizontal jogs between stacked transistors.
 - **Pin-to-rail alignment**: Place voltage/current sources so their pins land directly on the rail they connect to — no wire through the source body. For a VDD source, position it so the `+` pin y-coordinate equals the VDD rail y-coordinate. Use `ltspice_get_symbol_info` to compute the exact placement origin from the desired pin position (e.g., for voltage `+` at y=128, place origin at y=128-16=112).
-- **Minimum 128 units vertical spacing** between component tiers. Tight spacing causes wires to share columns and visually appear shorted.
+- **Minimum 128 units vertical spacing between pin levels** of adjacent tiers (e.g., between PMOS drain y and NMOS drain y). This leaves room for horizontal buses and net labels between tiers. With MOSFET bbox height of 96, plan tier origins ~192 units apart.
 - **Bias circuit alignment**: Bias devices (e.g., M5/Ibias) should share the y-level of their functional counterpart (e.g., M3 tail current source).
-- **Use `ltspice_get_symbol_info` to check bounding boxes** before placing. Ensure wires don't route through component bounding boxes.
+- **Plan the full layout before placing**: Decide VDD rail y, tier y-coordinates, and bus y-coordinates first. Verify that buses fit between bounding boxes of adjacent tiers. Use `ltspice_get_symbol_info` to check bbox extents at the intended rotation.
 
 **Wiring:**
 - **All wires must be orthogonal** — strictly horizontal or vertical. Never route diagonal wires. Use waypoints in `ltspice_connect` for L-shaped or multi-segment routes.
-- **Route gate-drain tie wires on a different x-column** than source/drain wires. For diode-connected MOSFETs, jog the gate tie wire horizontally before running vertically to avoid overlapping the source-to-supply wire.
-- **Heed `ltspice_connect` warnings**: the tool reports diagonal wires, long runs (>400 units), and bounding box crossings. Fix all warnings before proceeding.
+- **Horizontal buses must route OUTSIDE all component bounding boxes.** Use `ltspice_get_symbol_info` to check bbox extents. For PMOS M180 with bbox top at y=160, a gate bus at y=176 is INSIDE the bbox — route at y=144 (between VDD rail and bbox top) instead. Plan bus y-coordinates BEFORE placing components.
+- **Vertical wires must not pass through component bodies to reach a bus.** When connecting a drain to a horizontal bus, jog the wire horizontally outside the bbox first, then route vertically to the bus. Example for PMOS M180 diode connection: route drain (400,256) → right to (448,256) → up to (448,144) → along bus to label, NOT straight up through the body at x=400.
+- **Leave room for buses between tiers.** The minimum 128-unit tier spacing must account for bounding box height plus bus clearance. For PMOS M180 (bbox height 96), if VDD rail is at y=128 and PMOS origins at y=288: bbox occupies y=192–288, bus fits at y=144–160 (between rail and bbox top).
+- **Heed `ltspice_connect` warnings and errors**: the tool refuses diagonal wires, pin collisions, and wire junction overlaps. Non-blocking warnings (long runs, bbox crossings) should still be addressed.
 
 **Ground and net labels:**
 - **Local ground flags**: Place a ground (`0`) label directly at each grounded pin using `ltspice_add_net_label`. Never route wires to a distant ground flag.
