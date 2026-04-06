@@ -31,7 +31,7 @@ class SignalStatsInput(ToolInput):
     raw_file: str = Field(description="Path to .raw result file from simulation")
     signal: str = Field(description="Signal/trace name (e.g., 'V(out)', 'I(R1)').")
     step: int = Field(default=0, description="Step index for .step directives")
-    format: Literal["json", "text"] | None = Field(default=None)
+    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
 
 
 class QueryValueInput(ToolInput):
@@ -41,17 +41,17 @@ class QueryValueInput(ToolInput):
         description="Time or frequency to query in SPICE notation (e.g., '1m', '100u', '1G', '2.5k')"
     )
     step: int = Field(default=0, description="Step index for .step directives")
-    format: Literal["json", "text"] | None = Field(default=None)
+    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
 
 
 class MeasurementsInput(ToolInput):
     log_file: str = Field(description="Path to .log file from simulation")
-    format: Literal["json", "text"] | None = Field(default=None)
+    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
 
 
 class OperatingPointInput(ToolInput):
     raw_file: str = Field(description="Path to .raw result file from simulation")
-    format: Literal["json", "text"] | None = Field(default=None)
+    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
 
 
 class SimulationSummaryInput(ToolInput):
@@ -61,7 +61,7 @@ class SimulationSummaryInput(ToolInput):
         default=None,
         description="Signal for AC bandwidth metrics (e.g., 'V(outp)'). Required for AC analysis.",
     )
-    format: Literal["json", "text"] | None = Field(default=None)
+    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
 
 
 @registry.tool(
@@ -339,6 +339,35 @@ async def handle_get_operating_point(arguments: OperatingPointInput, state: Sess
     input_model=SimulationSummaryInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "sim_type": {"type": "string"},
+            "range": {"type": "object"},
+            "point_count": {"type": "integer"},
+            "step_count": {"type": "integer"},
+            "signals": {"type": "array", "items": {"type": "string"}},
+            "measurements": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {"type": ["number", "null"]},
+                },
+            },
+            "fourier": {"type": "array", "items": {"type": "object"}},
+            "ac_bandwidth_metrics": {
+                "type": "object",
+                "properties": {
+                    "bandwidth_3db": {"type": ["number", "null"]},
+                    "unity_gain_freq": {"type": ["number", "null"]},
+                    "phase_margin": {"type": ["number", "null"]},
+                    "gain_margin": {"type": ["number", "null"]},
+                },
+            },
+            "warnings": {"type": "array", "items": {"type": "string"}},
+            "errors": {"type": "array", "items": {"type": "string"}},
+        },
+    },
 )
 async def handle_get_simulation_summary(arguments: SimulationSummaryInput, state: SessionState):
     """Get comprehensive simulation summary."""

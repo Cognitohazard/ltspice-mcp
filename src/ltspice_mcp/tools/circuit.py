@@ -30,7 +30,9 @@ from ltspice_mcp.lib import services
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, get_symbol_info
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    BBOX_SCHEMA,
     PAGINATION_SCHEMA,
+    PIN_SCHEMA,
     RO_ANNOTATIONS,
     StrictModel,
     ToolInput,
@@ -124,7 +126,7 @@ class CreateNetlistInput(ToolInput):
 
 class CircuitReadInput(ToolInput):
     path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
-    format: Literal["json", "text"] | None = Field(default=None)
+    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
 
 
 class ListComponentsInput(ToolInput):
@@ -133,7 +135,7 @@ class ListComponentsInput(ToolInput):
     reference: str | None = Field(default=None, description="Look up a single component by reference (e.g., 'R1')")
     offset: int = Field(default=0, description="Pagination offset")
     limit: int = Field(default=50, description="Max results to return")
-    format: Literal["json", "text"] | None = Field(default=None)
+    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
 
 
 class SetComponentValueInput(ToolInput):
@@ -149,7 +151,7 @@ class ParameterInput(ToolInput):
     path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
     name: str | None = Field(default=None, description="Parameter name to set (omit to read all params)")
     value: str | None = Field(default=None, description="Parameter value (required when name is specified)")
-    format: Literal["json", "text"] | None = Field(default=None)
+    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
 
 
 class EditDirectiveInput(ToolInput):
@@ -391,6 +393,37 @@ async def handle_create_netlist(arguments: CreateNetlistInput, state: SessionSta
         openWorldHint=False,
     ),
     profiles=("full",),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "file": {"type": "string"},
+            "type": {"type": "string", "enum": ["asc", "netlist"]},
+            "components": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "reference": {"type": "string"},
+                        "value": {"type": "string"},
+                    },
+                },
+            },
+            "content": {"type": "string"},
+            "labels": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "x": {"type": "number"},
+                        "y": {"type": "number"},
+                    },
+                },
+            },
+            "wire_count": {"type": "integer"},
+            "directives": {"type": "array", "items": {"type": "string"}},
+        },
+    },
 )
 async def handle_read_circuit(arguments: CircuitReadInput, state: SessionState):
     """Read and parse a circuit file. For .asc schematics, returns component
@@ -596,6 +629,15 @@ async def handle_set_component_value(arguments: SetComponentValueInput, state: S
         openWorldHint=False,
     ),
     profiles=("full",),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "parameters": {
+                "type": "object",
+                "additionalProperties": {"type": "string"},
+            },
+        },
+    },
 )
 async def handle_parameter(arguments: ParameterInput, state: SessionState):
     """Get or set .PARAM directive values. Without name/value: returns all
@@ -612,7 +654,11 @@ async def handle_parameter(arguments: ParameterInput, state: SessionState):
         # Set mode — confirmation only, no structured data needed
         async with _editing(file_path, state) as editor:
             editor.set_parameter(param_name, param_value)
-        return text_response(f"Set .PARAM {param_name} = {param_value}")
+        return format_response(
+            f"Set .PARAM {param_name} = {param_value}",
+            {"parameters": {param_name: param_value}},
+            fmt,
+        )
 
     # Get mode (formerly get_parameters) — read-only, no _editing needed
     editor = _get_editor(file_path, state)
@@ -809,6 +855,21 @@ async def handle_set_component_attribute(
         openWorldHint=False,
     ),
     profiles=("full",),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "reference": {"type": "string"},
+            "symbol": {"type": "string"},
+            "position": {
+                "type": "object",
+                "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+            },
+            "rotation": {"type": "string"},
+            "pins": {"type": "array", "items": PIN_SCHEMA},
+            "bounding_box": BBOX_SCHEMA,
+            "warnings": {"type": "array", "items": {"type": "string"}},
+        },
+    },
 )
 async def handle_add_component(arguments: AddComponentInput, state: SessionState) -> types.CallToolResult:
     """Add a new component to an .asc schematic."""
@@ -851,7 +912,8 @@ async def handle_add_component(arguments: AddComponentInput, state: SessionState
     # Compute pin positions and bounding box
     sym_info = get_symbol_info(symbol)
     if sym_info is None:
-        return text_response(result)
+        data: dict = {"reference": reference, "symbol": symbol, "position": {"x": x, "y": y}, "rotation": rotation}
+        return format_response(result, data, None)
 
     geometry = compute_placed_geometry(sym_info, x, y, rotation)
     for pin in geometry["pins"]:
@@ -953,6 +1015,26 @@ async def handle_export_netlist(arguments: ExportNetlistInput, state: SessionSta
     input_model=SymbolInfoInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "description": {"type": "string"},
+            "bbox_width": {"type": "integer"},
+            "bbox_height": {"type": "integer"},
+            "pins": {"type": "array", "items": PIN_SCHEMA},
+            "placement": {
+                "type": "object",
+                "properties": {
+                    "x": {"type": "integer"},
+                    "y": {"type": "integer"},
+                    "rotation": {"type": "string"},
+                },
+            },
+            "absolute_pins": {"type": "array", "items": PIN_SCHEMA},
+            "absolute_bounding_box": BBOX_SCHEMA,
+        },
+    },
 )
 async def handle_get_symbol_info(
     arguments: SymbolInfoInput, state: SessionState
@@ -995,6 +1077,25 @@ async def handle_get_symbol_info(
     input_model=ComponentInfoInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "reference": {"type": "string"},
+            "symbol": {"type": "string"},
+            "position": {
+                "type": "object",
+                "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+            },
+            "rotation": {"type": "string"},
+            "value": {"type": ["string", "null"]},
+            "pins": {"type": "array", "items": PIN_SCHEMA},
+            "bounding_box": BBOX_SCHEMA,
+            "attributes": {
+                "type": "object",
+                "additionalProperties": {"type": "string"},
+            },
+        },
+    },
 )
 async def handle_get_component_info(
     arguments: ComponentInfoInput, state: SessionState
@@ -1225,6 +1326,36 @@ async def handle_add_text(
         openWorldHint=False,
     ),
     profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "from": {
+                "type": "object",
+                "properties": {
+                    "ref": {"type": "string"},
+                    "x": {"type": "integer"},
+                    "y": {"type": "integer"},
+                },
+            },
+            "to": {
+                "type": "object",
+                "properties": {
+                    "ref": {"type": "string"},
+                    "x": {"type": "integer"},
+                    "y": {"type": "integer"},
+                },
+            },
+            "wire_count": {"type": "integer"},
+            "points": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+                },
+            },
+            "warnings": {"type": "array", "items": {"type": "string"}},
+        },
+    },
 )
 async def handle_connect(
     arguments: ConnectInput, state: SessionState

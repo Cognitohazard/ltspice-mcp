@@ -103,6 +103,24 @@ def _get_or_create_runner(state: SessionState) -> SimulationRunner:
         openWorldHint=False,
     ),
     profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "job_id": {"type": "string"},
+            "status": {"type": "string"},
+            "sim_type": {"type": "string"},
+            "duration": {"type": "number"},
+            "step_count": {"type": "integer"},
+            "raw_file": {"type": "string"},
+            "log_file": {"type": "string"},
+            "netlist": {"type": "string"},
+            "simulator": {"type": "string"},
+            "signals": {"type": "array", "items": {"type": "string"}},
+            "warnings": {"type": "array", "items": {"type": "string"}},
+            "errors": {"type": "array", "items": {"type": "string"}},
+            "error": {"type": "string"},
+        },
+    },
 )
 async def handle_run_simulation(arguments: RunSimulationInput, state: SessionState):
     """Run a SPICE simulation synchronously or asynchronously.
@@ -236,7 +254,8 @@ async def _wait_for_completion(
         return format_response(f"Simulation cancelled\nJob ID: {job.job_id}", data, fmt)
     else:
         # Unexpected status
-        return text_response(f"Simulation ended with unexpected status: {job.status}")
+        data = {"job_id": job.job_id, "status": job.status}
+        return format_response(f"Simulation ended with unexpected status: {job.status}", data, fmt)
 
 
 def _format_success_response(job_id: str, summary: dict, fmt: str | None = None):
@@ -302,6 +321,36 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
         openWorldHint=False,
     ),
     profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "job_id": {"type": "string"},
+            "status": {"type": "string"},
+            "netlist": {"type": "string"},
+            "simulator": {"type": "string"},
+            "elapsed": {"type": "number"},
+            "duration": {"type": "number"},
+            "sim_type": {"type": "string"},
+            "raw_file": {"type": "string"},
+            "log_file": {"type": "string"},
+            "signals": {"type": "array", "items": {"type": "string"}},
+            "error": {"type": "string"},
+            "jobs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "job_id": {"type": "string"},
+                        "status": {"type": "string"},
+                        "netlist": {"type": "string"},
+                        "started_at": {"type": "string"},
+                        "duration": {"type": "number"},
+                    },
+                },
+            },
+            "count": {"type": "integer"},
+        },
+    },
 )
 async def handle_check_job(arguments: CheckJobInput, state: SessionState):
     """Check status of a simulation job, or list all jobs."""
@@ -384,7 +433,8 @@ async def handle_check_job(arguments: CheckJobInput, state: SessionState):
         data = {"job_id": job_id, "status": "cancelled", "netlist": str(job.netlist)}
         return format_response(f"Job {job_id} was cancelled\nNetlist: {job.netlist}", data, fmt)
     else:
-        return text_response(f"Job {job_id} has unexpected status: {job.status}")
+        data = {"job_id": job_id, "status": job.status}
+        return format_response(f"Job {job_id} has unexpected status: {job.status}", data, fmt)
 
 
 def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = None):
