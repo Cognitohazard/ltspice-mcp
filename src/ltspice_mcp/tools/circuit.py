@@ -196,11 +196,11 @@ class ConnectInput(ToolInput):
     to_pin: str = Field(
         description="Target pin as 'Reference.Pin' (e.g., 'M4a.D', 'VDD.+') or 'net:name' for a net label"
     )
-    waypoints: list[WaypointInput] | None = Field(
-        default=None,
+    waypoints: list[WaypointInput] = Field(
+        default_factory=list,
         description=(
-            "Intermediate points for wire routing. If omitted, uses direct L-route "
-            "(horizontal then vertical). Each waypoint is {x, y}."
+            "Intermediate points for wire routing. For L-shaped routes, provide the "
+            "corner point. For straight connections (same x or same y), omit."
         ),
     )
 
@@ -1081,8 +1081,8 @@ async def handle_add_net_label(
     name="ltspice_connect",
     description=(
         "Connect two component pins with wire(s). Resolves pin positions automatically. "
-        "Without waypoints, routes an L-shaped wire (horizontal then vertical). "
-        "With waypoints, routes through the specified intermediate points."
+        "Waypoints define the wire route through intermediate points. "
+        "For a straight horizontal or vertical connection, waypoints can be omitted."
     ),
     input_model=ConnectInput,
     annotations=types.ToolAnnotations(
@@ -1119,13 +1119,8 @@ async def handle_connect(
 
         # Build list of points: from → [waypoints] → to
         points = [(x1, y1)]
-        if arguments.waypoints:
-            for wp in arguments.waypoints:
-                points.append((wp.x, wp.y))
-        else:
-            # Direct L-route: horizontal first, then vertical
-            if x1 != x2 and y1 != y2:
-                points.append((x2, y1))  # corner point
+        for wp in arguments.waypoints:
+            points.append((wp.x, wp.y))
         points.append((x2, y2))
 
         # Create wire segments between consecutive points
