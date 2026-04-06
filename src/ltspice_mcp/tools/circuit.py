@@ -7,6 +7,7 @@ and raise NetlistError if given a non-.asc file.
 """
 
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,9 +20,11 @@ from spicelib.editor.base_schematic import ERotation, Line, Point, SchematicComp
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import services
+from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, get_symbol_info
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     PAGINATION_SCHEMA,
+    RO_ANNOTATIONS,
     StrictModel,
     ToolInput,
     format_response,
@@ -164,6 +167,47 @@ class WireSegmentInput(StrictModel):
 class AddWireInput(ToolInput):
     path: str
     wires: list[WireSegmentInput]
+
+
+class NetLabelInput(ToolInput):
+    path: str
+    net: str = Field(description="Net name ('0' for ground, or a name like 'VDD', 'outp')")
+    x: int
+    y: int
+
+
+class WaypointInput(StrictModel):
+    x: int
+    y: int
+
+
+class ConnectInput(ToolInput):
+    path: str
+    from_pin: str = Field(
+        description="Source pin as 'Reference.Pin' (e.g., 'M1.D', 'VDD.+') or 'net:name' for a net label"
+    )
+    to_pin: str = Field(
+        description="Target pin as 'Reference.Pin' (e.g., 'M4a.D', 'VDD.+') or 'net:name' for a net label"
+    )
+    waypoints: list[WaypointInput] | None = Field(
+        default=None,
+        description=(
+            "Intermediate points for wire routing. If omitted, uses direct L-route "
+            "(horizontal then vertical). Each waypoint is {x, y}."
+        ),
+    )
+
+
+class SymbolInfoInput(ToolInput):
+    symbol: str = Field(description="Symbol name (e.g., 'nmos', 'pmos', 'res', 'cap', 'voltage')")
+    x: int = Field(default=0, description="Placement X coordinate (for computing absolute positions)")
+    y: int = Field(default=0, description="Placement Y coordinate (for computing absolute positions)")
+    rotation: Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"] = "R0"
+
+
+class ComponentInfoInput(ToolInput):
+    path: str
+    reference: str = Field(description="Component reference (e.g., 'M1', 'R1')")
 
 
 # ---------------------------------------------------------------------------
@@ -729,6 +773,24 @@ async def handle_add_component(arguments: AddComponentInput, state: SessionState
     result = f"Added {reference} ({symbol}) at ({x},{y})"
     if value is not None:
         result += f" = {value}"
+
+    # Compute pin positions and bounding box
+    sym_info = get_symbol_info(symbol)
+    if sym_info is not None:
+        geometry = compute_placed_geometry(sym_info, x, y, rotation)
+        for pin in geometry["pins"]:
+            result += f"\n  {pin['name']}: ({pin['x']}, {pin['y']})"
+        bb = geometry["bounding_box"]
+        result += f"\n  bbox: ({bb['x']},{bb['y']}) {bb['width']}x{bb['height']}"
+        return format_response(result, {
+            "reference": reference,
+            "symbol": symbol,
+            "position": {"x": x, "y": y},
+            "rotation": rotation,
+            "pins": geometry["pins"],
+            "bounding_box": geometry["bounding_box"],
+        }, None)
+
     return text_response(result)
 
 
@@ -801,3 +863,272 @@ async def handle_export_netlist(arguments: ExportNetlistInput, state: SessionSta
     content = net_path.read_text()
 
     return text_response(f"=== {net_path.name} ===\n\n{content}")
+
+
+@registry.tool(
+    name="ltspice_get_symbol_info",
+    description=(
+        "Get symbol pin positions, bounding box, and description. "
+        "Optionally compute absolute positions for a given placement and rotation."
+    ),
+    input_model=SymbolInfoInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+)
+async def handle_get_symbol_info(
+    arguments: SymbolInfoInput, state: SessionState
+) -> types.CallToolResult:
+    """Get symbol geometry info for schematic layout planning."""
+    symbol = arguments.symbol
+    sym_info = get_symbol_info(symbol)
+    if sym_info is None:
+        raise NetlistError(
+            f"Symbol '{symbol}' not found. Ensure LTspice symbol libraries are configured."
+        )
+
+    geometry = compute_placed_geometry(sym_info, arguments.x, arguments.y, arguments.rotation)
+    data = {
+        **sym_info.to_dict(),
+        "placement": {"x": arguments.x, "y": arguments.y, "rotation": arguments.rotation},
+        "absolute_pins": geometry["pins"],
+        "absolute_bounding_box": geometry["bounding_box"],
+    }
+
+    lines = [f"Symbol: {sym_info.name}"]
+    if sym_info.description:
+        lines.append(f"Description: {sym_info.description}")
+    lines.append(f"Size: {sym_info.bbox_width}x{sym_info.bbox_height}")
+    lines.append(f"Pins (at {arguments.rotation}, origin ({arguments.x},{arguments.y})):")
+    for pin in geometry["pins"]:
+        lines.append(f"  {pin['name']}: ({pin['x']}, {pin['y']})")
+    bb = geometry["bounding_box"]
+    lines.append(f"Bounding box: ({bb['x']},{bb['y']}) {bb['width']}x{bb['height']}")
+
+    return format_response("\n".join(lines), data, None)
+
+
+@registry.tool(
+    name="ltspice_get_component_info",
+    description=(
+        "Get a placed component's pin positions, bounding box, value, and attributes "
+        "from an .asc schematic."
+    ),
+    input_model=ComponentInfoInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+)
+async def handle_get_component_info(
+    arguments: ComponentInfoInput, state: SessionState
+) -> types.CallToolResult:
+    """Get full info about a placed component including computed pin positions."""
+    asc_path = safe_path(arguments.path, state)
+    _require_asc(asc_path)
+    reference = arguments.reference
+
+    editor = _get_asc_editor(asc_path, state)
+    component_refs = editor.get_components()
+    if reference not in component_refs:
+        raise NetlistError(
+            f"Component '{reference}' not found. "
+            f"Available: {', '.join(sorted(component_refs))}"
+        )
+
+    pos, erot = editor.get_component_position(reference)
+    rot_str = erot.name if erot else "R0"
+    # Access the SchematicComponent object for symbol and attributes
+    comp = editor.components[reference]
+    symbol = comp.symbol
+
+    value = None
+    with contextlib.suppress(Exception):
+        value = editor.get_component_value(reference)
+
+    data: dict = {
+        "reference": reference,
+        "symbol": symbol,
+        "position": {"x": pos.X, "y": pos.Y},
+        "rotation": rot_str,
+        "value": value,
+    }
+
+    lines = [f"{reference} ({symbol}) at ({pos.X},{pos.Y}) {rot_str}"]
+    if value:
+        lines.append(f"Value: {value}")
+
+    # Compute pin positions from symbol geometry
+    sym_info = get_symbol_info(symbol) if symbol else None
+    if sym_info is not None:
+        geometry = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
+        data["pins"] = geometry["pins"]
+        data["bounding_box"] = geometry["bounding_box"]
+        lines.append("Pins:")
+        for pin in geometry["pins"]:
+            lines.append(f"  {pin['name']}: ({pin['x']}, {pin['y']})")
+        bb = geometry["bounding_box"]
+        lines.append(f"Bounding box: ({bb['x']},{bb['y']}) {bb['width']}x{bb['height']}")
+
+    # Include non-trivial attributes
+    for attr_name, attr_val in comp.attributes.items():
+        if attr_name not in ("Value", "InstName") and attr_val:
+            data.setdefault("attributes", {})[attr_name] = attr_val
+            lines.append(f"{attr_name}: {attr_val}")
+
+    return format_response("\n".join(lines), data, None)
+
+
+def _resolve_pin(
+    pin_ref: str, editor: AscEditor
+) -> tuple[int, int]:
+    """Resolve a pin reference ('M1.D' or 'net:VDD') to absolute (x, y) coordinates.
+
+    Raises NetlistError if the reference cannot be resolved.
+    """
+    if pin_ref.startswith("net:"):
+        # Look up a FLAG/net label position in the .asc
+        net_name = pin_ref[4:]
+        for line_obj in editor.lines:
+            line_str = str(line_obj).strip()
+            if line_str.startswith("FLAG "):
+                parts = line_str.split()
+                if len(parts) >= 4 and parts[3] == net_name:
+                    return int(parts[1]), int(parts[2])
+        raise NetlistError(
+            f"Net label '{net_name}' not found in schematic. "
+            "Add it with ltspice_add_net_label first."
+        )
+
+    # Component.Pin format
+    if "." not in pin_ref:
+        raise NetlistError(
+            f"Invalid pin reference '{pin_ref}'. "
+            "Use 'Reference.Pin' (e.g., 'M1.D') or 'net:name' (e.g., 'net:VDD')."
+        )
+
+    ref, pin_name = pin_ref.rsplit(".", 1)
+    component_refs = editor.get_components()
+    if ref not in component_refs:
+        raise NetlistError(
+            f"Component '{ref}' not found. Available: {', '.join(sorted(component_refs))}"
+        )
+
+    pos, erot = editor.get_component_position(ref)
+    rot_str = erot.name if erot else "R0"
+    comp = editor.components[ref]
+    symbol = comp.symbol
+
+    sym_info = get_symbol_info(symbol) if symbol else None
+    if sym_info is None:
+        raise NetlistError(f"Cannot resolve pins for '{ref}': symbol '{symbol}' not found.")
+
+    geometry = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
+    for pin in geometry["pins"]:
+        if pin["name"].upper() == pin_name.upper():
+            return pin["x"], pin["y"]
+
+    available = [p["name"] for p in geometry["pins"]]
+    raise NetlistError(
+        f"Pin '{pin_name}' not found on {ref} ({symbol}). Available: {', '.join(available)}"
+    )
+
+
+@registry.tool(
+    name="ltspice_add_net_label",
+    description="Add a net label or ground flag to an .asc schematic at a wire junction.",
+    input_model=NetLabelInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+    profiles=("full", "agentic"),
+)
+async def handle_add_net_label(
+    arguments: NetLabelInput, state: SessionState
+) -> types.CallToolResult:
+    """Add a FLAG (net label or ground) to a schematic."""
+    asc_path = safe_path(arguments.path, state)
+    _require_asc(asc_path)
+
+    net = arguments.net
+    x = arguments.x
+    y = arguments.y
+
+    async with _editing_asc(asc_path, state) as editor:
+        flag_line = f"FLAG {x} {y} {net}"
+        # Insert FLAG line before the first SYMBOL line
+        insert_idx = 0
+        for i, line_obj in enumerate(editor.lines):
+            line_str = str(line_obj).strip()
+            if line_str.startswith("SYMBOL "):
+                insert_idx = i
+                break
+        else:
+            insert_idx = len(editor.lines)
+        editor.lines.insert(insert_idx, flag_line)  # pyright: ignore[reportArgumentType]
+
+    label = "ground" if net == "0" else f"net '{net}'"
+    return text_response(f"Added {label} at ({x},{y})")
+
+
+@registry.tool(
+    name="ltspice_connect",
+    description=(
+        "Connect two component pins with wire(s). Resolves pin positions automatically. "
+        "Without waypoints, routes an L-shaped wire (horizontal then vertical). "
+        "With waypoints, routes through the specified intermediate points."
+    ),
+    input_model=ConnectInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    ),
+    profiles=("full", "agentic"),
+)
+async def handle_connect(
+    arguments: ConnectInput, state: SessionState
+) -> types.CallToolResult:
+    """Connect two pins with auto-routed or waypoint-guided wires."""
+    asc_path = safe_path(arguments.path, state)
+    _require_asc(asc_path)
+
+    async with _editing_asc(asc_path, state) as editor:
+        x1, y1 = _resolve_pin(arguments.from_pin, editor)
+        x2, y2 = _resolve_pin(arguments.to_pin, editor)
+
+        # Build list of points: from → [waypoints] → to
+        points = [(x1, y1)]
+        if arguments.waypoints:
+            for wp in arguments.waypoints:
+                points.append((wp.x, wp.y))
+        else:
+            # Direct L-route: horizontal first, then vertical
+            if x1 != x2 and y1 != y2:
+                points.append((x2, y1))  # corner point
+        points.append((x2, y2))
+
+        # Create wire segments between consecutive points
+        segments = []
+        for i in range(len(points) - 1):
+            px1, py1 = points[i]
+            px2, py2 = points[i + 1]
+            if px1 == px2 and py1 == py2:
+                continue  # skip zero-length
+            editor.wires.append(Line(Point(px1, py1), Point(px2, py2)))
+            segments.append(f"({px1},{py1})->({px2},{py2})")
+
+    result_lines = [f"Connected {arguments.from_pin} to {arguments.to_pin}"]
+    result_lines.append(f"  From: ({x1},{y1})  To: ({x2},{y2})")
+    for seg in segments:
+        result_lines.append(f"  Wire: {seg}")
+
+    data = {
+        "from": {"ref": arguments.from_pin, "x": x1, "y": y1},
+        "to": {"ref": arguments.to_pin, "x": x2, "y": y2},
+        "wire_count": len(segments),
+        "points": [{"x": p[0], "y": p[1]} for p in points],
+    }
+
+    return format_response("\n".join(result_lines), data, None)
