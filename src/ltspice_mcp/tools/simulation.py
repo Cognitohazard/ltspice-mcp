@@ -251,11 +251,14 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
 
     signal_text = "\n".join(signal_list) if signal_list else "  (none)"
 
-    # Format warnings
+    # Format warnings and errors
     warnings = summary.get("warnings", [])
-    warning_text = ""
+    errors = summary.get("errors", [])
+    diagnostics_text = ""
+    if errors:
+        diagnostics_text += "\n\nErrors:\n" + "\n".join(f"  {e}" for e in errors)
     if warnings:
-        warning_text = "\n\nWarnings:\n" + "\n".join(f"  {w}" for w in warnings)
+        diagnostics_text += "\n\nWarnings:\n" + "\n".join(f"  {w}" for w in warnings)
 
     text = (
         f"Simulation completed successfully\n"
@@ -265,7 +268,7 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
         f"Steps: {summary['step_count']}\n"
         f"Raw file: {summary['raw_file']}\n"
         f"Log file: {summary['log_file']}\n\n"
-        f"Available signals ({len(signals)}):\n{signal_text}{warning_text}"
+        f"Available signals ({len(signals)}):\n{signal_text}{diagnostics_text}"
     )
 
     data = {
@@ -279,6 +282,8 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
         "signals": signals,
         "warnings": warnings,
     }
+    if errors:
+        data["errors"] = errors
     return format_response(text, data, fmt)
 
 

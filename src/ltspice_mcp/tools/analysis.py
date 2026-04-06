@@ -197,9 +197,16 @@ async def handle_query_value(arguments: QueryValueInput, state: SessionState):
     return format_response("\n".join(lines), {"signal": signal, **result_data}, fmt)
 
 
-def _format_measurements(measurements: dict, step_count: int) -> str:
+def _format_measurements(
+    measurements: dict, step_count: int, errors: list[str] | None = None
+) -> str:
     """Format .MEAS results for display. Shared between handlers."""
     if not measurements:
+        if errors:
+            lines = ["No .MEAS results — errors in log:", ""]
+            for err in errors:
+                lines.append(f"  {err}")
+            return "\n".join(lines)
         return "No .MEAS results found in log file"
 
     if step_count <= 1:
@@ -260,7 +267,9 @@ async def handle_get_measurements(arguments: MeasurementsInput, state: SessionSt
         raise ResultError(f"Failed to parse log file: {e}") from e
 
     return format_response(
-        _format_measurements(meas_data["measurements"], meas_data["step_count"]),
+        _format_measurements(
+            meas_data["measurements"], meas_data["step_count"], meas_data.get("errors")
+        ),
         meas_data,
         fmt,
     )
@@ -420,6 +429,12 @@ async def handle_get_simulation_summary(arguments: SimulationSummaryInput, state
             lines.append(f"  Phase margin: {ac_metrics['phase_margin']:.2f} deg")
         if ac_metrics["gain_margin"] is not None:
             lines.append(f"  Gain margin: {ac_metrics['gain_margin']:.2f} dB")
+        lines.append("")
+
+    if "errors" in summary:
+        lines.append(f"Errors ({len(summary['errors'])}):")
+        for error in summary["errors"]:
+            lines.append(f"  {error}")
         lines.append("")
 
     if "warnings" in summary:
