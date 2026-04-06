@@ -1223,86 +1223,52 @@ async def handle_connect(
     asc_path = safe_path(arguments.path, state)
     _require_asc(asc_path)
 
-    # Collect component bounding boxes and existing wires for crossing detection
+    # Collect component geometry and existing wires for validation
     pre_editor = _get_asc_editor(asc_path, state)
-    component_bboxes = _collect_component_geometry(pre_editor)
+    component_geo = _collect_component_geometry(pre_editor)
     existing_wires = [
         (int(w.V1.X), int(w.V1.Y), int(w.V2.X), int(w.V2.Y)) for w in pre_editor.wires
     ]
 
-    async with _editing_asc(asc_path, state) as ed:
-        x1, y1 = _resolve_pin(arguments.from_pin, ed)
-        x2, y2 = _resolve_pin(arguments.to_pin, ed)
+    # Resolve pins (read-only — no edits yet)
+    x1, y1 = _resolve_pin(arguments.from_pin, pre_editor)
+    x2, y2 = _resolve_pin(arguments.to_pin, pre_editor)
 
-        # Build list of points: from → [waypoints] → to (dedup consecutive)
-        raw_points = [(x1, y1)]
-        for wp in arguments.waypoints:
-            raw_points.append((wp.x, wp.y))
-        raw_points.append((x2, y2))
-        points = [raw_points[0]]
-        for pt in raw_points[1:]:
-            if pt != points[-1]:
-                points.append(pt)
+    # Build list of points: from → [waypoints] → to (dedup consecutive)
+    raw_points = [(x1, y1)]
+    for wp in arguments.waypoints:
+        raw_points.append((wp.x, wp.y))
+    raw_points.append((x2, y2))
+    points = [raw_points[0]]
+    for pt in raw_points[1:]:
+        if pt != points[-1]:
+            points.append(pt)
 
-        # Create wire segments between consecutive points
-        segments: list[tuple[int, int, int, int]] = []
-        for i in range(len(points) - 1):
-            px1, py1 = points[i]
-            px2, py2 = points[i + 1]
-            if px1 == px2 and py1 == py2:
-                continue  # skip zero-length
-            ed.wires.append(Line(Point(px1, py1), Point(px2, py2)))
+    # Compute segments (not yet added to editor)
+    segments: list[tuple[int, int, int, int]] = []
+    for i in range(len(points) - 1):
+        px1, py1 = points[i]
+        px2, py2 = points[i + 1]
+        if px1 != px2 or py1 != py2:
             segments.append((px1, py1, px2, py2))
 
-    # Compute warnings
+    # --- Validate before adding wires ---
+    errors: list[str] = []
     warnings: list[str] = []
-
-    for sx1, sy1, sx2, sy2 in segments:
-        if sx1 != sx2 and sy1 != sy2:
-            warnings.append(f"Diagonal wire ({sx1},{sy1})->({sx2},{sy2}): not orthogonal")
-
-    total_length = sum(abs(sx2 - sx1) + abs(sy2 - sy1) for sx1, sy1, sx2, sy2 in segments)
-    if total_length > 400:
-        warnings.append(
-            f"Long wire run ({total_length} units): consider placing components closer "
-            "or adding a local net label"
-        )
-
-    # Check bounding box crossings (skip components that own the from/to pins)
+    endpoints = {(x1, y1), (x2, y2)}
     skip_refs = {
         ref.rsplit(".", 1)[0]
         for ref in (arguments.from_pin, arguments.to_pin)
         if "." in ref and not ref.startswith("net:")
     }
 
+    # Diagonal wires (error — never valid)
     for sx1, sy1, sx2, sy2 in segments:
-        for bb in component_bboxes:
-            if bb["ref"] in skip_refs:
-                continue
-            bx, by, bw, bh = bb["x"], bb["y"], bb["width"], bb["height"]
-            # Check if wire segment intersects bounding box interior
-            # For horizontal wire (sy1 == sy2)
-            if sy1 == sy2:
-                wy = sy1
-                wx_min, wx_max = min(sx1, sx2), max(sx1, sx2)
-                if by < wy < by + bh and wx_min < bx + bw and wx_max > bx:
-                    warnings.append(
-                        f"Wire at y={wy} crosses {bb['ref']} bounding box "
-                        f"({bx},{by})-({bx + bw},{by + bh})"
-                    )
-            # For vertical wire (sx1 == sx2)
-            elif sx1 == sx2:
-                wx = sx1
-                wy_min, wy_max = min(sy1, sy2), max(sy1, sy2)
-                if bx < wx < bx + bw and wy_min < by + bh and wy_max > by:
-                    warnings.append(
-                        f"Wire at x={wx} crosses {bb['ref']} bounding box "
-                        f"({bx},{by})-({bx + bw},{by + bh})"
-                    )
+        if sx1 != sx2 and sy1 != sy2:
+            errors.append(f"Diagonal wire ({sx1},{sy1})->({sx2},{sy2}): not orthogonal")
 
-    # Check if wire passes through any component pin (not from/to endpoints)
-    endpoints = {(x1, y1), (x2, y2)}
-    for cg in component_bboxes:
+    # Pin collision check (error — will create unintended connection)
+    for cg in component_geo:
         if cg["ref"] in skip_refs:
             continue
         for pin in cg["pins"]:
@@ -1316,42 +1282,37 @@ async def handle_connect(
                 elif sx1 == sx2 and px == sx1:
                     on_wire = min(sy1, sy2) <= py <= max(sy1, sy2)
                 if on_wire:
-                    warnings.append(
+                    errors.append(
                         f"Wire passes through {cg['ref']}.{pin['name']} at ({px},{py}): "
                         "will create unintended connection"
                     )
 
-    # Check for unintended junctions with existing wires
+    # Wire junction check (error — will create unintended junction)
     for sx1, sy1, sx2, sy2 in segments:
         for ex1, ey1, ex2, ey2 in existing_wires:
-            # Check if any interior point of the new segment lies on an existing wire
-            # (or vice versa). Only flag points that aren't the intended endpoints.
             if sx1 == sx2 and ex1 == ex2 and sx1 == ex1:
-                # Both vertical, same x — check y overlap
                 new_min, new_max = min(sy1, sy2), max(sy1, sy2)
                 ext_min, ext_max = min(ey1, ey2), max(ey1, ey2)
                 if new_min < ext_max and new_max > ext_min:
                     overlap_y = max(new_min, ext_min)
                     if (sx1, overlap_y) not in endpoints:
-                        warnings.append(
+                        errors.append(
                             f"Wire overlap at x={sx1} between y={max(new_min, ext_min)} "
-                            f"and y={min(new_max, ext_max)}: may create unintended junction"
+                            f"and y={min(new_max, ext_max)}: will create unintended junction"
                         )
                         break
             elif sy1 == sy2 and ey1 == ey2 and sy1 == ey1:
-                # Both horizontal, same y — check x overlap
                 new_min, new_max = min(sx1, sx2), max(sx1, sx2)
                 ext_min, ext_max = min(ex1, ex2), max(ex1, ex2)
                 if new_min < ext_max and new_max > ext_min:
                     overlap_x = max(new_min, ext_min)
                     if (overlap_x, sy1) not in endpoints:
-                        warnings.append(
+                        errors.append(
                             f"Wire overlap at y={sy1} between x={max(new_min, ext_min)} "
-                            f"and x={min(new_max, ext_max)}: may create unintended junction"
+                            f"and x={min(new_max, ext_max)}: will create unintended junction"
                         )
                         break
             elif sx1 == sx2 and ey1 == ey2:
-                # New vertical, existing horizontal — check cross point
                 cross_x, cross_y = sx1, ey1
                 new_min, new_max = min(sy1, sy2), max(sy1, sy2)
                 ext_min, ext_max = min(ex1, ex2), max(ex1, ex2)
@@ -1360,12 +1321,11 @@ async def handle_connect(
                     and ext_min < cross_x < ext_max
                     and (cross_x, cross_y) not in endpoints
                 ):
-                    warnings.append(
+                    errors.append(
                         f"Wire crosses existing wire at ({cross_x},{cross_y}): "
-                        "may create unintended junction"
+                        "will create unintended junction"
                     )
             elif sy1 == sy2 and ex1 == ex2:
-                # New horizontal, existing vertical — check cross point
                 cross_x, cross_y = ex1, sy1
                 new_min, new_max = min(sx1, sx2), max(sx1, sx2)
                 ext_min, ext_max = min(ey1, ey2), max(ey1, ey2)
@@ -1374,10 +1334,53 @@ async def handle_connect(
                     and new_min < cross_x < new_max
                     and (cross_x, cross_y) not in endpoints
                 ):
-                    warnings.append(
+                    errors.append(
                         f"Wire crosses existing wire at ({cross_x},{cross_y}): "
-                        "may create unintended junction"
+                        "will create unintended junction"
                     )
+
+    # Refuse to add wires if any errors detected
+    if errors:
+        error_lines = [f"Refused to connect {arguments.from_pin} to {arguments.to_pin}:"]
+        for e in errors:
+            error_lines.append(f"  {e}")
+        error_lines.append("\nFix the route with different waypoints to avoid these issues.")
+        raise NetlistError("\n".join(error_lines))
+
+    # Non-blocking warnings
+    total_length = sum(abs(sx2 - sx1) + abs(sy2 - sy1) for sx1, sy1, sx2, sy2 in segments)
+    if total_length > 400:
+        warnings.append(
+            f"Long wire run ({total_length} units): consider placing components closer "
+            "or adding a local net label"
+        )
+
+    for sx1, sy1, sx2, sy2 in segments:
+        for bb in component_geo:
+            if bb["ref"] in skip_refs:
+                continue
+            bx, by, bw, bh = bb["x"], bb["y"], bb["width"], bb["height"]
+            if sy1 == sy2:
+                wy = sy1
+                wx_min, wx_max = min(sx1, sx2), max(sx1, sx2)
+                if by < wy < by + bh and wx_min < bx + bw and wx_max > bx:
+                    warnings.append(
+                        f"Wire at y={wy} crosses {bb['ref']} bounding box "
+                        f"({bx},{by})-({bx + bw},{by + bh})"
+                    )
+            elif sx1 == sx2:
+                wx = sx1
+                wy_min, wy_max = min(sy1, sy2), max(sy1, sy2)
+                if bx < wx < bx + bw and wy_min < by + bh and wy_max > by:
+                    warnings.append(
+                        f"Wire at x={wx} crosses {bb['ref']} bounding box "
+                        f"({bx},{by})-({bx + bw},{by + bh})"
+                    )
+
+    # All checks passed — now add the wires
+    async with _editing_asc(asc_path, state) as ed:
+        for sx1, sy1, sx2, sy2 in segments:
+            ed.wires.append(Line(Point(sx1, sy1), Point(sx2, sy2)))
 
     result_lines = [f"Connected {arguments.from_pin} to {arguments.to_pin}"]
     result_lines.append(f"  From: ({x1},{y1})  To: ({x2},{y2})")
