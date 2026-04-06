@@ -277,6 +277,13 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 | M180 | Left | D bottom, S top | PMOS (source to VDD at top) |
 | R180 | Right | D bottom, S top | PMOS mirrored (gate faces right) |
 
+**Choose orientation based on where the gate connects:**
+- Gate wire must NOT cross through the component's own body. Pick the rotation that puts the gate on the side facing the signal source.
+- Example: if M3's gate connects to M5 on the right → use M0 (gate right), not R0 (gate left).
+- For diff pairs: M1 at R0 (gate left, toward Vinp), M2 at M0 (gate right, toward Vinn).
+- For PMOS current mirrors: M4a at R180 (gate right, toward center), M4b at M180 (gate left, toward center) — gates face each other.
+- Use `ltspice_get_symbol_info` with the intended rotation to verify pin directions before placing.
+
 #### Schematic layout best practices
 
 **Component placement:**

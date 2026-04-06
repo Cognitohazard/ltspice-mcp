@@ -162,6 +162,10 @@ class AddComponentInput(ToolInput):
     y: int
     value: str | None = None
     rotation: Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"] = "R0"
+    attributes: dict[str, str] | None = Field(
+        default=None,
+        description="Optional attributes to set (e.g., {'SpiceLine': 'W=10u L=0.5u', 'Value2': '...'})",
+    )
 
 
 class WireSegmentInput(StrictModel):
@@ -181,6 +185,7 @@ class NetLabelInput(ToolInput):
     net: str = Field(description="Net name ('0' for ground, or a name like 'VDD', 'outp')")
     x: int
     y: int
+    action: Literal["add", "remove"] = "add"
 
 
 class AddTextInput(ToolInput):
@@ -782,6 +787,9 @@ async def handle_add_component(arguments: AddComponentInput, state: SessionState
         comp.rotation = erot
         if value is not None:
             comp.attributes["Value"] = value
+        if arguments.attributes:
+            for attr_name, attr_val in arguments.attributes.items():
+                comp.attributes[attr_name] = attr_val
 
         editor.add_component(comp)
 
@@ -791,22 +799,56 @@ async def handle_add_component(arguments: AddComponentInput, state: SessionState
 
     # Compute pin positions and bounding box
     sym_info = get_symbol_info(symbol)
-    if sym_info is not None:
-        geometry = compute_placed_geometry(sym_info, x, y, rotation)
-        for pin in geometry["pins"]:
-            result += f"\n  {pin['name']}: ({pin['x']}, {pin['y']})"
-        bb = geometry["bounding_box"]
-        result += f"\n  bbox: ({bb['x']},{bb['y']}) {bb['width']}x{bb['height']}"
-        return format_response(result, {
-            "reference": reference,
-            "symbol": symbol,
-            "position": {"x": x, "y": y},
-            "rotation": rotation,
-            "pins": geometry["pins"],
-            "bounding_box": geometry["bounding_box"],
-        }, None)
+    if sym_info is None:
+        return text_response(result)
 
-    return text_response(result)
+    geometry = compute_placed_geometry(sym_info, x, y, rotation)
+    for pin in geometry["pins"]:
+        result += f"\n  {pin['name']}: ({pin['x']}, {pin['y']}) [{pin['dir']}]"
+    bb = geometry["bounding_box"]
+    result += f"\n  bbox: ({bb['x']},{bb['y']}) {bb['width']}x{bb['height']}"
+
+    # Check for overlap with existing components
+    warnings: list[str] = []
+    editor = _get_asc_editor(asc_path, state)
+    for existing_ref in editor.get_components():
+        if existing_ref == reference:
+            continue
+        existing_comp = editor.components[existing_ref]
+        existing_sym = existing_comp.symbol
+        existing_info = get_symbol_info(existing_sym) if existing_sym else None
+        if existing_info is None:
+            continue
+        epos, erot = editor.get_component_position(existing_ref)
+        erot_str = erot.name if erot else "R0"
+        egeo = compute_placed_geometry(existing_info, int(epos.X), int(epos.Y), erot_str)
+        ebb = egeo["bounding_box"]
+        # AABB overlap test
+        if (
+            bb["x"] < ebb["x"] + ebb["width"]
+            and bb["x"] + bb["width"] > ebb["x"]
+            and bb["y"] < ebb["y"] + ebb["height"]
+            and bb["y"] + bb["height"] > ebb["y"]
+        ):
+            warnings.append(f"Overlaps {existing_ref} bounding box")
+
+    if warnings:
+        result += "\n\nWarnings:"
+        for w in warnings:
+            result += f"\n  {w}"
+
+    data: dict = {
+        "reference": reference,
+        "symbol": symbol,
+        "position": {"x": x, "y": y},
+        "rotation": rotation,
+        "pins": geometry["pins"],
+        "bounding_box": geometry["bounding_box"],
+    }
+    if warnings:
+        data["warnings"] = warnings
+
+    return format_response(result, data, None)
 
 
 @registry.tool(
@@ -1069,20 +1111,43 @@ def _resolve_pin(
 async def handle_add_net_label(
     arguments: NetLabelInput, state: SessionState
 ) -> types.CallToolResult:
-    """Add a FLAG (net label or ground) to a schematic."""
+    """Add or remove a FLAG (net label or ground) in a schematic."""
     asc_path = safe_path(arguments.path, state)
     _require_asc(asc_path)
 
     net = arguments.net
     x = arguments.x
     y = arguments.y
+    label_desc = "ground" if net == "0" else f"net '{net}'"
 
+    if arguments.action == "remove":
+        async with _editing_asc(asc_path, state) as editor:
+            for i, lbl in enumerate(editor.labels):
+                if lbl.text == net and int(lbl.coord.X) == x and int(lbl.coord.Y) == y:
+                    editor.labels.pop(i)
+                    return text_response(f"Removed {label_desc} at ({x},{y})")
+            raise NetlistError(f"No {label_desc} found at ({x},{y})")
+
+    # Add mode
+    result = ""
     async with _editing_asc(asc_path, state) as editor:
+        # Warn on duplicate non-ground labels
+        if net != "0":
+            for lbl in editor.labels:
+                if lbl.text == net:
+                    result = (
+                        f"Warning: '{net}' already exists at "
+                        f"({int(lbl.coord.X)},{int(lbl.coord.Y)}). "
+                        "Multiple labels with the same name will cause "
+                        "ltspice_connect to error on ambiguity.\n"
+                    )
+                    break
+
         label = Text(coord=Point(x, y), text=net, type=TextTypeEnum.LABEL)
         editor.labels.append(label)
 
-    label = "ground" if net == "0" else f"net '{net}'"
-    return text_response(f"Added {label} at ({x},{y})")
+    result += f"Added {label_desc} at ({x},{y})"
+    return text_response(result)
 
 
 @registry.tool(
@@ -1156,11 +1221,15 @@ async def handle_connect(
         x1, y1 = _resolve_pin(arguments.from_pin, ed)
         x2, y2 = _resolve_pin(arguments.to_pin, ed)
 
-        # Build list of points: from → [waypoints] → to
-        points = [(x1, y1)]
+        # Build list of points: from → [waypoints] → to (dedup consecutive)
+        raw_points = [(x1, y1)]
         for wp in arguments.waypoints:
-            points.append((wp.x, wp.y))
-        points.append((x2, y2))
+            raw_points.append((wp.x, wp.y))
+        raw_points.append((x2, y2))
+        points = [raw_points[0]]
+        for pt in raw_points[1:]:
+            if pt != points[-1]:
+                points.append(pt)
 
         # Create wire segments between consecutive points
         segments: list[tuple[int, int, int, int]] = []
@@ -1186,9 +1255,16 @@ async def handle_connect(
             "or adding a local net label"
         )
 
-    # Check bounding box crossings
+    # Check bounding box crossings (skip components that own the from/to pins)
+    skip_refs = set()
+    for pin_ref in (arguments.from_pin, arguments.to_pin):
+        if "." in pin_ref and not pin_ref.startswith("net:"):
+            skip_refs.add(pin_ref.rsplit(".", 1)[0])
+
     for sx1, sy1, sx2, sy2 in segments:
         for bb in component_bboxes:
+            if bb["ref"] in skip_refs:
+                continue
             bx, by, bw, bh = bb["x"], bb["y"], bb["width"], bb["height"]
             # Check if wire segment intersects bounding box interior
             # For horizontal wire (sy1 == sy2)
