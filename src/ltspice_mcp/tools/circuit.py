@@ -183,6 +183,14 @@ class NetLabelInput(ToolInput):
     y: int
 
 
+class AddTextInput(ToolInput):
+    path: str
+    text: str = Field(description="Text content to display on the schematic")
+    x: int
+    y: int
+    size: int = Field(default=2, description="Font size (1=small, 2=normal, 3=large)")
+
+
 class WaypointInput(StrictModel):
     x: int
     y: int
@@ -1075,6 +1083,37 @@ async def handle_add_net_label(
 
     label = "ground" if net == "0" else f"net '{net}'"
     return text_response(f"Added {label} at ({x},{y})")
+
+
+@registry.tool(
+    name="ltspice_add_text",
+    description="Add a comment text annotation to an .asc schematic.",
+    input_model=AddTextInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+    profiles=("full", "agentic"),
+)
+async def handle_add_text(
+    arguments: AddTextInput, state: SessionState
+) -> types.CallToolResult:
+    """Add a comment text to a schematic."""
+    asc_path = safe_path(arguments.path, state)
+    _require_asc(asc_path)
+
+    async with _editing_asc(asc_path, state) as editor:
+        comment = Text(
+            coord=Point(arguments.x, arguments.y),
+            text=arguments.text,
+            type=TextTypeEnum.COMMENT,
+            size=arguments.size,
+        )
+        editor.directives.append(comment)
+
+    return text_response(f"Added text at ({arguments.x},{arguments.y}): {arguments.text}")
 
 
 @registry.tool(
