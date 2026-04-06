@@ -55,6 +55,10 @@ class OperatingPointInput(ToolInput):
 class SimulationSummaryInput(ToolInput):
     raw_file: str = Field(description="Path to .raw result file from simulation")
     log_file: str | None = Field(default=None, description="Optional path to .log file")
+    signal: str | None = Field(
+        default=None,
+        description="Signal for AC bandwidth metrics (e.g., 'V(outp)'). Required for AC analysis.",
+    )
     format: Literal["json", "text"] | None = Field(default=None)
 
 
@@ -349,13 +353,11 @@ async def handle_get_simulation_summary(arguments: SimulationSummaryInput, state
     except Exception as e:
         raise ResultError(f"Failed to build summary: {e}") from e
 
-    # Compute AC bandwidth metrics if applicable
+    # Compute AC bandwidth metrics only when signal is explicitly specified
     ac_metrics = None
-    if "AC" in summary["sim_type"].upper():
-        voltage_signals = [s for s in summary["signals"] if s.startswith("V(")]
-        if voltage_signals:
-            with contextlib.suppress(Exception):
-                ac_metrics = compute_ac_bandwidth_metrics(raw, voltage_signals[0], 0)
+    if "AC" in summary["sim_type"].upper() and arguments.signal:
+        with contextlib.suppress(Exception):
+            ac_metrics = compute_ac_bandwidth_metrics(raw, arguments.signal, 0)
 
     # Build JSON data dict (always needed for json mode, cheap to build)
     json_data = dict(summary)
