@@ -47,21 +47,17 @@ class TestResolveSafePath:
         result = resolve_safe_path(abs_path, [work_dir, other_dir])
         assert result == other_dir / "file.cir"
 
-    def test_symlink_escape_blocked(self, work_dir: Path):
+    def test_symlink_escape_blocked(self, tmp_path: Path):
         """Symlink pointing outside sandbox should be blocked."""
-        # Create a target outside the sandbox
-        import tempfile
-
-        outside = Path(tempfile.mkdtemp())
+        sandbox = tmp_path / "sandbox"
+        sandbox.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
         secret = outside / "secret.txt"
         secret.write_text("secret")
 
-        link = work_dir / "sneaky_link"
+        link = sandbox / "sneaky_link"
         link.symlink_to(secret)
 
         with pytest.raises(PathSecurityError, match="outside allowed"):
-            resolve_safe_path("sneaky_link", [work_dir])
-
-        # Cleanup
-        secret.unlink()
-        outside.rmdir()
+            resolve_safe_path("sneaky_link", [sandbox])
