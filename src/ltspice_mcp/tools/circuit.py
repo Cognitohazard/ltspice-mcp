@@ -405,6 +405,9 @@ async def handle_create_netlist(arguments: CreateNetlistInput, state: SessionSta
                     "properties": {
                         "reference": {"type": "string"},
                         "value": {"type": "string"},
+                        "x": {"type": "number"},
+                        "y": {"type": "number"},
+                        "rotation": {"type": "string"},
                     },
                 },
             },
@@ -415,8 +418,8 @@ async def handle_create_netlist(arguments: CreateNetlistInput, state: SessionSta
                     "type": "object",
                     "properties": {
                         "text": {"type": "string"},
-                        "x": {"type": "number"},
-                        "y": {"type": "number"},
+                        "x": {"type": "integer"},
+                        "y": {"type": "integer"},
                     },
                 },
             },
@@ -912,8 +915,8 @@ async def handle_add_component(arguments: AddComponentInput, state: SessionState
     # Compute pin positions and bounding box
     sym_info = get_symbol_info(symbol)
     if sym_info is None:
-        data: dict = {"reference": reference, "symbol": symbol, "position": {"x": x, "y": y}, "rotation": rotation}
-        return format_response(result, data, None)
+        fallback_data = {"reference": reference, "symbol": symbol, "position": {"x": x, "y": y}, "rotation": rotation}
+        return format_response(result, fallback_data, None)
 
     geometry = compute_placed_geometry(sym_info, x, y, rotation)
     for pin in geometry["pins"]:
@@ -1084,7 +1087,7 @@ async def handle_get_symbol_info(
             "symbol": {"type": "string"},
             "position": {
                 "type": "object",
-                "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+                "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
             },
             "rotation": {"type": "string"},
             "value": {"type": ["string", "null"]},
