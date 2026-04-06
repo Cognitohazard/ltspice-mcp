@@ -123,7 +123,11 @@ Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispa
 | `ltspice_move_component` | Move or rotate a component in an `.asc` schematic |
 | `ltspice_set_component_attribute` | Set a component attribute (SpiceLine, Value2, etc.) |
 | `ltspice_add_component` | Add a new component to an `.asc` schematic at a specified grid position |
-| `ltspice_add_wire` | Add wire segment(s) to an `.asc` schematic to connect components |
+| `ltspice_connect` | Connect two component pins with wires, validates for shorts |
+| `ltspice_add_net_label` | Add/remove net labels and ground flags |
+| `ltspice_add_text` | Add comment text annotations to schematic |
+| `ltspice_get_symbol_info` | Get symbol pin positions, bounding box, and description |
+| `ltspice_get_component_info` | Get placed component pin positions and attributes |
 | `ltspice_export_netlist` | Export an `.asc` schematic to a `.net` netlist |
 
 `.asc` schematic editing requires `.asy` symbol files. These are auto-detected on Windows and WSL; override with `[schematic] symbol_paths` in TOML or the `LTSPICE_MCP_SYMBOL_PATHS` env var.
