@@ -26,6 +26,14 @@ from ltspice_mcp.state import SessionState
 logger = logging.getLogger(__name__)
 
 
+def _get_state(server_: Server) -> SessionState:
+    """Extract session state from the lifespan context."""
+    try:
+        return server_.request_context.lifespan_context["state"]
+    except (AttributeError, KeyError) as e:
+        raise RuntimeError(f"Session state not available: {e}") from e
+
+
 def _configure_asc_editor(config: ServerConfig, available: dict) -> bool:
     """Configure AscEditor library paths for .asc schematic support.
 
@@ -278,8 +286,7 @@ server.lifespan = server_lifespan
 @server.list_tools()
 async def list_tools() -> list[types.Tool]:
     """Return MCP tools filtered by the active tool profile."""
-    state = server.request_context.lifespan_context["state"]
-    return state.tool_defs
+    return _get_state(server).tool_defs
 
 
 @server.call_tool()
@@ -289,11 +296,7 @@ async def call_tool(name: str, arguments: dict | None):
     All handlers return types.CallToolResult (the MCP protocol's canonical
     response type). Data-returning tools populate structuredContent.
     """
-    # Get session state from lifespan context
-    try:
-        state = server.request_context.lifespan_context["state"]
-    except (AttributeError, KeyError) as e:
-        raise RuntimeError(f"Session state not available: {e}") from e
+    state = _get_state(server)
 
     # Look up handler in profile-filtered dispatch table
     registered = state.tool_dispatch.get(name)
@@ -353,11 +356,7 @@ async def read_resource(uri: AnyUrl) -> Iterable[ReadResourceContents]:
     Raises:
         ValueError: If URI is unknown or resource not found
     """
-    # Get session state from lifespan context
-    try:
-        state = server.request_context.lifespan_context["state"]
-    except (AttributeError, KeyError) as e:
-        raise ValueError(f"Internal error: Session state not available ({e})") from e
+    state = _get_state(server)
 
     try:
         result = handle_read_resource(str(uri), state)

@@ -22,9 +22,9 @@ from ltspice_mcp.tools._base import (
 
 class SearchLibraryInput(ToolInput):
     query: str = Field(description="Search term (case-insensitive substring match)")
-    source: Literal["user", "builtin"] = Field(default="user")
-    offset: int = Field(default=0)
-    limit: int = Field(default=50)
+    source: Literal["user", "builtin"] = Field(default="user", description="Search user-loaded or built-in libraries")
+    offset: int = Field(default=0, description="Pagination offset")
+    limit: int = Field(default=50, description="Max results to return")
     format: Literal["json", "text"] | None = Field(default=None)
 
 
@@ -43,10 +43,10 @@ class UnloadLibraryInput(ToolInput):
 
 
 class ListLibrariesInput(ToolInput):
-    detail: bool = Field(default=False)
-    path: str | None = Field(default=None)
-    offset: int = Field(default=0)
-    limit: int = Field(default=50)
+    detail: bool = Field(default=False, description="Include model names from each library")
+    path: str | None = Field(default=None, description="Filter to a specific library path")
+    offset: int = Field(default=0, description="Pagination offset")
+    limit: int = Field(default=50, description="Max results to return")
     format: Literal["json", "text"] | None = Field(default=None)
 
 

@@ -37,7 +37,9 @@ class SignalStatsInput(ToolInput):
 class QueryValueInput(ToolInput):
     raw_file: str = Field(description="Path to .raw result file from simulation")
     signal: str = Field(description="Signal/trace name (e.g., 'V(out)', 'I(R1)').")
-    at: str = Field(description="Time or frequency to query, accepts SPICE notation")
+    at: str = Field(
+        description="Time or frequency to query in SPICE notation (e.g., '1m', '100u', '1G', '2.5k')"
+    )
     step: int = Field(default=0, description="Step index for .step directives")
     format: Literal["json", "text"] | None = Field(default=None)
 

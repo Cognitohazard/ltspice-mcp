@@ -128,66 +128,75 @@ class CircuitReadInput(ToolInput):
 
 
 class ListComponentsInput(ToolInput):
-    path: str
-    prefix: str | None = None
-    reference: str | None = None
-    offset: int = 0
-    limit: int = 50
-    format: Literal["json", "text"] | None = None
+    path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
+    prefix: str | None = Field(default=None, description="Filter by reference prefix (e.g., 'R', 'M', 'C')")
+    reference: str | None = Field(default=None, description="Look up a single component by reference (e.g., 'R1')")
+    offset: int = Field(default=0, description="Pagination offset")
+    limit: int = Field(default=50, description="Max results to return")
+    format: Literal["json", "text"] | None = Field(default=None)
 
 
 class SetComponentValueInput(ToolInput):
-    path: str
-    reference: str | None = None
-    value: str | None = None
-    values: dict[str, str] | None = None
+    path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
+    reference: str | None = Field(default=None, description="Component reference for single mode (e.g., 'R1')")
+    value: str | None = Field(default=None, description="New value for single mode (e.g., '10k', '100n')")
+    values: dict[str, str] | None = Field(
+        default=None, description="Batch mode: {reference: value} dict (e.g., {'R1': '10k', 'C1': '100n'})"
+    )
 
 
 class ParameterInput(ToolInput):
-    path: str
-    name: str | None = None
-    value: str | None = None
-    format: Literal["json", "text"] | None = None
+    path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
+    name: str | None = Field(default=None, description="Parameter name to set (omit to read all params)")
+    value: str | None = Field(default=None, description="Parameter value (required when name is specified)")
+    format: Literal["json", "text"] | None = Field(default=None)
 
 
 class EditDirectiveInput(ToolInput):
-    path: str
-    action: Literal["add", "remove"]
-    instruction: str
+    path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
+    action: Literal["add", "remove"] = Field(description="Whether to add or remove the directive")
+    instruction: str = Field(
+        description="SPICE directive text (e.g., '.tran 10m', '.ac dec 100 1 1G'). "
+        "For remove: exact match or regex with 'regex:' prefix."
+    )
 
 
 class RemoveComponentInput(ToolInput):
-    path: str
-    reference: str
+    path: str = Field(description="Path to .asc schematic")
+    reference: str = Field(description="Component reference to remove (e.g., 'R1', 'M3')")
 
 
 class MoveComponentInput(ToolInput):
-    path: str
-    reference: str
-    x: int
-    y: int
-    rotation: Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"] | None = None
+    path: str = Field(description="Path to .asc schematic")
+    reference: str = Field(description="Component reference to move (e.g., 'R1', 'M3')")
+    x: int = Field(description="New X coordinate (LTspice grid units)")
+    y: int = Field(description="New Y coordinate (LTspice grid units)")
+    rotation: Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"] | None = Field(
+        default=None, description="New rotation (omit to keep current)"
+    )
 
 
 class SetComponentAttributeInput(ToolInput):
-    path: str
-    reference: str
-    attribute: str
-    value: str
+    path: str = Field(description="Path to .asc schematic")
+    reference: str = Field(description="Component reference (e.g., 'M1', 'R1')")
+    attribute: str = Field(description="Attribute name (e.g., 'SpiceLine', 'SpiceModel', 'Value2')")
+    value: str = Field(description="Attribute value (e.g., 'W=10u L=0.5u')")
 
 
 class ExportNetlistInput(ToolInput):
-    path: str
+    path: str = Field(description="Path to .asc schematic to export")
 
 
 class AddComponentInput(ToolInput):
-    path: str
-    reference: str
-    symbol: str
-    x: int
-    y: int
-    value: str | None = None
-    rotation: Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"] = "R0"
+    path: str = Field(description="Path to .asc schematic")
+    reference: str = Field(description="Reference designator (e.g., 'M1', 'R3', 'VDD')")
+    symbol: str = Field(description="Symbol name (e.g., 'nmos', 'pmos', 'res', 'cap', 'voltage')")
+    x: int = Field(description="X coordinate (LTspice grid units)")
+    y: int = Field(description="Y coordinate (LTspice grid units)")
+    value: str | None = Field(default=None, description="Component value (e.g., '10k', 'NMOS_3V3')")
+    rotation: Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"] = Field(
+        default="R0", description="Rotation/mirror (PMOS typically M180, NMOS typically R0)"
+    )
     attributes: dict[str, str] | None = Field(
         default=None,
         description="Optional attributes to set (e.g., {'SpiceLine': 'W=10u L=0.5u', 'Value2': '...'})",
@@ -207,20 +216,20 @@ class NetLabelInput(ToolInput):
 
 
 class AddTextInput(ToolInput):
-    path: str
+    path: str = Field(description="Path to .asc schematic")
     text: str = Field(description="Text content to display on the schematic")
-    x: int
-    y: int
+    x: int = Field(description="X coordinate for text placement")
+    y: int = Field(description="Y coordinate for text placement")
     size: int = Field(default=2, description="Font size (1=small, 2=normal, 3=large)")
 
 
 class WaypointInput(StrictModel):
-    x: int
-    y: int
+    x: int = Field(description="X coordinate of waypoint")
+    y: int = Field(description="Y coordinate of waypoint")
 
 
 class ConnectInput(ToolInput):
-    path: str
+    path: str = Field(description="Path to .asc schematic")
     from_pin: str = Field(
         description="Source pin as 'Reference.Pin' (e.g., 'M1.D', 'VDD.+') or 'net:name' for a net label"
     )
@@ -244,7 +253,7 @@ class SymbolInfoInput(ToolInput):
 
 
 class ComponentInfoInput(ToolInput):
-    path: str
+    path: str = Field(description="Path to .asc schematic")
     reference: str = Field(description="Component reference (e.g., 'M1', 'R1')")
 
 
@@ -1070,7 +1079,8 @@ def _resolve_pin(
             coords = ", ".join(f"({x},{y})" for x, y in matches)
             raise NetlistError(
                 f"Multiple '{net_name}' labels found at: {coords}. "
-                "Use a unique net label, or connect directly to a component pin."
+                "Use a unique net label, connect directly to a component pin, "
+                "or place the label at a pin with add_net_label(net='0', pin='M3.S')."
             )
         return matches[0]
 
