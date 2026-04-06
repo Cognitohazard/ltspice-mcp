@@ -90,12 +90,16 @@ class SimulationRunner:
         """
         job_id = job.job_id
 
-        def completion_callback(raw_file: str, log_file: str) -> None:
+        def completion_callback(raw_file: Path | None, log_file: Path | None) -> None:
             """Called by SimRunner in worker thread when simulation completes."""
             try:
-                # Bridge to event loop thread-safely
+                # Bridge to event loop thread-safely — convert Path to str for downstream
                 self.loop.call_soon_threadsafe(
-                    self._handle_completion, job_id, raw_file, log_file, state
+                    self._handle_completion,
+                    job_id,
+                    str(raw_file) if raw_file else "",
+                    str(log_file) if log_file else "",
+                    state,
                 )
             except RuntimeError as e:
                 # Event loop was closed - graceful shutdown in progress
