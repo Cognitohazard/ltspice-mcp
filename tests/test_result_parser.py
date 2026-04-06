@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib.log_parser import parse_measurements
+from ltspice_mcp.lib.log_parser import extract_log_diagnostics, parse_measurements
 from ltspice_mcp.lib.raw_parser import (
     compute_ac_bandwidth_metrics,
     compute_signal_stats,
@@ -224,3 +224,99 @@ class TestParseMeasurements:
         result = parse_measurements(log)
         assert result["measurements"] == {}
         assert result["step_count"] == 0
+
+
+class TestExtractLogDiagnostics:
+    def test_empty_log(self, work_dir: Path):
+        log = work_dir / "empty.log"
+        log.write_text("")
+        result = extract_log_diagnostics(log)
+        assert result["warnings"] == []
+        assert result["errors"] == []
+
+    def test_file_error_with_caret(self, work_dir: Path):
+        """filepath(line): message + source line + ^^^ caret."""
+        log = work_dir / "parse_err.log"
+        log.write_text(
+            "LTspice 26.0.1\n"
+            "Circuit: test.cir\n"
+            "C:\\tmp\\test.cir(38): No such function defined.\n"
+            ".meas AC gain_db FIND Vdb(outp) AT=1\n"
+            "                      ^^^\n"
+            "Total elapsed time: 0.01 seconds.\n"
+        )
+        result = extract_log_diagnostics(log)
+        assert len(result["errors"]) == 1
+        assert "No such function defined" in result["errors"][0]
+        assert "^^^" in result["errors"][0]
+        assert result["warnings"] == []
+
+    def test_fatal_error(self, work_dir: Path):
+        log = work_dir / "fatal.log"
+        log.write_text("Fatal Error: Unknown subcircuit called in: xu1 n004 n001 vcc 0 lm741\n")
+        result = extract_log_diagnostics(log)
+        assert len(result["errors"]) == 1
+        assert "Fatal Error" in result["errors"][0]
+
+    def test_error_on_line(self, work_dir: Path):
+        log = work_dir / "line_err.log"
+        log.write_text('Error on line 18 : r:u2:1:_r1 Unknown parameter "*"\n')
+        result = extract_log_diagnostics(log)
+        assert len(result["errors"]) == 1
+        assert "Error on line 18" in result["errors"][0]
+
+    def test_warning_both_casings(self, work_dir: Path):
+        log = work_dir / "warn.log"
+        log.write_text(
+            'Warning: Multiple definitions of model "2N2222"\n'
+            "WARNING: Node U1:11 is floating\n"
+        )
+        result = extract_log_diagnostics(log)
+        assert len(result["warnings"]) == 2
+        assert result["errors"] == []
+
+    def test_bare_convergence_errors(self, work_dir: Path):
+        log = work_dir / "conv.log"
+        log.write_text(
+            "Direct Newton iteration for .op point succeeded.\n"
+            "Singular matrix\n"
+            "Time step too small\n"
+        )
+        result = extract_log_diagnostics(log)
+        assert len(result["errors"]) == 2
+        assert any("Singular matrix" in e for e in result["errors"])
+        assert any("Time step too small" in e for e in result["errors"])
+
+    def test_mixed_warnings_and_errors(self, work_dir: Path):
+        log = work_dir / "mixed.log"
+        log.write_text(
+            "Warning: something minor\n"
+            "C:\\test.cir(10): No such function defined.\n"
+            ".meas AC foo FIND Vdb(x) AT=1\n"
+            "                  ^^^\n"
+            "Total elapsed time: 0.01 seconds.\n"
+        )
+        result = extract_log_diagnostics(log)
+        assert len(result["warnings"]) == 1
+        assert len(result["errors"]) == 1
+
+    def test_nonexistent_file(self):
+        result = extract_log_diagnostics(Path("/nonexistent/file.log"))
+        assert result["warnings"] == []
+        assert result["errors"] == []
+
+    def test_measurements_surfaces_errors(self, work_dir: Path):
+        """parse_measurements should include errors when results are empty."""
+        log = work_dir / "meas_err.log"
+        log.write_text(
+            "LTspice 26.0.1\n"
+            "Circuit: test.cir\n"
+            "C:\\tmp\\test.cir(38): No such function defined.\n"
+            ".meas AC gain_db FIND Vdb(outp) AT=1\n"
+            "                      ^^^\n"
+            "Total elapsed time: 0.01 seconds.\n"
+        )
+        result = parse_measurements(log)
+        assert result["measurements"] == {}
+        assert "errors" in result
+        assert len(result["errors"]) == 1
