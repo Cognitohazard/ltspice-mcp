@@ -22,11 +22,23 @@ Built on the low-level `mcp.server.lowlevel.Server` API with [spicelib](https://
 
 ## Setup
 
+### Install from PyPI
+
+```bash
+uv pip install ltspice-mcp
+```
+
+### Or install from source
+
 ```bash
 git clone https://github.com/Cognitohazard/ltspice-mcp.git
 cd ltspice-mcp
 uv sync
+```
 
+### Configure
+
+```bash
 cp ltspice-mcp.example.toml ltspice-mcp.toml
 # Set simulator.path if LTspice isn't auto-detected (required on WSL)
 ```
@@ -34,7 +46,7 @@ cp ltspice-mcp.example.toml ltspice-mcp.toml
 ### Add to Claude Code
 
 ```bash
-claude mcp add -s project ltspice -- uv run --directory /path/to/ltspice-mcp ltspice-mcp
+claude mcp add -s project ltspice -- uvx ltspice-mcp
 ```
 
 Or add to `.mcp.json` manually:
@@ -44,8 +56,8 @@ Or add to `.mcp.json` manually:
   "mcpServers": {
     "ltspice": {
       "type": "stdio",
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/ltspice-mcp", "ltspice-mcp"]
+      "command": "uvx",
+      "args": ["ltspice-mcp"]
     }
   }
 }

@@ -255,6 +255,37 @@ C1 out 0 {C}
 - Export to netlist for direct text editing when needed.
 - Bus notation: `Data[0:7]` creates 8 nets (cosmetic — netlister flattens to individual nets).
 
+#### Common symbol pin offsets (at R0)
+
+| Symbol | Pins (name: x,y) | Size (WxH) |
+|-|-|-|
+| nmos | D:(48,0) G:(0,80) S:(48,96) | 48x96 |
+| pmos | D:(48,0) G:(0,80) S:(48,96) | 48x96 |
+| voltage | +:(0,16) -:(0,96) | 64x80 |
+| current | +:(0,0) -:(0,80) | 64x80 |
+| res | A:(0,0) B:(0,64) | 32x64 |
+| cap | A:(16,0) B:(16,64) | 32x64 |
+
+Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M180→(x,-y). Use `ltspice_get_symbol_info` for exact positions.
+
+#### MOSFET orientation conventions
+
+| Rotation | Gate side | D/S vertical | Typical use |
+|-|-|-|-|
+| R0 | Left | D top, S bottom | NMOS (drain up) |
+| M0 | Right | D top, S bottom | NMOS mirrored (symmetric diff pair) |
+| M180 | Left | D bottom, S top | PMOS (source to VDD at top) |
+| R180 | Right | D bottom, S top | PMOS mirrored (gate faces right) |
+
+#### Schematic layout best practices
+
+- **Minimum 128 units vertical spacing** between component tiers (e.g., PMOS loads and NMOS diff pair). Tight spacing causes wires to share columns and visually appear shorted.
+- **Route gate-drain tie wires on a different x-column** than source/drain wires. For diode-connected MOSFETs, jog the gate tie wire horizontally before running vertically to avoid overlapping the source-to-supply wire.
+- **Use `ltspice_get_symbol_info` to check bounding boxes** before placing. Ensure wires don't route through component bounding boxes.
+- **Voltage source polarity**: `+` pin is at the top (smaller y), `-` at bottom. For VDD sources, `+` connects to the supply rail, `-` to ground.
+- **Current source direction**: Current flows from `+` (top) to `-` (bottom) externally. Place with `+` on the higher-voltage rail.
+- **Model names must not collide with type keywords**: Use `NMOS_3V3` not `NMOS` for `.model` names when the symbol Value is also a MOSFET type.
+
 ### Other LTspice Quirks
 
 - **Unicode mu**: LTspice replaces `u` with Unicode mu (µ) in saved files. Can corrupt netlists on copy/paste.
