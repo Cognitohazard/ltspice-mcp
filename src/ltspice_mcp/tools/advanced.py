@@ -23,6 +23,7 @@ from ltspice_mcp.state import (
     SweepDimension,
 )
 from ltspice_mcp.tools._base import (
+    PAGINATION_SCHEMA,
     StrictModel,
     ToolInput,
     format_response,
@@ -83,7 +84,7 @@ class GetBatchResultsInput(ToolInput):
     offset: int = Field(default=0, description="Pagination offset for raw data")
     limit: int = Field(default=50, description="Max raw data rows to return")
     raw: bool = Field(default=False, description="Return per-run raw data instead of aggregate stats")
-    format: Literal["json", "text"] | None = Field(default=None)
+    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
 
 
 # ---------------------------------------------------------------------------
@@ -562,6 +563,35 @@ async def handle_run_montecarlo(arguments: RunBatchInput, state: SessionState):
         openWorldHint=False,
     ),
     profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "job_id": {"type": "string"},
+            "job_type": {"type": "string"},
+            "status": {"type": "string"},
+            "netlist": {"type": "string"},
+            "total_runs": {"type": "integer"},
+            "completed_runs": {"type": "integer"},
+            "failed_runs": {"type": "integer"},
+            "mode": {"type": "string", "enum": ["aggregate", "raw"]},
+            "signal": {"type": "string"},
+            "run_count": {"type": "integer"},
+            "stats": {
+                "type": "object",
+                "properties": {
+                    "max_across_runs": {"type": ["number", "null"]},
+                    "min_across_runs": {"type": ["number", "null"]},
+                    "mean_across_runs": {"type": ["number", "null"]},
+                    "std_across_runs": {"type": ["number", "null"]},
+                    "median_across_runs": {"type": ["number", "null"]},
+                },
+            },
+            "worst_case_run": {"type": ["integer", "null"]},
+            "best_case_run": {"type": ["integer", "null"]},
+            "runs": {"type": "array", "items": {"type": "object"}},
+            "pagination": PAGINATION_SCHEMA,
+        },
+    },
 )
 async def handle_get_batch_results(arguments: GetBatchResultsInput, state: SessionState):
     """Query a batch simulation job — status/progress or signal results.

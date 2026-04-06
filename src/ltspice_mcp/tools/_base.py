@@ -76,6 +76,27 @@ PAGINATION_SCHEMA: dict[str, Any] = {
     },
 }
 
+PIN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "x": {"type": "integer"},
+        "y": {"type": "integer"},
+        "dir": {"type": "string"},
+        "order": {"type": "integer"},
+    },
+}
+
+BBOX_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "x": {"type": "integer"},
+        "y": {"type": "integer"},
+        "width": {"type": "integer"},
+        "height": {"type": "integer"},
+    },
+}
+
 RO_ANNOTATIONS = types.ToolAnnotations(
     readOnlyHint=True,
     destructiveHint=False,

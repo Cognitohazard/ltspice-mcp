@@ -263,6 +263,7 @@ Config          config.py  — TOML + env var configuration
 - **Runner lifecycle**: `RunnerManager` owns all runner instances (sim, sweep, MC). It auto-invalidates cached runners when the event loop, simulator class, or output folder changes. Runners are never created directly.
 - **stdin protection**: `main.py` redirects fd 0 to `/dev/null` before starting the server, passing the real stdin only to the MCP transport. This prevents subprocesses from consuming MCP protocol bytes — a workaround for [python-sdk#671](https://github.com/modelcontextprotocol/python-sdk/issues/671).
 - **Tool annotations**: Every tool declares `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` for client auto-approval decisions.
+- **Output schemas**: All 19 data-returning tools declare `outputSchema` for client introspection of `structuredContent`. The remaining 16 text-only confirmation tools don't set `structuredContent` and omit `outputSchema`.
 - **Structured errors**: Typed error hierarchy (`PathSecurityError`, `NetlistError`, `SimulationError` variants) in `errors.py`. Handlers catch `LTSpiceMCPError` subtypes and return error text; unknown exceptions propagate to the MCP SDK.
 
 ## Development

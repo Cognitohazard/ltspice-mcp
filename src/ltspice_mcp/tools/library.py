@@ -25,13 +25,13 @@ class SearchLibraryInput(ToolInput):
     source: Literal["user", "builtin"] = Field(default="user", description="Search user-loaded or built-in libraries")
     offset: int = Field(default=0, description="Pagination offset")
     limit: int = Field(default=50, description="Max results to return")
-    format: Literal["json", "text"] | None = Field(default=None)
+    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
 
 
 class GetModelInfoInput(ToolInput):
     name: str = Field(description="Model or subcircuit name (case-insensitive)")
     full: bool = Field(default=False, description="Include full SPICE definition text")
-    format: Literal["json", "text"] | None = Field(default=None)
+    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
 
 
 class LoadLibraryInput(ToolInput):
@@ -47,7 +47,7 @@ class ListLibrariesInput(ToolInput):
     path: str | None = Field(default=None, description="Filter to a specific library path")
     offset: int = Field(default=0, description="Pagination offset")
     limit: int = Field(default=50, description="Max results to return")
-    format: Literal["json", "text"] | None = Field(default=None)
+    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
 
 
 @registry.tool(
@@ -130,6 +130,17 @@ async def handle_search_library(arguments: SearchLibraryInput, state: SessionSta
     input_model=GetModelInfoInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "type": {"type": "string"},
+            "source_path": {"type": "string"},
+            "include_directive": {"type": "string"},
+            "parameters": {"type": "array", "items": {"type": "string"}},
+            "raw_text": {"type": "string"},
+        },
+    },
 )
 async def handle_get_model_info(arguments: GetModelInfoInput, state: SessionState):
     """Get SPICE model/subcircuit details."""
@@ -262,6 +273,22 @@ async def handle_unload_library(arguments: UnloadLibraryInput, state: SessionSta
     input_model=ListLibrariesInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full",),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "libraries": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "subcircuits": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+            },
+            "pagination": PAGINATION_SCHEMA,
+        },
+    },
 )
 async def handle_list_libraries(arguments: ListLibrariesInput, state: SessionState):
     """List loaded libraries, optionally with subcircuit detail."""
