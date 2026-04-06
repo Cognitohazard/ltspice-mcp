@@ -123,7 +123,7 @@ class CreateNetlistInput(ToolInput):
 
 
 class CircuitReadInput(ToolInput):
-    path: str = Field(description="Path to circuit file (.cir, .net, or .asc schematic)")
+    path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
     format: Literal["json", "text"] | None = Field(default=None)
 
 

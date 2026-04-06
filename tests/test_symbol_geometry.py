@@ -15,7 +15,6 @@ from ltspice_mcp.lib.symbol_geometry import (
     parse_asy_file,
 )
 
-
 # ---------------------------------------------------------------------------
 # _apply_rotation
 # ---------------------------------------------------------------------------
@@ -96,7 +95,7 @@ PINATTR SpiceOrder 3
 
 
 class TestParseAsyFile:
-    @pytest.fixture()
+    @pytest.fixture
     def nmos_asy(self, tmp_path: Path) -> Path:
         p = tmp_path / "nmos.asy"
         p.write_text(NMOS_ASY)
@@ -177,7 +176,7 @@ class TestParseAsyFile:
 class TestComputePlacedGeometry:
     """Test absolute coordinate computation for placed components."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def simple_symbol(self) -> SymbolInfo:
         """A simple 2-pin symbol: pin A at (0, -50), pin B at (0, 50), bbox 20x100."""
         return SymbolInfo(
@@ -300,9 +299,6 @@ class TestPinDirection:
     def test_center_pin_defaults(self):
         """A pin at the exact center picks a direction (not 'unknown')."""
         d = _pin_direction(50, 40, self.BBOX_W, self.BBOX_H, "R0")
-        # Exact center: dx=0, dy=0 -> normalized are both 0, equal.
-        # Falls into abs(dx)/w >= abs(dy)/h branch (both 0, 0 >= 0 is true).
-        # dx=0 -> picks left (dx <= 0 path)
         assert d in ("up", "down", "left", "right")
 
     def test_zero_bbox_no_crash(self):
