@@ -86,6 +86,32 @@ def _parse_rotation(rotation: str) -> ERotation:
         )
     return erot
 
+
+def _bboxes_overlap(a: dict, b: dict) -> bool:
+    """AABB overlap test between two bounding boxes with {x, y, width, height}."""
+    return (
+        a["x"] < b["x"] + b["width"]
+        and a["x"] + a["width"] > b["x"]
+        and a["y"] < b["y"] + b["height"]
+        and a["y"] + a["height"] > b["y"]
+    )
+
+
+def _collect_component_bboxes(editor: AscEditor) -> list[dict]:
+    """Collect bounding boxes for all components in the schematic."""
+    bboxes: list[dict] = []
+    for ref in editor.get_components():
+        comp = editor.components[ref]
+        sym = comp.symbol
+        sym_info = get_symbol_info(sym) if sym else None
+        if sym_info is None:
+            continue
+        pos, erot = editor.get_component_position(ref)
+        rot_str = erot.name if erot else "R0"
+        geo = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
+        bboxes.append({"ref": ref, **geo["bounding_box"]})
+    return bboxes
+
 # Type alias for the union returned by _make_editor / _get_editor.
 # Schematic-only handlers narrow this to AscEditor after _require_asc.
 Editor = AscEditor | SpiceEditor
@@ -810,27 +836,11 @@ async def handle_add_component(arguments: AddComponentInput, state: SessionState
 
     # Check for overlap with existing components
     warnings: list[str] = []
-    editor = _get_asc_editor(asc_path, state)
-    for existing_ref in editor.get_components():
-        if existing_ref == reference:
+    for ebb in _collect_component_bboxes(_get_asc_editor(asc_path, state)):
+        if ebb["ref"] == reference:
             continue
-        existing_comp = editor.components[existing_ref]
-        existing_sym = existing_comp.symbol
-        existing_info = get_symbol_info(existing_sym) if existing_sym else None
-        if existing_info is None:
-            continue
-        epos, erot = editor.get_component_position(existing_ref)
-        erot_str = erot.name if erot else "R0"
-        egeo = compute_placed_geometry(existing_info, int(epos.X), int(epos.Y), erot_str)
-        ebb = egeo["bounding_box"]
-        # AABB overlap test
-        if (
-            bb["x"] < ebb["x"] + ebb["width"]
-            and bb["x"] + bb["width"] > ebb["x"]
-            and bb["y"] < ebb["y"] + ebb["height"]
-            and bb["y"] + bb["height"] > ebb["y"]
-        ):
-            warnings.append(f"Overlaps {existing_ref} bounding box")
+        if _bboxes_overlap(bb, ebb):
+            warnings.append(f"Overlaps {ebb['ref']} bounding box")
 
     if warnings:
         result += "\n\nWarnings:"
@@ -1205,17 +1215,7 @@ async def handle_connect(
     _require_asc(asc_path)
 
     # Collect component bounding boxes for crossing detection
-    component_bboxes: list[dict] = []
-    editor = _get_asc_editor(asc_path, state)
-    for ref in editor.get_components():
-        comp = editor.components[ref]
-        sym = comp.symbol
-        sym_info = get_symbol_info(sym) if sym else None
-        if sym_info is not None:
-            pos, erot = editor.get_component_position(ref)
-            rot_str = erot.name if erot else "R0"
-            geo = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
-            component_bboxes.append({"ref": ref, **geo["bounding_box"]})
+    component_bboxes = _collect_component_bboxes(_get_asc_editor(asc_path, state))
 
     async with _editing_asc(asc_path, state) as ed:
         x1, y1 = _resolve_pin(arguments.from_pin, ed)
@@ -1256,10 +1256,11 @@ async def handle_connect(
         )
 
     # Check bounding box crossings (skip components that own the from/to pins)
-    skip_refs = set()
-    for pin_ref in (arguments.from_pin, arguments.to_pin):
-        if "." in pin_ref and not pin_ref.startswith("net:"):
-            skip_refs.add(pin_ref.rsplit(".", 1)[0])
+    skip_refs = {
+        ref.rsplit(".", 1)[0]
+        for ref in (arguments.from_pin, arguments.to_pin)
+        if "." in ref and not ref.startswith("net:")
+    }
 
     for sx1, sy1, sx2, sy2 in segments:
         for bb in component_bboxes:
