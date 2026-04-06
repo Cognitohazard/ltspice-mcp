@@ -97,9 +97,9 @@ def _bboxes_overlap(a: dict, b: dict) -> bool:
     )
 
 
-def _collect_component_bboxes(editor: AscEditor) -> list[dict]:
-    """Collect bounding boxes for all components in the schematic."""
-    bboxes: list[dict] = []
+def _collect_component_geometry(editor: AscEditor) -> list[dict]:
+    """Collect bounding boxes and pin positions for all components."""
+    result: list[dict] = []
     for ref in editor.get_components():
         comp = editor.components[ref]
         sym = comp.symbol
@@ -109,8 +109,8 @@ def _collect_component_bboxes(editor: AscEditor) -> list[dict]:
         pos, erot = editor.get_component_position(ref)
         rot_str = erot.name if erot else "R0"
         geo = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
-        bboxes.append({"ref": ref, **geo["bounding_box"]})
-    return bboxes
+        result.append({"ref": ref, **geo["bounding_box"], "pins": geo["pins"]})
+    return result
 
 # Type alias for the union returned by _make_editor / _get_editor.
 # Schematic-only handlers narrow this to AscEditor after _require_asc.
@@ -192,18 +192,6 @@ class AddComponentInput(ToolInput):
         default=None,
         description="Optional attributes to set (e.g., {'SpiceLine': 'W=10u L=0.5u', 'Value2': '...'})",
     )
-
-
-class WireSegmentInput(StrictModel):
-    x1: int
-    y1: int
-    x2: int
-    y2: int
-
-
-class AddWireInput(ToolInput):
-    path: str
-    wires: list[WireSegmentInput]
 
 
 class NetLabelInput(ToolInput):
@@ -703,15 +691,39 @@ async def handle_remove_component(arguments: RemoveComponentInput, state: Sessio
 
     reference = arguments.reference
 
+    # Collect pin positions before removal to check for orphaned wires
+    editor_pre = _get_asc_editor(asc_path, state)
+    if reference not in editor_pre.get_components():
+        raise NetlistError(
+            f"Component '{reference}' not found. "
+            f"Available: {', '.join(editor_pre.get_components())}"
+        )
+    comp = editor_pre.components[reference]
+    sym_info = get_symbol_info(comp.symbol) if comp.symbol else None
+    pin_coords: set[tuple[int, int]] = set()
+    if sym_info is not None:
+        pos, erot = editor_pre.get_component_position(reference)
+        rot_str = erot.name if erot else "R0"
+        geo = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
+        pin_coords = {(p["x"], p["y"]) for p in geo["pins"]}
+
     async with _editing_asc(asc_path, state) as editor:
-        components = editor.get_components()
-        if reference not in components:
-            raise NetlistError(
-                f"Component '{reference}' not found. Available: {', '.join(components)}"
-            )
         editor.remove_component(reference)
 
-    return text_response(f"Removed {reference} from {asc_path.name}")
+    # Check for wires that touch the removed component's pin positions
+    result = f"Removed {reference} from {asc_path.name}"
+    if pin_coords:
+        editor_post = _get_asc_editor(asc_path, state)
+        orphaned_at: list[str] = []
+        for w in editor_post.wires:
+            for coord in [(int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))]:
+                if coord in pin_coords:
+                    orphaned_at.append(f"({coord[0]},{coord[1]})")
+                    pin_coords.discard(coord)
+        if orphaned_at:
+            result += f"\n\nWarning: orphaned wires remain at: {', '.join(orphaned_at)}"
+
+    return text_response(result)
 
 
 @registry.tool(
@@ -840,7 +852,7 @@ async def handle_add_component(arguments: AddComponentInput, state: SessionState
 
     # Check for overlap with existing components
     warnings: list[str] = []
-    for ebb in _collect_component_bboxes(_get_asc_editor(asc_path, state)):
+    for ebb in _collect_component_geometry(_get_asc_editor(asc_path, state)):
         if ebb["ref"] == reference:
             continue
         if _bboxes_overlap(bb, ebb):
@@ -865,37 +877,7 @@ async def handle_add_component(arguments: AddComponentInput, state: SessionState
     return format_response(result, data, None)
 
 
-@registry.tool(
-    name="ltspice_add_wire",
-    description="Add wire segment(s) to an .asc schematic to connect components.",
-    input_model=AddWireInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=False,
-    ),
-    profiles=("full",),
-)
-async def handle_add_wire(arguments: AddWireInput, state: SessionState) -> types.CallToolResult:
-    """Add wire segment(s) to an .asc schematic."""
-    asc_path = safe_path(arguments.path, state)
-    _require_asc(asc_path)
-
-    wires = arguments.wires
-    if not wires:
-        raise NetlistError("At least one wire segment is required")
-
-    async with _editing_asc(asc_path, state) as editor:
-        for i, w in enumerate(wires):
-            try:
-                x1, y1 = w.x1, w.y1
-                x2, y2 = w.x2, w.y2
-            except Exception as e:
-                raise NetlistError(f"Wire segment {i}: requires integer x1, y1, x2, y2: {e}") from e
-            editor.wires.append(Line(Point(x1, y1), Point(x2, y2)))
-
-    return text_response(f"Added {len(wires)} wire segment(s) to {asc_path.name}")
+_previous_exports: dict[Path, list[str]] = {}
 
 
 @registry.tool(
@@ -932,8 +914,25 @@ async def handle_export_netlist(arguments: ExportNetlistInput, state: SessionSta
         raise NetlistError("Export failed: .net file not created")
 
     content = net_path.read_text()
+    current_lines = content.splitlines()
 
-    return text_response(f"=== {net_path.name} ===\n\n{content}")
+    result = f"=== {net_path.name} ===\n\n{content}"
+
+    # Show diff if a previous export exists for this file
+    prev = _previous_exports.get(asc_path)
+    if prev is not None:
+        added = [ln for ln in current_lines if ln not in prev and not ln.startswith("*")]
+        removed = [ln for ln in prev if ln not in current_lines and not ln.startswith("*")]
+        if added or removed:
+            result += "\n\n--- Changes since last export ---"
+            for ln in removed:
+                result += f"\n- {ln}"
+            for ln in added:
+                result += f"\n+ {ln}"
+
+    _previous_exports[asc_path] = current_lines
+
+    return text_response(result)
 
 
 @registry.tool(
@@ -1071,8 +1070,7 @@ def _resolve_pin(
             coords = ", ".join(f"({x},{y})" for x, y in matches)
             raise NetlistError(
                 f"Multiple '{net_name}' labels found at: {coords}. "
-                "Use a unique net label, or connect directly to a component pin, "
-                "or use ltspice_add_wire with explicit coordinates."
+                "Use a unique net label, or connect directly to a component pin."
             )
         return matches[0]
 
@@ -1227,7 +1225,7 @@ async def handle_connect(
 
     # Collect component bounding boxes and existing wires for crossing detection
     pre_editor = _get_asc_editor(asc_path, state)
-    component_bboxes = _collect_component_bboxes(pre_editor)
+    component_bboxes = _collect_component_geometry(pre_editor)
     existing_wires = [
         (int(w.V1.X), int(w.V1.Y), int(w.V2.X), int(w.V2.Y)) for w in pre_editor.wires
     ]
@@ -1302,8 +1300,28 @@ async def handle_connect(
                         f"({bx},{by})-({bx + bw},{by + bh})"
                     )
 
-    # Check for unintended junctions with existing wires
+    # Check if wire passes through any component pin (not from/to endpoints)
     endpoints = {(x1, y1), (x2, y2)}
+    for cg in component_bboxes:
+        if cg["ref"] in skip_refs:
+            continue
+        for pin in cg["pins"]:
+            px, py = pin["x"], pin["y"]
+            if (px, py) in endpoints:
+                continue
+            for sx1, sy1, sx2, sy2 in segments:
+                on_wire = False
+                if sy1 == sy2 and py == sy1:
+                    on_wire = min(sx1, sx2) <= px <= max(sx1, sx2)
+                elif sx1 == sx2 and px == sx1:
+                    on_wire = min(sy1, sy2) <= py <= max(sy1, sy2)
+                if on_wire:
+                    warnings.append(
+                        f"Wire passes through {cg['ref']}.{pin['name']} at ({px},{py}): "
+                        "will create unintended connection"
+                    )
+
+    # Check for unintended junctions with existing wires
     for sx1, sy1, sx2, sy2 in segments:
         for ex1, ey1, ex2, ey2 in existing_wires:
             # Check if any interior point of the new segment lies on an existing wire
