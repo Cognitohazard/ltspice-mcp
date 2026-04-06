@@ -40,13 +40,13 @@ logger = logging.getLogger(__name__)
 class SweepParameter(StrictModel):
     """Nested sweep parameter definition."""
 
-    name: str
-    type: Literal["component", "parameter"]
-    start: float
-    stop: float
-    step: float | None = None
-    points: int | None = None
-    scale: Literal["linear", "log"] = "linear"
+    name: str = Field(description="Component reference (e.g., 'R1') or parameter name")
+    type: Literal["component", "parameter"] = Field(description="'component' for ref values, 'parameter' for .PARAM")
+    start: float = Field(description="Start value of sweep range")
+    stop: float = Field(description="End value of sweep range")
+    step: float | None = Field(default=None, description="Step size (mutually exclusive with points)")
+    points: int | None = Field(default=None, description="Number of points (mutually exclusive with step)")
+    scale: Literal["linear", "log"] = Field(default="linear", description="Sweep scale")
 
 
 class ConfigureSweepInput(ToolInput):
@@ -55,30 +55,35 @@ class ConfigureSweepInput(ToolInput):
 
 
 class RunBatchInput(ToolInput):
-    config_id: str
-    max_parallel: int | None = None
+    config_id: str = Field(description="Configuration ID from configure_sweep or configure_montecarlo")
+    max_parallel: int | None = Field(default=None, description="Max concurrent simulations (default: server config)")
 
 
 class MonteCarloTolerance(StrictModel):
-    ref: str
-    tolerance: float
-    distribution: Literal["uniform", "gaussian", "normal"] = "uniform"
+    ref: str = Field(description="Component ref (e.g., 'R1') or type name (e.g., 'resistors', 'R')")
+    tolerance: float = Field(description="Tolerance as fraction (e.g., 0.05 for 5%)")
+    distribution: Literal["uniform", "gaussian", "normal"] = Field(
+        default="uniform", description="Distribution type"
+    )
 
 
 class ConfigureMonteCarloInput(ToolInput):
     netlist: str = Field(description="Path to the netlist file (.cir, .net, .asc)")
-    tolerances: list[MonteCarloTolerance]
-    num_runs: int = 100
+    tolerances: list[MonteCarloTolerance] = Field(description="Component tolerance specifications")
+    num_runs: int = Field(default=100, description="Number of Monte Carlo iterations")
 
 
 class GetBatchResultsInput(ToolInput):
-    job_id: str
-    signal: str | None = None
-    filters: dict[str, str] | None = None
-    offset: int = 0
-    limit: int = 50
-    raw: bool = False
-    format: Literal["json", "text"] | None = None
+    job_id: str = Field(description="Batch job ID from run_sweep or run_montecarlo")
+    signal: str | None = Field(default=None, description="Signal name for per-signal stats (e.g., 'V(out)')")
+    filters: dict[str, str] | None = Field(
+        default=None,
+        description="Filter runs by parameter values (e.g., {'R1': '10k'}). Only with signal + raw.",
+    )
+    offset: int = Field(default=0, description="Pagination offset for raw data")
+    limit: int = Field(default=50, description="Max raw data rows to return")
+    raw: bool = Field(default=False, description="Return per-run raw data instead of aggregate stats")
+    format: Literal["json", "text"] | None = Field(default=None)
 
 
 # ---------------------------------------------------------------------------
