@@ -16,11 +16,6 @@ wheels/
 
 .mcp.json
 
-CLAUDE.md
-
-.chunkhound/
-.chunkhound.json
-
 # Runtime artifacts
 workspace/
 ltspice-mcp.toml
