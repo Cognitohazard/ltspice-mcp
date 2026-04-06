@@ -288,6 +288,8 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 
 **Component placement:**
 - **Tier alignment**: Matched/mirrored transistors (diff pairs, current mirrors, bias mirrors) MUST share the same y-coordinate. Plan horizontal tiers: VDD rail → PMOS loads → diff pair → tail/bias → VSS.
+- **Drain/source alignment on each branch**: Within a vertical branch (e.g., PMOS load stacked above NMOS input), position components so the drain pin of the upper device is on the same x-column as the drain pin of the lower device. This eliminates horizontal jogs between stacked transistors.
+- **Pin-to-rail alignment**: Place voltage/current sources so their pins land directly on the rail they connect to — no wire through the source body. For a VDD source, position it so the `+` pin y-coordinate equals the VDD rail y-coordinate. Use `ltspice_get_symbol_info` to compute the exact placement origin from the desired pin position (e.g., for voltage `+` at y=128, place origin at y=128-16=112).
 - **Minimum 128 units vertical spacing** between component tiers. Tight spacing causes wires to share columns and visually appear shorted.
 - **Bias circuit alignment**: Bias devices (e.g., M5/Ibias) should share the y-level of their functional counterpart (e.g., M3 tail current source).
 - **Use `ltspice_get_symbol_info` to check bounding boxes** before placing. Ensure wires don't route through component bounding boxes.
