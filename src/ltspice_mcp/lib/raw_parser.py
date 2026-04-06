@@ -16,7 +16,11 @@ import numpy as np
 from spicelib.log.ltsteps import LTSpiceLogReader
 from spicelib.raw.raw_read import RawRead
 
-from ltspice_mcp.lib.log_parser import parse_fourier_data, parse_measurements
+from ltspice_mcp.lib.log_parser import (
+    extract_log_diagnostics,
+    parse_fourier_data,
+    parse_measurements,
+)
 
 # Smallest positive normal float — floor for magnitude before log10 to avoid -inf
 _FLOAT_TINY = np.finfo(float).tiny
@@ -365,16 +369,13 @@ def build_simulation_summary(
             except Exception:
                 pass
 
-        # Parse warnings from log content
+        # Parse warnings and errors from log
         try:
-            log_content = log_path.read_text()
-            warnings = [
-                line.strip()
-                for line in log_content.splitlines()
-                if "warning" in line.lower()
-            ]
-            if warnings:
-                summary["warnings"] = warnings
+            diagnostics = extract_log_diagnostics(log_path)
+            if diagnostics["warnings"]:
+                summary["warnings"] = diagnostics["warnings"]
+            if diagnostics["errors"]:
+                summary["errors"] = diagnostics["errors"]
         except Exception:
             pass
 

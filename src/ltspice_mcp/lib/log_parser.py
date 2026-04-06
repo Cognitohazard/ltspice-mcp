@@ -4,6 +4,7 @@ For .raw file parsing (waveform data, statistics), see raw_parser.py.
 """
 
 import logging
+import re
 from pathlib import Path
 
 from spicelib.log.ltsteps import LTSpiceLogReader
@@ -24,6 +25,102 @@ ERROR_KEYWORDS = [
     "missing",
     "can't find",
 ]
+
+# --- Structured log diagnostic extraction ---
+
+# filepath(line): message — LTspice parse errors (.meas, .param, behavioral sources)
+_RE_FILE_ERROR = re.compile(r"^.+\(\d+\):\s+.+")
+# ^^^ caret pointer (follows a source line in a parse error block)
+_RE_CARET = re.compile(r"^\s*\^+\s*$")
+# "Error on line N :" — component-level errors after subcircuit expansion
+_RE_LINE_ERROR = re.compile(r"^Error on line \d+", re.IGNORECASE)
+# "Fatal Error:" — missing subcircuits/models
+_RE_FATAL = re.compile(r"^Fatal Error:", re.IGNORECASE)
+# Explicit warning prefix (LTspice uses both casings)
+_RE_WARNING = re.compile(r"^(?:Warning|WARNING):", re.IGNORECASE)
+# Bare convergence / runtime messages with no prefix
+_BARE_ERROR_PHRASES = [
+    "singular matrix",
+    "time step too small",
+    "no convergence",
+    "gmin/source stepping failed",
+    "questionable use of curly braces",
+]
+
+
+def extract_log_diagnostics(log_path: Path) -> dict[str, list[str]]:
+    """Extract structured warnings and errors from an LTspice log file.
+
+    Detects all known LTspice diagnostic patterns:
+    - filepath(line): message + source line + ^^^ caret blocks
+    - "Error on line N:" component errors
+    - "Fatal Error:" messages
+    - "Warning:"/"WARNING:" prefixed lines
+    - Bare convergence/runtime messages (e.g., "Singular matrix")
+
+    Returns:
+        {"warnings": [...], "errors": [...]} with human-readable strings.
+    """
+    warnings: list[str] = []
+    errors: list[str] = []
+
+    try:
+        content = log_path.read_text()
+    except Exception:
+        return {"warnings": warnings, "errors": errors}
+
+    lines = content.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # filepath(line): message — collect the block (source line + caret)
+        if _RE_FILE_ERROR.match(line):
+            block = [stripped]
+            # Grab following source line + caret if present
+            j = i + 1
+            while j < len(lines) and j <= i + 2:
+                next_stripped = lines[j].strip()
+                if not next_stripped:
+                    break
+                block.append(next_stripped)
+                if _RE_CARET.match(lines[j]):
+                    j += 1
+                    break
+                j += 1
+            errors.append("\n".join(block))
+            i = j
+            continue
+
+        # Fatal Error:
+        if _RE_FATAL.match(stripped):
+            errors.append(stripped)
+            i += 1
+            continue
+
+        # Error on line N:
+        if _RE_LINE_ERROR.match(stripped):
+            errors.append(stripped)
+            i += 1
+            continue
+
+        # Warning: / WARNING:
+        if _RE_WARNING.match(stripped):
+            warnings.append(stripped)
+            i += 1
+            continue
+
+        # Bare convergence / runtime phrases
+        stripped_lower = stripped.lower()
+        if any(phrase in stripped_lower for phrase in _BARE_ERROR_PHRASES):
+            errors.append(stripped)
+            i += 1
+            continue
+
+        i += 1
+
+    return {"warnings": warnings, "errors": errors}
 
 
 def extract_error_context(log_file: Path, max_lines: int = 20) -> str:
@@ -166,20 +263,15 @@ def parse_success_summary(raw_file: Path, log_file: Path, duration: float) -> di
         logger.warning(f"Could not parse raw file {raw_file}: {e}")
         # Continue with partial data
 
-    # Parse log file for warnings
+    # Parse log file for warnings and errors
     if log_file.exists():
         try:
-            log_content = log_file.read_text()
-            warnings = []
-            for line in log_content.splitlines():
-                if "warning" in line.lower():
-                    warnings.append(line.strip())
-                    if len(warnings) >= 5:  # Limit to first 5 warnings
-                        break
-            result["warnings"] = warnings
+            diagnostics = extract_log_diagnostics(log_file)
+            result["warnings"] = diagnostics["warnings"][:5]
+            if diagnostics["errors"]:
+                result["errors"] = diagnostics["errors"][:5]
         except Exception as e:
             logger.warning(f"Could not parse log file {log_file}: {e}")
-            # Continue with empty warnings list
 
     return result
 
@@ -207,7 +299,12 @@ def parse_measurements(log_path: Path, reader: LTSpiceLogReader | None = None) -
     # Get measurement names
     measure_names = reader.get_measure_names()
     if not measure_names:
-        return {"measurements": {}, "step_count": 0}
+        result: dict = {"measurements": {}, "step_count": 0}
+        # Surface any errors from the log that explain why measurements are missing
+        diagnostics = extract_log_diagnostics(log_path)
+        if diagnostics["errors"]:
+            result["errors"] = diagnostics["errors"]
+        return result
 
     # Extract values for each measurement
     measurements = {}
