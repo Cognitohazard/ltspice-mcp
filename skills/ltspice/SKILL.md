@@ -302,7 +302,7 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 **Ground and net labels:**
 - **Local ground flags**: Place a ground (`0`) label directly at each grounded pin using `ltspice_add_net_label`. Never route wires to a distant ground flag.
 - **One ground per pin**: Each component's ground connection gets its own `ltspice_add_net_label` call at the pin's coordinates — do not share ground flags between components.
-- **Do not use `ltspice_connect` with `net:0`** when multiple ground labels exist — the tool errors on ambiguous net references. Instead, use `ltspice_add_wire` for the short wire from pin to its local ground flag, or `ltspice_connect` to a unique net label.
+- **Do not use `ltspice_connect` with `net:0`** when multiple ground labels exist — the tool errors on ambiguous net references. Place ground flags directly at pin coordinates using `ltspice_add_net_label(net="0", pin="M3.S")` — no wire needed when the flag is on the pin.
 - **Named nets (VDD, outp, etc.)**: Use a single label per unique net name. Connect components to it via `ltspice_connect` with `net:NAME` or waypoints.
 
 **Sources:**
