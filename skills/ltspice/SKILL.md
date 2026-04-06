@@ -247,6 +247,10 @@ C1 out 0 {C}
 - Model aliasing: `.model 3904 ako: 2N3904` — inherit and override parameters.
 - Model stepping: `.step param STM list 3904 2222` with `Q1: {STM}`.
 
+### Design workflow: .cir first, .asc last
+
+**Design and iterate over `.cir` netlists** — plain text, no placement overhead, fast to edit and simulate. Only build `.asc` schematics after the circuit design is finalized or when the user needs a visual schematic for review. The `.asc` tools are for presentation, not design iteration.
+
 ### .asc Schematics
 
 `.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use spicelib's `AscEditor` or LTspice's GUI.
