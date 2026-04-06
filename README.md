@@ -80,8 +80,8 @@ Simulation output is automatically redirected to a Windows temp directory. LTspi
 
 | Profile | Tools | Use case |
 |-|-|-|
-| `full` (default) | All 31 | Backwards-compatible default for any MCP client |
-| `agentic` | 16 | **Recommended** when your client supports skill files |
+| `full` (default) | All 35 | Backwards-compatible default for any MCP client |
+| `agentic` | 21 | **Recommended** when your client supports skill files |
 
 The **agentic** profile removes netlist-editing wrappers, sweep/MC configuration tools, niche schematic operations, and library session management — things a capable LLM agent does better through direct file editing. It keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, AscEditor-dependent ops, and library search — the tools that provide genuine leverage over what an LLM can do natively.
 
@@ -105,9 +105,9 @@ Copy the relevant skill into whatever location your MCP client uses for persiste
 
 ## Tools
 
-All 31 tools are prefixed with `ltspice_` to avoid namespace conflicts with other MCP servers. Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) for client auto-approval decisions.
+All 35 tools are prefixed with `ltspice_` to avoid namespace conflicts with other MCP servers. Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) for client auto-approval decisions.
 
-### Circuit editing (12 tools)
+### Circuit editing (16 tools)
 
 Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispatch picks the right editor automatically.
 
@@ -119,16 +119,16 @@ Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispa
 | `ltspice_set_component_value` | Set one component value, or batch-set many via a `values` dict |
 | `ltspice_parameter` | Get all `.PARAM` values (no args) or set one (`name` + `value`) |
 | `ltspice_edit_directive` | Add or remove SPICE directives (`.tran`, `.ac`, `.lib`, etc.) |
-| `ltspice_remove_component` | Remove a component from an `.asc` schematic |
+| `ltspice_remove_component` | Remove a component (warns about orphaned wires) |
 | `ltspice_move_component` | Move or rotate a component in an `.asc` schematic |
 | `ltspice_set_component_attribute` | Set a component attribute (SpiceLine, Value2, etc.) |
-| `ltspice_add_component` | Add a new component to an `.asc` schematic at a specified grid position |
-| `ltspice_connect` | Connect two component pins with wires, validates for shorts |
-| `ltspice_add_net_label` | Add/remove net labels and ground flags |
+| `ltspice_add_component` | Add a component with value, attributes, returns pin positions and bounding box |
+| `ltspice_connect` | Connect two pins by reference with waypoint routing; validates for pin collisions, wire junctions, and diagonal wires before adding |
+| `ltspice_add_net_label` | Add/remove net labels and ground flags (supports pin reference for placement) |
 | `ltspice_add_text` | Add comment text annotations to schematic |
-| `ltspice_get_symbol_info` | Get symbol pin positions, bounding box, and description |
-| `ltspice_get_component_info` | Get placed component pin positions and attributes |
-| `ltspice_export_netlist` | Export an `.asc` schematic to a `.net` netlist |
+| `ltspice_get_symbol_info` | Get symbol pin positions, bounding box, pin directions, and description |
+| `ltspice_get_component_info` | Get placed component pin positions, bounding box, and attributes |
+| `ltspice_export_netlist` | Export `.asc` to `.net` netlist (shows diff against previous export) |
 
 `.asc` schematic editing requires `.asy` symbol files. These are auto-detected on Windows and WSL; override with `[schematic] symbol_paths` in TOML or the `LTSPICE_MCP_SYMBOL_PATHS` env var.
 
