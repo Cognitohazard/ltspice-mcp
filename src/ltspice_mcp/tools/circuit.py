@@ -16,7 +16,14 @@ from typing import Literal
 from mcp import types
 from pydantic import Field
 from spicelib import AscEditor, SpiceEditor
-from spicelib.editor.base_schematic import ERotation, Line, Point, SchematicComponent
+from spicelib.editor.base_schematic import (
+    ERotation,
+    Line,
+    Point,
+    SchematicComponent,
+    Text,
+    TextTypeEnum,
+)
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import services
@@ -986,16 +993,24 @@ def _resolve_pin(
     if pin_ref.startswith("net:"):
         # Look up a FLAG/net label position in the .asc
         net_name = pin_ref[4:]
-        for line_obj in editor.lines:
-            line_str = str(line_obj).strip()
-            if line_str.startswith("FLAG "):
-                parts = line_str.split()
-                if len(parts) >= 4 and parts[3] == net_name:
-                    return int(parts[1]), int(parts[2])
-        raise NetlistError(
-            f"Net label '{net_name}' not found in schematic. "
-            "Add it with ltspice_add_net_label first."
-        )
+        matches = [
+            (int(lbl.coord.X), int(lbl.coord.Y))
+            for lbl in editor.labels
+            if lbl.text == net_name
+        ]
+        if not matches:
+            raise NetlistError(
+                f"Net label '{net_name}' not found in schematic. "
+                "Add it with ltspice_add_net_label first."
+            )
+        if len(matches) > 1:
+            coords = ", ".join(f"({x},{y})" for x, y in matches)
+            raise NetlistError(
+                f"Multiple '{net_name}' labels found at: {coords}. "
+                "Use a unique net label, or connect directly to a component pin, "
+                "or use ltspice_add_wire with explicit coordinates."
+            )
+        return matches[0]
 
     # Component.Pin format
     if "." not in pin_ref:
@@ -1055,17 +1070,8 @@ async def handle_add_net_label(
     y = arguments.y
 
     async with _editing_asc(asc_path, state) as editor:
-        flag_line = f"FLAG {x} {y} {net}"
-        # Insert FLAG line before the first SYMBOL line
-        insert_idx = 0
-        for i, line_obj in enumerate(editor.lines):
-            line_str = str(line_obj).strip()
-            if line_str.startswith("SYMBOL "):
-                insert_idx = i
-                break
-        else:
-            insert_idx = len(editor.lines)
-        editor.lines.insert(insert_idx, flag_line)  # pyright: ignore[reportArgumentType]
+        label = Text(coord=Point(x, y), text=net, type=TextTypeEnum.LABEL)
+        editor.labels.append(label)
 
     label = "ground" if net == "0" else f"net '{net}'"
     return text_response(f"Added {label} at ({x},{y})")
@@ -1094,9 +1100,22 @@ async def handle_connect(
     asc_path = safe_path(arguments.path, state)
     _require_asc(asc_path)
 
-    async with _editing_asc(asc_path, state) as editor:
-        x1, y1 = _resolve_pin(arguments.from_pin, editor)
-        x2, y2 = _resolve_pin(arguments.to_pin, editor)
+    # Collect component bounding boxes for crossing detection
+    component_bboxes: list[dict] = []
+    editor = _get_asc_editor(asc_path, state)
+    for ref in editor.get_components():
+        comp = editor.components[ref]
+        sym = comp.symbol
+        sym_info = get_symbol_info(sym) if sym else None
+        if sym_info is not None:
+            pos, erot = editor.get_component_position(ref)
+            rot_str = erot.name if erot else "R0"
+            geo = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
+            component_bboxes.append({"ref": ref, **geo["bounding_box"]})
+
+    async with _editing_asc(asc_path, state) as ed:
+        x1, y1 = _resolve_pin(arguments.from_pin, ed)
+        x2, y2 = _resolve_pin(arguments.to_pin, ed)
 
         # Build list of points: from → [waypoints] → to
         points = [(x1, y1)]
@@ -1110,25 +1129,71 @@ async def handle_connect(
         points.append((x2, y2))
 
         # Create wire segments between consecutive points
-        segments = []
+        segments: list[tuple[int, int, int, int]] = []
         for i in range(len(points) - 1):
             px1, py1 = points[i]
             px2, py2 = points[i + 1]
             if px1 == px2 and py1 == py2:
                 continue  # skip zero-length
-            editor.wires.append(Line(Point(px1, py1), Point(px2, py2)))
-            segments.append(f"({px1},{py1})->({px2},{py2})")
+            ed.wires.append(Line(Point(px1, py1), Point(px2, py2)))
+            segments.append((px1, py1, px2, py2))
+
+    # Compute warnings
+    warnings: list[str] = []
+
+    for sx1, sy1, sx2, sy2 in segments:
+        if sx1 != sx2 and sy1 != sy2:
+            warnings.append(f"Diagonal wire ({sx1},{sy1})->({sx2},{sy2}): not orthogonal")
+
+    total_length = sum(abs(sx2 - sx1) + abs(sy2 - sy1) for sx1, sy1, sx2, sy2 in segments)
+    if total_length > 400:
+        warnings.append(
+            f"Long wire run ({total_length} units): consider placing components closer "
+            "or adding a local net label"
+        )
+
+    # Check bounding box crossings
+    for sx1, sy1, sx2, sy2 in segments:
+        for bb in component_bboxes:
+            bx, by, bw, bh = bb["x"], bb["y"], bb["width"], bb["height"]
+            # Check if wire segment intersects bounding box interior
+            # For horizontal wire (sy1 == sy2)
+            if sy1 == sy2:
+                wy = sy1
+                wx_min, wx_max = min(sx1, sx2), max(sx1, sx2)
+                if by < wy < by + bh and wx_min < bx + bw and wx_max > bx:
+                    warnings.append(
+                        f"Wire at y={wy} crosses {bb['ref']} bounding box "
+                        f"({bx},{by})-({bx + bw},{by + bh})"
+                    )
+            # For vertical wire (sx1 == sx2)
+            elif sx1 == sx2:
+                wx = sx1
+                wy_min, wy_max = min(sy1, sy2), max(sy1, sy2)
+                if bx < wx < bx + bw and wy_min < by + bh and wy_max > by:
+                    warnings.append(
+                        f"Wire at x={wx} crosses {bb['ref']} bounding box "
+                        f"({bx},{by})-({bx + bw},{by + bh})"
+                    )
 
     result_lines = [f"Connected {arguments.from_pin} to {arguments.to_pin}"]
     result_lines.append(f"  From: ({x1},{y1})  To: ({x2},{y2})")
-    for seg in segments:
-        result_lines.append(f"  Wire: {seg}")
+    for sx1, sy1, sx2, sy2 in segments:
+        result_lines.append(f"  Wire: ({sx1},{sy1})->({sx2},{sy2})")
 
-    data = {
+    if warnings:
+        result_lines.append("")
+        result_lines.append("Warnings:")
+        for w in warnings:
+            result_lines.append(f"  {w}")
+
+    data: dict = {
         "from": {"ref": arguments.from_pin, "x": x1, "y": y1},
         "to": {"ref": arguments.to_pin, "x": x2, "y": y2},
         "wire_count": len(segments),
         "points": [{"x": p[0], "y": p[1]} for p in points],
     }
+    if warnings:
+        data["warnings"] = warnings
 
     return format_response("\n".join(result_lines), data, None)

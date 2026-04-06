@@ -279,11 +279,28 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 
 #### Schematic layout best practices
 
-- **Minimum 128 units vertical spacing** between component tiers (e.g., PMOS loads and NMOS diff pair). Tight spacing causes wires to share columns and visually appear shorted.
-- **Route gate-drain tie wires on a different x-column** than source/drain wires. For diode-connected MOSFETs, jog the gate tie wire horizontally before running vertically to avoid overlapping the source-to-supply wire.
+**Component placement:**
+- **Tier alignment**: Matched/mirrored transistors (diff pairs, current mirrors, bias mirrors) MUST share the same y-coordinate. Plan horizontal tiers: VDD rail → PMOS loads → diff pair → tail/bias → VSS.
+- **Minimum 128 units vertical spacing** between component tiers. Tight spacing causes wires to share columns and visually appear shorted.
+- **Bias circuit alignment**: Bias devices (e.g., M5/Ibias) should share the y-level of their functional counterpart (e.g., M3 tail current source).
 - **Use `ltspice_get_symbol_info` to check bounding boxes** before placing. Ensure wires don't route through component bounding boxes.
+
+**Wiring:**
+- **All wires must be orthogonal** — strictly horizontal or vertical. Never route diagonal wires. Use waypoints in `ltspice_connect` for L-shaped or multi-segment routes.
+- **Route gate-drain tie wires on a different x-column** than source/drain wires. For diode-connected MOSFETs, jog the gate tie wire horizontally before running vertically to avoid overlapping the source-to-supply wire.
+- **Heed `ltspice_connect` warnings**: the tool reports diagonal wires, long runs (>400 units), and bounding box crossings. Fix all warnings before proceeding.
+
+**Ground and net labels:**
+- **Local ground flags**: Place a ground (`0`) label directly at each grounded pin using `ltspice_add_net_label`. Never route wires to a distant ground flag.
+- **One ground per pin**: Each component's ground connection gets its own `ltspice_add_net_label` call at the pin's coordinates — do not share ground flags between components.
+- **Do not use `ltspice_connect` with `net:0`** when multiple ground labels exist — the tool errors on ambiguous net references. Instead, use `ltspice_add_wire` for the short wire from pin to its local ground flag, or `ltspice_connect` to a unique net label.
+- **Named nets (VDD, outp, etc.)**: Use a single label per unique net name. Connect components to it via `ltspice_connect` with `net:NAME` or waypoints.
+
+**Sources:**
 - **Voltage source polarity**: `+` pin is at the top (smaller y), `-` at bottom. For VDD sources, `+` connects to the supply rail, `-` to ground.
 - **Current source direction**: Current flows from `+` (top) to `-` (bottom) externally. Place with `+` on the higher-voltage rail.
+
+**Models:**
 - **Model names must not collide with type keywords**: Use `NMOS_3V3` not `NMOS` for `.model` names when the symbol Value is also a MOSFET type.
 
 ### Other LTspice Quirks
