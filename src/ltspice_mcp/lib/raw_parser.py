@@ -10,6 +10,7 @@ Functions are synchronous — callers invoke them directly (see concurrency cont
 """
 
 import contextlib
+import re
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +25,13 @@ from ltspice_mcp.lib.log_parser import (
 
 # Smallest positive normal float — floor for magnitude before log10 to avoid -inf
 _FLOAT_TINY = np.finfo(float).tiny
+
+# Word-boundary simulation-type matchers. Substring matching would false-positive
+# on phrases like "DC transfer characteristic" (contains "AC") or "backup" (also
+# contains "AC"), so detection is anchored to whole words.
+_RE_TRANSIENT = re.compile(r"\bTRANSIENT\b", re.IGNORECASE)
+_RE_AC = re.compile(r"\bAC\b", re.IGNORECASE)
+_RE_DC = re.compile(r"\bDC\b", re.IGNORECASE)
 
 
 def _safe_magnitude_db(wave: np.ndarray) -> np.ndarray:
@@ -55,13 +63,10 @@ def detect_sim_type(raw: RawRead) -> str:
 def is_ac_analysis(sim_type: str) -> bool:
     """Check if simulation type is AC analysis.
 
-    Args:
-        sim_type: Simulation type string from detect_sim_type
-
-    Returns:
-        True if AC analysis, False otherwise
+    Uses a word-boundary match on "AC" so substrings in unrelated words
+    (e.g. "characteristic", "backup", "BACK") don't false-positive.
     """
-    return "AC" in sim_type.upper()
+    return bool(_RE_AC.search(sim_type))
 
 
 def get_trace_names(raw: RawRead) -> list[str]:
@@ -105,8 +110,17 @@ def compute_signal_stats(raw: RawRead, trace_name: str, step: int = 0) -> dict:
     Returns:
         Dictionary with stats and analysis_type field.
         All values are Python float (not numpy scalars).
+
+    Raises:
+        ValueError: If the requested trace contains no data points.
     """
     wave = raw.get_wave(trace_name, step=step)
+
+    if len(wave) == 0:
+        raise ValueError(
+            f"Signal '{trace_name}' has no data points at step {step}; "
+            "cannot compute statistics."
+        )
 
     # Detect if this is AC data (complex array)
     if np.iscomplexobj(wave):
@@ -152,9 +166,18 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
         Dictionary with trace name, requested/actual x values, and signal value.
         For AC data, includes magnitude_db and phase_deg.
         All values are Python float (not numpy scalars).
+
+    Raises:
+        ValueError: If the trace contains no data points.
     """
     axis = raw.get_axis(step=step)
     wave = raw.get_wave(trace_name, step=step)
+
+    if len(axis) == 0 or len(wave) == 0:
+        raise ValueError(
+            f"Signal '{trace_name}' has no data points at step {step}; "
+            "cannot query value."
+        )
 
     # Binary search for nearest point
     idx = np.searchsorted(axis, target_x)
@@ -210,12 +233,16 @@ def extract_operating_point(raw: RawRead) -> dict:
     for trace in trace_names:
         # Get first data point (OP has exactly one point, others we take first)
         wave = raw.get_wave(trace, step=0)
+        if len(wave) == 0:
+            # Skip traces with no data — happens on truncated/aborted runs
+            continue
         value = float(wave[0])
 
-        # Categorize by trace name prefix
-        if trace.startswith("V("):
+        # SPICE node names are case-insensitive; spicelib may return either case.
+        trace_upper = trace.upper()
+        if trace_upper.startswith("V("):
             voltages[trace] = value
-        elif trace.startswith("I("):
+        elif trace_upper.startswith("I("):
             currents[trace] = value
 
     return {"voltages": voltages, "currents": currents}
@@ -226,6 +253,11 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
 
     Calculates -3dB point, unity-gain frequency, phase margin, and gain margin
     for AC analysis. Returns None for metrics that cannot be computed.
+
+    Phase is unwrapped before crossing detection so that systems whose true
+    phase drops below -180° (e.g. 3-pole loops) are correctly handled — the
+    raw ``np.angle`` output wraps from -179° to +179° at every -180° crossing,
+    which would otherwise hide the crossing entirely.
 
     Args:
         raw: Loaded RawRead instance
@@ -239,9 +271,10 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     axis = raw.get_axis(step=step)
     wave = raw.get_wave(trace_name, step=step)
 
-    # Convert to magnitude and phase
+    # Convert to magnitude (dB) and unwrapped phase (degrees)
     magnitude_db = _safe_magnitude_db(wave)
-    phase_deg = np.angle(wave, deg=True)
+    phase_rad = np.unwrap(np.angle(wave))
+    phase_deg = np.rad2deg(phase_rad)
 
     metrics: dict[str, float | None] = {
         "bandwidth_3db": None,
@@ -334,16 +367,22 @@ def build_simulation_summary(
     axis = raw.get_axis(step=0)
     point_count = len(axis)
 
-    # Determine range based on simulation type
-    range_info = {}
-    if "Transient" in sim_type:
-        range_info = {"time_start": float(axis[0]), "time_end": float(axis[-1])}
-    elif "AC" in sim_type.upper():
-        # AC axis values may be complex (frequency + j0); take real part
-        range_info = {"freq_start": float(axis[0].real), "freq_end": float(axis[-1].real)}
-    elif "DC" in sim_type.upper():
-        range_info = {"sweep_start": float(axis[0]), "sweep_end": float(axis[-1])}
-    # Operating Point has no range (single point)
+    # Word-boundary matching avoids false positives like "DC transfer
+    # characteristic" being classified as AC because "characteristic"
+    # contains the substring "AC".
+    range_info: dict = {}
+    if point_count > 0:
+        if _RE_TRANSIENT.search(sim_type):
+            range_info = {"time_start": float(axis[0]), "time_end": float(axis[-1])}
+        elif is_ac_analysis(sim_type):
+            # AC axis values may be complex (frequency + j0); take real part
+            range_info = {
+                "freq_start": float(axis[0].real),
+                "freq_end": float(axis[-1].real),
+            }
+        elif _RE_DC.search(sim_type):
+            range_info = {"sweep_start": float(axis[0]), "sweep_end": float(axis[-1])}
+        # Operating Point has no range (single point)
 
     summary = {
         "sim_type": sim_type,

@@ -9,6 +9,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+from mcp.types import TextResourceContents
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import NetlistError
@@ -17,6 +18,12 @@ from ltspice_mcp.state import SessionState
 
 # Path to the test fixture .asc schematic
 _FIXTURE_DIR = Path(__file__).parent / "fixtures"
+
+
+def _text(contents) -> str:
+    """Extract text from a resource contents entry, asserting it is text."""
+    assert isinstance(contents, TextResourceContents)
+    return contents.text
 
 
 def _make_ltspice_state(work_dir: Path) -> SessionState | None:
@@ -274,7 +281,7 @@ class TestResourcesWithResults:
         from ltspice_mcp.resources import handle_read_resource
 
         result = handle_read_resource("ltspice://netlists/", ltspice_state)
-        text = result.contents[0].text
+        text = _text(result.contents[0])
         assert "rc_filter.cir" in text
 
     async def test_results_resource_after_sim(self, ltspice_state: SessionState, rc_netlist: Path):
@@ -287,7 +294,7 @@ class TestResourcesWithResults:
         )
 
         result = handle_read_resource("ltspice://results/", ltspice_state)
-        text = result.contents[0].text
+        text = _text(result.contents[0])
         assert '"count": 1' in text or "simulation" in text.lower()
 
     async def test_signals_resource_for_job(self, ltspice_state: SessionState, rc_netlist: Path):
@@ -307,7 +314,7 @@ class TestResourcesWithResults:
             pytest.skip(f"Job not completed: status={job.status}")
 
         result = handle_read_resource(f"ltspice://results/{job_id}/signals", ltspice_state)
-        text = result.contents[0].text
+        text = _text(result.contents[0])
         assert "signals" in text.lower()
 
 
