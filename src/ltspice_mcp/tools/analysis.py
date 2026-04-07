@@ -1,6 +1,7 @@
 """Waveform analysis tools. (Phase 4)"""
 
 import contextlib
+import math
 from typing import Literal
 
 from pydantic import Field
@@ -15,6 +16,7 @@ from ltspice_mcp.lib.raw_parser import (
     compute_signal_stats,
     detect_sim_type,
     extract_operating_point,
+    is_ac_analysis,
     query_point_value,
 )
 from ltspice_mcp.state import SessionState
@@ -161,8 +163,6 @@ async def handle_get_signal_stats(arguments: SignalStatsInput, state: SessionSta
 )
 async def handle_query_value(arguments: QueryValueInput, state: SessionState):
     """Query signal value at a specific time or frequency."""
-    import math
-
     raw_path = safe_path(arguments.raw_file, state)
     signal = arguments.signal
     at_str = arguments.at
@@ -174,9 +174,9 @@ async def handle_query_value(arguments: QueryValueInput, state: SessionState):
     except ValueError as e:
         raise ResultError(f"Invalid 'at' value: {e}") from e
 
-    # Reject NaN / inf — np.searchsorted treats NaN as greater than everything
-    # and returns the last index, which looks like a valid result but isn't.
-    if math.isnan(target_x) or math.isinf(target_x):
+    # np.searchsorted treats NaN as greater than everything and returns the
+    # last index, which looks like a valid result but isn't.
+    if not math.isfinite(target_x):
         raise ResultError(
             f"'at' value must be finite, got {at_str!r} (parsed as {target_x})"
         )
@@ -191,7 +191,7 @@ async def handle_query_value(arguments: QueryValueInput, state: SessionState):
         raise ResultError(f"Failed to query value: {e}") from e
 
     sim_type = detect_sim_type(raw)
-    x_unit = "f" if "AC" in sim_type.upper() else "t"
+    x_unit = "f" if is_ac_analysis(sim_type) else "t"
 
     if "magnitude_db" in result_data:
         lines = [
@@ -395,7 +395,7 @@ async def handle_get_simulation_summary(arguments: SimulationSummaryInput, state
 
     # Compute AC bandwidth metrics only when signal is explicitly specified
     ac_metrics = None
-    if "AC" in summary["sim_type"].upper() and arguments.signal:
+    if is_ac_analysis(summary["sim_type"]) and arguments.signal:
         with contextlib.suppress(Exception):
             ac_metrics = compute_ac_bandwidth_metrics(raw, arguments.signal, 0)
 

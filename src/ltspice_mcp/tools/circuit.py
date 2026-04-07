@@ -99,6 +99,38 @@ def _bboxes_overlap(a: dict, b: dict) -> bool:
     )
 
 
+def _format_available_refs(refs: list[str] | set[str], cap: int = 20) -> str:
+    """Format a component-reference list for "Available: ..." error messages.
+
+    Caps the displayed list so errors on large schematics don't explode into
+    hundreds of refs.
+    """
+    sorted_refs = sorted(refs)
+    if len(sorted_refs) > cap:
+        return ", ".join(sorted_refs[:cap]) + f", ... ({len(sorted_refs)} total)"
+    return ", ".join(sorted_refs)
+
+
+def _require_component(
+    editor: "AscEditor | SpiceEditor", reference: str
+) -> list[str]:
+    """Verify a component reference exists in the editor.
+
+    Calls ``editor.get_components()`` exactly once and reuses the result for
+    both the membership check and the "Available: ..." error message, avoiding
+    the redundant scans that several handlers used to do.
+
+    Returns the component list so callers can reuse it.
+    """
+    comps = editor.get_components()
+    if reference not in comps:
+        raise NetlistError(
+            f"Component '{reference}' not found. "
+            f"Available: {_format_available_refs(comps)}"
+        )
+    return comps
+
+
 def _collect_component_geometry(editor: AscEditor) -> list[dict]:
     """Collect bounding boxes and pin positions for all components."""
     result: list[dict] = []
@@ -522,8 +554,6 @@ async def handle_list_components(arguments: ListComponentsInput, state: SessionS
     file_path = safe_path(arguments.path, state)
     fmt = arguments.format
 
-    # Reject contradictory inputs — reference and prefix are mutually
-    # exclusive modes (single-component lookup vs filtered listing).
     if arguments.reference is not None and arguments.prefix is not None:
         raise NetlistError(
             "'reference' (single lookup) and 'prefix' (filter) are mutually "
@@ -542,14 +572,11 @@ async def handle_list_components(arguments: ListComponentsInput, state: SessionS
         data = {"reference": reference, "value": value}
         return format_response(f"{reference} = {value}", data, fmt)
 
-    # List mode. The ``prefix`` arg must be a plain single-letter SPICE
-    # reference designator (or empty). Anything longer or containing regex
-    # metacharacters would be passed through to spicelib's internal parser
-    # which raises a raw NotImplementedError on failure.
+    # A prefix containing regex metacharacters or more than one character
+    # would otherwise reach spicelib's parser which raises a raw
+    # NotImplementedError out of our error hierarchy.
     prefix = arguments.prefix
-    if prefix is not None and (
-        len(prefix) != 1 or not prefix.isalpha()
-    ):
+    if prefix is not None and (len(prefix) != 1 or not prefix.isalpha()):
         raise NetlistError(
             f"Component prefix must be a single letter (e.g. 'R', 'C'), got {prefix!r}"
         )
@@ -709,12 +736,9 @@ async def handle_parameter(arguments: ParameterInput, state: SessionState):
 
     if param_name is not None:
         # Read a single parameter
-        try:
+        value = None
+        with contextlib.suppress(Exception):
             value = editor.get_parameter(param_name)
-        except Exception as e:
-            raise NetlistError(
-                f"Parameter '{param_name}' not found in {file_path.name}"
-            ) from e
         if value is None:
             raise NetlistError(
                 f"Parameter '{param_name}' not found in {file_path.name}"
@@ -821,11 +845,7 @@ async def handle_remove_component(arguments: RemoveComponentInput, state: Sessio
 
     # Collect pin positions before removal to check for orphaned wires
     editor_pre = _get_asc_editor(asc_path, state)
-    if reference not in editor_pre.get_components():
-        raise NetlistError(
-            f"Component '{reference}' not found. "
-            f"Available: {', '.join(editor_pre.get_components())}"
-        )
+    _require_component(editor_pre, reference)
     comp = editor_pre.components[reference]
     sym_info = get_symbol_info(comp.symbol) if comp.symbol else None
     pin_coords: set[tuple[int, int]] = set()
@@ -877,11 +897,7 @@ async def handle_move_component(arguments: MoveComponentInput, state: SessionSta
     rotation = arguments.rotation
 
     async with _editing_asc(asc_path, state) as editor:
-        if reference not in editor.get_components():
-            raise NetlistError(
-                f"Component '{reference}' not found. "
-                f"Available: {', '.join(sorted(editor.get_components()))}"
-            )
+        _require_component(editor, reference)
         old_pos, old_rot = editor.get_component_position(reference)
 
         new_rot = _parse_rotation(rotation) if rotation is not None else old_rot
@@ -920,11 +936,7 @@ async def handle_set_component_attribute(
         raise NetlistError("Attribute name must not be empty")
 
     async with _editing_asc(asc_path, state) as editor:
-        if reference not in editor.get_components():
-            raise NetlistError(
-                f"Component '{reference}' not found. "
-                f"Available: {', '.join(sorted(editor.get_components()))}"
-            )
+        _require_component(editor, reference)
         editor.set_component_attribute(reference, attribute, value)
 
     return text_response(f"Set {reference}.{attribute} = {value}")
@@ -1202,12 +1214,7 @@ async def handle_get_component_info(
     reference = arguments.reference
 
     editor = _get_asc_editor(asc_path, state)
-    component_refs = editor.get_components()
-    if reference not in component_refs:
-        raise NetlistError(
-            f"Component '{reference}' not found. "
-            f"Available: {', '.join(sorted(component_refs))}"
-        )
+    _require_component(editor, reference)
 
     pos, erot = editor.get_component_position(reference)
     rot_str = erot.name if erot else "R0"
