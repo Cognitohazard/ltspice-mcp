@@ -597,11 +597,21 @@ async def handle_set_component_value(arguments: SetComponentValueInput, state: S
     reference = arguments.reference
     value = arguments.value
 
+    # Reject ambiguous input: single and batch mode are mutually exclusive.
+    single_mode_args = reference is not None or value is not None
+    if values_dict is not None and single_mode_args:
+        raise NetlistError(
+            "Single mode ('reference'+'value') and batch mode ('values') "
+            "are mutually exclusive — provide one, not both."
+        )
+
     async with _editing(file_path, state) as editor:
         if values_dict is not None:
             # Batch mode
             if not isinstance(values_dict, dict):
                 raise NetlistError("'values' must be an object mapping references to new values")
+            if not values_dict:
+                raise NetlistError("'values' dict must not be empty")
             editor.set_component_values(**values_dict)
             changes = [f"{ref}: {val}" for ref, val in values_dict.items()]
             result = f"Updated {len(values_dict)} component(s):\n" + "\n".join(changes)
@@ -1378,6 +1388,14 @@ async def handle_connect(
     x1, y1 = _resolve_pin(arguments.from_pin, pre_editor)
     x2, y2 = _resolve_pin(arguments.to_pin, pre_editor)
 
+    # Reject zero-length connections — they would emit no wires and silently
+    # report success, which is almost always a user error.
+    if (x1, y1) == (x2, y2) and not arguments.waypoints:
+        raise NetlistError(
+            f"Cannot connect {arguments.from_pin} to {arguments.to_pin}: "
+            f"both endpoints resolve to the same coordinate ({x1},{y1})."
+        )
+
     # Build list of points: from → [waypoints] → to (dedup consecutive)
     raw_points = [(x1, y1)]
     for wp in arguments.waypoints:
@@ -1395,6 +1413,14 @@ async def handle_connect(
         px2, py2 = points[i + 1]
         if px1 != px2 or py1 != py2:
             segments.append((px1, py1, px2, py2))
+
+    # If after dedup we ended up with no segments at all (e.g. waypoints all
+    # collapse onto one of the endpoints), reject as a no-op.
+    if not segments:
+        raise NetlistError(
+            f"Cannot connect {arguments.from_pin} to {arguments.to_pin}: "
+            "the requested route has zero length after deduplicating waypoints."
+        )
 
     # --- Validate before adding wires ---
     errors: list[str] = []

@@ -49,8 +49,6 @@ class TestExtractParameters:
 class TestParseLibraryFile:
     def test_parse_model_entry(self, tmp_path: Path):
         lib = tmp_path / "models.lib"
-        # Space before '(' is required — regex group(2) captures \S+ which
-        # would swallow the paren if it's adjacent to the type name.
         lib.write_text(".MODEL 2N2222 NPN (BF=200 IS=1e-14 VAF=100)\n")
 
         index = parse_library_file(lib)
@@ -61,6 +59,56 @@ class TestParseLibraryFile:
         assert m.parameters["BF"] == "200"
         assert m.parameters["IS"] == "1e-14"
         assert m.source_path == lib
+
+    def test_parse_model_no_space_before_paren(self, tmp_path: Path):
+        # Regression: SPICE allows '.MODEL Q1 NPN(BF=200)' with no space.
+        # Previously the regex captured 'NPN(BF=200)' as the type and lost
+        # the parameters entirely.
+        lib = tmp_path / "models.lib"
+        lib.write_text(".MODEL Q1 NPN(BF=200 IS=1e-14)\n")
+        index = parse_library_file(lib)
+        assert len(index.models) == 1
+        m = index.models[0]
+        assert m.name == "Q1"
+        assert m.parameters["BF"] == "200"
+        assert m.parameters["IS"] == "1e-14"
+
+    def test_parse_nested_subckt(self, tmp_path: Path):
+        # Regression: a .SUBCKT containing another .SUBCKT was previously
+        # truncated by the inner .ENDS, losing both the inner subckt and the
+        # rest of the outer body.
+        lib = tmp_path / "nested.lib"
+        lib.write_text(
+            ".SUBCKT outer in out\n"
+            ".SUBCKT inner a b\n"
+            "R1 a b 1k\n"
+            ".ENDS\n"
+            "X1 in out inner\n"
+            ".ENDS\n"
+            ".MODEL D1 D(IS=1e-14)\n"
+        )
+        index = parse_library_file(lib)
+        names = {m.name for m in index.models}
+        assert "outer" in names
+        assert "D1" in names  # must be reachable after the nested .ENDS
+
+        outer = next(m for m in index.models if m.name == "outer")
+        # outer's body includes the nested .SUBCKT/.ENDS pair plus X1 and the
+        # final .ENDS — i.e. all 6 lines from .SUBCKT outer through .ENDS.
+        assert outer.line_count == 6
+
+    def test_parse_subckt_with_params_keyword(self, tmp_path: Path):
+        # Regression: '.SUBCKT name node1 node2 PARAMS: key=value' previously
+        # parsed PARAMS: and key=value as additional node names.
+        lib = tmp_path / "params.lib"
+        lib.write_text(
+            ".SUBCKT myamp in out vcc PARAMS: gain=10 offset=0\n"
+            "R1 in out 1k\n"
+            ".ENDS\n"
+        )
+        index = parse_library_file(lib)
+        m = index.models[0]
+        assert m.parameters == {"node1": "in", "node2": "out", "node3": "vcc"}
 
     def test_parse_subckt_with_ends(self, tmp_path: Path):
         lib = tmp_path / "sub.lib"

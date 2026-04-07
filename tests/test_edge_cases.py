@@ -288,3 +288,181 @@ class TestResolveMcRefWhitespace:
         ref, is_type = _resolve_mc_ref("  resistors ")
         assert ref == "R"
         assert is_type is True
+
+
+# ---------------------------------------------------------------------------
+# Bug J: compute_ac_bandwidth_metrics misses -180° phase crossings due to wrap
+# ---------------------------------------------------------------------------
+
+
+class TestAcBandwidthPhaseWrap:
+    def test_phase_wrap_does_not_hide_180_crossing(self):
+        from ltspice_mcp.lib.raw_parser import compute_ac_bandwidth_metrics
+
+        # Construct a small frequency response whose phase crosses -180°.
+        # Without np.unwrap, np.angle wraps -181° to +179° and the
+        # gain-margin detection misses the crossing entirely.
+        freqs = np.array([1.0, 10.0, 100.0, 1000.0, 10000.0])
+        mag_lin = np.array([10**0.5, 10**0.25, 1.0, 10**(-0.25), 10**(-0.5)])
+        phase_rad = np.deg2rad(np.array([-90, -150, -179, -181, -210]))
+        wave = mag_lin * np.exp(1j * phase_rad)
+
+        raw = MagicMock()
+        raw.get_axis.return_value = freqs
+        raw.get_wave = lambda name, step=0: wave
+        result = compute_ac_bandwidth_metrics(raw, "V(out)")
+        assert result["gain_margin"] is not None
+
+    def test_3pole_unstable_system(self):
+        from ltspice_mcp.lib.raw_parser import compute_ac_bandwidth_metrics
+
+        freqs = np.logspace(-1, 6, 500)
+        omega = 2 * np.pi * freqs
+        # 3-pole loop: should be unstable, phase margin negative
+        H = 1e6 / ((1 + 1j * omega / 1) * (1 + 1j * omega / 100) * (1 + 1j * omega / 1000))
+        raw = MagicMock()
+        raw.get_axis.return_value = freqs
+        raw.get_wave = lambda name, step=0: H
+        result = compute_ac_bandwidth_metrics(raw, "V(out)")
+        # An unstable 3-pole loop must report a negative phase margin
+        assert result["phase_margin"] is not None
+        assert result["phase_margin"] < 0
+
+
+# ---------------------------------------------------------------------------
+# Bug K: library_parser nested .SUBCKT, no-space paren, PARAMS: keyword
+# ---------------------------------------------------------------------------
+# (Tested in test_library_parser.py — see TestParseLibraryFile.)
+
+
+# ---------------------------------------------------------------------------
+# Bug L: handle_connect silently produces zero-wire connections for self-loops
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestConnectZeroLength:
+    async def test_self_loop_rejected(self, asc_state, asc_file):
+        from ltspice_mcp.errors import NetlistError
+        from ltspice_mcp.tools.circuit import ConnectInput, handle_connect
+
+        with pytest.raises(NetlistError, match="same coordinate"):
+            await handle_connect(
+                ConnectInput(path=asc_file.name, from_pin="R1.1", to_pin="R1.1"),
+                asc_state,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Bug M: linear sweep with mismatched step direction silently returns []
+# ---------------------------------------------------------------------------
+
+
+class TestSweepDirectionMismatch:
+    def test_descending_range_with_positive_step_raises(self):
+        with pytest.raises(ValueError, match="direction"):
+            generate_sweep_range(10, 1, step=+1, points=None, scale="linear")
+
+    def test_ascending_range_with_negative_step_raises(self):
+        with pytest.raises(ValueError, match="direction"):
+            generate_sweep_range(1, 10, step=-1, points=None, scale="linear")
+
+
+# ---------------------------------------------------------------------------
+# Bug N: is_windows_native_path matches /mnt/cdrom (false positive)
+# ---------------------------------------------------------------------------
+
+
+class TestIsWindowsNativePath:
+    def test_drive_letter_match(self):
+        from ltspice_mcp.lib.wsl import is_windows_native_path
+        assert is_windows_native_path(Path("/mnt/c/Users/foo")) is True
+
+    def test_cdrom_not_drive(self):
+        from ltspice_mcp.lib.wsl import is_windows_native_path
+        # /mnt/cdrom is not a Windows drive letter — must NOT match
+        assert is_windows_native_path(Path("/mnt/cdrom/foo")) is False
+
+    def test_extdata_not_drive(self):
+        from ltspice_mcp.lib.wsl import is_windows_native_path
+        assert is_windows_native_path(Path("/mnt/extdata/x")) is False
+
+    def test_mnt_alone_not_drive(self):
+        from ltspice_mcp.lib.wsl import is_windows_native_path
+        assert is_windows_native_path(Path("/mnt")) is False
+
+
+# ---------------------------------------------------------------------------
+# Bug O: parse_measurements crashes on unparseable string values
+# ---------------------------------------------------------------------------
+
+
+class TestParseMeasurementsUnparseable:
+    def test_unparseable_string_becomes_none(self):
+        from ltspice_mcp.lib.log_parser import parse_measurements
+
+        class FakeReader:
+            def __init__(self, data): self.dataset = data
+            def get_measure_names(self): return list(self.dataset.keys())
+
+        reader = FakeReader({"fc": ["unparseable", 100.0]})
+        result = parse_measurements(Path("/tmp/x.log"), reader=reader)  # type: ignore[arg-type]
+        # Crashing was the bug; the unparseable value should become None.
+        assert result["measurements"]["fc"] == [None, 100.0]
+
+
+# ---------------------------------------------------------------------------
+# Bug P: handle_check_job reports queued status as 'unexpected'
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestCheckJobQueued:
+    async def test_queued_job_reported_correctly(self, state_no_sim):
+        from ltspice_mcp.lib import now
+        from ltspice_mcp.state import SimulationJob
+        from ltspice_mcp.tools.simulation import CheckJobInput, handle_check_job
+
+        state_no_sim.jobs["jq"] = SimulationJob(
+            job_id="jq",
+            netlist=Path("/tmp/x.cir"),
+            simulator="F",
+            status="queued",
+            started_at=now(),
+        )
+        r = await handle_check_job(CheckJobInput(job_id="jq"), state_no_sim)
+        assert "unexpected" not in r.content[0].text
+        assert r.structuredContent["status"] == "queued"
+
+
+# ---------------------------------------------------------------------------
+# Bug Q: handle_set_component_value silently accepts contradictory inputs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestSetComponentValueAmbiguous:
+    async def test_both_modes_rejected(self, state_no_sim, sample_netlist):
+        from ltspice_mcp.errors import NetlistError
+        from ltspice_mcp.tools.circuit import SetComponentValueInput, handle_set_component_value
+
+        with pytest.raises(NetlistError, match="mutually exclusive"):
+            await handle_set_component_value(
+                SetComponentValueInput(
+                    path=sample_netlist.name,
+                    reference="R1",
+                    value="2k",
+                    values={"C1": "5n"},
+                ),
+                state_no_sim,
+            )
+
+    async def test_empty_values_dict_rejected(self, state_no_sim, sample_netlist):
+        from ltspice_mcp.errors import NetlistError
+        from ltspice_mcp.tools.circuit import SetComponentValueInput, handle_set_component_value
+
+        with pytest.raises(NetlistError, match="empty"):
+            await handle_set_component_value(
+                SetComponentValueInput(path=sample_netlist.name, values={}),
+                state_no_sim,
+            )
