@@ -10,6 +10,7 @@ Functions are synchronous — callers invoke them directly (see concurrency cont
 """
 
 import contextlib
+import re
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +25,13 @@ from ltspice_mcp.lib.log_parser import (
 
 # Smallest positive normal float — floor for magnitude before log10 to avoid -inf
 _FLOAT_TINY = np.finfo(float).tiny
+
+# Word-boundary simulation-type matchers. Substring matching would false-positive
+# on phrases like "DC transfer characteristic" (contains "AC") or "backup" (also
+# contains "AC"), so detection is anchored to whole words.
+_RE_TRANSIENT = re.compile(r"\bTRANSIENT\b", re.IGNORECASE)
+_RE_AC = re.compile(r"\bAC\b", re.IGNORECASE)
+_RE_DC = re.compile(r"\bDC\b", re.IGNORECASE)
 
 
 def _safe_magnitude_db(wave: np.ndarray) -> np.ndarray:
@@ -57,16 +65,8 @@ def is_ac_analysis(sim_type: str) -> bool:
 
     Uses a word-boundary match on "AC" so substrings in unrelated words
     (e.g. "characteristic", "backup", "BACK") don't false-positive.
-
-    Args:
-        sim_type: Simulation type string from detect_sim_type
-
-    Returns:
-        True if AC analysis, False otherwise
     """
-    import re as _re
-
-    return bool(_re.search(r"\bAC\b", sim_type, _re.IGNORECASE))
+    return bool(_RE_AC.search(sim_type))
 
 
 def get_trace_names(raw: RawRead) -> list[str]:
@@ -238,8 +238,7 @@ def extract_operating_point(raw: RawRead) -> dict:
             continue
         value = float(wave[0])
 
-        # Categorize by trace name prefix (case-insensitive — SPICE node
-        # names are case-insensitive, and spicelib may return either case)
+        # SPICE node names are case-insensitive; spicelib may return either case.
         trace_upper = trace.upper()
         if trace_upper.startswith("V("):
             voltages[trace] = value
@@ -368,23 +367,20 @@ def build_simulation_summary(
     axis = raw.get_axis(step=0)
     point_count = len(axis)
 
-    # Determine range based on simulation type. Use word-boundary matching
-    # so "DC transfer characteristic" doesn't false-positive as AC because
-    # the word "characteristic" contains the substring "AC".
-    import re as _re
-
-    sim_type_upper = sim_type.upper()
-    range_info = {}
+    # Word-boundary matching avoids false positives like "DC transfer
+    # characteristic" being classified as AC because "characteristic"
+    # contains the substring "AC".
+    range_info: dict = {}
     if point_count > 0:
-        if _re.search(r"\bTRANSIENT\b", sim_type_upper):
+        if _RE_TRANSIENT.search(sim_type):
             range_info = {"time_start": float(axis[0]), "time_end": float(axis[-1])}
-        elif _re.search(r"\bAC\b", sim_type_upper):
+        elif is_ac_analysis(sim_type):
             # AC axis values may be complex (frequency + j0); take real part
             range_info = {
                 "freq_start": float(axis[0].real),
                 "freq_end": float(axis[-1].real),
             }
-        elif _re.search(r"\bDC\b", sim_type_upper):
+        elif _RE_DC.search(sim_type):
             range_info = {"sweep_start": float(axis[0]), "sweep_end": float(axis[-1])}
         # Operating Point has no range (single point)
 
