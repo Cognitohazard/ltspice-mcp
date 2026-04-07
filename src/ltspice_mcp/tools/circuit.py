@@ -99,6 +99,38 @@ def _bboxes_overlap(a: dict, b: dict) -> bool:
     )
 
 
+def _format_available_refs(refs: list[str] | set[str], cap: int = 20) -> str:
+    """Format a component-reference list for "Available: ..." error messages.
+
+    Caps the displayed list so errors on large schematics don't explode into
+    hundreds of refs.
+    """
+    sorted_refs = sorted(refs)
+    if len(sorted_refs) > cap:
+        return ", ".join(sorted_refs[:cap]) + f", ... ({len(sorted_refs)} total)"
+    return ", ".join(sorted_refs)
+
+
+def _require_component(
+    editor: "AscEditor | SpiceEditor", reference: str
+) -> list[str]:
+    """Verify a component reference exists in the editor.
+
+    Calls ``editor.get_components()`` exactly once and reuses the result for
+    both the membership check and the "Available: ..." error message, avoiding
+    the redundant scans that several handlers used to do.
+
+    Returns the component list so callers can reuse it.
+    """
+    comps = editor.get_components()
+    if reference not in comps:
+        raise NetlistError(
+            f"Component '{reference}' not found. "
+            f"Available: {_format_available_refs(comps)}"
+        )
+    return comps
+
+
 def _collect_component_geometry(editor: AscEditor) -> list[dict]:
     """Collect bounding boxes and pin positions for all components."""
     result: list[dict] = []
@@ -522,6 +554,12 @@ async def handle_list_components(arguments: ListComponentsInput, state: SessionS
     file_path = safe_path(arguments.path, state)
     fmt = arguments.format
 
+    if arguments.reference is not None and arguments.prefix is not None:
+        raise NetlistError(
+            "'reference' (single lookup) and 'prefix' (filter) are mutually "
+            "exclusive — provide one, not both."
+        )
+
     editor = _get_editor(file_path, state)
 
     # Single-component lookup mode (absorbed from get_component_value)
@@ -534,9 +572,19 @@ async def handle_list_components(arguments: ListComponentsInput, state: SessionS
         data = {"reference": reference, "value": value}
         return format_response(f"{reference} = {value}", data, fmt)
 
-    # List mode
+    # A prefix containing regex metacharacters or more than one character
+    # would otherwise reach spicelib's parser which raises a raw
+    # NotImplementedError out of our error hierarchy.
     prefix = arguments.prefix
-    components = editor.get_components(prefix) if prefix else editor.get_components()
+    if prefix is not None and (len(prefix) != 1 or not prefix.isalpha()):
+        raise NetlistError(
+            f"Component prefix must be a single letter (e.g. 'R', 'C'), got {prefix!r}"
+        )
+
+    try:
+        components = editor.get_components(prefix) if prefix else editor.get_components()
+    except Exception as e:
+        raise NetlistError(f"Failed to list components: {e}") from e
 
     if not components:
         msg = (
@@ -597,11 +645,21 @@ async def handle_set_component_value(arguments: SetComponentValueInput, state: S
     reference = arguments.reference
     value = arguments.value
 
+    # Reject ambiguous input: single and batch mode are mutually exclusive.
+    single_mode_args = reference is not None or value is not None
+    if values_dict is not None and single_mode_args:
+        raise NetlistError(
+            "Single mode ('reference'+'value') and batch mode ('values') "
+            "are mutually exclusive — provide one, not both."
+        )
+
     async with _editing(file_path, state) as editor:
         if values_dict is not None:
             # Batch mode
             if not isinstance(values_dict, dict):
                 raise NetlistError("'values' must be an object mapping references to new values")
+            if not values_dict:
+                raise NetlistError("'values' dict must not be empty")
             editor.set_component_values(**values_dict)
             changes = [f"{ref}: {val}" for ref, val in values_dict.items()]
             result = f"Updated {len(values_dict)} component(s):\n" + "\n".join(changes)
@@ -643,15 +701,26 @@ async def handle_set_component_value(arguments: SetComponentValueInput, state: S
     },
 )
 async def handle_parameter(arguments: ParameterInput, state: SessionState):
-    """Get or set .PARAM directive values. Without name/value: returns all
-    parameters. With name and value: sets the parameter.
-    Works on .cir/.net and .asc.
+    """Get or set .PARAM directive values.
+
+    Modes:
+      - no args         → list every .PARAM in the file
+      - name only       → read a single parameter's value
+      - name and value  → set a parameter (creates it if missing)
+
+    Providing value without name is an error. Works on .cir/.net and .asc.
     """
     file_path = safe_path(arguments.path, state)
     fmt = arguments.format
 
     param_name = arguments.name
     param_value = arguments.value
+
+    if param_name is not None and not param_name.strip():
+        raise NetlistError("Parameter name must not be empty")
+
+    if param_value is not None and param_name is None:
+        raise NetlistError("'value' requires 'name' — cannot set a parameter without a name")
 
     if param_name is not None and param_value is not None:
         # Set mode — confirmation only, no structured data needed
@@ -663,10 +732,25 @@ async def handle_parameter(arguments: ParameterInput, state: SessionState):
             fmt,
         )
 
-    # Get mode (formerly get_parameters) — read-only, no _editing needed
     editor = _get_editor(file_path, state)
-    param_names = editor.get_all_parameter_names()
 
+    if param_name is not None:
+        # Read a single parameter
+        value = None
+        with contextlib.suppress(Exception):
+            value = editor.get_parameter(param_name)
+        if value is None:
+            raise NetlistError(
+                f"Parameter '{param_name}' not found in {file_path.name}"
+            )
+        return format_response(
+            f".PARAM {param_name} = {value}",
+            {"parameters": {param_name: value}},
+            fmt,
+        )
+
+    # Read all parameters
+    param_names = editor.get_all_parameter_names()
     params = {}
     if param_names:
         param_lines = []
@@ -700,6 +784,9 @@ async def handle_edit_directive(arguments: EditDirectiveInput, state: SessionSta
     action = arguments.action
     instruction = arguments.instruction
 
+    if not instruction.strip():
+        raise NetlistError("Directive instruction must not be empty")
+
     async with _editing(file_path, state) as editor:
         if action == "add":
             if not instruction.strip().startswith("."):
@@ -712,6 +799,13 @@ async def handle_edit_directive(arguments: EditDirectiveInput, state: SessionSta
         elif action == "remove":
             if instruction.startswith("regex:"):
                 pattern = instruction[6:]
+                # Reject empty regex — an empty pattern matches every line
+                # and would wipe out the entire file.
+                if not pattern.strip():
+                    raise NetlistError(
+                        "Empty regex pattern would match every directive; "
+                        "provide an explicit regex after 'regex:'."
+                    )
                 editor.remove_Xinstruction(pattern)
             elif any(char in instruction for char in r"\[]().*+?^${}|"):
                 editor.remove_Xinstruction(instruction)
@@ -751,11 +845,7 @@ async def handle_remove_component(arguments: RemoveComponentInput, state: Sessio
 
     # Collect pin positions before removal to check for orphaned wires
     editor_pre = _get_asc_editor(asc_path, state)
-    if reference not in editor_pre.get_components():
-        raise NetlistError(
-            f"Component '{reference}' not found. "
-            f"Available: {', '.join(editor_pre.get_components())}"
-        )
+    _require_component(editor_pre, reference)
     comp = editor_pre.components[reference]
     sym_info = get_symbol_info(comp.symbol) if comp.symbol else None
     pin_coords: set[tuple[int, int]] = set()
@@ -807,6 +897,7 @@ async def handle_move_component(arguments: MoveComponentInput, state: SessionSta
     rotation = arguments.rotation
 
     async with _editing_asc(asc_path, state) as editor:
+        _require_component(editor, reference)
         old_pos, old_rot = editor.get_component_position(reference)
 
         new_rot = _parse_rotation(rotation) if rotation is not None else old_rot
@@ -841,7 +932,11 @@ async def handle_set_component_attribute(
     attribute = arguments.attribute
     value = arguments.value
 
+    if not attribute.strip():
+        raise NetlistError("Attribute name must not be empty")
+
     async with _editing_asc(asc_path, state) as editor:
+        _require_component(editor, reference)
         editor.set_component_attribute(reference, attribute, value)
 
     return text_response(f"Set {reference}.{attribute} = {value}")
@@ -886,6 +981,16 @@ async def handle_add_component(arguments: AddComponentInput, state: SessionState
     value = arguments.value
     rotation = arguments.rotation
     erot = _parse_rotation(rotation)
+
+    # Validate the symbol exists BEFORE touching the file. Saving a .asc with
+    # a dangling symbol name corrupts it — spicelib's AscEditor refuses to
+    # re-open such a file because it can't find the .asy on reset_netlist().
+    if get_symbol_info(symbol) is None:
+        raise NetlistError(
+            f"Symbol '{symbol}' not found in any configured symbol library. "
+            "Use ltspice_get_symbol_info to verify the symbol name, or "
+            "configure [schematic] symbol_paths in ltspice-mcp.toml."
+        )
 
     async with _editing_asc(asc_path, state) as editor:
         if reference in editor.components:
@@ -1109,12 +1214,7 @@ async def handle_get_component_info(
     reference = arguments.reference
 
     editor = _get_asc_editor(asc_path, state)
-    component_refs = editor.get_components()
-    if reference not in component_refs:
-        raise NetlistError(
-            f"Component '{reference}' not found. "
-            f"Available: {', '.join(sorted(component_refs))}"
-        )
+    _require_component(editor, reference)
 
     pos, erot = editor.get_component_position(reference)
     rot_str = erot.name if erot else "R0"
@@ -1378,6 +1478,14 @@ async def handle_connect(
     x1, y1 = _resolve_pin(arguments.from_pin, pre_editor)
     x2, y2 = _resolve_pin(arguments.to_pin, pre_editor)
 
+    # Reject zero-length connections — they would emit no wires and silently
+    # report success, which is almost always a user error.
+    if (x1, y1) == (x2, y2) and not arguments.waypoints:
+        raise NetlistError(
+            f"Cannot connect {arguments.from_pin} to {arguments.to_pin}: "
+            f"both endpoints resolve to the same coordinate ({x1},{y1})."
+        )
+
     # Build list of points: from → [waypoints] → to (dedup consecutive)
     raw_points = [(x1, y1)]
     for wp in arguments.waypoints:
@@ -1395,6 +1503,14 @@ async def handle_connect(
         px2, py2 = points[i + 1]
         if px1 != px2 or py1 != py2:
             segments.append((px1, py1, px2, py2))
+
+    # If after dedup we ended up with no segments at all (e.g. waypoints all
+    # collapse onto one of the endpoints), reject as a no-op.
+    if not segments:
+        raise NetlistError(
+            f"Cannot connect {arguments.from_pin} to {arguments.to_pin}: "
+            "the requested route has zero length after deduplicating waypoints."
+        )
 
     # --- Validate before adding wires ---
     errors: list[str] = []

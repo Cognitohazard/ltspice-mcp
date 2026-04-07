@@ -38,7 +38,10 @@ _RE_LINE_ERROR = re.compile(r"^Error on line \d+", re.IGNORECASE)
 _RE_FATAL = re.compile(r"^Fatal Error:", re.IGNORECASE)
 # Explicit warning prefix (LTspice uses both casings)
 _RE_WARNING = re.compile(r"^(?:Warning|WARNING):", re.IGNORECASE)
-# Bare convergence / runtime messages with no prefix
+# Bare convergence / runtime messages with no prefix.
+# These are matched anchored to the start of a (stripped) line so we don't
+# false-positive on phrases that merely *contain* one of these substrings
+# (e.g. "the singular matrix decomposition succeeded").
 _BARE_ERROR_PHRASES = [
     "singular matrix",
     "time step too small",
@@ -111,9 +114,11 @@ def extract_log_diagnostics(log_path: Path) -> dict[str, list[str]]:
             i += 1
             continue
 
-        # Bare convergence / runtime phrases
+        # Bare convergence / runtime phrases — anchored at start of line to
+        # avoid false positives on lines that merely contain the phrase as a
+        # substring (e.g., "the singular matrix decomposition succeeded").
         stripped_lower = stripped.lower()
-        if any(phrase in stripped_lower for phrase in _BARE_ERROR_PHRASES):
+        if any(stripped_lower.startswith(phrase) for phrase in _BARE_ERROR_PHRASES):
             errors.append(stripped)
             i += 1
             continue
@@ -324,7 +329,15 @@ def parse_measurements(log_path: Path, reader: LTSpiceLogReader | None = None) -
                 # numpy scalar types
                 python_values.append(float(val.item()))
             else:
-                python_values.append(float(val))
+                # Try to coerce to float; on failure record as None (failed
+                # measurement) instead of crashing the whole call.
+                try:
+                    python_values.append(float(val))
+                except (TypeError, ValueError):
+                    logger.warning(
+                        f"Measurement '{name}' has non-numeric value {val!r}; recording as None"
+                    )
+                    python_values.append(None)
         measurements[name] = python_values
 
     # Determine step count from first measurement

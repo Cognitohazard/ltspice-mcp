@@ -365,24 +365,32 @@ async def handle_check_job(arguments: CheckJobInput, state: SessionState):
     job = services.resolve_simulation_job(job_id, state)
 
     # Check status
-    if job.status == "running":
+    if job.status in ("running", "queued"):
         elapsed = (now() - job.started_at).total_seconds()
         data = {
             "job_id": job_id,
-            "status": "running",
+            "status": job.status,
             "netlist": str(job.netlist),
             "simulator": job.simulator,
             "elapsed": elapsed,
         }
-        return format_response(
-            f"Job {job_id} is still running\n"
-            f"Netlist: {job.netlist}\n"
-            f"Simulator: {job.simulator}\n"
-            f"Elapsed: {elapsed:.1f}s\n\n"
-            f"Use ltspice_cancel_job('{job_id}') to cancel",
-            data,
-            fmt,
-        )
+        if job.status == "queued":
+            text = (
+                f"Job {job_id} is queued (waiting for a runner slot)\n"
+                f"Netlist: {job.netlist}\n"
+                f"Simulator: {job.simulator}\n"
+                f"Elapsed: {elapsed:.1f}s\n\n"
+                f"Use ltspice_cancel_job('{job_id}') to cancel"
+            )
+        else:
+            text = (
+                f"Job {job_id} is still running\n"
+                f"Netlist: {job.netlist}\n"
+                f"Simulator: {job.simulator}\n"
+                f"Elapsed: {elapsed:.1f}s\n\n"
+                f"Use ltspice_cancel_job('{job_id}') to cancel"
+            )
+        return format_response(text, data, fmt)
     elif job.status == "completed":
         duration = (job.completed_at - job.started_at).total_seconds() if job.completed_at else 0
         if job.raw_file is None or job.log_file is None:
