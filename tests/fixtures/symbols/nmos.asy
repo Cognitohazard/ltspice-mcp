@@ -1,0 +1,18 @@
+Version 4
+SymbolType CELL
+LINE Normal 0 48 0 96
+LINE Normal 0 -48 0 -96
+LINE Normal -48 0 0 0
+RECTANGLE Normal -64 -96 64 96
+SYMATTR Prefix M
+SYMATTR Description N-Channel MOSFET
+SYMATTR Value nmos
+PIN 0 -96 TOP 8
+PINATTR PinName D
+PINATTR SpiceOrder 1
+PIN -48 0 LEFT 8
+PINATTR PinName G
+PINATTR SpiceOrder 2
+PIN 0 96 BOTTOM 8
+PINATTR PinName S
+PINATTR SpiceOrder 3

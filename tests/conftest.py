@@ -1,11 +1,17 @@
 """Shared fixtures for ltspice-mcp tests."""
 
+import shutil
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from spicelib import AscEditor
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.state import SessionState
+
+_FIXTURE_SYMBOLS = Path(__file__).parent / "fixtures" / "symbols"
+_FIXTURE_DRAFT = Path(__file__).parent / "fixtures" / "Draft1.asc"
 
 
 @pytest.fixture
@@ -40,6 +46,31 @@ def _reset_runners():
     will still pass.
     """
     return
+
+
+@pytest.fixture
+def asc_symbols() -> Iterator[Path]:
+    """Register tiny .asy fixture symbols with AscEditor (class-level)."""
+    AscEditor.set_custom_library_paths(str(_FIXTURE_SYMBOLS))
+    yield _FIXTURE_SYMBOLS
+    # Reset to defaults
+    AscEditor.custom_lib_paths = []
+    AscEditor.symbol_cache = {}
+
+
+@pytest.fixture
+def asc_state(state_no_sim: SessionState, work_dir: Path, asc_symbols: Path) -> SessionState:
+    """SessionState with .asc editor available and a Draft1.asc copied into work_dir."""
+    dest = work_dir / "Draft1.asc"
+    shutil.copy(_FIXTURE_DRAFT, dest)
+    state_no_sim.asc_editor_available = True
+    return state_no_sim
+
+
+@pytest.fixture
+def asc_file(asc_state: SessionState, work_dir: Path) -> Path:
+    """Path to Draft1.asc within the test work_dir."""
+    return work_dir / "Draft1.asc"
 
 
 @pytest.fixture
