@@ -44,11 +44,18 @@ class PinInfo:
 
 @dataclass(frozen=True)
 class SymbolInfo:
-    """Parsed symbol metadata: pins, bounding box, description."""
+    """Parsed symbol metadata: pins, bounding box, description.
+
+    The bounding box is described in the symbol's local coordinate space.
+    LTspice symbols are typically centered around the origin, so ``bbox_x``
+    and ``bbox_y`` are usually negative.
+    """
 
     name: str
     description: str
     pins: tuple[PinInfo, ...]
+    bbox_x: int
+    bbox_y: int
     bbox_width: int
     bbox_height: int
 
@@ -57,7 +64,12 @@ class SymbolInfo:
             "symbol": self.name,
             "description": self.description,
             "pins": [p.to_dict() for p in self.pins],
-            "bounding_box": {"width": self.bbox_width, "height": self.bbox_height},
+            "bounding_box": {
+                "x": self.bbox_x,
+                "y": self.bbox_y,
+                "width": self.bbox_width,
+                "height": self.bbox_height,
+            },
         }
 
 
@@ -70,14 +82,16 @@ def _apply_rotation(x: int, y: int, rotation: str) -> tuple[int, int]:
 _DIRECTION_NAMES = {(0, -1): "up", (0, 1): "down", (-1, 0): "left", (1, 0): "right"}
 
 
-def _pin_direction(px: int, py: int, bbox_w: int, bbox_h: int, rotation: str) -> str:
+def _pin_direction(
+    px: int, py: int, bbox_x: int, bbox_y: int, bbox_w: int, bbox_h: int, rotation: str
+) -> str:
     """Determine which direction a pin's lead extends for external wiring.
 
     Computed from the pin's position relative to the bounding box center,
     then transformed by the rotation.
     """
-    cx = bbox_w / 2
-    cy = bbox_h / 2
+    cx = bbox_x + bbox_w / 2
+    cy = bbox_y + bbox_h / 2
     dx = px - cx
     dy = py - cy
 
@@ -167,11 +181,16 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
 
         i += 1
 
-    # Compute bounding box from all geometry points
+    # Compute bounding box from all geometry points (preserve min coords;
+    # symbols can have negative coordinates since they're typically centered).
     if all_x and all_y:
-        bbox_width = max(all_x) - min(all_x)
-        bbox_height = max(all_y) - min(all_y)
+        bbox_x = min(all_x)
+        bbox_y = min(all_y)
+        bbox_width = max(all_x) - bbox_x
+        bbox_height = max(all_y) - bbox_y
     else:
+        bbox_x = 0
+        bbox_y = 0
         bbox_width = 0
         bbox_height = 0
 
@@ -181,6 +200,8 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
         name=symbol_name,
         description=description,
         pins=tuple(pins),
+        bbox_x=bbox_x,
+        bbox_y=bbox_y,
         bbox_width=bbox_width,
         bbox_height=bbox_height,
     )
@@ -214,6 +235,7 @@ def compute_placed_geometry(
     """
     # Transform pins
     placed_pins = []
+    bx, by = symbol_info.bbox_x, symbol_info.bbox_y
     bw, bh = symbol_info.bbox_width, symbol_info.bbox_height
     for pin in symbol_info.pins:
         rx, ry = _apply_rotation(pin.x, pin.y, rotation)
@@ -222,17 +244,18 @@ def compute_placed_geometry(
             "order": pin.order,
             "x": origin_x + rx,
             "y": origin_y + ry,
-            "dir": _pin_direction(pin.x, pin.y, bw, bh, rotation),
+            "dir": _pin_direction(pin.x, pin.y, bx, by, bw, bh, rotation),
         })
 
-    # Transform bounding box corners
-    # Original bbox: from (0, 0) to (width, height) — but we need the actual
-    # min/max of all geometry. Use the four corners of the original bbox.
-    w, h = symbol_info.bbox_width, symbol_info.bbox_height
-    # Find the original min coords from the symbol's geometry
-    # The bbox is relative to the symbol's local coordinate space
-    # We approximate using (0, 0) to (w, h) — the symbol origin is at (0, 0)
-    corners = [(0, 0), (w, 0), (0, h), (w, h)]
+    # Transform the four corners of the symbol's local bounding box.
+    # Symbols are typically centered around the origin, so bbox_x/bbox_y
+    # are usually negative.
+    corners = [
+        (bx, by),
+        (bx + bw, by),
+        (bx, by + bh),
+        (bx + bw, by + bh),
+    ]
     transformed = [_apply_rotation(cx, cy, rotation) for cx, cy in corners]
     tx = [c[0] for c in transformed]
     ty = [c[1] for c in transformed]
