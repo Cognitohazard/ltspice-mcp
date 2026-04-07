@@ -161,6 +161,8 @@ async def handle_get_signal_stats(arguments: SignalStatsInput, state: SessionSta
 )
 async def handle_query_value(arguments: QueryValueInput, state: SessionState):
     """Query signal value at a specific time or frequency."""
+    import math
+
     raw_path = safe_path(arguments.raw_file, state)
     signal = arguments.signal
     at_str = arguments.at
@@ -171,6 +173,13 @@ async def handle_query_value(arguments: QueryValueInput, state: SessionState):
         target_x = parse_spice_value(at_str)
     except ValueError as e:
         raise ResultError(f"Invalid 'at' value: {e}") from e
+
+    # Reject NaN / inf — np.searchsorted treats NaN as greater than everything
+    # and returns the last index, which looks like a valid result but isn't.
+    if math.isnan(target_x) or math.isinf(target_x):
+        raise ResultError(
+            f"'at' value must be finite, got {at_str!r} (parsed as {target_x})"
+        )
 
     raw = services.load_raw(raw_path, state)
     services.validate_signal(raw, signal)

@@ -111,6 +111,14 @@ def _merge_continuation_lines(lines: list[str]) -> list[str]:
         if stripped.startswith("*"):
             continue
 
+        # Skip blank lines without flushing ``current`` — a blank line
+        # between a definition and its continuation (``+ ...``) must not
+        # break the continuation, otherwise the merged output contains a
+        # garbage fragment like " BF=200" and the real definition loses
+        # its parameters.
+        if not stripped:
+            continue
+
         # Remove inline comments (';' and '$')
         stripped = re.sub(r"[;$].*$", "", stripped)
 

@@ -522,6 +522,14 @@ async def handle_list_components(arguments: ListComponentsInput, state: SessionS
     file_path = safe_path(arguments.path, state)
     fmt = arguments.format
 
+    # Reject contradictory inputs — reference and prefix are mutually
+    # exclusive modes (single-component lookup vs filtered listing).
+    if arguments.reference is not None and arguments.prefix is not None:
+        raise NetlistError(
+            "'reference' (single lookup) and 'prefix' (filter) are mutually "
+            "exclusive — provide one, not both."
+        )
+
     editor = _get_editor(file_path, state)
 
     # Single-component lookup mode (absorbed from get_component_value)
@@ -534,9 +542,22 @@ async def handle_list_components(arguments: ListComponentsInput, state: SessionS
         data = {"reference": reference, "value": value}
         return format_response(f"{reference} = {value}", data, fmt)
 
-    # List mode
+    # List mode. The ``prefix`` arg must be a plain single-letter SPICE
+    # reference designator (or empty). Anything longer or containing regex
+    # metacharacters would be passed through to spicelib's internal parser
+    # which raises a raw NotImplementedError on failure.
     prefix = arguments.prefix
-    components = editor.get_components(prefix) if prefix else editor.get_components()
+    if prefix is not None and (
+        len(prefix) != 1 or not prefix.isalpha()
+    ):
+        raise NetlistError(
+            f"Component prefix must be a single letter (e.g. 'R', 'C'), got {prefix!r}"
+        )
+
+    try:
+        components = editor.get_components(prefix) if prefix else editor.get_components()
+    except Exception as e:
+        raise NetlistError(f"Failed to list components: {e}") from e
 
     if not components:
         msg = (
@@ -653,15 +674,26 @@ async def handle_set_component_value(arguments: SetComponentValueInput, state: S
     },
 )
 async def handle_parameter(arguments: ParameterInput, state: SessionState):
-    """Get or set .PARAM directive values. Without name/value: returns all
-    parameters. With name and value: sets the parameter.
-    Works on .cir/.net and .asc.
+    """Get or set .PARAM directive values.
+
+    Modes:
+      - no args         → list every .PARAM in the file
+      - name only       → read a single parameter's value
+      - name and value  → set a parameter (creates it if missing)
+
+    Providing value without name is an error. Works on .cir/.net and .asc.
     """
     file_path = safe_path(arguments.path, state)
     fmt = arguments.format
 
     param_name = arguments.name
     param_value = arguments.value
+
+    if param_name is not None and not param_name.strip():
+        raise NetlistError("Parameter name must not be empty")
+
+    if param_value is not None and param_name is None:
+        raise NetlistError("'value' requires 'name' — cannot set a parameter without a name")
 
     if param_name is not None and param_value is not None:
         # Set mode — confirmation only, no structured data needed
@@ -673,10 +705,28 @@ async def handle_parameter(arguments: ParameterInput, state: SessionState):
             fmt,
         )
 
-    # Get mode (formerly get_parameters) — read-only, no _editing needed
     editor = _get_editor(file_path, state)
-    param_names = editor.get_all_parameter_names()
 
+    if param_name is not None:
+        # Read a single parameter
+        try:
+            value = editor.get_parameter(param_name)
+        except Exception as e:
+            raise NetlistError(
+                f"Parameter '{param_name}' not found in {file_path.name}"
+            ) from e
+        if value is None:
+            raise NetlistError(
+                f"Parameter '{param_name}' not found in {file_path.name}"
+            )
+        return format_response(
+            f".PARAM {param_name} = {value}",
+            {"parameters": {param_name: value}},
+            fmt,
+        )
+
+    # Read all parameters
+    param_names = editor.get_all_parameter_names()
     params = {}
     if param_names:
         param_lines = []
@@ -710,6 +760,9 @@ async def handle_edit_directive(arguments: EditDirectiveInput, state: SessionSta
     action = arguments.action
     instruction = arguments.instruction
 
+    if not instruction.strip():
+        raise NetlistError("Directive instruction must not be empty")
+
     async with _editing(file_path, state) as editor:
         if action == "add":
             if not instruction.strip().startswith("."):
@@ -722,6 +775,13 @@ async def handle_edit_directive(arguments: EditDirectiveInput, state: SessionSta
         elif action == "remove":
             if instruction.startswith("regex:"):
                 pattern = instruction[6:]
+                # Reject empty regex — an empty pattern matches every line
+                # and would wipe out the entire file.
+                if not pattern.strip():
+                    raise NetlistError(
+                        "Empty regex pattern would match every directive; "
+                        "provide an explicit regex after 'regex:'."
+                    )
                 editor.remove_Xinstruction(pattern)
             elif any(char in instruction for char in r"\[]().*+?^${}|"):
                 editor.remove_Xinstruction(instruction)
@@ -817,6 +877,11 @@ async def handle_move_component(arguments: MoveComponentInput, state: SessionSta
     rotation = arguments.rotation
 
     async with _editing_asc(asc_path, state) as editor:
+        if reference not in editor.get_components():
+            raise NetlistError(
+                f"Component '{reference}' not found. "
+                f"Available: {', '.join(sorted(editor.get_components()))}"
+            )
         old_pos, old_rot = editor.get_component_position(reference)
 
         new_rot = _parse_rotation(rotation) if rotation is not None else old_rot
@@ -851,7 +916,15 @@ async def handle_set_component_attribute(
     attribute = arguments.attribute
     value = arguments.value
 
+    if not attribute.strip():
+        raise NetlistError("Attribute name must not be empty")
+
     async with _editing_asc(asc_path, state) as editor:
+        if reference not in editor.get_components():
+            raise NetlistError(
+                f"Component '{reference}' not found. "
+                f"Available: {', '.join(sorted(editor.get_components()))}"
+            )
         editor.set_component_attribute(reference, attribute, value)
 
     return text_response(f"Set {reference}.{attribute} = {value}")
