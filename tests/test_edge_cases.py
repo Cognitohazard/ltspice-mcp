@@ -625,3 +625,306 @@ class TestAddComponentSymbolValidation:
         # The file must still be readable (previously this would corrupt it)
         editor = AscEditor(str(asc_file))
         assert "X99" not in editor.components
+
+
+# ---------------------------------------------------------------------------
+# Round 5: continuation-line merge, edit_directive empty patterns, queued
+# status, AC/DC substring false-positives, list_components metacharacters.
+# ---------------------------------------------------------------------------
+
+
+class TestMergeContinuationBlankLine:
+    def test_blank_line_preserves_continuation(self):
+        from ltspice_mcp.lib.library_parser import _merge_continuation_lines
+
+        # A blank line between a definition and its '+' continuation used to
+        # reset `current` to the empty string, producing a garbage
+        # ' BF=200' line and losing the real definition's params.
+        result = _merge_continuation_lines([".MODEL Q NPN", "", "+ BF=200"])
+        assert result == [".MODEL Q NPN BF=200"]
+
+    def test_multiple_blank_lines(self):
+        from ltspice_mcp.lib.library_parser import _merge_continuation_lines
+
+        result = _merge_continuation_lines(
+            [".MODEL Q NPN", "", "", "+ BF=200", "+ IS=1e-14"]
+        )
+        assert result == [".MODEL Q NPN BF=200 IS=1e-14"]
+
+
+@pytest.mark.asyncio
+class TestEditDirectiveEmpty:
+    async def test_empty_instruction_rejected(self, state_no_sim, sample_netlist):
+        from ltspice_mcp.errors import NetlistError
+        from ltspice_mcp.tools.circuit import EditDirectiveInput, handle_edit_directive
+
+        with pytest.raises(NetlistError, match="must not be empty"):
+            await handle_edit_directive(
+                EditDirectiveInput(path=sample_netlist.name, action="add", instruction=""),
+                state_no_sim,
+            )
+
+    async def test_empty_regex_rejected(self, state_no_sim, sample_netlist):
+        from ltspice_mcp.errors import NetlistError
+        from ltspice_mcp.tools.circuit import EditDirectiveInput, handle_edit_directive
+
+        with pytest.raises(NetlistError, match="Empty regex"):
+            await handle_edit_directive(
+                EditDirectiveInput(
+                    path=sample_netlist.name, action="remove", instruction="regex:"
+                ),
+                state_no_sim,
+            )
+
+
+@pytest.mark.asyncio
+class TestHandleParameterModes:
+    async def test_value_without_name_rejected(self, state_no_sim, sample_netlist):
+        from ltspice_mcp.errors import NetlistError
+        from ltspice_mcp.tools.circuit import ParameterInput, handle_parameter
+
+        with pytest.raises(NetlistError, match="requires 'name'"):
+            await handle_parameter(
+                ParameterInput(path=sample_netlist.name, value="2k"),
+                state_no_sim,
+            )
+
+    async def test_empty_name_rejected(self, state_no_sim, sample_netlist):
+        from ltspice_mcp.errors import NetlistError
+        from ltspice_mcp.tools.circuit import ParameterInput, handle_parameter
+
+        with pytest.raises(NetlistError, match="name must not be empty"):
+            await handle_parameter(
+                ParameterInput(path=sample_netlist.name, name=" ", value="2k"),
+                state_no_sim,
+            )
+
+    async def test_read_single_param(self, state_no_sim, sample_netlist):
+        from ltspice_mcp.tools.circuit import ParameterInput, handle_parameter
+
+        r = await handle_parameter(
+            ParameterInput(path=sample_netlist.name, name="Rval"),
+            state_no_sim,
+        )
+        # Previously returned ALL params when given only name.
+        assert "Rval" in r.structuredContent["parameters"]
+        assert len(r.structuredContent["parameters"]) == 1
+
+
+class TestSimulatorSelectionCaseInsensitive:
+    def test_uppercase_preference(self):
+        from ltspice_mcp.config import ServerConfig
+        from ltspice_mcp.lib.simulator import select_default_simulator
+
+        class LT:
+            pass
+
+        cfg = ServerConfig(working_dir=Path("/tmp"), allowed_paths=[Path("/tmp")])
+        cfg.simulator = "LTSPICE"
+        assert select_default_simulator({"ltspice": LT}, cfg) is LT
+
+    def test_whitespace_preference(self):
+        from ltspice_mcp.config import ServerConfig
+        from ltspice_mcp.lib.simulator import select_default_simulator
+
+        class NG:
+            pass
+
+        cfg = ServerConfig(working_dir=Path("/tmp"), allowed_paths=[Path("/tmp")])
+        cfg.simulator = "  ngspice  "
+        assert select_default_simulator({"ngspice": NG}, cfg) is NG
+
+
+class TestIsAcAnalysisWordBoundary:
+    def test_ac_matches(self):
+        from ltspice_mcp.lib.raw_parser import is_ac_analysis
+
+        assert is_ac_analysis("AC Analysis") is True
+        assert is_ac_analysis("ac analysis") is True
+
+    def test_substring_not_matched(self):
+        from ltspice_mcp.lib.raw_parser import is_ac_analysis
+
+        # Previously all these returned True because "AC" is a substring
+        assert is_ac_analysis("backup") is False
+        assert is_ac_analysis("BACK tracking") is False
+        assert is_ac_analysis("DC transfer characteristic") is False
+
+
+class TestBuildSimulationSummaryRange:
+    def _mk(self, plotname, axis):
+        raw = MagicMock()
+        raw.get_raw_property.return_value = plotname
+        raw.get_trace_names.return_value = ["time", "V(out)"]
+        raw.get_steps.return_value = [0]
+        raw.get_axis.return_value = axis
+        raw.get_wave = lambda n, step=0: axis
+        return raw
+
+    def test_dc_not_misclassified_as_ac(self):
+        from ltspice_mcp.lib.raw_parser import build_simulation_summary
+
+        r = build_simulation_summary(
+            self._mk("DC transfer characteristic", np.array([0, 1, 2])), None
+        )
+        # Previously "characteristic" contained the substring "AC" so DC
+        # ended up with freq_start/freq_end keys.
+        assert "sweep_start" in r["range"]
+        assert "freq_start" not in r["range"]
+
+    def test_empty_axis_does_not_crash(self):
+        from ltspice_mcp.lib.raw_parser import build_simulation_summary
+
+        r = build_simulation_summary(
+            self._mk("Transient Analysis", np.array([])), None
+        )
+        assert r["range"] == {}
+        assert r["point_count"] == 0
+
+
+class TestExtractOperatingPointCaseInsensitive:
+    def test_lowercase_trace_names(self):
+        from ltspice_mcp.lib.raw_parser import extract_operating_point
+
+        raw = MagicMock()
+        raw.get_trace_names.return_value = ["v(out)", "i(r1)"]
+        waves = {"v(out)": np.array([3.3]), "i(r1)": np.array([0.001])}
+        raw.get_wave = lambda n, step=0: waves[n]
+        r = extract_operating_point(raw)
+        # Previously lowercase V/I prefixes were silently dropped.
+        assert r["voltages"].get("v(out)") == 3.3
+        assert r["currents"].get("i(r1)") == 0.001
+
+
+@pytest.mark.asyncio
+class TestMoveComponentWraps:
+    async def test_move_unknown_ref_raises_netlist_error(self, asc_state, asc_file):
+        from ltspice_mcp.errors import NetlistError
+        from ltspice_mcp.tools.circuit import MoveComponentInput, handle_move_component
+
+        # Previously leaked spicelib's ComponentNotFoundError.
+        with pytest.raises(NetlistError, match="not found"):
+            await handle_move_component(
+                MoveComponentInput(path=asc_file.name, reference="ZZZ", x=0, y=0),
+                asc_state,
+            )
+
+
+@pytest.mark.asyncio
+class TestSetComponentAttributeWraps:
+    async def test_unknown_ref_raises_netlist_error(self, asc_state, asc_file):
+        from ltspice_mcp.errors import NetlistError
+        from ltspice_mcp.tools.circuit import (
+            SetComponentAttributeInput,
+            handle_set_component_attribute,
+        )
+
+        with pytest.raises(NetlistError, match="not found"):
+            await handle_set_component_attribute(
+                SetComponentAttributeInput(
+                    path=asc_file.name, reference="ZZZ", attribute="SpiceLine", value="x"
+                ),
+                asc_state,
+            )
+
+    async def test_empty_attribute_rejected(self, asc_state, asc_file):
+        from ltspice_mcp.errors import NetlistError
+        from ltspice_mcp.tools.circuit import (
+            SetComponentAttributeInput,
+            handle_set_component_attribute,
+        )
+
+        with pytest.raises(NetlistError, match="not be empty"):
+            await handle_set_component_attribute(
+                SetComponentAttributeInput(
+                    path=asc_file.name, reference="R1", attribute="  ", value="x"
+                ),
+                asc_state,
+            )
+
+
+@pytest.mark.asyncio
+class TestListComponentsValidation:
+    async def test_reference_and_prefix_mutually_exclusive(
+        self, state_no_sim, sample_netlist
+    ):
+        from ltspice_mcp.errors import NetlistError
+        from ltspice_mcp.tools.circuit import ListComponentsInput, handle_list_components
+
+        with pytest.raises(NetlistError, match="mutually exclusive"):
+            await handle_list_components(
+                ListComponentsInput(
+                    path=sample_netlist.name, reference="R1", prefix="C"
+                ),
+                state_no_sim,
+            )
+
+    async def test_metachar_prefix_rejected(self, state_no_sim, sample_netlist):
+        from ltspice_mcp.errors import NetlistError
+        from ltspice_mcp.tools.circuit import ListComponentsInput, handle_list_components
+
+        # Previously propagated a raw NotImplementedError from spicelib.
+        with pytest.raises(NetlistError, match="single letter"):
+            await handle_list_components(
+                ListComponentsInput(path=sample_netlist.name, prefix="R.*"),
+                state_no_sim,
+            )
+
+    async def test_multichar_prefix_rejected(self, state_no_sim, sample_netlist):
+        from ltspice_mcp.errors import NetlistError
+        from ltspice_mcp.tools.circuit import ListComponentsInput, handle_list_components
+
+        with pytest.raises(NetlistError, match="single letter"):
+            await handle_list_components(
+                ListComponentsInput(path=sample_netlist.name, prefix="RR"),
+                state_no_sim,
+            )
+
+
+@pytest.mark.asyncio
+class TestQueryValueRejectsNaNInf:
+    async def test_nan_at_rejected(self, state_no_sim, work_dir):
+        import numpy as np
+
+        from ltspice_mcp.errors import ResultError
+        from ltspice_mcp.tools.analysis import QueryValueInput, handle_query_value
+
+        raw_file = work_dir / "x.raw"
+        raw_file.write_bytes(b"placeholder")
+        raw = MagicMock()
+        raw.get_raw_property.return_value = "Transient Analysis"
+        raw.get_trace_names.return_value = ["time", "V(out)"]
+        raw.get_steps.return_value = [0]
+        axis = np.array([0.0, 1.0, 2.0])
+        raw.get_axis.return_value = axis
+        raw.get_wave = lambda n, step=0: axis
+        state_no_sim.results.set(raw_file, raw)
+
+        with pytest.raises(ResultError, match="finite"):
+            await handle_query_value(
+                QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="nan"),
+                state_no_sim,
+            )
+
+    async def test_inf_at_rejected(self, state_no_sim, work_dir):
+        import numpy as np
+
+        from ltspice_mcp.errors import ResultError
+        from ltspice_mcp.tools.analysis import QueryValueInput, handle_query_value
+
+        raw_file = work_dir / "x.raw"
+        raw_file.write_bytes(b"placeholder")
+        raw = MagicMock()
+        raw.get_raw_property.return_value = "Transient Analysis"
+        raw.get_trace_names.return_value = ["time", "V(out)"]
+        raw.get_steps.return_value = [0]
+        axis = np.array([0.0, 1.0, 2.0])
+        raw.get_axis.return_value = axis
+        raw.get_wave = lambda n, step=0: axis
+        state_no_sim.results.set(raw_file, raw)
+
+        with pytest.raises(ResultError, match="finite"):
+            await handle_query_value(
+                QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="inf"),
+                state_no_sim,
+            )
