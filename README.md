@@ -9,8 +9,8 @@ Built on the low-level `mcp.server.lowlevel.Server` API with [spicelib](https://
 ## Requirements
 
 - Python 3.13+
-- [uv](https://docs.astral.sh/uv/) package manager
 - LTspice (for simulation — circuit editing works without it)
+- An MCP-capable client (see [MCP clients](#mcp-clients) below)
 
 ### Platform support
 
@@ -20,20 +20,33 @@ Built on the low-level `mcp.server.lowlevel.Server` API with [spicelib](https://
 | WSL2 | Windows LTspice.exe via interop (not Wine) |
 | Linux | Via Wine (spicelib handles this) |
 
-## Setup
+## Install
 
-### Install from PyPI
+Any Python package installer works — pick whichever you already use.
 
 ```bash
-uv pip install ltspice-mcp
+# uv (recommended — fast, installs in an isolated tool env and puts `ltspice-mcp` on PATH)
+uv tool install ltspice-mcp
+
+# or plain pip (inside a venv or with --user)
+pip install ltspice-mcp
+
+# or pipx (same isolated-tool model as `uv tool`, if you prefer PyPA tooling)
+pipx install ltspice-mcp
 ```
 
-### Or install from source
+After install, the `ltspice-mcp` command should be on your PATH. Verify with:
+
+```bash
+ltspice-mcp --help
+```
+
+### Install from source
 
 ```bash
 git clone https://github.com/Cognitohazard/ltspice-mcp.git
 cd ltspice-mcp
-uv sync
+uv sync   # or: pip install -e .
 ```
 
 ### Configure
@@ -43,29 +56,75 @@ cp ltspice-mcp.example.toml ltspice-mcp.toml
 # Set simulator.path if LTspice isn't auto-detected (required on WSL)
 ```
 
-### Add to Claude Code
+## MCP clients
 
-```bash
-claude mcp add -s project ltspice -- uvx ltspice-mcp
-```
+MCP is an [open standard](https://modelcontextprotocol.io/), so this server works with any client that speaks it. Below are setup snippets for the major ones. All examples assume you've already installed `ltspice-mcp` so the executable is on your `PATH`.
 
-Or add to `.mcp.json` manually:
+> **Transport:** `ltspice-mcp` speaks stdio. Local desktop clients (Claude Desktop, Claude Code, Cursor, Windsurf, Gemini CLI, etc.) connect to stdio servers directly. Web clients that only accept remote MCP (claude.ai, ChatGPT) need a stdio→HTTP bridge — see [Remote / web clients](#remote--web-clients).
+
+### Generic stdio config
+
+Every client below uses the same JSON snippet — only the config file path differs. Paste this into the client's MCP config file:
 
 ```json
 {
   "mcpServers": {
     "ltspice": {
-      "type": "stdio",
-      "command": "uvx",
-      "args": ["ltspice-mcp"]
+      "command": "ltspice-mcp",
+      "args": []
     }
   }
 }
 ```
 
-### WSL configuration
+If `ltspice-mcp` isn't on the client's `PATH` (common on macOS GUI apps), use the absolute path — find it with `which ltspice-mcp` (Linux/macOS) or `where ltspice-mcp` (Windows).
 
-Set the Windows-side LTspice path in `ltspice-mcp.toml`:
+### Claude Code (Anthropic CLI)
+
+```bash
+claude mcp add -s project ltspice -- ltspice-mcp
+```
+
+This writes a `.mcp.json` in the project root. Use `-s user` to install globally for your user instead.
+
+### Claude Desktop
+
+Paste the [generic stdio config](#generic-stdio-config) into:
+
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+Restart Claude Desktop. The LTspice tools appear under the MCP icon in the input box.
+
+### Cursor
+
+Paste the [generic stdio config](#generic-stdio-config) into `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` in a project.
+
+### Windsurf (Codeium)
+
+Paste the [generic stdio config](#generic-stdio-config) into `~/.codeium/windsurf/mcp_config.json`.
+
+### Gemini CLI
+
+Merge the [generic stdio config](#generic-stdio-config) into the `mcpServers` object in `~/.gemini/settings.json`.
+
+### Continue, Cline, Zed, and other clients
+
+Any client that supports MCP stdio servers takes the same [generic stdio config](#generic-stdio-config) — check the client's docs for where its config file lives.
+
+### Remote / web clients
+
+**claude.ai** (Pro/Max "Connectors") and **ChatGPT** (Developer Mode connectors) only accept remote MCP servers over HTTPS, not local stdio processes. To use `ltspice-mcp` with them you need to bridge stdio to HTTP/SSE and expose it at a public URL. Common approaches:
+
+- [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy) — wraps a stdio server as an SSE endpoint
+- Run behind a reverse tunnel (Cloudflare Tunnel, ngrok, Tailscale Funnel)
+
+Because this server can write files, spawn simulators, and read arbitrary paths under `allowed_paths`, **only expose it on a network you fully control**. For remote use cases, tighten `[security] allowed_paths` and keep the tunnel private.
+
+## WSL configuration
+
+On WSL, LTspice.exe runs via Windows interop (not Wine), so spicelib can't auto-detect it across the WSL boundary. Set the Windows-side path explicitly in `ltspice-mcp.toml`:
 
 ```toml
 [simulator]
@@ -258,7 +317,7 @@ Config          config.py  — TOML + env var configuration
 
 ### Design notes
 
-- **Async wrapping**: All spicelib operations are synchronous. They run in `asyncio.to_thread()` via `run_sync()` to avoid blocking the event loop.
+- **Async wrapping**: spicelib is synchronous. Short-lived parser/editor calls run inline on the event loop (the MCP stdio transport processes one request at a time). Long-lived simulator work uses `asyncio.to_thread()` inside the runner layer (`sim_runner`, `sweep_runner`, `montecarlo_runner`).
 - **Path sandbox**: User-provided paths are validated against `config.allowed_paths`. Paths outside the sandbox raise `PathSecurityError`.
 - **Runner lifecycle**: `RunnerManager` owns all runner instances (sim, sweep, MC). It auto-invalidates cached runners when the event loop, simulator class, or output folder changes. Runners are never created directly.
 - **stdin protection**: `main.py` redirects fd 0 to `/dev/null` before starting the server, passing the real stdin only to the MCP transport. This prevents subprocesses from consuming MCP protocol bytes — a workaround for [python-sdk#671](https://github.com/modelcontextprotocol/python-sdk/issues/671).
@@ -268,12 +327,22 @@ Config          config.py  — TOML + env var configuration
 
 ## Development
 
+The project uses [uv](https://docs.astral.sh/uv/) for dev dependency management because it resolves the PEP 735 `dependency-groups` in `pyproject.toml` natively. Plain `pip` (25.1+) also supports this via `--group`.
+
 ```bash
-uv sync                        # Install dependencies
+# With uv (recommended for development)
+uv sync                        # Install runtime + dev dependencies
 uv run pytest tests/ -v        # Run tests
 uv run pyright                 # Type checking
+uv run ruff check src/ tests/  # Lint
 uv run ltspice-mcp             # Run server (stdio)
 uv run ltspice-mcp --config /path/to/config.toml  # Custom config
+
+# With pip 25.1+
+pip install -e . --group dev
+pytest tests/ -v
+pyright
+ltspice-mcp
 ```
 
 ## License
