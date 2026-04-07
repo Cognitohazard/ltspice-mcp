@@ -62,7 +62,9 @@ def _resolve_result_file(
 
     if isinstance(job, SimulationJob):
         file_path = getattr(job, field)
-        if job.status != "completed" or file_path is None:
+        # Reject missing, None, or empty-string paths — an empty Path coerces
+        # to "." which would silently point at the current directory.
+        if job.status != "completed" or file_path is None or str(file_path) in ("", "."):
             raise ResultError(
                 f"Job is not completed (status={job.status!r}) or has no {label} file"
             )
@@ -75,7 +77,7 @@ def _resolve_result_file(
         raise ResultError(f"Batch job {job_id!r} has no run results")
     first_run = batch_job.run_results[min(batch_job.run_results)]
     result_file = first_run.get(field)
-    if result_file is None:
+    if result_file is None or str(result_file) in ("", "."):
         raise ResultError(f"Batch job {job_id!r} first run has no {label} file")
     return Path(result_file) if not isinstance(result_file, Path) else result_file
 
@@ -211,6 +213,12 @@ def get_batch_signal_data(
     """Extract structured batch signal data for aggregated or raw mode."""
     if batch_job.completed_runs == 0:
         raise BatchJobError(f"No completed runs yet for job {batch_job.job_id}")
+
+    if raw and (offset < 0 or limit < 1):
+        raise BatchJobError(
+            f"Invalid pagination for job {batch_job.job_id}: "
+            f"offset must be >= 0 and limit must be >= 1 (got offset={offset}, limit={limit})"
+        )
 
     if filters:
         matching_indices = filter_runs_by_params(batch_job.run_results, filters)

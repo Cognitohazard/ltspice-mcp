@@ -466,3 +466,162 @@ class TestSetComponentValueAmbiguous:
                 SetComponentValueInput(path=sample_netlist.name, values={}),
                 state_no_sim,
             )
+
+
+# ---------------------------------------------------------------------------
+# Bug R: config.py silently accepted bad TOML values (wrong type, negative,
+# out-of-range) and invalid log levels
+# ---------------------------------------------------------------------------
+
+
+class TestConfigTomlValidation:
+    def _load(self, tmp_path: Path, toml_content: str, monkeypatch):
+        from ltspice_mcp.config import ServerConfig
+
+        p = tmp_path / "c.toml"
+        p.write_text(toml_content)
+        monkeypatch.setenv("LTSPICE_MCP_CONFIG", str(p))
+        return ServerConfig.load()
+
+    def test_string_timeout_rejected(self, tmp_path, monkeypatch):
+        cfg = self._load(
+            tmp_path,
+            '[simulation]\ntimeout = "not a number"\n',
+            monkeypatch,
+        )
+        # Should fall back to the default, not store a string
+        assert cfg.default_timeout == 300.0
+
+    def test_negative_timeout_rejected(self, tmp_path, monkeypatch):
+        cfg = self._load(tmp_path, "[simulation]\ntimeout = -5\n", monkeypatch)
+        assert cfg.default_timeout == 300.0
+
+    def test_huge_timeout_rejected(self, tmp_path, monkeypatch):
+        cfg = self._load(
+            tmp_path, "[simulation]\ntimeout = 999999999\n", monkeypatch
+        )
+        assert cfg.default_timeout == 300.0
+
+    def test_zero_max_parallel_rejected(self, tmp_path, monkeypatch):
+        cfg = self._load(tmp_path, "[simulation]\nmax_parallel = 0\n", monkeypatch)
+        assert cfg.max_parallel_sims == 4
+
+    def test_negative_max_parallel_rejected(self, tmp_path, monkeypatch):
+        cfg = self._load(
+            tmp_path, "[simulation]\nmax_parallel = -1\n", monkeypatch
+        )
+        assert cfg.max_parallel_sims == 4
+
+    def test_invalid_log_level_rejected(self, tmp_path, monkeypatch):
+        cfg = self._load(
+            tmp_path, '[logging]\nlevel = "SUPERDEBUG"\n', monkeypatch
+        )
+        assert cfg.log_level == "INFO"
+
+    def test_lowercase_log_level_normalized(self, tmp_path, monkeypatch):
+        cfg = self._load(tmp_path, '[logging]\nlevel = "debug"\n', monkeypatch)
+        assert cfg.log_level == "DEBUG"
+
+
+# ---------------------------------------------------------------------------
+# Bug S: _resolve_result_file accepted empty-string paths as valid
+# ---------------------------------------------------------------------------
+
+
+class TestResolveResultFileEmpty:
+    def test_batch_empty_string_path_rejected(self, state_no_sim):
+        from datetime import timedelta
+
+        from ltspice_mcp.errors import ResultError
+        from ltspice_mcp.lib import now, services
+        from ltspice_mcp.state import BatchJob
+
+        bj = BatchJob(
+            job_id="b1",
+            job_type="sweep",
+            netlist=Path("/tmp/x.cir"),
+            total_runs=1,
+            completed_runs=1,
+            status="completed",
+        )
+        bj.completed_at = now() + timedelta(seconds=1)
+        bj.run_results = {0: {"raw_file": "", "log_file": "", "params": {}}}
+        state_no_sim.batch_jobs["b1"] = bj
+
+        with pytest.raises(ResultError, match="no raw file"):
+            services.resolve_raw_file("b1", state_no_sim)
+
+
+# ---------------------------------------------------------------------------
+# Bug T: get_batch_signal_data accepted negative offset / zero limit
+# ---------------------------------------------------------------------------
+
+
+class TestBatchPaginationValidation:
+    def _make_bj(self, state, n_runs: int = 10):
+        from datetime import timedelta
+
+        from ltspice_mcp.lib import now
+        from ltspice_mcp.state import BatchJob
+
+        bj = BatchJob(
+            job_id="b1",
+            job_type="sweep",
+            netlist=Path("/tmp/x.cir"),
+            total_runs=n_runs,
+            completed_runs=n_runs,
+            status="completed",
+        )
+        bj.completed_at = now() + timedelta(seconds=1)
+        bj.run_results = {
+            i: {"raw_file": Path(f"/tmp/r{i}.raw"), "log_file": Path(f"/tmp/r{i}.log"), "params": {}}
+            for i in range(n_runs)
+        }
+        state.batch_jobs["b1"] = bj
+        return bj
+
+    def test_negative_offset_rejected(self, state_no_sim):
+        from ltspice_mcp.errors import BatchJobError
+        from ltspice_mcp.lib import services
+
+        bj = self._make_bj(state_no_sim)
+        with pytest.raises(BatchJobError, match="offset"):
+            services.get_batch_signal_data(bj, "V(out)", raw=True, offset=-5, limit=5)
+
+    def test_zero_limit_rejected(self, state_no_sim):
+        from ltspice_mcp.errors import BatchJobError
+        from ltspice_mcp.lib import services
+
+        bj = self._make_bj(state_no_sim)
+        with pytest.raises(BatchJobError, match="limit"):
+            services.get_batch_signal_data(bj, "V(out)", raw=True, offset=0, limit=0)
+
+
+# ---------------------------------------------------------------------------
+# Bug U: handle_add_component corrupted the .asc file when given a
+# nonexistent symbol name, making the file unopenable afterwards
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestAddComponentSymbolValidation:
+    async def test_nonexistent_symbol_rejected(self, asc_state, asc_file):
+        from spicelib import AscEditor
+
+        from ltspice_mcp.errors import NetlistError
+        from ltspice_mcp.tools.circuit import AddComponentInput, handle_add_component
+
+        with pytest.raises(NetlistError, match="not found in any configured"):
+            await handle_add_component(
+                AddComponentInput(
+                    path=asc_file.name,
+                    reference="X99",
+                    symbol="totally_fake_symbol_xyz",
+                    x=0,
+                    y=0,
+                ),
+                asc_state,
+            )
+        # The file must still be readable (previously this would corrupt it)
+        editor = AscEditor(str(asc_file))
+        assert "X99" not in editor.components
