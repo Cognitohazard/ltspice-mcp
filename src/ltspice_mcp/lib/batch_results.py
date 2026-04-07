@@ -7,6 +7,7 @@ All functions are synchronous — callers invoke them directly
 (see concurrency contract in tools/_base.py).
 """
 
+import math
 import time
 from pathlib import Path
 
@@ -160,7 +161,13 @@ def filter_runs_by_params(
                     except (TypeError, ValueError):
                         all_match = False
                         break
-                    if not (lo <= run_numeric <= hi):
+                    # NaN bounds or NaN values never match a range
+                    if (
+                        math.isnan(lo)
+                        or math.isnan(hi)
+                        or math.isnan(run_numeric)
+                        or not (lo <= run_numeric <= hi)
+                    ):
                         all_match = False
                         break
                 except ValueError:
@@ -175,6 +182,10 @@ def filter_runs_by_params(
                     try:
                         run_numeric = float(run_value)
                     except (TypeError, ValueError):
+                        all_match = False
+                        break
+                    # NaN never matches anything (including itself)
+                    if math.isnan(target) or math.isnan(run_numeric):
                         all_match = False
                         break
                     # Compare with relative tolerance of 1e-6
@@ -216,14 +227,16 @@ def get_progress_snapshot(batch_job: BatchJob, start_time: float) -> dict:
             elapsed_s: float — seconds since start_time
             eta_s: float | None — estimated seconds remaining (None if no runs done yet)
     """
-    elapsed = time.time() - start_time
+    # Clamp elapsed to >= 0 in case the wall clock moved backwards or
+    # start_time was set in the future for some reason.
+    elapsed = max(0.0, time.time() - start_time)
     completed = batch_job.completed_runs
     total = batch_job.total_runs
     failed = batch_job.failed_runs
 
     if completed > 0 and elapsed > 0:
         rate = completed / elapsed  # runs per second
-        remaining = total - completed
+        remaining = max(0, total - completed)  # don't go negative on overshoot
         eta_s = remaining / rate if rate > 0 else None
     else:
         eta_s = None

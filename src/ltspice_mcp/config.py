@@ -14,6 +14,44 @@ logger = logging.getLogger(__name__)
 
 ToolProfile = Literal["full", "agentic"]
 VALID_PROFILES: frozenset[str] = frozenset({"full", "agentic"})
+VALID_LOG_LEVELS: frozenset[str] = frozenset(
+    {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+)
+
+
+def _validate_numeric(
+    config_dict: dict,
+    key: str,
+    type_fn: type,
+    min_val: float,
+    max_val: float,
+    *,
+    exclusive_min: bool = False,
+    source: str = "config",
+) -> None:
+    """Validate a numeric config value in-place, dropping it on failure.
+
+    Unlike ``_load_bounded_env`` this operates on an already-loaded dict
+    so it can validate TOML values using the same bounds as env overrides.
+    """
+    if key not in config_dict:
+        return
+    raw = config_dict[key]
+    try:
+        val = type_fn(raw)
+    except (ValueError, TypeError):
+        logger.warning("%s: invalid value %r for %s; ignoring", source, raw, key)
+        del config_dict[key]
+        return
+    too_low = val <= min_val if exclusive_min else val < min_val
+    if too_low or val > max_val:
+        low = f">{min_val}" if exclusive_min else str(min_val)
+        logger.warning(
+            "%s: %s must be %s-%s, got %s; ignoring", source, key, low, max_val, val
+        )
+        del config_dict[key]
+    else:
+        config_dict[key] = val
 
 
 def _load_bounded_env(
@@ -158,7 +196,15 @@ class ServerConfig:
                     config_dict["plot_style"] = toml_data["plotting"]["style"]
 
             if "logging" in toml_data and "level" in toml_data["logging"]:
-                config_dict["log_level"] = toml_data["logging"]["level"]
+                level = str(toml_data["logging"]["level"]).upper()
+                if level in VALID_LOG_LEVELS:
+                    config_dict["log_level"] = level
+                else:
+                    logger.warning(
+                        "config: invalid log level %r; must be one of %s",
+                        toml_data["logging"]["level"],
+                        sorted(VALID_LOG_LEVELS),
+                    )
 
             if "schematic" in toml_data and "symbol_paths" in toml_data["schematic"]:
                 config_dict["symbol_paths"] = [
@@ -171,6 +217,30 @@ class ServerConfig:
                 and (p := _validated_profile(toml_data["tools"]["profile"], "config"))
             ):
                 config_dict["tool_profile"] = p
+
+            # Validate numeric TOML values against the same bounds as env
+            # overrides so a bad TOML entry doesn't sneak past.
+            _validate_numeric(
+                config_dict, "max_parallel_sims", int, 1, 128, source="config"
+            )
+            _validate_numeric(
+                config_dict,
+                "default_timeout",
+                float,
+                0,
+                86400,
+                exclusive_min=True,
+                source="config",
+            )
+            _validate_numeric(
+                config_dict,
+                "max_points_returned",
+                int,
+                1,
+                10_000_000,
+                source="config",
+            )
+            _validate_numeric(config_dict, "plot_dpi", int, 50, 600, source="config")
 
         # Override with environment variables (highest precedence)
         if env_sim := os.getenv("LTSPICE_MCP_SIMULATOR"):
@@ -200,7 +270,15 @@ class ServerConfig:
             config_dict["plot_style"] = env_style
 
         if env_log := os.getenv("LTSPICE_MCP_LOG_LEVEL"):
-            config_dict["log_level"] = env_log
+            env_log_upper = env_log.upper()
+            if env_log_upper in VALID_LOG_LEVELS:
+                config_dict["log_level"] = env_log_upper
+            else:
+                logger.warning(
+                    "LTSPICE_MCP_LOG_LEVEL: invalid value %r; must be one of %s",
+                    env_log,
+                    sorted(VALID_LOG_LEVELS),
+                )
 
         if env_sym := os.getenv("LTSPICE_MCP_SYMBOL_PATHS"):
             config_dict["symbol_paths"] = [Path(p) for p in env_sym.split(os.pathsep)]

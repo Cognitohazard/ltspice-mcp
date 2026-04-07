@@ -127,20 +127,24 @@ def _resolve_mc_ref(ref: str) -> tuple[str, bool]:
       - Type names: "resistors", "R", "capacitor", etc. -> ("R", True)
       - Component refs: "R1", "C3", "L2" -> ("R1", False)
 
+    Surrounding whitespace is stripped before classification so that
+    "  R1  " resolves the same as "R1".
+
     Args:
         ref: Raw ref string from the user
 
     Returns:
         (resolved_ref, is_type_level) tuple
     """
-    lower = ref.lower().strip()
+    ref = ref.strip()
+    lower = ref.lower()
 
     # Check type name map first
     if lower in _TYPE_NAME_TO_PREFIX:
         return (_TYPE_NAME_TO_PREFIX[lower], True)
 
-    # Single uppercase letter -> treat as type prefix
-    if len(ref) == 1 and ref.upper().isalpha():
+    # Single letter -> treat as type prefix
+    if len(ref) == 1 and ref.isalpha():
         return (ref.upper(), True)
 
     # Otherwise assume component ref (e.g. "R1", "C3", "L2a")

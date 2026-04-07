@@ -124,11 +124,12 @@ def select_default_simulator(available: dict[str, type], config: ServerConfig) -
         logger.warning("No simulators available - operations requiring simulation will fail")
         return None
 
-    # Check user preference
+    # Check user preference (case-insensitive, whitespace tolerant)
     if config.simulator:
-        if config.simulator in available:
-            logger.info(f"Using configured simulator: {config.simulator}")
-            return available[config.simulator]
+        preferred = config.simulator.strip().lower()
+        if preferred in available:
+            logger.info(f"Using configured simulator: {preferred}")
+            return available[preferred]
         else:
             logger.warning(
                 f"Configured simulator '{config.simulator}' not available. "

@@ -83,11 +83,25 @@ def generate_sweep_range(
     if step is not None and points is not None:
         raise ValueError("step and points are mutually exclusive — provide one, not both.")
 
+    # Validate point count up front (numpy gives a confusing error otherwise)
+    if points is not None and points < 1:
+        raise ValueError(f"points must be >= 1 (got points={points}).")
+
     if scale == "linear":
         if points is not None:
             arr = np.linspace(start, stop, int(points))
         else:
             assert step is not None
+            if step == 0:
+                raise ValueError("Linear scale step must be != 0.")
+            # Step direction must match the (start → stop) direction, otherwise
+            # np.arange silently returns an empty array.
+            if (stop > start and step < 0) or (stop < start and step > 0):
+                raise ValueError(
+                    f"Linear sweep step direction does not match range: "
+                    f"start={start}, stop={stop}, step={step}. "
+                    f"Use step>0 for ascending ranges and step<0 for descending."
+                )
             # Epsilon guard: extend stop slightly so np.arange includes stop
             arr = np.arange(start, stop + step * 1e-10, step)
     elif scale == "log":
@@ -100,10 +114,14 @@ def generate_sweep_range(
             arr = np.geomspace(start, stop, int(points))
         else:
             assert step is not None
-            # Compute n from the log ratio: n = log(stop/start) / log(step) + 1
-            # step here is treated as the multiplicative factor per step
+            # step is the multiplicative factor per step; must be > 0 and != 1
+            # (step=1 would be a no-op multiplier and divide by zero in log(1))
             if step <= 0:
                 raise ValueError(f"Log scale step must be positive (got step={step}).")
+            if step == 1:
+                raise ValueError(
+                    "Log scale step must be != 1 (step=1 is a degenerate multiplier)."
+                )
             n = round(math.log(stop / start) / math.log(step)) + 1
             arr = np.geomspace(start, stop, n)
     else:

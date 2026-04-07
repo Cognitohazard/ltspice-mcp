@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from mcp.types import TextResourceContents
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.resources import (
@@ -11,6 +12,12 @@ from ltspice_mcp.resources import (
     handle_read_resource,
 )
 from ltspice_mcp.state import SessionState
+
+
+def _text(contents) -> str:
+    """Extract text from a resource contents entry, asserting it is text."""
+    assert isinstance(contents, TextResourceContents)
+    return contents.text
 
 
 class TestStaticResources:
@@ -45,7 +52,7 @@ class TestReadResource:
 
         result = handle_read_resource("ltspice://config", state_no_sim)
         assert result.contents
-        text = result.contents[0].text
+        text = _text(result.contents[0])
         data = json.loads(text)
         assert "working_dir" in data
         assert "allowed_paths" in data
@@ -55,13 +62,13 @@ class TestReadResource:
     def test_read_netlists_empty(self, state_no_sim: SessionState):
         result = handle_read_resource("ltspice://netlists/", state_no_sim)
         assert result.contents
-        assert '"count": 0' in result.contents[0].text
+        assert '"count": 0' in _text(result.contents[0])
 
     def test_read_netlists_with_files(
         self, state_no_sim: SessionState, sample_netlist: Path
     ):
         result = handle_read_resource("ltspice://netlists/", state_no_sim)
-        text = result.contents[0].text
+        text = _text(result.contents[0])
         assert "rc_filter.cir" in text
         assert '"count": 1' in text
 
@@ -69,16 +76,16 @@ class TestReadResource:
         result = handle_read_resource(
             f"ltspice://netlists/{sample_netlist.name}", state_no_sim
         )
-        text = result.contents[0].text
+        text = _text(result.contents[0])
         assert "R1 in out 1k" in text
 
     def test_read_results_empty(self, state_no_sim: SessionState):
         result = handle_read_resource("ltspice://results/", state_no_sim)
-        assert '"count": 0' in result.contents[0].text
+        assert '"count": 0' in _text(result.contents[0])
 
     def test_read_models_empty(self, state_no_sim: SessionState):
         result = handle_read_resource("ltspice://models/", state_no_sim)
-        assert "libraries" in result.contents[0].text
+        assert "libraries" in _text(result.contents[0])
 
     def test_unknown_uri_raises(self, state_no_sim: SessionState):
         with pytest.raises(ValueError, match="Unknown resource URI"):
