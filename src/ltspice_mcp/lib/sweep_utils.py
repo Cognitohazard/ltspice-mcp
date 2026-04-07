@@ -92,6 +92,16 @@ def generate_sweep_range(
             arr = np.linspace(start, stop, int(points))
         else:
             assert step is not None
+            if step == 0:
+                raise ValueError("Linear scale step must be != 0.")
+            # Step direction must match the (start → stop) direction, otherwise
+            # np.arange silently returns an empty array.
+            if (stop > start and step < 0) or (stop < start and step > 0):
+                raise ValueError(
+                    f"Linear sweep step direction does not match range: "
+                    f"start={start}, stop={stop}, step={step}. "
+                    f"Use step>0 for ascending ranges and step<0 for descending."
+                )
             # Epsilon guard: extend stop slightly so np.arange includes stop
             arr = np.arange(start, stop + step * 1e-10, step)
     elif scale == "log":

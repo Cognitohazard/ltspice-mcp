@@ -329,7 +329,15 @@ def parse_measurements(log_path: Path, reader: LTSpiceLogReader | None = None) -
                 # numpy scalar types
                 python_values.append(float(val.item()))
             else:
-                python_values.append(float(val))
+                # Try to coerce to float; on failure record as None (failed
+                # measurement) instead of crashing the whole call.
+                try:
+                    python_values.append(float(val))
+                except (TypeError, ValueError):
+                    logger.warning(
+                        f"Measurement '{name}' has non-numeric value {val!r}; recording as None"
+                    )
+                    python_values.append(None)
         measurements[name] = python_values
 
     # Determine step count from first measurement

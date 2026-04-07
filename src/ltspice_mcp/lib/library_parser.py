@@ -177,8 +177,14 @@ def parse_library_file(path: Path) -> LibraryIndex:
 
     models = []
 
-    # Regex patterns
-    model_pattern = re.compile(r"^\s*\.MODEL\s+(\S+)\s+(\S+)(?:\s*\((.*?)\))?", re.IGNORECASE)
+    # Regex patterns.
+    # Model type is `[^\s(]+` (not `\S+`) so it does not greedily swallow the
+    # opening paren when there is no space before it: `.MODEL Q NPN(BF=200)`
+    # parses correctly as type=NPN, params=BF=200.
+    model_pattern = re.compile(
+        r"^\s*\.MODEL\s+(\S+)\s+([^\s(]+)\s*(?:\((.*?)\))?",
+        re.IGNORECASE,
+    )
     subckt_pattern = re.compile(r"^\s*\.SUBCKT\s+(\S+)", re.IGNORECASE)
     ends_pattern = re.compile(r"^\s*\.ENDS", re.IGNORECASE)
 
@@ -225,17 +231,23 @@ def parse_library_file(path: Path) -> LibraryIndex:
             start_line = i
             raw_lines = [line]
 
-            # Find matching .ENDS
+            # Find matching .ENDS, tracking nesting depth so an inner .SUBCKT
+            # / .ENDS pair doesn't accidentally terminate the outer one.
             i += 1
+            depth = 1
             found_ends = False
             while i < len(merged):
                 current_line = merged[i]
                 raw_lines.append(current_line)
 
-                if ends_pattern.match(current_line):
-                    found_ends = True
-                    i += 1
-                    break
+                if subckt_pattern.match(current_line):
+                    depth += 1
+                elif ends_pattern.match(current_line):
+                    depth -= 1
+                    if depth == 0:
+                        found_ends = True
+                        i += 1
+                        break
 
                 i += 1
 
@@ -248,11 +260,19 @@ def parse_library_file(path: Path) -> LibraryIndex:
             raw_text = "\n".join(raw_lines)
             line_count = len(raw_lines)
 
-            # Extract node list from first line for parameters summary
-            # .SUBCKT name node1 node2 node3 ...
+            # Extract node list from first line for parameters summary.
+            # .SUBCKT name [node1 node2 ...] [PARAMS: key=value ...]
+            # Stop at the first token that is "PARAMS:" or contains "=", since
+            # those mark the start of subcircuit parameters, not nodes.
             parts = line.split()
-            nodes = parts[2:7] if len(parts) > 2 else []  # First 5 nodes
-            parameters = {f"node{i + 1}": node for i, node in enumerate(nodes)}
+            node_tokens: list[str] = []
+            for tok in parts[2:]:
+                if tok.upper() == "PARAMS:" or "=" in tok:
+                    break
+                node_tokens.append(tok)
+                if len(node_tokens) >= 5:
+                    break
+            parameters = {f"node{i + 1}": node for i, node in enumerate(node_tokens)}
 
             try:
                 entry = ModelEntry(

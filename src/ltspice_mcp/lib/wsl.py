@@ -154,11 +154,17 @@ def get_windows_output_dir() -> Path | None:
 
 
 def is_windows_native_path(path: Path) -> bool:
-    """Check if a path is on the Windows filesystem (under /mnt/)."""
+    """Check if a path is on a WSL-mounted Windows drive (e.g. /mnt/c/...).
+
+    WSL mounts each Windows drive under /mnt/<letter> where <letter> is a
+    single character. Only such paths sit on the actual Windows filesystem;
+    other /mnt/ entries (e.g. /mnt/cdrom, /mnt/extdata) are unrelated mounts.
+    """
     try:
-        return str(path.resolve()).startswith("/mnt/")
+        parts = path.resolve().parts
     except OSError:
         return False
+    return len(parts) >= 3 and parts[0] == "/" and parts[1] == "mnt" and len(parts[2]) == 1
 
 
 def get_ltspice_lib_paths() -> list[str]:

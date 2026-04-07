@@ -248,6 +248,11 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     Calculates -3dB point, unity-gain frequency, phase margin, and gain margin
     for AC analysis. Returns None for metrics that cannot be computed.
 
+    Phase is unwrapped before crossing detection so that systems whose true
+    phase drops below -180° (e.g. 3-pole loops) are correctly handled — the
+    raw ``np.angle`` output wraps from -179° to +179° at every -180° crossing,
+    which would otherwise hide the crossing entirely.
+
     Args:
         raw: Loaded RawRead instance
         trace_name: Name of voltage trace to analyze
@@ -260,9 +265,10 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     axis = raw.get_axis(step=step)
     wave = raw.get_wave(trace_name, step=step)
 
-    # Convert to magnitude and phase
+    # Convert to magnitude (dB) and unwrapped phase (degrees)
     magnitude_db = _safe_magnitude_db(wave)
-    phase_deg = np.angle(wave, deg=True)
+    phase_rad = np.unwrap(np.angle(wave))
+    phase_deg = np.rad2deg(phase_rad)
 
     metrics: dict[str, float | None] = {
         "bandwidth_3db": None,
