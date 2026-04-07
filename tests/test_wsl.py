@@ -1,9 +1,17 @@
 """Unit tests for WSL detection and path conversion."""
 
+import subprocess
 from pathlib import Path
-from unittest.mock import mock_open, patch
+from unittest.mock import MagicMock, mock_open, patch
 
-from ltspice_mcp.lib.wsl import is_wsl, to_windows_path
+from ltspice_mcp.lib.wsl import (
+    _resolve_win_env,
+    get_ltspice_lib_paths,
+    get_windows_output_dir,
+    is_windows_native_path,
+    is_wsl,
+    to_windows_path,
+)
 
 
 class TestIsWsl:
@@ -66,3 +74,84 @@ class TestToWindowsPath:
 
         path = Path("circuit.net")
         assert to_windows_path(path) == "circuit.net"
+
+    def test_wsl_path_conversion(self):
+        import ltspice_mcp.lib.wsl as wsl_mod
+
+        wsl_mod._is_wsl_cached = True
+        fake_result = MagicMock(stdout="C:\\Users\\test\\file.cir\n", stderr="", returncode=0)
+        with patch("subprocess.run", return_value=fake_result):
+            result = to_windows_path(Path("/mnt/c/Users/test/file.cir"))
+            assert "C:" in result
+
+    def test_wslpath_not_found(self):
+        import ltspice_mcp.lib.wsl as wsl_mod
+
+        wsl_mod._is_wsl_cached = True
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            result = to_windows_path(Path("/tmp/foo"))
+            assert result == "/tmp/foo"
+
+    def test_wslpath_failure(self):
+        import ltspice_mcp.lib.wsl as wsl_mod
+
+        wsl_mod._is_wsl_cached = True
+        err = subprocess.CalledProcessError(1, "wslpath", stderr="bad path")
+        with patch("subprocess.run", side_effect=err):
+            result = to_windows_path(Path("/tmp/foo"))
+            assert result == "/tmp/foo"
+
+
+class TestResolveWinEnv:
+    def test_failure_returns_none(self):
+        with patch("subprocess.run", side_effect=Exception("boom")):
+            assert _resolve_win_env("TEMP") is None
+
+
+class TestGetWindowsOutputDir:
+    def test_not_wsl(self):
+        import ltspice_mcp.lib.wsl as wsl_mod
+
+        wsl_mod._is_wsl_cached = False
+        wsl_mod._win_temp_dir = None
+        assert get_windows_output_dir() is None
+
+    def test_cached(self):
+        import ltspice_mcp.lib.wsl as wsl_mod
+
+        wsl_mod._is_wsl_cached = True
+        cached = Path("/tmp/cached_dir")
+        wsl_mod._win_temp_dir = cached
+        assert get_windows_output_dir() == cached
+        # Reset
+        wsl_mod._win_temp_dir = None
+        wsl_mod._is_wsl_cached = None
+
+
+class TestIsWindowsNativePath:
+    def test_mnt_path(self, tmp_path: Path):
+        # tmp_path is not under /mnt
+        assert is_windows_native_path(tmp_path) is False
+
+    def test_oserror(self, monkeypatch):
+        def boom(self):
+            raise OSError("denied")
+
+        monkeypatch.setattr(Path, "resolve", boom)
+        assert is_windows_native_path(Path("/foo")) is False
+
+
+class TestGetLtspiceLibPaths:
+    def test_not_wsl(self):
+        import ltspice_mcp.lib.wsl as wsl_mod
+
+        wsl_mod._is_wsl_cached = False
+        assert get_ltspice_lib_paths() == []
+
+    def test_wsl_no_localappdata(self):
+        import ltspice_mcp.lib.wsl as wsl_mod
+
+        wsl_mod._is_wsl_cached = True
+        with patch("ltspice_mcp.lib.wsl._resolve_win_env", return_value=None):
+            assert get_ltspice_lib_paths() == []
+        wsl_mod._is_wsl_cached = None
