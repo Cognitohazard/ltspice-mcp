@@ -178,7 +178,11 @@ class TestComputePlacedGeometry:
 
     @pytest.fixture
     def simple_symbol(self) -> SymbolInfo:
-        """A simple 2-pin symbol: pin A at (0, -50), pin B at (0, 50), bbox 20x100."""
+        """A simple 2-pin symbol centered on the origin.
+
+        Pin A at (0,-50), pin B at (0,50). Bbox spans (-10,-50) to (10,50)
+        — width 20, height 100, with the origin at the center.
+        """
         return SymbolInfo(
             name="res",
             description="Resistor",
@@ -186,6 +190,8 @@ class TestComputePlacedGeometry:
                 PinInfo(name="A", order=1, x=0, y=-50),
                 PinInfo(name="B", order=2, x=0, y=50),
             ),
+            bbox_x=-10,
+            bbox_y=-50,
             bbox_width=20,
             bbox_height=100,
         )
@@ -223,10 +229,26 @@ class TestComputePlacedGeometry:
     def test_bbox_r0(self, simple_symbol: SymbolInfo):
         result = compute_placed_geometry(simple_symbol, origin_x=100, origin_y=200, rotation="R0")
         bbox = result["bounding_box"]
+        # Local bbox (-10,-50)..(10,50) placed at (100,200) → (90,150)..(110,250)
+        assert bbox["x"] == 90
+        assert bbox["y"] == 150
         assert bbox["width"] == 20
         assert bbox["height"] == 100
-        assert bbox["x"] == 100
-        assert bbox["y"] == 200
+
+    def test_bbox_contains_all_pins(self, simple_symbol: SymbolInfo):
+        """Regression: every placed pin must lie within the placed bounding box."""
+        for rotation in ("R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"):
+            result = compute_placed_geometry(
+                simple_symbol, origin_x=300, origin_y=400, rotation=rotation
+            )
+            bbox = result["bounding_box"]
+            for pin in result["pins"]:
+                assert bbox["x"] <= pin["x"] <= bbox["x"] + bbox["width"], (
+                    f"{rotation}: pin {pin['name']} x={pin['x']} outside bbox {bbox}"
+                )
+                assert bbox["y"] <= pin["y"] <= bbox["y"] + bbox["height"], (
+                    f"{rotation}: pin {pin['name']} y={pin['y']} outside bbox {bbox}"
+                )
 
     def test_bbox_r90(self, simple_symbol: SymbolInfo):
         """After R90, width and height should swap."""
@@ -258,50 +280,65 @@ class TestComputePlacedGeometry:
 class TestPinDirection:
     """Test pin wire direction inference from position relative to bbox center."""
 
+    # Bbox at origin spanning (0,0) to (100,80) — center at (50, 40)
+    BBOX_X = 0
+    BBOX_Y = 0
     BBOX_W = 100
     BBOX_H = 80
 
     def test_right_edge(self):
         # Pin far to the right of center
-        d = _pin_direction(90, 40, self.BBOX_W, self.BBOX_H, "R0")
+        d = _pin_direction(90, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R0")
         assert d == "right"
 
     def test_left_edge(self):
-        d = _pin_direction(10, 40, self.BBOX_W, self.BBOX_H, "R0")
+        d = _pin_direction(10, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R0")
         assert d == "left"
 
     def test_top_edge(self):
         # Pin far above center (y < cy)
-        d = _pin_direction(50, 5, self.BBOX_W, self.BBOX_H, "R0")
+        d = _pin_direction(50, 5, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R0")
         assert d == "up"
 
     def test_bottom_edge(self):
-        d = _pin_direction(50, 75, self.BBOX_W, self.BBOX_H, "R0")
+        d = _pin_direction(50, 75, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R0")
         assert d == "down"
 
     def test_rotation_flips_direction(self):
         """A pin on the right edge under R0 should report left under R180."""
-        d_r0 = _pin_direction(90, 40, self.BBOX_W, self.BBOX_H, "R0")
-        d_r180 = _pin_direction(90, 40, self.BBOX_W, self.BBOX_H, "R180")
+        d_r0 = _pin_direction(90, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R0")
+        d_r180 = _pin_direction(
+            90, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R180"
+        )
         assert d_r0 == "right"
         assert d_r180 == "left"
 
     def test_r90_rotates_direction(self):
         """A pin on the right edge under R0 should report down under R90."""
-        d = _pin_direction(90, 40, self.BBOX_W, self.BBOX_H, "R90")
+        d = _pin_direction(90, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R90")
         assert d == "down"
 
     def test_mirror_m0_flips_horizontal(self):
         """M0 mirrors x-axis: right becomes left."""
-        d = _pin_direction(90, 40, self.BBOX_W, self.BBOX_H, "M0")
+        d = _pin_direction(90, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "M0")
         assert d == "left"
+
+    def test_centered_bbox(self):
+        """A symbol whose local bbox is centered on the origin (typical LTspice symbol).
+
+        Bbox spans (-50,-40) to (50,40); a pin at (0,-40) is on the top edge.
+        """
+        # Bug regression: previously, _pin_direction assumed bbox started at (0,0),
+        # so a pin at (0,-40) on a centered symbol was misclassified.
+        d = _pin_direction(0, -40, -50, -40, 100, 80, "R0")
+        assert d == "up"
 
     def test_center_pin_defaults(self):
         """A pin at the exact center picks a direction (not 'unknown')."""
-        d = _pin_direction(50, 40, self.BBOX_W, self.BBOX_H, "R0")
+        d = _pin_direction(50, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R0")
         assert d in ("up", "down", "left", "right")
 
     def test_zero_bbox_no_crash(self):
         """Zero-size bbox should not crash (max(w,1) guard)."""
-        d = _pin_direction(5, 5, 0, 0, "R0")
+        d = _pin_direction(5, 5, 0, 0, 0, 0, "R0")
         assert d in ("up", "down", "left", "right", "unknown")
