@@ -8,13 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from mcp import types
 
-
-def _text_of(result) -> str:
-    """Extract text from a TextContent result, asserting type."""
-    item = result.content[0]
-    assert isinstance(item, types.TextContent)
-    return item.text
-
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import ResultError, SimulationError
 from ltspice_mcp.lib import now
@@ -27,6 +20,13 @@ from ltspice_mcp.tools.simulation import (
     handle_check_job,
     handle_run_simulation,
 )
+
+
+def _text_of(result) -> str:
+    """Extract text from a TextContent result, asserting type."""
+    item = result.content[0]
+    assert isinstance(item, types.TextContent)
+    return item.text
 
 
 class FakeSim:

@@ -105,8 +105,17 @@ def compute_signal_stats(raw: RawRead, trace_name: str, step: int = 0) -> dict:
     Returns:
         Dictionary with stats and analysis_type field.
         All values are Python float (not numpy scalars).
+
+    Raises:
+        ValueError: If the requested trace contains no data points.
     """
     wave = raw.get_wave(trace_name, step=step)
+
+    if len(wave) == 0:
+        raise ValueError(
+            f"Signal '{trace_name}' has no data points at step {step}; "
+            "cannot compute statistics."
+        )
 
     # Detect if this is AC data (complex array)
     if np.iscomplexobj(wave):
@@ -152,9 +161,18 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
         Dictionary with trace name, requested/actual x values, and signal value.
         For AC data, includes magnitude_db and phase_deg.
         All values are Python float (not numpy scalars).
+
+    Raises:
+        ValueError: If the trace contains no data points.
     """
     axis = raw.get_axis(step=step)
     wave = raw.get_wave(trace_name, step=step)
+
+    if len(axis) == 0 or len(wave) == 0:
+        raise ValueError(
+            f"Signal '{trace_name}' has no data points at step {step}; "
+            "cannot query value."
+        )
 
     # Binary search for nearest point
     idx = np.searchsorted(axis, target_x)
@@ -210,6 +228,9 @@ def extract_operating_point(raw: RawRead) -> dict:
     for trace in trace_names:
         # Get first data point (OP has exactly one point, others we take first)
         wave = raw.get_wave(trace, step=0)
+        if len(wave) == 0:
+            # Skip traces with no data — happens on truncated/aborted runs
+            continue
         value = float(wave[0])
 
         # Categorize by trace name prefix
