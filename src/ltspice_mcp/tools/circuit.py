@@ -897,6 +897,16 @@ async def handle_add_component(arguments: AddComponentInput, state: SessionState
     rotation = arguments.rotation
     erot = _parse_rotation(rotation)
 
+    # Validate the symbol exists BEFORE touching the file. Saving a .asc with
+    # a dangling symbol name corrupts it — spicelib's AscEditor refuses to
+    # re-open such a file because it can't find the .asy on reset_netlist().
+    if get_symbol_info(symbol) is None:
+        raise NetlistError(
+            f"Symbol '{symbol}' not found in any configured symbol library. "
+            "Use ltspice_get_symbol_info to verify the symbol name, or "
+            "configure [schematic] symbol_paths in ltspice-mcp.toml."
+        )
+
     async with _editing_asc(asc_path, state) as editor:
         if reference in editor.components:
             raise NetlistError(
