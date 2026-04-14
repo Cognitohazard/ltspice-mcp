@@ -82,9 +82,21 @@ class TestConfigureAscEditor:
             assert result is True
 
 
+class _FakeSession:
+    """Stub MCP session — log/progress calls are no-ops."""
+
+    async def send_log_message(self, **kwargs):
+        pass
+
+    async def send_progress_notification(self, **kwargs):
+        pass
+
+
 class _FakeRequestContext:
     def __init__(self, state: SessionState):
         self.lifespan_context = {"state": state}
+        self.session = _FakeSession()
+        self.meta = None
 
 
 class _FakeServer:
