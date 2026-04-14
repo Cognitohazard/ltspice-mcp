@@ -14,6 +14,8 @@ from ltspice_mcp.errors import ResultError
 
 logger = logging.getLogger(__name__)
 
+_MAX_DIAGNOSTICS = 50
+
 # Error keywords to search for in log files (case-insensitive)
 ERROR_KEYWORDS = [
     "error",
@@ -247,13 +249,7 @@ def parse_success_summary(raw_file: Path, log_file: Path, duration: float) -> di
             if sim_type:
                 result["sim_type"] = sim_type
         except Exception:
-            # Fallback: try get_plot_name() method if available
-            try:
-                plot_name = getattr(raw_read, "get_plot_name", lambda: None)()
-                if plot_name:
-                    result["sim_type"] = plot_name
-            except Exception:
-                pass
+            pass
 
         # Get step count
         try:
@@ -272,9 +268,19 @@ def parse_success_summary(raw_file: Path, log_file: Path, duration: float) -> di
     if log_file.exists():
         try:
             diagnostics = extract_log_diagnostics(log_file)
-            result["warnings"] = diagnostics["warnings"][:5]
-            if diagnostics["errors"]:
-                result["errors"] = diagnostics["errors"][:5]
+            warnings = diagnostics["warnings"]
+            if len(warnings) > _MAX_DIAGNOSTICS:
+                result["warnings"] = warnings[:_MAX_DIAGNOSTICS]
+                result["warnings_truncated"] = len(warnings)
+            else:
+                result["warnings"] = warnings
+            errors = diagnostics["errors"]
+            if errors:
+                if len(errors) > _MAX_DIAGNOSTICS:
+                    result["errors"] = errors[:_MAX_DIAGNOSTICS]
+                    result["errors_truncated"] = len(errors)
+                else:
+                    result["errors"] = errors
         except Exception as e:
             logger.warning(f"Could not parse log file {log_file}: {e}")
 

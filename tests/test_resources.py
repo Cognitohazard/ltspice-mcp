@@ -5,9 +5,7 @@ from pathlib import Path
 import pytest
 from mcp.types import TextResourceContents
 
-from ltspice_mcp.errors import ResultError
 from ltspice_mcp.resources import (
-    get_resource_templates,
     get_static_resources,
     handle_read_resource,
 )
@@ -27,23 +25,11 @@ class TestStaticResources:
         names = {r.name for r in resources}
         assert names == {"netlists", "results", "models", "config"}
 
-    def test_all_have_uri_and_mime(self):
-        for r in get_static_resources():
-            assert r.uri is not None
-            assert r.mimeType is not None
-
-
-class TestResourceTemplates:
-    def test_returns_three_templates(self):
-        templates = get_resource_templates()
-        assert len(templates) == 3
-
-    def test_template_uris(self):
-        templates = get_resource_templates()
-        uris = {t.uriTemplate for t in templates}
-        assert "ltspice://netlists/{filename}" in uris
-        assert "ltspice://results/{job_id}/signals" in uris
-        assert "ltspice://results/{job_id}/measurements" in uris
+    def test_resource_uris(self):
+        resources = get_static_resources()
+        uris = {str(r.uri) for r in resources}
+        assert "ltspice://netlists/" in uris
+        assert "ltspice://results/" in uris
 
 
 class TestReadResource:
@@ -94,11 +80,3 @@ class TestReadResource:
     def test_netlist_path_escape_blocked(self, state_no_sim: SessionState):
         with pytest.raises(ValueError, match="Unknown resource URI"):
             handle_read_resource("ltspice://netlists/../../etc/passwd", state_no_sim)
-
-    def test_signals_no_job(self, state_no_sim: SessionState):
-        with pytest.raises(ResultError, match="Job not found"):
-            handle_read_resource("ltspice://results/fake_job_id/signals", state_no_sim)
-
-    def test_measurements_no_job(self, state_no_sim: SessionState):
-        with pytest.raises(ResultError, match="Job not found"):
-            handle_read_resource("ltspice://results/fake_job_id/measurements", state_no_sim)

@@ -11,6 +11,7 @@ from pydantic import Field
 from ltspice_mcp.errors import ResultError, SimulationError
 from ltspice_mcp.lib import now, services
 from ltspice_mcp.lib.log_parser import extract_error_context, parse_success_summary
+from ltspice_mcp.lib.mcp_logging import mcp_log
 from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
 from ltspice_mcp.state import SessionState, SimulationJob
 from ltspice_mcp.tools._base import (
@@ -152,6 +153,7 @@ async def handle_run_simulation(arguments: RunSimulationInput, state: SessionSta
     # leave an orphaned "running" job with no task to advance it
     runner = _get_or_create_runner(state)
     state.add_job(job)
+    await mcp_log("info", f"Simulation started: {netlist_path.name} ({default_simulator.__name__})")
     job.task = asyncio.create_task(runner.start_simulation(netlist_path, job, state))
 
     # Decide sync vs async
@@ -235,10 +237,12 @@ async def _wait_for_completion(
                 f"raw_file: {job.raw_file}, log_file: {job.log_file}"
             )
         summary = parse_success_summary(job.raw_file, job.log_file, duration)
+        await mcp_log("info", f"Simulation completed: {job.netlist.name} ({duration:.1f}s)")
         return _format_success_response(job.job_id, summary, fmt)
     elif job.status == "failed":
         # Extract error context
         error_msg = job.error or "Unknown error"
+        await mcp_log("error", f"Simulation failed: {job.netlist.name} — {job.error or 'unknown'}")
         if job.log_file and job.log_file.exists():
             log_excerpt = extract_error_context(job.log_file, max_lines=20)
             error_msg = f"{error_msg}\n\nLog excerpt:\n{log_excerpt}"

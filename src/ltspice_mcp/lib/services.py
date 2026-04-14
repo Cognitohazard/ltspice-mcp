@@ -287,8 +287,8 @@ def extract_asc_info(editor: AscEditor, file_path: Path) -> dict[str, Any]:
         )
 
     label_data = [
-        {"text": label.text, "x": label.coord.X, "y": label.coord.Y}
-        for label in editor.labels
+        {"text": lbl.text, "x": int(lbl.coord.X), "y": int(lbl.coord.Y)}
+        for lbl in editor.labels
     ]
     directive_data = [directive.text for directive in editor.directives]
 
