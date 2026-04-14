@@ -1,19 +1,35 @@
 """SweepRunner wrapper for spicelib SimStepper with asyncio integration."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from spicelib import SpiceEditor
 from spicelib.sim.sim_runner import SimRunner
-from spicelib.sim.sim_stepping import SimStepper
 
 from ltspice_mcp.errors import BatchJobError
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.sweep_utils import generate_sweep_range
 from ltspice_mcp.state import BatchJob, SessionState
+
+if TYPE_CHECKING:
+    from spicelib.sim.sim_stepping import SimStepper
+
+
+def _create_stepper(editor: object, runner: SimRunner) -> SimStepper:
+    """Create a SimStepper wrapping an editor and runner.
+
+    spicelib types SimStepper's first arg as abstract BaseEditor —
+    the type: ignore is isolated here.
+    """
+    from spicelib.sim.sim_stepping import SimStepper
+
+    return SimStepper(editor, runner)  # type: ignore[reportAbstractUsage, reportArgumentType]
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +139,7 @@ class SweepRunner:
             self._active_runners[batch_job.job_id] = runner
 
             # Create SimStepper wrapping editor + runner
-            stepper = SimStepper(editor, runner)  # type: ignore[abstract]
+            stepper = _create_stepper(editor, runner)
 
             # Add each sweep dimension
             if batch_job.sweep_config is None:

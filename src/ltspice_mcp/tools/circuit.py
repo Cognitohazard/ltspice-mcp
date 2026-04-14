@@ -44,6 +44,36 @@ from ltspice_mcp.tools._base import (
     text_response,
 )
 
+
+def _create_component(
+    editor: AscEditor,
+    reference: str,
+    symbol: str,
+    x: int,
+    y: int,
+    rotation: ERotation,
+    *,
+    value: str | None = None,
+    attributes: dict[str, str] | None = None,
+) -> None:
+    """Create and add a SchematicComponent to an AscEditor.
+
+    Wraps the fragile pattern of constructing a blank SchematicComponent
+    then manually setting .reference, .symbol, .position, .rotation.
+    """
+    comp = SchematicComponent(editor, "")
+    comp.reference = reference
+    comp.symbol = symbol  # pyright: ignore[reportAttributeAccessIssue]
+    comp.position = Point(x, y)
+    comp.rotation = rotation
+    if value is not None:
+        comp.attributes["Value"] = value
+    if attributes:
+        for attr_name, attr_val in attributes.items():
+            comp.attributes[attr_name] = attr_val
+    editor.add_component(comp)
+
+
 # Per-file locks to prevent concurrent edits to the same circuit file.
 # Bounded to avoid unbounded growth; only evicts *unheld* locks.
 _MAX_EDIT_LOCKS = 64
@@ -1000,18 +1030,10 @@ async def handle_add_component(arguments: AddComponentInput, state: SessionState
                 "or ltspice_remove_component to remove it first."
             )
 
-        comp = SchematicComponent(editor, "")
-        comp.reference = reference
-        comp.symbol = symbol  # pyright: ignore[reportAttributeAccessIssue]
-        comp.position = Point(x, y)
-        comp.rotation = erot
-        if value is not None:
-            comp.attributes["Value"] = value
-        if arguments.attributes:
-            for attr_name, attr_val in arguments.attributes.items():
-                comp.attributes[attr_name] = attr_val
-
-        editor.add_component(comp)
+        _create_component(
+            editor, reference, symbol, x, y, erot,
+            value=value, attributes=arguments.attributes,
+        )
 
     result = f"Added {reference} ({symbol}) at ({x},{y})"
     if value is not None:
@@ -1218,7 +1240,6 @@ async def handle_get_component_info(
 
     pos, erot = editor.get_component_position(reference)
     rot_str = erot.name if erot else "R0"
-    # Access the SchematicComponent object for symbol and attributes
     comp = editor.components[reference]
     symbol = comp.symbol
 
@@ -1376,8 +1397,7 @@ async def handle_add_net_label(
                     )
                     break
 
-        label = Text(coord=Point(x, y), text=net, type=TextTypeEnum.LABEL)
-        editor.labels.append(label)
+        editor.labels.append(Text(coord=Point(x, y), text=net, type=TextTypeEnum.LABEL))
 
     result += f"Added {label_desc} at ({x},{y})"
     return text_response(result)

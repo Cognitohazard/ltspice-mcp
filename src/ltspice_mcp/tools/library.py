@@ -6,6 +6,7 @@ from mcp import types
 from pydantic import Field
 
 from ltspice_mcp.errors import LibraryError
+from ltspice_mcp.lib.mcp_logging import mcp_log
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     PAGINATION_SCHEMA,
@@ -224,6 +225,7 @@ async def handle_load_library(arguments: LoadLibraryInput, state: SessionState) 
         f"{summary['models']} models, {summary['subcircuits']} subcircuits "
         f"from {summary['files_loaded']} file(s)"
     )
+    await mcp_log("info", f"Library loaded: {result}")
 
     return text_response(result)
 

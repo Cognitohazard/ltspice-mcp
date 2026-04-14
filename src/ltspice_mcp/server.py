@@ -15,6 +15,7 @@ from pydantic import AnyUrl, ValidationError
 from ltspice_mcp import errors as _err
 from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
+from ltspice_mcp.lib.mcp_logging import mcp_log, set_log_fn, set_progress_fn
 from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.resources import (
     get_resource_templates,
@@ -85,7 +86,6 @@ def _configure_asc_editor(config: ServerConfig, available: dict) -> bool:
     # 4. Windows native (or Linux with Wine) — spicelib handles it
     try:
         AscEditor.prepare_for_simulator(ltspice_cls)
-        # Verify it actually found paths
         if AscEditor.simulator_lib_paths or AscEditor.custom_lib_paths:
             logger.info("AscEditor configured via prepare_for_simulator()")
             return True
@@ -303,6 +303,33 @@ async def call_tool(name: str, arguments: dict | None):
     if registered is None:
         raise ValueError(f"Unknown tool: {name}")
 
+    # Set up MCP protocol logging and progress for this request.
+    # Handlers and services call mcp_log() / mcp_progress() which read
+    # these ContextVars — no server/session reference needed downstream.
+    session = server.request_context.session
+
+    async def _log(level: str, msg: str) -> None:
+        await session.send_log_message(level=level, data=msg, logger="ltspice-mcp")  # type: ignore[arg-type]
+
+    set_log_fn(_log)
+
+    # Progress: only set up if client provided a progressToken
+    meta = server.request_context.meta
+    progress_token = meta.progressToken if meta else None
+    if progress_token is not None:
+
+        async def _progress(completed: float, total: float | None = None, msg: str | None = None) -> None:
+            await session.send_progress_notification(
+                progress_token=progress_token,  # type: ignore[arg-type]
+                progress=completed,
+                total=total,
+                message=msg,
+            )
+
+        set_progress_fn(_progress)
+    else:
+        set_progress_fn(None)
+
     # Invoke handler — enrich known errors with actionable guidance.
     # Exceptions propagate to the MCP SDK which sets isError=True.
     # Input validation (Pydantic model_validate) is handled by the registry
@@ -312,6 +339,7 @@ async def call_tool(name: str, arguments: dict | None):
     except ValidationError as e:
         raise ValueError(f"Invalid arguments for {name}: {e}") from None
     except PathSecurityError as e:
+        await mcp_log("warning", f"Path security violation in {name}: {e}")
         allowed = ", ".join(str(p) for p in state.config.allowed_paths)
         raise PathSecurityError(
             f"{e}\n\nAllowed paths: {allowed}\n"
