@@ -102,11 +102,8 @@ class MonteCarloRunner:
 
         def execute_montecarlo() -> None:
             """Execute Montecarlo in thread pool (blocking call - safe in worker thread)."""
-            # Pass Linux path — WSL path conversion is handled by the simulator
-            netlist_path = batch_job.netlist
-            netlist_str = str(netlist_path)
+            netlist_str = str(batch_job.netlist)
 
-            # Create SimRunner for this Monte Carlo execution
             runner = SimRunner(
                 simulator=self.simulator_class,
                 output_folder=str(self.output_folder),
@@ -115,8 +112,6 @@ class MonteCarloRunner:
             )
             self._active_runners[batch_job.job_id] = runner
 
-            # Create Montecarlo - takes circuit_file str (not SpiceEditor)
-            # It manages its own editor internally
             if batch_job.mc_config is None:
                 raise BatchJobError(
                     f"Monte Carlo job {batch_job.job_id} has no Monte Carlo configuration"
@@ -124,14 +119,10 @@ class MonteCarloRunner:
             mc_config = batch_job.mc_config
             mc = Montecarlo(netlist_str, runner)
 
-            # Apply type-level tolerances first (prefix like "R", "C", "L")
-            # These set defaults for all components of that type
             for ref, (tol, dist) in mc_config.type_tolerances.items():
                 mc.set_tolerance(ref, tol, distribution=dist)
                 logger.debug(f"MC job {batch_job.job_id}: set type tolerance {ref}={tol} ({dist})")
 
-            # Apply component-level overrides (specific refs like "R1", "C3")
-            # These override the type-level defaults for individual components
             for ref, (tol, dist) in mc_config.component_overrides.items():
                 mc.set_tolerance(ref, tol, distribution=dist)
                 logger.debug(
@@ -145,7 +136,6 @@ class MonteCarloRunner:
                 f"component_overrides={list(mc_config.component_overrides.keys())}"
             )
 
-            # Execute all Monte Carlo runs (blocks until complete - safe in thread pool)
             mc.run_analysis(
                 callback=run_completion_callback,
                 num_runs=batch_job.total_runs,
@@ -159,7 +149,6 @@ class MonteCarloRunner:
                     state,
                 )
 
-        # Submit to thread pool using asyncio.to_thread (non-blocking)
         try:
             batch_job.status = "running"
             await asyncio.to_thread(execute_montecarlo)
@@ -244,7 +233,6 @@ class MonteCarloRunner:
             logger.warning(f"MC completion for unknown batch job {job_id}")
             return
 
-        # Guard: skip if already cancelled (partial results preserved)
         if batch_job.status == "cancelled":
             logger.debug(
                 f"MC job {job_id} was cancelled — preserving "
@@ -252,7 +240,6 @@ class MonteCarloRunner:
             )
             return
 
-        # Mark job as completed
         batch_job.status = "completed"
         batch_job.completed_at = now()
         batch_job.done_event.set()
@@ -284,7 +271,6 @@ class MonteCarloRunner:
             except Exception as e:
                 logger.warning(f"Error killing Monte Carlo job {batch_job.job_id}: {e}")
 
-        # Update job state - partial results preserved (run_results keeps completed entries)
         batch_job.status = "cancelled"
         batch_job.completed_at = now()
         batch_job.done_event.set()

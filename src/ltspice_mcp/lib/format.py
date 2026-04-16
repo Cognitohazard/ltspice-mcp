@@ -8,7 +8,7 @@ Used throughout the analysis tools to accept human-friendly frequency and time v
 # (LTspice, ngspice, qspice all treat suffixes as case-insensitive).
 # Order matters: longer suffixes must come first so 'Meg' matches before 'm'.
 # Both 'm' and 'M' mean milli per SPICE convention; mega is spelled 'Meg'.
-SCALE_FACTORS: list[tuple[str, float]] = [
+_SCALE_FACTORS: list[tuple[str, float]] = [
     ("meg", 1e6),
     ("t", 1e12),
     ("g", 1e9),
@@ -47,7 +47,7 @@ def parse_spice_value(s: str) -> float:
 
     # Case-insensitive suffix match (longest suffix first)
     s_lower = s.lower()
-    for suffix, multiplier in SCALE_FACTORS:
+    for suffix, multiplier in _SCALE_FACTORS:
         if s_lower.endswith(suffix):
             base = s[: -len(suffix)]
             try:
@@ -57,5 +57,5 @@ def parse_spice_value(s: str) -> float:
 
     raise ValueError(
         f"Cannot parse '{s}' as SPICE value. "
-        f"Expected number or number with suffix: {', '.join(suf for suf, _ in SCALE_FACTORS)}"
+        f"Expected number or number with suffix: {', '.join(suf for suf, _ in _SCALE_FACTORS)}"
     )
