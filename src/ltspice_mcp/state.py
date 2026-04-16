@@ -183,9 +183,6 @@ class SessionState:
     """MCP tool definitions filtered by the active tool profile."""
     tool_dispatch: dict[str, "RegisteredTool"] = field(default_factory=dict)
     """Tool name → registered tool metadata, filtered by the active tool profile."""
-    asc_editor_available: bool = False
-    """Whether AscEditor is configured with symbol library paths.
-    False on Linux without LTspice (no .asy files available)."""
     sweep_configs: dict[str, SweepConfig] = field(default_factory=dict)
     mc_configs: dict[str, MonteCarloConfig] = field(default_factory=dict)
     batch_jobs: dict[str, BatchJob] = field(default_factory=dict)

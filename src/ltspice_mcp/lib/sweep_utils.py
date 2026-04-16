@@ -11,33 +11,28 @@ import uuid
 import numpy as np
 
 
-def generate_batch_job_id(job_type: str) -> str:
-    """Generate unique batch job ID.
+def generate_id(prefix: str) -> str:
+    """Generate a unique ID with the given prefix.
 
-    Format: {job_type}_{timestamp}_{uuid_short}
-    Mirrors the generate_job_id() pattern in sim_runner.py.
+    Format: {prefix}_{timestamp}_{uuid_short}
 
     Args:
-        job_type: Type of batch job (e.g. "sweep", "montecarlo")
+        prefix: ID prefix (e.g. "sim", "sweep", "montecarlo", "mc")
 
     Returns:
-        Job ID string (e.g., "sweep_1707916800_a3f7b2c4")
+        ID string (e.g., "sweep_1707916800_a3f7b2c4")
     """
-    return f"{job_type}_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    return f"{prefix}_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+
+
+def generate_batch_job_id(job_type: str) -> str:
+    """Generate unique batch job ID."""
+    return generate_id(job_type)
 
 
 def generate_config_id(config_type: str) -> str:
-    """Generate unique configuration ID for sweep or Monte Carlo configs.
-
-    Format: {config_type}_{timestamp}_{uuid_short}
-
-    Args:
-        config_type: Type of config (e.g. "sweep", "mc")
-
-    Returns:
-        Config ID string (e.g., "sweep_1707916800_b1e2d3f4")
-    """
-    return f"{config_type}_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    """Generate unique configuration ID for sweep or Monte Carlo configs."""
+    return generate_id(config_type)
 
 
 def generate_sweep_range(
@@ -77,13 +72,11 @@ def generate_sweep_range(
                     or if scale is not "linear" or "log",
                     or if log scale receives non-positive start/stop values.
     """
-    # Enforce mutual exclusivity
     if step is None and points is None:
         raise ValueError("Either step or points must be provided, not neither.")
     if step is not None and points is not None:
         raise ValueError("step and points are mutually exclusive — provide one, not both.")
 
-    # Validate point count up front (numpy gives a confusing error otherwise)
     if points is not None and points < 1:
         raise ValueError(f"points must be >= 1 (got points={points}).")
 
@@ -94,15 +87,15 @@ def generate_sweep_range(
             assert step is not None
             if step == 0:
                 raise ValueError("Linear scale step must be != 0.")
-            # Step direction must match the (start → stop) direction, otherwise
-            # np.arange silently returns an empty array.
+            # np.arange silently returns an empty array on direction mismatch
             if (stop > start and step < 0) or (stop < start and step > 0):
                 raise ValueError(
                     f"Linear sweep step direction does not match range: "
                     f"start={start}, stop={stop}, step={step}. "
                     f"Use step>0 for ascending ranges and step<0 for descending."
                 )
-            # Epsilon guard: extend stop slightly so np.arange includes stop
+            # Epsilon guard: extend stop slightly so np.arange includes the endpoint.
+            # Scales with step magnitude to avoid relative precision issues.
             arr = np.arange(start, stop + step * 1e-10, step)
     elif scale == "log":
         if start <= 0 or stop <= 0:
@@ -114,8 +107,8 @@ def generate_sweep_range(
             arr = np.geomspace(start, stop, int(points))
         else:
             assert step is not None
-            # step is the multiplicative factor per step; must be > 0 and != 1
-            # (step=1 would be a no-op multiplier and divide by zero in log(1))
+            # step is the multiplicative factor per step (geometric series);
+            # step=1 would divide by zero in log(1)
             if step <= 0:
                 raise ValueError(f"Log scale step must be positive (got step={step}).")
             if step == 1:
@@ -127,5 +120,4 @@ def generate_sweep_range(
     else:
         raise ValueError(f"Unknown scale '{scale}'. Expected 'linear' or 'log'.")
 
-    # Convert all values to Python float for JSON serialization
     return [float(v) for v in arr]

@@ -118,7 +118,7 @@ AscEditor requires `.asy` symbol library files. Platform handling in `server.py:
 | WSL + LTspice on Windows | `wsl.get_ltspice_lib_paths()` resolves `%LOCALAPPDATA%` via `cmd.exe` |
 | Any platform without LTspice | No .asc support (no .asy symbol files available) |
 
-Users can override via `[schematic] symbol_paths` in TOML or `LTSPICE_MCP_SYMBOL_PATHS` env var. `state.asc_editor_available` tracks whether .asc editing is usable.
+Users can override via `[schematic] symbol_paths` in TOML or `LTSPICE_MCP_SYMBOL_PATHS` env var.
 
 ### Key Patterns
 

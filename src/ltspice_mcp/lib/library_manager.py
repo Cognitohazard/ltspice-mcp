@@ -75,17 +75,13 @@ class LibraryManager:
         candidates = []
 
         if is_wsl():
-            # Check Windows paths via /mnt/c
-            # Try to find user directories
             users_dir = Path("/mnt/c/Users")
             if users_dir.exists():
                 for user_path in users_dir.iterdir():
                     if user_path.is_dir():
-                        # Check Documents/LTspiceXVII/lib/
                         lib_path = user_path / "Documents/LTspiceXVII/lib"
                         if lib_path.exists():
                             candidates.append(lib_path)
-                        # Check AppData/Local/Programs/ADI/LTspice/lib/
                         lib_path = user_path / "AppData/Local/Programs/ADI/LTspice/lib"
                         if lib_path.exists():
                             candidates.append(lib_path)
@@ -109,11 +105,9 @@ class LibraryManager:
             ]
             candidates.extend(wine_prefixes)
 
-        # Find .lib files in candidate directories
         lib_files = []
         for candidate in candidates:
             if candidate.exists() and candidate.is_dir():
-                # Recursively find .lib files
                 for lib_file in candidate.rglob("*.lib"):
                     if lib_file.is_file():
                         lib_files.append(lib_file)
@@ -129,15 +123,12 @@ class LibraryManager:
         """
         candidates = []
 
-        # Check SPICE_LIB_DIR environment variable first
         if env_path := os.getenv("SPICE_LIB_DIR"):
             path = Path(env_path)
             if path.exists() and path.is_dir():
                 candidates.append(path)
 
-        # Platform-specific default paths
         if sys.platform == "win32" or is_wsl():
-            # Windows/WSL - check common install locations
             if is_wsl():
                 candidates.extend(
                     [
@@ -153,7 +144,6 @@ class LibraryManager:
                     ]
                 )
 
-        # Linux paths (native or WSL)
         candidates.extend(
             [
                 Path("/usr/share/ngspice"),
@@ -162,11 +152,9 @@ class LibraryManager:
             ]
         )
 
-        # Find library files in candidate directories
         lib_files = []
         for candidate in candidates:
             if candidate.exists() and candidate.is_dir():
-                # Look for models in lib subdirectory
                 lib_dir = candidate / "lib"
                 if lib_dir.exists():
                     for pattern in ["*.lib", "*.mod"]:

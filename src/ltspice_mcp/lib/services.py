@@ -21,7 +21,7 @@ from ltspice_mcp.lib.batch_results import (
     get_progress_snapshot,
 )
 from ltspice_mcp.lib.log_parser import parse_measurements
-from ltspice_mcp.lib.raw_parser import get_step_count, get_trace_names
+from ltspice_mcp.lib.raw_parser import get_step_count
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
 
 Editor = AscEditor | SpiceEditor
@@ -92,26 +92,6 @@ def resolve_log_file(job_id: str, state: SessionState) -> Path:
     return _resolve_result_file(job_id, state, "log_file", "log")
 
 
-def job_to_dict(job: SimulationJob) -> dict[str, Any]:
-    """Convert a simulation job to structured status data."""
-    duration = None
-    if job.completed_at is not None:
-        duration = (job.completed_at - job.started_at).total_seconds()
-
-    return {
-        "job_id": job.job_id,
-        "status": job.status,
-        "netlist": str(job.netlist),
-        "simulator": job.simulator,
-        "started_at": job.started_at.isoformat(),
-        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
-        "duration": duration,
-        "raw_file": str(job.raw_file) if job.raw_file else None,
-        "log_file": str(job.log_file) if job.log_file else None,
-        "error": job.error,
-    }
-
-
 def load_raw(raw_path: Path, state: SessionState) -> RawRead:
     """Load and cache a ``RawRead`` instance."""
     try:
@@ -132,7 +112,7 @@ def load_raw(raw_path: Path, state: SessionState) -> RawRead:
 
 def validate_signal(raw: RawRead, signal: str) -> None:
     """Validate that a signal exists in a raw result."""
-    trace_names = get_trace_names(raw)
+    trace_names = raw.get_trace_names()
     if signal not in trace_names:
         available = ", ".join(trace_names[:10])
         if len(trace_names) > 10:
@@ -151,7 +131,7 @@ def load_signal_names(job_id: str, state: SessionState) -> list[str]:
     """Load signal names from a completed job."""
     raw_path = resolve_raw_file(job_id, state)
     raw = load_raw(raw_path, state)
-    return get_trace_names(raw)
+    return raw.get_trace_names()
 
 
 def load_measurements(

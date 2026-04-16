@@ -69,18 +69,6 @@ def is_ac_analysis(sim_type: str) -> bool:
     return bool(_RE_AC.search(sim_type))
 
 
-def get_trace_names(raw: RawRead) -> list[str]:
-    """Get list of all trace/signal names in the result file.
-
-    Args:
-        raw: Loaded RawRead instance
-
-    Returns:
-        List of trace names (e.g., ["time", "V(out)", "I(R1)"])
-    """
-    return raw.get_trace_names()
-
-
 def get_step_count(raw: RawRead) -> int:
     """Get number of simulation steps (for .step directives).
 
@@ -182,7 +170,6 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
     # Binary search for nearest point
     idx = np.searchsorted(axis, target_x)
 
-    # Handle edge cases and find closest point
     if idx == 0:
         closest_idx = 0
     elif idx == len(axis):
@@ -193,7 +180,6 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
 
     actual_x = float(axis[closest_idx])
 
-    # Build result based on data type
     result = {
         "trace": trace_name,
         "requested_x": float(target_x),
@@ -201,12 +187,10 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
     }
 
     if np.iscomplexobj(wave):
-        # AC data - return magnitude and phase
         value = wave[closest_idx]
         result["magnitude_db"] = float(20 * np.log10(np.abs(value)))
         result["phase_deg"] = float(np.angle(value, deg=True))
     else:
-        # Real data - return raw value
         result["value"] = float(wave[closest_idx])
 
     return result
@@ -225,16 +209,14 @@ def extract_operating_point(raw: RawRead) -> dict:
         Dictionary with 'voltages' and 'currents' dicts mapping trace names to values.
         All values are Python float.
     """
-    trace_names = get_trace_names(raw)
+    trace_names = raw.get_trace_names()
 
     voltages = {}
     currents = {}
 
     for trace in trace_names:
-        # Get first data point (OP has exactly one point, others we take first)
         wave = raw.get_wave(trace, step=0)
         if len(wave) == 0:
-            # Skip traces with no data — happens on truncated/aborted runs
             continue
         value = float(wave[0])
 
@@ -271,7 +253,6 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     axis = raw.get_axis(step=step)
     wave = raw.get_wave(trace_name, step=step)
 
-    # Convert to magnitude (dB) and unwrapped phase (degrees)
     magnitude_db = _safe_magnitude_db(wave)
     phase_rad = np.unwrap(np.angle(wave))
     phase_deg = np.rad2deg(phase_rad)
@@ -283,9 +264,7 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
         "gain_margin": None,
     }
 
-    # 1. -3dB bandwidth
     try:
-        # Find max magnitude
         max_db = np.max(magnitude_db)
         target_db = max_db - 3.0
 
@@ -293,32 +272,25 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
         if magnitude_db[0] == max_db or np.all(np.diff(magnitude_db) <= 0):
             target_db = magnitude_db[0] - 3.0
 
-        # Find first crossing below -3dB
         crossings = np.where(magnitude_db < target_db)[0]
         if len(crossings) > 0:
             metrics["bandwidth_3db"] = float(axis[crossings[0]])
     except Exception:
         pass
 
-    # 2. Unity-gain frequency (0dB crossing)
+    # Unity-gain frequency (0dB crossing) + phase margin
     try:
-        # Find where magnitude crosses 0dB from positive to negative
         sign_changes = np.diff(np.sign(magnitude_db))
-        # Look for -2 (positive to negative crossing)
         crossings = np.where(sign_changes < 0)[0]
         if len(crossings) > 0:
-            # Use first crossing
             idx = crossings[0]
-            # Linear interpolation for better accuracy
             if idx + 1 < len(axis):
                 x0, x1 = axis[idx], axis[idx + 1]
                 y0, y1 = magnitude_db[idx], magnitude_db[idx + 1]
-                # Interpolate to find exact 0dB crossing
                 if y1 != y0:
                     unity_freq = x0 + (0 - y0) * (x1 - x0) / (y1 - y0)
                     metrics["unity_gain_freq"] = float(unity_freq)
 
-                    # 3. Phase margin at unity-gain frequency
                     ugf_idx = np.searchsorted(axis, unity_freq)
                     if ugf_idx < len(phase_deg):
                         phase_at_ugf = phase_deg[ugf_idx]
@@ -326,15 +298,12 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     except Exception:
         pass
 
-    # 4. Gain margin at -180 degree phase crossing
+    # Gain margin at -180 degree phase crossing
     try:
-        # Find where phase crosses -180 degrees
         phase_target = -180
-        # Look for crossings near -180
         crossings = np.where((phase_deg[:-1] > phase_target) & (phase_deg[1:] <= phase_target))[0]
         if len(crossings) > 0:
             idx = crossings[0]
-            # Read gain at that frequency
             gain_at_crossing = magnitude_db[idx]
             metrics["gain_margin"] = float(-gain_at_crossing)
     except Exception:
@@ -358,18 +327,13 @@ def build_simulation_summary(
         optional measurements, warnings, Fourier data, and duration.
         All numpy types converted to Python float.
     """
-    # Get basic metadata
     sim_type = detect_sim_type(raw)
-    trace_names = get_trace_names(raw)
+    trace_names = raw.get_trace_names()
     step_count = get_step_count(raw)
 
-    # Get axis to determine range and point count
     axis = raw.get_axis(step=0)
     point_count = len(axis)
 
-    # Word-boundary matching avoids false positives like "DC transfer
-    # characteristic" being classified as AC because "characteristic"
-    # contains the substring "AC".
     range_info: dict = {}
     if point_count > 0:
         if _RE_TRANSIENT.search(sim_type):
@@ -392,14 +356,11 @@ def build_simulation_summary(
         "signals": trace_names,
     }
 
-    # Add optional data from log file
     if log_path and log_path.exists():
-        # Create a single LTSpiceLogReader for both measurements and Fourier
         log_reader: LTSpiceLogReader | None = None
         with contextlib.suppress(Exception):
             log_reader = LTSpiceLogReader(str(log_path))
 
-        # Parse measurements
         if log_reader is not None:
             try:
                 meas_data = parse_measurements(log_path, reader=log_reader)
@@ -408,7 +369,6 @@ def build_simulation_summary(
             except Exception:
                 pass
 
-        # Parse warnings and errors from log
         try:
             diagnostics = extract_log_diagnostics(log_path)
             if diagnostics["warnings"]:
@@ -418,7 +378,6 @@ def build_simulation_summary(
         except Exception:
             pass
 
-        # Parse Fourier data
         if log_reader is not None:
             try:
                 fourier_data = parse_fourier_data(log_path, reader=log_reader)
@@ -427,7 +386,6 @@ def build_simulation_summary(
             except Exception:
                 pass
 
-    # Add duration if provided
     if duration is not None:
         summary["duration"] = float(duration)
 
