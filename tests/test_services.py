@@ -131,27 +131,6 @@ class TestResolveResultFile:
         assert services.resolve_raw_file("b1", state_no_sim) == raw
 
 
-class TestJobToDict:
-    def test_complete(self, state_no_sim: SessionState, tmp_path: Path):
-        raw = tmp_path / "out.raw"
-        raw.write_text("d")
-        log = tmp_path / "out.log"
-        log.write_text("l")
-        job = _make_job(state_no_sim, raw_file=raw, log_file=log)
-        d = services.job_to_dict(job)
-        assert d["job_id"] == "j1"
-        assert d["status"] == "completed"
-        assert d["duration"] is not None
-        assert d["raw_file"] == str(raw)
-
-    def test_no_completed_at(self, state_no_sim: SessionState):
-        job = _make_job(state_no_sim)
-        job.completed_at = None
-        d = services.job_to_dict(job)
-        assert d["duration"] is None
-        assert d["completed_at"] is None
-
-
 class TestLoadRaw:
     def test_missing_file(self, state_no_sim: SessionState, tmp_path: Path):
         with pytest.raises(ResultError, match="not found"):

@@ -15,7 +15,7 @@ from pydantic import AnyUrl, ValidationError
 from ltspice_mcp import errors as _err
 from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
-from ltspice_mcp.lib.mcp_logging import mcp_log, set_log_fn, set_progress_fn
+from ltspice_mcp.lib.mcp_logging import mcp_log, set_log_fn
 from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.resources import (
     get_resource_templates,
@@ -35,7 +35,7 @@ def _get_state(server_: Server) -> SessionState:
         raise RuntimeError(f"Session state not available: {e}") from e
 
 
-def _configure_asc_editor(config: ServerConfig, available: dict) -> bool:
+def _configure_asc_editor(config: ServerConfig, available: dict) -> None:
     """Configure AscEditor library paths for .asc schematic support.
 
     Handles four platform scenarios:
@@ -46,9 +46,6 @@ def _configure_asc_editor(config: ServerConfig, available: dict) -> bool:
 
     Users can override auto-detection via config.symbol_paths or
     LTSPICE_MCP_SYMBOL_PATHS env var for non-standard installs.
-
-    Returns:
-        True if AscEditor is usable (symbol library paths found).
     """
     from spicelib.editor.asc_editor import AscEditor
 
@@ -58,14 +55,14 @@ def _configure_asc_editor(config: ServerConfig, available: dict) -> bool:
         if valid:
             AscEditor.custom_lib_paths = valid
             logger.info(f"AscEditor symbol paths from config: {valid}")
-            return True
+            return
         logger.warning(f"Configured symbol_paths do not exist: {config.symbol_paths}")
 
     # 2. No LTspice detected → no .asc support (Linux native, WSL + ngspice only)
     ltspice_cls = available.get("ltspice")
     if ltspice_cls is None:
         logger.info("No LTspice detected — .asc schematic editing disabled")
-        return False
+        return
 
     # 3. WSL + LTspice on Windows — spicelib can't auto-detect via /mnt/c/
     from ltspice_mcp.lib.wsl import get_ltspice_lib_paths, is_wsl
@@ -75,25 +72,23 @@ def _configure_asc_editor(config: ServerConfig, available: dict) -> bool:
         if lib_paths:
             AscEditor.custom_lib_paths = lib_paths
             logger.info(f"AscEditor WSL library paths: {lib_paths}")
-            return True
+            return
         logger.warning(
             "LTspice detected but symbol library not found on WSL. "
             "Set [schematic] symbol_paths in ltspice-mcp.toml or "
             "LTSPICE_MCP_SYMBOL_PATHS env var."
         )
-        return False
+        return
 
     # 4. Windows native (or Linux with Wine) — spicelib handles it
     try:
         AscEditor.prepare_for_simulator(ltspice_cls)
         if AscEditor.simulator_lib_paths or AscEditor.custom_lib_paths:
             logger.info("AscEditor configured via prepare_for_simulator()")
-            return True
+            return
         logger.warning("prepare_for_simulator() found no library paths")
-        return False
     except Exception as e:
         logger.warning(f"AscEditor prepare_for_simulator failed: {e}")
-        return False
 
 
 class _ErrorHint(NamedTuple):
@@ -198,9 +193,6 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     Raises:
         Various exceptions during config/simulator setup (allowed to propagate)
     """
-    # 1. Load config (generates default TOML if missing)
-    # Config path resolution is handled by ServerConfig.load():
-    #   --config CLI arg sets $LTSPICE_MCP_CONFIG → env var → CWD fallback
     config = ServerConfig.load()
     config_file = config.config_path
 
@@ -212,7 +204,6 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
         generate_default_config(config_file)
         config_source = f"{config_file} (generated)"
 
-    # 2. Setup logging to stderr
     logging.basicConfig(
         level=getattr(logging, config.log_level.upper()),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -221,17 +212,11 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     )
     logger = logging.getLogger("ltspice_mcp.server")
 
-    # 3. Detect simulators (pass config so simulator_exe override is applied)
     available = detect_simulators(config)
+    _configure_asc_editor(config, available)
 
-    # 4. Configure AscEditor library paths for .asc schematic support
-    asc_available = _configure_asc_editor(config, available)
-
-    # 5. Create session state
     state = SessionState.create(config, available)
-    state.asc_editor_available = asc_available
 
-    # 6. Log verbose startup summary
     logger.info("=== LTSpice MCP Server Starting ===")
     logger.info("Server name: ltspice-mcp")
     logger.info(f"Config source: {config_source}")
@@ -269,16 +254,13 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 
     logger.info("Startup complete. Server ready for MCP connections.")
 
-    # 7. Yield state to server
     try:
         yield {"state": state}
     finally:
-        # 8. Cleanup on shutdown
         await state.shutdown()
         logger.info("Server shutdown complete")
 
 
-# Create server instance with lifespan
 server = Server("ltspice-mcp")
 server.lifespan = server_lifespan
 
@@ -303,32 +285,15 @@ async def call_tool(name: str, arguments: dict | None):
     if registered is None:
         raise ValueError(f"Unknown tool: {name}")
 
-    # Set up MCP protocol logging and progress for this request.
-    # Handlers and services call mcp_log() / mcp_progress() which read
-    # these ContextVars — no server/session reference needed downstream.
+    # Set up MCP protocol logging for this request.
+    # Handlers and services call mcp_log() which reads this ContextVar —
+    # no server/session reference needed downstream.
     session = server.request_context.session
 
     async def _log(level: str, msg: str) -> None:
         await session.send_log_message(level=level, data=msg, logger="ltspice-mcp")  # type: ignore[arg-type]
 
     set_log_fn(_log)
-
-    # Progress: only set up if client provided a progressToken
-    meta = server.request_context.meta
-    progress_token = meta.progressToken if meta else None
-    if progress_token is not None:
-
-        async def _progress(completed: float, total: float | None = None, msg: str | None = None) -> None:
-            await session.send_progress_notification(
-                progress_token=progress_token,  # type: ignore[arg-type]
-                progress=completed,
-                total=total,
-                message=msg,
-            )
-
-        set_progress_fn(_progress)
-    else:
-        set_progress_fn(None)
 
     # Invoke handler — enrich known errors with actionable guidance.
     # Exceptions propagate to the MCP SDK which sets isError=True.

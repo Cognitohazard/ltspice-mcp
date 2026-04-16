@@ -2,30 +2,21 @@
 
 import asyncio
 import logging
-import time
-import uuid
 from pathlib import Path
 
 from spicelib.sim.sim_runner import SimRunner
 
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.log_parser import extract_error_context
+from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState, SimulationJob
 
 logger = logging.getLogger(__name__)
 
 
 def generate_job_id() -> str:
-    """Generate unique job ID for simulation tracking.
-
-    Format: sim_{timestamp}_{uuid_short}
-    - Timestamp for sortability (chronological ordering)
-    - UUID for uniqueness (collision resistance)
-
-    Returns:
-        Job ID string (e.g., "sim_1707916800_a3f7b2c4")
-    """
-    return f"sim_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    """Generate unique job ID for simulation tracking."""
+    return generate_id("sim")
 
 
 class SimulationRunner:
@@ -62,7 +53,6 @@ class SimulationRunner:
         self.output_folder = output_folder
         self.max_parallel = max_parallel
 
-        # Track runner instances per job (created lazily)
         self._runners: dict[str, SimRunner] = {}
 
         logger.debug(
@@ -93,7 +83,6 @@ class SimulationRunner:
         def completion_callback(raw_file: Path | None, log_file: Path | None) -> None:
             """Called by SimRunner in worker thread when simulation completes."""
             try:
-                # Bridge to event loop thread-safely — convert Path to str for downstream
                 self.loop.call_soon_threadsafe(
                     self._handle_completion,
                     job_id,
@@ -107,11 +96,8 @@ class SimulationRunner:
 
         def submit_sim() -> SimRunner:
             """Submit simulation to SimRunner (runs in thread pool)."""
-            # Pass Linux path to spicelib — path conversion for WSL/Wine
-            # is handled by the simulator class's run() method
             netlist_str = str(netlist_path)
 
-            # Create new SimRunner instance for this job
             runner = SimRunner(
                 simulator=self.simulator_class,
                 output_folder=str(self.output_folder),
@@ -119,10 +105,8 @@ class SimulationRunner:
                 timeout=600,  # Generous fallback; real timeout is at tool layer via asyncio.wait_for()
             )
 
-            # Submit simulation (returns RunTask immediately)
             # run_filename must keep a netlist extension — LTspice ignores
             # files without .cir/.net/.sp extension (exits with code 1).
-            # Preserve the original extension for compatibility.
             ext = netlist_path.suffix or ".net"
             run_name = f"{job_id}{ext}"
             runner.run(
@@ -137,15 +121,12 @@ class SimulationRunner:
                 f"simulator={self.simulator_class.__name__}"
             )
 
-            # Store runner for potential cancellation
             return runner
 
-        # Submit to thread pool using asyncio.to_thread
         try:
             runner = await asyncio.to_thread(submit_sim)
             self._runners[job_id] = runner
 
-            # Update job status
             job.status = "running"
             job.task = runner  # Store for cancellation
 
@@ -170,23 +151,19 @@ class SimulationRunner:
             log_file: Path to generated .log file
             state: SessionState for job lookup and updates
         """
-        # Look up job
         job = state.jobs.get(job_id)
         if not job:
             logger.warning(f"Completed job {job_id} not found in state")
             return
 
-        # Check if job was already cancelled or completed
         if job.status in ("cancelled", "completed", "failed"):
             logger.debug(f"Job {job_id} already in terminal state: {job.status}")
             return
 
-        # Store file paths
         job.completed_at = now()
         job.raw_file = Path(raw_file)
         job.log_file = Path(log_file)
 
-        # Check if simulation actually succeeded (raw file exists and has content)
         try:
             raw_size = job.raw_file.stat().st_size if job.raw_file else 0
         except OSError as e:
@@ -194,7 +171,6 @@ class SimulationRunner:
             raw_size = 0
 
         if raw_size == 0:
-            # Simulation failed - extract error from log
             job.status = "failed"
             try:
                 if job.log_file and job.log_file.exists():
@@ -209,47 +185,14 @@ class SimulationRunner:
 
             logger.warning(f"Simulation {job_id} failed: {job.error}")
         else:
-            # Simulation succeeded
             job.status = "completed"
             logger.info(
                 f"Simulation {job_id} completed successfully: "
                 f"raw={job.raw_file}, log={job.log_file}"
             )
 
-        # Clean up runner reference
-        if job_id in self._runners:
-            del self._runners[job_id]
-
-        # Signal completion
+        self._runners.pop(job_id, None)
         job.done_event.set()
-
-    def _handle_error(self, job_id: str, error: str, state: SessionState) -> None:
-        """Handle simulation error in event loop thread.
-
-        Called via call_soon_threadsafe() when submission or execution fails.
-
-        Args:
-            job_id: Job ID of failed simulation
-            error: Error message
-            state: SessionState for job lookup and updates
-        """
-        job = state.jobs.get(job_id)
-        if not job:
-            logger.warning(f"Error for unknown job {job_id}: {error}")
-            return
-
-        job.status = "failed"
-        job.error = error
-        job.completed_at = now()
-
-        # Clean up runner reference
-        if job_id in self._runners:
-            del self._runners[job_id]
-
-        # Signal completion
-        job.done_event.set()
-
-        logger.error(f"Simulation {job_id} error: {error}")
 
     async def cancel(self, job: SimulationJob) -> None:
         """Cancel a running simulation.
@@ -266,29 +209,20 @@ class SimulationRunner:
         """
         job_id = job.job_id
 
-        # Get runner reference
         runner = self._runners.get(job_id)
         if runner is None:
             logger.warning(f"Cannot cancel job {job_id}: runner not found")
             return
 
-        # Try to kill the simulator processes
         try:
-            # spicelib SimRunner has no stop() method — use kill_all_spice()
-            # which terminates processes by name via psutil
             await asyncio.to_thread(runner.kill_all_spice)
             logger.info(f"Cancelled simulation {job_id}")
         except Exception as e:
             logger.warning(f"Error cancelling simulation {job_id}: {e}")
 
-        # Update job state
         job.status = "cancelled"
         job.completed_at = now()
         job.error = "Cancelled by user"
 
-        # Clean up runner reference
-        if job_id in self._runners:
-            del self._runners[job_id]
-
-        # Signal completion
+        self._runners.pop(job_id, None)
         job.done_event.set()

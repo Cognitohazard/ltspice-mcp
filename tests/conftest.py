@@ -63,7 +63,6 @@ def asc_state(state_no_sim: SessionState, work_dir: Path, asc_symbols: Path) -> 
     """SessionState with .asc editor available and a Draft1.asc copied into work_dir."""
     dest = work_dir / "Draft1.asc"
     shutil.copy(_FIXTURE_DRAFT, dest)
-    state_no_sim.asc_editor_available = True
     return state_no_sim
 
 

@@ -67,13 +67,9 @@ class LibraryIndex:
         """
         query_lower = query.lower()
 
-        # Find all matching models
         matches = [model for model in self.models if query_lower in model.name_lower]
-
-        # Sort alphabetically by name (case-insensitive)
         matches.sort(key=lambda m: m.name_lower)
 
-        # Apply pagination
         total = len(matches)
         page = matches[offset : offset + limit]
 
@@ -119,11 +115,9 @@ def _merge_continuation_lines(lines: list[str]) -> list[str]:
         if not stripped:
             continue
 
-        # Remove inline comments (';' and '$')
-        stripped = re.sub(r"[;$].*$", "", stripped)
+        stripped = re.sub(r"[;$].*$", "", stripped)  # remove inline comments
 
         if stripped.startswith("+"):
-            # Continuation line
             if current is not None:
                 current += " " + stripped[1:].strip()
         else:
@@ -173,7 +167,6 @@ def parse_library_file(path: Path) -> LibraryIndex:
     Raises:
         OSError: If file cannot be read
     """
-    # Read file with encoding error handling
     try:
         content = path.read_text(errors="replace")
     except OSError as e:
@@ -200,7 +193,6 @@ def parse_library_file(path: Path) -> LibraryIndex:
     while i < len(merged):
         line = merged[i]
 
-        # Check for .MODEL
         model_match = model_pattern.match(line)
         if model_match:
             name = model_match.group(1)
@@ -210,7 +202,6 @@ def parse_library_file(path: Path) -> LibraryIndex:
             raw_text = line
             line_count = 1
 
-            # Extract parameters for summary
             parameters = _extract_parameters(param_text)
 
             try:
@@ -232,7 +223,6 @@ def parse_library_file(path: Path) -> LibraryIndex:
             i += 1
             continue
 
-        # Check for .SUBCKT
         subckt_match = subckt_pattern.match(line)
         if subckt_match:
             name = subckt_match.group(1)
