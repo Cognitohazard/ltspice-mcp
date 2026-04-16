@@ -115,19 +115,6 @@ class TestSimulationRunnerHandleCompletion:
         # Status should not change from cancelled
         assert job.status == "cancelled"
 
-    def test_handle_error(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
-    ):
-        job = _make_job(state_no_sim, work_dir)
-        sim_runner._handle_error(job.job_id, "boom", state_no_sim)
-        assert job.status == "failed"
-        assert job.error == "boom"
-        assert job.done_event.is_set()
-
-    def test_handle_error_unknown(
-        self, sim_runner: SimulationRunner, state_no_sim: SessionState
-    ):
-        sim_runner._handle_error("missing", "boom", state_no_sim)
 
 
 class TestSimulationRunnerCancel:

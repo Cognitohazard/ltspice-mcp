@@ -399,7 +399,6 @@ async def handle_get_simulation_summary(arguments: SimulationSummaryInput, state
         with contextlib.suppress(Exception):
             ac_metrics = compute_ac_bandwidth_metrics(raw, arguments.signal, 0)
 
-    # Build JSON data dict (always needed for json mode, cheap to build)
     json_data = dict(summary)
     if ac_metrics:
         json_data["ac_bandwidth_metrics"] = ac_metrics

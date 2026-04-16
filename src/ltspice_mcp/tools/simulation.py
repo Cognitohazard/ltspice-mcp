@@ -1,7 +1,6 @@
 """Simulation execution tools. (Phase 3)"""
 
 import asyncio
-import logging
 import time
 from typing import Literal
 
@@ -23,8 +22,6 @@ from ltspice_mcp.tools._base import (
     resolve_output_folder,
     text_response,
 )
-
-logger = logging.getLogger(__name__)
 
 # Constants for timeout behavior
 SYNC_TIMEOUT_THRESHOLD = 30.0  # Simulations <= 30s run synchronously by default
