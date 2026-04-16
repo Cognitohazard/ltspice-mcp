@@ -28,20 +28,15 @@ class FileCache[T]:
         Returns:
             Cached value if mtime matches, otherwise newly created value
         """
-        # Get current modification time
         try:
             mtime = path.stat().st_mtime
         except OSError:
-            # File doesn't exist or can't be accessed - call factory and don't cache
             return factory(path)
 
-        # Check cache
         entry = self._entries.get(path)
         if entry is not None and entry[0] == mtime:
-            # Cache hit - return cached value
             return entry[1]
 
-        # Cache miss or stale - create new value
         value = factory(path)
         self._entries[path] = (mtime, value)
         return value

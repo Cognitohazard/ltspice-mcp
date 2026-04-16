@@ -753,7 +753,6 @@ async def handle_parameter(arguments: ParameterInput, state: SessionState):
         raise NetlistError("'value' requires 'name' — cannot set a parameter without a name")
 
     if param_name is not None and param_value is not None:
-        # Set mode — confirmation only, no structured data needed
         async with _editing(file_path, state) as editor:
             editor.set_parameter(param_name, param_value)
         return format_response(
@@ -765,7 +764,6 @@ async def handle_parameter(arguments: ParameterInput, state: SessionState):
     editor = _get_editor(file_path, state)
 
     if param_name is not None:
-        # Read a single parameter
         value = None
         with contextlib.suppress(Exception):
             value = editor.get_parameter(param_name)
@@ -779,7 +777,6 @@ async def handle_parameter(arguments: ParameterInput, state: SessionState):
             fmt,
         )
 
-    # Read all parameters
     param_names = editor.get_all_parameter_names()
     params = {}
     if param_names:
@@ -888,7 +885,6 @@ async def handle_remove_component(arguments: RemoveComponentInput, state: Sessio
     async with _editing_asc(asc_path, state) as editor:
         editor.remove_component(reference)
 
-    # Check for wires that touch the removed component's pin positions
     result = f"Removed {reference} from {asc_path.name}"
     if pin_coords:
         editor_post = _get_asc_editor(asc_path, state)
@@ -1039,7 +1035,6 @@ async def handle_add_component(arguments: AddComponentInput, state: SessionState
     if value is not None:
         result += f" = {value}"
 
-    # Compute pin positions and bounding box
     sym_info = get_symbol_info(symbol)
     if sym_info is None:
         fallback_data = {"reference": reference, "symbol": symbol, "position": {"x": x, "y": y}, "rotation": rotation}
@@ -1051,7 +1046,6 @@ async def handle_add_component(arguments: AddComponentInput, state: SessionState
     bb = geometry["bounding_box"]
     result += f"\n  bbox: ({bb['x']},{bb['y']}) {bb['width']}x{bb['height']}"
 
-    # Check for overlap with existing components
     warnings: list[str] = []
     for ebb in _collect_component_geometry(_get_asc_editor(asc_path, state)):
         if ebb["ref"] == reference:
@@ -1382,7 +1376,6 @@ async def handle_add_net_label(
                     return text_response(f"Removed {label_desc} at ({x},{y})")
             raise NetlistError(f"No {label_desc} found at ({x},{y})")
 
-    # Add mode
     result = ""
     async with _editing_asc(asc_path, state) as editor:
         # Warn on duplicate non-ground labels

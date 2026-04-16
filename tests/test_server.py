@@ -42,34 +42,32 @@ class TestGetErrorHint:
 
 class TestConfigureAscEditor:
     def test_explicit_symbol_paths(self, tmp_path: Path):
-        # Create a real symbol dir
         symdir = tmp_path / "syms"
         symdir.mkdir()
         cfg = ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path])
         cfg.symbol_paths = [symdir]
-        result = _configure_asc_editor(cfg, available={})
-        assert result is True
+        with patch("spicelib.editor.asc_editor.AscEditor") as mock_cls:
+            mock_cls.custom_lib_paths = []
+            _configure_asc_editor(cfg, available={})
+            assert str(symdir) in mock_cls.custom_lib_paths
 
     def test_explicit_symbol_paths_invalid(self, tmp_path: Path):
         cfg = ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path])
         cfg.symbol_paths = [tmp_path / "nonexistent"]
-        result = _configure_asc_editor(cfg, available={})
-        # Falls through to other checks; with no LTspice → False
-        assert result is False
+        # Falls through to other checks; with no LTspice → no-op
+        _configure_asc_editor(cfg, available={})
 
     def test_no_ltspice(self, tmp_path: Path):
         cfg = ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path])
         cfg.symbol_paths = []
-        result = _configure_asc_editor(cfg, available={})
-        assert result is False
+        _configure_asc_editor(cfg, available={})
 
     def test_wsl_no_lib_paths(self, tmp_path: Path):
         cfg = ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path])
         cfg.symbol_paths = []
         with patch("ltspice_mcp.lib.wsl.is_wsl", return_value=True), \
              patch("ltspice_mcp.lib.wsl.get_ltspice_lib_paths", return_value=[]):
-            result = _configure_asc_editor(cfg, available={"ltspice": object})
-            assert result is False
+            _configure_asc_editor(cfg, available={"ltspice": object})
 
     def test_wsl_with_lib_paths(self, tmp_path: Path):
         cfg = ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path])
@@ -78,8 +76,7 @@ class TestConfigureAscEditor:
         symdir.mkdir()
         with patch("ltspice_mcp.lib.wsl.is_wsl", return_value=True), \
              patch("ltspice_mcp.lib.wsl.get_ltspice_lib_paths", return_value=[str(symdir)]):
-            result = _configure_asc_editor(cfg, available={"ltspice": object})
-            assert result is True
+            _configure_asc_editor(cfg, available={"ltspice": object})
 
 
 class _FakeSession:
