@@ -139,7 +139,6 @@ def _resolve_mc_ref(ref: str) -> tuple[str, bool]:
     ref = ref.strip()
     lower = ref.lower()
 
-    # Check type name map first
     if lower in _TYPE_NAME_TO_PREFIX:
         return (_TYPE_NAME_TO_PREFIX[lower], True)
 
@@ -190,7 +189,6 @@ async def handle_configure_sweep(arguments: ConfigureSweepInput, state: SessionS
     if not parameters:
         raise BatchJobError("At least one parameter dimension is required")
 
-    # Validate and build dimensions
     dimensions: list[SweepDimension] = []
     for i, param in enumerate(parameters):
         name = param.name.strip()
@@ -222,7 +220,6 @@ async def handle_configure_sweep(arguments: ConfigureSweepInput, state: SessionS
                 f"Parameter '{name}': scale must be 'linear' or 'log', got '{scale}'"
             )
 
-        # Convert and validate types
         if step is not None:
             step = float(step)
             if step <= 0:
@@ -252,7 +249,6 @@ async def handle_configure_sweep(arguments: ConfigureSweepInput, state: SessionS
 
     total_runs = prod(dim_sizes) if dim_sizes else 0
 
-    # Build and store config
     config = SweepConfig(netlist=netlist_path, dimensions=dimensions)
     config_id = generate_config_id("sweep")
     state.sweep_configs[config_id] = config
@@ -323,7 +319,6 @@ async def handle_run_sweep(arguments: RunBatchInput, state: SessionState):
         dim_sizes.append(len(values))
     total_runs = prod(dim_sizes) if dim_sizes else 0
 
-    # Create and register batch job
     job_id = generate_batch_job_id("sweep")
     batch_job = BatchJob(
         job_id=job_id,
@@ -334,7 +329,6 @@ async def handle_run_sweep(arguments: RunBatchInput, state: SessionState):
     )
     state.add_batch_job(batch_job)
 
-    # Get sweep runner and start async task
     default_simulator = state.default_simulator
     if default_simulator is None:
         raise BatchJobError("No simulator available. Check server status.")
@@ -402,7 +396,6 @@ async def handle_configure_montecarlo(arguments: ConfigureMonteCarloInput, state
     if num_runs < 1 or num_runs > 10_000:
         raise BatchJobError(f"num_runs must be 1-10000, got {num_runs}")
 
-    # Parse tolerances into type_tolerances and component_overrides
     type_tolerances: dict[str, tuple[float, str]] = {}
     component_overrides: dict[str, tuple[float, str]] = {}
 
@@ -429,7 +422,6 @@ async def handle_configure_montecarlo(arguments: ConfigureMonteCarloInput, state
         else:
             component_overrides[resolved_ref] = (tolerance, distribution)
 
-    # Build and store config
     config = MonteCarloConfig(
         netlist=netlist_path,
         type_tolerances=type_tolerances,
@@ -439,7 +431,6 @@ async def handle_configure_montecarlo(arguments: ConfigureMonteCarloInput, state
     config_id = generate_config_id("mc")
     state.mc_configs[config_id] = config
 
-    # Build summary strings
     type_summary = (
         ", ".join(f"{k}: {v[0] * 100:.1f}% {v[1]}" for k, v in type_tolerances.items())
         if type_tolerances
@@ -512,7 +503,6 @@ async def handle_run_montecarlo(arguments: RunBatchInput, state: SessionState):
 
     require_simulator(state)
 
-    # Create and register batch job
     job_id = generate_batch_job_id("mc")
     batch_job = BatchJob(
         job_id=job_id,
@@ -523,7 +513,6 @@ async def handle_run_montecarlo(arguments: RunBatchInput, state: SessionState):
     )
     state.add_batch_job(batch_job)
 
-    # Get MC runner and start async task
     default_simulator = state.default_simulator
     if default_simulator is None:
         raise BatchJobError("No simulator available. Check server status.")

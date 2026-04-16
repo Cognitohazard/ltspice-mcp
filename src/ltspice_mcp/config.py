@@ -156,10 +156,8 @@ class ServerConfig:
         Returns:
             Populated ServerConfig instance.
         """
-        # Start with defaults
         config_dict: dict = {}
 
-        # Load from TOML if it exists
         if config_path is None:
             env_config = os.getenv("LTSPICE_MCP_CONFIG")
             config_path = Path(env_config) if env_config else Path.cwd() / "ltspice-mcp.toml"
@@ -218,8 +216,6 @@ class ServerConfig:
             ):
                 config_dict["tool_profile"] = p
 
-            # Validate numeric TOML values against the same bounds as env
-            # overrides so a bad TOML entry doesn't sneak past.
             _validate_numeric(
                 config_dict, "max_parallel_sims", int, 1, 128, source="config"
             )
@@ -242,7 +238,6 @@ class ServerConfig:
             )
             _validate_numeric(config_dict, "plot_dpi", int, 50, 600, source="config")
 
-        # Override with environment variables (highest precedence)
         if env_sim := os.getenv("LTSPICE_MCP_SIMULATOR"):
             config_dict["simulator"] = env_sim
 
@@ -383,5 +378,4 @@ def generate_default_config(path: Path) -> None:
     logging_tbl.add("level", "INFO")
     doc.add("logging", logging_tbl)
 
-    # Write to file
     path.write_text(tomlkit.dumps(doc))

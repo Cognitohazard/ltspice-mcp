@@ -51,7 +51,6 @@ async def handle_get_server_status(arguments: GetServerStatusInput, state: Sessi
 
     lines = ["=== LTSpice MCP Server Status ===\n"]
 
-    # Build structured data alongside text
     simulators_data = {}
 
     lines.append("Simulators:")

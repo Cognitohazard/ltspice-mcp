@@ -216,7 +216,6 @@ class SweepRunner:
             logger.warning(f"Run completion for unknown batch job {job_id}")
             return
 
-        # Guard: skip if job already in terminal state (cancelled, completed, failed)
         if batch_job.status in ("cancelled", "completed", "failed"):
             logger.debug(
                 f"Sweep job {job_id} already in terminal state '{batch_job.status}', "
@@ -224,10 +223,8 @@ class SweepRunner:
             )
             return
 
-        # Determine run index from completed_runs count (incremented per run)
         run_index = batch_job.completed_runs
 
-        # Store run result - params will be populated from stepper.sim_info at completion
         batch_job.run_results[run_index] = {
             "raw_file": str(raw_file),
             "log_file": str(log_file),
