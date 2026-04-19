@@ -48,12 +48,20 @@ def _reset_runners():
     return
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def asc_symbols() -> Iterator[Path]:
-    """Register tiny .asy fixture symbols with AscEditor (class-level)."""
+    """Register tiny .asy fixture symbols with AscEditor (class-level).
+
+    Session-scoped so the class-level ``symbol_cache`` is populated once and
+    reused across all tests. ``AscEditor._asy_file_find`` otherwise walks
+    ``os.path.curdir`` (the project root, with ``.venv`` and ``.git``) on every
+    cold load — ~1s per symbol lookup. Keeping the cache warm across the
+    session eliminates that walk for every test after the first.
+    """
     AscEditor.set_custom_library_paths(str(_FIXTURE_SYMBOLS))
+    for asy in _FIXTURE_SYMBOLS.glob("*.asy"):
+        AscEditor.symbol_cache[asy.name] = str(asy)
     yield _FIXTURE_SYMBOLS
-    # Reset to defaults
     AscEditor.custom_lib_paths = []
     AscEditor.symbol_cache = {}
 
