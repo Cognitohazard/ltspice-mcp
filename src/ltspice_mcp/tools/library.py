@@ -7,6 +7,7 @@ from pydantic import Field
 
 from ltspice_mcp.errors import LibraryError
 from ltspice_mcp.lib.mcp_logging import mcp_log
+from ltspice_mcp.lib.services import format_suggestion_block
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     PAGINATION_SCHEMA,
@@ -21,17 +22,18 @@ from ltspice_mcp.tools._base import (
 )
 
 
-class SearchLibraryInput(ToolInput):
-    query: str = Field(description="Search term (case-insensitive substring match)")
-    source: Literal["user", "builtin"] = Field(default="user", description="Search user-loaded or built-in libraries")
-    offset: int = Field(default=0, description="Pagination offset")
-    limit: int = Field(default=50, description="Max results to return")
-    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
-
-
 class GetModelInfoInput(ToolInput):
     name: str = Field(description="Model or subcircuit name (case-insensitive)")
     full: bool = Field(default=False, description="Include full SPICE definition text")
+    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
+
+
+class FindModelInput(ToolInput):
+    name: str = Field(description="Model/subcircuit name to match (case-insensitive)")
+    exact: bool = Field(default=False, description="Only return the exact case-insensitive match (score=1.0) if any; skips fuzzy scoring.")
+    limit: int = Field(default=5, description="Max suggestions to return (1-25). Ignored when exact=true.")
+    cutoff: float = Field(default=0.6, description="Minimum fuzzy similarity ratio (0.0-1.0). Lower = more matches, noisier. Ignored when exact=true.")
+    include_builtin: bool = Field(default=False, description="Also walk built-in simulator libraries (slower; lazy-parses all built-ins on first call).")
     format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
 
 
@@ -49,77 +51,6 @@ class ListLibrariesInput(ToolInput):
     offset: int = Field(default=0, description="Pagination offset")
     limit: int = Field(default=50, description="Max results to return")
     format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
-
-
-@registry.tool(
-    name="ltspice_search_library",
-    description=(
-        "Search component libraries for models and subcircuits by name "
-        "(case-insensitive substring match). Search user-loaded or built-in libraries."
-    ),
-    input_model=SearchLibraryInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_schema={
-        "type": "object",
-        "properties": {
-            "results": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"},
-                        "type": {"type": "string"},
-                        "source_path": {"type": "string"},
-                    },
-                },
-            },
-            "pagination": PAGINATION_SCHEMA,
-        },
-    },
-)
-async def handle_search_library(arguments: SearchLibraryInput, state: SessionState):
-    """Search component libraries by name."""
-    query = arguments.query
-    source = arguments.source
-    offset = arguments.offset
-    limit = min(arguments.limit, 50)
-    fmt = arguments.format
-
-    try:
-        if source == "user":
-            result = state.libraries.search_user_libraries(query, offset, limit)
-        elif source == "builtin":
-            result = state.libraries.search_builtin_libraries(query, offset, limit)
-        else:
-            raise LibraryError(f"Invalid source: {source}. Must be 'user' or 'builtin'")
-    except LibraryError:
-        raise
-    except Exception as e:
-        raise LibraryError(f"Search failed: {e}") from e
-
-    results = result["results"]
-    total = result["total"]
-
-    if not results:
-        return format_response(
-            f"No models found matching '{query}'",
-            {"results": [], "pagination": pagination_metadata(0, offset, limit)},
-            fmt,
-        )
-
-    lines = [f"Found {total} model(s) matching '{query}'"]
-    lines.append(f"Showing {offset + 1}-{offset + len(results)} of {total}")
-    lines.append("")
-
-    for r in results:
-        lines.append(f"  {r['name']} ({r['type']}) - {r['source_path']}")
-
-    data = {
-        "results": results,
-        "pagination": pagination_metadata(total, offset, limit),
-    }
-    return format_response("\n".join(lines), data, fmt)
 
 
 @registry.tool(
@@ -155,9 +86,19 @@ async def handle_get_model_info(arguments: GetModelInfoInput, state: SessionStat
         raise LibraryError(f"Failed to get model info: {e}") from e
 
     if info is None:
+        suggestions = state.libraries.find_similar_models(
+            name, limit=3, cutoff=0.6, include_builtin=False
+        )
+        msg = f"Model '{name}' not found in loaded libraries."
+        if suggestions:
+            block = format_suggestion_block({name: suggestions}, header="Did you mean:")
+            raise LibraryError(
+                f"{msg}{block}\n\nUse ltspice_find_model to browse more candidates.",
+                suggestions=suggestions,
+            )
         raise LibraryError(
-            f"Model '{name}' not found in loaded or built-in libraries. "
-            "Use ltspice_search_library to find models."
+            f"{msg} Load a library containing it with ltspice_load_library, "
+            "or lower the cutoff via ltspice_find_model(cutoff=...) for a wider search."
         )
 
     lines = [
@@ -181,6 +122,90 @@ async def handle_get_model_info(arguments: GetModelInfoInput, state: SessionStat
         lines.append(info["raw_text"])
 
     return format_response("\n".join(lines), info, fmt)
+
+
+@registry.tool(
+    name="ltspice_find_model",
+    description=(
+        "Find model/subcircuit candidates across loaded (and optionally built-in) "
+        "libraries. Default is fuzzy matching — finds typos, case variants, and "
+        "near-neighbour part numbers (e.g., '2N3905' → '2N3904'); pass exact=true "
+        "to only return the exact case-insensitive match. Returns ranked candidates "
+        "with similarity score and ready-to-paste .include directive."
+    ),
+    input_model=FindModelInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "type": {"type": "string"},
+                        "source_path": {"type": "string"},
+                        "include_directive": {"type": "string"},
+                        "score": {"type": "number"},
+                        "parameters": {"type": "object"},
+                    },
+                },
+            },
+            "include_builtin": {"type": "boolean"},
+            "exact": {"type": "boolean"},
+            "cutoff": {"type": "number"},
+        },
+    },
+)
+async def handle_find_model(arguments: FindModelInput, state: SessionState):
+    name = arguments.name
+    exact = arguments.exact
+    limit = max(1, min(arguments.limit, 25))
+    cutoff = max(0.0, min(arguments.cutoff, 1.0))
+    include_builtin = arguments.include_builtin
+    fmt = arguments.format
+
+    try:
+        results = state.libraries.find_similar_models(
+            name,
+            exact=exact,
+            limit=limit,
+            cutoff=cutoff,
+            include_builtin=include_builtin,
+        )
+    except Exception as e:
+        raise LibraryError(f"Model search failed: {e}") from e
+
+    data = {
+        "query": name,
+        "results": results,
+        "include_builtin": include_builtin,
+        "exact": exact,
+        "cutoff": cutoff,
+    }
+    scope = "loaded + built-in" if include_builtin else "loaded"
+
+    if not results:
+        if exact:
+            hint = " Retry ltspice_find_model with exact=false for fuzzy matches."
+        elif not include_builtin:
+            hint = " Try lowering cutoff or set include_builtin=true."
+        else:
+            hint = " Try lowering cutoff or ltspice_load_library to add more sources."
+        reason = "No exact match" if exact else f"No fuzzy matches (cutoff={cutoff})"
+        return format_response(
+            f"{reason} for '{name}' in {scope} libraries.{hint}", data, fmt
+        )
+
+    mode = "Exact match" if exact else f"Fuzzy matches (cutoff={cutoff})"
+    lines = [f"{mode} for '{name}' in {scope} libraries:", ""]
+    for r in results:
+        lines.append(f"  {r['name']} ({r['type']}, score={r['score']}) - {r['source_path']}")
+        lines.append(f"    {r['include_directive']}")
+    return format_response("\n".join(lines), data, fmt)
 
 
 @registry.tool(

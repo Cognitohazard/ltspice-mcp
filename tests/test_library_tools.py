@@ -7,15 +7,15 @@ import pytest
 from ltspice_mcp.errors import LibraryError, PathSecurityError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.library import (
+    FindModelInput,
     GetModelInfoInput,
     ListLibrariesInput,
     LoadLibraryInput,
-    SearchLibraryInput,
     UnloadLibraryInput,
+    handle_find_model,
     handle_get_model_info,
     handle_list_libraries,
     handle_load_library,
-    handle_search_library,
     handle_unload_library,
 )
 
@@ -88,46 +88,6 @@ class TestUnloadLibrary:
 
 
 @pytest.mark.asyncio
-class TestSearchLibrary:
-    async def test_search_user_finds(self, state_no_sim: SessionState, lib_file: Path):
-        await handle_load_library(LoadLibraryInput(path=lib_file.name), state_no_sim)
-        result = await handle_search_library(
-            SearchLibraryInput(query="2222", source="user"), state_no_sim
-        )
-        text = result.content[0].text
-        assert "2N2222" in text
-
-    async def test_search_user_no_results(self, state_no_sim: SessionState, lib_file: Path):
-        await handle_load_library(LoadLibraryInput(path=lib_file.name), state_no_sim)
-        result = await handle_search_library(
-            SearchLibraryInput(query="ZZZNOPE"), state_no_sim
-        )
-        assert "No models" in result.content[0].text
-
-    async def test_search_builtin_empty(self, state_no_sim: SessionState):
-        result = await handle_search_library(
-            SearchLibraryInput(query="anything", source="builtin"), state_no_sim
-        )
-        assert "No models" in result.content[0].text
-
-    async def test_search_json_format(self, state_no_sim: SessionState, lib_file: Path):
-        await handle_load_library(LoadLibraryInput(path=lib_file.name), state_no_sim)
-        result = await handle_search_library(
-            SearchLibraryInput(query="", format="json"), state_no_sim
-        )
-        assert result.structuredContent is not None
-        assert "results" in result.structuredContent
-
-    async def test_search_pagination(self, state_no_sim: SessionState, lib_file: Path):
-        await handle_load_library(LoadLibraryInput(path=lib_file.name), state_no_sim)
-        result = await handle_search_library(
-            SearchLibraryInput(query="", offset=1, limit=1), state_no_sim
-        )
-        assert result.structuredContent["pagination"]["total"] == 3
-        assert len(result.structuredContent["results"]) == 1
-
-
-@pytest.mark.asyncio
 class TestGetModelInfo:
     async def test_found(self, state_no_sim: SessionState, lib_file: Path):
         await handle_load_library(LoadLibraryInput(path=lib_file.name), state_no_sim)
@@ -151,6 +111,107 @@ class TestGetModelInfo:
             await handle_get_model_info(
                 GetModelInfoInput(name="NOPE"), state_no_sim
             )
+
+    async def test_not_found_suggests_fuzzy(
+        self, state_no_sim: SessionState, lib_file: Path
+    ):
+        await handle_load_library(LoadLibraryInput(path=lib_file.name), state_no_sim)
+        with pytest.raises(LibraryError) as exc:
+            await handle_get_model_info(
+                GetModelInfoInput(name="2N2223"), state_no_sim
+            )
+        msg = str(exc.value)
+        assert "Did you mean" in msg
+        assert "2N2222" in msg
+
+
+@pytest.mark.asyncio
+class TestFindModel:
+    @pytest.fixture
+    def fuzzy_lib(self, work_dir: Path) -> Path:
+        p = work_dir / "fuzzy.lib"
+        p.write_text(
+            ".MODEL 2N3904 NPN(BF=200)\n"
+            ".MODEL 2N3906 PNP(BF=200)\n"
+            ".MODEL 2N2222 NPN(BF=300)\n"
+            ".SUBCKT LM741 in+ in- out\nR1 in+ in- 1Meg\n.ENDS\n"
+        )
+        return p
+
+    async def test_typo_finds_candidates(
+        self, state_no_sim: SessionState, fuzzy_lib: Path
+    ):
+        await handle_load_library(LoadLibraryInput(path=fuzzy_lib.name), state_no_sim)
+        result = await handle_find_model(
+            FindModelInput(name="2N3905"), state_no_sim
+        )
+        text = result.content[0].text
+        assert "2N3904" in text or "2N3906" in text
+        data = result.structuredContent
+        assert data["query"] == "2N3905"
+        assert len(data["results"]) > 0
+        assert all(0.0 <= r["score"] <= 1.0 for r in data["results"])
+
+    async def test_empty_returns_hint(self, state_no_sim: SessionState):
+        result = await handle_find_model(
+            FindModelInput(name="XYZZY"), state_no_sim
+        )
+        assert "No fuzzy matches" in result.content[0].text
+        assert result.structuredContent["results"] == []
+
+    async def test_exact_match_found(
+        self, state_no_sim: SessionState, fuzzy_lib: Path
+    ):
+        await handle_load_library(LoadLibraryInput(path=fuzzy_lib.name), state_no_sim)
+        result = await handle_find_model(
+            FindModelInput(name="2N3904", exact=True), state_no_sim
+        )
+        data = result.structuredContent
+        assert data["exact"] is True
+        assert len(data["results"]) == 1
+        assert data["results"][0]["name"] == "2N3904"
+        assert data["results"][0]["score"] == 1.0
+        assert "Exact match" in result.content[0].text
+
+    async def test_exact_match_case_insensitive(
+        self, state_no_sim: SessionState, fuzzy_lib: Path
+    ):
+        await handle_load_library(LoadLibraryInput(path=fuzzy_lib.name), state_no_sim)
+        result = await handle_find_model(
+            FindModelInput(name="2n3904", exact=True), state_no_sim
+        )
+        assert len(result.structuredContent["results"]) == 1
+
+    async def test_exact_no_match(
+        self, state_no_sim: SessionState, fuzzy_lib: Path
+    ):
+        await handle_load_library(LoadLibraryInput(path=fuzzy_lib.name), state_no_sim)
+        result = await handle_find_model(
+            FindModelInput(name="2N3905", exact=True), state_no_sim
+        )
+        assert result.structuredContent["results"] == []
+        assert "No exact match" in result.content[0].text
+        assert "ltspice_find_model" in result.content[0].text
+        assert "exact=false" in result.content[0].text
+
+    async def test_cutoff_filters(
+        self, state_no_sim: SessionState, fuzzy_lib: Path
+    ):
+        await handle_load_library(LoadLibraryInput(path=fuzzy_lib.name), state_no_sim)
+        result = await handle_find_model(
+            FindModelInput(name="XYZZY", cutoff=0.95), state_no_sim
+        )
+        assert result.structuredContent["results"] == []
+
+    async def test_json_format(
+        self, state_no_sim: SessionState, fuzzy_lib: Path
+    ):
+        await handle_load_library(LoadLibraryInput(path=fuzzy_lib.name), state_no_sim)
+        result = await handle_find_model(
+            FindModelInput(name="2N3905", format="json"), state_no_sim
+        )
+        assert result.structuredContent is not None
+        assert "results" in result.structuredContent
 
 
 @pytest.mark.asyncio

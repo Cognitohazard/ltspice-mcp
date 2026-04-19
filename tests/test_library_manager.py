@@ -110,20 +110,6 @@ class TestSearchUserLibraries:
         assert result["results"] == []
 
 
-class TestSearchBuiltinLibraries:
-    def test_no_builtin_paths_returns_empty(self, empty_manager: LibraryManager):
-        # No simulators available → no builtin paths
-        result = empty_manager.search_builtin_libraries("anything")
-        assert result["total"] == 0
-
-    def test_builtin_search_with_mocked_paths(
-        self, empty_manager: LibraryManager, lib_file: Path
-    ):
-        empty_manager._builtin_paths = [lib_file]
-        result = empty_manager.search_builtin_libraries("2222")
-        assert result["total"] == 1
-
-
 class TestGetModelInfo:
     def test_found_in_user_lib(self, empty_manager: LibraryManager, lib_file: Path):
         empty_manager.load_library(lib_file)
@@ -151,10 +137,112 @@ class TestGetModelInfo:
         assert info is not None
         assert info["name"] == "D1N4148"
 
+    def test_include_builtin_false_skips_builtin(
+        self, empty_manager: LibraryManager, lib_file: Path
+    ):
+        empty_manager._builtin_paths = [lib_file]
+        assert empty_manager.get_model_info("D1N4148", include_builtin=False) is None
+
     def test_case_insensitive(self, empty_manager: LibraryManager, lib_file: Path):
         empty_manager.load_library(lib_file)
         info = empty_manager.get_model_info("2n2222")
         assert info is not None
+
+
+class TestFindSimilarModels:
+    @pytest.fixture
+    def fuzzy_lib(self, tmp_path: Path) -> Path:
+        p = tmp_path / "fuzzy.lib"
+        p.write_text(
+            ".MODEL 2N3904 NPN(BF=200)\n"
+            ".MODEL 2N3906 PNP(BF=200)\n"
+            ".MODEL 2N2222 NPN(BF=300)\n"
+            ".MODEL D1N4148 D(IS=2.52e-9)\n"
+            ".SUBCKT LM741 in+ in- out\nR1 in+ in- 1Meg\n.ENDS\n"
+        )
+        return p
+
+    def test_typo_finds_correct(self, empty_manager: LibraryManager, fuzzy_lib: Path):
+        empty_manager.load_library(fuzzy_lib)
+        results = empty_manager.find_similar_models("2N3905")
+        assert len(results) > 0
+        names = [r["name"] for r in results]
+        assert "2N3904" in names or "2N3906" in names
+        assert all("score" in r and 0.0 <= r["score"] <= 1.0 for r in results)
+
+    def test_ranked_by_score(self, empty_manager: LibraryManager, fuzzy_lib: Path):
+        empty_manager.load_library(fuzzy_lib)
+        results = empty_manager.find_similar_models("2N3905", limit=5, cutoff=0.0)
+        scores = [r["score"] for r in results]
+        assert scores == sorted(scores, reverse=True)
+
+    def test_case_insensitive(self, empty_manager: LibraryManager, fuzzy_lib: Path):
+        empty_manager.load_library(fuzzy_lib)
+        results = empty_manager.find_similar_models("lm741")
+        assert any(r["name"] == "LM741" for r in results)
+
+    def test_cutoff_filters(self, empty_manager: LibraryManager, fuzzy_lib: Path):
+        empty_manager.load_library(fuzzy_lib)
+        strict = empty_manager.find_similar_models("XYZZY", cutoff=0.9)
+        assert strict == []
+        loose = empty_manager.find_similar_models("XYZZY", cutoff=0.0)
+        assert len(loose) > 0
+
+    def test_limit_caps_results(self, empty_manager: LibraryManager, fuzzy_lib: Path):
+        empty_manager.load_library(fuzzy_lib)
+        results = empty_manager.find_similar_models("2N", limit=2, cutoff=0.0)
+        assert len(results) == 2
+
+    def test_empty_when_no_libs_loaded(self, empty_manager: LibraryManager):
+        assert empty_manager.find_similar_models("anything") == []
+
+    def test_include_builtin_walks_builtin(
+        self, empty_manager: LibraryManager, fuzzy_lib: Path
+    ):
+        empty_manager._builtin_paths = [fuzzy_lib]
+        no_builtin = empty_manager.find_similar_models("2N3905", include_builtin=False)
+        with_builtin = empty_manager.find_similar_models("2N3905", include_builtin=True)
+        assert no_builtin == []
+        assert len(with_builtin) > 0
+
+    def test_include_directive_present(self, empty_manager: LibraryManager, fuzzy_lib: Path):
+        empty_manager.load_library(fuzzy_lib)
+        results = empty_manager.find_similar_models("2N3905")
+        assert results
+        assert all(".include" in r["include_directive"] for r in results)
+
+    def test_part_family_prefers_siblings_over_cross_family(
+        self, empty_manager: LibraryManager, tmp_path: Path
+    ):
+        """2N3905 (typo) should rank 2N3904/2N3906 above BC547 or LM741."""
+        lib = tmp_path / "mixed.lib"
+        lib.write_text(
+            ".MODEL 2N3904 NPN(BF=200)\n"
+            ".MODEL 2N3906 PNP(BF=200)\n"
+            ".MODEL BC547 NPN(BF=300)\n"
+            ".SUBCKT LM741 in+ in- out\nR1 in+ in- 1Meg\n.ENDS\n"
+        )
+        empty_manager.load_library(lib)
+        results = empty_manager.find_similar_models("2N3905", limit=5, cutoff=0.0)
+        top_two_names = {r["name"] for r in results[:2]}
+        assert top_two_names == {"2N3904", "2N3906"}, f"got ranking: {[r['name'] for r in results]}"
+
+    def test_part_suffix_variant_ranks_high(
+        self, empty_manager: LibraryManager, tmp_path: Path
+    ):
+        """LTC3406 should find LTC3406A/B near the top (substring bias)."""
+        lib = tmp_path / "ltc.lib"
+        lib.write_text(
+            ".SUBCKT LTC3406A in out\nR1 in out 1k\n.ENDS\n"
+            ".SUBCKT LTC3406B in out\nR1 in out 1k\n.ENDS\n"
+            ".SUBCKT LTC3405 in out\nR1 in out 1k\n.ENDS\n"
+            ".SUBCKT LM7812 in out\nR1 in out 1k\n.ENDS\n"
+        )
+        empty_manager.load_library(lib)
+        results = empty_manager.find_similar_models("LTC3406", limit=4, cutoff=0.0)
+        names = [r["name"] for r in results]
+        # LTC3406A and LTC3406B should both be in the top 2 (order may vary).
+        assert set(names[:2]) == {"LTC3406A", "LTC3406B"}, f"got: {names}"
 
 
 class TestListLibraries:
