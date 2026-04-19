@@ -10,6 +10,8 @@ from typing import Literal
 import tomlkit
 from tomlkit import comment, document, nl, table
 
+from ltspice_mcp.lib import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 ToolProfile = Literal["full", "agentic"]
@@ -418,4 +420,4 @@ def generate_default_config(path: Path) -> None:
     state_tbl.add("persist_jobs", True)
     doc.add("state", state_tbl)
 
-    path.write_text(tomlkit.dumps(doc))
+    atomic_write_text(path, tomlkit.dumps(doc), durable=False)
