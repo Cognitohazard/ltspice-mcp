@@ -173,3 +173,44 @@ class TestGetBatchSignalData:
         bj = _make_batch(state_no_sim, run_results={0: {"params": {}}})
         with pytest.raises(BatchJobError, match="page range"):
             services.get_batch_signal_data(bj, "V(out)", raw=True, offset=10, limit=5)
+
+
+class TestExtractModelSuggestions:
+    def test_none_when_log_missing(self, state_no_sim: SessionState, tmp_path: Path):
+        assert services.extract_model_suggestions(tmp_path / "no.log", state_no_sim.libraries) is None
+
+    def test_none_for_clean_log(self, state_no_sim: SessionState, tmp_path: Path):
+        log = tmp_path / "clean.log"
+        log.write_text("Total elapsed time: 0.01 seconds.\n")
+        assert services.extract_model_suggestions(log, state_no_sim.libraries) is None
+
+    def test_none_when_no_libraries_loaded(
+        self, state_no_sim: SessionState, tmp_path: Path
+    ):
+        log = tmp_path / "err.log"
+        log.write_text('Error on line 2 : s1 0 0 sw Unable to find definition of model "sw"\n')
+        assert services.extract_model_suggestions(log, state_no_sim.libraries) is None
+
+    def test_returns_ranked_suggestions(self, state_no_sim: SessionState, work_dir: Path):
+        lib = work_dir / "sw.lib"
+        lib.write_text(".MODEL SW VSWITCH(VT=1)\n.MODEL SW2 VSWITCH(VT=2)\n")
+        state_no_sim.libraries.load_library(lib)
+        log = work_dir / "err.log"
+        log.write_text('Error on line 2 : s1 0 0 swx Unable to find definition of model "swx"\n')
+        out = services.extract_model_suggestions(log, state_no_sim.libraries)
+        assert out is not None
+        assert "swx" in out
+        names = {m["name"] for m in out["swx"]}
+        assert "SW" in names
+
+    def test_format_suggestion_block_empty(self):
+        assert services.format_suggestion_block(None) == ""
+        assert services.format_suggestion_block({}) == ""
+
+    def test_format_suggestion_block_renders(self):
+        out = services.format_suggestion_block(
+            {"swx": [{"name": "SW", "score": 0.9, "source_path": "/tmp/sw.lib"}]}
+        )
+        assert "Missing 'swx'" in out
+        assert "SW" in out
+        assert "/tmp/sw.lib" in out

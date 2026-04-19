@@ -103,12 +103,13 @@ class _ErrorHint(NamedTuple):
 _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
     _err.MissingModelError: _ErrorHint(
         full=(
-            "Try ltspice_search_library to find the model, or "
-            "ltspice_load_library to load a library file containing it."
+            "Try ltspice_find_model to fuzzy-match against loaded libraries "
+            "(catches typos and near-neighbour part numbers), or ltspice_load_library "
+            "to load a library file containing it."
         ),
         agentic=(
-            "Try ltspice_search_library to find the model, then add "
-            "the .lib directive to the netlist manually."
+            "Try ltspice_find_model to fuzzy-match against loaded libraries "
+            "(catches typos), or load a library containing it and rerun."
         ),
     ),
     _err.ConvergenceError: _ErrorHint(
@@ -165,8 +166,8 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
             "ltspice_load_library to load a new one."
         ),
         agentic=(
-            "Use ltspice_search_library to find models, or add "
-            ".lib directives to the netlist manually."
+            "Use ltspice_find_model to fuzzy-match against loaded libraries, "
+            "or add .lib directives to the netlist manually."
         ),
     ),
 }
@@ -312,6 +313,16 @@ async def call_tool(name: str, arguments: dict | None):
         ) from None
     except LTSpiceMCPError as e:
         hint = _get_error_hint(type(e), state.config.tool_profile)
+        text = f"{e}\n\n{hint}" if hint else str(e)
+        # When the error carries structured suggestions (e.g. fuzzy model
+        # matches), return them as structuredContent with isError=True so
+        # clients can parse them without regex'ing the text message.
+        if e.suggestions:
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=text)],
+                structuredContent={"error": str(e), "suggestions": e.suggestions},
+                isError=True,
+            )
         if hint:
             raise type(e)(f"{e}\n\n{hint}") from None
         raise

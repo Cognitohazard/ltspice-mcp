@@ -393,6 +393,10 @@ async def handle_get_simulation_summary(arguments: SimulationSummaryInput, state
     except Exception as e:
         raise ResultError(f"Failed to build summary: {e}") from e
 
+    suggestions = services.suggestions_from_errors(summary.get("errors"), state.libraries)
+    if suggestions:
+        summary["suggestions"] = suggestions
+
     # Compute AC bandwidth metrics only when signal is explicitly specified
     ac_metrics = None
     if is_ac_analysis(summary["sim_type"]) and arguments.signal:

@@ -1,5 +1,7 @@
 """Tests for the error hierarchy."""
 
+import pytest
+
 from ltspice_mcp.errors import (
     BatchJobError,
     ConvergenceError,
@@ -12,6 +14,26 @@ from ltspice_mcp.errors import (
     SimulationError,
     SingularMatrixError,
 )
+
+
+class TestSuggestions:
+    def test_default_empty_list(self):
+        e = LibraryError("nope")
+        assert e.suggestions == []
+
+    def test_suggestions_kwarg_stored(self):
+        s = [{"name": "SW", "score": 0.9}]
+        e = LibraryError("model 'sx' not found", suggestions=s)
+        assert e.suggestions is s
+        assert str(e) == "model 'sx' not found"
+
+    @pytest.mark.parametrize(
+        "cls",
+        [LibraryError, MissingModelError, NetlistError, ResultError, BatchJobError],
+    )
+    def test_all_subclasses_accept_suggestions(self, cls):
+        e = cls("msg", suggestions=[{"name": "X"}])
+        assert e.suggestions == [{"name": "X"}]
 
 
 class TestErrorHierarchy:
