@@ -8,6 +8,7 @@ license = "GPL-3.0-or-later"
 requires-python = ">=3.13"
 dependencies = [
     "mcp[cli]>=1.0,<2.0",
+    "rapidfuzz>=3.0,<4.0",
     "spicelib>=1.4.9,<2.0",
     "tomlkit>=0.14.0,<1.0",
 ]

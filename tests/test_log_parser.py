@@ -8,10 +8,57 @@ from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.log_parser import (
     extract_error_context,
     extract_log_diagnostics,
+    extract_missing_refs,
     parse_fourier_data,
     parse_measurements,
     parse_success_summary,
 )
+
+
+class TestExtractMissingRefs:
+    def test_missing_model_quoted_name(self, tmp_path: Path):
+        log = tmp_path / "missing_model.log"
+        log.write_text(
+            'Error on line 2 : s1 n003 n001 n002 0 sw Unable to find '
+            'definition of model "sw"\n'
+        )
+        assert extract_missing_refs(log) == ["sw"]
+
+    def test_missing_model_dialog_variant(self, tmp_path: Path):
+        log = tmp_path / "missing_model.log"
+        log.write_text("Can't find definition of model \"NMOS_3v3\"\n")
+        assert extract_missing_refs(log) == ["NMOS_3v3"]
+
+    def test_unknown_subcircuit_last_token(self, tmp_path: Path):
+        log = tmp_path / "missing_subckt.log"
+        log.write_text(
+            "Fatal Error: Unknown subcircuit called in: xu1 n004 n001 vcc 0 lm741\n"
+        )
+        assert extract_missing_refs(log) == ["lm741"]
+
+    def test_dedupes_repeated_refs(self, tmp_path: Path):
+        log = tmp_path / "dupes.log"
+        log.write_text(
+            'Error on line 2 : s1 n003 n001 0 sw Unable to find definition of model "sw"\n'
+            'Error on line 3 : s2 n004 n002 0 sw Unable to find definition of model "sw"\n'
+        )
+        assert extract_missing_refs(log) == ["sw"]
+
+    def test_both_kinds_in_same_log(self, tmp_path: Path):
+        log = tmp_path / "both.log"
+        log.write_text(
+            'Error on line 2 : s1 n1 n2 n3 0 sw Unable to find definition of model "sw"\n'
+            "Fatal Error: Unknown subcircuit called in: xu1 n1 n2 n3 lm741\n"
+        )
+        assert set(extract_missing_refs(log)) == {"sw", "lm741"}
+
+    def test_clean_log_returns_empty(self, tmp_path: Path):
+        log = tmp_path / "clean.log"
+        log.write_text("Total elapsed time: 0.01 seconds.\n")
+        assert extract_missing_refs(log) == []
+
+    def test_missing_file_returns_empty(self, tmp_path: Path):
+        assert extract_missing_refs(tmp_path / "nope.log") == []
 
 
 class TestExtractLogDiagnostics:

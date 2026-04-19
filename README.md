@@ -223,7 +223,7 @@ Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispa
 
 | Tool | Description |
 |-|-|
-| `ltspice_search_library` | Search loaded libraries for models/subcircuits by name |
+| `ltspice_find_model` | Find model candidates by name (fuzzy by default; `exact=true` for exact case-insensitive match) |
 | `ltspice_get_model_info` | Get model parameters and the `.include` directive to use it |
 | `ltspice_load_library` | Load a `.lib`/`.mod` file or a directory of library files |
 | `ltspice_unload_library` | Unload a previously loaded library |
