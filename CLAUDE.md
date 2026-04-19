@@ -33,11 +33,16 @@ uv run pytest tests/ -v
 # Run a single test file
 uv run pytest tests/test_pathutil.py -v
 
+# Debug a single failure (disable parallelism for readable output)
+uv run pytest -n0 tests/test_pathutil.py::TestName::test_case -v
+
 # Run directly
 python -m ltspice_mcp
 ```
 
 No Makefile. CI: `.github/workflows/publish.yml` (test + publish to PyPI on version tags).
+
+The suite runs in parallel by default via `pytest-xdist` (`-n auto` in `pyproject.toml`). Pass `-n0` to serialize when you need deterministic output order or to attach a debugger.
 
 ## Architecture
 
