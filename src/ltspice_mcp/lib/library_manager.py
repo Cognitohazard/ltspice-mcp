@@ -2,8 +2,12 @@
 
 import logging
 import os
+import re
 import sys
+from collections.abc import Iterator
 from pathlib import Path
+
+from rapidfuzz import fuzz
 
 from ltspice_mcp.errors import LibraryError
 from ltspice_mcp.lib.cache import FileCache
@@ -11,6 +15,26 @@ from ltspice_mcp.lib.library_parser import LibraryIndex, ModelEntry, parse_libra
 from ltspice_mcp.lib.wsl import is_wsl
 
 logger = logging.getLogger(__name__)
+
+
+_WORD_TOK = re.compile(r"[A-Za-z]+|[0-9]+")
+
+
+def _part_aware_score(query_lower: str, candidate_lower: str) -> float:
+    """Similarity in [0.0, 1.0] biased for part-number-style names.
+
+    Base is ``rapidfuzz.fuzz.WRatio`` (handles typos, substring containment,
+    and token reorderings). A small bonus applies when the first word token
+    of both strings matches — e.g. 'LTC3406' / 'LTC3406A' share 'ltc',
+    '2N3904' / '2N3906' share '2n'. The bonus keeps near-neighbour siblings
+    ranked above cross-family matches with similar edit distance.
+    """
+    base = fuzz.WRatio(query_lower, candidate_lower) / 100.0
+    q_toks = _WORD_TOK.findall(query_lower)
+    c_toks = _WORD_TOK.findall(candidate_lower)
+    if q_toks and c_toks and q_toks[0] == c_toks[0]:
+        base = min(1.0, base + 0.05)
+    return base
 
 
 class LibraryManager:
@@ -304,83 +328,87 @@ class LibraryManager:
 
         return {"results": results, "total": total, "offset": offset, "limit": limit}
 
-    def search_builtin_libraries(self, query: str, offset: int = 0, limit: int = 50) -> dict:
-        """Search across built-in simulator libraries.
-
-        Triggers lazy detection of built-in libraries on first call.
-
-        Args:
-            query: Case-insensitive substring to search for
-            offset: Number of results to skip
-            limit: Maximum results to return
-
-        Returns:
-            Dict with results, total, offset, limit
-        """
-        # Trigger lazy detection
-        builtin_paths = self._detect_builtin_paths()
-
-        all_matches = []
-
-        # Parse and search each built-in library
-        for lib_path in builtin_paths:
+    def _iter_builtin_indexes(self) -> Iterator[LibraryIndex]:
+        """Yield each built-in LibraryIndex via the mtime cache, skipping parse failures."""
+        for lib_path in self._detect_builtin_paths():
             try:
-                # Use cache with mtime invalidation
-                index = self._builtin_libs.get(lib_path, lambda p: parse_library_file(p))
-                matches, _ = index.search(query, offset=0, limit=999999)
-                all_matches.extend(matches)
+                yield self._builtin_libs.get(lib_path, parse_library_file)
             except Exception as e:
                 logger.warning(f"Failed to search built-in library {lib_path}: {e}")
 
-        # Sort all matches alphabetically
-        all_matches.sort(key=lambda m: m.name_lower)
+    def find_similar_models(
+        self,
+        name: str,
+        *,
+        exact: bool = False,
+        limit: int = 5,
+        cutoff: float = 0.6,
+        include_builtin: bool = False,
+    ) -> list[dict]:
+        """Return candidate matches for ``name``, each annotated with a ``score`` in [0.0, 1.0].
 
-        # Apply pagination
-        total = len(all_matches)
-        page = all_matches[offset : offset + limit]
+        With ``exact=True`` returns at most one entry (score 1.0) when the
+        name matches case-insensitively. Otherwise fuzzy-ranks via
+        ``_part_aware_score`` (rapidfuzz WRatio + first-word-token bonus).
 
-        # Format results
-        results = [
-            {
-                "name": m.name,
-                "type": m.model_type,
-                "source_path": str(m.source_path),
-                "parameters": m.parameters,
-            }
-            for m in page
-        ]
-
-        return {"results": results, "total": total, "offset": offset, "limit": limit}
-
-    def get_model_info(self, name: str, full: bool = False) -> dict | None:
-        """Get detailed model/subcircuit information.
-
-        Searches both user-loaded and built-in libraries.
-
-        Args:
-            name: Model/subcircuit name (case-insensitive)
-            full: If True, include full raw_text definition
-
-        Returns:
-            Dict with name, type, source_path, include_directive, parameters, and
-            optionally raw_text. Returns None if not found.
+        ``include_builtin=True`` lazy-parses every built-in .lib on first
+        call — hundreds of ms on a full LTspice install.
         """
-        # Search user libraries first
+        if exact:
+            info = self.get_model_info(name, full=False, include_builtin=include_builtin)
+            if info is None:
+                return []
+            info["score"] = 1.0
+            return [info]
+
+        query_lower = name.lower()
+
+        def score(entry: ModelEntry) -> float:
+            return _part_aware_score(query_lower, entry.name_lower)
+
+        candidates: list[tuple[float, ModelEntry]] = []
+
+        def collect(index: LibraryIndex) -> None:
+            for entry in index.models:
+                s = score(entry)
+                if s >= cutoff:
+                    candidates.append((s, entry))
+
+        for _, index in self.get_loaded_libraries():
+            collect(index)
+        if include_builtin:
+            for index in self._iter_builtin_indexes():
+                collect(index)
+
+        candidates.sort(key=lambda pair: (-pair[0], pair[1].name_lower))
+
+        results = []
+        for s, entry in candidates[:limit]:
+            info = self._format_model_info(entry, full=False)
+            info["score"] = round(s, 3)
+            results.append(info)
+        return results
+
+    def get_model_info(
+        self, name: str, full: bool = False, include_builtin: bool = True
+    ) -> dict | None:
+        """Look up a model/subcircuit by exact case-insensitive name.
+
+        Searches loaded user libraries first, then built-in libraries unless
+        ``include_builtin=False``. Returns ``None`` if no exact match exists.
+        """
         for _, index in self.get_loaded_libraries():
             model = index.get_model(name)
             if model:
                 return self._format_model_info(model, full)
 
-        # Search built-in libraries
-        builtin_paths = self._detect_builtin_paths()
-        for lib_path in builtin_paths:
-            try:
-                index = self._builtin_libs.get(lib_path, lambda p: parse_library_file(p))
-                model = index.get_model(name)
-                if model:
-                    return self._format_model_info(model, full)
-            except Exception as e:
-                logger.warning(f"Failed to search built-in library {lib_path}: {e}")
+        if not include_builtin:
+            return None
+
+        for index in self._iter_builtin_indexes():
+            model = index.get_model(name)
+            if model:
+                return self._format_model_info(model, full)
 
         return None
 

@@ -151,3 +151,25 @@ class TestServerDispatch:
             result = await read_resource(AnyUrl("ltspice://config"))
             result = list(result)
             assert len(result) > 0
+
+    async def test_error_with_suggestions_returns_structured_result(
+        self, state_no_sim: SessionState, tmp_path
+    ):
+        """LibraryError with suggestions should surface as isError=True + structuredContent."""
+        from mcp import types as mcp_types
+
+        # Load a library so get_model_info has candidates for fuzzy matching
+        lib = state_no_sim.working_dir / "mini.lib"
+        lib.write_text(".MODEL 2N2222 NPN(BF=200)\n")
+        state_no_sim.libraries.load_library(lib)
+
+        with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)):
+            result = await call_tool(
+                "ltspice_get_model_info", {"name": "2N2223"}
+            )
+        assert isinstance(result, mcp_types.CallToolResult)
+        assert result.isError is True
+        assert result.structuredContent is not None
+        assert "suggestions" in result.structuredContent
+        names = [s["name"] for s in result.structuredContent["suggestions"]]
+        assert "2N2222" in names

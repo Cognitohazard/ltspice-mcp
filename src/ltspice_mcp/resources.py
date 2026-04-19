@@ -298,6 +298,6 @@ def _read_models(
 
     data = {
         "libraries": libraries,
-        "note": ("Use the ltspice_search_library tool to find models in built-in libraries."),
+        "note": ("Use ltspice_find_model(include_builtin=true) to find models in built-in libraries."),
     }
     return _make_result(uri_str, json.dumps(data, indent=2))

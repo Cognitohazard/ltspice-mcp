@@ -159,9 +159,9 @@ async def handle_run_simulation(arguments: RunSimulationInput, state: SessionSta
     # Else: async (return job ID immediately)
     if wait:
         effective_timeout = min(timeout, HARD_MAX_TIMEOUT)
-        return await _wait_for_completion(job, effective_timeout, runner, fmt)
+        return await _wait_for_completion(job, effective_timeout, runner, state, fmt)
     elif timeout <= SYNC_TIMEOUT_THRESHOLD:
-        return await _wait_for_completion(job, timeout, runner, fmt)
+        return await _wait_for_completion(job, timeout, runner, state, fmt)
     else:
         # Async path - return job ID immediately
         data = {
@@ -187,6 +187,7 @@ async def _wait_for_completion(
     job: SimulationJob,
     timeout: float,  # noqa: ASYNC109
     runner: SimulationRunner,
+    state: SessionState,
     fmt: str | None = None,
 ):
     """Wait for simulation to complete (sync mode)."""
@@ -234,17 +235,21 @@ async def _wait_for_completion(
                 f"raw_file: {job.raw_file}, log_file: {job.log_file}"
             )
         summary = parse_success_summary(job.raw_file, job.log_file, duration)
+        suggestions = services.suggestions_from_errors(summary.get("errors"), state.libraries)
+        if suggestions:
+            summary["suggestions"] = suggestions
         await mcp_log("info", f"Simulation completed: {job.netlist.name} ({duration:.1f}s)")
         return _format_success_response(job.job_id, summary, fmt)
     elif job.status == "failed":
-        # Extract error context
         error_msg = job.error or "Unknown error"
         await mcp_log("error", f"Simulation failed: {job.netlist.name} — {job.error or 'unknown'}")
+        data = {"job_id": job.job_id, "status": "failed", "duration": duration, "error": job.error}
         if job.log_file and job.log_file.exists():
             log_excerpt = extract_error_context(job.log_file, max_lines=20)
             error_msg = f"{error_msg}\n\nLog excerpt:\n{log_excerpt}"
-
-        data = {"job_id": job.job_id, "status": "failed", "duration": duration, "error": job.error}
+            error_msg = services.attach_suggestions_to_failure(
+                error_msg, data, job.log_file, state.libraries
+            )
         return format_response(
             f"Simulation failed\nJob ID: {job.job_id}\nDuration: {duration:.2f}s\n\n{error_msg}",
             data,
@@ -405,15 +410,20 @@ async def handle_check_job(arguments: CheckJobInput, state: SessionState):
                 f"raw: {job.raw_file.exists()}, log: {job.log_file.exists()}"
             )
         summary = parse_success_summary(job.raw_file, job.log_file, duration)
+        suggestions = services.suggestions_from_errors(summary.get("errors"), state.libraries)
+        if suggestions:
+            summary["suggestions"] = suggestions
         return _format_success_response(job_id, summary, fmt)
     elif job.status == "failed":
         duration = (job.completed_at - job.started_at).total_seconds() if job.completed_at else 0
         error_msg = job.error or "Unknown error"
+        data = {"job_id": job_id, "status": "failed", "duration": duration, "error": job.error}
         if job.log_file and job.log_file.exists():
             log_excerpt = extract_error_context(job.log_file, max_lines=20)
             error_msg = f"{error_msg}\n\nLog excerpt:\n{log_excerpt}"
-
-        data = {"job_id": job_id, "status": "failed", "duration": duration, "error": job.error}
+            error_msg = services.attach_suggestions_to_failure(
+                error_msg, data, job.log_file, state.libraries
+            )
         return format_response(
             f"Simulation failed\nJob ID: {job_id}\nDuration: {duration:.2f}s\n\n{error_msg}",
             data,
