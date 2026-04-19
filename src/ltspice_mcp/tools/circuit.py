@@ -26,7 +26,7 @@ from spicelib.editor.base_schematic import (
 )
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib import services
+from ltspice_mcp.lib import atomic_write_text, services
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, get_symbol_info
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
@@ -422,13 +422,13 @@ async def handle_create_netlist(arguments: CreateNetlistInput, state: SessionSta
     content = arguments.content
     target_path = safe_path(f"{name}.cir", state)
 
-    if target_path.exists():
-        raise NetlistError(f"File already exists: {target_path}")
-
     if not content.strip().upper().endswith(".END"):
         content = content.rstrip() + "\n.END\n"
 
-    target_path.write_text(content)
+    try:
+        atomic_write_text(target_path, content, overwrite=False, durable=False)
+    except FileExistsError as e:
+        raise NetlistError(f"File already exists: {target_path}") from e
 
     try:
         editor = SpiceEditor(str(target_path))
