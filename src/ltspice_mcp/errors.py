@@ -1,8 +1,20 @@
 """Error hierarchy for ltspice-mcp server."""
 
+from typing import Any
+
 
 class LTSpiceMCPError(Exception):
-    """Base exception for all ltspice-mcp errors."""
+    """Base exception for all ltspice-mcp errors.
+
+    ``suggestions`` — optional ranked candidate dicts surfaced by the MCP
+    dispatch layer as ``structuredContent`` on the error response.
+    """
+
+    def __init__(
+        self, *args: object, suggestions: list[dict[str, Any]] | None = None
+    ) -> None:
+        super().__init__(*args)
+        self.suggestions: list[dict[str, Any]] = suggestions or []
 
 
 class PathSecurityError(LTSpiceMCPError):

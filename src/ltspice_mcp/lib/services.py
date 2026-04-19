@@ -20,11 +20,86 @@ from ltspice_mcp.lib.batch_results import (
     filter_runs_by_params,
     get_progress_snapshot,
 )
-from ltspice_mcp.lib.log_parser import parse_measurements
+from ltspice_mcp.lib.library_manager import LibraryManager
+from ltspice_mcp.lib.log_parser import (
+    extract_missing_refs,
+    missing_refs_from_text,
+    parse_measurements,
+)
 from ltspice_mcp.lib.raw_parser import get_step_count
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
 
 Editor = AscEditor | SpiceEditor
+
+
+def _suggestions_for_refs(
+    refs: list[str], libraries: LibraryManager
+) -> dict[str, list[dict]] | None:
+    """Fuzzy-match each ref against loaded libraries only (never built-ins)."""
+    if not refs:
+        return None
+    out: dict[str, list[dict]] = {}
+    for ref in refs:
+        matches = libraries.find_similar_models(ref, limit=3, cutoff=0.5)
+        if matches:
+            out[ref] = matches
+    return out or None
+
+
+def suggestions_from_errors(
+    errors: list[str] | None, libraries: LibraryManager
+) -> dict[str, list[dict]] | None:
+    """Zero-cost when ``errors`` is falsy — skips the log re-read entirely."""
+    if not errors:
+        return None
+    return _suggestions_for_refs(
+        missing_refs_from_text("\n".join(errors)), libraries
+    )
+
+
+def extract_model_suggestions(
+    log_path: Path | None, libraries: LibraryManager
+) -> dict[str, list[dict]] | None:
+    """Read ``log_path`` and fuzzy-match every missing ref against loaded libraries."""
+    if log_path is None or not log_path.exists():
+        return None
+    return _suggestions_for_refs(extract_missing_refs(log_path), libraries)
+
+
+def format_suggestion_block(
+    suggestions: dict[str, list[dict]] | None,
+    *,
+    header: str = "Possible fixes (from loaded user libraries):",
+) -> str:
+    """Human-readable block for a suggestions dict; empty string if None/empty."""
+    if not suggestions:
+        return ""
+    lines = ["", header]
+    for ref, matches in suggestions.items():
+        lines.append(f"  Missing '{ref}' — did you mean:")
+        for m in matches:
+            lines.append(f"    {m['name']} (score={m['score']}) - {m['source_path']}")
+    return "\n".join(lines)
+
+
+def attach_suggestions_to_failure(
+    error_msg: str,
+    data: dict,
+    log_path: Path | None,
+    libraries: LibraryManager,
+) -> str:
+    """Append a suggestions block to ``error_msg`` and mutate ``data['suggestions']``.
+
+    Returns the (possibly-unchanged) error message. Called on simulation
+    failure paths where the log already has the error context inline — saves
+    callers from re-implementing the 'read-log / extract / format / attach'
+    sequence at every failure site.
+    """
+    suggestions = extract_model_suggestions(log_path, libraries)
+    if not suggestions:
+        return error_msg
+    data["suggestions"] = suggestions
+    return f"{error_msg}\n{format_suggestion_block(suggestions)}"
 
 
 def resolve_simulation_job(job_id: str, state: SessionState) -> SimulationJob:
