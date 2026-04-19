@@ -146,7 +146,7 @@ class TestServerLifecycle:
                 "ltspice_configure_montecarlo",
                 "ltspice_run_montecarlo",
                 "ltspice_get_batch_results",
-                "ltspice_search_library",
+                "ltspice_find_model",
                 "ltspice_get_model_info",
                 "ltspice_load_library",
                 "ltspice_unload_library",
@@ -507,11 +507,11 @@ class TestLibraryTools:
             assert not result.isError
             assert "No libraries loaded" in _text(result)
 
-    async def test_search_library_no_results(self, tmp_path):
+    async def test_find_model_no_results(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_search_library", {"query": "LM358"})
+            result = await _call(session, "ltspice_find_model", {"name": "LM358"})
             assert not result.isError
-            assert "No models found matching 'LM358'" in _text(result)
+            assert "No fuzzy matches" in _text(result)
 
     async def test_load_nonexistent_library_errors(self, tmp_path):
         async with mcp_session(tmp_path) as session:

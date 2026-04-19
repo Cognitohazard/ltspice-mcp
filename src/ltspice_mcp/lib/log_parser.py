@@ -52,6 +52,52 @@ _BARE_ERROR_PHRASES = [
     "questionable use of curly braces",
 ]
 
+# Missing .MODEL — appears in log as:
+#   Error on line 2 : s1 n003 n001 n002 0 sw Unable to find definition of model "sw"
+# (rarer GUI-dialog phrasing "Can't find definition of model" is also tolerated).
+_RE_MISSING_MODEL = re.compile(
+    r'(?:Unable to find|Can\'?t find) definition of model\s+"([^"]+)"',
+    re.IGNORECASE,
+)
+# Missing .SUBCKT — appears in log as:
+#   Fatal Error: Unknown subcircuit called in: xu1 n004 n001 vcc 0 lm741
+# The missing subcircuit name is the LAST token of the instance line.
+_RE_MISSING_SUBCKT = re.compile(
+    r"Unknown subcircuit called in:\s+(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def missing_refs_from_text(text: str) -> list[str]:
+    """Scan log text for missing .MODEL / .SUBCKT names, de-duplicated in order."""
+    seen: set[str] = set()
+    refs: list[str] = []
+
+    for m in _RE_MISSING_MODEL.finditer(text):
+        name = m.group(1)
+        if name and name not in seen:
+            seen.add(name)
+            refs.append(name)
+
+    for m in _RE_MISSING_SUBCKT.finditer(text):
+        tokens = m.group(1).split()
+        if not tokens:
+            continue
+        name = tokens[-1]
+        if name and name not in seen:
+            seen.add(name)
+            refs.append(name)
+
+    return refs
+
+
+def extract_missing_refs(log_path: Path) -> list[str]:
+    """Extract names of models/subcircuits that LTspice couldn't resolve."""
+    try:
+        return missing_refs_from_text(log_path.read_text(errors="replace"))
+    except OSError:
+        return []
+
 
 def extract_log_diagnostics(log_path: Path) -> dict[str, list[str]]:
     """Extract structured warnings and errors from an LTspice log file.
