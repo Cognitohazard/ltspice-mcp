@@ -19,11 +19,11 @@ def _text(contents) -> str:
 
 
 class TestStaticResources:
-    def test_returns_four_resources(self):
+    def test_returns_static_resources(self):
         resources = get_static_resources()
-        assert len(resources) == 4
+        assert len(resources) == 5
         names = {r.name for r in resources}
-        assert names == {"netlists", "results", "models", "config"}
+        assert names == {"netlists", "results", "models", "config", "recent"}
 
     def test_resource_uris(self):
         resources = get_static_resources()

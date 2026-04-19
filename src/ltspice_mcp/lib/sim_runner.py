@@ -137,6 +137,7 @@ class SimulationRunner:
             job.error = f"Submission failed: {e}"
             job.completed_at = now()
             job.done_event.set()
+            state.persist_job(job)
 
     def _handle_completion(
         self, job_id: str, raw_file: str, log_file: str, state: SessionState
@@ -193,15 +194,16 @@ class SimulationRunner:
 
         self._runners.pop(job_id, None)
         job.done_event.set()
+        state.persist_job(job)
 
-    async def cancel(self, job: SimulationJob) -> None:
+    async def cancel(
+        self, job: SimulationJob, state: SessionState | None = None
+    ) -> None:
         """Cancel a running simulation.
 
         Attempts to stop the SimRunner and kill the simulator process.
-        Sets job status to cancelled and signals completion.
-
-        Args:
-            job: SimulationJob to cancel
+        Sets job status to cancelled, signals completion, and persists the
+        terminal record when ``state`` is provided.
 
         Note:
             spicelib SimRunner doesn't have a direct cancel method.
@@ -226,3 +228,5 @@ class SimulationRunner:
 
         self._runners.pop(job_id, None)
         job.done_event.set()
+        if state is not None:
+            state.persist_job(job)

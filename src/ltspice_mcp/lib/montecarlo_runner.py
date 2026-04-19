@@ -151,6 +151,7 @@ class MonteCarloRunner:
 
         try:
             batch_job.status = "running"
+            state.persist_job(batch_job)
             await asyncio.to_thread(execute_montecarlo)
         except Exception as e:
             if batch_job.status == "cancelled":
@@ -162,6 +163,7 @@ class MonteCarloRunner:
             batch_job.error = f"Monte Carlo execution failed: {e}"
             batch_job.completed_at = now()
             batch_job.done_event.set()
+            state.persist_job(batch_job)
         finally:
             self._active_runners.pop(batch_job.job_id, None)
             self._cancel_events.pop(batch_job.job_id, None)
@@ -211,6 +213,7 @@ class MonteCarloRunner:
         }
 
         batch_job.completed_runs += 1
+        state.persist_batch_progress(batch_job)
 
         logger.debug(
             f"MC job {job_id}: run {run_index} complete "
@@ -243,13 +246,16 @@ class MonteCarloRunner:
         batch_job.status = "completed"
         batch_job.completed_at = now()
         batch_job.done_event.set()
+        state.persist_job(batch_job)
 
         logger.info(
             f"Monte Carlo job {job_id} completed: "
             f"{batch_job.completed_runs}/{batch_job.total_runs} runs finished"
         )
 
-    async def cancel(self, batch_job: BatchJob) -> None:
+    async def cancel(
+        self, batch_job: BatchJob, state: SessionState | None = None
+    ) -> None:
         """Cancel a running Monte Carlo batch job.
 
         Sets job status to cancelled and signals completion. Partial results
@@ -257,6 +263,7 @@ class MonteCarloRunner:
 
         Args:
             batch_job: BatchJob to cancel
+            state: Optional SessionState for persistence of the cancelled record.
         """
         logger.info(f"Cancelling Monte Carlo job {batch_job.job_id}")
 
@@ -274,6 +281,8 @@ class MonteCarloRunner:
         batch_job.status = "cancelled"
         batch_job.completed_at = now()
         batch_job.done_event.set()
+        if state is not None:
+            state.persist_job(batch_job)
 
         logger.info(
             f"Monte Carlo job {batch_job.job_id} cancelled: "

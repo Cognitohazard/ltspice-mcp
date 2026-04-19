@@ -137,6 +137,10 @@ class ServerConfig:
     """Tool profile: "full" exposes all tools, "agentic" exposes a subset
     for LLM agents with native file access (Read/Edit/Write)."""
 
+    persist_jobs: bool = True
+    """Persist simulation/batch job metadata to ``.ltspice-mcp/jobs/`` next
+    to each circuit file so a restarted server can surface prior runs."""
+
     config_path: Path = field(default_factory=lambda: Path.cwd() / "ltspice-mcp.toml")
     """Path that was resolved for the config file (set by load())."""
 
@@ -216,6 +220,15 @@ class ServerConfig:
             ):
                 config_dict["tool_profile"] = p
 
+            if "state" in toml_data and "persist_jobs" in toml_data["state"]:
+                raw = toml_data["state"]["persist_jobs"]
+                if isinstance(raw, bool):
+                    config_dict["persist_jobs"] = raw
+                else:
+                    logger.warning(
+                        "config: state.persist_jobs must be boolean; ignoring %r", raw
+                    )
+
             _validate_numeric(
                 config_dict, "max_parallel_sims", int, 1, 128, source="config"
             )
@@ -282,6 +295,17 @@ class ServerConfig:
             p := _validated_profile(env_profile, "LTSPICE_MCP_TOOL_PROFILE")
         ):
             config_dict["tool_profile"] = p
+
+        if (env_persist := os.getenv("LTSPICE_MCP_PERSIST_JOBS")) is not None:
+            normalized = env_persist.strip().lower()
+            if normalized in ("1", "true", "yes", "on"):
+                config_dict["persist_jobs"] = True
+            elif normalized in ("0", "false", "no", "off"):
+                config_dict["persist_jobs"] = False
+            else:
+                logger.warning(
+                    "LTSPICE_MCP_PERSIST_JOBS: invalid boolean %r; ignoring", env_persist
+                )
 
         config_dict["config_path"] = config_path
         return cls(**config_dict)
@@ -377,5 +401,21 @@ def generate_default_config(path: Path) -> None:
     logging_tbl.add(comment("Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL"))
     logging_tbl.add("level", "INFO")
     doc.add("logging", logging_tbl)
+    doc.add(nl())
+
+    # State section
+    state_tbl = table()
+    state_tbl.add(
+        comment(
+            "Persist simulation/batch job metadata to .ltspice-mcp/jobs/ next to each circuit."
+        )
+    )
+    state_tbl.add(
+        comment(
+            "Lets a restarted server surface prior runs and recent circuits; set to false to disable."
+        )
+    )
+    state_tbl.add("persist_jobs", True)
+    doc.add("state", state_tbl)
 
     path.write_text(tomlkit.dumps(doc))

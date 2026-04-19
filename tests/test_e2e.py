@@ -554,13 +554,20 @@ class TestStatusTool:
 
 
 class TestResources:
-    async def test_list_resources_returns_four_static(self, tmp_path):
+    async def test_list_resources_returns_five_static(self, tmp_path):
         async with mcp_session(tmp_path) as session:
             result = await session.list_resources()
             resources = {r.name: r for r in result.resources}
-            assert len(resources) == 4
-            assert set(resources.keys()) == {"netlists", "results", "models", "config"}
+            assert len(resources) == 5
+            assert set(resources.keys()) == {
+                "netlists",
+                "results",
+                "models",
+                "config",
+                "recent",
+            }
             assert str(resources["config"].uri) == "ltspice://config"
+            assert str(resources["recent"].uri) == "ltspice://recent"
 
     async def test_list_resource_templates_returns_three(self, tmp_path):
         async with mcp_session(tmp_path) as session:
