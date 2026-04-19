@@ -203,7 +203,7 @@ async def _wait_for_completion(
         job.completed_at = now()
 
         # Cancel the simulation
-        await runner.cancel(job)
+        await runner.cancel(job, state)
 
         # Extract log context if available
         log_excerpt = ""
@@ -547,6 +547,6 @@ async def handle_cancel_job(arguments: CancelJobInput, state: SessionState) -> t
     # Cancel the job
     require_simulator(state)
     runner = _get_or_create_runner(state)
-    await runner.cancel(job)
+    await runner.cancel(job, state)
 
     return text_response(f"Job {job_id} cancelled")
