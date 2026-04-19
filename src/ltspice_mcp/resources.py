@@ -5,18 +5,19 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from mcp import types
 from pydantic import AnyUrl
 
-from ltspice_mcp.lib import services
+from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, job_store, recent, services
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
 
-NETLIST_EXTENSIONS = {".asc", ".net", ".sp", ".cir", ".spice"}
+NETLIST_EXTENSIONS = CIRCUIT_EXTENSIONS
 RouteHandler = Callable[[str, dict[str, str], SessionState], types.ReadResourceResult]
 
 
@@ -95,6 +96,15 @@ def get_static_resources() -> list[types.Resource]:
             name="config",
             uri=AnyUrl("ltspice://config"),
             description="Server configuration and detected simulators",
+            mimeType="application/json",
+        ),
+        types.Resource(
+            name="recent",
+            uri=AnyUrl("ltspice://recent"),
+            description=(
+                "Recently-edited circuit files with persisted-job summary counts. "
+                "Surfaces work from prior sessions, including interrupted jobs."
+            ),
             mimeType="application/json",
         ),
     ]
@@ -274,6 +284,32 @@ def _read_measurements(
     data: dict[str, Any] = {"job_id": job_id, "measurements": meas_data["measurements"]}
     if "log_text" in meas_data:
         data["log_text"] = meas_data["log_text"]
+    return _make_result(uri_str, json.dumps(data, indent=2))
+
+
+@_router.route("ltspice://recent")
+def _read_recent(
+    uri_str: str, params: dict[str, str], state: SessionState
+) -> types.ReadResourceResult:
+    """Summary of recently-touched circuits + persisted job counts per circuit."""
+    del params, state  # state is unused; recent.json is user-global
+    entries = recent.load(prune_missing=True)
+    circuits: list[dict[str, Any]] = []
+    for entry in entries:
+        raw_path = entry.get("path")
+        if not isinstance(raw_path, str):
+            continue
+        summary = job_store.summarize_circuit(Path(raw_path))
+        summary["last_touched"] = entry.get("last_touched")
+        circuits.append(summary)
+    data = {
+        "circuits": circuits,
+        "count": len(circuits),
+        "note": (
+            "Use ltspice_check_job(job_id) or ltspice_get_batch_results(job_id) to inspect "
+            "a specific job; interrupted jobs were running when the server last stopped."
+        ),
+    }
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
