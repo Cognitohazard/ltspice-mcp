@@ -15,7 +15,9 @@ from pydantic import AnyUrl, ValidationError
 from ltspice_mcp import errors as _err
 from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
+from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
 from ltspice_mcp.lib.mcp_logging import mcp_log, set_log_fn
+from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.resources import (
     get_resource_templates,
@@ -23,6 +25,9 @@ from ltspice_mcp.resources import (
     handle_read_resource,
 )
 from ltspice_mcp.state import SessionState
+
+# Tool argument keys that carry a circuit file path.
+_CIRCUIT_PATH_KEYS: tuple[str, ...] = ("path", "netlist")
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +38,39 @@ def _get_state(server_: Server) -> SessionState:
         return server_.request_context.lifespan_context["state"]
     except (AttributeError, KeyError) as e:
         raise RuntimeError(f"Session state not available: {e}") from e
+
+
+def _extract_circuit_path(arguments: dict | None) -> str | None:
+    """Pull a circuit path from raw tool arguments, if one is present."""
+    if not isinstance(arguments, dict):
+        return None
+    for key in _CIRCUIT_PATH_KEYS:
+        val = arguments.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+    return None
+
+
+def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
+    """Side effects for any tool call that references a circuit file.
+
+    Loads the circuit's persisted jobs (once per session) and bumps it to
+    the top of the recent-circuits index. Best-effort — failures don't
+    break dispatch. Recent-index writes are debounced per session via
+    ``SessionState._touched_recent`` so repeated tool calls on the same
+    circuit don't rewrite the file each time.
+    """
+    raw = _extract_circuit_path(arguments)
+    if not raw:
+        return
+    try:
+        resolved = resolve_safe_path(raw, state.config.allowed_paths)
+    except (PathSecurityError, OSError):
+        return
+    if resolved.suffix.lower() not in CIRCUIT_EXTENSIONS:
+        return
+    state.ensure_jobs_loaded_for(resolved)
+    state.note_recent_circuit(resolved)
 
 
 def _configure_asc_editor(config: ServerConfig, available: dict) -> None:
@@ -295,6 +333,10 @@ async def call_tool(name: str, arguments: dict | None):
         await session.send_log_message(level=level, data=msg, logger="ltspice-mcp")  # type: ignore[arg-type]
 
     set_log_fn(_log)
+
+    # Lazy-load persisted jobs for the circuit this tool is operating on,
+    # and bump it in the recent-circuits index. Best-effort; errors swallowed.
+    _notice_circuit(arguments, state)
 
     # Invoke handler — enrich known errors with actionable guidance.
     # Exceptions propagate to the MCP SDK which sets isError=True.
