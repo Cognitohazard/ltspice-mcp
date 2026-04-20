@@ -13,12 +13,120 @@ rejects AC analysis before calling in.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Literal, TypedDict
 
 import numpy as np
 from scipy.signal import find_peaks
 
 _LEVEL_EPSILON = 1e-12
+
+CrossingDirection = Literal["rising", "falling"]
+
+
+class EdgeMetricsOutput(TypedDict):
+    """Return shape of :func:`analyze_edge`."""
+
+    transition_time: float
+    slew_rate: float
+    low_level: float
+    high_level: float
+    t_low_crossing: float
+    t_high_crossing: float
+    t_mid_crossing: float
+    edge_direction: CrossingDirection
+    is_rise_time: bool
+    low_pct: float
+    high_pct: float
+    num_edges_in_window: int
+    warnings: list[str]
+
+
+class PulseResponseOutput(TypedDict):
+    """Return shape of :func:`analyze_pulse_response`."""
+
+    direction: CrossingDirection
+    initial_value: float
+    steady_state_value: float
+    peak_value: float
+    peak_time: float
+    overshoot_pct: float
+    undershoot_pct: float
+    settling_time: float | None
+    settling_tolerance_pct: float
+    warnings: list[str]
+
+
+class TimingBetweenOutput(TypedDict):
+    """Return shape of :func:`analyze_timing_between`."""
+
+    t_a: float
+    t_b: float
+    delay: float
+    threshold_a_used: float
+    threshold_b_used: float
+    direction_a: CrossingDirection
+    direction_b: CrossingDirection
+    num_crossings_a: int
+    num_crossings_b: int
+    warnings: list[str]
+
+
+class PeriodicMetricsOutput(TypedDict):
+    """Return shape of :func:`analyze_periodic`."""
+
+    period: float
+    frequency: float
+    jitter_rms: float
+    duty_cycle_pct: float | None
+    pulse_width_high: float | None
+    pulse_width_low: float | None
+    num_rising_edges: int
+    num_falling_edges: int
+    num_periods_measured: int
+    threshold_used: float
+    warnings: list[str]
+
+
+class SignalStatsOutput(TypedDict):
+    """Return shape of :func:`compute_signal_stats`. Transient-only."""
+
+    t_start: float
+    t_end: float
+    duration: float
+    num_samples: int
+    mean: float
+    rms: float
+    std: float
+    abs_mean: float
+    min: float
+    max: float
+    pk_pk: float
+
+
+class HistogramBin(TypedDict):
+    """One bin in a ``.MEAS`` value histogram."""
+
+    bin_start: float
+    bin_end: float
+    count: int
+
+
+class MeasurementStatsEntry(TypedDict):
+    """Per-measurement aggregate stats in :func:`compute_measurement_stats`."""
+
+    total_count: int
+    valid_count: int
+    failure_count: int
+    min: float | None
+    max: float | None
+    mean: float | None
+    median: float | None
+    std: float | None
+    p10: float | None
+    p90: float | None
+    best_step_index: int | None
+    worst_step_index: int | None
+    histogram: list[HistogramBin]
 
 
 def window_and_clean(
@@ -134,7 +242,7 @@ def analyze_edge(
     edge_index: int = 0,
     low_pct: float = 10.0,
     high_pct: float = 90.0,
-) -> dict[str, Any]:
+) -> EdgeMetricsOutput:
     """Compute transition time (rise or fall) and slew rate for one edge.
 
     Levels are estimated from the first/last 10% of the window (NOT global
@@ -243,7 +351,7 @@ def analyze_pulse_response(
     initial_value: float | None = None,
     final_value: float | None = None,
     settling_tolerance_pct: float = 2.0,
-) -> dict[str, Any]:
+) -> PulseResponseOutput:
     """Compute overshoot, undershoot, settling time for a step response.
 
     - ``initial_value`` / ``final_value`` default to mean of first/last 10% of window.
@@ -340,7 +448,7 @@ def analyze_timing_between(
     threshold_pct: float = 50.0,
     direction_a: str = "rising",
     direction_b: str = "rising",
-) -> dict[str, Any]:
+) -> TimingBetweenOutput:
     """Time delay between first threshold crossings of two signals on a shared axis.
 
     Thresholds are per-signal (default 50% of each signal's own range in the
@@ -415,7 +523,7 @@ def analyze_periodic(
     *,
     threshold: float | None = None,
     min_periods: int = 2,
-) -> dict[str, Any]:
+) -> PeriodicMetricsOutput:
     """Period, frequency, duty cycle, jitter for an oscillating signal.
 
     Uses threshold crossings (default = midpoint of window min/max). For
@@ -517,7 +625,7 @@ def analyze_periodic(
 def compute_signal_stats(
     t: np.ndarray,
     y: np.ndarray,
-) -> dict[str, Any]:
+) -> SignalStatsOutput:
     """Time-weighted signal statistics over the window [t[0], t[-1]].
 
     Uses trapezoidal integration so non-uniform sample spacing is handled
@@ -574,7 +682,7 @@ def compute_measurement_stats(
     *,
     histogram_bins: int = 10,
     measurement: str | None = None,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, MeasurementStatsEntry]:
     """Aggregate stats across all steps of a ``.MEAS`` result dict.
 
     ``None`` entries (failed measurements) are counted but excluded from stats.
@@ -590,46 +698,39 @@ def compute_measurement_stats(
             f"{', '.join(measurements.keys()) or '<none>'}"
         )
 
-    result: dict[str, dict[str, Any]] = {}
+    result: dict[str, MeasurementStatsEntry] = {}
     for name in names:
         values = measurements[name]
         total = len(values)
         valid = [v for v in values if v is not None]
         valid_count = len(valid)
 
-        entry: dict[str, Any] = {
-            "total_count": total,
-            "valid_count": valid_count,
-            "failure_count": total - valid_count,
-        }
-
         if valid_count == 0:
-            entry.update(
-                min=None,
-                max=None,
-                mean=None,
-                median=None,
-                std=None,
-                p10=None,
-                p90=None,
-                best_step_index=None,
-                worst_step_index=None,
-                histogram=[],
-            )
-            result[name] = entry
+            result[name] = {
+                "total_count": total,
+                "valid_count": valid_count,
+                "failure_count": total - valid_count,
+                "min": None,
+                "max": None,
+                "mean": None,
+                "median": None,
+                "std": None,
+                "p10": None,
+                "p90": None,
+                "best_step_index": None,
+                "worst_step_index": None,
+                "histogram": [],
+            }
             continue
 
         arr = np.asarray(valid, dtype=float)
-        entry["min"] = float(np.min(arr))
-        entry["max"] = float(np.max(arr))
-        entry["mean"] = float(np.mean(arr))
-        entry["median"] = float(np.median(arr))
-        entry["std"] = float(np.std(arr, ddof=0))
-        entry["p10"] = float(np.percentile(arr, 10))
-        entry["p90"] = float(np.percentile(arr, 90))
+        e_min = float(np.min(arr))
+        e_max = float(np.max(arr))
 
-        best_step = worst_step = None
-        best_val = worst_val = None
+        best_step: int | None = None
+        worst_step: int | None = None
+        best_val: float | None = None
+        worst_val: float | None = None
         for i, v in enumerate(values):
             if v is None:
                 continue
@@ -639,12 +740,11 @@ def compute_measurement_stats(
             if worst_val is None or v > worst_val:
                 worst_val = v
                 worst_step = i
-        entry["best_step_index"] = best_step
-        entry["worst_step_index"] = worst_step
 
-        if histogram_bins > 0 and valid_count >= 2 and entry["min"] < entry["max"]:
+        histogram: list[HistogramBin] = []
+        if histogram_bins > 0 and valid_count >= 2 and e_min < e_max:
             counts, edges = np.histogram(arr, bins=histogram_bins)
-            entry["histogram"] = [
+            histogram = [
                 {
                     "bin_start": float(edges[i]),
                     "bin_end": float(edges[i + 1]),
@@ -652,9 +752,21 @@ def compute_measurement_stats(
                 }
                 for i in range(len(counts))
             ]
-        else:
-            entry["histogram"] = []
 
-        result[name] = entry
+        result[name] = {
+            "total_count": total,
+            "valid_count": valid_count,
+            "failure_count": total - valid_count,
+            "min": e_min,
+            "max": e_max,
+            "mean": float(np.mean(arr)),
+            "median": float(np.median(arr)),
+            "std": float(np.std(arr, ddof=0)),
+            "p10": float(np.percentile(arr, 10)),
+            "p90": float(np.percentile(arr, 90)),
+            "best_step_index": best_step,
+            "worst_step_index": worst_step,
+            "histogram": histogram,
+        }
 
     return result

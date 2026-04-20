@@ -165,8 +165,8 @@ persistence entirely.
 
 | Profile | Tools | Use case |
 |-|-|-|
-| `full` (default) | All 41 tools | Backwards-compatible default for any MCP client |
-| `agentic` | 27 | **Recommended** when your client supports skill files |
+| `full` (default) | All 47 tools | Backwards-compatible default for any MCP client |
+| `agentic` | 33 | **Recommended** when your client supports skill files |
 
 The **agentic** profile removes netlist-editing wrappers, sweep/MC configuration tools, niche schematic operations, and library session management — things a capable LLM agent does better through direct file editing. It keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, AscEditor-dependent ops, and library search — the tools that provide genuine leverage over what an LLM can do natively.
 
@@ -190,7 +190,7 @@ Copy the relevant skill into whatever location your MCP client uses for persiste
 
 ## Tools
 
-All 41 tools are prefixed with `ltspice_` to avoid namespace conflicts with other MCP servers. Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) for client auto-approval decisions.
+All 47 tools are prefixed with `ltspice_` to avoid namespace conflicts with other MCP servers. Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) for client auto-approval decisions.
 
 ### Circuit editing (16 tools)
 
@@ -225,15 +225,28 @@ Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispa
 | `ltspice_check_job` | Check a job's status by ID, or list all jobs |
 | `ltspice_cancel_job` | Cancel a running simulation |
 
-### Analysis (5 tools)
+### Analysis (16 tools)
+
+Scalar and overview tools work on any .raw file; waveform tools reject AC (use the AC-specific tools instead) and AC tools reject transient.
 
 | Tool | Description |
 |-|-|
-| `ltspice_get_signal_stats` | Signal statistics: min, max, mean, RMS, peak-to-peak (dB/phase for AC) |
+| `ltspice_signal_stats` | Signal statistics: min, max, mean, RMS, peak-to-peak (dB/phase for AC) |
 | `ltspice_query_value` | Query a signal's value at a specific time or frequency |
 | `ltspice_measurements` | Extract `.MEAS` directive results from the simulation log |
 | `ltspice_operating_point` | DC operating point: all node voltages and branch currents |
 | `ltspice_simulation_summary` | Full summary: simulation type, signals, measurements, warnings |
+| `ltspice_edge_metrics` | Transient rise/fall time and slew rate for one edge |
+| `ltspice_pulse_response` | Transient overshoot, undershoot, and settling time for a step |
+| `ltspice_timing_between` | Propagation delay between two transient signals on a shared axis |
+| `ltspice_periodic_metrics` | Period, frequency, duty cycle, and jitter for an oscillating signal |
+| `ltspice_measurement_stats` | Aggregate `.MEAS` scalars across a sweep or Monte Carlo run |
+| `ltspice_filter_metrics` | AC filter characterization: type (LPF/HPF/BPF/BSF), cutoffs, ripple, rejection, order |
+| `ltspice_stability_metrics` | AC loop-gain stability: all unity-gain / -180° crossings and per-crossing margins |
+| `ltspice_gain_at` | Batch gain + phase at N frequencies with log-axis interpolation |
+| `ltspice_roll_off` | Magnitude slope between two frequencies in dB/decade + dB/octave |
+| `ltspice_resonance` | Detect AC peaks and estimate Q factor + -3 dB bandwidth per peak |
+| `ltspice_find_crossing` | Low-level: find frequencies where magnitude (dB/linear) or phase crosses a level |
 
 ### Parametric analysis (5 tools)
 
@@ -255,11 +268,12 @@ Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispa
 | `ltspice_unload_library` | Unload a previously loaded library |
 | `ltspice_list_libraries` | List loaded libraries, optionally with their model names |
 
-### Status (1 tool)
+### Status (2 tools)
 
 | Tool | Description |
 |-|-|
 | `ltspice_server_status` | Server status: detected simulators, config, sandbox paths, runtime state |
+| `ltspice_recent` | Recently-used circuits and jobs from the persistent sidecar index |
 
 ## Resources
 
