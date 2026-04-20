@@ -10,24 +10,36 @@ from ltspice_mcp.errors import ResultError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import (
     EdgeMetricsInput,
+    FilterMetricsInput,
+    FindCrossingInput,
+    GainAtInput,
     MeasurementsInput,
     MeasurementStatsInput,
     OperatingPointInput,
     PeriodicMetricsInput,
     PulseResponseInput,
     QueryValueInput,
+    ResonanceInput,
+    RollOffInput,
     SignalStatsInput,
     SimulationSummaryInput,
+    StabilityMetricsInput,
     TimingBetweenInput,
     handle_edge_metrics,
+    handle_filter_metrics,
+    handle_find_crossing,
+    handle_gain_at,
     handle_measurement_stats,
     handle_measurements,
     handle_operating_point,
     handle_periodic_metrics,
     handle_pulse_response,
     handle_query_value,
+    handle_resonance,
+    handle_roll_off,
     handle_signal_stats,
     handle_simulation_summary,
+    handle_stability_metrics,
     handle_timing_between,
 )
 
@@ -136,9 +148,7 @@ class TestSignalStats:
                 state_no_sim,
             )
 
-    async def test_transient_time_weighted_rms(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
+    async def test_transient_time_weighted_rms(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = work_dir / "sine.raw"
         freq = 1000.0
         t = np.linspace(0, 10 / freq, 20001)
@@ -173,9 +183,7 @@ class TestSignalStats:
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
         result = await handle_signal_stats(
-            SignalStatsInput(
-                raw_file=raw_file.name, signal="V(out)", t_start="0.6m", t_end="1m"
-            ),
+            SignalStatsInput(raw_file=raw_file.name, signal="V(out)", t_start="0.6m", t_end="1m"),
             state_no_sim,
         )
         sc = result.structuredContent
@@ -227,22 +235,14 @@ class TestGetMeasurements:
         log = work_dir / "bad.log"
         log.write_text("not a real spice log")
         with pytest.raises(ResultError):
-            await handle_measurements(
-                MeasurementsInput(log_file=log.name), state_no_sim
-            )
+            await handle_measurements(MeasurementsInput(log_file=log.name), state_no_sim)
 
-    async def test_no_measurements_with_errors(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
+    async def test_no_measurements_with_errors(self, state_no_sim: SessionState, work_dir: Path):
         log = work_dir / "err.log"
         log.write_text(
-            "Circuit: * test\n"
-            "Fatal Error: missing model XYZ\n"
-            "Total elapsed time: 0.001 seconds.\n"
+            "Circuit: * test\nFatal Error: missing model XYZ\nTotal elapsed time: 0.001 seconds.\n"
         )
-        result = await handle_measurements(
-            MeasurementsInput(log_file=log.name), state_no_sim
-        )
+        result = await handle_measurements(MeasurementsInput(log_file=log.name), state_no_sim)
         assert "errors in log" in result.content[0].text
 
 
@@ -367,20 +367,18 @@ class TestQueryStepRange:
     async def test_step_out_of_range(self, state_no_sim: SessionState, fake_raw: Path):
         with pytest.raises(ResultError, match="out of range"):
             await handle_query_value(
-                QueryValueInput(
-                    raw_file=fake_raw.name, signal="V(out)", at="0.5", step=99
-                ),
+                QueryValueInput(raw_file=fake_raw.name, signal="V(out)", at="0.5", step=99),
                 state_no_sim,
             )
 
     async def test_signal_not_found(self, state_no_sim: SessionState, fake_raw: Path):
         with pytest.raises(ResultError, match="not found"):
             await handle_query_value(
-                QueryValueInput(
-                    raw_file=fake_raw.name, signal="V(missing)", at="0.5"
-                ),
+                QueryValueInput(raw_file=fake_raw.name, signal="V(missing)", at="0.5"),
                 state_no_sim,
             )
+
+
 def _step_waveform(step_time: float = 0.5e-3, tr: float = 0.1e-3, n: int = 5001):
     t = np.linspace(0, 2e-3, n)
     y = np.where(t < step_time, 0.0, np.where(t < step_time + tr, (t - step_time) / tr, 1.0))
@@ -664,3 +662,213 @@ class TestMeasurementStats:
             await handle_measurement_stats(MeasurementStatsInput(log_file=log.name), state_no_sim)
 
 
+# ---------------------------------------------------------------------------
+# AC-tool handlers (integration: parsing + load path + formatting)
+# ---------------------------------------------------------------------------
+
+
+def _ac_raw(
+    state: SessionState,
+    work_dir: Path,
+    *,
+    filename: str = "ac.raw",
+    points: int = 500,
+    fc: float = 1000.0,
+) -> Path:
+    """Build a mock AC RawRead with a 1-pole LPF transfer function."""
+    raw_file = work_dir / filename
+    freqs = np.logspace(0, 6, points)
+    s = 1j * 2 * np.pi * freqs
+    wc = 2 * np.pi * fc
+    H = wc / (s + wc)
+    raw = _make_raw_mock(
+        plotname="AC Analysis",
+        trace_names=["frequency", "V(out)"],
+        waves={"frequency": freqs, "V(out)": H},
+        axis=freqs,
+    )
+    _inject_raw_mock(state, raw_file, raw)
+    return raw_file
+
+
+@pytest.mark.asyncio
+class TestFilterMetricsTool:
+    async def test_lpf_classification(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = _ac_raw(state_no_sim, work_dir)
+        result = await handle_filter_metrics(
+            FilterMetricsInput(raw_file=raw_file.name, signal="V(out)"),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc["filter_type"] == "lowpass"
+        assert sc["cutoff_high_hz"] == pytest.approx(1000.0, rel=0.05)
+        assert sc["estimated_order"] == 1
+        assert "Filter Metrics" in result.content[0].text
+
+    async def test_rejects_transient(self, state_no_sim: SessionState, fake_raw: Path):
+        with pytest.raises(ResultError, match="AC analysis"):
+            await handle_filter_metrics(
+                FilterMetricsInput(raw_file=fake_raw.name, signal="V(out)"),
+                state_no_sim,
+            )
+
+    async def test_ref_db_must_be_negative(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = _ac_raw(state_no_sim, work_dir)
+        with pytest.raises(ResultError, match="negative"):
+            await handle_filter_metrics(
+                FilterMetricsInput(raw_file=raw_file.name, signal="V(out)", ref_db=3.0),
+                state_no_sim,
+            )
+
+
+@pytest.mark.asyncio
+class TestGainAtTool:
+    async def test_batch_query(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = _ac_raw(state_no_sim, work_dir)
+        result = await handle_gain_at(
+            GainAtInput(
+                raw_file=raw_file.name,
+                signal="V(out)",
+                frequencies=["100", "1k", "10k"],
+            ),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert len(sc["points"]) == 3
+        # 1-pole LPF at fc should be -3 dB.
+        assert sc["points"][1]["magnitude_db"] == pytest.approx(-3.0, abs=0.1)
+
+    async def test_empty_frequencies(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = _ac_raw(state_no_sim, work_dir)
+        with pytest.raises(ResultError, match="empty"):
+            await handle_gain_at(
+                GainAtInput(raw_file=raw_file.name, signal="V(out)", frequencies=[]),
+                state_no_sim,
+            )
+
+    async def test_invalid_frequency(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = _ac_raw(state_no_sim, work_dir)
+        with pytest.raises(ResultError):
+            await handle_gain_at(
+                GainAtInput(
+                    raw_file=raw_file.name,
+                    signal="V(out)",
+                    frequencies=["not_a_number"],
+                ),
+                state_no_sim,
+            )
+
+
+@pytest.mark.asyncio
+class TestStabilityMetricsTool:
+    async def test_2pole_loop(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "loop.raw"
+        freqs = np.logspace(0, 8, 500)
+        s = 1j * 2 * np.pi * freqs
+        A = 1000.0
+        H = A / ((1 + s / (2 * np.pi * 1000)) * (1 + s / (2 * np.pi * 100000)))
+        raw = _make_raw_mock(
+            plotname="AC Analysis",
+            trace_names=["frequency", "V(loop)"],
+            waves={"frequency": freqs, "V(loop)": H},
+            axis=freqs,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_stability_metrics(
+            StabilityMetricsInput(raw_file=raw_file.name, signal="V(loop)"),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc["stability"] in ("unconditional", "stable")
+        assert sc["phase_margin_worst_deg"] is not None
+        # 60 dB DC gain.
+        assert sc["dc_gain_db"] == pytest.approx(60.0, abs=0.1)
+
+
+@pytest.mark.asyncio
+class TestRollOffTool:
+    async def test_1pole_asymptote(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = _ac_raw(state_no_sim, work_dir, fc=100.0)
+        result = await handle_roll_off(
+            RollOffInput(
+                raw_file=raw_file.name,
+                signal="V(out)",
+                f_low="10k",
+                f_high="100k",
+            ),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc["slope_db_per_decade"] == pytest.approx(-20.0, abs=1.0)
+        assert sc["nearest_pole_order_estimate"] == 1
+
+
+@pytest.mark.asyncio
+class TestResonanceTool:
+    async def test_biquad(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "reson.raw"
+        freqs = np.logspace(1, 5, 3000)
+        s = 1j * 2 * np.pi * freqs
+        w0 = 2 * np.pi * 1000
+        Q = 10.0
+        H = (w0 * w0) / (s * s + (w0 / Q) * s + w0 * w0)
+        raw = _make_raw_mock(
+            plotname="AC Analysis",
+            trace_names=["frequency", "V(out)"],
+            waves={"frequency": freqs, "V(out)": H},
+            axis=freqs,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_resonance(
+            ResonanceInput(raw_file=raw_file.name, signal="V(out)"),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert len(sc["peaks"]) == 1
+        peak = sc["peaks"][0]
+        assert peak["frequency_hz"] == pytest.approx(1000.0, rel=0.05)
+        assert peak["q_factor"] == pytest.approx(10.0, rel=0.1)
+
+
+@pytest.mark.asyncio
+class TestFindCrossingTool:
+    async def test_magnitude_crossing(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = _ac_raw(state_no_sim, work_dir)
+        result = await handle_find_crossing(
+            FindCrossingInput(
+                raw_file=raw_file.name,
+                signal="V(out)",
+                quantity="magnitude_db",
+                level=-3.0,
+            ),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert len(sc["crossings"]) == 1
+        assert sc["crossings"][0]["frequency_hz"] == pytest.approx(1000.0, rel=0.05)
+
+    async def test_rejects_transient(self, state_no_sim: SessionState, fake_raw: Path):
+        with pytest.raises(ResultError, match="AC analysis"):
+            await handle_find_crossing(
+                FindCrossingInput(
+                    raw_file=fake_raw.name,
+                    signal="V(out)",
+                    quantity="magnitude_db",
+                    level=0.0,
+                ),
+                state_no_sim,
+            )
+
+    async def test_max_results_validated(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = _ac_raw(state_no_sim, work_dir)
+        with pytest.raises(ResultError, match="max_results"):
+            await handle_find_crossing(
+                FindCrossingInput(
+                    raw_file=raw_file.name,
+                    signal="V(out)",
+                    quantity="magnitude_db",
+                    level=0.0,
+                    max_results=0,
+                ),
+                state_no_sim,
+            )

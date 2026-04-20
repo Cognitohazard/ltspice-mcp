@@ -282,5 +282,6 @@ class TestExtractLogDiagnostics:
         )
         result = parse_measurements(log)
         assert result["measurements"] == {}
-        assert "errors" in result
-        assert len(result["errors"]) == 1
+        errors = result["errors"]
+        assert errors is not None
+        assert len(errors) == 1
