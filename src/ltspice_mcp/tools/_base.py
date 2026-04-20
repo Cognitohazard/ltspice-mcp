@@ -3,11 +3,13 @@
 import copy
 import json
 import logging
-from collections.abc import Callable
+import types as _stdlib_types
+import typing
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from functools import wraps
+from functools import cache, wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
 from mcp import types
 from pydantic import BaseModel, ConfigDict
@@ -44,20 +46,27 @@ def json_response(data: Any) -> types.CallToolResult:
 
 
 def format_response(
-    text: str, data: dict[str, Any], fmt: str | None = None
+    text: str,
+    data: Mapping[str, Any],
+    fmt: str | None = None,
 ) -> types.CallToolResult:
     """Return a CallToolResult with text content and structuredContent.
 
-    Always populates structuredContent for programmatic access.
-    The format param controls the text representation:
+    Always populates structuredContent for programmatic access. Accepts any
+    mapping so TypedDict return values from lib functions pass through
+    without cast/copy. The format param controls the text representation:
     - "json": text is JSON-formatted (for clients that parse text)
     - "text" or None: text is human-readable (default)
     """
+    # MCP SDK's CallToolResult wants a plain dict for structuredContent;
+    # TypedDicts ARE plain dicts at runtime, but wrap defensively so
+    # non-dict mappings (rare, but cheap to support) also work.
+    payload: dict[str, Any] = dict(data) if not isinstance(data, dict) else data
     if fmt == "json":
-        return json_response(data)
+        return json_response(payload)
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=text)],
-        structuredContent=data,
+        structuredContent=payload,
     )
 
 
@@ -163,6 +172,118 @@ def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
     return _strip_titles(schema)
 
 
+# ---------------------------------------------------------------------------
+# TypedDict → JSON Schema generator
+# ---------------------------------------------------------------------------
+
+
+_PRIMITIVE_MAP: dict[type, str] = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+}
+
+
+def _is_typeddict(tp: Any) -> bool:
+    return isinstance(tp, type) and typing.is_typeddict(tp)
+
+
+def _jsontype_from_union(args: tuple[Any, ...]) -> dict[str, Any]:
+    """Handle ``X | None`` and ``X | Y | None`` unions.
+
+    ``X | None`` becomes ``{"type": ["X", "null"]}`` when X is a single
+    primitive — the common case for ``float | None`` fields. Mixed unions
+    with complex members fall back to ``anyOf``.
+    """
+    non_none = [a for a in args if a is not type(None)]
+    has_none = len(non_none) != len(args)
+    if len(non_none) == 1:
+        inner = _schema_for_type(non_none[0])
+        if has_none and "type" in inner and isinstance(inner["type"], str):
+            type_val = inner["type"]
+            return {**inner, "type": [type_val, "null"]}
+        if has_none:
+            # Complex inner (nested object/array) — use anyOf with null.
+            return {"anyOf": [inner, {"type": "null"}]}
+        return inner
+    variants = [_schema_for_type(a) for a in non_none]
+    if has_none:
+        variants.append({"type": "null"})
+    return {"anyOf": variants}
+
+
+def _is_union(tp: Any) -> bool:
+    """True for both ``typing.Union[X, Y]`` and ``X | Y`` syntax."""
+    if get_origin(tp) is Union:
+        return True
+    # Python 3.10+: `X | Y` has origin == types.UnionType (the class).
+    return get_origin(tp) is _stdlib_types.UnionType
+
+
+def _schema_for_type(tp: Any) -> dict[str, Any]:
+    """Return a JSON Schema fragment for a type annotation."""
+    if tp is Any:
+        return {}
+    if tp is type(None):
+        return {"type": "null"}
+    if tp in _PRIMITIVE_MAP:
+        return {"type": _PRIMITIVE_MAP[tp]}
+    if _is_typeddict(tp):
+        return schema_from_typeddict(tp)
+
+    origin = get_origin(tp)
+    args = get_args(tp)
+
+    if origin is Literal:
+        return {"enum": list(args)}
+    if _is_union(tp):
+        return _jsontype_from_union(args)
+    if origin is list or origin is tuple:
+        item_type = args[0] if args else Any
+        return {"type": "array", "items": _schema_for_type(item_type)}
+    if origin is dict:
+        value_type = args[1] if len(args) == 2 else Any
+        return {
+            "type": "object",
+            "additionalProperties": _schema_for_type(value_type),
+        }
+
+    raise TypeError(
+        f"Unsupported type annotation for schema generation: {tp!r}. "
+        "Extend _schema_for_type in tools/_base.py if this construct is "
+        "now used in the repo."
+    )
+
+
+@cache
+def schema_from_typeddict(td: type) -> dict[str, Any]:
+    """Generate a JSON Schema (``{"type": "object", ...}``) from a TypedDict.
+
+    Every field is emitted under ``properties``. ``required`` lists fields
+    that don't accept None — optional-by-convention is expressed as
+    ``X | None`` on the TypedDict, not via ``NotRequired``, so the repo
+    has a single way to spell "may be missing" and the schema reflects it.
+    """
+    if not _is_typeddict(td):
+        raise TypeError(f"Expected TypedDict, got {td!r}")
+
+    hints = get_type_hints(td)
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    for field_name, field_type in hints.items():
+        properties[field_name] = _schema_for_type(field_type)
+        # A field is required unless its type admits None.
+        admits_none = _is_union(field_type) and type(None) in get_args(field_type)
+        if not admits_none:
+            required.append(field_name)
+
+    schema: dict[str, Any] = {"type": "object", "properties": properties}
+    if required:
+        schema["required"] = required
+    return schema
+
+
 class ToolRegistry:
     """Registry for tool definitions and handlers."""
 
@@ -178,8 +299,19 @@ class ToolRegistry:
         annotations: types.ToolAnnotations,
         profiles: tuple[str, ...] = ("full",),
         output_schema: dict[str, Any] | None = None,
+        output_model: type | None = None,
     ) -> Callable[[Callable], Callable]:
-        """Register a tool and derive its schema from the input model."""
+        """Register a tool and derive its schema from the input model.
+
+        ``output_model`` (a TypedDict) is preferred over ``output_schema``
+        (a hand-written dict): the schema is generated once at registration
+        time from the same type the lib already returns, so the two can't
+        drift. Only one of the two should be supplied.
+        """
+        if output_model is not None and output_schema is not None:
+            raise ValueError(
+                f"Tool {name!r}: supply either output_model or output_schema, not both"
+            )
 
         def decorator(handler: Callable) -> Callable:
             if any(rt.definition.name == name for rt in self._registered):
@@ -201,7 +333,9 @@ class ToolRegistry:
                 ),
                 "annotations": annotations,
             }
-            if output_schema is not None:
+            if output_model is not None:
+                definition_kwargs["outputSchema"] = schema_from_typeddict(output_model)
+            elif output_schema is not None:
                 definition_kwargs["outputSchema"] = output_schema
 
             self._registered.append(
