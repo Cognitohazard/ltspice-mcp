@@ -377,3 +377,90 @@ class TestSchemaVersion:
         summary = job_store.summarize_circuit(circuit)
         assert summary["total_jobs"] == 1
         assert summary["status_counts"] == {"completed": 1}
+
+
+class TestSchemaMigration:
+    def test_missing_schema_version_rejected(self, tmp_path: Path) -> None:
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        sidecar = job_store.sidecar_dir(circuit)
+        sidecar.mkdir(parents=True)
+        (sidecar / "sim_versionless.json").write_text(
+            json.dumps(
+                {
+                    "schema": job_store.SCHEMA,
+                    # no schema_version
+                    "job_id": "sim_versionless",
+                    "kind": "simulation",
+                    "status": "completed",
+                    "netlist": str(circuit),
+                    "simulator": "LTspice",
+                    "started_at": now().isoformat(),
+                }
+            )
+        )
+        sim_jobs, _ = job_store.load_jobs_for_circuit(circuit)
+        assert sim_jobs == []
+
+    def test_wrong_schema_rejected(self, tmp_path: Path) -> None:
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        sidecar = job_store.sidecar_dir(circuit)
+        sidecar.mkdir(parents=True)
+        (sidecar / "sim_alien.json").write_text(
+            json.dumps(
+                {
+                    "schema": "something-else",
+                    "schema_version": 1,
+                    "job_id": "sim_alien",
+                    "kind": "simulation",
+                    "status": "completed",
+                }
+            )
+        )
+        sim_jobs, _ = job_store.load_jobs_for_circuit(circuit)
+        assert sim_jobs == []
+
+    def test_migration_chain_applies(self, tmp_path: Path, monkeypatch) -> None:
+        """Forge a hypothetical v0 record + migration and verify it upgrades."""
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        sidecar = job_store.sidecar_dir(circuit)
+        sidecar.mkdir(parents=True)
+
+        # Pretend current schema is v2, v0 and v1 are readable.
+        monkeypatch.setattr(job_store, "SCHEMA_VERSION", 2)
+        monkeypatch.setattr(job_store, "SUPPORTED_VERSIONS", frozenset({0, 1, 2}))
+
+        def v0_to_v1(data: dict) -> dict:
+            # Fake migration: rename old_name -> netlist
+            if "old_name" in data:
+                data["netlist"] = data.pop("old_name")
+            return data
+
+        def v1_to_v2(data: dict) -> dict:
+            # Fake migration: add a missing field with a default
+            data.setdefault("error", None)
+            return data
+
+        monkeypatch.setitem(job_store._MIGRATIONS, 0, v0_to_v1)
+        monkeypatch.setitem(job_store._MIGRATIONS, 1, v1_to_v2)
+
+        (sidecar / "sim_legacy.json").write_text(
+            json.dumps(
+                {
+                    "schema": job_store.SCHEMA,
+                    "schema_version": 0,
+                    "job_id": "sim_legacy",
+                    "kind": "simulation",
+                    "status": "completed",
+                    "old_name": str(circuit),
+                    "simulator": "LTspice",
+                    "started_at": now().isoformat(),
+                }
+            )
+        )
+        sim_jobs, _ = job_store.load_jobs_for_circuit(circuit)
+        assert len(sim_jobs) == 1
+        assert sim_jobs[0].job_id == "sim_legacy"
+        assert str(sim_jobs[0].netlist) == str(circuit)

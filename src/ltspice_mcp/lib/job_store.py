@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from ltspice_mcp.lib import atomic_write_json, parse_iso_datetime
-from ltspice_mcp.state import (
+from ltspice_mcp.lib.job_types import (
     NON_TERMINAL_LIVE_STATUSES,
     TERMINAL_STATUSES,
     BatchJob,
@@ -35,10 +35,39 @@ SIDECAR_DIRNAME = ".ltspice-mcp"
 JOBS_SUBDIR = "jobs"
 SCHEMA = "ltspice-mcp/job"
 SCHEMA_VERSION = 1
-# Versions this build accepts on load. Bump SCHEMA_VERSION when the stored
-# shape changes in a breaking way; add migration logic in ``_migrate``.
+# Versions this build can READ after applying ``_MIGRATIONS``. Always
+# includes the current version; older versions are added once their
+# migration function lands in ``_MIGRATIONS``.
 SUPPORTED_VERSIONS: frozenset[int] = frozenset({1})
 INTERRUPTED_STATUS = "interrupted"
+
+
+def _migrate(data: dict, from_version: int) -> dict:
+    """Upgrade a loaded record from ``from_version`` to ``SCHEMA_VERSION``.
+
+    Applies each step in the chain ``_MIGRATIONS[v](data)``. When adding a
+    new schema version, bump ``SCHEMA_VERSION``, add the current version to
+    ``SUPPORTED_VERSIONS``, and register a migration function here.
+    Migrations MUST be idempotent-safe: if called twice on the same dict
+    they should not corrupt it.
+    """
+    current = from_version
+    while current < SCHEMA_VERSION:
+        migrate_fn = _MIGRATIONS.get(current)
+        if migrate_fn is None:
+            raise ValueError(
+                f"No migration path from schema_version {current} "
+                f"to {SCHEMA_VERSION}"
+            )
+        data = migrate_fn(data)
+        current += 1
+    data["schema_version"] = SCHEMA_VERSION
+    return data
+
+
+# Registered migration functions. Key N transforms v(N) into v(N+1).
+# Keep each function focused and reversible where possible.
+_MIGRATIONS: dict[int, Any] = {}
 
 
 def sidecar_dir(circuit_path: Path) -> Path:
@@ -145,28 +174,12 @@ def _finalize_loaded_status(raw_status: str) -> tuple[str, bool]:
 
 
 def _accept_schema(data: dict, source: Path) -> bool:
-    """Verify a loaded record's schema is one we understand.
+    """Verify a loaded record's schema is one we understand, migrating if needed.
 
-    Unknown or missing versions are rejected with a warning rather than
-    parsed into an ambiguous structure. When we introduce v2 we'll add
-    a migration path here instead of bumping ``SUPPORTED_VERSIONS`` blindly.
+    Modifies ``data`` in place when applying a migration so callers get the
+    current-schema shape without special-casing versions. Returns False for
+    unsupported versions or schemas (caller should skip that record).
     """
-    raw_version = data.get("schema_version")
-    if raw_version is None:
-        # Pre-versioned files (shipped briefly in development) are not in
-        # the wild; be strict going forward.
-        logger.warning(
-            "Skipping job file %s: missing schema_version", source
-        )
-        return False
-    if not isinstance(raw_version, int) or raw_version not in SUPPORTED_VERSIONS:
-        logger.warning(
-            "Skipping job file %s: unsupported schema_version %r (expected %s)",
-            source,
-            raw_version,
-            sorted(SUPPORTED_VERSIONS),
-        )
-        return False
     schema = data.get("schema")
     if schema != SCHEMA:
         logger.warning(
@@ -176,7 +189,37 @@ def _accept_schema(data: dict, source: Path) -> bool:
             SCHEMA,
         )
         return False
-    return True
+
+    raw_version = data.get("schema_version")
+    if raw_version is None:
+        logger.warning("Skipping job file %s: missing schema_version", source)
+        return False
+    if not isinstance(raw_version, int):
+        logger.warning(
+            "Skipping job file %s: schema_version must be an integer, got %r",
+            source,
+            raw_version,
+        )
+        return False
+
+    if raw_version == SCHEMA_VERSION:
+        return True
+    if raw_version in SUPPORTED_VERSIONS and raw_version < SCHEMA_VERSION:
+        try:
+            _migrate(data, raw_version)
+        except ValueError as e:
+            logger.warning("Skipping job file %s: %s", source, e)
+            return False
+        return True
+
+    logger.warning(
+        "Skipping job file %s: unsupported schema_version %d "
+        "(this build reads %s)",
+        source,
+        raw_version,
+        sorted(SUPPORTED_VERSIONS),
+    )
+    return False
 
 
 def _deserialize_sim_job(data: dict) -> SimulationJob:

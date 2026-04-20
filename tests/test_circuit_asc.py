@@ -20,14 +20,14 @@ from ltspice_mcp.tools.circuit import (
     handle_add_component,
     handle_add_net_label,
     handle_add_text,
+    handle_component_info,
     handle_connect,
-    handle_get_component_info,
-    handle_get_symbol_info,
     handle_list_components,
     handle_move_component,
     handle_read_circuit,
     handle_remove_component,
     handle_set_component_attribute,
+    handle_symbol_info,
 )
 
 
@@ -55,7 +55,7 @@ class TestReadAscCircuit:
 @pytest.mark.asyncio
 class TestGetSymbolInfo:
     async def test_valid_symbol(self, asc_state: SessionState):
-        result = await handle_get_symbol_info(
+        result = await handle_symbol_info(
             SymbolInfoInput(symbol="res", x=0, y=0, rotation="R0"), asc_state
         )
         text = result.content[0].text
@@ -64,7 +64,7 @@ class TestGetSymbolInfo:
 
     async def test_unknown_symbol(self, asc_state: SessionState):
         with pytest.raises(NetlistError, match="not found"):
-            await handle_get_symbol_info(
+            await handle_symbol_info(
                 SymbolInfoInput(symbol="bogus_xyz_zzz"), asc_state
             )
 
@@ -72,7 +72,7 @@ class TestGetSymbolInfo:
 @pytest.mark.asyncio
 class TestGetComponentInfo:
     async def test_existing(self, asc_state: SessionState, asc_file: Path):
-        result = await handle_get_component_info(
+        result = await handle_component_info(
             ComponentInfoInput(path=asc_file.name, reference="R1"), asc_state
         )
         text = result.content[0].text
@@ -82,7 +82,7 @@ class TestGetComponentInfo:
 
     async def test_missing_ref(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="not found"):
-            await handle_get_component_info(
+            await handle_component_info(
                 ComponentInfoInput(path=asc_file.name, reference="ZZZ"), asc_state
             )
 
@@ -90,7 +90,7 @@ class TestGetComponentInfo:
         cir = work_dir / "x.cir"
         cir.write_text("R1 1 0 1k\n.END\n")
         with pytest.raises(NetlistError, match=r"requires an \.asc"):
-            await handle_get_component_info(
+            await handle_component_info(
                 ComponentInfoInput(path=cir.name, reference="R1"), asc_state
             )
 

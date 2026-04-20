@@ -106,10 +106,10 @@ Direct editing of LTspice `.asc` schematics is a first-class feature. All circui
 - **`ltspice_set_component_value`** handles both single (`reference`+`value`) and batch (`values` dict) modes.
 - **`ltspice_parameter`** reads all .PARAM values (no args) or sets one (`name`+`value`).
 - **`ltspice_edit_directive`** adds or removes SPICE directives via `action: "add"|"remove"`.
-- **Schematic-only tools** (`ltspice_remove_component`, `ltspice_move_component`, `ltspice_set_component_attribute`, `ltspice_export_netlist`, `ltspice_connect`, `ltspice_add_net_label`, `ltspice_add_text`, `ltspice_get_symbol_info`, `ltspice_get_component_info`) validate `.asc` extension and use `_get_asc_editor()`.
+- **Schematic-only tools** (`ltspice_remove_component`, `ltspice_move_component`, `ltspice_set_component_attribute`, `ltspice_export_netlist`, `ltspice_connect`, `ltspice_add_net_label`, `ltspice_add_text`, `ltspice_symbol_info`, `ltspice_component_info`) validate `.asc` extension and use `_get_asc_editor()`.
 - **`ltspice_connect`** wires two pins by reference (e.g., `M1.D` → `M4a.D`) with waypoint routing. Validates before writing: refuses diagonal wires, pin collisions, and wire junction overlaps. Warns on long runs and bbox crossings.
 - **`ltspice_add_component`** returns pin positions (with direction), bounding box, and overlap warnings.
-- **`ltspice_get_symbol_info`** / **`ltspice_get_component_info`** provide pin geometry for layout planning.
+- **`ltspice_symbol_info`** / **`ltspice_component_info`** provide pin geometry for layout planning.
 - **`ltspice_add_net_label`** supports `pin="M3.S"` for placement at pin coordinates.
 - **`ltspice_export_netlist`** shows diff against previous export.
 - All tools use `"path"` as the file parameter name.
@@ -154,8 +154,8 @@ TOML sections: `[simulator]`, `[security]`, `[simulation]`, `[analysis]`, `[plot
 
 | Profile | Tools | Use case |
 |-|-|-|
-| `full` (default) | All 35 | Any MCP client, automation, non-agent LLMs |
-| `agentic` | 21 | LLM agents with native file access (Read/Edit/Write) |
+| `full` (default) | All 41 | Any MCP client, automation, non-agent LLMs |
+| `agentic` | 27 | LLM agents with native file access (Read/Edit/Write) |
 
 The "agentic" profile removes netlist-editing wrapper tools (e.g., `create_netlist`, `read_circuit`, `set_component_value`, `parameter`, `edit_directive`) and library session management — these are things capable agents do natively. It keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, AscEditor-dependent ops, and library search.
 

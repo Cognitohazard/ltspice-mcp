@@ -34,7 +34,7 @@ _RE_AC = re.compile(r"\bAC\b", re.IGNORECASE)
 _RE_DC = re.compile(r"\bDC\b", re.IGNORECASE)
 
 
-def _safe_magnitude_db(wave: np.ndarray) -> np.ndarray:
+def safe_magnitude_db(wave: np.ndarray) -> np.ndarray:
     """Convert complex waveform to magnitude in dB, clamping zeros to avoid -inf."""
     magnitude = np.abs(wave)
     magnitude = np.where(magnitude > 0, magnitude, _FLOAT_TINY)
@@ -82,60 +82,6 @@ def get_step_count(raw: RawRead) -> int:
         return len(raw.get_steps())
     except Exception:
         return 1
-
-
-def compute_signal_stats(raw: RawRead, trace_name: str, step: int = 0) -> dict:
-    """Compute statistics for a single trace.
-
-    For transient/DC (real data): min, max, mean, RMS, peak-to-peak
-    For AC (complex data): magnitude (dB) and phase (degrees) stats
-
-    Args:
-        raw: Loaded RawRead instance
-        trace_name: Name of trace to analyze
-        step: Step index (default 0)
-
-    Returns:
-        Dictionary with stats and analysis_type field.
-        All values are Python float (not numpy scalars).
-
-    Raises:
-        ValueError: If the requested trace contains no data points.
-    """
-    wave = raw.get_wave(trace_name, step=step)
-
-    if len(wave) == 0:
-        raise ValueError(
-            f"Signal '{trace_name}' has no data points at step {step}; "
-            "cannot compute statistics."
-        )
-
-    # Detect if this is AC data (complex array)
-    if np.iscomplexobj(wave):
-        # AC Analysis - compute magnitude and phase stats
-        magnitude_db = _safe_magnitude_db(wave)
-        phase_deg = np.angle(wave, deg=True)
-
-        return {
-            "analysis_type": "ac",
-            "min_db": float(np.min(magnitude_db)),
-            "max_db": float(np.max(magnitude_db)),
-            "mean_db": float(np.mean(magnitude_db)),
-            "min_phase": float(np.min(phase_deg)),
-            "max_phase": float(np.max(phase_deg)),
-            "point_count": len(wave),
-        }
-    else:
-        # Transient/DC Analysis - compute standard stats
-        return {
-            "analysis_type": "transient",
-            "min": float(np.min(wave)),
-            "max": float(np.max(wave)),
-            "mean": float(np.mean(wave)),
-            "rms": float(np.sqrt(np.mean(wave**2))),
-            "peak_to_peak": float(np.ptp(wave)),
-            "point_count": len(wave),
-        }
 
 
 def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int = 0) -> dict:
@@ -253,7 +199,7 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     axis = raw.get_axis(step=step)
     wave = raw.get_wave(trace_name, step=step)
 
-    magnitude_db = _safe_magnitude_db(wave)
+    magnitude_db = safe_magnitude_db(wave)
     phase_rad = np.unwrap(np.angle(wave))
     phase_deg = np.rad2deg(phase_rad)
 
