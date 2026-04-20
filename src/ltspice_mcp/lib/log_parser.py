@@ -3,9 +3,12 @@
 For .raw file parsing (waveform data, statistics), see raw_parser.py.
 """
 
+from __future__ import annotations
+
 import logging
 import re
 from pathlib import Path
+from typing import TypedDict
 
 from spicelib.log.ltsteps import LTSpiceLogReader
 from spicelib.raw.raw_read import RawRead
@@ -13,6 +16,19 @@ from spicelib.raw.raw_read import RawRead
 from ltspice_mcp.errors import ResultError
 
 logger = logging.getLogger(__name__)
+
+
+class MeasurementsOutput(TypedDict):
+    """Return shape of :func:`parse_measurements`.
+
+    ``errors`` is populated only on the empty-measurements path (the log
+    had no .MEAS results and the parser surfaced why). Always present in
+    the return value — ``None`` when the measurement parse succeeded.
+    """
+
+    measurements: dict[str, list[float | None]]
+    step_count: int
+    errors: list[str] | None
 
 _MAX_DIAGNOSTICS = 50
 
@@ -320,7 +336,9 @@ def parse_success_summary(raw_file: Path, log_file: Path, duration: float) -> di
     return result
 
 
-def parse_measurements(log_path: Path, reader: LTSpiceLogReader | None = None) -> dict:
+def parse_measurements(
+    log_path: Path, reader: LTSpiceLogReader | None = None
+) -> MeasurementsOutput:
     """Parse .MEAS measurement results from simulation log file.
 
     Args:
@@ -342,14 +360,12 @@ def parse_measurements(log_path: Path, reader: LTSpiceLogReader | None = None) -
 
     measure_names = reader.get_measure_names()
     if not measure_names:
-        result: dict = {"measurements": {}, "step_count": 0}
         # Surface any errors from the log that explain why measurements are missing
         diagnostics = extract_log_diagnostics(log_path)
-        if diagnostics["errors"]:
-            result["errors"] = diagnostics["errors"]
-        return result
+        errors_list = diagnostics["errors"] or None
+        return {"measurements": {}, "step_count": 0, "errors": errors_list}
 
-    measurements = {}
+    measurements: dict[str, list[float | None]] = {}
     for name in measure_names:
         values = reader.dataset.get(name.lower(), [])  # dataset uses lowercase keys
         python_values = []
@@ -374,7 +390,7 @@ def parse_measurements(log_path: Path, reader: LTSpiceLogReader | None = None) -
 
     step_count = len(measurements[measure_names[0]]) if measurements else 0
 
-    return {"measurements": measurements, "step_count": step_count}
+    return {"measurements": measurements, "step_count": step_count, "errors": None}
 
 
 def parse_fourier_data(log_path: Path, reader: LTSpiceLogReader | None = None) -> list[dict]:

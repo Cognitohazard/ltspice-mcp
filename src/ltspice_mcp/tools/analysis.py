@@ -24,16 +24,34 @@ return derived metrics. Organized by what the tool answers:
 
 import contextlib
 import math
-from typing import Literal
+from typing import Literal, TypedDict
 
 import numpy as np
 from pydantic import Field
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import services
+from ltspice_mcp.lib.ac_analysis import (
+    CrossingWithQuantity,
+    FilterMetricsOutput,
+    GainAtPoint,
+    Quantity,
+    ResonancesOutput,
+    RollOffOutput,
+    SearchDirection,
+    StabilityMetricsOutput,
+    compute_filter_metrics,
+    compute_resonances,
+    compute_roll_off,
+    compute_stability_metrics,
+    find_crossings_any_quantity,
+    gain_at_frequencies,
+    prepare_ac_arrays,
+)
 from ltspice_mcp.lib.format import parse_spice_value
-from ltspice_mcp.lib.log_parser import parse_measurements
+from ltspice_mcp.lib.log_parser import MeasurementsOutput, parse_measurements
 from ltspice_mcp.lib.raw_parser import (
+    OperatingPointOutput,
     build_simulation_summary,
     compute_ac_bandwidth_metrics,
     detect_sim_type,
@@ -43,6 +61,11 @@ from ltspice_mcp.lib.raw_parser import (
     safe_magnitude_db,
 )
 from ltspice_mcp.lib.signal_analysis import (
+    EdgeMetricsOutput,
+    MeasurementStatsEntry,
+    PeriodicMetricsOutput,
+    PulseResponseOutput,
+    TimingBetweenOutput,
     analyze_edge,
     analyze_periodic,
     analyze_pulse_response,
@@ -156,7 +179,10 @@ class SignalStatsInput(ToolInput):
         default=None,
         description="Window end in SPICE notation. Transient only; ignored for AC.",
     )
-    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
 
 
 class QueryValueInput(ToolInput):
@@ -166,17 +192,26 @@ class QueryValueInput(ToolInput):
         description="Time or frequency to query in SPICE notation (e.g., '1m', '100u', '1G', '2.5k')"
     )
     step: int = Field(default=0, description="Step index for .step directives")
-    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
 
 
 class MeasurementsInput(ToolInput):
     log_file: str = Field(description="Path to .log file from simulation")
-    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
 
 
 class OperatingPointInput(ToolInput):
     raw_file: str = Field(description="Path to .raw result file from simulation")
-    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
 
 
 class SimulationSummaryInput(ToolInput):
@@ -186,7 +221,10 @@ class SimulationSummaryInput(ToolInput):
         default=None,
         description="Signal for AC bandwidth metrics (e.g., 'V(outp)'). Required for AC analysis.",
     )
-    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
 
 
 @registry.tool(
@@ -376,9 +414,7 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
     # np.searchsorted treats NaN as greater than everything and returns the
     # last index, which looks like a valid result but isn't.
     if not math.isfinite(target_x):
-        raise ResultError(
-            f"'at' value must be finite, got {at_str!r} (parsed as {target_x})"
-        )
+        raise ResultError(f"'at' value must be finite, got {at_str!r} (parsed as {target_x})")
 
     raw = services.load_raw(raw_path, state)
     services.validate_signal(raw, signal)
@@ -454,19 +490,7 @@ def _format_measurements(
     input_model=MeasurementsInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full", "agentic"),
-    output_schema={
-        "type": "object",
-        "properties": {
-            "measurements": {
-                "type": "object",
-                "additionalProperties": {
-                    "type": "array",
-                    "items": {"type": ["number", "null"]},
-                },
-            },
-            "step_count": {"type": "integer"},
-        },
-    },
+    output_model=MeasurementsOutput,
 )
 async def handle_measurements(args: MeasurementsInput, state: SessionState):
     """Extract .MEAS measurement results from simulation log file."""
@@ -491,25 +515,11 @@ async def handle_measurements(args: MeasurementsInput, state: SessionState):
 
 @registry.tool(
     name="ltspice_operating_point",
-    description=(
-        "Read DC operating point data showing all node voltages and branch currents."
-    ),
+    description=("Read DC operating point data showing all node voltages and branch currents."),
     input_model=OperatingPointInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full", "agentic"),
-    output_schema={
-        "type": "object",
-        "properties": {
-            "voltages": {
-                "type": "object",
-                "additionalProperties": {"type": "number"},
-            },
-            "currents": {
-                "type": "object",
-                "additionalProperties": {"type": "number"},
-            },
-        },
-    },
+    output_model=OperatingPointOutput,
 )
 async def handle_operating_point(args: OperatingPointInput, state: SessionState):
     """Read DC operating point data (all node voltages and branch currents)."""
@@ -688,6 +698,8 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
         lines.append("")
 
     return format_response("\n".join(lines), json_data, fmt)
+
+
 class EdgeMetricsInput(ToolInput):
     raw_file: str = Field(description="Path to .raw transient result file")
     signal: str = Field(description="Signal name (e.g. 'V(out)')")
@@ -797,120 +809,29 @@ class MeasurementStatsInput(ToolInput):
 
 
 # ---------------------------------------------------------------------------
-# Output schemas
+# Response TypedDicts — compose lib output + per-tool metadata (signal names)
 # ---------------------------------------------------------------------------
 
-_WARNINGS_SCHEMA = {"type": "array", "items": {"type": "string"}}
 
-_EDGE_METRICS_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "signal": {"type": "string"},
-        "transition_time": {"type": "number"},
-        "slew_rate": {"type": "number"},
-        "low_level": {"type": "number"},
-        "high_level": {"type": "number"},
-        "t_low_crossing": {"type": "number"},
-        "t_high_crossing": {"type": "number"},
-        "t_mid_crossing": {"type": "number"},
-        "edge_direction": {"type": "string"},
-        "is_rise_time": {"type": "boolean"},
-        "low_pct": {"type": "number"},
-        "high_pct": {"type": "number"},
-        "num_edges_in_window": {"type": "integer"},
-        "warnings": _WARNINGS_SCHEMA,
-    },
-}
+class EdgeMetricsResponse(EdgeMetricsOutput):
+    signal: str
 
-_PULSE_RESPONSE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "signal": {"type": "string"},
-        "direction": {"type": "string"},
-        "initial_value": {"type": "number"},
-        "steady_state_value": {"type": "number"},
-        "peak_value": {"type": "number"},
-        "peak_time": {"type": "number"},
-        "overshoot_pct": {"type": "number"},
-        "undershoot_pct": {"type": "number"},
-        "settling_time": {"type": ["number", "null"]},
-        "settling_tolerance_pct": {"type": "number"},
-        "warnings": _WARNINGS_SCHEMA,
-    },
-}
 
-_TIMING_BETWEEN_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "signal_a": {"type": "string"},
-        "signal_b": {"type": "string"},
-        "t_a": {"type": "number"},
-        "t_b": {"type": "number"},
-        "delay": {"type": "number"},
-        "threshold_a_used": {"type": "number"},
-        "threshold_b_used": {"type": "number"},
-        "direction_a": {"type": "string"},
-        "direction_b": {"type": "string"},
-        "num_crossings_a": {"type": "integer"},
-        "num_crossings_b": {"type": "integer"},
-        "warnings": _WARNINGS_SCHEMA,
-    },
-}
+class PulseResponseResponse(PulseResponseOutput):
+    signal: str
 
-_PERIODIC_METRICS_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "signal": {"type": "string"},
-        "period": {"type": "number"},
-        "frequency": {"type": "number"},
-        "jitter_rms": {"type": "number"},
-        "duty_cycle_pct": {"type": ["number", "null"]},
-        "pulse_width_high": {"type": ["number", "null"]},
-        "pulse_width_low": {"type": ["number", "null"]},
-        "num_rising_edges": {"type": "integer"},
-        "num_falling_edges": {"type": "integer"},
-        "num_periods_measured": {"type": "integer"},
-        "threshold_used": {"type": "number"},
-        "warnings": _WARNINGS_SCHEMA,
-    },
-}
 
-_MEASUREMENT_STATS_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "stats": {
-            "type": "object",
-            "additionalProperties": {
-                "type": "object",
-                "properties": {
-                    "total_count": {"type": "integer"},
-                    "valid_count": {"type": "integer"},
-                    "failure_count": {"type": "integer"},
-                    "min": {"type": ["number", "null"]},
-                    "max": {"type": ["number", "null"]},
-                    "mean": {"type": ["number", "null"]},
-                    "median": {"type": ["number", "null"]},
-                    "std": {"type": ["number", "null"]},
-                    "p10": {"type": ["number", "null"]},
-                    "p90": {"type": ["number", "null"]},
-                    "best_step_index": {"type": ["integer", "null"]},
-                    "worst_step_index": {"type": ["integer", "null"]},
-                    "histogram": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "bin_start": {"type": "number"},
-                                "bin_end": {"type": "number"},
-                                "count": {"type": "integer"},
-                            },
-                        },
-                    },
-                },
-            },
-        }
-    },
-}
+class TimingBetweenResponse(TimingBetweenOutput):
+    signal_a: str
+    signal_b: str
+
+
+class PeriodicMetricsResponse(PeriodicMetricsOutput):
+    signal: str
+
+
+class MeasurementStatsResponse(TypedDict):
+    stats: dict[str, MeasurementStatsEntry]
 
 
 # ---------------------------------------------------------------------------
@@ -942,7 +863,7 @@ _MEASUREMENT_STATS_SCHEMA = {
     input_model=EdgeMetricsInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full", "agentic"),
-    output_schema=_EDGE_METRICS_SCHEMA,
+    output_model=EdgeMetricsResponse,
 )
 async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
     axis, wave = _load_real_signal(args.raw_file, args.signal, args.step, state)
@@ -999,7 +920,7 @@ async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
     input_model=PulseResponseInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full", "agentic"),
-    output_schema=_PULSE_RESPONSE_SCHEMA,
+    output_model=PulseResponseResponse,
 )
 async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
     axis, wave = _load_real_signal(args.raw_file, args.signal, args.step, state)
@@ -1055,7 +976,7 @@ async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
     input_model=TimingBetweenInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full", "agentic"),
-    output_schema=_TIMING_BETWEEN_SCHEMA,
+    output_model=TimingBetweenResponse,
 )
 async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
     raw_path = safe_path(args.raw_file, state)
@@ -1140,7 +1061,7 @@ async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
     input_model=PeriodicMetricsInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full", "agentic"),
-    output_schema=_PERIODIC_METRICS_SCHEMA,
+    output_model=PeriodicMetricsResponse,
 )
 async def handle_periodic_metrics(args: PeriodicMetricsInput, state: SessionState):
     axis, wave = _load_real_signal(args.raw_file, args.signal, args.step, state)
@@ -1197,7 +1118,7 @@ async def handle_periodic_metrics(args: PeriodicMetricsInput, state: SessionStat
     input_model=MeasurementStatsInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full", "agentic"),
-    output_schema=_MEASUREMENT_STATS_SCHEMA,
+    output_model=MeasurementStatsResponse,
 )
 async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionState):
     log_path = safe_path(args.log_file, state)
@@ -1249,3 +1170,598 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
         lines.append("")
 
     return format_response("\n".join(lines).rstrip(), {"stats": stats}, args.format)
+
+
+# ---------------------------------------------------------------------------
+# AC analysis tools
+# ---------------------------------------------------------------------------
+
+
+def _parse_freq(s: str, name: str = "frequency") -> float:
+    """Parse a SPICE-notation frequency into a finite positive float."""
+    try:
+        v = parse_spice_value(s)
+    except ValueError as e:
+        raise ResultError(f"Invalid {name} value {s!r}: {e}") from e
+    if not math.isfinite(v):
+        raise ResultError(f"{name} must be finite, got {s!r}")
+    if v <= 0:
+        raise ResultError(f"{name} must be positive, got {s!r} ({v})")
+    return v
+
+
+def _load_ac_signal(
+    raw_file: str, signal: str, step: int, state: SessionState
+) -> tuple[np.ndarray, np.ndarray]:
+    """Load (freqs, H) for an AC signal. Rejects transient data."""
+    raw_path = safe_path(raw_file, state)
+    raw = services.load_raw(raw_path, state)
+    sim_type = detect_sim_type(raw)
+    if not is_ac_analysis(sim_type):
+        raise ResultError(
+            f"This tool requires AC analysis data; got {sim_type!r}. "
+            "Use ltspice_signal_stats (transient) or run a .AC sweep first."
+        )
+    services.validate_signal(raw, signal)
+    services.validate_step(raw, step)
+    axis = np.asarray(raw.get_axis(step=step))
+    wave = np.asarray(raw.get_wave(signal, step=step))
+    try:
+        return prepare_ac_arrays(axis, wave)
+    except ValueError as e:
+        raise ResultError(str(e)) from e
+
+
+
+
+# ---- Input models ---------------------------------------------------------
+
+
+class FindCrossingInput(ToolInput):
+    raw_file: str = Field(description="Path to AC analysis .raw result file")
+    signal: str = Field(description="Signal name (e.g. 'V(out)')")
+    quantity: Quantity = Field(
+        description=(
+            "What to cross: 'magnitude_db' (dB), 'magnitude_linear' (absolute |H|), "
+            "or 'phase_deg' (UNWRAPPED phase in degrees)."
+        ),
+    )
+    level: float = Field(
+        description="Level to cross at, in the units of `quantity`. e.g. 0 for 0 dB, -180 for phase margin.",
+    )
+    direction: SearchDirection = Field(default="any")
+    f_start: str | None = Field(
+        default=None,
+        description="Lower frequency bound in SPICE notation (e.g. '10k'). Defaults to sweep start.",
+    )
+    f_end: str | None = Field(
+        default=None,
+        description="Upper frequency bound in SPICE notation. Defaults to sweep end.",
+    )
+    max_results: int = Field(default=10, description="Cap on returned crossings (1..100).")
+    min_separation_decades: float = Field(
+        default=0.0,
+        description="Merge crossings within this many decades; useful when gain grazes the level.",
+    )
+    step: int = Field(default=0, description="Step index for .step sweeps")
+    format: FormatField = Field(default=None)
+
+
+class GainAtInput(ToolInput):
+    raw_file: str = Field(description="Path to AC analysis .raw result file")
+    signal: str = Field(description="Signal name (e.g. 'V(out)')")
+    frequencies: list[str] = Field(
+        description=(
+            "Frequencies to query, each in SPICE notation (e.g. ['100', '1k', '10k']). "
+            "Log-axis interpolation is used — queries between sample points are exact "
+            "under a log-scale linear assumption, which matches .AC DEC spacing."
+        ),
+    )
+    include_unwrapped_phase: bool = Field(
+        default=False,
+        description="Also return cumulative unwrapped phase (handy for delay / margin prep).",
+    )
+    step: int = Field(default=0, description="Step index for .step sweeps")
+    format: FormatField = Field(default=None)
+
+
+class FilterMetricsInput(ToolInput):
+    raw_file: str = Field(description="Path to AC analysis .raw result file")
+    signal: str = Field(description="Signal name (e.g. 'V(out)')")
+    ref_db: float = Field(
+        default=-3.0,
+        description=(
+            "Cutoff reference BELOW passband in dB (must be negative). "
+            "Standard -3 for half-power; use -1 for tighter passband specs "
+            "or -6 for voltage-half."
+        ),
+    )
+    flatness_db: float = Field(
+        default=1.0,
+        description="Passband flatness tolerance in dB used for auto-detecting the passband range.",
+    )
+    passband_range: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional [f_lo, f_hi] SPICE-notation override for the passband. "
+            "If omitted, auto-detected from the flat region near the peak."
+        ),
+    )
+    stopband_range: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional [f_lo, f_hi] SPICE-notation stopband region. If given, "
+            "stopband_rejection is the worst-case attenuation in that range."
+        ),
+    )
+    step: int = Field(default=0, description="Step index for .step sweeps")
+    format: FormatField = Field(default=None)
+
+
+class StabilityMetricsInput(ToolInput):
+    raw_file: str = Field(description="Path to loop-gain AC analysis .raw file")
+    signal: str = Field(description="Loop-gain signal (e.g. 'V(loop)')")
+    min_separation_decades: float = Field(
+        default=0.1,
+        description="Merge near-duplicate crossovers closer than this many decades.",
+    )
+    step: int = Field(default=0, description="Step index for .step sweeps")
+    format: FormatField = Field(default=None)
+
+
+class RollOffInput(ToolInput):
+    raw_file: str = Field(description="Path to AC analysis .raw result file")
+    signal: str = Field(description="Signal name (e.g. 'V(out)')")
+    f_low: str = Field(description="Low frequency bound (SPICE notation)")
+    f_high: str = Field(description="High frequency bound (SPICE notation)")
+    step: int = Field(default=0, description="Step index for .step sweeps")
+    format: FormatField = Field(default=None)
+
+
+class ResonanceInput(ToolInput):
+    raw_file: str = Field(description="Path to AC analysis .raw result file")
+    signal: str = Field(description="Signal name (e.g. 'V(out)')")
+    min_prominence_db: float = Field(
+        default=3.0,
+        description=(
+            "Minimum peak prominence in dB. Smaller = more sensitive but also "
+            "catches gentle humps. 3 dB rejects filter-passband shoulders."
+        ),
+    )
+    min_separation_decades: float = Field(
+        default=0.2,
+        description="Merge peaks closer than this many decades (find_peaks can emit duplicates on shoulders).",
+    )
+    max_peaks: int = Field(default=20, description="Maximum peaks returned (1..100)")
+    step: int = Field(default=0, description="Step index for .step sweeps")
+    format: FormatField = Field(default=None)
+
+
+# ---- Output schemas -------------------------------------------------------
+
+
+class FilterMetricsResponse(FilterMetricsOutput):
+    """Tool-layer response = lib output + the signal name the user asked about."""
+
+    signal: str
+
+
+class StabilityMetricsResponse(StabilityMetricsOutput):
+    """Tool-layer response = lib output + the signal name."""
+
+    signal: str
+
+
+class FindCrossingResponse(TypedDict):
+    """Tool-layer response for :func:`handle_find_crossing`."""
+
+    signal: str
+    quantity: Quantity
+    level: float
+    direction: SearchDirection
+    crossings: list[CrossingWithQuantity]
+    warnings: list[str]
+
+
+class GainAtResponse(TypedDict):
+    """Tool-layer response for :func:`handle_gain_at`."""
+
+    signal: str
+    points: list[GainAtPoint]
+    warnings: list[str]
+
+
+class RollOffResponse(RollOffOutput):
+    """Tool-layer response = lib output + the signal name."""
+
+    signal: str
+
+
+class ResonancesResponse(ResonancesOutput):
+    """Tool-layer response = lib output + the signal name."""
+
+    signal: str
+
+
+# ---- Handlers -------------------------------------------------------------
+
+
+@registry.tool(
+    name="ltspice_find_crossing",
+    description=(
+        "Low-level primitive: find all frequencies where a signal's magnitude "
+        "(dB or linear) or phase crosses a given level. This is the escape "
+        "hatch when the opinionated tools (filter_metrics, stability_metrics) "
+        "don't match your question.\n\n"
+        "Examples:\n"
+        "  - 0 dB crossing of V(out) → unity-gain frequency\n"
+        "  - -180° phase crossing → gain margin frequency\n"
+        "  - -20 dB crossing → custom stopband edge\n"
+        "  - -135° phase crossing → 45° phase-margin frequency\n\n"
+        "Log-axis interpolation between sample points. Returns crossings in "
+        "increasing frequency. For phase queries, phase is UNWRAPPED first "
+        "(continuous, no ±180° jumps) — so 'level=-180' really means -180° "
+        "in absolute phase even on systems whose true phase goes past -360°.\n\n"
+        "Use the bundled tools for common questions: ltspice_filter_metrics "
+        "for -3 dB cutoffs, ltspice_stability_metrics for all unity-gain and "
+        "-180° crossings with margins, ltspice_gain_at for point queries "
+        "without a crossing search."
+    ),
+    input_model=FindCrossingInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_model=FindCrossingResponse,
+)
+async def handle_find_crossing(args: FindCrossingInput, state: SessionState):
+    freqs, H = _load_ac_signal(args.raw_file, args.signal, args.step, state)
+    f_start = _parse_freq(args.f_start, "f_start") if args.f_start else None
+    f_end = _parse_freq(args.f_end, "f_end") if args.f_end else None
+    if args.max_results < 1 or args.max_results > 1000:
+        raise ResultError(f"max_results must be in [1, 1000], got {args.max_results}")
+
+    try:
+        crossings, warnings = find_crossings_any_quantity(
+            freqs,
+            H,
+            quantity=args.quantity,
+            level=args.level,
+            direction=args.direction,
+            f_start=f_start,
+            f_end=f_end,
+            max_results=args.max_results,
+            min_separation_decades=args.min_separation_decades,
+        )
+    except ValueError as e:
+        raise ResultError(str(e)) from e
+
+    data = {
+        "signal": args.signal,
+        "quantity": args.quantity,
+        "level": args.level,
+        "direction": args.direction,
+        "crossings": crossings,
+        "warnings": warnings,
+    }
+
+    unit = crossings[0]["units"] if crossings else ""
+    lines = [
+        f"Crossings of {args.signal}.{args.quantity} at {args.level:g}{unit}:",
+        "",
+    ]
+    if not crossings:
+        lines.append("  (none found in window)")
+    else:
+        for c in crossings:
+            lines.append(f"  {c['frequency_hz']:.6g} Hz ({c['direction']})")
+    lines += _warning_lines(warnings)
+    return format_response("\n".join(lines), data, args.format)
+
+
+@registry.tool(
+    name="ltspice_gain_at",
+    description=(
+        "Query magnitude (dB + linear) and phase at a list of frequencies. "
+        "Use this instead of calling ltspice_query_value N times — one "
+        "simulation load, log-axis interpolation, consistent phase handling.\n\n"
+        "Phase is reported wrapped to (-180°, 180°] by default (what you'd "
+        "read off a Bode plot). Set include_unwrapped_phase=true to also "
+        "get the continuous unwrapped phase — useful for phase-margin prep "
+        "or group-delay estimation.\n\n"
+        "Frequencies outside the sweep range are clamped to the nearest "
+        "endpoint and a warning is emitted — don't silently extrapolate.\n\n"
+        "For filter characterization use ltspice_filter_metrics; for "
+        "stability margins use ltspice_stability_metrics; for custom "
+        "crossing searches use ltspice_find_crossing."
+    ),
+    input_model=GainAtInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_model=GainAtResponse,
+)
+async def handle_gain_at(args: GainAtInput, state: SessionState):
+    if not args.frequencies:
+        raise ResultError("frequencies list is empty")
+    if len(args.frequencies) > 1000:
+        raise ResultError(f"Too many frequencies ({len(args.frequencies)}); cap is 1000")
+    freqs_q = [_parse_freq(f, "frequency") for f in args.frequencies]
+    freqs, H = _load_ac_signal(args.raw_file, args.signal, args.step, state)
+    points, warnings = _run(
+        gain_at_frequencies,
+        freqs,
+        H,
+        freqs_q,
+        include_unwrapped_phase=args.include_unwrapped_phase,
+    )
+    data = {"signal": args.signal, "points": points, "warnings": warnings}
+
+    lines = [f"Gain/phase of {args.signal}:", ""]
+    header = "  {:>14s}  {:>10s}  {:>10s}".format("Frequency (Hz)", "Mag (dB)", "Phase (°)")
+    lines.append(header)
+    lines.append("  " + "-" * (len(header) - 2))
+    for p in points:
+        lines.append(
+            f"  {p['frequency_hz']:>14.6g}  {p['magnitude_db']:>10.3f}  {p['phase_deg']:>10.2f}"
+        )
+    lines += _warning_lines(warnings)
+    return format_response("\n".join(lines), data, args.format)
+
+
+def _parse_freq_pair(pair: list[str] | None, name: str) -> tuple[float, float] | None:
+    if pair is None:
+        return None
+    if len(pair) != 2:
+        raise ResultError(f"{name} must have exactly 2 elements, got {len(pair)}")
+    lo = _parse_freq(pair[0], f"{name}[0]")
+    hi = _parse_freq(pair[1], f"{name}[1]")
+    if lo >= hi:
+        raise ResultError(f"{name}: low ({lo}) must be less than high ({hi})")
+    return lo, hi
+
+
+@registry.tool(
+    name="ltspice_filter_metrics",
+    description=(
+        "Characterize a filter response: LPF / HPF / BPF / BSF type, cutoffs, "
+        "passband gain & ripple, stopband rejection, transition bandwidth, "
+        "rough pole-order estimate.\n\n"
+        "Cutoffs are reported at `ref_db` BELOW the passband (not an "
+        "absolute -3 dB gain) — so for a BPF with 20 dB passband gain, "
+        "`ref_db=-3` gives cutoffs at 17 dB absolute, matching datasheet "
+        "conventions. Passband is auto-detected from the flat region near "
+        "the peak (within `flatness_db` of max); override with "
+        "`passband_range`.\n\n"
+        "Classification heuristic: endpoint gain vs peak location. The "
+        "classifier is deliberately conservative — ambiguous sweeps (shallow "
+        "roll-off, lopsided endpoints, sharp under-sampled notches) return "
+        "`filter_type='unknown'` rather than a best guess, and a warning "
+        "spells out what was ambiguous. Notch (BSF) detection requires "
+        "dense sampling near the null; if the minimum sample is flanked by "
+        "points more than a few dB higher, stopband_rejection_db is a "
+        "lower bound only and the tool warns accordingly.\n\n"
+        "Order estimate: measures slope in the ASYMPTOTIC region (1-2 "
+        "decades past cutoff). Returned only when slope is within ±2 dB/dec "
+        "of an integer multiple of 20 dB/dec, else null — reports raw "
+        "slope regardless.\n\n"
+        "For stability / loop-gain questions use ltspice_stability_metrics; "
+        "for resonant peaks & Q use ltspice_resonance."
+    ),
+    input_model=FilterMetricsInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_model=FilterMetricsResponse,
+)
+async def handle_filter_metrics(args: FilterMetricsInput, state: SessionState):
+    freqs, H = _load_ac_signal(args.raw_file, args.signal, args.step, state)
+    pb = _parse_freq_pair(args.passband_range, "passband_range")
+    sb = _parse_freq_pair(args.stopband_range, "stopband_range")
+    data = _run(
+        compute_filter_metrics,
+        freqs,
+        H,
+        ref_db=args.ref_db,
+        flatness_db=args.flatness_db,
+        passband_range=pb,
+        stopband_range=sb,
+    )
+    data["signal"] = args.signal
+
+    fc_lo = "-" if data["cutoff_low_hz"] is None else f"{data['cutoff_low_hz']:.6g} Hz"
+    fc_hi = "-" if data["cutoff_high_hz"] is None else f"{data['cutoff_high_hz']:.6g} Hz"
+    rej = (
+        "-" if data["stopband_rejection_db"] is None else f"{data['stopband_rejection_db']:.2f} dB"
+    )
+    slope = (
+        "-"
+        if data["rolloff_slope_db_per_decade"] is None
+        else f"{data['rolloff_slope_db_per_decade']:.2f} dB/dec"
+    )
+    order = "-" if data["estimated_order"] is None else f"{data['estimated_order']}"
+    tbw = (
+        "-"
+        if data["transition_bandwidth_hz"] is None
+        else f"{data['transition_bandwidth_hz']:.6g} Hz"
+    )
+    lines = [
+        f"Filter Metrics: {args.signal}",
+        "",
+        f"Type:                {data['filter_type']}",
+        f"Passband:            "
+        f"[{data['passband_low_hz']:.6g}, {data['passband_high_hz']:.6g}] Hz "
+        f"@ {data['passband_gain_db']:.2f} dB",
+        f"Passband ripple:     {data['passband_ripple_db']:.3f} dB",
+        f"Cutoff (ref {args.ref_db:+.1f} dB): low={fc_lo}  high={fc_hi}",
+        f"Stopband rejection:  {rej}",
+        f"Transition BW:       {tbw}",
+        f"Roll-off slope:      {slope}",
+        f"Estimated order:     {order}",
+    ]
+    lines += _warning_lines(data["warnings"])
+    return format_response("\n".join(lines), data, args.format)
+
+
+@registry.tool(
+    name="ltspice_stability_metrics",
+    description=(
+        "Find EVERY unity-gain and -180° phase crossover in a loop-gain AC "
+        "sweep, report phase margin at each unity-gain crossing and gain "
+        "margin at each -180° crossing. Replaces the single-crossing "
+        "approximation in ltspice_simulation_summary, which returns wrong "
+        "margins on conditionally-stable systems.\n\n"
+        "Run this on a LOOP-GAIN signal (typically a dedicated middlebrook "
+        "probe or .AC of the open loop). Running on a closed-loop output "
+        "gives meaningless margins.\n\n"
+        "Returns: dc_gain_db, high_freq_gain_db, stability classification "
+        "(stable / unstable / conditional / unconditional / "
+        "always_below_unity), all crossings, per-crossing margins, and the "
+        "worst-case values.\n\n"
+        "Nuances:\n"
+        "  - Phase is UNWRAPPED first, so systems whose phase drops past "
+        "-360° are handled correctly (otherwise the raw wrap hides the "
+        "crossing).\n"
+        "  - If phase NEVER crosses -180°, gain margin is 'infinite' "
+        "(returned as null with stability='unconditional'). That's stable, "
+        "not an error.\n"
+        "  - If gain NEVER reaches unity, phase margin is undefined "
+        "(returned as null with stability='always_below_unity').\n"
+        "  - Multiple crossovers trigger stability='conditional' and a "
+        "warning — each one needs its own review.\n\n"
+        "For -3 dB filter cutoffs use ltspice_filter_metrics; for custom "
+        "crossings use ltspice_find_crossing."
+    ),
+    input_model=StabilityMetricsInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_model=StabilityMetricsResponse,
+)
+async def handle_stability_metrics(args: StabilityMetricsInput, state: SessionState):
+    freqs, H = _load_ac_signal(args.raw_file, args.signal, args.step, state)
+    data = _run(
+        compute_stability_metrics,
+        freqs,
+        H,
+        min_separation_decades=args.min_separation_decades,
+    )
+    data["signal"] = args.signal
+
+    pm_worst = (
+        "-" if data["phase_margin_worst_deg"] is None else f"{data['phase_margin_worst_deg']:.2f}°"
+    )
+    gm_worst = (
+        "-" if data["gain_margin_worst_db"] is None else f"{data['gain_margin_worst_db']:.2f} dB"
+    )
+    lines = [
+        f"Stability: {args.signal}",
+        "",
+        f"DC gain:          {data['dc_gain_db']:.2f} dB",
+        f"High-freq gain:   {data['high_freq_gain_db']:.2f} dB",
+        f"Classification:   {data['stability']}",
+        f"PM (worst):       {pm_worst}",
+        f"GM (worst):       {gm_worst}",
+        "",
+        f"Unity-gain crossings ({len(data['unity_gain_crossovers'])}):",
+    ]
+    for c, m in zip(data["unity_gain_crossovers"], data["phase_margins"], strict=True):
+        lines.append(
+            f"  {c['frequency_hz']:.6g} Hz ({c['direction']})  PM={m['margin_deg']:+.2f}°"
+        )
+    lines.append(f"Phase -180° crossings ({len(data['phase_180_crossovers'])}):")
+    for c, m in zip(data["phase_180_crossovers"], data["gain_margins"], strict=True):
+        lines.append(
+            f"  {c['frequency_hz']:.6g} Hz ({c['direction']})  GM={m['margin_db']:+.2f} dB"
+        )
+    lines += _warning_lines(data["warnings"])
+    return format_response("\n".join(lines), data, args.format)
+
+
+@registry.tool(
+    name="ltspice_roll_off",
+    description=(
+        "Magnitude slope between two frequencies, reported in dB/decade and "
+        "dB/octave. Useful for sanity-checking the asymptotic slope of a "
+        "filter's stopband or an amplifier's high-frequency roll-off.\n\n"
+        "Pick the endpoints in the ASYMPTOTIC region (≥1 decade past any "
+        "knee) — measuring across the knee understates the slope. "
+        "A rounded pole-order estimate is returned only when the slope is "
+        "within ±2 dB/dec of an integer multiple of 20 dB/dec; noisy or "
+        "non-asymptotic slopes get a null order and raw slope.\n\n"
+        "For a full filter characterization use ltspice_filter_metrics; for "
+        "resonance peaks use ltspice_resonance."
+    ),
+    input_model=RollOffInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_model=RollOffResponse,
+)
+async def handle_roll_off(args: RollOffInput, state: SessionState):
+    f_lo = _parse_freq(args.f_low, "f_low")
+    f_hi = _parse_freq(args.f_high, "f_high")
+    freqs, H = _load_ac_signal(args.raw_file, args.signal, args.step, state)
+    data = _run(compute_roll_off, freqs, H, f_low=f_lo, f_high=f_hi)
+    data["signal"] = args.signal
+
+    order = (
+        "-"
+        if data["nearest_pole_order_estimate"] is None
+        else str(data["nearest_pole_order_estimate"])
+    )
+    lines = [
+        f"Roll-off: {args.signal}",
+        "",
+        f"Span: [{data['f_low_hz']:.6g}, {data['f_high_hz']:.6g}] Hz "
+        f"({data['span_decades']:.2f} decades)",
+        f"Gain:  {data['gain_low_db']:.2f} → {data['gain_high_db']:.2f} dB "
+        f"(Δ = {data['delta_db']:+.2f} dB)",
+        f"Slope: {data['slope_db_per_decade']:.2f} dB/decade "
+        f"({data['slope_db_per_octave']:.2f} dB/octave)",
+        f"Estimated nearest pole order: {order}",
+    ]
+    lines += _warning_lines(data["warnings"])
+    return format_response("\n".join(lines), data, args.format)
+
+
+@registry.tool(
+    name="ltspice_resonance",
+    description=(
+        "Detect magnitude peaks in an AC sweep and estimate Q factor + "
+        "-3 dB bandwidth for each. Useful for RLC resonators, crystal "
+        "oscillators, peaking amps, or any response with distinct resonant "
+        "modes.\n\n"
+        "Q = f_peak / Δf(-3 dB from peak). Q is returned as null for peaks "
+        "without two flanking -3 dB crossings inside the swept range — "
+        "widen the sweep if you need Q for a boundary peak.\n\n"
+        "`min_prominence_db=3` rejects the gentle hump of a filter's "
+        "passband (which isn't a resonance). Tight resonances (Q > 30) "
+        "need dense sampling near f_peak — log sweeps with <50 pts/decade "
+        "will under-sample the peak and give inflated Q/bandwidth.\n\n"
+        "For overall filter characterization use ltspice_filter_metrics; "
+        "for stability margins use ltspice_stability_metrics."
+    ),
+    input_model=ResonanceInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_model=ResonancesResponse,
+)
+async def handle_resonance(args: ResonanceInput, state: SessionState):
+    if args.max_peaks < 1 or args.max_peaks > 1000:
+        raise ResultError(f"max_peaks must be in [1, 1000], got {args.max_peaks}")
+    freqs, H = _load_ac_signal(args.raw_file, args.signal, args.step, state)
+    data = _run(
+        compute_resonances,
+        freqs,
+        H,
+        min_prominence_db=args.min_prominence_db,
+        min_separation_decades=args.min_separation_decades,
+        max_peaks=args.max_peaks,
+    )
+    data["signal"] = args.signal
+
+    lines = [f"Resonances: {args.signal}", "", f"Peaks detected: {data['num_peaks_detected']}"]
+    for p in data["peaks"]:
+        q = "-" if p["q_factor"] is None else f"{p['q_factor']:.2f}"
+        bw = "-" if p["bandwidth_3db_hz"] is None else f"{p['bandwidth_3db_hz']:.6g} Hz"
+        lines.append(
+            f"  f={p['frequency_hz']:.6g} Hz  gain={p['magnitude_db']:.2f} dB  "
+            f"Q={q}  BW-3dB={bw}  phase={p['phase_deg']:+.2f}°"
+        )
+    lines += _warning_lines(data["warnings"])
+    return format_response("\n".join(lines), data, args.format)

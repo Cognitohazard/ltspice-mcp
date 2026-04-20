@@ -212,11 +212,14 @@ def load_signal_names(job_id: str, state: SessionState) -> list[str]:
 def load_measurements(
     job_id: str, state: SessionState, *, include_log_text: bool = False
 ) -> dict[str, Any]:
-    """Load measurements from a completed job."""
+    """Load measurements from a completed job.
+
+    Return type is ``dict[str, Any]`` (not ``MeasurementsOutput``) because
+    this helper may add a ``log_text`` field beyond the parser's shape.
+    """
     log_path = resolve_log_file(job_id, state)
-    data = parse_measurements(log_path)
+    data: dict[str, Any] = dict(parse_measurements(log_path))
     if include_log_text and log_path.exists():
-        data = dict(data)
         data["log_text"] = log_path.read_text(encoding="utf-8", errors="replace")
     return data
 

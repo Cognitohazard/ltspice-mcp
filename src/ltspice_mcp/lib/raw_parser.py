@@ -9,9 +9,12 @@ For .log file parsing (measurements, Fourier data), see log_parser.py.
 Functions are synchronous — callers invoke them directly (see concurrency contract in tools/_base.py).
 """
 
+from __future__ import annotations
+
 import contextlib
 import re
 from pathlib import Path
+from typing import TypedDict
 
 import numpy as np
 from spicelib.log.ltsteps import LTSpiceLogReader
@@ -22,6 +25,13 @@ from ltspice_mcp.lib.log_parser import (
     parse_fourier_data,
     parse_measurements,
 )
+
+
+class OperatingPointOutput(TypedDict):
+    """Return shape of :func:`extract_operating_point`."""
+
+    voltages: dict[str, float]
+    currents: dict[str, float]
 
 # Smallest positive normal float — floor for magnitude before log10 to avoid -inf
 _FLOAT_TINY = np.finfo(float).tiny
@@ -142,7 +152,7 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
     return result
 
 
-def extract_operating_point(raw: RawRead) -> dict:
+def extract_operating_point(raw: RawRead) -> OperatingPointOutput:
     """Extract DC operating point data (all node voltages and branch currents).
 
     Works best with Operating Point (.OP) simulations, but can extract
@@ -177,31 +187,21 @@ def extract_operating_point(raw: RawRead) -> dict:
 
 
 def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -> dict:
-    """Compute AC bandwidth metrics (best-effort).
+    """Compute AC bandwidth metrics used by ``simulation_summary``.
 
-    Calculates -3dB point, unity-gain frequency, phase margin, and gain margin
-    for AC analysis. Returns None for metrics that cannot be computed.
-
-    Phase is unwrapped before crossing detection so that systems whose true
-    phase drops below -180° (e.g. 3-pole loops) are correctly handled — the
-    raw ``np.angle`` output wraps from -179° to +179° at every -180° crossing,
-    which would otherwise hide the crossing entirely.
-
-    Args:
-        raw: Loaded RawRead instance
-        trace_name: Name of voltage trace to analyze
-        step: Step index (default 0)
-
-    Returns:
-        Dictionary with bandwidth_3db, unity_gain_freq, phase_margin, gain_margin.
-        Each value is Python float or None if not computable.
+    Thin wrapper over :mod:`ltspice_mcp.lib.ac_analysis`. Returns a dict
+    with ``bandwidth_3db``, ``unity_gain_freq``, ``phase_margin``, and
+    ``gain_margin`` — each a Python float or None. For all crossovers,
+    per-crossing margins, and the stability classification, call
+    ``ltspice_stability_metrics`` directly.
     """
-    axis = raw.get_axis(step=step)
-    wave = raw.get_wave(trace_name, step=step)
-
-    magnitude_db = safe_magnitude_db(wave)
-    phase_rad = np.unwrap(np.angle(wave))
-    phase_deg = np.rad2deg(phase_rad)
+    # Deferred import — ac_analysis imports raw_parser at module load so
+    # the edge in the other direction has to stay late-bound.
+    from ltspice_mcp.lib.ac_analysis import (
+        compute_stability_metrics,
+        detect_crossings,
+        prepare_ac_arrays,
+    )
 
     metrics: dict[str, float | None] = {
         "bandwidth_3db": None,
@@ -211,47 +211,40 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     }
 
     try:
-        max_db = np.max(magnitude_db)
-        target_db = max_db - 3.0
+        axis_raw = raw.get_axis(step=step)
+        wave_raw = raw.get_wave(trace_name, step=step)
+        freqs, H = prepare_ac_arrays(np.asarray(axis_raw), np.asarray(wave_raw))
+    except Exception:
+        return metrics
 
-        # If gain is monotonically decreasing, use first point as reference
-        if magnitude_db[0] == max_db or np.all(np.diff(magnitude_db) <= 0):
-            target_db = magnitude_db[0] - 3.0
-
-        crossings = np.where(magnitude_db < target_db)[0]
-        if len(crossings) > 0:
-            metrics["bandwidth_3db"] = float(axis[crossings[0]])
+    # -3 dB bandwidth relative to the low-frequency (DC) gain. For LPFs
+    # this is the cutoff; for HPFs there's no such crossing and the value
+    # stays None; for BPFs it reports the first -3 dB crossing above DC
+    # (the low cutoff), matching the previous behavior.
+    try:
+        mag_db = safe_magnitude_db(H)
+        ref_db = float(mag_db[0])
+        crossings = detect_crossings(freqs, mag_db, ref_db - 3.0, direction="falling")
+        if crossings:
+            metrics["bandwidth_3db"] = float(crossings[0]["frequency_hz"])
     except Exception:
         pass
 
-    # Unity-gain frequency (0dB crossing) + phase margin
     try:
-        sign_changes = np.diff(np.sign(magnitude_db))
-        crossings = np.where(sign_changes < 0)[0]
-        if len(crossings) > 0:
-            idx = crossings[0]
-            if idx + 1 < len(axis):
-                x0, x1 = axis[idx], axis[idx + 1]
-                y0, y1 = magnitude_db[idx], magnitude_db[idx + 1]
-                if y1 != y0:
-                    unity_freq = x0 + (0 - y0) * (x1 - x0) / (y1 - y0)
-                    metrics["unity_gain_freq"] = float(unity_freq)
-
-                    ugf_idx = np.searchsorted(axis, unity_freq)
-                    if ugf_idx < len(phase_deg):
-                        phase_at_ugf = phase_deg[ugf_idx]
-                        metrics["phase_margin"] = float(180 + phase_at_ugf)
-    except Exception:
-        pass
-
-    # Gain margin at -180 degree phase crossing
-    try:
-        phase_target = -180
-        crossings = np.where((phase_deg[:-1] > phase_target) & (phase_deg[1:] <= phase_target))[0]
-        if len(crossings) > 0:
-            idx = crossings[0]
-            gain_at_crossing = magnitude_db[idx]
-            metrics["gain_margin"] = float(-gain_at_crossing)
+        stability = compute_stability_metrics(freqs, H)
+        # Pick the crossover that produced the worst-case margin so the
+        # reported unity_gain_freq and phase_margin come from the SAME
+        # crossing (matters on conditionally-stable amps where the first
+        # unity-gain crossing is fine but a later one defines stability).
+        pm_entries = stability["phase_margins"]
+        if pm_entries:
+            worst_pm = min(pm_entries, key=lambda m: abs(m["margin_deg"]))
+            metrics["unity_gain_freq"] = float(worst_pm["frequency_hz"])
+            metrics["phase_margin"] = float(worst_pm["margin_deg"])
+        gm_entries = stability["gain_margins"]
+        if gm_entries:
+            worst_gm = min(gm_entries, key=lambda m: abs(m["margin_db"]))
+            metrics["gain_margin"] = float(worst_gm["margin_db"])
     except Exception:
         pass
 
