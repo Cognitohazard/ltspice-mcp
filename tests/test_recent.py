@@ -101,3 +101,39 @@ class TestIsCircuitFile:
     @pytest.mark.parametrize("name", ["readme.txt", "notes.md", "raw.bin", "sim.log"])
     def test_rejected_extensions(self, name: str) -> None:
         assert not recent.is_circuit_file(Path(name))
+
+
+class TestSchemaVersion:
+    def test_write_includes_schema_header(self, recent_home: Path, tmp_path: Path) -> None:
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        recent.touch(circuit)
+        on_disk = json.loads(recent.index_path().read_text())
+        assert on_disk["schema"] == recent.SCHEMA
+        assert on_disk["schema_version"] == recent.SCHEMA_VERSION
+
+    def test_read_accepts_legacy_versionless_file(
+        self, recent_home: Path, tmp_path: Path
+    ) -> None:
+        recent_home.mkdir(parents=True, exist_ok=True)
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        (recent_home / "recent.json").write_text(
+            json.dumps({"circuits": [{"path": str(circuit.resolve()), "last_touched": None}]})
+        )
+        entries = recent.load()
+        assert len(entries) == 1
+        assert entries[0]["path"] == str(circuit.resolve())
+
+    def test_read_rejects_future_version(self, recent_home: Path) -> None:
+        recent_home.mkdir(parents=True, exist_ok=True)
+        (recent_home / "recent.json").write_text(
+            json.dumps(
+                {
+                    "schema": recent.SCHEMA,
+                    "schema_version": 999,
+                    "circuits": [{"path": "/tmp/x.cir", "last_touched": None}],
+                }
+            )
+        )
+        assert recent.load() == []

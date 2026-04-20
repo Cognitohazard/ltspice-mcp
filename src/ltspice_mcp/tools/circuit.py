@@ -416,10 +416,10 @@ async def _editing_asc(path: Path, state: SessionState) -> AsyncIterator[AscEdit
     ),
     profiles=("full",),
 )
-async def handle_create_netlist(arguments: CreateNetlistInput, state: SessionState) -> types.CallToolResult:
+async def handle_create_netlist(args: CreateNetlistInput, state: SessionState) -> types.CallToolResult:
     """Create a new SPICE netlist file from content string."""
-    name = arguments.name
-    content = arguments.content
+    name = args.name
+    content = args.content
     target_path = safe_path(f"{name}.cir", state)
 
     if not content.strip().upper().endswith(".END"):
@@ -490,13 +490,13 @@ async def handle_create_netlist(arguments: CreateNetlistInput, state: SessionSta
         },
     },
 )
-async def handle_read_circuit(arguments: CircuitReadInput, state: SessionState):
+async def handle_read_circuit(args: CircuitReadInput, state: SessionState):
     """Read and parse a circuit file. For .asc schematics, returns component
     positions, net labels, wires, and directives. For .cir/.net, returns raw
     content and component list with values.
     """
-    file_path = safe_path(arguments.path, state)
-    fmt = arguments.format
+    file_path = safe_path(args.path, state)
+    fmt = args.format
 
     if _is_asc(file_path):
         data = services.extract_asc_info(_get_asc_editor(file_path, state), file_path)
@@ -576,15 +576,15 @@ def _format_circuit_text(file_path: Path, data: dict) -> str:
         },
     },
 )
-async def handle_list_components(arguments: ListComponentsInput, state: SessionState):
+async def handle_list_components(args: ListComponentsInput, state: SessionState):
     """List all components, optionally filtered by prefix. If a single
     reference is provided, return just that component's value.
     Works on .cir/.net and .asc.
     """
-    file_path = safe_path(arguments.path, state)
-    fmt = arguments.format
+    file_path = safe_path(args.path, state)
+    fmt = args.format
 
-    if arguments.reference is not None and arguments.prefix is not None:
+    if args.reference is not None and args.prefix is not None:
         raise NetlistError(
             "'reference' (single lookup) and 'prefix' (filter) are mutually "
             "exclusive — provide one, not both."
@@ -593,7 +593,7 @@ async def handle_list_components(arguments: ListComponentsInput, state: SessionS
     editor = _get_editor(file_path, state)
 
     # Single-component lookup mode (absorbed from get_component_value)
-    reference = arguments.reference
+    reference = args.reference
     if reference is not None:
         try:
             value = editor.get_component_value(reference)
@@ -605,7 +605,7 @@ async def handle_list_components(arguments: ListComponentsInput, state: SessionS
     # A prefix containing regex metacharacters or more than one character
     # would otherwise reach spicelib's parser which raises a raw
     # NotImplementedError out of our error hierarchy.
-    prefix = arguments.prefix
+    prefix = args.prefix
     if prefix is not None and (len(prefix) != 1 or not prefix.isalpha()):
         raise NetlistError(
             f"Component prefix must be a single letter (e.g. 'R', 'C'), got {prefix!r}"
@@ -624,7 +624,7 @@ async def handle_list_components(arguments: ListComponentsInput, state: SessionS
             msg, {"components": [], "pagination": pagination_metadata(0, 0, 50)}, fmt
         )
 
-    page, total, offset, limit = paginate(components, arguments)
+    page, total, offset, limit = paginate(components, args)
 
     comp_list = []
     comp_lines = []
@@ -662,18 +662,18 @@ async def handle_list_components(arguments: ListComponentsInput, state: SessionS
     ),
     profiles=("full",),
 )
-async def handle_set_component_value(arguments: SetComponentValueInput, state: SessionState) -> types.CallToolResult:
+async def handle_set_component_value(args: SetComponentValueInput, state: SessionState) -> types.CallToolResult:
     """Set component value(s). Accepts single or batch mode.
 
     Single mode: provide 'reference' and 'value'.
     Batch mode: provide 'values' dict mapping references to new values.
     Works on .cir/.net and .asc.
     """
-    file_path = safe_path(arguments.path, state)
+    file_path = safe_path(args.path, state)
 
-    values_dict = arguments.values
-    reference = arguments.reference
-    value = arguments.value
+    values_dict = args.values
+    reference = args.reference
+    value = args.value
 
     # Reject ambiguous input: single and batch mode are mutually exclusive.
     single_mode_args = reference is not None or value is not None
@@ -730,7 +730,7 @@ async def handle_set_component_value(arguments: SetComponentValueInput, state: S
         },
     },
 )
-async def handle_parameter(arguments: ParameterInput, state: SessionState):
+async def handle_parameter(args: ParameterInput, state: SessionState):
     """Get or set .PARAM directive values.
 
     Modes:
@@ -740,11 +740,11 @@ async def handle_parameter(arguments: ParameterInput, state: SessionState):
 
     Providing value without name is an error. Works on .cir/.net and .asc.
     """
-    file_path = safe_path(arguments.path, state)
-    fmt = arguments.format
+    file_path = safe_path(args.path, state)
+    fmt = args.format
 
-    param_name = arguments.name
-    param_value = arguments.value
+    param_name = args.name
+    param_value = args.value
 
     if param_name is not None and not param_name.strip():
         raise NetlistError("Parameter name must not be empty")
@@ -804,12 +804,12 @@ async def handle_parameter(arguments: ParameterInput, state: SessionState):
     ),
     profiles=("full",),
 )
-async def handle_edit_directive(arguments: EditDirectiveInput, state: SessionState) -> types.CallToolResult:
+async def handle_edit_directive(args: EditDirectiveInput, state: SessionState) -> types.CallToolResult:
     """Add or remove a SPICE directive. Works on .cir/.net and .asc."""
-    file_path = safe_path(arguments.path, state)
+    file_path = safe_path(args.path, state)
 
-    action = arguments.action
-    instruction = arguments.instruction
+    action = args.action
+    instruction = args.instruction
 
     if not instruction.strip():
         raise NetlistError("Directive instruction must not be empty")
@@ -863,12 +863,12 @@ async def handle_edit_directive(arguments: EditDirectiveInput, state: SessionSta
     ),
     profiles=("full",),
 )
-async def handle_remove_component(arguments: RemoveComponentInput, state: SessionState) -> types.CallToolResult:
+async def handle_remove_component(args: RemoveComponentInput, state: SessionState) -> types.CallToolResult:
     """Remove a component from a schematic by reference designator."""
-    asc_path = safe_path(arguments.path, state)
+    asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
 
-    reference = arguments.reference
+    reference = args.reference
 
     # Collect pin positions before removal to check for orphaned wires
     editor_pre = _get_asc_editor(asc_path, state)
@@ -912,15 +912,15 @@ async def handle_remove_component(arguments: RemoveComponentInput, state: Sessio
     ),
     profiles=("full",),
 )
-async def handle_move_component(arguments: MoveComponentInput, state: SessionState) -> types.CallToolResult:
+async def handle_move_component(args: MoveComponentInput, state: SessionState) -> types.CallToolResult:
     """Move or rotate a component in a schematic."""
-    asc_path = safe_path(arguments.path, state)
+    asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
 
-    reference = arguments.reference
-    x = arguments.x
-    y = arguments.y
-    rotation = arguments.rotation
+    reference = args.reference
+    x = args.x
+    y = args.y
+    rotation = args.rotation
 
     async with _editing_asc(asc_path, state) as editor:
         _require_component(editor, reference)
@@ -948,15 +948,15 @@ async def handle_move_component(arguments: MoveComponentInput, state: SessionSta
     profiles=("full",),
 )
 async def handle_set_component_attribute(
-    arguments: SetComponentAttributeInput, state: SessionState
+    args: SetComponentAttributeInput, state: SessionState
 ) -> types.CallToolResult:
     """Set an attribute on a schematic component (e.g., SpiceLine, SpiceModel)."""
-    asc_path = safe_path(arguments.path, state)
+    asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
 
-    reference = arguments.reference
-    attribute = arguments.attribute
-    value = arguments.value
+    reference = args.reference
+    attribute = args.attribute
+    value = args.value
 
     if not attribute.strip():
         raise NetlistError("Attribute name must not be empty")
@@ -995,17 +995,17 @@ async def handle_set_component_attribute(
         },
     },
 )
-async def handle_add_component(arguments: AddComponentInput, state: SessionState) -> types.CallToolResult:
+async def handle_add_component(args: AddComponentInput, state: SessionState) -> types.CallToolResult:
     """Add a new component to an .asc schematic."""
-    asc_path = safe_path(arguments.path, state)
+    asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
 
-    reference = arguments.reference
-    symbol = arguments.symbol
-    x = arguments.x
-    y = arguments.y
-    value = arguments.value
-    rotation = arguments.rotation
+    reference = args.reference
+    symbol = args.symbol
+    x = args.x
+    y = args.y
+    value = args.value
+    rotation = args.rotation
     erot = _parse_rotation(rotation)
 
     # Validate the symbol exists BEFORE touching the file. Saving a .asc with
@@ -1014,7 +1014,7 @@ async def handle_add_component(arguments: AddComponentInput, state: SessionState
     if get_symbol_info(symbol) is None:
         raise NetlistError(
             f"Symbol '{symbol}' not found in any configured symbol library. "
-            "Use ltspice_get_symbol_info to verify the symbol name, or "
+            "Use ltspice_symbol_info to verify the symbol name, or "
             "configure [schematic] symbol_paths in ltspice-mcp.toml."
         )
 
@@ -1028,7 +1028,7 @@ async def handle_add_component(arguments: AddComponentInput, state: SessionState
 
         _create_component(
             editor, reference, symbol, x, y, erot,
-            value=value, attributes=arguments.attributes,
+            value=value, attributes=args.attributes,
         )
 
     result = f"Added {reference} ({symbol}) at ({x},{y})"
@@ -1087,9 +1087,9 @@ _previous_exports: dict[Path, list[str]] = {}
     ),
     profiles=("full", "agentic"),
 )
-async def handle_export_netlist(arguments: ExportNetlistInput, state: SessionState) -> types.CallToolResult:
+async def handle_export_netlist(args: ExportNetlistInput, state: SessionState) -> types.CallToolResult:
     """Export an .asc schematic to a SPICE netlist (.net) using LTspice."""
-    asc_path = safe_path(arguments.path, state)
+    asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
 
     ltspice_cls = state.available_simulators.get("ltspice")
@@ -1131,7 +1131,7 @@ async def handle_export_netlist(arguments: ExportNetlistInput, state: SessionSta
 
 
 @registry.tool(
-    name="ltspice_get_symbol_info",
+    name="ltspice_symbol_info",
     description=(
         "Get symbol pin positions, bounding box, and description. "
         "Optionally compute absolute positions for a given placement and rotation."
@@ -1160,21 +1160,21 @@ async def handle_export_netlist(arguments: ExportNetlistInput, state: SessionSta
         },
     },
 )
-async def handle_get_symbol_info(
-    arguments: SymbolInfoInput, state: SessionState
+async def handle_symbol_info(
+    args: SymbolInfoInput, state: SessionState
 ) -> types.CallToolResult:
     """Get symbol geometry info for schematic layout planning."""
-    symbol = arguments.symbol
+    symbol = args.symbol
     sym_info = get_symbol_info(symbol)
     if sym_info is None:
         raise NetlistError(
             f"Symbol '{symbol}' not found. Ensure LTspice symbol libraries are configured."
         )
 
-    geometry = compute_placed_geometry(sym_info, arguments.x, arguments.y, arguments.rotation)
+    geometry = compute_placed_geometry(sym_info, args.x, args.y, args.rotation)
     data = {
         **sym_info.to_dict(),
-        "placement": {"x": arguments.x, "y": arguments.y, "rotation": arguments.rotation},
+        "placement": {"x": args.x, "y": args.y, "rotation": args.rotation},
         "absolute_pins": geometry["pins"],
         "absolute_bounding_box": geometry["bounding_box"],
     }
@@ -1183,7 +1183,7 @@ async def handle_get_symbol_info(
     if sym_info.description:
         lines.append(f"Description: {sym_info.description}")
     lines.append(f"Size: {sym_info.bbox_width}x{sym_info.bbox_height}")
-    lines.append(f"Pins (at {arguments.rotation}, origin ({arguments.x},{arguments.y})):")
+    lines.append(f"Pins (at {args.rotation}, origin ({args.x},{args.y})):")
     for pin in geometry["pins"]:
         lines.append(f"  {pin['name']}: ({pin['x']}, {pin['y']})")
     bb = geometry["bounding_box"]
@@ -1193,7 +1193,7 @@ async def handle_get_symbol_info(
 
 
 @registry.tool(
-    name="ltspice_get_component_info",
+    name="ltspice_component_info",
     description=(
         "Get a placed component's pin positions, bounding box, value, and attributes "
         "from an .asc schematic."
@@ -1221,13 +1221,13 @@ async def handle_get_symbol_info(
         },
     },
 )
-async def handle_get_component_info(
-    arguments: ComponentInfoInput, state: SessionState
+async def handle_component_info(
+    args: ComponentInfoInput, state: SessionState
 ) -> types.CallToolResult:
     """Get full info about a placed component including computed pin positions."""
-    asc_path = safe_path(arguments.path, state)
+    asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
-    reference = arguments.reference
+    reference = args.reference
 
     editor = _get_asc_editor(asc_path, state)
     _require_component(editor, reference)
@@ -1350,25 +1350,25 @@ def _resolve_pin(
     profiles=("full", "agentic"),
 )
 async def handle_add_net_label(
-    arguments: NetLabelInput, state: SessionState
+    args: NetLabelInput, state: SessionState
 ) -> types.CallToolResult:
     """Add or remove a FLAG (net label or ground) in a schematic."""
-    asc_path = safe_path(arguments.path, state)
+    asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
 
-    net = arguments.net
+    net = args.net
     label_desc = "ground" if net == "0" else f"net '{net}'"
 
     # Resolve coordinates from pin reference or explicit x/y
-    if arguments.pin is not None:
+    if args.pin is not None:
         editor = _get_asc_editor(asc_path, state)
-        x, y = _resolve_pin(arguments.pin, editor)
-    elif arguments.x is not None and arguments.y is not None:
-        x, y = arguments.x, arguments.y
+        x, y = _resolve_pin(args.pin, editor)
+    elif args.x is not None and args.y is not None:
+        x, y = args.x, args.y
     else:
         raise NetlistError("Either pin or both x and y coordinates are required.")
 
-    if arguments.action == "remove":
+    if args.action == "remove":
         async with _editing_asc(asc_path, state) as editor:
             for i, lbl in enumerate(editor.labels):
                 if lbl.text == net and int(lbl.coord.X) == x and int(lbl.coord.Y) == y:
@@ -1409,22 +1409,22 @@ async def handle_add_net_label(
     profiles=("full", "agentic"),
 )
 async def handle_add_text(
-    arguments: AddTextInput, state: SessionState
+    args: AddTextInput, state: SessionState
 ) -> types.CallToolResult:
     """Add a comment text to a schematic."""
-    asc_path = safe_path(arguments.path, state)
+    asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
 
     async with _editing_asc(asc_path, state) as editor:
         comment = Text(
-            coord=Point(arguments.x, arguments.y),
-            text=arguments.text,
+            coord=Point(args.x, args.y),
+            text=args.text,
             type=TextTypeEnum.COMMENT,
-            size=arguments.size,
+            size=args.size,
         )
         editor.directives.append(comment)
 
-    return text_response(f"Added text at ({arguments.x},{arguments.y}): {arguments.text}")
+    return text_response(f"Added text at ({args.x},{args.y}): {args.text}")
 
 
 @registry.tool(
@@ -1474,10 +1474,10 @@ async def handle_add_text(
     },
 )
 async def handle_connect(
-    arguments: ConnectInput, state: SessionState
+    args: ConnectInput, state: SessionState
 ) -> types.CallToolResult:
     """Connect two pins with auto-routed or waypoint-guided wires."""
-    asc_path = safe_path(arguments.path, state)
+    asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
 
     # Collect component geometry and existing wires for validation
@@ -1488,20 +1488,20 @@ async def handle_connect(
     ]
 
     # Resolve pins (read-only — no edits yet)
-    x1, y1 = _resolve_pin(arguments.from_pin, pre_editor)
-    x2, y2 = _resolve_pin(arguments.to_pin, pre_editor)
+    x1, y1 = _resolve_pin(args.from_pin, pre_editor)
+    x2, y2 = _resolve_pin(args.to_pin, pre_editor)
 
     # Reject zero-length connections — they would emit no wires and silently
     # report success, which is almost always a user error.
-    if (x1, y1) == (x2, y2) and not arguments.waypoints:
+    if (x1, y1) == (x2, y2) and not args.waypoints:
         raise NetlistError(
-            f"Cannot connect {arguments.from_pin} to {arguments.to_pin}: "
+            f"Cannot connect {args.from_pin} to {args.to_pin}: "
             f"both endpoints resolve to the same coordinate ({x1},{y1})."
         )
 
     # Build list of points: from → [waypoints] → to (dedup consecutive)
     raw_points = [(x1, y1)]
-    for wp in arguments.waypoints:
+    for wp in args.waypoints:
         raw_points.append((wp.x, wp.y))
     raw_points.append((x2, y2))
     points = [raw_points[0]]
@@ -1521,7 +1521,7 @@ async def handle_connect(
     # collapse onto one of the endpoints), reject as a no-op.
     if not segments:
         raise NetlistError(
-            f"Cannot connect {arguments.from_pin} to {arguments.to_pin}: "
+            f"Cannot connect {args.from_pin} to {args.to_pin}: "
             "the requested route has zero length after deduplicating waypoints."
         )
 
@@ -1531,7 +1531,7 @@ async def handle_connect(
     endpoints = {(x1, y1), (x2, y2)}
     skip_refs = {
         ref.rsplit(".", 1)[0]
-        for ref in (arguments.from_pin, arguments.to_pin)
+        for ref in (args.from_pin, args.to_pin)
         if "." in ref and not ref.startswith("net:")
     }
 
@@ -1630,7 +1630,7 @@ async def handle_connect(
 
     # Refuse to add wires if any errors detected
     if errors:
-        error_lines = [f"Refused to connect {arguments.from_pin} to {arguments.to_pin}:"]
+        error_lines = [f"Refused to connect {args.from_pin} to {args.to_pin}:"]
         for e in errors:
             error_lines.append(f"  {e}")
         error_lines.append("\nFix the route with different waypoints to avoid these issues.")
@@ -1671,7 +1671,7 @@ async def handle_connect(
         for sx1, sy1, sx2, sy2 in segments:
             ed.wires.append(Line(Point(sx1, sy1), Point(sx2, sy2)))
 
-    result_lines = [f"Connected {arguments.from_pin} to {arguments.to_pin}"]
+    result_lines = [f"Connected {args.from_pin} to {args.to_pin}"]
     result_lines.append(f"  From: ({x1},{y1})  To: ({x2},{y2})")
     for sx1, sy1, sx2, sy2 in segments:
         result_lines.append(f"  Wire: ({sx1},{sy1})->({sx2},{sy2})")
@@ -1683,8 +1683,8 @@ async def handle_connect(
             result_lines.append(f"  {w}")
 
     data: dict = {
-        "from": {"ref": arguments.from_pin, "x": x1, "y": y1},
-        "to": {"ref": arguments.to_pin, "x": x2, "y": y2},
+        "from": {"ref": args.from_pin, "x": x1, "y": y1},
+        "to": {"ref": args.to_pin, "x": x2, "y": y2},
         "wire_count": len(segments),
         "points": [{"x": p[0], "y": p[1]} for p in points],
     }

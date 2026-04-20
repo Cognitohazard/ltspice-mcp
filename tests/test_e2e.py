@@ -136,22 +136,22 @@ class TestServerLifecycle:
                 "ltspice_run_simulation",
                 "ltspice_check_job",
                 "ltspice_cancel_job",
-                "ltspice_get_signal_stats",
+                "ltspice_signal_stats",
                 "ltspice_query_value",
-                "ltspice_get_measurements",
-                "ltspice_get_operating_point",
-                "ltspice_get_simulation_summary",
+                "ltspice_measurements",
+                "ltspice_operating_point",
+                "ltspice_simulation_summary",
                 "ltspice_configure_sweep",
                 "ltspice_run_sweep",
                 "ltspice_configure_montecarlo",
                 "ltspice_run_montecarlo",
-                "ltspice_get_batch_results",
+                "ltspice_batch_results",
                 "ltspice_find_model",
-                "ltspice_get_model_info",
+                "ltspice_model_info",
                 "ltspice_load_library",
                 "ltspice_unload_library",
                 "ltspice_list_libraries",
-                "ltspice_get_server_status",
+                "ltspice_server_status",
             }
             missing = expected - names
             assert not missing, f"Missing tools: {missing}"
@@ -385,24 +385,24 @@ class TestSimulationDegraded:
 
 
 class TestAnalysisDegraded:
-    async def test_get_signal_stats_missing_file(self, tmp_path):
+    async def test_signal_stats_missing_file(self, tmp_path):
         async with mcp_session(tmp_path) as session:
             result = await _call(
                 session,
-                "ltspice_get_signal_stats",
+                "ltspice_signal_stats",
                 {"raw_file": "missing.raw", "signal": "V(out)"},
             )
             _assert_tool_error(result, "not found")
 
     async def test_get_measurements_missing_file(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_get_measurements", {"log_file": "missing.log"})
+            result = await _call(session, "ltspice_measurements", {"log_file": "missing.log"})
             _assert_tool_error(result, "No such file")
 
     async def test_get_simulation_summary_missing_file(self, tmp_path):
         async with mcp_session(tmp_path) as session:
             result = await _call(
-                session, "ltspice_get_simulation_summary", {"raw_file": "missing.raw"}
+                session, "ltspice_simulation_summary", {"raw_file": "missing.raw"}
             )
             _assert_tool_error(result, "not found")
 
@@ -491,7 +491,7 @@ class TestAdvancedTools:
     async def test_get_batch_results_invalid_job_returns_error(self, tmp_path):
         """get_batch_results returns error for missing jobs."""
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_get_batch_results", {"job_id": "batch_bogus"})
+            result = await _call(session, "ltspice_batch_results", {"job_id": "batch_bogus"})
             _assert_tool_error(result, "Batch job not found: batch_bogus")
 
 
@@ -534,7 +534,7 @@ class TestLibraryTools:
 class TestStatusTool:
     async def test_get_server_status_content(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_get_server_status", {})
+            result = await _call(session, "ltspice_server_status", {})
             assert not result.isError
             text = _text(result)
             assert "=== LTSpice MCP Server Status ===" in text
