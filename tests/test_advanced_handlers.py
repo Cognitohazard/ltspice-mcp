@@ -14,9 +14,9 @@ from ltspice_mcp.tools.advanced import (
     MonteCarloTolerance,
     RunBatchInput,
     SweepParameter,
+    handle_batch_results,
     handle_configure_montecarlo,
     handle_configure_sweep,
-    handle_get_batch_results,
     handle_run_montecarlo,
     handle_run_sweep,
 )
@@ -292,20 +292,20 @@ class TestRunMonteCarlo:
 class TestGetBatchResults:
     async def test_unknown_job(self, state_no_sim: SessionState):
         with pytest.raises(BatchJobError):
-            await handle_get_batch_results(
+            await handle_batch_results(
                 GetBatchResultsInput(job_id="missing"), state_no_sim
             )
 
     async def test_status_running(self, state_no_sim: SessionState):
         _make_batch(state_no_sim, status="running")
-        result = await handle_get_batch_results(
+        result = await handle_batch_results(
             GetBatchResultsInput(job_id="b1"), state_no_sim
         )
         assert "running" in result.content[0].text.lower()
 
     async def test_status_completed(self, state_no_sim: SessionState):
         _make_batch(state_no_sim, status="completed", completed_runs=5, total_runs=5)
-        result = await handle_get_batch_results(
+        result = await handle_batch_results(
             GetBatchResultsInput(job_id="b1"), state_no_sim
         )
         text = result.content[0].text.lower()
@@ -314,7 +314,7 @@ class TestGetBatchResults:
     async def test_status_failed(self, state_no_sim: SessionState):
         bj = _make_batch(state_no_sim, status="failed")
         bj.error = "test error"
-        result = await handle_get_batch_results(
+        result = await handle_batch_results(
             GetBatchResultsInput(job_id="b1"), state_no_sim
         )
         assert "failed" in result.content[0].text.lower()
@@ -322,13 +322,13 @@ class TestGetBatchResults:
     async def test_signal_no_completed_runs(self, state_no_sim: SessionState):
         _make_batch(state_no_sim, status="completed", completed_runs=0)
         with pytest.raises(BatchJobError, match="No completed runs"):
-            await handle_get_batch_results(
+            await handle_batch_results(
                 GetBatchResultsInput(job_id="b1", signal="V(out)"), state_no_sim
             )
 
     async def test_status_cancelled(self, state_no_sim: SessionState):
         _make_batch(state_no_sim, status="cancelled", completed_runs=2, total_runs=10)
-        result = await handle_get_batch_results(
+        result = await handle_batch_results(
             GetBatchResultsInput(job_id="b1"), state_no_sim
         )
         assert "cancelled" in result.content[0].text.lower()
