@@ -133,14 +133,40 @@ path = "/mnt/c/Program Files/ADI/LTspice/LTspice.exe"
 
 Simulation output is automatically redirected to a Windows temp directory. LTspice writes SQLite `.db` files alongside results, and these fail on UNC paths (`\\wsl.localhost\...`), which causes `.MEAS` data to be lost.
 
+## Persisted job state
+
+The server stores simulation, sweep, and Monte Carlo job metadata in a
+per-circuit sidecar directory so a restarted server can surface prior
+runs. Expect to see these alongside your circuits:
+
+```
+your-project/
+├── amp.cir
+└── .ltspice-mcp/
+    └── jobs/
+        ├── sim_a3f1.json
+        └── sweep_b82c.json
+```
+
+If you track the circuit project in git, add to `.gitignore`:
+
+```
+.ltspice-mcp/
+```
+
+The global recent-circuits index lives at `~/.ltspice-mcp/recent.json`
+(or `$XDG_STATE_HOME/ltspice-mcp/recent.json` / `$LTSPICE_MCP_HOME/recent.json`).
+Set `[state] persist_jobs = false` in `ltspice-mcp.toml` to disable
+persistence entirely.
+
 ## Tool Profiles
 
 `tool_profile` controls which tools the server exposes. Set via `[tools] profile` in TOML or `LTSPICE_MCP_TOOL_PROFILE` env var.
 
 | Profile | Tools | Use case |
 |-|-|-|
-| `full` (default) | All 35 | Backwards-compatible default for any MCP client |
-| `agentic` | 21 | **Recommended** when your client supports skill files |
+| `full` (default) | All 41 tools | Backwards-compatible default for any MCP client |
+| `agentic` | 27 | **Recommended** when your client supports skill files |
 
 The **agentic** profile removes netlist-editing wrappers, sweep/MC configuration tools, niche schematic operations, and library session management — things a capable LLM agent does better through direct file editing. It keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, AscEditor-dependent ops, and library search — the tools that provide genuine leverage over what an LLM can do natively.
 
@@ -164,7 +190,7 @@ Copy the relevant skill into whatever location your MCP client uses for persiste
 
 ## Tools
 
-All 35 tools are prefixed with `ltspice_` to avoid namespace conflicts with other MCP servers. Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) for client auto-approval decisions.
+All 41 tools are prefixed with `ltspice_` to avoid namespace conflicts with other MCP servers. Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) for client auto-approval decisions.
 
 ### Circuit editing (16 tools)
 
@@ -185,8 +211,8 @@ Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispa
 | `ltspice_connect` | Connect two pins by reference with waypoint routing; validates for pin collisions, wire junctions, and diagonal wires before adding |
 | `ltspice_add_net_label` | Add/remove net labels and ground flags (supports pin reference for placement) |
 | `ltspice_add_text` | Add comment text annotations to schematic |
-| `ltspice_get_symbol_info` | Get symbol pin positions, bounding box, pin directions, and description |
-| `ltspice_get_component_info` | Get placed component pin positions, bounding box, and attributes |
+| `ltspice_symbol_info` | Get symbol pin positions, bounding box, pin directions, and description |
+| `ltspice_component_info` | Get placed component pin positions, bounding box, and attributes |
 | `ltspice_export_netlist` | Export `.asc` to `.net` netlist (shows diff against previous export) |
 
 `.asc` schematic editing requires `.asy` symbol files. These are auto-detected on Windows and WSL; override with `[schematic] symbol_paths` in TOML or the `LTSPICE_MCP_SYMBOL_PATHS` env var.
@@ -205,9 +231,9 @@ Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispa
 |-|-|
 | `ltspice_get_signal_stats` | Signal statistics: min, max, mean, RMS, peak-to-peak (dB/phase for AC) |
 | `ltspice_query_value` | Query a signal's value at a specific time or frequency |
-| `ltspice_get_measurements` | Extract `.MEAS` directive results from the simulation log |
-| `ltspice_get_operating_point` | DC operating point: all node voltages and branch currents |
-| `ltspice_get_simulation_summary` | Full summary: simulation type, signals, measurements, warnings |
+| `ltspice_measurements` | Extract `.MEAS` directive results from the simulation log |
+| `ltspice_operating_point` | DC operating point: all node voltages and branch currents |
+| `ltspice_simulation_summary` | Full summary: simulation type, signals, measurements, warnings |
 
 ### Parametric analysis (5 tools)
 
@@ -217,14 +243,14 @@ Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispa
 | `ltspice_run_sweep` | Execute a configured sweep (async, returns job ID) |
 | `ltspice_configure_montecarlo` | Configure Monte Carlo analysis with per-type component tolerances |
 | `ltspice_run_montecarlo` | Execute a configured Monte Carlo analysis (async, returns job ID) |
-| `ltspice_get_batch_results` | Query sweep/MC job progress, per-signal statistics, or per-run data |
+| `ltspice_batch_results` | Query sweep/MC job progress, per-signal statistics, or per-run data |
 
 ### Library management (5 tools)
 
 | Tool | Description |
 |-|-|
 | `ltspice_find_model` | Find model candidates by name (fuzzy by default; `exact=true` for exact case-insensitive match) |
-| `ltspice_get_model_info` | Get model parameters and the `.include` directive to use it |
+| `ltspice_model_info` | Get model parameters and the `.include` directive to use it |
 | `ltspice_load_library` | Load a `.lib`/`.mod` file or a directory of library files |
 | `ltspice_unload_library` | Unload a previously loaded library |
 | `ltspice_list_libraries` | List loaded libraries, optionally with their model names |
@@ -233,7 +259,7 @@ Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispa
 
 | Tool | Description |
 |-|-|
-| `ltspice_get_server_status` | Server status: detected simulators, config, sandbox paths, runtime state |
+| `ltspice_server_status` | Server status: detected simulators, config, sandbox paths, runtime state |
 
 ## Resources
 

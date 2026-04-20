@@ -168,21 +168,21 @@ def _resolve_mc_ref(ref: str) -> tuple[str, bool]:
     ),
     profiles=("full",),
 )
-async def handle_configure_sweep(arguments: ConfigureSweepInput, state: SessionState):
+async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState):
     """Configure a multi-parameter sweep and store it for later execution.
 
     Validates all parameters, creates SweepDimension objects, computes total
     run count, and stores the SweepConfig in session state.
 
     Args:
-        arguments: Tool arguments with netlist and parameters array
+        args: Tool args with netlist and parameters array
         state: Current session state
 
     Returns:
         TextContent with config ID and summary
     """
-    netlist_str = arguments.netlist
-    parameters = arguments.parameters
+    netlist_str = args.netlist
+    parameters = args.parameters
 
     netlist_path = resolve_netlist_path(netlist_str, state)
 
@@ -286,21 +286,21 @@ async def handle_configure_sweep(arguments: ConfigureSweepInput, state: SessionS
     ),
     profiles=("full", "agentic"),
 )
-async def handle_run_sweep(arguments: RunBatchInput, state: SessionState):
+async def handle_run_sweep(args: RunBatchInput, state: SessionState):
     """Start a previously configured parameter sweep.
 
     Looks up the sweep config, creates a BatchJob, and starts execution
     asynchronously. Returns the job ID immediately — never blocks.
 
     Args:
-        arguments: Tool arguments with config_id and optional max_parallel
+        args: Tool args with config_id and optional max_parallel
         state: Current session state
 
     Returns:
         TextContent with job ID for monitoring
     """
-    config_id = arguments.config_id
-    max_parallel = arguments.max_parallel
+    config_id = args.config_id
+    max_parallel = args.max_parallel
 
     # Look up config
     config = state.sweep_configs.get(config_id)
@@ -348,8 +348,8 @@ async def handle_run_sweep(arguments: RunBatchInput, state: SessionState):
         f"Sweep started\n"
         f"Job ID: {job_id}\n"
         f"Total runs: {total_runs}\n\n"
-        f"Use ltspice_get_batch_results('{job_id}') to monitor progress\n"
-        f"Use ltspice_get_batch_results('{job_id}', signal='...') to query results"
+        f"Use ltspice_batch_results('{job_id}') to monitor progress\n"
+        f"Use ltspice_batch_results('{job_id}', signal='...') to query results"
     )
 
 
@@ -371,22 +371,22 @@ async def handle_run_sweep(arguments: RunBatchInput, state: SessionState):
     ),
     profiles=("full",),
 )
-async def handle_configure_montecarlo(arguments: ConfigureMonteCarloInput, state: SessionState):
+async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: SessionState):
     """Configure a Monte Carlo analysis and store it for later execution.
 
     Parses tolerances with type-name-to-prefix mapping, validates distribution
     names, and stores MonteCarloConfig in session state.
 
     Args:
-        arguments: Tool arguments with netlist, tolerances, num_runs
+        args: Tool args with netlist, tolerances, num_runs
         state: Current session state
 
     Returns:
         TextContent with config ID and summary
     """
-    netlist_str = arguments.netlist
-    tolerances_list = arguments.tolerances
-    num_runs = int(arguments.num_runs)
+    netlist_str = args.netlist
+    tolerances_list = args.tolerances
+    num_runs = int(args.num_runs)
 
     netlist_path = resolve_netlist_path(netlist_str, state)
 
@@ -477,21 +477,21 @@ async def handle_configure_montecarlo(arguments: ConfigureMonteCarloInput, state
     ),
     profiles=("full", "agentic"),
 )
-async def handle_run_montecarlo(arguments: RunBatchInput, state: SessionState):
+async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
     """Start a previously configured Monte Carlo analysis.
 
     Looks up the MC config, creates a BatchJob, and starts execution
     asynchronously. Returns the job ID immediately — never blocks.
 
     Args:
-        arguments: Tool arguments with config_id and optional max_parallel
+        args: Tool args with config_id and optional max_parallel
         state: Current session state
 
     Returns:
         TextContent with job ID for monitoring
     """
-    config_id = arguments.config_id
-    max_parallel = arguments.max_parallel
+    config_id = args.config_id
+    max_parallel = args.max_parallel
 
     # Look up config
     config = state.mc_configs.get(config_id)
@@ -533,8 +533,8 @@ async def handle_run_montecarlo(arguments: RunBatchInput, state: SessionState):
         f"Monte Carlo started\n"
         f"Job ID: {job_id}\n"
         f"Total runs: {config.num_runs}\n\n"
-        f"Use ltspice_get_batch_results('{job_id}') to monitor progress\n"
-        f"Use ltspice_get_batch_results('{job_id}', signal='...') to query results"
+        f"Use ltspice_batch_results('{job_id}') to monitor progress\n"
+        f"Use ltspice_batch_results('{job_id}', signal='...') to query results"
     )
 
 
@@ -542,7 +542,7 @@ async def handle_run_montecarlo(arguments: RunBatchInput, state: SessionState):
 # Handler 5: get_batch_results (consolidated: status + results)
 # ---------------------------------------------------------------------------
 @registry.tool(
-    name="ltspice_get_batch_results",
+    name="ltspice_batch_results",
     description=(
         "Query a batch simulation job (sweep or Monte Carlo). Without signal: "
         "returns job status and progress. With signal: returns aggregate statistics "
@@ -586,7 +586,7 @@ async def handle_run_montecarlo(arguments: RunBatchInput, state: SessionState):
         },
     },
 )
-async def handle_get_batch_results(arguments: GetBatchResultsInput, state: SessionState):
+async def handle_batch_results(args: GetBatchResultsInput, state: SessionState):
     """Query a batch simulation job — status/progress or signal results.
 
     Without signal: returns job status and progress (running/completed/failed).
@@ -595,25 +595,25 @@ async def handle_get_batch_results(arguments: GetBatchResultsInput, state: Sessi
     Supports parameter filtering using SPICE notation (exact or range).
 
     Args:
-        arguments: Tool arguments with job_id, optional signal, optional filters/pagination
+        args: Tool args with job_id, optional signal, optional filters/pagination
         state: Current session state
 
     Returns:
         TextContent with status info or statistics/per-run data
     """
-    job_id = arguments.job_id
-    signal = arguments.signal
-    fmt = arguments.format
+    job_id = args.job_id
+    signal = args.signal
+    fmt = args.format
     batch_job = services.resolve_batch_job(job_id, state)
 
     if signal is None:
         data = services.get_batch_status(batch_job)
         return format_response(_format_batch_status_text(data), data, fmt)
 
-    filters = arguments.filters
-    offset = arguments.offset
-    limit = min(arguments.limit, 50)
-    raw_mode = arguments.raw
+    filters = args.filters
+    offset = args.offset
+    limit = min(args.limit, 50)
+    raw_mode = args.raw
     data = services.get_batch_signal_data(
         batch_job,
         signal,
@@ -645,7 +645,7 @@ def _format_batch_status_text(data: dict) -> str:
             f"Progress: {data['completed']}/{data['total']} runs complete{eta_str}\n"
             f"Failed: {data['failed']}\n"
             f"Netlist: {data['netlist']}\n\n"
-            f"Use ltspice_get_batch_results('{data['job_id']}', signal='...') to query partial results"
+            f"Use ltspice_batch_results('{data['job_id']}', signal='...') to query partial results"
         )
     if status == "completed":
         duration = data["duration"] or 0.0
@@ -656,7 +656,7 @@ def _format_batch_status_text(data: dict) -> str:
             f"Successful: {data['successful']}\n"
             f"Failed: {data['failed_runs']}\n"
             f"Duration: {duration:.1f}s\n\n"
-            f"Use ltspice_get_batch_results('{data['job_id']}', signal='V(out)') to query results"
+            f"Use ltspice_batch_results('{data['job_id']}', signal='V(out)') to query results"
         )
     if status == "failed":
         return (
@@ -743,7 +743,7 @@ def _format_batch_raw_text(data: dict) -> str:
     pagination = data["pagination"]
     if pagination["has_more"]:
         lines.append(
-            f"\nNext page: ltspice_get_batch_results('{data['job_id']}', signal='{data['signal']}', raw=true, offset={pagination['next_offset']})"
+            f"\nNext page: ltspice_batch_results('{data['job_id']}', signal='{data['signal']}', raw=true, offset={pagination['next_offset']})"
         )
 
     return "\n".join(lines)

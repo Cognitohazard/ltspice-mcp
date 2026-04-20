@@ -15,7 +15,7 @@ from ltspice_mcp.tools._base import (
 )
 
 
-class GetServerStatusInput(ToolInput):
+class ServerStatusInput(ToolInput):
     """Inputs for the server status tool."""
 
     format: Literal["json", "text"] | None = Field(
@@ -25,13 +25,13 @@ class GetServerStatusInput(ToolInput):
 
 
 @registry.tool(
-    name="ltspice_get_server_status",
+    name="ltspice_server_status",
     description=(
         "Get comprehensive server status including detected simulators, "
         "configuration settings, security sandbox paths, and runtime state. "
         "Use this to check what capabilities are available before attempting operations."
     ),
-    input_model=GetServerStatusInput,
+    input_model=ServerStatusInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full", "agentic"),
     output_schema={
@@ -47,9 +47,9 @@ class GetServerStatusInput(ToolInput):
         },
     },
 )
-async def handle_get_server_status(arguments: GetServerStatusInput, state: SessionState):
+async def handle_server_status(args: ServerStatusInput, state: SessionState):
     """Get comprehensive server status information."""
-    fmt = arguments.format
+    fmt = args.format
 
     lines = ["=== LTSpice MCP Server Status ===\n"]
 
@@ -141,10 +141,17 @@ class RecentInput(ToolInput):
 @registry.tool(
     name="ltspice_recent",
     description=(
-        "List circuits you've recently edited or simulated, with per-circuit counts "
-        "of persisted jobs (completed, failed, interrupted). Use on session start to "
-        "pick up prior work. 'interrupted' means a job was running when the server "
-        "last stopped — inspect via ltspice_check_job(job_id)."
+        "Call on session start to find circuits the user was last working "
+        "with, including jobs that were still running when the server "
+        "stopped. Needs no inputs.\n\n"
+        "Returns a list of recent circuits, each with its absolute path, "
+        "whether the file still exists, last-touched timestamp, total "
+        "persisted job count, status_counts (completed/failed/"
+        "interrupted/etc.), and the IDs of any interrupted jobs.\n\n"
+        "'interrupted' means a simulation was in flight when the server "
+        "stopped — recovery path is ltspice_check_job(job_id) to see "
+        "whether results are recoverable or the run needs to be "
+        "re-kicked. Does NOT start or cancel anything; purely read-only."
     ),
     input_model=RecentInput,
     annotations=RO_ANNOTATIONS,
@@ -170,10 +177,10 @@ class RecentInput(ToolInput):
         },
     },
 )
-async def handle_recent(arguments: RecentInput, state: SessionState):
+async def handle_recent(args: RecentInput, state: SessionState):
     """List recently-touched circuits with persisted job summaries."""
     del state  # recent.json is user-global; nothing state-scoped is needed
-    fmt = arguments.format
+    fmt = args.format
     entries = recent.load(prune_missing=True)
     circuits: list[dict] = []
     for entry in entries:

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib import job_registry as job_registry_module
 from ltspice_mcp.lib import job_store, now
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
 
@@ -185,7 +186,7 @@ class TestEnsureJobsLoadedFor:
         config.persist_jobs = True
         state.persist_job(prior)
         config.persist_jobs = False
-        state._loaded_circuits.clear()
+        state.job_registry._loaded_circuits.clear()
 
         state.ensure_jobs_loaded_for(circuit)
         assert "sim_should_not_load" not in state.jobs
@@ -287,11 +288,11 @@ class TestAsyncPersistDrain:
         state.jobs["sim_drain"] = job
         # Schedule a write from async context (this is what the runners do).
         state.persist_job(job)
-        assert state._pending_persist, "expected a pending persist task"
+        assert state.job_registry._pending_persist, "expected a pending persist task"
 
         await state.shutdown()
 
-        assert not state._pending_persist
+        assert not state.job_registry._pending_persist
         sidecar = job_store.sidecar_dir(circuit) / "sim_drain.json"
         assert sidecar.exists()
 
@@ -335,14 +336,12 @@ class TestAsyncPersistDrain:
 
 class TestEvictionDeletesSidecar:
     def test_evicted_job_file_is_removed(self, state: SessionState, tmp_path: Path) -> None:
-        from ltspice_mcp import state as state_module
-
         circuit = tmp_path / "rc.cir"
         circuit.write_text("")
 
         # Temporarily shrink the cap so eviction triggers quickly.
-        original_cap = state_module._MAX_FINISHED_JOBS
-        state_module._MAX_FINISHED_JOBS = 2
+        original_cap = job_registry_module._MAX_FINISHED_JOBS
+        job_registry_module._MAX_FINISHED_JOBS = 2
         try:
             ids = []
             for i in range(3):
@@ -364,4 +363,84 @@ class TestEvictionDeletesSidecar:
             assert ids[1] in state.jobs
             assert ids[2] in state.jobs
         finally:
-            state_module._MAX_FINISHED_JOBS = original_cap
+            job_registry_module._MAX_FINISHED_JOBS = original_cap
+
+
+class TestPreloadRecent:
+    def test_preload_loads_jobs_for_recent_circuits(
+        self, state: SessionState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Route recent.json to tmp_path so we don't touch the user's home dir.
+        monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path / "home"))
+
+        from ltspice_mcp.lib import recent
+
+        # Two circuits in separate parent dirs so each has its own sidecar.
+        circuits = []
+        for idx in range(2):
+            sub = tmp_path / f"proj{idx}"
+            sub.mkdir()
+            c = sub / "rc.cir"
+            c.write_text("")
+            job = SimulationJob(
+                job_id=f"sim_pre_{idx}",
+                netlist=c,
+                simulator="LTspice",
+                status="completed",
+                started_at=now(),
+                completed_at=now(),
+            )
+            state.add_job(job)
+            recent.touch(c)
+            circuits.append(c)
+
+        # Fresh registry should see zero jobs before preload.
+        fresh = type(state.job_registry)(persist_enabled=True)
+        assert not fresh.sim_jobs
+        loaded = fresh.preload_recent(max_circuits=10)
+        assert loaded == 2
+        assert {"sim_pre_0", "sim_pre_1"} <= set(fresh.sim_jobs)
+
+    def test_preload_bounded_by_max_circuits(
+        self, state: SessionState, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path / "home"))
+        from ltspice_mcp.lib import recent
+
+        # Each circuit needs its own parent dir — sidecars are stored at
+        # ``<parent>/.ltspice-mcp/jobs/``, so siblings share one sidecar
+        # directory and loading any one of them would fetch all jobs.
+        for idx in range(5):
+            sub = tmp_path / f"proj{idx}"
+            sub.mkdir()
+            c = sub / "rc.cir"
+            c.write_text("")
+            state.add_job(
+                SimulationJob(
+                    job_id=f"sim_bound_{idx}",
+                    netlist=c,
+                    simulator="LTspice",
+                    status="completed",
+                    started_at=now(),
+                    completed_at=now(),
+                )
+            )
+            recent.touch(c)
+
+        fresh = type(state.job_registry)(persist_enabled=True)
+        loaded = fresh.preload_recent(max_circuits=2)
+        assert loaded == 2
+        assert len(fresh.sim_jobs) == 2
+
+    def test_preload_zero_is_noop(self, state: SessionState) -> None:
+        assert state.job_registry.preload_recent(max_circuits=0) == 0
+
+    def test_preload_disabled_persistence_is_noop(self, tmp_path: Path) -> None:
+        config = ServerConfig(
+            working_dir=tmp_path,
+            allowed_paths=[tmp_path],
+            persist_jobs=False,
+            log_level="DEBUG",
+        )
+        state = SessionState.create(config, {})
+        assert state.job_registry.preload_recent(max_circuits=10) == 0

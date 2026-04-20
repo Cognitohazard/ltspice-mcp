@@ -190,23 +190,23 @@ class TestMeasExtraction:
         return job
 
     async def test_get_measurements(self, ltspice_state: SessionState, rc_netlist: Path):
-        from ltspice_mcp.tools.analysis import handle_get_measurements
+        from ltspice_mcp.tools.analysis import handle_measurements
 
         job = await self._run_and_get_job(ltspice_state, rc_netlist.name)
         assert job.log_file and job.log_file.exists()
 
-        result = await handle_get_measurements({"log_file": str(job.log_file)}, ltspice_state)
+        result = await handle_measurements({"log_file": str(job.log_file)}, ltspice_state)
         text = result.content[0].text
         # With Windows-native output dir, .MEAS should work
         assert "fc" in text.lower(), f"Expected 'fc' measurement, got: {text[:300]}"
 
     async def test_transient_measurements(self, ltspice_state: SessionState, tran_netlist: Path):
-        from ltspice_mcp.tools.analysis import handle_get_measurements
+        from ltspice_mcp.tools.analysis import handle_measurements
 
         job = await self._run_and_get_job(ltspice_state, tran_netlist.name)
         assert job.log_file and job.log_file.exists()
 
-        result = await handle_get_measurements({"log_file": str(job.log_file)}, ltspice_state)
+        result = await handle_measurements({"log_file": str(job.log_file)}, ltspice_state)
         text = result.content[0].text
         assert "vout_max" in text.lower(), f"Expected 'vout_max' measurement, got: {text[:300]}"
 
@@ -226,24 +226,24 @@ class TestACAnalysis:
         return job
 
     async def test_list_signals(self, ltspice_state: SessionState, rc_netlist: Path):
-        from ltspice_mcp.tools.analysis import handle_get_simulation_summary
+        from ltspice_mcp.tools.analysis import handle_simulation_summary
 
         job = await self._run_and_get_job(ltspice_state, rc_netlist.name)
         assert job.raw_file and job.raw_file.exists()
 
-        result = await handle_get_simulation_summary(
+        result = await handle_simulation_summary(
             {"raw_file": str(job.raw_file)}, ltspice_state
         )
         text = result.content[0].text
         assert "V(out)" in text or "v(out)" in text.lower()
 
     async def test_simulation_summary(self, ltspice_state: SessionState, rc_netlist: Path):
-        from ltspice_mcp.tools.analysis import handle_get_simulation_summary
+        from ltspice_mcp.tools.analysis import handle_simulation_summary
 
         job = await self._run_and_get_job(ltspice_state, rc_netlist.name)
         assert job.raw_file and job.raw_file.exists()
 
-        result = await handle_get_simulation_summary(
+        result = await handle_simulation_summary(
             {"raw_file": str(job.raw_file)}, ltspice_state
         )
         text = result.content[0].text
@@ -529,8 +529,8 @@ class TestSweepIntegration:
 
     async def test_configure_and_run_sweep(self, ltspice_state: SessionState, rc_netlist: Path):
         from ltspice_mcp.tools.advanced import (
+            handle_batch_results,
             handle_configure_sweep,
-            handle_get_batch_results,
             handle_run_sweep,
         )
 
@@ -583,14 +583,14 @@ class TestSweepIntegration:
             pytest.fail(f"Sweep job {job_id} timed out")
 
         # Check status
-        status_result = await handle_get_batch_results({"job_id": job_id}, ltspice_state)
+        status_result = await handle_batch_results({"job_id": job_id}, ltspice_state)
         status_text = status_result.content[0].text
         assert "completed" in status_text.lower(), f"Sweep not completed: {status_text[:300]}"
 
     async def test_sweep_results_queryable(self, ltspice_state: SessionState, rc_netlist: Path):
         from ltspice_mcp.tools.advanced import (
+            handle_batch_results,
             handle_configure_sweep,
-            handle_get_batch_results,
             handle_run_sweep,
         )
 
@@ -618,7 +618,7 @@ class TestSweepIntegration:
         await asyncio.wait_for(batch_job.done_event.wait(), timeout=120)
 
         # Query results for V(out)
-        results = await handle_get_batch_results(
+        results = await handle_batch_results(
             {"job_id": job_id, "signal": "V(out)"}, ltspice_state
         )
         text = results.content[0].text
@@ -634,8 +634,8 @@ class TestMonteCarloIntegration:
         self, ltspice_state: SessionState, rc_netlist: Path
     ):
         from ltspice_mcp.tools.advanced import (
+            handle_batch_results,
             handle_configure_montecarlo,
-            handle_get_batch_results,
             handle_run_montecarlo,
         )
 
@@ -668,6 +668,6 @@ class TestMonteCarloIntegration:
         except TimeoutError:
             pytest.fail(f"Monte Carlo job {job_id} timed out")
 
-        status_result = await handle_get_batch_results({"job_id": job_id}, ltspice_state)
+        status_result = await handle_batch_results({"job_id": job_id}, ltspice_state)
         status_text = status_result.content[0].text
         assert "completed" in status_text.lower(), f"MC not completed: {status_text[:300]}"
