@@ -54,7 +54,7 @@ class ListLibrariesInput(ToolInput):
 
 
 @registry.tool(
-    name="ltspice_get_model_info",
+    name="ltspice_model_info",
     description=(
         "Get SPICE model/subcircuit details including parameters and ready-to-use "
         ".include directive. Set full=true to get the complete SPICE definition text."
@@ -74,11 +74,11 @@ class ListLibrariesInput(ToolInput):
         },
     },
 )
-async def handle_get_model_info(arguments: GetModelInfoInput, state: SessionState):
+async def handle_model_info(args: GetModelInfoInput, state: SessionState):
     """Get SPICE model/subcircuit details."""
-    name = arguments.name
-    full = arguments.full
-    fmt = arguments.format
+    name = args.name
+    full = args.full
+    fmt = args.format
 
     try:
         info = state.libraries.get_model_info(name, full)
@@ -160,13 +160,13 @@ async def handle_get_model_info(arguments: GetModelInfoInput, state: SessionStat
         },
     },
 )
-async def handle_find_model(arguments: FindModelInput, state: SessionState):
-    name = arguments.name
-    exact = arguments.exact
-    limit = max(1, min(arguments.limit, 25))
-    cutoff = max(0.0, min(arguments.cutoff, 1.0))
-    include_builtin = arguments.include_builtin
-    fmt = arguments.format
+async def handle_find_model(args: FindModelInput, state: SessionState):
+    name = args.name
+    exact = args.exact
+    limit = max(1, min(args.limit, 25))
+    cutoff = max(0.0, min(args.cutoff, 1.0))
+    include_builtin = args.include_builtin
+    fmt = args.format
 
     try:
         results = state.libraries.find_similar_models(
@@ -222,11 +222,11 @@ async def handle_find_model(arguments: FindModelInput, state: SessionState):
     ),
     profiles=("full",),
 )
-async def handle_load_library(arguments: LoadLibraryInput, state: SessionState) -> types.CallToolResult:
+async def handle_load_library(args: LoadLibraryInput, state: SessionState) -> types.CallToolResult:
     """Load a SPICE library file or directory.
 
     Args:
-        arguments: Contains 'path' (string)
+        args: Contains 'path' (string)
         state: Session state with library manager
 
     Returns:
@@ -236,7 +236,7 @@ async def handle_load_library(arguments: LoadLibraryInput, state: SessionState) 
         PathSecurityError: Path outside sandbox
         LibraryError: Load failed
     """
-    path = safe_path(arguments.path, state)
+    path = safe_path(args.path, state)
 
     try:
         summary = state.libraries.load_library(path)
@@ -267,11 +267,11 @@ async def handle_load_library(arguments: LoadLibraryInput, state: SessionState) 
     ),
     profiles=("full",),
 )
-async def handle_unload_library(arguments: UnloadLibraryInput, state: SessionState) -> types.CallToolResult:
+async def handle_unload_library(args: UnloadLibraryInput, state: SessionState) -> types.CallToolResult:
     """Unload a library from the session.
 
     Args:
-        arguments: Contains 'path' (string)
+        args: Contains 'path' (string)
         state: Session state with library manager
 
     Returns:
@@ -281,7 +281,7 @@ async def handle_unload_library(arguments: UnloadLibraryInput, state: SessionSta
         PathSecurityError: Path outside sandbox
         LibraryError: Library not loaded
     """
-    path = safe_path(arguments.path, state)
+    path = safe_path(args.path, state)
 
     try:
         result = state.libraries.unload_library(path)
@@ -317,13 +317,13 @@ async def handle_unload_library(arguments: UnloadLibraryInput, state: SessionSta
         },
     },
 )
-async def handle_list_libraries(arguments: ListLibrariesInput, state: SessionState):
+async def handle_list_libraries(args: ListLibrariesInput, state: SessionState):
     """List loaded libraries, optionally with subcircuit detail."""
-    detail = arguments.detail
-    fmt = arguments.format
+    detail = args.detail
+    fmt = args.format
     filter_path = None
-    if arguments.path is not None:
-        filter_path = safe_path(arguments.path, state)
+    if args.path is not None:
+        filter_path = safe_path(args.path, state)
 
     libs = state.libraries.list_libraries()
 
@@ -337,7 +337,7 @@ async def handle_list_libraries(arguments: ListLibrariesInput, state: SessionSta
     if not libs:
         return format_response(f"No libraries matching {filter_path}", {"libraries": []}, fmt)
 
-    libs_page, total, offset, limit = paginate(libs, arguments)
+    libs_page, total, offset, limit = paginate(libs, args)
     has_more = offset + len(libs_page) < total
     header = f"Loaded libraries: showing {offset + 1}-{offset + len(libs_page)} of {total}"
 

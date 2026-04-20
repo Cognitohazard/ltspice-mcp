@@ -75,7 +75,7 @@ async def run():
         # Step 1: Check server status
         # ----------------------------------------------------------
         step(1, "Check server status")
-        r = await session.call_tool("ltspice_get_server_status", {}, read_timeout_seconds=TIMEOUT)
+        r = await session.call_tool("ltspice_server_status", {}, read_timeout_seconds=TIMEOUT)
         print(text(r))
 
         has_simulator = "degraded" not in text(r)
@@ -202,7 +202,7 @@ async def run():
         else:
             # Measurements from log
             r = await session.call_tool(
-                "ltspice_get_measurements",
+                "ltspice_measurements",
                 {"log_file": "sallen_key_lpf.log"},
                 read_timeout_seconds=TIMEOUT,
             )
@@ -210,7 +210,7 @@ async def run():
 
             # Simulation summary
             r = await session.call_tool(
-                "ltspice_get_simulation_summary",
+                "ltspice_simulation_summary",
                 {"raw_file": "sallen_key_lpf.raw"},
                 read_timeout_seconds=TIMEOUT,
             )
@@ -218,7 +218,7 @@ async def run():
 
             # Signal stats at output
             r = await session.call_tool(
-                "ltspice_get_signal_stats",
+                "ltspice_signal_stats",
                 {"raw_file": "sallen_key_lpf.raw", "signal": "V(out)"},
                 read_timeout_seconds=TIMEOUT,
             )

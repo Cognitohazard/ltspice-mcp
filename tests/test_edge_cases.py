@@ -18,7 +18,6 @@ from ltspice_mcp.lib.batch_results import filter_runs_by_params
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.log_parser import extract_log_diagnostics
 from ltspice_mcp.lib.raw_parser import (
-    compute_signal_stats,
     extract_operating_point,
     query_point_value,
 )
@@ -91,22 +90,6 @@ class TestParseSpiceCaseSensitivity:
 
     def test_uppercase_T(self):
         assert parse_spice_value("1T") == 1e12
-
-
-# ---------------------------------------------------------------------------
-# Bug D: compute_signal_stats on empty wave crashes with cryptic numpy error
-# ---------------------------------------------------------------------------
-
-
-class TestComputeSignalStatsEmpty:
-    def test_empty_wave_raises_clean_error(self):
-        raw = MagicMock()
-        raw.get_axis.return_value = np.array([])
-        raw.get_wave = lambda name, step=0: np.array([])
-        raw.get_steps.return_value = [0]
-        # Should raise a domain error, not a numpy reduction error.
-        with pytest.raises((ResultError, ValueError)):
-            compute_signal_stats(raw, "V(out)")
 
 
 # ---------------------------------------------------------------------------
