@@ -175,8 +175,8 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
         ),
     ),
     _err.SimulationError: _ErrorHint(
-        full="Use ltspice_get_server_status to verify simulator availability.",
-        agentic="Use ltspice_get_server_status to verify simulator availability.",
+        full="Use ltspice_server_status to verify simulator availability.",
+        agentic="Use ltspice_server_status to verify simulator availability.",
     ),
     _err.NetlistError: _ErrorHint(
         full=(
@@ -191,11 +191,11 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
     _err.ResultError: _ErrorHint(
         full=(
             "Verify the simulation completed successfully with ltspice_check_job, "
-            "and check signal names with ltspice_get_simulation_summary."
+            "and check signal names with ltspice_simulation_summary."
         ),
         agentic=(
             "Verify the simulation completed successfully with ltspice_check_job, "
-            "and check signal names with ltspice_get_simulation_summary."
+            "and check signal names with ltspice_simulation_summary."
         ),
     ),
     _err.LibraryError: _ErrorHint(
@@ -291,6 +291,18 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     for allowed_path in config.allowed_paths:
         logger.info(f"  - {allowed_path.resolve()}")
 
+    # Eager-load persisted jobs for the top-N recently-touched circuits so
+    # first-tool-call latency on those circuits doesn't surprise the user.
+    # Circuits outside this budget fall back to lazy load on first tool call.
+    if config.persist_jobs and config.preload_recent_count > 0:
+        preloaded = state.job_registry.preload_recent(
+            max_circuits=config.preload_recent_count
+        )
+        if preloaded:
+            logger.info(
+                "Preloaded persisted jobs for %d recent circuit(s)", preloaded
+            )
+
     logger.info("Startup complete. Server ready for MCP connections.")
 
     try:
@@ -351,7 +363,7 @@ async def call_tool(name: str, arguments: dict | None):
         allowed = ", ".join(str(p) for p in state.config.allowed_paths)
         raise PathSecurityError(
             f"{e}\n\nAllowed paths: {allowed}\n"
-            f"Use ltspice_get_server_status to see full sandbox configuration."
+            f"Use ltspice_server_status to see full sandbox configuration."
         ) from None
     except LTSpiceMCPError as e:
         hint = _get_error_hint(type(e), state.config.tool_profile)

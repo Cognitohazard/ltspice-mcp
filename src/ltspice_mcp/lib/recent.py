@@ -32,6 +32,12 @@ DEFAULT_CAP = 20
 INDEX_FILENAME = "recent.json"
 _LEGACY_HOME = ".ltspice-mcp"
 
+SCHEMA = "ltspice-mcp/recent"
+SCHEMA_VERSION = 1
+# Versions this build can READ. Files without a version (legacy, pre-schema)
+# are accepted as v1 since the shape has been stable.
+SUPPORTED_VERSIONS: frozenset[int] = frozenset({1})
+
 
 def index_path() -> Path:
     """Resolve the global recent-circuits file path.
@@ -67,7 +73,22 @@ def _read_index(path: Path) -> list[dict]:
     except (OSError, json.JSONDecodeError) as e:
         logger.warning("Ignoring unreadable recent index %s: %s", path, e)
         return []
-    entries = data.get("circuits") if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return []
+    # Schema check: accept current version, or a versionless legacy file
+    # (shape has been stable). Reject anything from a newer build so we
+    # don't silently drop unknown fields on the next write.
+    raw_version = data.get("schema_version")
+    if raw_version is not None and (
+        not isinstance(raw_version, int) or raw_version not in SUPPORTED_VERSIONS
+    ):
+        logger.warning(
+            "Ignoring recent index %s: unsupported schema_version %r",
+            path,
+            raw_version,
+        )
+        return []
+    entries = data.get("circuits")
     if not isinstance(entries, list):
         return []
     out: list[dict] = []
@@ -79,6 +100,15 @@ def _read_index(path: Path) -> list[dict]:
         if isinstance(p, str) and p:
             out.append({"path": p, "last_touched": t if isinstance(t, str) else None})
     return out
+
+
+def _index_payload(entries: list[dict]) -> dict:
+    """Build the full on-disk payload: schema header + circuit entries."""
+    return {
+        "schema": SCHEMA,
+        "schema_version": SCHEMA_VERSION,
+        "circuits": entries,
+    }
 
 
 def touch(circuit_path: Path, cap: int = DEFAULT_CAP) -> None:
@@ -102,7 +132,7 @@ def touch(circuit_path: Path, cap: int = DEFAULT_CAP) -> None:
             entries.insert(0, {"path": resolved, "last_touched": now().isoformat()})
             if len(entries) > cap:
                 entries = entries[:cap]
-            atomic_write_json(path, {"circuits": entries})
+            atomic_write_json(path, _index_payload(entries))
     except (OSError, TimeoutError) as e:
         logger.warning("Failed to persist recent-circuits index %s: %s", path, e)
 
@@ -129,7 +159,7 @@ def load(*, prune_missing: bool = False) -> list[dict]:
                     dropped = True
             if dropped:
                 with contextlib.suppress(OSError):
-                    atomic_write_json(path, {"circuits": kept})
+                    atomic_write_json(path, _index_payload(kept))
             return kept
     except (OSError, TimeoutError) as e:
         logger.warning("Failed to prune recent-circuits index %s: %s", path, e)

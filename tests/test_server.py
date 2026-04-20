@@ -165,7 +165,7 @@ class TestServerDispatch:
 
         with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)):
             result = await call_tool(
-                "ltspice_get_model_info", {"name": "2N2223"}
+                "ltspice_model_info", {"name": "2N2223"}
             )
         assert isinstance(result, mcp_types.CallToolResult)
         assert result.isError is True

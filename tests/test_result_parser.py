@@ -14,7 +14,6 @@ from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.log_parser import extract_log_diagnostics, parse_measurements
 from ltspice_mcp.lib.raw_parser import (
     compute_ac_bandwidth_metrics,
-    compute_signal_stats,
     detect_sim_type,
     extract_operating_point,
     get_step_count,
@@ -84,41 +83,6 @@ class TestGetStepCount:
         raw = MagicMock()
         raw.get_steps.side_effect = Exception("no steps")
         assert get_step_count(raw) == 1
-
-
-class TestComputeSignalStats:
-    def test_real_data(self):
-        """Transient/DC — real-valued data."""
-        axis = np.linspace(0, 1, 100)
-        wave = np.sin(2 * np.pi * axis)  # sine wave
-        raw = _make_raw_mock(["V(out)"], axis, {"V(out)": wave})
-
-        stats = compute_signal_stats(raw, "V(out)")
-        assert stats["analysis_type"] == "transient"
-        assert stats["min"] == pytest.approx(-1.0, abs=0.1)
-        assert stats["max"] == pytest.approx(1.0, abs=0.1)
-        assert stats["mean"] == pytest.approx(0.0, abs=0.1)
-        assert stats["rms"] == pytest.approx(0.707, abs=0.05)
-        assert stats["peak_to_peak"] == pytest.approx(2.0, abs=0.1)
-        assert stats["point_count"] == 100
-        # All values should be Python float
-        for k, v in stats.items():
-            if k != "analysis_type":
-                assert type(v) in (float, int)
-
-    def test_complex_data(self):
-        """AC — complex-valued data."""
-        freqs = np.logspace(0, 6, 50)
-        # Simple lowpass: H(f) = 1/(1 + j*f/fc), fc=1kHz
-        fc = 1000
-        wave = 1 / (1 + 1j * freqs / fc)
-        raw = _make_raw_mock(["V(out)"], freqs, {"V(out)": wave})
-
-        stats = compute_signal_stats(raw, "V(out)")
-        assert stats["analysis_type"] == "ac"
-        assert stats["max_db"] == pytest.approx(0.0, abs=0.5)  # DC gain ~0dB
-        assert stats["min_db"] < -20  # rolloff at high freq
-        assert stats["point_count"] == 50
 
 
 class TestQueryPointValue:

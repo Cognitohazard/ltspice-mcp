@@ -306,7 +306,7 @@ def _read_recent(
         "circuits": circuits,
         "count": len(circuits),
         "note": (
-            "Use ltspice_check_job(job_id) or ltspice_get_batch_results(job_id) to inspect "
+            "Use ltspice_check_job(job_id) or ltspice_batch_results(job_id) to inspect "
             "a specific job; interrupted jobs were running when the server last stopped."
         ),
     }

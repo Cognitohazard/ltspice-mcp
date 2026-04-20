@@ -9,10 +9,11 @@ from pydantic import Field
 
 from ltspice_mcp.errors import ResultError, SimulationError
 from ltspice_mcp.lib import now, services
+from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.log_parser import extract_error_context, parse_success_summary
 from ltspice_mcp.lib.mcp_logging import mcp_log
 from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
-from ltspice_mcp.state import SessionState, SimulationJob
+from ltspice_mcp.state import NON_TERMINAL_LIVE_STATUSES, SessionState, SimulationJob
 from ltspice_mcp.tools._base import (
     ToolInput,
     format_response,
@@ -120,17 +121,17 @@ def _get_or_create_runner(state: SessionState) -> SimulationRunner:
         },
     },
 )
-async def handle_run_simulation(arguments: RunSimulationInput, state: SessionState):
+async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     """Run a SPICE simulation synchronously or asynchronously.
 
     Automatically chooses sync vs async based on timeout threshold (30s).
     Sync mode blocks until completion, async mode returns job ID immediately.
     """
-    # Extract arguments
-    netlist_str = arguments.netlist
-    timeout = arguments.timeout if arguments.timeout is not None else state.config.default_timeout
-    wait = arguments.wait
-    fmt = arguments.format
+    # Extract args
+    netlist_str = args.netlist
+    timeout = args.timeout if args.timeout is not None else state.config.default_timeout
+    wait = args.wait
+    fmt = args.format
 
     netlist_path = resolve_netlist_path(netlist_str, state)
     require_simulator(state)
@@ -143,7 +144,9 @@ async def handle_run_simulation(arguments: RunSimulationInput, state: SessionSta
         job_id=job_id,
         netlist=netlist_path,
         simulator=default_simulator.__name__,
-        status="running",
+        # "queued" until the runner accepts the work; then the
+        # runner transitions to "running" and emits 'started'.
+        status="queued",
         started_at=now(),
     )
     # Get SimulationRunner before storing job — if this fails, we don't
@@ -197,13 +200,13 @@ async def _wait_for_completion(
         # Wait for completion with timeout
         await asyncio.wait_for(job.done_event.wait(), timeout=timeout)
     except TimeoutError:
-        # Timeout - this is NOT a simulator error, it's a tool-level kill
+        # Timeout - this is NOT a simulator error, it's a tool-level kill.
+        # Kill the spice process first, then record status=timeout (NOT
+        # cancelled) so the user sees the real cause.
         duration = time.time() - start_time
-        job.status = "timeout"
-        job.completed_at = now()
-
-        # Cancel the simulation
-        await runner.cancel(job, state)
+        await runner._kill(job.job_id)
+        if job.status == "running":
+            transition(job, "timeout", state=state, duration_s=duration)
 
         # Extract log context if available
         log_excerpt = ""
@@ -358,20 +361,20 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
         },
     },
 )
-async def handle_check_job(arguments: CheckJobInput, state: SessionState):
+async def handle_check_job(args: CheckJobInput, state: SessionState):
     """Check status of a simulation job, or list all jobs."""
-    job_id = arguments.job_id
-    fmt = arguments.format
+    job_id = args.job_id
+    fmt = args.format
 
     # If no job_id provided, list jobs
     if not job_id:
-        return _list_jobs(arguments, state, fmt)
+        return _list_jobs(args, state, fmt)
 
     # Look up specific job
     job = services.resolve_simulation_job(job_id, state)
 
     # Check status
-    if job.status in ("running", "queued"):
+    if job.status in NON_TERMINAL_LIVE_STATUSES:
         elapsed = (now() - job.started_at).total_seconds()
         data = {
             "job_id": job_id,
@@ -466,7 +469,7 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
     elif status_filter:
         jobs_to_show = [job for job in state.jobs.values() if job.status == status_filter]
     else:
-        jobs_to_show = [job for job in state.jobs.values() if job.status in ("running", "queued")]
+        jobs_to_show = [job for job in state.jobs.values() if job.status in NON_TERMINAL_LIVE_STATUSES]
 
     # Sort by started_at (most recent first)
     jobs_to_show.sort(key=lambda j: j.started_at, reverse=True)
@@ -525,23 +528,23 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
     ),
     profiles=("full", "agentic"),
 )
-async def handle_cancel_job(arguments: CancelJobInput, state: SessionState) -> types.CallToolResult:
+async def handle_cancel_job(args: CancelJobInput, state: SessionState) -> types.CallToolResult:
     """Cancel a running simulation job.
 
     Args:
-        arguments: Tool arguments with job_id
+        args: Tool args with job_id
         state: Current session state
 
     Returns:
         List containing TextContent with cancellation result
     """
-    job_id = arguments.job_id
+    job_id = args.job_id
 
     # Look up job
     job = services.resolve_simulation_job(job_id, state)
 
     # Check if job is running
-    if job.status not in ("running", "queued"):
+    if job.status not in NON_TERMINAL_LIVE_STATUSES:
         raise SimulationError(f"Job {job_id} is not running (status: {job.status})")
 
     # Cancel the job

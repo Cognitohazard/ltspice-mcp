@@ -143,6 +143,12 @@ class ServerConfig:
     """Persist simulation/batch job metadata to ``.ltspice-mcp/jobs/`` next
     to each circuit file so a restarted server can surface prior runs."""
 
+    preload_recent_count: int = 10
+    """At startup, eagerly load persisted jobs for this many recently-touched
+    circuits (capped by ``recent.json``). Set to 0 to disable preload and
+    fall back to lazy loading on first tool call. Bounded-IO; typical
+    cost is a handful of millisecond-scale JSON reads."""
+
     config_path: Path = field(default_factory=lambda: Path.cwd() / "ltspice-mcp.toml")
     """Path that was resolved for the config file (set by load())."""
 
@@ -231,6 +237,17 @@ class ServerConfig:
                         "config: state.persist_jobs must be boolean; ignoring %r", raw
                     )
 
+            if "state" in toml_data and "preload_recent_count" in toml_data["state"]:
+                raw = toml_data["state"]["preload_recent_count"]
+                if isinstance(raw, int) and raw >= 0:
+                    config_dict["preload_recent_count"] = raw
+                else:
+                    logger.warning(
+                        "config: state.preload_recent_count must be a non-negative "
+                        "integer; ignoring %r",
+                        raw,
+                    )
+
             _validate_numeric(
                 config_dict, "max_parallel_sims", int, 1, 128, source="config"
             )
@@ -307,6 +324,19 @@ class ServerConfig:
             else:
                 logger.warning(
                     "LTSPICE_MCP_PERSIST_JOBS: invalid boolean %r; ignoring", env_persist
+                )
+
+        if (env_preload := os.getenv("LTSPICE_MCP_PRELOAD_RECENT_COUNT")) is not None:
+            try:
+                parsed = int(env_preload)
+                if parsed < 0:
+                    raise ValueError("must be >= 0")
+                config_dict["preload_recent_count"] = parsed
+            except ValueError as e:
+                logger.warning(
+                    "LTSPICE_MCP_PRELOAD_RECENT_COUNT: invalid integer %r (%s); ignoring",
+                    env_preload,
+                    e,
                 )
 
         config_dict["config_path"] = config_path
@@ -418,6 +448,13 @@ def generate_default_config(path: Path) -> None:
         )
     )
     state_tbl.add("persist_jobs", True)
+    state_tbl.add(
+        comment(
+            "preload_recent_count: at startup, eagerly load persisted jobs for this many "
+            "recently-touched circuits. 0 disables preload (lazy-only)."
+        )
+    )
+    state_tbl.add("preload_recent_count", 10)
     doc.add("state", state_tbl)
 
     atomic_write_text(path, tomlkit.dumps(doc), durable=False)

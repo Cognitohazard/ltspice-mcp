@@ -13,9 +13,9 @@ from ltspice_mcp.tools.library import (
     LoadLibraryInput,
     UnloadLibraryInput,
     handle_find_model,
-    handle_get_model_info,
     handle_list_libraries,
     handle_load_library,
+    handle_model_info,
     handle_unload_library,
 )
 
@@ -91,7 +91,7 @@ class TestUnloadLibrary:
 class TestGetModelInfo:
     async def test_found(self, state_no_sim: SessionState, lib_file: Path):
         await handle_load_library(LoadLibraryInput(path=lib_file.name), state_no_sim)
-        result = await handle_get_model_info(
+        result = await handle_model_info(
             GetModelInfoInput(name="2N2222"), state_no_sim
         )
         text = result.content[0].text
@@ -100,7 +100,7 @@ class TestGetModelInfo:
 
     async def test_full(self, state_no_sim: SessionState, lib_file: Path):
         await handle_load_library(LoadLibraryInput(path=lib_file.name), state_no_sim)
-        result = await handle_get_model_info(
+        result = await handle_model_info(
             GetModelInfoInput(name="2N2222", full=True), state_no_sim
         )
         text = result.content[0].text
@@ -108,7 +108,7 @@ class TestGetModelInfo:
 
     async def test_not_found(self, state_no_sim: SessionState):
         with pytest.raises(LibraryError, match="not found"):
-            await handle_get_model_info(
+            await handle_model_info(
                 GetModelInfoInput(name="NOPE"), state_no_sim
             )
 
@@ -117,7 +117,7 @@ class TestGetModelInfo:
     ):
         await handle_load_library(LoadLibraryInput(path=lib_file.name), state_no_sim)
         with pytest.raises(LibraryError) as exc:
-            await handle_get_model_info(
+            await handle_model_info(
                 GetModelInfoInput(name="2N2223"), state_no_sim
             )
         msg = str(exc.value)

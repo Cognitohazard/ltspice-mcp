@@ -9,16 +9,26 @@ import pytest
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import (
+    EdgeMetricsInput,
     MeasurementsInput,
+    MeasurementStatsInput,
     OperatingPointInput,
+    PeriodicMetricsInput,
+    PulseResponseInput,
     QueryValueInput,
     SignalStatsInput,
     SimulationSummaryInput,
-    handle_get_measurements,
-    handle_get_operating_point,
-    handle_get_signal_stats,
-    handle_get_simulation_summary,
+    TimingBetweenInput,
+    handle_edge_metrics,
+    handle_measurement_stats,
+    handle_measurements,
+    handle_operating_point,
+    handle_periodic_metrics,
+    handle_pulse_response,
     handle_query_value,
+    handle_signal_stats,
+    handle_simulation_summary,
+    handle_timing_between,
 )
 
 
@@ -67,7 +77,7 @@ def fake_raw(state_no_sim: SessionState, work_dir: Path) -> Path:
 @pytest.mark.asyncio
 class TestSignalStats:
     async def test_transient(self, state_no_sim: SessionState, fake_raw: Path):
-        result = await handle_get_signal_stats(
+        result = await handle_signal_stats(
             SignalStatsInput(raw_file=fake_raw.name, signal="V(out)"),
             state_no_sim,
         )
@@ -79,14 +89,14 @@ class TestSignalStats:
 
     async def test_signal_not_found(self, state_no_sim: SessionState, fake_raw: Path):
         with pytest.raises(ResultError, match="not found"):
-            await handle_get_signal_stats(
+            await handle_signal_stats(
                 SignalStatsInput(raw_file=fake_raw.name, signal="V(missing)"),
                 state_no_sim,
             )
 
     async def test_step_out_of_range(self, state_no_sim: SessionState, fake_raw: Path):
         with pytest.raises(ResultError, match="out of range"):
-            await handle_get_signal_stats(
+            await handle_signal_stats(
                 SignalStatsInput(raw_file=fake_raw.name, signal="V(out)", step=99),
                 state_no_sim,
             )
@@ -102,12 +112,78 @@ class TestSignalStats:
             axis=freqs,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_get_signal_stats(
+        result = await handle_signal_stats(
             SignalStatsInput(raw_file=raw_file.name, signal="V(out)"),
             state_no_sim,
         )
         assert "AC" in result.content[0].text
         assert result.structuredContent["analysis_type"] == "ac"
+
+    async def test_ac_rejects_window(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "ac.raw"
+        freqs = np.logspace(0, 6, 100)
+        wave = 1.0 / (1 + 1j * freqs / 1000)
+        raw = _make_raw_mock(
+            plotname="AC Analysis",
+            trace_names=["frequency", "V(out)"],
+            waves={"frequency": freqs, "V(out)": wave},
+            axis=freqs,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        with pytest.raises(ResultError, match="not supported for AC"):
+            await handle_signal_stats(
+                SignalStatsInput(raw_file=raw_file.name, signal="V(out)", t_start="1k"),
+                state_no_sim,
+            )
+
+    async def test_transient_time_weighted_rms(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw_file = work_dir / "sine.raw"
+        freq = 1000.0
+        t = np.linspace(0, 10 / freq, 20001)
+        amp = 5.0
+        y = amp * np.sin(2 * np.pi * freq * t)
+        raw = _make_raw_mock(
+            trace_names=["time", "V(out)"],
+            waves={"time": t, "V(out)": y},
+            axis=t,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_signal_stats(
+            SignalStatsInput(raw_file=raw_file.name, signal="V(out)"),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc["analysis_type"] == "transient"
+        assert sc["rms"] == pytest.approx(amp / np.sqrt(2), rel=1e-3)
+        assert sc["peak_to_peak"] == pytest.approx(2 * amp, rel=1e-3)
+        assert sc["std"] == pytest.approx(amp / np.sqrt(2), rel=1e-3)
+        assert sc["t_start_used"] == pytest.approx(0.0)
+
+    async def test_transient_windowed(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "step.raw"
+        t = np.linspace(0, 1e-3, 2001)
+        # Step from 0 to 5V at t=0.5ms; window selects steady DC portion.
+        y = np.where(t < 0.5e-3, 0.0, 5.0)
+        raw = _make_raw_mock(
+            trace_names=["time", "V(out)"],
+            waves={"time": t, "V(out)": y},
+            axis=t,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_signal_stats(
+            SignalStatsInput(
+                raw_file=raw_file.name, signal="V(out)", t_start="0.6m", t_end="1m"
+            ),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc["mean"] == pytest.approx(5.0)
+        assert sc["rms"] == pytest.approx(5.0)
+        assert sc["std"] == pytest.approx(0.0, abs=1e-9)
+        assert sc["t_start_used"] == pytest.approx(6e-4)
+        assert sc["t_end_used"] == pytest.approx(1e-3)
 
 
 @pytest.mark.asyncio
@@ -151,7 +227,7 @@ class TestGetMeasurements:
         log = work_dir / "bad.log"
         log.write_text("not a real spice log")
         with pytest.raises(ResultError):
-            await handle_get_measurements(
+            await handle_measurements(
                 MeasurementsInput(log_file=log.name), state_no_sim
             )
 
@@ -164,7 +240,7 @@ class TestGetMeasurements:
             "Fatal Error: missing model XYZ\n"
             "Total elapsed time: 0.001 seconds.\n"
         )
-        result = await handle_get_measurements(
+        result = await handle_measurements(
             MeasurementsInput(log_file=log.name), state_no_sim
         )
         assert "errors in log" in result.content[0].text
@@ -184,7 +260,7 @@ class TestGetOperatingPoint:
             },
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_get_operating_point(
+        result = await handle_operating_point(
             OperatingPointInput(raw_file=raw_file.name), state_no_sim
         )
         text = result.content[0].text
@@ -195,7 +271,7 @@ class TestGetOperatingPoint:
 @pytest.mark.asyncio
 class TestGetSimulationSummary:
     async def test_basic(self, state_no_sim: SessionState, fake_raw: Path):
-        result = await handle_get_simulation_summary(
+        result = await handle_simulation_summary(
             SimulationSummaryInput(raw_file=fake_raw.name), state_no_sim
         )
         text = result.content[0].text
@@ -203,7 +279,7 @@ class TestGetSimulationSummary:
         assert "Signals" in text
 
     async def test_json_format(self, state_no_sim: SessionState, fake_raw: Path):
-        result = await handle_get_simulation_summary(
+        result = await handle_simulation_summary(
             SimulationSummaryInput(raw_file=fake_raw.name, format="json"),
             state_no_sim,
         )
@@ -257,7 +333,7 @@ class TestSummaryWithMeasurements:
             "fc: mag(v(out))=0.707 AT 1591.5\n"
             "Total elapsed time: 0.001 seconds.\n"
         )
-        result = await handle_get_simulation_summary(
+        result = await handle_simulation_summary(
             SimulationSummaryInput(raw_file=fake_raw.name, log_file=log.name),
             state_no_sim,
         )
@@ -278,7 +354,7 @@ class TestSummaryAcWithMetrics:
             axis=freqs,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        result = await handle_get_simulation_summary(
+        result = await handle_simulation_summary(
             SimulationSummaryInput(raw_file=raw_file.name, signal="V(out)"),
             state_no_sim,
         )
@@ -305,3 +381,286 @@ class TestQueryStepRange:
                 ),
                 state_no_sim,
             )
+def _step_waveform(step_time: float = 0.5e-3, tr: float = 0.1e-3, n: int = 5001):
+    t = np.linspace(0, 2e-3, n)
+    y = np.where(t < step_time, 0.0, np.where(t < step_time + tr, (t - step_time) / tr, 1.0))
+    return t, y
+
+
+def _square_wave(freq: float = 1000.0, duty: float = 0.5, periods: int = 5, n: int = 50001):
+    t = np.linspace(0, periods / freq, n)
+    phase = (t * freq) % 1.0
+    y = np.where(phase < duty, 1.0, 0.0)
+    return t, y
+
+
+# ---------------------------------------------------------------------------
+# edge_metrics
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestEdgeMetrics:
+    async def test_happy_path(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "edge.raw"
+        t, y = _step_waveform()
+        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+
+        result = await handle_edge_metrics(
+            EdgeMetricsInput(raw_file=raw_file.name, signal="V(out)"),
+            state_no_sim,
+        )
+        assert result.structuredContent is not None
+        sc = result.structuredContent
+        assert sc["is_rise_time"] is True
+        assert sc["signal"] == "V(out)"
+        assert sc["transition_time"] > 0
+        assert "Rise time" in result.content[0].text
+
+    async def test_ac_rejected(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "ac.raw"
+        freqs = np.logspace(0, 6, 100)
+        wave = 1.0 / (1 + 1j * freqs / 1000)
+        raw = _make_raw_mock(
+            plotname="AC Analysis",
+            trace_names=["frequency", "V(out)"],
+            waves={"frequency": freqs, "V(out)": wave},
+            axis=freqs,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        with pytest.raises(ResultError, match="transient analysis"):
+            await handle_edge_metrics(
+                EdgeMetricsInput(raw_file=raw_file.name, signal="V(out)"),
+                state_no_sim,
+            )
+
+    async def test_invalid_signal(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "edge.raw"
+        t, y = _step_waveform()
+        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        with pytest.raises(ResultError, match="not found"):
+            await handle_edge_metrics(
+                EdgeMetricsInput(raw_file=raw_file.name, signal="V(missing)"),
+                state_no_sim,
+            )
+
+    async def test_window_propagated(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "edge.raw"
+        t, y = _step_waveform()
+        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+
+        result = await handle_edge_metrics(
+            EdgeMetricsInput(
+                raw_file=raw_file.name,
+                signal="V(out)",
+                t_start="100u",
+                t_end="1m",
+            ),
+            state_no_sim,
+        )
+        assert result.structuredContent["is_rise_time"] is True
+
+    async def test_invalid_t_start(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "edge.raw"
+        t, y = _step_waveform()
+        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        with pytest.raises(ResultError, match="Invalid t_start"):
+            await handle_edge_metrics(
+                EdgeMetricsInput(raw_file=raw_file.name, signal="V(out)", t_start="garbage"),
+                state_no_sim,
+            )
+
+    async def test_json_format(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "edge.raw"
+        t, y = _step_waveform()
+        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_edge_metrics(
+            EdgeMetricsInput(raw_file=raw_file.name, signal="V(out)", format="json"),
+            state_no_sim,
+        )
+        assert result.structuredContent is not None
+        # JSON format emits JSON text
+        assert result.content[0].text.startswith("{")
+
+
+# ---------------------------------------------------------------------------
+# pulse_response
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestPulseResponse:
+    async def test_happy_path(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "pulse.raw"
+        # Underdamped step with pre-step plateau
+        t_pre = np.linspace(-1e-3, 0, 500, endpoint=False)
+        t_post = np.linspace(0, 20e-3, 20001)
+        y_pre = np.zeros_like(t_pre)
+        zeta = 0.3
+        wn = 2 * np.pi * 500
+        wd = wn * np.sqrt(1 - zeta**2)
+        phi = np.arctan2(np.sqrt(1 - zeta**2), zeta)
+        y_post = 1 - np.exp(-zeta * wn * t_post) / np.sqrt(1 - zeta**2) * np.sin(wd * t_post + phi)
+        t = np.concatenate([t_pre, t_post])
+        y = np.concatenate([y_pre, y_post])
+        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+
+        # Pass explicit initial/final — the auto-detect window averages first 10%
+        # which, with 500 pre samples and 20001 post samples, bleeds into ringing.
+        result = await handle_pulse_response(
+            PulseResponseInput(
+                raw_file=raw_file.name,
+                signal="V(out)",
+                initial_value=0.0,
+                final_value=1.0,
+            ),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc["direction"] == "rising"
+        assert sc["overshoot_pct"] > 0
+        assert sc["initial_value"] == 0.0
+        assert sc["steady_state_value"] == 1.0
+
+    async def test_no_step_rejected(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "flat.raw"
+        t = np.linspace(0, 1e-3, 1000)
+        y = np.full_like(t, 3.3)
+        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        with pytest.raises(ResultError, match="No step detected"):
+            await handle_pulse_response(
+                PulseResponseInput(raw_file=raw_file.name, signal="V(out)"),
+                state_no_sim,
+            )
+
+
+# ---------------------------------------------------------------------------
+# timing_between
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestTimingBetween:
+    async def test_known_delay(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "tim.raw"
+        t = np.linspace(0, 1e-3, 10001)
+        vin = np.where(t < 0.3e-3, 0.0, 3.3)
+        vout = np.where(t < 0.5e-3, 0.0, 1.8)
+        raw = _make_raw_mock(
+            trace_names=["time", "V(in)", "V(out)"],
+            waves={"time": t, "V(in)": vin, "V(out)": vout},
+            axis=t,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+
+        result = await handle_timing_between(
+            TimingBetweenInput(raw_file=raw_file.name, signal_a="V(in)", signal_b="V(out)"),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc["delay"] == pytest.approx(0.2e-3, abs=1e-6)
+        assert sc["threshold_a_used"] == pytest.approx(1.65, abs=0.01)
+        assert sc["threshold_b_used"] == pytest.approx(0.9, abs=0.01)
+
+    async def test_missing_signal_b(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "tim.raw"
+        t = np.linspace(0, 1e-3, 1000)
+        vin = np.where(t < 0.3e-3, 0.0, 3.3)
+        raw = _make_raw_mock(
+            trace_names=["time", "V(in)"],
+            waves={"time": t, "V(in)": vin},
+            axis=t,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        with pytest.raises(ResultError, match="not found"):
+            await handle_timing_between(
+                TimingBetweenInput(raw_file=raw_file.name, signal_a="V(in)", signal_b="V(out)"),
+                state_no_sim,
+            )
+
+
+# ---------------------------------------------------------------------------
+# periodic_metrics
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestPeriodicMetrics:
+    async def test_square_wave(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "sq.raw"
+        t, y = _square_wave(freq=1000.0, duty=0.4, periods=10)
+        raw = _make_raw_mock(
+            trace_names=["time", "V(clk)"],
+            waves={"time": t, "V(clk)": y},
+            axis=t,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_periodic_metrics(
+            PeriodicMetricsInput(raw_file=raw_file.name, signal="V(clk)"),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc["frequency"] == pytest.approx(1000.0, rel=0.01)
+        assert sc["duty_cycle_pct"] == pytest.approx(40.0, abs=1.0)
+
+    async def test_constant_rejected(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "flat.raw"
+        t = np.linspace(0, 1e-3, 1000)
+        y = np.full_like(t, 1.0)
+        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        with pytest.raises(ResultError, match="constant"):
+            await handle_periodic_metrics(
+                PeriodicMetricsInput(raw_file=raw_file.name, signal="V(out)"),
+                state_no_sim,
+            )
+
+
+# ---------------------------------------------------------------------------
+# measurement_stats
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestMeasurementStats:
+    async def test_basic(self, state_no_sim: SessionState, work_dir: Path):
+        # Use the same single-measurement log format validated by the log
+        # parser tests — ensures the plumbing works. Multi-step aggregation
+        # logic is covered by test_waveform_analysis.TestComputeMeasurementStats.
+        log = work_dir / "meas.log"
+        log.write_text(
+            "Circuit: * test\n"
+            "\n"
+            "Direct Newton iteration for .op point succeeded.\n"
+            "fc: mag(v(out))=0.707 AT 1591.5\n"
+            "Date: today\n"
+            "Total elapsed time: 0.001 seconds.\n"
+        )
+        result = await handle_measurement_stats(
+            MeasurementStatsInput(log_file=log.name), state_no_sim
+        )
+        assert result.structuredContent is not None
+        assert "stats" in result.structuredContent
+        # Should have exactly one measurement aggregated
+        assert len(result.structuredContent["stats"]) >= 1
+
+    async def test_missing_log_file(self, state_no_sim: SessionState, work_dir: Path):
+        with pytest.raises(ResultError):
+            await handle_measurement_stats(
+                MeasurementStatsInput(log_file="nonexistent.log"), state_no_sim
+            )
+
+    async def test_empty_log_errors(self, state_no_sim: SessionState, work_dir: Path):
+        log = work_dir / "empty.log"
+        log.write_text("not a spice log\n")
+        with pytest.raises(ResultError):
+            await handle_measurement_stats(MeasurementStatsInput(log_file=log.name), state_no_sim)
+
+
