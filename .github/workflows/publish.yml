@@ -5,14 +5,26 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
 
       - name: Run linter
         run: uv run ruff check src/ tests/
@@ -23,24 +35,36 @@ jobs:
   build:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # hatch-vcs needs full history to resolve the tag
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
 
       - name: Build package
         run: uv build
+
+      - name: Verify metadata
+        run: uv run --with twine python -m twine check --strict dist/*
 
       - name: Upload dist artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
+          if-no-files-found: error
+          retention-days: 7
 
   publish:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: pypi
     permissions:
       id-token: write
@@ -51,5 +75,8 @@ jobs:
           name: dist
           path: dist/
 
+      # Pinned to the v1.14.0 commit SHA. The publish step is privileged
+      # (OIDC → PyPI Trusted Publishing), so it must not follow a mutable
+      # ref like release/v1. Dependabot bumps this with an updated comment.
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0

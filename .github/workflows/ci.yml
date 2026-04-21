@@ -6,14 +6,26 @@ on:
   pull_request:
     branches: [master]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
 
       - name: Lint
         run: uv run ruff check src/ tests/
@@ -23,3 +35,22 @@ jobs:
 
       - name: Test
         run: uv run pytest tests/ -v
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Export locked runtime dependencies
+        run: uv export --format requirements-txt --no-hashes --no-dev --no-emit-project --output-file requirements.txt
+
+      - name: Audit locked dependencies
+        run: uv run --with pip-audit python -m pip_audit -r requirements.txt --no-deps --strict
