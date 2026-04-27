@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -24,6 +25,59 @@ from spicelib.sim.sim_runner import SimRunner
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_types import BatchJob
 from ltspice_mcp.state import SessionState
+
+# Trailing `_<digits>` in spicelib-generated raw/log filenames. spicelib's
+# SimRunner._run_file_name produces "<stem>_<runno><suffix>" (1-based runno).
+_RUNNO_RE = re.compile(r"_(\d+)$")
+
+
+def _parse_runno(raw_file: Path) -> int | None:
+    """Extract spicelib's 1-based runno from a raw/log filename, or None.
+
+    Returns None for files whose basename doesn't match the spicelib pattern
+    (e.g., one-shot sims via `ltspice_run_simulation`, which use job_id stems).
+    Used as a fallback when the runno can't be captured at submission via
+    ``wrap_runner_for_runno_callbacks``.
+    """
+    match = _RUNNO_RE.search(raw_file.stem)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def wrap_runner_for_runno_callbacks(runner: SimRunner) -> SimRunner:
+    """Make ``runner.run`` inject ``task.runno`` into the user's callback.
+
+    spicelib's per-run callback is ``(raw_file, log_file)`` — no task
+    ref, no runno. We submit with ``callback=None`` so spicelib doesn't
+    fire the user's callback before the rebind, read ``task.runno`` from
+    the returned RunTask, then patch ``task.callback`` to a closure that
+    calls the user's callback as ``user_cb(raw_file, log_file, runno=runno)``.
+    Idempotent via a sentinel attribute on the wrapper.
+    """
+    if getattr(runner.run, "_runno_aware", False):
+        return runner
+
+    original_run = runner.run
+
+    def runno_aware_run(*args, **kwargs):
+        user_callback = kwargs.pop("callback", None)
+        user_callback_args = kwargs.pop("callback_args", None)
+        task = original_run(*args, callback=None, callback_args=None, **kwargs)
+        if user_callback is not None and task is not None:
+            runno = task.runno
+
+            def runno_bound(raw_file: object, log_file: object, *cb_args: object) -> object:
+                return user_callback(raw_file, log_file, runno=runno)
+
+            task.callback = runno_bound
+            if user_callback_args is not None:
+                task.callback_args = user_callback_args
+        return task
+
+    runno_aware_run._runno_aware = True  # type: ignore[attr-defined]
+    runner.run = runno_aware_run  # type: ignore[method-assign]
+    return runner
 
 logger = logging.getLogger(__name__)
 
@@ -117,12 +171,23 @@ class BatchRunnerBase(RunnerBase):
         log_file: Path,
         state: SessionState,
         kind: str,
+        runno: int | None = None,
     ) -> None:
         """Append one successful sub-run to ``batch_job.run_results``.
 
-        Params are always stored as an empty dict at this stage. Sweeps
-        populate them from ``stepper.sim_info`` after run_all returns;
-        Monte Carlo leaves them empty (deviations are statistical).
+        ``run_results`` is keyed by 0-based runno. The runno is passed
+        explicitly when available (callers using
+        ``wrap_runner_for_runno_callbacks``) — that's the canonical path
+        and what makes parallel execution correctly labeled. As a
+        fallback for callbacks that don't have it, the runno is parsed
+        from the raw_file basename (spicelib names files
+        ``<stem>_<runno><suffix>``); failing that, completion order is
+        used (a third-best signal for environments where neither
+        mechanism applies).
+
+        Params are stored empty at this stage. Sweeps populate them from
+        ``stepper.sim_info`` after run_all returns; Monte Carlo leaves
+        them empty (deviations are statistical).
         """
         if batch_job.status in ("cancelled", "completed", "failed"):
             logger.debug(
@@ -133,7 +198,10 @@ class BatchRunnerBase(RunnerBase):
             )
             return
 
-        run_index = batch_job.completed_runs
+        if runno is None:
+            runno = _parse_runno(raw_file)
+        # 0-based key preserves the existing "first run = key 0" convention.
+        run_index = (runno - 1) if runno is not None else batch_job.completed_runs
         batch_job.run_results[run_index] = {
             "raw_file": str(raw_file),
             "log_file": str(log_file),

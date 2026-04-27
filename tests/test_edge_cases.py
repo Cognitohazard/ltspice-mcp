@@ -122,7 +122,7 @@ class TestExtractOperatingPointEmpty:
 class TestLogDiagnosticsFalsePositives:
     """The bare-phrase check uses substring matching, causing false positives."""
 
-    def _check(self, text: str) -> dict:
+    def _check(self, text: str):
         with tempfile.NamedTemporaryFile(suffix=".log", mode="w", delete=False) as t:
             t.write(text + "\n")
             return extract_log_diagnostics(Path(t.name))
@@ -274,13 +274,15 @@ class TestResolveMcRefWhitespace:
 
 
 # ---------------------------------------------------------------------------
-# Bug J: compute_ac_bandwidth_metrics misses -180° phase crossings due to wrap
+# Bug J: stability margin detection on phase wrap and 3-pole unstable loop
+# (Margins moved out of compute_ac_bandwidth_metrics — they live in
+# compute_stability_metrics, which is the right home for loop-gain analysis.)
 # ---------------------------------------------------------------------------
 
 
-class TestAcBandwidthPhaseWrap:
+class TestStabilityPhaseWrap:
     def test_phase_wrap_does_not_hide_180_crossing(self):
-        from ltspice_mcp.lib.raw_parser import compute_ac_bandwidth_metrics
+        from ltspice_mcp.lib.ac_analysis import compute_stability_metrics, prepare_ac_arrays
 
         # Construct a small frequency response whose phase crosses -180°.
         # Without np.unwrap, np.angle wraps -181° to +179° and the
@@ -290,26 +292,45 @@ class TestAcBandwidthPhaseWrap:
         phase_rad = np.deg2rad(np.array([-90, -150, -179, -181, -210]))
         wave = mag_lin * np.exp(1j * phase_rad)
 
-        raw = MagicMock()
-        raw.get_axis.return_value = freqs
-        raw.get_wave = lambda name, step=0: wave
-        result = compute_ac_bandwidth_metrics(raw, "V(out)")
-        assert result["gain_margin"] is not None
+        f, H = prepare_ac_arrays(freqs, wave)
+        result = compute_stability_metrics(f, H)
+        assert result["gain_margins"]
+        assert result["gain_margin_worst_db"] is not None
 
     def test_3pole_unstable_system(self):
-        from ltspice_mcp.lib.raw_parser import compute_ac_bandwidth_metrics
+        from ltspice_mcp.lib.ac_analysis import compute_stability_metrics, prepare_ac_arrays
 
         freqs = np.logspace(-1, 6, 500)
         omega = 2 * np.pi * freqs
         # 3-pole loop: should be unstable, phase margin negative
         H = 1e6 / ((1 + 1j * omega / 1) * (1 + 1j * omega / 100) * (1 + 1j * omega / 1000))
+        f, Hp = prepare_ac_arrays(freqs, H)
+        result = compute_stability_metrics(f, Hp)
+        # An unstable 3-pole loop must report a negative phase margin
+        assert result["phase_margins"]
+        assert result["phase_margin_worst_deg"] is not None
+        assert result["phase_margin_worst_deg"] < 0
+
+
+class TestAcBandwidthMetrics:
+    """compute_ac_bandwidth_metrics now reports only -3 dB and unity-gain freq;
+    margins live in compute_stability_metrics."""
+
+    def test_returns_only_bandwidth_and_unity_gain(self):
+        from ltspice_mcp.lib.raw_parser import compute_ac_bandwidth_metrics
+
+        freqs = np.logspace(0, 5, 200)
+        omega = 2 * np.pi * freqs
+        # Simple single-pole LPF at 1 kHz
+        H = 1.0 / (1 + 1j * omega / (2 * np.pi * 1000))
         raw = MagicMock()
         raw.get_axis.return_value = freqs
         raw.get_wave = lambda name, step=0: H
         result = compute_ac_bandwidth_metrics(raw, "V(out)")
-        # An unstable 3-pole loop must report a negative phase margin
-        assert result["phase_margin"] is not None
-        assert result["phase_margin"] < 0
+        assert set(result.keys()) == {"bandwidth_3db", "unity_gain_freq"}
+        assert result["bandwidth_3db"] is not None
+        # -3 dB point should be near 1 kHz
+        assert 900 < result["bandwidth_3db"] < 1100
 
 
 # ---------------------------------------------------------------------------

@@ -27,6 +27,7 @@ from spicelib.editor.base_schematic import (
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import atomic_write_text, services
+from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, get_symbol_info
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
@@ -820,6 +821,12 @@ async def handle_edit_directive(args: EditDirectiveInput, state: SessionState) -
                 raise NetlistError(
                     "SPICE directives must start with '.' (e.g. .tran, .ac, .param)"
                 )
+            # Pre-flight validation: catch known-bad patterns (e.g. vdb()
+            # in .MEAS) before they reach the simulator and fail post-hoc
+            # inside the .log.
+            err = validate_directive(instruction, simulator="LTspice")
+            if err is not None:
+                raise NetlistError(f"{err.message}\n  Suggestion: {err.suggestion}")
             editor.add_instruction(instruction)
             result = f"Added directive: {instruction}"
 

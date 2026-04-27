@@ -92,12 +92,14 @@ class MonteCarloConfig:
         type_tolerances: Per-component-type tolerances: prefix -> (tolerance, distribution)
         component_overrides: Per-component tolerances: ref -> (tolerance, distribution)
         num_runs: Number of Monte Carlo runs (default 100)
+        seed: Optional RNG seed for reproducible runs. None => fresh entropy.
     """
 
     netlist: Path
     type_tolerances: dict[str, tuple[float, str]] = field(default_factory=dict)
     component_overrides: dict[str, tuple[float, str]] = field(default_factory=dict)
     num_runs: int = 100
+    seed: int | None = None
 
 
 @dataclass
