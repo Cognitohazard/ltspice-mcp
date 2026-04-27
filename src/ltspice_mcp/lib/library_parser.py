@@ -1,11 +1,41 @@
 """Component library parsing utilities."""
 
+import codecs
 import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+# BOM probes for the encodings we care about. Order matters: UTF-32 BOMs start
+# with the same two bytes as UTF-16, so check the longer ones first.
+_BOM_ENCODINGS: tuple[tuple[bytes, str], ...] = (
+    (codecs.BOM_UTF32_LE, "utf-32-le"),
+    (codecs.BOM_UTF32_BE, "utf-32-be"),
+    (codecs.BOM_UTF16_LE, "utf-16-le"),
+    (codecs.BOM_UTF16_BE, "utf-16-be"),
+    (codecs.BOM_UTF8, "utf-8-sig"),
+)
+
+
+def _read_library_text(path: Path) -> str:
+    """Read a SPICE library file with encoding auto-detection.
+
+    LTspice's bundled ``lib/cmp/standard.{mos,bjt,...}`` files are UTF-16 LE
+    with a BOM. Earlier versions of this parser assumed UTF-8 (the platform
+    default for ``Path.read_text``) and silently produced empty model lists
+    for those files — so ``find_model(include_builtin=True)`` couldn't find
+    any of LTspice's stock parts. We now sniff the BOM and decode
+    accordingly, falling back to UTF-8 with replacement for ASCII files
+    without a BOM (which covers most third-party .lib files).
+    """
+    raw = path.read_bytes()
+    for bom, encoding in _BOM_ENCODINGS:
+        if raw.startswith(bom):
+            return raw[len(bom):].decode(encoding, errors="replace")
+    return raw.decode("utf-8", errors="replace")
 
 
 @dataclass(frozen=True)
@@ -168,7 +198,7 @@ def parse_library_file(path: Path) -> LibraryIndex:
         OSError: If file cannot be read
     """
     try:
-        content = path.read_text(errors="replace")
+        content = _read_library_text(path)
     except OSError as e:
         logger.error(f"Failed to read library file {path}: {e}")
         raise

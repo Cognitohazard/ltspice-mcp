@@ -18,13 +18,25 @@ from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.state import BatchJob
 
 
-def compute_batch_stats(run_results: dict[int, dict], signal: str) -> dict:
+def compute_batch_stats(
+    run_results: dict[int, dict],
+    signal: str,
+    *,
+    at: float | None = None,
+) -> dict:
     """Compute aggregate statistics for a signal across all batch runs.
 
     Loads each run's raw file, extracts the requested signal waveform, and
     computes per-run scalars (max/min/mean of absolute values). Aggregates
     those scalars across all runs to produce min/max/mean/std/median and
     identifies the worst-case (highest peak) and best-case (lowest peak) run.
+
+    With ``at`` (a target time/frequency), each run is sliced to a single
+    point first — useful for AC sweeps where the per-run peak across the
+    full frequency range conflates startup roll-off with run-to-run
+    variation. ``peak``/``mean``/``min`` collapse to the same value at that
+    point, and ``stats.*_across_runs`` answer "what's the spread of the
+    magnitude at this frequency across runs?".
 
     Runs with missing raw files are skipped gracefully — useful for cancelled
     jobs that produced only partial results.
@@ -34,6 +46,10 @@ def compute_batch_stats(run_results: dict[int, dict], signal: str) -> dict:
     Args:
         run_results: Dict mapping run_index -> {raw_file, log_file, params}
         signal: Signal name to extract (e.g. "V(out)", "I(R1)")
+        at: Optional time (transient) or frequency (AC) point. When given,
+            collapses each run to a single sample using nearest-neighbour
+            lookup on the run's axis. Without it, the per-run peak across
+            the full waveform is used (legacy behaviour).
 
     Returns:
         Dict with:
@@ -43,6 +59,7 @@ def compute_batch_stats(run_results: dict[int, dict], signal: str) -> dict:
             stats: dict — aggregate min/max/mean/std/median across runs
             worst_case_run: int | None — run with highest peak absolute value
             best_case_run: int | None — run with lowest peak absolute value
+            at: float | None — echo of the slicing point (for downstream display)
     """
     per_run_summaries = []
     peak_values: list[float] = []
@@ -63,9 +80,28 @@ def compute_batch_stats(run_results: dict[int, dict], signal: str) -> dict:
             if np.iscomplexobj(wave):
                 wave = np.abs(wave)
 
-            peak = float(np.max(wave))
-            mean_val = float(np.mean(wave))
-            min_val = float(np.min(wave))
+            if at is not None:
+                axis = np.asarray(raw.get_axis(step=0))
+                if np.iscomplexobj(axis):
+                    axis = np.real(axis)
+                if axis.size == 0:
+                    continue
+                # SPICE sweep axes are monotonic; binary-search beats
+                # ``argmin(abs(axis - at))`` which materializes a full
+                # diff array per run (multi-MB for long transients).
+                ins = int(np.searchsorted(axis, at))
+                if ins == 0:
+                    idx = 0
+                elif ins == axis.size:
+                    idx = axis.size - 1
+                else:
+                    idx = ins - 1 if abs(axis[ins - 1] - at) <= abs(axis[ins] - at) else ins
+                point = float(wave[idx])
+                peak = mean_val = min_val = point
+            else:
+                peak = float(np.max(wave))
+                mean_val = float(np.mean(wave))
+                min_val = float(np.min(wave))
 
             per_run_summaries.append(
                 {
@@ -107,6 +143,7 @@ def compute_batch_stats(run_results: dict[int, dict], signal: str) -> dict:
 
     return {
         "signal": signal,
+        "at": at,
         "run_count": len(per_run_summaries),
         "runs": per_run_summaries,
         "stats": stats,

@@ -10,6 +10,13 @@ from pydantic import Field
 
 from ltspice_mcp.errors import BatchJobError
 from ltspice_mcp.lib import services
+from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.montecarlo import (
+    MismatchRule,
+    ModelTolerance,
+    ParamTolerance,
+    ToleranceSpec,
+)
 from ltspice_mcp.lib.sweep_utils import (
     generate_batch_job_id,
     generate_config_id,
@@ -68,10 +75,163 @@ class MonteCarloTolerance(StrictModel):
     )
 
 
+class MonteCarloParameterTolerance(StrictModel):
+    """Tolerance for one parameter — either a model card param or a .PARAM."""
+
+    tolerance: float = Field(
+        description=(
+            "Tolerance value. Interpreted by 'kind': fraction of nominal "
+            "(0.05 = ±5%) for relative; σ/half-range in source units (0.012 = "
+            "±12 mV at 3σ for absolute on a voltage parameter). Tolerance "
+            "represents ±3σ for normal distributions."
+        ),
+    )
+    distribution: Literal["uniform", "gaussian", "normal"] = Field(
+        default="normal",
+        description="Distribution type. Default 'normal' matches foundry MC convention.",
+    )
+    kind: Literal["relative", "absolute"] = Field(
+        default="relative",
+        description=(
+            "'relative' = fraction of nominal (good for KP, RD-like). "
+            "'absolute' = σ/half-range in source units (good for VTH where "
+            "PDKs spec σ_VTH in volts directly)."
+        ),
+    )
+
+
+class MonteCarloModelTolerance(StrictModel):
+    """Process-variation rule: sampled once per .MODEL per run.
+
+    Every transistor instance using this model inherits the same perturbed
+    parameters in a given run — this matches foundry-correlated process
+    variation (wafer-to-wafer / die-to-die). For uncorrelated per-instance
+    mismatch, use the 'mismatch' input instead.
+    """
+
+    model: str = Field(
+        description="Name of the .MODEL card to perturb (case-insensitive, must already exist in the netlist)."
+    )
+    parameters: dict[str, MonteCarloParameterTolerance] = Field(
+        description=(
+            "Per-parameter tolerance specs keyed by parameter name (e.g., "
+            "{'VTO': {'tolerance': 0.012, 'kind': 'absolute'}, "
+            "'KP': {'tolerance': 0.10, 'kind': 'relative'}})."
+        ),
+    )
+
+
+class MonteCarloMismatchRule(StrictModel):
+    """Pelgrom-law mismatch coefficients applied to one device prefix.
+
+    σ(ΔVTH) = AVT/√(W·L) and σ(ΔK)/K = AK/√(W·L), sampled INDEPENDENTLY per
+    instance per run. Generates per-instance variant .MODEL cards inlined
+    into the per-run netlist (foundry preprocessor convention).
+
+    Defaults are deliberately not provided — coefficients are technology-
+    specific. Typical values: 65nm AVT≈3-5 mV·µm, AK≈1-2 %·µm.
+    """
+
+    prefix: str = Field(
+        default="M",
+        description=(
+            "Device prefix to apply mismatch to (case-insensitive). Default 'M' "
+            "(MOSFETs). Other letter prefixes (e.g. 'Q' for BJTs, 'J' for JFETs) "
+            "work too — the engine matches on the leading character. Mismatch "
+            "math (Pelgrom σ ∝ 1/√(W·L)) and the vth_param/k_param defaults are "
+            "still MOSFET-shaped, so for non-MOSFETs you'll typically want to "
+            "set vth_param/k_param to that device's threshold/gain parameters."
+        ),
+    )
+    AVT: float = Field(
+        default=0.0,
+        description=(
+            "VTH-mismatch coefficient in V·µm (e.g. 3e-3 = 3 mV·µm). 0 disables "
+            "VTH mismatch."
+        ),
+    )
+    AK: float = Field(
+        default=0.0,
+        description=(
+            "K-mismatch coefficient in fraction·µm (e.g. 0.02 = 2%·µm). 0 disables "
+            "K mismatch."
+        ),
+    )
+    distribution: Literal["uniform", "gaussian", "normal"] = Field(
+        default="normal",
+        description="Distribution type for the per-instance offset (default normal).",
+    )
+    vth_param: str = Field(
+        default="VTO",
+        description=(
+            "Model-card parameter receiving ΔVTH. Defaults to 'VTO' (Level-1 SPICE); "
+            "use 'VTH0' for BSIM models."
+        ),
+    )
+    k_param: str = Field(
+        default="KP",
+        description=(
+            "Model-card parameter scaled by (1+ΔK/K). Defaults to 'KP' (Level-1); "
+            "use 'U0' for BSIM."
+        ),
+    )
+    min_wl_um2: float = Field(
+        default=1e-3,
+        description=(
+            "Lower bound on W·L (in µm²) used when computing Pelgrom σ — "
+            "guards against div-by-zero for behaviorally-described instances."
+        ),
+    )
+
+
+class MonteCarloParamRule(StrictModel):
+    """Sample-once-per-run perturbation of a .PARAM directive.
+
+    Useful when the user has already wired .PARAM substitution into model
+    cards (e.g., '.MODEL NMOS1 NMOS(VTO={vto_n})' with '.PARAM vto_n=0.7').
+    """
+
+    name: str = Field(description=".PARAM name to perturb (must already exist).")
+    tolerance: float = Field(description="Tolerance value (see kind).")
+    distribution: Literal["uniform", "gaussian", "normal"] = Field(default="normal")
+    kind: Literal["relative", "absolute"] = Field(default="relative")
+
+
 class ConfigureMonteCarloInput(ToolInput):
     netlist: str = Field(description="Path to the netlist file (.cir, .net, .asc)")
-    tolerances: list[MonteCarloTolerance] = Field(description="Component tolerance specifications")
+    tolerances: list[MonteCarloTolerance] = Field(
+        default_factory=list,
+        description="R/C/L (and V/I type-level) component tolerance specifications.",
+    )
+    model_tolerances: list[MonteCarloModelTolerance] = Field(
+        default_factory=list,
+        description=(
+            "Process-variation rules: per-.MODEL parameter perturbations "
+            "sampled once per run. All instances of the model see the same "
+            "perturbation (correlated)."
+        ),
+    )
+    mismatch: list[MonteCarloMismatchRule] = Field(
+        default_factory=list,
+        description=(
+            "Pelgrom-law mismatch rules per device prefix. Sampled INDEPENDENTLY "
+            "per instance per run. Requires explicit AVT/AK — defaults are 0 "
+            "(no mismatch) since coefficients are technology-specific."
+        ),
+    )
+    param_tolerances: list[MonteCarloParamRule] = Field(
+        default_factory=list,
+        description=(
+            "Sample-once-per-run perturbation of .PARAM directives. Use this "
+            "when the netlist already wires {param} substitutions into model "
+            "cards or component values."
+        ),
+    )
     num_runs: int = Field(default=100, description="Number of Monte Carlo iterations")
+    seed: int | None = Field(
+        default=None,
+        description="Optional RNG seed for reproducible runs. None = fresh entropy each call.",
+    )
 
 
 class GetBatchResultsInput(ToolInput):
@@ -80,6 +240,15 @@ class GetBatchResultsInput(ToolInput):
     filters: dict[str, str] | None = Field(
         default=None,
         description="Filter runs by parameter values (e.g., {'R1': '10k'}). Only with signal + raw.",
+    )
+    at: str | None = Field(
+        default=None,
+        description=(
+            "Optional time (transient) or frequency (AC) point in SPICE notation "
+            "(e.g., '1k', '100u'). When given, each run is sliced to a single sample at that "
+            "point before aggregating. Without this, the per-run peak across the full waveform "
+            "is used, which conflates startup/roll-off with run-to-run variation on AC sweeps."
+        ),
     )
     offset: int = Field(default=0, description="Pagination offset for raw data")
     limit: int = Field(default=50, description="Max raw data rows to return")
@@ -118,6 +287,20 @@ _DISTRIBUTION_MAP: dict[str, str] = {
     "normal": "normal",
     "uniform": "uniform",
 }
+
+
+def _spec_from_input(tol: float, dist: str, kind: str) -> ToleranceSpec:
+    """Build a ``ToleranceSpec`` from raw user input, validating distribution."""
+    normalized = _DISTRIBUTION_MAP.get(dist.lower())
+    if normalized is None:
+        raise BatchJobError(
+            f"Distribution must be 'uniform', 'normal', or 'gaussian', got {dist!r}"
+        )
+    return ToleranceSpec(
+        tolerance=float(tol),
+        distribution=normalized,  # type: ignore[arg-type]
+        kind=kind,  # type: ignore[arg-type]
+    )
 
 
 def _resolve_mc_ref(ref: str) -> tuple[str, bool]:
@@ -386,12 +569,24 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
     """
     netlist_str = args.netlist
     tolerances_list = args.tolerances
+    model_tolerances_input = args.model_tolerances
+    mismatch_input = args.mismatch
+    param_tolerances_input = args.param_tolerances
     num_runs = int(args.num_runs)
 
     netlist_path = resolve_netlist_path(netlist_str, state)
 
-    if not tolerances_list:
-        raise BatchJobError("At least one tolerance entry is required")
+    has_any_rule = bool(
+        tolerances_list
+        or model_tolerances_input
+        or mismatch_input
+        or param_tolerances_input
+    )
+    if not has_any_rule:
+        raise BatchJobError(
+            "At least one tolerance rule is required (tolerances, model_tolerances, "
+            "mismatch, or param_tolerances)."
+        )
 
     if num_runs < 1 or num_runs > 10_000:
         raise BatchJobError(f"num_runs must be 1-10000, got {num_runs}")
@@ -422,29 +617,91 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
         else:
             component_overrides[resolved_ref] = (tolerance, distribution)
 
+    model_tolerances: list[ModelTolerance] = []
+    for mt in model_tolerances_input:
+        if not mt.parameters:
+            raise BatchJobError(
+                f"model_tolerances entry for '{mt.model}': parameters dict must be non-empty"
+            )
+        params: dict[str, ToleranceSpec] = {}
+        for param_name, spec_input in mt.parameters.items():
+            params[param_name.upper()] = _spec_from_input(
+                spec_input.tolerance, spec_input.distribution, spec_input.kind
+            )
+        model_tolerances.append(
+            ModelTolerance(model_name=mt.model, parameters=params)
+        )
+
+    mismatch_rules: list[MismatchRule] = []
+    for mr in mismatch_input:
+        if mr.AVT == 0.0 and mr.AK == 0.0:
+            raise BatchJobError(
+                f"mismatch entry for prefix '{mr.prefix}': at least one of "
+                "AVT or AK must be non-zero (mismatch coefficients are technology-"
+                "specific; no defaults are provided)."
+            )
+        normalized = _DISTRIBUTION_MAP.get(mr.distribution.lower())
+        if normalized is None:
+            raise BatchJobError(
+                f"mismatch entry for prefix '{mr.prefix}': unknown distribution {mr.distribution!r}"
+            )
+        mismatch_rules.append(
+            MismatchRule(
+                prefix=mr.prefix,
+                avt=float(mr.AVT),
+                ak=float(mr.AK),
+                distribution=normalized,  # type: ignore[arg-type]
+                vth_param=mr.vth_param,
+                k_param=mr.k_param,
+                min_wl_um2=float(mr.min_wl_um2),
+            )
+        )
+
+    param_tolerances: list[ParamTolerance] = []
+    for pt in param_tolerances_input:
+        param_tolerances.append(
+            ParamTolerance(
+                name=pt.name,
+                spec=_spec_from_input(pt.tolerance, pt.distribution, pt.kind),
+            )
+        )
+
     config = MonteCarloConfig(
         netlist=netlist_path,
         type_tolerances=type_tolerances,
         component_overrides=component_overrides,
         num_runs=num_runs,
+        seed=args.seed,
+        model_tolerances=model_tolerances,
+        mismatch_rules=mismatch_rules,
+        param_tolerances=param_tolerances,
     )
     config_id = generate_config_id("mc")
     state.mc_configs[config_id] = config
 
-    type_summary = (
-        ", ".join(f"{k}: {v[0] * 100:.1f}% {v[1]}" for k, v in type_tolerances.items())
-        if type_tolerances
-        else "none"
+    def _summary(items, formatter) -> str:
+        return ", ".join(formatter(x) for x in items) if items else "none"
+
+    type_summary = _summary(
+        type_tolerances.items(), lambda kv: f"{kv[0]}: {kv[1][0] * 100:.1f}% {kv[1][1]}"
     )
-    component_summary = (
-        ", ".join(f"{k}: {v[0] * 100:.1f}% {v[1]}" for k, v in component_overrides.items())
-        if component_overrides
-        else "none"
+    component_summary = _summary(
+        component_overrides.items(),
+        lambda kv: f"{kv[0]}: {kv[1][0] * 100:.1f}% {kv[1][1]}",
     )
+    model_summary = _summary(
+        model_tolerances,
+        lambda mt: f"{mt.model_name}({', '.join(mt.parameters.keys())})",
+    )
+    mismatch_summary = _summary(
+        mismatch_rules, lambda r: f"{r.prefix}(AVT={r.avt:.2g}, AK={r.ak:.2g})"
+    )
+    param_summary = _summary(param_tolerances, lambda p: p.name)
 
     logger.info(
         f"Monte Carlo configured: config_id={config_id}, netlist={netlist_path.name}, "
-        f"num_runs={num_runs}"
+        f"num_runs={num_runs}, .MODEL rules={len(model_tolerances)}, "
+        f"mismatch rules={len(mismatch_rules)}, .PARAM rules={len(param_tolerances)}"
     )
 
     return text_response(
@@ -454,6 +711,10 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
         f"Runs: {num_runs}\n"
         f"Type tolerances: {type_summary}\n"
         f"Component overrides: {component_summary}\n"
+        f".MODEL process variation: {model_summary}\n"
+        f"Mismatch (Pelgrom): {mismatch_summary}\n"
+        f".PARAM perturbation: {param_summary}\n"
+        f"Seed: {args.seed if args.seed is not None else 'fresh entropy'}\n"
         f"\n"
         f"Use ltspice_run_montecarlo('{config_id}') to execute"
     )
@@ -614,6 +875,14 @@ async def handle_batch_results(args: GetBatchResultsInput, state: SessionState):
     offset = args.offset
     limit = min(args.limit, 50)
     raw_mode = args.raw
+    at_value: float | None = None
+    if args.at is not None:
+        try:
+            at_value = parse_spice_value(args.at)
+        except (ValueError, TypeError) as e:
+            raise BatchJobError(
+                f"Invalid 'at' value {args.at!r} — expected SPICE notation (e.g., '1k', '100u'): {e}"
+            ) from e
     data = services.get_batch_signal_data(
         batch_job,
         signal,
@@ -621,6 +890,7 @@ async def handle_batch_results(args: GetBatchResultsInput, state: SessionState):
         raw=raw_mode,
         offset=offset,
         limit=limit,
+        at=at_value,
     )
     if raw_mode:
         data["pagination"] = pagination_metadata(data["total_matching"], offset, limit)

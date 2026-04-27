@@ -164,3 +164,42 @@ class TestParseLibraryFile:
         result = index.get_model("2n2222")
         assert result is not None
         assert result.name == "2N2222"
+
+    def test_utf16_le_with_bom(self, tmp_path: Path):
+        """LTspice's bundled ``lib/cmp/standard.{mos,bjt,...}`` files are
+        UTF-16 LE with a BOM. Earlier the parser used ``Path.read_text``
+        which defaulted to UTF-8 and produced empty model lists for these
+        files — so ``find_model(include_builtin=True)`` couldn't find any
+        of LTspice's stock parts."""
+        import codecs
+
+        lib = tmp_path / "standard.mos"
+        text = ".MODEL 2N7000 NMOS(VTO=2.0 KP=0.05)\n.MODEL BSS84 PMOS(VTO=-2.0)\n"
+        lib.write_bytes(codecs.BOM_UTF16_LE + text.encode("utf-16-le"))
+
+        index = parse_library_file(lib)
+        names = {m.name for m in index.models}
+        assert "2N7000" in names
+        assert "BSS84" in names
+
+    def test_utf16_be_with_bom(self, tmp_path: Path):
+        import codecs
+
+        lib = tmp_path / "be.mos"
+        text = ".MODEL FOO NMOS(VTO=1.0)\n"
+        lib.write_bytes(codecs.BOM_UTF16_BE + text.encode("utf-16-be"))
+
+        index = parse_library_file(lib)
+        names = {m.name for m in index.models}
+        assert "FOO" in names
+
+    def test_utf8_bom_skipped(self, tmp_path: Path):
+        import codecs
+
+        lib = tmp_path / "u8.lib"
+        text = ".MODEL UTF8MODEL NPN(BF=300)\n"
+        lib.write_bytes(codecs.BOM_UTF8 + text.encode("utf-8"))
+
+        index = parse_library_file(lib)
+        names = {m.name for m in index.models}
+        assert "UTF8MODEL" in names

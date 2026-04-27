@@ -2,6 +2,7 @@
 
 from datetime import timedelta
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -214,3 +215,31 @@ class TestExtractModelSuggestions:
         assert "Missing 'swx'" in out
         assert "SW" in out
         assert "/tmp/sw.lib" in out
+
+
+class TestValidateSignal:
+    """``validate_signal`` is case-insensitive — LTspice writes ``v(onoise)``
+    in lowercase for ``.NOISE`` raws but ``V(out)`` everywhere else, and we
+    don't want to reject a user's ``V(onoise)`` just because the raw used a
+    different case."""
+
+    def _raw(self, names: list[str]) -> MagicMock:
+        raw = MagicMock()
+        raw.get_trace_names.return_value = names
+        return raw
+
+    def test_exact_match_returns_same_string(self):
+        raw = self._raw(["V(out)", "I(R1)"])
+        assert services.validate_signal(raw, "V(out)") == "V(out)"
+
+    def test_case_insensitive_returns_canonical_name(self):
+        # spicelib preserves the case the simulator wrote — for noise raws
+        # that's lowercase. Caller must use the canonical name to read traces.
+        raw = self._raw(["v(onoise)", "v(inoise)"])
+        assert services.validate_signal(raw, "V(onoise)") == "v(onoise)"
+        assert services.validate_signal(raw, "V(INOISE)") == "v(inoise)"
+
+    def test_unknown_signal_lists_available(self):
+        raw = self._raw(["V(a)", "V(b)"])
+        with pytest.raises(ResultError, match="Signal 'V\\(missing\\)' not found"):
+            services.validate_signal(raw, "V(missing)")
