@@ -85,6 +85,12 @@ ignore = [
     "PERF401", # list-comprehension rewrites often hurt readability for filtering+appending
     "PT018",   # compound assertions are acceptable when testing related properties
 ]
+# Scientific/EE notation characters used intentionally in docstrings, comments,
+# and string literals: Greek sigma for standard deviation, multiplication and
+# centred dot for product notation (W·L, V·µm), proper minus sign for
+# inequality contexts (−3σ ≤ x ≤ 3σ), proportional-to symbol, micro sign,
+# square root for Pelgrom's law, and degree sign for phase margins.
+allowed-confusables = ["σ", "×", "·", "−", "∝", "µ", "√", "°"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["ltspice_mcp"]
