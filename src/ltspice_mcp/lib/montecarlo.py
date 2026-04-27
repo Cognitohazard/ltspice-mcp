@@ -652,8 +652,7 @@ def inject_card_before_end(netlist_text: str, card: str) -> str:
     if insert_at is None:
         sep = "" if netlist_text.endswith("\n") or not netlist_text else "\n"
         return netlist_text + sep + card
-    new_lines = lines[:insert_at] + [card] + lines[insert_at:]
-    return "".join(new_lines)
+    return "".join([*lines[:insert_at], card, *lines[insert_at:]])
 
 
 def rewrite_instance_model(
