@@ -106,6 +106,38 @@ BBOX_SCHEMA: dict[str, Any] = {
     },
 }
 
+# Structured .MEAS parse errors surfaced from extract_log_diagnostics.
+# Each entry is the offending directive plus an optional fix suggestion
+# pulled from the spice_validator blocklist.
+MEAS_ERRORS_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "directive": {"type": "string"},
+            "raw_block": {"type": "string"},
+            "suggestion": {"type": ["string", "null"]},
+        },
+    },
+}
+
+
+def format_meas_errors(meas_errors: list[dict[str, Any]]) -> list[str]:
+    """Render structured .MEAS errors for the text-format response.
+
+    Returns the lines (no trailing blank); callers append to their own
+    line list. Empty input returns an empty list so callers don't need
+    to guard.
+    """
+    if not meas_errors:
+        return []
+    lines = [f".MEAS errors ({len(meas_errors)}):"]
+    for me in meas_errors:
+        lines.append(f"  Directive: {me['directive']}")
+        if me.get("suggestion"):
+            lines.append(f"    Suggestion: {me['suggestion']}")
+    return lines
+
 RO_ANNOTATIONS = types.ToolAnnotations(
     readOnlyHint=True,
     destructiveHint=False,

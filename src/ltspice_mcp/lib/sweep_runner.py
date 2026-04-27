@@ -13,7 +13,7 @@ from ltspice_mcp.errors import BatchJobError
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_types import BatchJob
-from ltspice_mcp.lib.runner_base import BatchRunnerBase
+from ltspice_mcp.lib.runner_base import BatchRunnerBase, wrap_runner_for_runno_callbacks
 from ltspice_mcp.lib.sweep_utils import generate_sweep_range
 from ltspice_mcp.state import SessionState
 
@@ -64,7 +64,7 @@ class SweepRunner(BatchRunnerBase):
         """Submit the sweep to a worker thread; return immediately."""
         cancel_event = self._register_cancel(batch_job.job_id)
 
-        def run_completion_callback(raw_file, log_file) -> None:
+        def run_completion_callback(raw_file, log_file, runno: int) -> None:
             if cancel_event.is_set():
                 return
             self._bridge(
@@ -73,6 +73,7 @@ class SweepRunner(BatchRunnerBase):
                 Path(raw_file),
                 Path(log_file),
                 state,
+                runno,
                 context=f"sweep run (job {batch_job.job_id})",
             )
 
@@ -83,7 +84,7 @@ class SweepRunner(BatchRunnerBase):
                 )
 
             editor = SpiceEditor(str(batch_job.netlist))
-            runner = self._build_sim_runner()
+            runner = wrap_runner_for_runno_callbacks(self._build_sim_runner())
             self._register_runner(batch_job.job_id, runner)
             stepper = _create_stepper(editor, runner)
 
@@ -108,7 +109,9 @@ class SweepRunner(BatchRunnerBase):
                 len(batch_job.sweep_config.dimensions),
             )
 
-            stepper.run_all(callback=run_completion_callback, wait_completion=True)
+            # The wrapped runner injects runno as a third arg; spicelib's
+            # CallbackType is the unwrapped (raw_file, log_file) shape.
+            stepper.run_all(callback=run_completion_callback, wait_completion=True)  # type: ignore[arg-type]
 
             if not cancel_event.is_set():
                 self._bridge(
@@ -135,12 +138,15 @@ class SweepRunner(BatchRunnerBase):
         raw_file: Path,
         log_file: Path,
         state: SessionState,
+        runno: int | None = None,
     ) -> None:
         batch_job = state.batch_jobs.get(job_id)
         if not batch_job:
             logger.warning("Run completion for unknown sweep job %s", job_id)
             return
-        self._record_run_completion(batch_job, raw_file, log_file, state, kind="Sweep")
+        self._record_run_completion(
+            batch_job, raw_file, log_file, state, kind="Sweep", runno=runno
+        )
 
     def _handle_sweep_completion(
         self,
@@ -150,9 +156,11 @@ class SweepRunner(BatchRunnerBase):
     ) -> None:
         """Populate per-run params from ``stepper.sim_info`` and finalize.
 
-        ``sim_info`` is keyed by runno (int); ``run_results`` is keyed by
-        0-based completion order. Both lists are populated in the same
-        order so matching by sorted index gives the right pairing.
+        ``sim_info`` is keyed by runno (1-based int); ``run_results`` is
+        keyed by 0-based runno parsed from the raw_file basename
+        (see ``runner_base._record_run_completion``). The (runno - 1)
+        lookup pairs them deterministically regardless of completion
+        order, which is what makes parallel sweeps correctly labeled.
         """
         batch_job = state.batch_jobs.get(job_id)
         if not batch_job:
@@ -166,8 +174,9 @@ class SweepRunner(BatchRunnerBase):
             )
             return
 
-        for order_idx, (_runno, info) in enumerate(sorted(stepper.sim_info.items())):
-            if order_idx not in batch_job.run_results:
+        for runno, info in stepper.sim_info.items():
+            run_key = runno - 1
+            if run_key not in batch_job.run_results:
                 continue
             params = {}
             for key, val in info.items():
@@ -177,7 +186,7 @@ class SweepRunner(BatchRunnerBase):
                     params[key] = parse_spice_value(str(val))
                 except (ValueError, TypeError):
                     params[key] = val
-            batch_job.run_results[order_idx]["params"] = params
+            batch_job.run_results[run_key]["params"] = params
 
         transition(
             batch_job,

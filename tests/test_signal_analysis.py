@@ -316,6 +316,31 @@ class TestAnalyzePulseResponse:
         assert result["settling_time"] is not None
         assert 0 < result["settling_time"] < 11e-3
 
+    def test_window_straddles_edge_refuses_auto_initial(self):
+        """When the leading 10% straddles the input edge, the auto-detected
+        initial_value mixes pre/post-edge samples and silently produces
+        wrong overshoot. Reject rather than report a corrupt result.
+        """
+        # No pre-pad: window starts at t=0 with the step right there.
+        t, y = _second_order_step(zeta=0.2, wn=2 * math.pi * 1000, t_end=20e-3, pre_pad=0.0)
+        with pytest.raises(ValueError, match="initial_value is unreliable"):
+            analyze_pulse_response(t, y)
+
+    def test_explicit_initial_bypasses_variance_check(self):
+        """Variance check fires only on the auto path; explicit values are honored."""
+        t, y = _second_order_step(zeta=0.2, wn=2 * math.pi * 1000, t_end=20e-3, pre_pad=0.0)
+        # User accepts the responsibility by passing initial_value explicitly.
+        result = analyze_pulse_response(t, y, initial_value=0.0)
+        assert result["initial_value"] == 0.0
+        assert result["overshoot_pct"] > 0
+
+    def test_unsettled_signal_refuses_auto_final(self):
+        """When the response hasn't settled by window end, refuse auto final_value."""
+        # Truncate the window before the ringing dies down.
+        t, y = _second_order_step(zeta=0.05, wn=2 * math.pi * 1000, t_end=2e-3, n=2001)
+        with pytest.raises(ValueError, match="final_value is unreliable"):
+            analyze_pulse_response(t, y)
+
     def test_invalid_tolerance(self):
         t, y = _linear_edge(1e-3, 2e-3, 0.0, 1.0)
         with pytest.raises(ValueError, match="must be positive"):

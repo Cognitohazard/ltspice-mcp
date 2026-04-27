@@ -223,15 +223,35 @@ def _interp_crossings(
     return [float(x) for x in tc]
 
 
+def _tail_windows(y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return (first 10% slice, last 10% slice) of a 1-D signal."""
+    tail_n = max(1, len(y) // 10)
+    return y[:tail_n], y[-tail_n:]
+
+
 def _estimate_levels(y: np.ndarray) -> tuple[float, float]:
     """Return (start_level, end_level) averaged over first/last 10% of samples.
 
     Using the ends rather than global min/max makes the estimate resistant to
     overshoot/undershoot ringing in the transition region.
     """
-    n = len(y)
-    tail_n = max(1, n // 10)
-    return float(np.mean(y[:tail_n])), float(np.mean(y[-tail_n:]))
+    head, tail = _tail_windows(y)
+    return float(np.mean(head)), float(np.mean(tail))
+
+
+def _level_stability(y: np.ndarray) -> tuple[float, float]:
+    """Stddev of the first/last 10% of samples. High stddev signals that
+    the auto-level estimate is unreliable (window straddles an edge, or
+    response hasn't settled).
+    """
+    head, tail = _tail_windows(y)
+    return float(np.std(head)), float(np.std(tail))
+
+
+# Auto-level estimate is rejected when leading/trailing 10% stddev exceeds
+# this fraction of |final - initial|. 0.10 = 10% — generous enough to allow
+# small ripple, tight enough to catch a window straddling the edge.
+_AUTO_LEVEL_VARIANCE_THRESHOLD = 0.10
 
 
 def analyze_edge(
@@ -378,8 +398,32 @@ def analyze_pulse_response(
             "explicit initial_value/final_value."
         )
 
-    direction = "rising" if delta > 0 else "falling"
+    # Refuse auto level estimates whose source window has high variance —
+    # straddling an edge or unsettled ringing produces silently wrong
+    # overshoot/settling numbers. The error message tells the caller how
+    # to fix it (explicit initial_value/final_value or tighter window).
     abs_delta = abs(delta)
+    start_std, end_std = _level_stability(y)
+    threshold = _AUTO_LEVEL_VARIANCE_THRESHOLD * abs_delta
+    if initial_value is None and start_std > threshold:
+        raise ValueError(
+            f"Auto-detected initial_value is unreliable: leading-10% stddev "
+            f"({start_std:.3g}) exceeds {_AUTO_LEVEL_VARIANCE_THRESHOLD * 100:.0f}% "
+            f"of |final - initial| ({abs_delta:.3g}) — the window likely "
+            f"straddles the input edge or includes pre-edge ringing. "
+            f"Pass an explicit initial_value, or tighten t_start past the "
+            f"transition."
+        )
+    if final_value is None and end_std > threshold:
+        raise ValueError(
+            f"Auto-detected final_value is unreliable: trailing-10% stddev "
+            f"({end_std:.3g}) exceeds {_AUTO_LEVEL_VARIANCE_THRESHOLD * 100:.0f}% "
+            f"of |final - initial| ({abs_delta:.3g}) — the response hasn't "
+            f"settled by window end. Pass an explicit final_value, or "
+            f"extend t_end past the settling time."
+        )
+
+    direction = "rising" if delta > 0 else "falling"
 
     if direction == "rising":
         overshoot_signal = y - fv
