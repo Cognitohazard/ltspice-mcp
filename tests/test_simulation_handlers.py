@@ -226,7 +226,7 @@ class TestRunSimulationStubbed:
     ):
         fake_runner = MagicMock()
         fake_runner.start_simulation = AsyncMock()
-        fake_runner._kill = AsyncMock()
+        fake_runner.kill = AsyncMock()
         with patch(
             "ltspice_mcp.tools.simulation._get_or_create_runner",
             return_value=fake_runner,
