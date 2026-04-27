@@ -6,5 +6,11 @@
   "typeCheckingMode": "standard",
   "reportMissingImports": true,
   "reportUnusedVariable": "warning",
-  "reportPrivateUsage": "warning"
+  "reportPrivateUsage": "warning",
+  "executionEnvironments": [
+    {
+      "root": "tests",
+      "reportPrivateUsage": "none"
+    }
+  ]
 }

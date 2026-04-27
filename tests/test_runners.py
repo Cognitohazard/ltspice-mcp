@@ -467,7 +467,10 @@ class TestMCSampler:
         from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
 
         sampler = MCSampler(seed=0)
-        bad_spec = ToleranceSpec(tolerance=0.1, distribution="weibull")
+        # Deliberately bypass the Literal type to exercise the runtime
+        # error path — the engine validates the distribution name even
+        # though the static type system already constrains it.
+        bad_spec = ToleranceSpec(tolerance=0.1, distribution="weibull")  # type: ignore[arg-type]
         with pytest.raises(ValueError, match="Unknown distribution"):
             sampler.sample(1.0, bad_spec)
 
