@@ -187,13 +187,19 @@ def extract_operating_point(raw: RawRead) -> OperatingPointOutput:
 
 
 def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -> dict:
-    """Compute AC bandwidth metrics used by ``simulation_summary``.
+    """Compute -3 dB bandwidth and unity-gain frequency for AC simulations.
 
-    Thin wrapper over :mod:`ltspice_mcp.lib.ac_analysis`. Returns a dict
-    with ``bandwidth_3db``, ``unity_gain_freq``, ``phase_margin``, and
-    ``gain_margin`` — each a Python float or None. For all crossovers,
-    per-crossing margins, and the stability classification, call
-    ``ltspice_stability_metrics`` directly.
+    Returns a dict with ``bandwidth_3db`` and ``unity_gain_freq`` (each a
+    Python float or None). The bandwidth is the first −3 dB crossing
+    relative to DC gain (low cutoff for LPFs, low edge for BPFs). The
+    unity-gain frequency is the worst-case 0 dB crossover from the full
+    stability sweep — meaningful for amplifier-shaped responses.
+
+    Margins (phase, gain) are NOT reported here because they only have
+    semantic meaning when the supplied signal is a loop gain, which this
+    function can't verify. For full stability analysis with all
+    crossovers, per-crossing margins, and a stability classification,
+    call ``ltspice_stability_metrics`` directly on a loop-gain signal.
     """
     # Deferred import — ac_analysis imports raw_parser at module load so
     # the edge in the other direction has to stay late-bound.
@@ -206,8 +212,6 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     metrics: dict[str, float | None] = {
         "bandwidth_3db": None,
         "unity_gain_freq": None,
-        "phase_margin": None,
-        "gain_margin": None,
     }
 
     try:
@@ -232,19 +236,13 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
 
     try:
         stability = compute_stability_metrics(freqs, H)
-        # Pick the crossover that produced the worst-case margin so the
-        # reported unity_gain_freq and phase_margin come from the SAME
-        # crossing (matters on conditionally-stable amps where the first
-        # unity-gain crossing is fine but a later one defines stability).
+        # Worst-case unity-gain crossover: meaningful for amp-shaped
+        # responses; stability_metrics returns this even for non-loop-gain
+        # signals (it's just a 0 dB crossing).
         pm_entries = stability["phase_margins"]
         if pm_entries:
             worst_pm = min(pm_entries, key=lambda m: abs(m["margin_deg"]))
             metrics["unity_gain_freq"] = float(worst_pm["frequency_hz"])
-            metrics["phase_margin"] = float(worst_pm["margin_deg"])
-        gm_entries = stability["gain_margins"]
-        if gm_entries:
-            worst_gm = min(gm_entries, key=lambda m: abs(m["margin_db"]))
-            metrics["gain_margin"] = float(worst_gm["margin_db"])
     except Exception:
         pass
 
@@ -314,6 +312,8 @@ def build_simulation_summary(
                 summary["warnings"] = diagnostics["warnings"]
             if diagnostics["errors"]:
                 summary["errors"] = diagnostics["errors"]
+            if diagnostics.get("meas_errors"):
+                summary["meas_errors"] = diagnostics["meas_errors"]
         except Exception:
             pass
 

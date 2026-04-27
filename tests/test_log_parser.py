@@ -64,13 +64,13 @@ class TestExtractMissingRefs:
 class TestExtractLogDiagnostics:
     def test_missing_file_returns_empty(self, tmp_path: Path):
         result = extract_log_diagnostics(tmp_path / "nope.log")
-        assert result == {"warnings": [], "errors": []}
+        assert result == {"warnings": [], "errors": [], "meas_errors": []}
 
     def test_empty_file(self, tmp_path: Path):
         log = tmp_path / "empty.log"
         log.write_text("")
         result = extract_log_diagnostics(log)
-        assert result == {"warnings": [], "errors": []}
+        assert result == {"warnings": [], "errors": [], "meas_errors": []}
 
     def test_filepath_line_error_with_caret(self, tmp_path: Path):
         log = tmp_path / "caret.log"
@@ -111,6 +111,50 @@ class TestExtractLogDiagnostics:
         log.write_text("Time step too small\nsingular matrix\n")
         result = extract_log_diagnostics(log)
         assert len(result["errors"]) == 2
+
+    def test_meas_error_with_vdb_suggestion(self, tmp_path: Path):
+        """vdb() in .MEAS should produce a structured meas_error with a
+        suggestion pointing at mag()/filter_metrics."""
+        log = tmp_path / "meas.log"
+        log.write_text(
+            "/tmp/x.cir(9): No such function defined.\n"
+            ".meas AC fc_3dB WHEN vdb(out)=-3\n"
+            "^^^\n"
+        )
+        result = extract_log_diagnostics(log)
+        assert len(result["meas_errors"]) == 1
+        me = result["meas_errors"][0]
+        assert me["directive"].startswith(".meas")
+        assert "vdb" in me["directive"]
+        assert me["suggestion"] is not None
+        assert "mag" in me["suggestion"].lower()
+        # The same error is also present in the generic errors list.
+        assert len(result["errors"]) == 1
+
+    def test_meas_error_without_known_pattern(self, tmp_path: Path):
+        """A .MEAS error that doesn't match a validator rule still gets
+        captured in meas_errors but with suggestion=None."""
+        log = tmp_path / "meas2.log"
+        log.write_text(
+            "/tmp/x.cir(7): unrecognized .meas form\n"
+            ".meas AC bogus FUNNYCLAUSE V(out)\n"
+            "^^^\n"
+        )
+        result = extract_log_diagnostics(log)
+        assert len(result["meas_errors"]) == 1
+        assert result["meas_errors"][0]["suggestion"] is None
+
+    def test_non_meas_error_not_in_meas_errors(self, tmp_path: Path):
+        """Component-level errors don't show up as .MEAS errors."""
+        log = tmp_path / "comp.log"
+        log.write_text(
+            "/tmp/x.cir(3): bad component value\n"
+            "R1 in out abc\n"
+            "         ^^^\n"
+        )
+        result = extract_log_diagnostics(log)
+        assert len(result["errors"]) == 1
+        assert result["meas_errors"] == []
 
 
 class TestExtractErrorContext:

@@ -76,8 +76,10 @@ from ltspice_mcp.lib.signal_analysis import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    MEAS_ERRORS_SCHEMA,
     RO_ANNOTATIONS,
     ToolInput,
+    format_meas_errors,
     format_response,
     registry,
     safe_path,
@@ -578,12 +580,11 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
                 "properties": {
                     "bandwidth_3db": {"type": ["number", "null"]},
                     "unity_gain_freq": {"type": ["number", "null"]},
-                    "phase_margin": {"type": ["number", "null"]},
-                    "gain_margin": {"type": ["number", "null"]},
                 },
             },
             "warnings": {"type": "array", "items": {"type": "string"}},
             "errors": {"type": "array", "items": {"type": "string"}},
+            "meas_errors": MEAS_ERRORS_SCHEMA,
         },
     },
 )
@@ -679,10 +680,6 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
             lines.append(f"  -3dB point: {ac_metrics['bandwidth_3db']:.6g} Hz")
         if ac_metrics["unity_gain_freq"] is not None:
             lines.append(f"  Unity-gain frequency: {ac_metrics['unity_gain_freq']:.6g} Hz")
-        if ac_metrics["phase_margin"] is not None:
-            lines.append(f"  Phase margin: {ac_metrics['phase_margin']:.2f} deg")
-        if ac_metrics["gain_margin"] is not None:
-            lines.append(f"  Gain margin: {ac_metrics['gain_margin']:.2f} dB")
         lines.append("")
 
     if "errors" in summary:
@@ -695,6 +692,11 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
         lines.append(f"Warnings ({len(summary['warnings'])}):")
         for warning in summary["warnings"]:
             lines.append(f"  {warning}")
+        lines.append("")
+
+    meas_lines = format_meas_errors(summary.get("meas_errors", []))
+    if meas_lines:
+        lines.extend(meas_lines)
         lines.append("")
 
     return format_response("\n".join(lines), json_data, fmt)

@@ -15,7 +15,9 @@ from ltspice_mcp.lib.mcp_logging import mcp_log
 from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
 from ltspice_mcp.state import NON_TERMINAL_LIVE_STATUSES, SessionState, SimulationJob
 from ltspice_mcp.tools._base import (
+    MEAS_ERRORS_SCHEMA,
     ToolInput,
+    format_meas_errors,
     format_response,
     registry,
     require_simulator,
@@ -117,6 +119,7 @@ def _get_or_create_runner(state: SessionState) -> SimulationRunner:
             "signals": {"type": "array", "items": {"type": "string"}},
             "warnings": {"type": "array", "items": {"type": "string"}},
             "errors": {"type": "array", "items": {"type": "string"}},
+            "meas_errors": MEAS_ERRORS_SCHEMA,
             "error": {"type": "string"},
         },
     },
@@ -282,11 +285,15 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
     # Format warnings and errors
     warnings = summary.get("warnings", [])
     errors = summary.get("errors", [])
+    meas_errors = summary.get("meas_errors", [])
     diagnostics_text = ""
     if errors:
         diagnostics_text += "\n\nErrors:\n" + "\n".join(f"  {e}" for e in errors)
     if warnings:
         diagnostics_text += "\n\nWarnings:\n" + "\n".join(f"  {w}" for w in warnings)
+    meas_lines = format_meas_errors(meas_errors)
+    if meas_lines:
+        diagnostics_text += "\n\n" + "\n".join(meas_lines)
 
     text = (
         f"Simulation completed successfully\n"
@@ -312,6 +319,8 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
     }
     if errors:
         data["errors"] = errors
+    if meas_errors:
+        data["meas_errors"] = meas_errors
     return format_response(text, data, fmt)
 
 

@@ -14,8 +14,25 @@ from spicelib.log.ltsteps import LTSpiceLogReader
 from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib.spice_validator import validate_directive
 
 logger = logging.getLogger(__name__)
+
+
+class MeasErrorEntry(TypedDict):
+    """One .MEAS parse failure with an optional fix suggestion."""
+
+    directive: str
+    raw_block: str
+    suggestion: str | None
+
+
+class LogDiagnostics(TypedDict):
+    """Return shape of :func:`extract_log_diagnostics`."""
+
+    warnings: list[str]
+    errors: list[str]
+    meas_errors: list[MeasErrorEntry]
 
 
 class MeasurementsOutput(TypedDict):
@@ -115,7 +132,7 @@ def extract_missing_refs(log_path: Path) -> list[str]:
         return []
 
 
-def extract_log_diagnostics(log_path: Path) -> dict[str, list[str]]:
+def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
     """Extract structured warnings and errors from an LTspice log file.
 
     Detects all known LTspice diagnostic patterns:
@@ -126,15 +143,26 @@ def extract_log_diagnostics(log_path: Path) -> dict[str, list[str]]:
     - Bare convergence/runtime messages (e.g., "Singular matrix")
 
     Returns:
-        {"warnings": [...], "errors": [...]} with human-readable strings.
+        {
+          "warnings": [str, ...],
+          "errors": [str, ...],
+          "meas_errors": [{"directive": str, "raw_block": str,
+                           "suggestion": str | None}, ...],
+        }
+
+    ``meas_errors`` is a structured slice of ``errors`` covering .MEAS parse
+    failures specifically, with the offending directive extracted and an
+    optional suggestion when the failure pattern is in the
+    spice_validator blocklist (e.g. ``vdb()`` in .MEAS).
     """
     warnings: list[str] = []
     errors: list[str] = []
+    meas_errors: list[MeasErrorEntry] = []
 
     try:
         content = log_path.read_text()
     except Exception:
-        return {"warnings": warnings, "errors": errors}
+        return {"warnings": warnings, "errors": errors, "meas_errors": meas_errors}
 
     lines = content.splitlines()
     i = 0
@@ -156,7 +184,24 @@ def extract_log_diagnostics(log_path: Path) -> dict[str, list[str]]:
                     j += 1
                     break
                 j += 1
-            errors.append("\n".join(block))
+            full_block = "\n".join(block)
+            errors.append(full_block)
+
+            # If the source line in the block is a .MEAS directive, classify
+            # it as a meas_error and attach a suggestion when the failure
+            # matches a known pattern. The source line is the second entry
+            # in the block (first is "file(line): message").
+            if len(block) >= 2:
+                source_line = block[1].lstrip()
+                if source_line.lower().startswith(".meas"):
+                    val_err = validate_directive(source_line, simulator="LTspice")
+                    meas_errors.append(
+                        {
+                            "directive": source_line,
+                            "raw_block": full_block,
+                            "suggestion": val_err.suggestion if val_err else None,
+                        }
+                    )
             i = j
             continue
 
@@ -189,7 +234,7 @@ def extract_log_diagnostics(log_path: Path) -> dict[str, list[str]]:
 
         i += 1
 
-    return {"warnings": warnings, "errors": errors}
+    return {"warnings": warnings, "errors": errors, "meas_errors": meas_errors}
 
 
 def extract_error_context(log_file: Path, max_lines: int = 20) -> str:
