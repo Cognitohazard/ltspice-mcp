@@ -528,3 +528,428 @@ class TestParseValue:
 
         assert parse_value("") is None
         assert parse_value("abc") is None
+
+
+class TestSampleOffset:
+    """``sample_offset`` returns additive deltas — the call site composes
+    them with the nominal. Relative kind scales by |nominal|; absolute
+    kind uses the raw tolerance as σ (or half-range)."""
+
+    def test_relative_zero_nominal_yields_zero_delta(self):
+        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+
+        sampler = MCSampler(seed=1)
+        spec = ToleranceSpec(tolerance=0.10, kind="relative")
+        # σ = |nominal| * tol / 3 = 0 → all samples are 0.
+        samples = [sampler.sample_offset(0.0, spec) for _ in range(20)]
+        assert all(s == 0.0 for s in samples)
+
+    def test_absolute_kind_uses_raw_tolerance_as_3sigma(self):
+        import statistics
+
+        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+
+        sampler = MCSampler(seed=42)
+        # 30 mV ± 3σ → σ = 10 mV. Sample many; check std ≈ 10 mV.
+        spec = ToleranceSpec(tolerance=0.030, kind="absolute")
+        samples = [sampler.sample_offset(0.7, spec) for _ in range(5000)]
+        sigma_estimate = statistics.stdev(samples)
+        assert 0.0085 < sigma_estimate < 0.0115  # within ~15% of σ=10mV
+
+    def test_relative_kind_scales_by_nominal(self):
+        import statistics
+
+        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+
+        sampler = MCSampler(seed=7)
+        spec = ToleranceSpec(tolerance=0.10, kind="relative")
+        # σ = |1k| * 0.10 / 3 ≈ 33.3
+        samples = [sampler.sample_offset(1000.0, spec) for _ in range(5000)]
+        sigma = statistics.stdev(samples)
+        assert 28.0 < sigma < 38.0
+
+
+class TestModelPerturbationMath:
+    def test_sample_model_perturbation_skips_missing_nominals(self):
+        from ltspice_mcp.lib.montecarlo import (
+            MCSampler,
+            ToleranceSpec,
+            sample_model_perturbation,
+        )
+
+        sampler = MCSampler(seed=0)
+        out = sample_model_perturbation(
+            sampler,
+            "NMOS1",
+            nominals={"VTO": 0.7},  # KP is missing
+            tolerances={
+                "VTO": ToleranceSpec(tolerance=0.05, kind="relative"),
+                "KP": ToleranceSpec(tolerance=0.10, kind="relative"),  # not in nominals
+            },
+        )
+        # Only VTO comes back; KP is skipped without raising.
+        assert "VTO" in out
+        assert "KP" not in out
+
+    def test_sample_model_perturbation_adds_delta(self):
+        from ltspice_mcp.lib.montecarlo import (
+            MCSampler,
+            ToleranceSpec,
+            sample_model_perturbation,
+        )
+
+        sampler = MCSampler(seed=42)
+        # Absolute σ_VTH = 12 mV → ±36 mV at 3σ tolerance
+        out = sample_model_perturbation(
+            sampler,
+            "NMOS1",
+            nominals={"VTO": 0.7, "KP": 100e-6},
+            tolerances={
+                "VTO": ToleranceSpec(tolerance=0.036, kind="absolute"),
+                "KP": ToleranceSpec(tolerance=0.10, kind="relative"),
+            },
+        )
+        # VTO perturbation should be in vicinity of 0.7 ± several σ
+        assert 0.6 < out["VTO"] < 0.8
+        assert 80e-6 < out["KP"] < 120e-6
+
+
+class TestPerturbModelInText:
+    def test_replaces_existing_param(self):
+        from ltspice_mcp.lib.montecarlo import perturb_model_in_text
+
+        text = (
+            "* test\n"
+            ".MODEL NMOS1 NMOS(VTO=0.7 KP=100u LAMBDA=0.02)\n"
+            "M1 d g 0 0 NMOS1 W=10u L=1u\n"
+            ".END\n"
+        )
+        out = perturb_model_in_text(text, "NMOS1", {"VTO": 0.715, "KP": 0.000105})
+        # Old values must be gone
+        assert "VTO=0.7\b" not in out
+        assert "KP=100u" not in out
+        # New values present
+        assert "VTO=0.715" in out
+        assert "KP=0.000105" in out
+
+    def test_appends_missing_param_inside_paren(self):
+        from ltspice_mcp.lib.montecarlo import perturb_model_in_text
+
+        text = ".MODEL NMOS1 NMOS(VTO=0.7 KP=100u)\n"
+        out = perturb_model_in_text(text, "NMOS1", {"LAMBDA": 0.025})
+        assert "LAMBDA=0.025" in out
+        # Closing paren still present and balanced.
+        assert out.count("(") == out.count(")")
+
+    def test_case_insensitive_match(self):
+        from ltspice_mcp.lib.montecarlo import perturb_model_in_text
+
+        text = ".model nmos1 nmos(vto=0.7)\n"
+        out = perturb_model_in_text(text, "NMOS1", {"VTO": 0.65})
+        assert "0.65" in out
+
+    def test_continuation_lines_merged(self):
+        from ltspice_mcp.lib.montecarlo import perturb_model_in_text
+
+        text = (
+            ".MODEL NMOS1 NMOS(VTO=0.7\n"
+            "+ KP=100u LAMBDA=0.02)\n"
+            ".END\n"
+        )
+        out = perturb_model_in_text(text, "NMOS1", {"VTO": 0.715})
+        assert "0.715" in out
+
+    def test_missing_model_raises(self):
+        from ltspice_mcp.lib.montecarlo import perturb_model_in_text
+
+        with pytest.raises(ValueError, match="not found"):
+            perturb_model_in_text(".MODEL OTHER NPN(BF=200)\n", "NMOS1", {"VTO": 0.7})
+
+
+class TestPelgromMismatch:
+    def test_smaller_devices_have_larger_sigma(self):
+        import statistics
+
+        from ltspice_mcp.lib.montecarlo import (
+            InstanceGeometry,
+            MCSampler,
+            MismatchRule,
+            sample_instance_mismatch,
+        )
+
+        rule = MismatchRule(prefix="M", avt=3e-3, ak=0.0)
+        # Big device: W=L=10 µm → W·L=100 µm² → σ_VTH = 3mV/√100 = 300 µV
+        big = InstanceGeometry("M1", "NMOS1", width_m=10e-6, length_m=10e-6)
+        # Small device: W=L=0.5 µm → W·L=0.25 µm² → σ_VTH = 6 mV
+        small = InstanceGeometry("M2", "NMOS1", width_m=0.5e-6, length_m=0.5e-6)
+
+        sampler_big = MCSampler(seed=1)
+        sampler_small = MCSampler(seed=2)
+        big_samples = [
+            sample_instance_mismatch(sampler_big, big, rule)["dvth"]
+            for _ in range(2000)
+        ]
+        small_samples = [
+            sample_instance_mismatch(sampler_small, small, rule)["dvth"]
+            for _ in range(2000)
+        ]
+        sigma_big = statistics.stdev(big_samples)
+        sigma_small = statistics.stdev(small_samples)
+        # Theoretical ratio: σ_small/σ_big = √(WL_big / WL_small) = √(100/0.25) = 20
+        ratio = sigma_small / sigma_big
+        assert 15 < ratio < 25  # within ~25% of the analytical 20
+
+    def test_disabled_when_coefficients_zero(self):
+        from ltspice_mcp.lib.montecarlo import (
+            InstanceGeometry,
+            MCSampler,
+            MismatchRule,
+            sample_instance_mismatch,
+        )
+
+        rule = MismatchRule(prefix="M", avt=0.0, ak=0.0)
+        inst = InstanceGeometry("M1", "NMOS1", width_m=1e-6, length_m=1e-6)
+        sampler = MCSampler(seed=0)
+        out = sample_instance_mismatch(sampler, inst, rule)
+        assert out["dvth"] == 0.0
+        assert out["dk_over_k"] == 0.0
+
+
+class TestVariantModelGeneration:
+    def test_render_variant_renames_and_overrides(self):
+        from ltspice_mcp.lib.montecarlo import render_variant_model_card
+
+        base = ".MODEL NMOS1 NMOS(VTO=0.7 KP=100u LAMBDA=0.02)\n"
+        variant = render_variant_model_card(
+            base, "NMOS1__M1", {"VTO": 0.714, "KP": 0.000098}
+        )
+        assert ".MODEL NMOS1__M1" in variant
+        # Make sure the original NMOS1 token isn't left behind in the card
+        assert ".MODEL NMOS1 " not in variant
+        assert "VTO=0.714" in variant
+        assert "KP=9.8e-05" in variant or "KP=0.0000980" in variant or "KP=9.8e-5" in variant
+
+    def test_inject_card_before_end(self):
+        from ltspice_mcp.lib.montecarlo import inject_card_before_end
+
+        text = ".MODEL NMOS1 NMOS(VTO=0.7)\nM1 d g 0 0 NMOS1\n.END\n"
+        out = inject_card_before_end(text, ".MODEL NMOS1__M1 NMOS(VTO=0.715)\n")
+        assert ".MODEL NMOS1__M1" in out
+        # Variant card must appear before .END
+        end_idx = out.lower().rindex(".end")
+        variant_idx = out.index("NMOS1__M1")
+        assert variant_idx < end_idx
+
+    def test_rewrite_instance_model_preserves_params(self):
+        from ltspice_mcp.lib.montecarlo import rewrite_instance_model
+
+        text = "M1 d g 0 0 NMOS1 W=10u L=1u m=2\n"
+        out = rewrite_instance_model(text, "M1", "NMOS1__M1")
+        assert "NMOS1__M1" in out
+        # W= and L= preserved; the original model token is replaced not
+        # duplicated.
+        assert "W=10u" in out
+        assert "L=1u" in out
+        assert " NMOS1 " not in out
+
+    def test_rewrite_instance_model_no_params(self):
+        from ltspice_mcp.lib.montecarlo import rewrite_instance_model
+
+        text = "Q1 c b e MYNPN\n"
+        out = rewrite_instance_model(text, "Q1", "MYNPN__Q1")
+        assert "Q1 c b e MYNPN__Q1" in out
+
+
+class TestExtractMosfetInstances:
+    def test_finds_W_L_geometry(self):
+        from ltspice_mcp.lib.montecarlo import extract_mosfet_instances
+
+        text = (
+            "* test\n"
+            ".MODEL NMOS1 NMOS(VTO=0.7)\n"
+            "M1 d g 0 0 NMOS1 W=10u L=180n\n"
+            "M2 d g 0 0 NMOS1 W=2u L=180n\n"
+            ".END\n"
+        )
+        instances = extract_mosfet_instances(text)
+        refs = {i.ref: i for i in instances}
+        assert "M1" in refs and "M2" in refs
+        assert refs["M1"].width_m == pytest.approx(10e-6)
+        assert refs["M1"].length_m == pytest.approx(180e-9)
+        assert refs["M2"].width_m == pytest.approx(2e-6)
+        assert refs["M1"].model_name == "NMOS1"
+
+    def test_skips_instances_without_geometry(self):
+        from ltspice_mcp.lib.montecarlo import extract_mosfet_instances
+
+        # No W= / L= → can't compute Pelgrom σ; skipped.
+        text = "M1 d g 0 0 NMOS1\n"
+        instances = extract_mosfet_instances(text)
+        assert instances == []
+
+
+class TestParamPerturbation:
+    def test_perturb_param_replaces_value(self):
+        from ltspice_mcp.lib.montecarlo import perturb_param_in_text
+
+        text = "* test\n.PARAM vto_n=0.7\n.PARAM kp_n=100u\n.END\n"
+        out = perturb_param_in_text(text, "vto_n", 0.715)
+        assert ".PARAM vto_n=0.715" in out
+        assert ".PARAM kp_n=100u" in out  # untouched
+
+    def test_perturb_param_case_insensitive(self):
+        from ltspice_mcp.lib.montecarlo import perturb_param_in_text
+
+        text = ".param vto_n = 0.7\n"
+        out = perturb_param_in_text(text, "VTO_N", 0.715)
+        assert "0.715" in out
+
+    def test_perturb_param_missing_raises(self):
+        from ltspice_mcp.lib.montecarlo import perturb_param_in_text
+
+        with pytest.raises(ValueError, match="not found"):
+            perturb_param_in_text(".PARAM rd=1k\n", "vto_n", 0.7)
+
+    def test_parse_param_nominal(self):
+        from ltspice_mcp.lib.montecarlo import parse_param_nominal
+
+        text = ".PARAM vto_n=0.7\n.PARAM kp_n=100u\n"
+        assert parse_param_nominal(text, "vto_n") == pytest.approx(0.7)
+        assert parse_param_nominal(text, "kp_n") == pytest.approx(100e-6)
+        assert parse_param_nominal(text, "missing") is None
+
+
+class TestMismatchRuleMatching:
+    def test_finds_first_matching_prefix(self):
+        from ltspice_mcp.lib.montecarlo import MismatchRule, find_mismatch_rule
+
+        rules = [
+            MismatchRule(prefix="M", avt=3e-3, ak=0.02),
+            MismatchRule(prefix="Q", avt=2e-3),
+        ]
+        m_rule = find_mismatch_rule("M1", rules)
+        assert m_rule is not None
+        assert m_rule.prefix == "M"
+
+        q_rule = find_mismatch_rule("Q5", rules)
+        assert q_rule is not None
+        assert q_rule.prefix == "Q"
+
+        assert find_mismatch_rule("R7", rules) is None
+
+
+class TestStreamIsolation:
+    """Per-stream RNGs in MCSampler — adding/removing a perturbation
+    source mustn't shift other sources' samples. This is the property
+    that makes regression-fixed-seed tests stable as the engine evolves."""
+
+    def test_stream_keys_independent(self):
+        from ltspice_mcp.lib.montecarlo import MCSampler
+
+        sampler = MCSampler(seed=42)
+        a1 = sampler.stream("A").gauss(0.0, 1.0)
+        b1 = sampler.stream("B").gauss(0.0, 1.0)
+
+        # Re-create with same seed, draw from B first then A — order doesn't
+        # matter because each stream is a self-contained RNG keyed by name.
+        sampler2 = MCSampler(seed=42)
+        b2 = sampler2.stream("B").gauss(0.0, 1.0)
+        a2 = sampler2.stream("A").gauss(0.0, 1.0)
+
+        assert a1 == a2
+        assert b1 == b2
+
+    def test_default_stream_compat(self):
+        """The default stream still works for legacy single-stream callers."""
+        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+
+        s1 = MCSampler(seed=7)
+        s2 = MCSampler(seed=7)
+        spec = ToleranceSpec(tolerance=0.05)
+        assert s1.sample(100.0, spec) == s2.sample(100.0, spec)
+
+    def test_derive_yields_independent_child(self):
+        """``derive(namespace)`` produces a child sampler whose streams
+        are independent of the parent's, but reproducible from the parent
+        seed + namespace."""
+        from ltspice_mcp.lib.montecarlo import MCSampler
+
+        parent = MCSampler(seed=99)
+        child_a = parent.derive("run1")
+        child_b = parent.derive("run1")  # same namespace → same samples
+        assert child_a.stream("rcl:R1").gauss(0, 1) == child_b.stream("rcl:R1").gauss(0, 1)
+
+        child_c = parent.derive("run2")
+        # Different namespace → different stream output (>99% probability;
+        # we just check inequality on a single draw, sufficient given seed).
+        assert child_a.stream("rcl:R1").gauss(0, 1) != child_c.stream("rcl:R1").gauss(0, 1)
+
+    def test_adding_stream_doesnt_shift_existing(self):
+        """If a future engine version adds a new perturbation source, the
+        existing sources' sample sequences must be unchanged."""
+        from ltspice_mcp.lib.montecarlo import MCSampler
+
+        # Old engine: only one stream "rcl:R1"
+        old = MCSampler(seed=123)
+        old_samples = [old.stream("rcl:R1").gauss(0, 1) for _ in range(5)]
+
+        # New engine: adds a "model:NMOS1.VTO" stream. Sampling from the
+        # new stream first must not shift "rcl:R1"'s subsequent draws.
+        new = MCSampler(seed=123)
+        _ = [new.stream("model:NMOS1.VTO").gauss(0, 1) for _ in range(3)]
+        new_samples = [new.stream("rcl:R1").gauss(0, 1) for _ in range(5)]
+
+        assert old_samples == new_samples
+
+
+class TestTruncatedGaussian:
+    """The ±tolerance bound is the user-promised ±3σ truncation. Without
+    truncation, rare-but-real outliers produce nonsensical perturbed
+    values (e.g. negative VTO) that don't reflect real silicon."""
+
+    def test_normal_samples_stay_within_bound(self):
+        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+
+        sampler = MCSampler(seed=1)
+        spec = ToleranceSpec(tolerance=0.10, distribution="normal")
+        # 10000 samples — at least one would fall outside ±3σ in the
+        # untruncated distribution (~27 expected). With truncation, all
+        # must satisfy |delta/value - 1| <= 0.10.
+        for _ in range(10000):
+            perturbed = sampler.sample(1.0, spec)
+            assert abs(perturbed - 1.0) <= 0.10 + 1e-12  # within ±10% bound
+
+    def test_offset_samples_stay_within_bound_absolute(self):
+        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+
+        sampler = MCSampler(seed=2)
+        spec = ToleranceSpec(tolerance=0.030, distribution="normal", kind="absolute")
+        for _ in range(10000):
+            delta = sampler.sample_offset(0.7, spec)
+            assert abs(delta) <= 0.030 + 1e-12
+
+    def test_offset_samples_stay_within_bound_relative(self):
+        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+
+        sampler = MCSampler(seed=3)
+        spec = ToleranceSpec(tolerance=0.10, distribution="normal", kind="relative")
+        for _ in range(10000):
+            delta = sampler.sample_offset(1000.0, spec)
+            assert abs(delta) <= 100.0 + 1e-9  # |nominal| * tolerance
+
+    def test_truncation_preserves_distribution_shape(self):
+        """Truncation at ±3σ should leave the central distribution
+        approximately Gaussian — std should still be close to the
+        nominal σ (a tiny shrinkage from rejection at the tails)."""
+        import statistics
+
+        from ltspice_mcp.lib.montecarlo import MCSampler, ToleranceSpec
+
+        sampler = MCSampler(seed=4)
+        spec = ToleranceSpec(tolerance=0.10, distribution="normal")
+        samples = [sampler.sample(100.0, spec) - 100.0 for _ in range(20000)]
+        sigma_est = statistics.stdev(samples)
+        # σ = nominal * tol / 3 = 100 * 0.10 / 3 = 3.333
+        # Truncation at ±3σ shrinks σ by ~2-3% (analytical) — well within
+        # the ±10% bound below.
+        assert 3.0 < sigma_est < 3.5

@@ -93,6 +93,15 @@ class MonteCarloConfig:
         component_overrides: Per-component tolerances: ref -> (tolerance, distribution)
         num_runs: Number of Monte Carlo runs (default 100)
         seed: Optional RNG seed for reproducible runs. None => fresh entropy.
+        model_tolerances: Process-variation rules — sampled once per .MODEL
+            per run; every transistor instance using the model inherits the
+            perturbation. List items are ``ModelTolerance`` from
+            ``lib.montecarlo``.
+        mismatch_rules: Pelgrom-law mismatch rules per device prefix. List
+            items are ``MismatchRule`` from ``lib.montecarlo``. Generates
+            per-instance variant ``.MODEL`` cards in the per-run netlist.
+        param_tolerances: ``.PARAM`` perturbation rules — sampled once per
+            run. List items are ``ParamTolerance`` from ``lib.montecarlo``.
     """
 
     netlist: Path
@@ -100,6 +109,11 @@ class MonteCarloConfig:
     component_overrides: dict[str, tuple[float, str]] = field(default_factory=dict)
     num_runs: int = 100
     seed: int | None = None
+    # Imported lazily-typed (Any) to avoid a circular dep on lib.montecarlo
+    # — runtime objects are validated at construction in configure_montecarlo.
+    model_tolerances: list = field(default_factory=list)
+    mismatch_rules: list = field(default_factory=list)
+    param_tolerances: list = field(default_factory=list)
 
 
 @dataclass

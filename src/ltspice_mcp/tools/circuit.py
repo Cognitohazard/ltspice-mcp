@@ -8,6 +8,7 @@ and raise NetlistError if given a non-.asc file.
 
 import asyncio
 import contextlib
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -120,6 +121,40 @@ def _parse_rotation(rotation: str) -> ERotation:
     return erot
 
 
+# Matches one ``KEY=VALUE`` token (value may have braces, parens, sign, etc.).
+# Used to peel trailing parameters off a multi-token component value like
+# ``"NMOS1 W=10u L=1u"`` so we can route each piece through the right
+# spicelib API (model name → ``set_component_value``; W/L → ``set_component_parameters``).
+_PARAM_TOKEN_RE = re.compile(r"(\w+)\s*=\s*([^\s=]+)")
+
+
+def _apply_component_value(editor, reference: str, value: str) -> None:
+    """Set a component's value, splitting trailing ``KEY=VALUE`` tokens off.
+
+    spicelib's ``set_component_value`` writes only the model/value field of
+    the element line — it does NOT touch the trailing parameter section.
+    Calling it with ``"NMOS1 W=10u L=1u"`` against an existing ``M1 ... NMOS1 W=20u L=1u``
+    leaves both sets in place (``... NMOS1 W=10u L=1u W=20u L=1u``), which
+    LTspice may parse either way. To DWIM, we split off any ``KEY=VALUE``
+    tokens and route them through ``set_component_parameters`` (which edits
+    the params section via the same regex), keeping the model/value field
+    for ``set_component_value``.
+    """
+    if not isinstance(value, str) or "=" not in value:
+        editor.set_component_value(reference, value)
+        return
+    params: dict[str, str] = {}
+    head_end = len(value)
+    for m in _PARAM_TOKEN_RE.finditer(value):
+        params[m.group(1)] = m.group(2)
+        head_end = min(head_end, m.start())
+    head = value[:head_end].strip()
+    if head:
+        editor.set_component_value(reference, head)
+    if params:
+        editor.set_component_parameters(reference, **params)
+
+
 def _bboxes_overlap(a: dict, b: dict) -> bool:
     """AABB overlap test between two bounding boxes with {x, y, width, height}."""
     return (
@@ -185,6 +220,10 @@ Editor = AscEditor | SpiceEditor
 class CreateNetlistInput(ToolInput):
     name: str = Field(description="File name without extension")
     content: str = Field(description="Complete SPICE netlist content")
+    overwrite: bool = Field(
+        default=False,
+        description="Overwrite an existing file at this path. Default is to refuse.",
+    )
 
 
 class CircuitReadInput(ToolInput):
@@ -427,9 +466,11 @@ async def handle_create_netlist(args: CreateNetlistInput, state: SessionState) -
         content = content.rstrip() + "\n.END\n"
 
     try:
-        atomic_write_text(target_path, content, overwrite=False, durable=False)
+        atomic_write_text(target_path, content, overwrite=args.overwrite, durable=False)
     except FileExistsError as e:
-        raise NetlistError(f"File already exists: {target_path}") from e
+        raise NetlistError(
+            f"File already exists: {target_path}. Pass overwrite=true to replace it."
+        ) from e
 
     try:
         editor = SpiceEditor(str(target_path))
@@ -691,7 +732,8 @@ async def handle_set_component_value(args: SetComponentValueInput, state: Sessio
                 raise NetlistError("'values' must be an object mapping references to new values")
             if not values_dict:
                 raise NetlistError("'values' dict must not be empty")
-            editor.set_component_values(**values_dict)
+            for ref, val in values_dict.items():
+                _apply_component_value(editor, ref, val)
             changes = [f"{ref}: {val}" for ref, val in values_dict.items()]
             result = f"Updated {len(values_dict)} component(s):\n" + "\n".join(changes)
         elif reference is not None and value is not None:
@@ -700,7 +742,7 @@ async def handle_set_component_value(args: SetComponentValueInput, state: Sessio
                 old_value = editor.get_component_value(reference)
             except Exception:
                 raise NetlistError(f"Component '{reference}' not found") from None
-            editor.set_component_value(reference, value)
+            _apply_component_value(editor, reference, value)
             result = f"Set {reference}: {old_value} -> {value}"
         else:
             raise NetlistError(

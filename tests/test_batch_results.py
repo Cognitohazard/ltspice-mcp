@@ -107,3 +107,54 @@ class TestComputeBatchStats:
         }
         result = compute_batch_stats(runs, "V(out)")
         assert result["run_count"] == 0  # all skipped
+
+
+class TestComputeBatchStatsAt:
+    """``at`` slices each run to a single point on the axis before
+    aggregating. For AC sweeps the per-run peak across all frequencies
+    conflated low-frequency roll-off (Cin high-pass corner) with run-to-run
+    variation — ``at`` lets the caller ask "what's the spread of |H| at
+    this specific frequency across runs?"."""
+
+    def _write_transient_raw(
+        self, path: Path, axis: list[float], waves: dict[str, list[float]]
+    ) -> None:
+        from spicelib import RawWrite, Trace
+
+        rw = RawWrite()
+        rw.add_trace(Trace("time", axis))
+        for name, vals in waves.items():
+            rw.add_trace(Trace(name, vals))
+        rw.save(str(path))
+
+    def test_at_slices_to_single_point(self, tmp_path: Path):
+        # Each run has a different value at t=2.0; ``at`` picks that point.
+        run0 = tmp_path / "r0.raw"
+        run1 = tmp_path / "r1.raw"
+        self._write_transient_raw(
+            run0, [0.0, 1.0, 2.0, 3.0], {"V(out)": [0.0, 5.0, 10.0, 5.0]}
+        )
+        self._write_transient_raw(
+            run1, [0.0, 1.0, 2.0, 3.0], {"V(out)": [0.0, 3.0, 6.0, 3.0]}
+        )
+
+        runs = {
+            0: _make_run({"R": 1000.0}, raw_file=str(run0)),
+            1: _make_run({"R": 2000.0}, raw_file=str(run1)),
+        }
+
+        # Without ``at``: per-run peak across all time → 10.0 vs 6.0
+        no_at = compute_batch_stats(runs, "V(out)")
+        assert no_at["stats"]["max_across_runs"] == 10.0
+        assert no_at["stats"]["min_across_runs"] == 6.0
+
+        # With ``at=2.0``: each run reduced to the value at that time.
+        sliced = compute_batch_stats(runs, "V(out)", at=2.0)
+        assert sliced["at"] == 2.0
+        # peak/mean/min collapse to the single sample value.
+        assert sliced["runs"][0]["peak"] == 10.0
+        assert sliced["runs"][0]["mean"] == 10.0
+        assert sliced["runs"][0]["min"] == 10.0
+        assert sliced["runs"][1]["peak"] == 6.0
+        assert sliced["stats"]["max_across_runs"] == 10.0
+        assert sliced["stats"]["min_across_runs"] == 6.0

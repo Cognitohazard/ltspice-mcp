@@ -57,6 +57,24 @@ class TestCreateNetlist:
                 state_no_sim,
             )
 
+    async def test_overwrite_replaces_existing(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """``overwrite=True`` skips the FileExistsError path so iterating on
+        a design doesn't force read+edit roundtrips. The earlier behaviour
+        (always refuse) was friction during early stress-testing."""
+        await handle_create_netlist(
+            {"name": "ow", "content": "* v1\nR1 1 0 1k\n"},
+            state_no_sim,
+        )
+        await handle_create_netlist(
+            {"name": "ow", "content": "* v2\nR1 1 0 5k\n", "overwrite": True},
+            state_no_sim,
+        )
+        path = work_dir / "ow.cir"
+        assert "v2" in path.read_text()
+        assert "5k" in path.read_text()
+
 
 @pytest.mark.asyncio
 class TestReadCircuit:
@@ -199,6 +217,40 @@ class TestSetComponentValue:
                 {"path": sample_netlist.name},
                 state_no_sim,
             )
+
+    async def test_mosfet_value_with_params_replaces_both(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """Setting a MOSFET value of ``"NMOS1 W=10u L=1u"`` against an
+        existing ``M1 ... NMOS1 W=20u L=1u`` element used to leave both
+        param sets in place (``... NMOS1 W=10u L=1u W=20u L=1u``) because
+        spicelib's ``set_component_value`` only writes the model token. The
+        wrapper now splits the trailing ``W=/L=`` tokens and routes them
+        through ``set_component_parameters``."""
+        cir = work_dir / "m.cir"
+        cir.write_text(
+            "* MOSFET param replacement test\n"
+            ".MODEL NMOS1 NMOS(VTO=0.7 KP=100u)\n"
+            ".MODEL NMOS2 NMOS(VTO=0.5 KP=80u)\n"
+            "VDD vdd 0 5\n"
+            "M1 vdd vg 0 0 NMOS1 W=20u L=1u\n"
+            "Vg vg 0 1\n"
+            ".END\n"
+        )
+        await handle_set_component_value(
+            {"path": cir.name, "reference": "M1", "value": "NMOS2 W=10u L=2u"},
+            state_no_sim,
+        )
+        text = cir.read_text()
+        m1_lines = [ln for ln in text.splitlines() if ln.startswith("M1")]
+        assert len(m1_lines) == 1, f"expected one M1 line, got {m1_lines!r}"
+        line = m1_lines[0]
+        # New params replace the old ones — no duplicate W=/L= tokens left.
+        assert line.count("W=") == 1, f"duplicate W= in {line!r}"
+        assert line.count("L=") == 1, f"duplicate L= in {line!r}"
+        assert "W=10u" in line
+        assert "L=2u" in line
+        assert "W=20u" not in line
 
 
 @pytest.mark.asyncio
