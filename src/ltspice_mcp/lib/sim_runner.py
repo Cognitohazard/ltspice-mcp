@@ -139,11 +139,12 @@ class SimulationRunner(RunnerBase):
             )
             transition(job, "completed", state=state, raw_size_bytes=raw_size)
 
-    async def _kill(self, job_id: str) -> None:
+    async def kill(self, job_id: str) -> None:
         """Kill the spice process for a job without touching job status.
 
         Used by both cancel() and the tool-layer timeout path — the
-        latter wants to record status='timeout' rather than 'cancelled'.
+        latter wants to record status='timeout' rather than 'cancelled',
+        so it manages job state itself and only delegates the SIGKILL.
         """
         runner = self._runners.get(job_id)
         if runner is None:
@@ -161,7 +162,7 @@ class SimulationRunner(RunnerBase):
         self, job: SimulationJob, state: SessionState | None = None
     ) -> None:
         """Cancel a running simulation and record the cancelled state."""
-        await self._kill(job.job_id)
+        await self.kill(job.job_id)
         if job.status not in NON_TERMINAL_LIVE_STATUSES:
             # Already terminal (completion raced with cancel). Nothing to do.
             return

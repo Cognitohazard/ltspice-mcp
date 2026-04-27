@@ -207,7 +207,7 @@ async def _wait_for_completion(
         # Kill the spice process first, then record status=timeout (NOT
         # cancelled) so the user sees the real cause.
         duration = time.time() - start_time
-        await runner._kill(job.job_id)
+        await runner.kill(job.job_id)
         if job.status == "running":
             transition(job, "timeout", state=state, duration_s=duration)
 
