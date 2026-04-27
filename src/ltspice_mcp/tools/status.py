@@ -100,8 +100,17 @@ async def handle_server_status(args: ServerStatusInput, state: SessionState):
     else:
         lines.append("\n  Config file: Not found (using defaults)")
 
+    # ``state.jobs`` retains the full lifecycle (running/completed/failed/etc.)
+    # so we can answer ``check_job`` lookups after the fact. The status field
+    # here is meant for "what's the simulator doing right now" — only the
+    # in-flight statuses count.
+    _active_statuses = {"queued", "running"}
+    active_count = sum(1 for j in state.jobs.values() if j.status in _active_statuses)
+    tracked_count = len(state.jobs)
+
     lines.append("\nRuntime State:")
-    lines.append(f"  Active jobs: {len(state.jobs)}")
+    lines.append(f"  Active jobs: {active_count} (running)")
+    lines.append(f"  Tracked jobs: {tracked_count} (all statuses)")
     lines.append(f"  Cached editors: {len(state.editors)}")
     lines.append(f"  Cached results: {len(state.results)}")
     lines.append(f"  Loaded libraries: {len(state.libraries)}")
@@ -120,7 +129,8 @@ async def handle_server_status(args: ServerStatusInput, state: SessionState):
         },
         "allowed_paths": allowed_paths_list,
         "runtime": {
-            "active_jobs": len(state.jobs),
+            "active_jobs": active_count,
+            "tracked_jobs": tracked_count,
             "cached_editors": len(state.editors),
             "cached_results": len(state.results),
             "loaded_libraries": len(state.libraries),

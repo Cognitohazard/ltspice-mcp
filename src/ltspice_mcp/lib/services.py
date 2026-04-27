@@ -185,14 +185,29 @@ def load_raw(raw_path: Path, state: SessionState) -> RawRead:
         ) from e
 
 
-def validate_signal(raw: RawRead, signal: str) -> None:
-    """Validate that a signal exists in a raw result."""
+def validate_signal(raw: RawRead, signal: str) -> str:
+    """Validate that a signal exists in a raw result and return the canonical trace name.
+
+    Lookup is case-insensitive: SPICE node names are case-insensitive per
+    SPICE conventions, but spicelib preserves the case the simulator wrote.
+    LTspice writes ``V(out)`` for transient/AC/DC sweep raws but ``v(onoise)``
+    for ``.NOISE`` raws — case-sensitive match would reject the user's
+    ``V(onoise)`` even though the data exists.
+
+    The returned canonical name is what callers must pass to ``raw.get_wave``
+    to actually read the trace.
+    """
     trace_names = raw.get_trace_names()
-    if signal not in trace_names:
-        available = ", ".join(trace_names[:10])
-        if len(trace_names) > 10:
-            available += f", ... ({len(trace_names)} total)"
-        raise ResultError(f"Signal '{signal}' not found. Available signals: {available}")
+    if signal in trace_names:
+        return signal
+    sig_lower = signal.lower()
+    for name in trace_names:
+        if name.lower() == sig_lower:
+            return name
+    available = ", ".join(trace_names[:10])
+    if len(trace_names) > 10:
+        available += f", ... ({len(trace_names)} total)"
+    raise ResultError(f"Signal '{signal}' not found. Available signals: {available}")
 
 
 def validate_step(raw: RawRead, step: int) -> None:
@@ -267,6 +282,7 @@ def get_batch_signal_data(
     raw: bool = False,
     offset: int = 0,
     limit: int = 50,
+    at: float | None = None,
 ) -> dict[str, Any]:
     """Extract structured batch signal data for aggregated or raw mode."""
     if batch_job.completed_runs == 0:
@@ -299,7 +315,7 @@ def get_batch_signal_data(
                 f"offset={offset}, limit={limit}"
             )
         paginated_run_results = {idx: batch_job.run_results[idx] for idx in paginated_indices}
-        page_stats = compute_batch_stats(paginated_run_results, signal)
+        page_stats = compute_batch_stats(paginated_run_results, signal, at=at)
         return {
             "mode": "raw",
             "job_id": batch_job.job_id,
@@ -313,7 +329,7 @@ def get_batch_signal_data(
             "limit": limit,
         }
 
-    batch_stats = compute_batch_stats(matching_run_results, signal)
+    batch_stats = compute_batch_stats(matching_run_results, signal, at=at)
     if batch_stats["run_count"] == 0:
         raise ResultError(f"Signal '{signal}' not found in any completed run")
 
@@ -322,6 +338,7 @@ def get_batch_signal_data(
         "job_id": batch_job.job_id,
         "job_type": batch_job.job_type,
         "signal": signal,
+        "at": at,
         "run_count": batch_stats["run_count"],
         "filtered": filters is not None,
         "total_matching": total_matching,

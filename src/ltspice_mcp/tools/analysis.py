@@ -123,7 +123,7 @@ def _load_real_signal(
     raw_path = safe_path(raw_file, state)
     raw = services.load_raw(raw_path, state)
     _reject_ac(raw)
-    services.validate_signal(raw, signal)
+    signal = services.validate_signal(raw, signal)
     services.validate_step(raw, step)
     axis = np.asarray(raw.get_axis(step=step))
     if np.iscomplexobj(axis):
@@ -284,7 +284,7 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
     fmt = args.format
 
     raw = services.load_raw(raw_path, state)
-    services.validate_signal(raw, signal)
+    signal = services.validate_signal(raw, signal)
     services.validate_step(raw, step)
 
     try:
@@ -419,7 +419,7 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
         raise ResultError(f"'at' value must be finite, got {at_str!r} (parsed as {target_x})")
 
     raw = services.load_raw(raw_path, state)
-    services.validate_signal(raw, signal)
+    signal = services.validate_signal(raw, signal)
     services.validate_step(raw, step)
 
     try:
@@ -528,6 +528,28 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     raw_path = safe_path(args.raw_file, state)
     fmt = args.format
     raw = services.load_raw(raw_path, state)
+
+    sim_type = detect_sim_type(raw)
+    # ``extract_operating_point`` reads ``wave[0]`` for every trace. That's
+    # the DC bias point only for ``.OP`` (and ``.DC`` — point 0 is the
+    # sweep's starting bias). For AC/Noise it's the magnitude at the first
+    # frequency point — the "voltages" returned would be AC magnitudes
+    # (e.g. ``V(in)=1`` from an ``AC 1`` source). For Transient it's t=0
+    # which may include initial conditions, not the converged op-point.
+    sim_lower = sim_type.lower()
+    if "ac" in sim_lower.split() or "noise" in sim_lower:
+        raise ResultError(
+            f"Cannot extract DC operating point from {sim_type!r}: the first "
+            "point in an AC/Noise raw is the magnitude at the lowest frequency, "
+            "not the bias. Run a separate ``.OP`` analysis to capture the bias "
+            "point, or read it from the simulation .log."
+        )
+    if "transient" in sim_lower:
+        raise ResultError(
+            f"Cannot extract DC operating point from {sim_type!r}: the first "
+            "transient point is at t=0 and reflects initial conditions, not "
+            "the converged DC bias. Run a separate ``.OP`` analysis."
+        )
 
     try:
         op_data = extract_operating_point(raw)
@@ -984,15 +1006,15 @@ async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
     raw_path = safe_path(args.raw_file, state)
     raw = services.load_raw(raw_path, state)
     _reject_ac(raw)
-    services.validate_signal(raw, args.signal_a)
-    services.validate_signal(raw, args.signal_b)
+    sig_a = services.validate_signal(raw, args.signal_a)
+    sig_b = services.validate_signal(raw, args.signal_b)
     services.validate_step(raw, args.step)
 
     axis = np.asarray(raw.get_axis(step=args.step))
     if np.iscomplexobj(axis):
         axis = np.real(axis)
-    ya_full = np.asarray(raw.get_wave(args.signal_a, step=args.step))
-    yb_full = np.asarray(raw.get_wave(args.signal_b, step=args.step))
+    ya_full = np.asarray(raw.get_wave(sig_a, step=args.step))
+    yb_full = np.asarray(raw.get_wave(sig_b, step=args.step))
     if np.iscomplexobj(ya_full) or np.iscomplexobj(yb_full):
         raise ResultError(
             "Signals contain complex values; this tool requires real-valued transient data."
@@ -1204,7 +1226,7 @@ def _load_ac_signal(
             f"This tool requires AC analysis data; got {sim_type!r}. "
             "Use ltspice_signal_stats (transient) or run a .AC sweep first."
         )
-    services.validate_signal(raw, signal)
+    signal = services.validate_signal(raw, signal)
     services.validate_step(raw, step)
     axis = np.asarray(raw.get_axis(step=step))
     wave = np.asarray(raw.get_wave(signal, step=step))

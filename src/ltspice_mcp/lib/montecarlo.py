@@ -10,13 +10,35 @@ samples ``random.gauss(value, tolerance/3)`` (absolute σ instead of
 multiplicative) and uses a fresh ``random.Random()`` per call (defeats
 reproducibility). Owning the math gives us the intended
 ``value * (1 + N(0, tol/3))`` and a seeded RNG.
+
+Foundry-MC additions
+--------------------
+Beyond R/C/L value perturbation, the engine supports MOSFET-level MC the
+way commercial PDKs do it (Spectre/HSPICE/Eldo conventions):
+
+- **Process variation** — sample once per ``.MODEL`` per run; every
+  instance using that model inherits the same perturbed parameters
+  (correlated). Implemented by rewriting the ``.MODEL`` card.
+- **Mismatch (Pelgrom)** — sample once per instance per run, scaled by
+  ``σ ∝ 1/√(W·L)``. Implemented by generating per-instance variant
+  ``.MODEL`` cards inlined into the per-run netlist.
+- **``.PARAM`` deviation** — sample once per run for ``.PARAM`` directives
+  the user already wired into model cards via ``{param}`` substitution.
+
+Both relative (fractional %) and absolute (σ in source units) tolerances
+are accepted — VTH variation is naturally absolute (σ=15 mV) while KP is
+naturally relative (σ=10%).
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import math
 import random
+import re
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Literal
 
 from ltspice_mcp.lib.format import parse_spice_value
@@ -25,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 
 Distribution = Literal["uniform", "normal", "gaussian"]
+ToleranceKind = Literal["relative", "absolute"]
 
 
 # Component prefixes whose values can be perturbed without breaking
@@ -33,38 +56,723 @@ Distribution = Literal["uniform", "normal", "gaussian"]
 _PERTURBABLE_PREFIXES: frozenset[str] = frozenset({"R", "C", "L"})
 
 
+# Module-level regex constants — every helper that touches a netlist runs
+# inside the per-MC-run hot path (up to N_runs × N_instances times). We
+# compile once here and reference them; per-call ``re.compile`` is the
+# kind of thing that quietly dominates a 10000-run job.
+_RE_CONTINUATION = re.compile(r"^\s*\+")
+_RE_MODEL_DECL = re.compile(r"^\s*\.model\s+(\S+)\b", re.IGNORECASE)
+_RE_MODEL_RENAME = re.compile(r"^(\s*\.model\s+)\S+", re.IGNORECASE)
+# ``.END``, ``.ENDS``, and ``.ENDC`` all start with ``.end`` — caller
+# checks the next char to disambiguate.
+_RE_END_DIRECTIVE = re.compile(r"^\s*\.end\b", re.IGNORECASE)
+_RE_KEY_VALUE = re.compile(r"(\w+)\s*=\s*([^\s)\,]+)")
+_RE_MOSFET_INSTANCE = re.compile(
+    r"^\s*(M\w+)\s+(.*)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+# Per-key regex caches — keyed by the param/ref name so we don't rebuild
+# the same pattern every time the runner loop hits the same instance.
+@lru_cache(maxsize=256)
+def _re_param_assign(param: str) -> re.Pattern[str]:
+    """``\\bPARAM\\s*=\\s*<token>``, case-insensitive."""
+    return re.compile(
+        rf"\b({re.escape(param)})\s*=\s*([^\s)\,]+)",
+        re.IGNORECASE,
+    )
+
+
+@lru_cache(maxsize=256)
+def _re_param_directive(name: str) -> re.Pattern[str]:
+    """``^.PARAM <name>=<token>`` (multiline)."""
+    return re.compile(
+        rf"^(\s*\.param\s+){re.escape(name)}(\s*=\s*)([^\s\n]+)",
+        re.IGNORECASE | re.MULTILINE,
+    )
+
+
+@lru_cache(maxsize=256)
+def _re_instance_line(ref: str) -> re.Pattern[str]:
+    """``^<ref> <rest>`` (multiline) — used by rewrite_instance_model."""
+    return re.compile(
+        rf"^(\s*{re.escape(ref)})(\s+)(.*)$",
+        re.IGNORECASE | re.MULTILINE,
+    )
+
+
+@lru_cache(maxsize=256)
+def _re_param_value_in_blob(key: str) -> re.Pattern[str]:
+    """``\\b<KEY>\\s*=\\s*<token>`` for mining W=/L= off an instance line."""
+    return re.compile(rf"\b{re.escape(key)}\s*=\s*([^\s]+)", re.IGNORECASE)
+
+
+@lru_cache(maxsize=64)
+def _re_param_nominal(name: str) -> re.Pattern[str]:
+    """``^.PARAM <name>=<token>`` for nominal extraction (read-only)."""
+    return re.compile(
+        rf"^\s*\.param\s+{re.escape(name)}\s*=\s*([^\s\n]+)",
+        re.IGNORECASE | re.MULTILINE,
+    )
+
+
 @dataclass(frozen=True)
 class ToleranceSpec:
-    """Tolerance + distribution for one component."""
+    """Tolerance + distribution for one perturbation source.
+
+    ``tolerance`` is interpreted by ``kind``:
+
+    - ``relative`` (default): fraction of the nominal — ``σ = nominal·tol/3``
+      for normal, ``±tol·nominal`` half-range for uniform. Matches the
+      original R/C/L semantics and LTspice's ``ntol`` macro.
+    - ``absolute``: σ (for normal) or half-range (for uniform) **in the
+      source units** of whatever's being perturbed. Foundry PDKs spec VTH
+      mismatch this way (σ_VTH = 15 mV, not 5%).
+
+    Both forms produce additive offsets internally; the application site
+    decides whether to add them to a nominal (e.g. ``VTO + ΔVTH``) or
+    multiply (``RD * (1 + ΔR/R)``).
+    """
 
     tolerance: float
-    distribution: Distribution
+    distribution: Distribution = "normal"
+    kind: ToleranceKind = "relative"
 
 
 class MCSampler:
-    """Per-run value perturbation with optional seed for reproducibility."""
+    """Per-run value perturbation with optional seed for reproducibility.
+
+    Streams
+    -------
+    Each perturbation source (R/C/L value, per-.MODEL params, per-instance
+    mismatch, .PARAM) draws from its own seeded sub-stream. Adding or
+    removing a source does NOT shift the sample sequence of unrelated
+    sources — so adding mismatch on M5 doesn't change R1's perturbation
+    history. Sub-streams are derived deterministically from the global
+    seed and a string key (sha256-based, stable across Python versions).
+
+    Pass ``stream`` to ``sample`` / ``sample_offset`` to draw from a
+    specific stream; omit it to use the default ``"_default"`` stream
+    (preserves legacy single-stream behaviour for code that doesn't care).
+
+    Truncation
+    ----------
+    Normal samples are truncated at ±tolerance (= ±3σ by the convention
+    we ship). Foundry MC default is 3σ truncation; without it the rare
+    tail samples produce ``Vov < 0`` instances that break otherwise-valid
+    designs in ways that don't reflect real silicon. Rejection sampling
+    has ~0.27% reject rate at 3σ — negligible.
+    """
 
     def __init__(self, seed: int | None = None):
-        self._rng = random.Random(seed) if seed is not None else random.Random()
+        self._seed = seed
+        # Default stream — used when callers don't pass an explicit key.
+        # Backward-compatible with the previous single-RNG behaviour
+        # (sample(..., stream="_default") matches sample(...) of the old code
+        # for a given seed and call ordering).
+        self._streams: dict[str, random.Random] = {}
 
-    def sample(self, value: float, spec: ToleranceSpec) -> float:
-        """Return a perturbed value for one nominal/tolerance pair.
+    def stream(self, key: str = "_default") -> random.Random:
+        """Return a per-key sub-stream RNG.
 
-        - ``normal`` / ``gaussian``: ``value * (1 + N(0, tolerance/3))``.
-          ±tolerance corresponds to ±3σ, matching LTspice's ``ntol`` macro.
-        - ``uniform``: ``U(value*(1-tol), value*(1+tol))``.
+        Sub-streams are seeded from the global seed mixed with a stable
+        hash of ``key`` — adding a new stream key cannot perturb existing
+        streams. When the global seed is ``None`` (fresh-entropy mode)
+        each stream just gets its own ``random.Random()`` instance, still
+        independent.
         """
-        dist = spec.distribution.lower()
-        if dist in ("normal", "gaussian"):
-            return value * (1.0 + self._rng.gauss(0.0, spec.tolerance / 3.0))
-        if dist == "uniform":
-            return self._rng.uniform(
-                value * (1.0 - spec.tolerance),
-                value * (1.0 + spec.tolerance),
+        existing = self._streams.get(key)
+        if existing is not None:
+            return existing
+        if self._seed is None:
+            rng = random.Random()
+        else:
+            # SHA256 of "seed:key" → stable across Python versions and
+            # platforms (unlike `hash()`, which is randomised). 64-bit
+            # slice is enough entropy for Mersenne Twister seeding.
+            digest = hashlib.sha256(f"{self._seed}:{key}".encode()).digest()
+            sub_seed = int.from_bytes(digest[:8], "big")
+            rng = random.Random(sub_seed)
+        self._streams[key] = rng
+        return rng
+
+    def derive(self, namespace: str) -> MCSampler:
+        """Return a child sampler whose seed is deterministically derived.
+
+        Used by the runner to scope per-run RNG state: each MC iteration
+        gets its own ``MCSampler`` derived from ``"run<N>"``. Helpers
+        within an iteration then use short stream keys (``"rcl:R1"``,
+        ``"model:NMOS1.VTO"``) without worrying about cross-run collision.
+
+        With a ``None`` parent seed (fresh entropy), the child also gets
+        fresh entropy — namespacing is meaningless when the parent isn't
+        deterministic.
+        """
+        if self._seed is None:
+            return MCSampler(seed=None)
+        digest = hashlib.sha256(f"{self._seed}:{namespace}".encode()).digest()
+        child_seed = int.from_bytes(digest[:8], "big")
+        return MCSampler(seed=child_seed)
+
+    def sample(
+        self,
+        value: float,
+        spec: ToleranceSpec,
+        stream: str = "_default",
+    ) -> float:
+        """Return a perturbed value for an R/C/L-style nominal/tolerance pair.
+
+        - ``normal`` / ``gaussian``: ``value * (1 + N(0, tolerance/3))``,
+          truncated to ``±tolerance`` of the multiplier (= ±3σ).
+        - ``uniform``: ``U(value*(1-tol), value*(1+tol))``.
+
+        Always interpreted as multiplicative on ``value`` regardless of
+        ``spec.kind``. For per-parameter (model card or ``.PARAM``)
+        sampling that needs absolute support, use ``sample_offset``.
+        """
+        offset = _draw_zero_centred(self.stream(stream), spec.tolerance, spec.distribution)
+        return value * (1.0 + offset)
+
+    def sample_offset(
+        self,
+        nominal: float,
+        spec: ToleranceSpec,
+        stream: str = "_default",
+    ) -> float:
+        """Sample an additive perturbation for a parameter (model param, .PARAM).
+
+        Returns the *delta*. Caller adds it to the nominal.
+
+        - ``relative``: σ = ``|nominal| * tolerance / 3``; bounded by
+          ``±|nominal|*tolerance``.
+        - ``absolute``: σ = ``tolerance / 3``; bounded by ``±tolerance``.
+        """
+        scale = abs(nominal) * spec.tolerance if spec.kind == "relative" else spec.tolerance
+        return _draw_zero_centred(self.stream(stream), scale, spec.distribution)
+
+
+def _draw_zero_centred(
+    rng: random.Random,
+    bound: float,
+    distribution: Distribution,
+) -> float:
+    """Sample a zero-mean offset of half-range ``bound`` from ``distribution``.
+
+    ``normal`` / ``gaussian``: truncated Gaussian with σ=bound/3 (so
+    ±bound = ±3σ, matching the foundry convention).
+    ``uniform``: ``U(-bound, +bound)``.
+
+    Shared by ``MCSampler.sample`` (which multiplies by the nominal
+    afterwards) and ``MCSampler.sample_offset`` (which returns the raw
+    delta) so the dist dispatch lives in one place.
+    """
+    dist = distribution.lower()
+    if dist in ("normal", "gaussian"):
+        return _truncated_gauss(rng, bound / 3.0, bound)
+    if dist == "uniform":
+        return rng.uniform(-bound, +bound)
+    raise ValueError(
+        f"Unknown distribution {dist!r}; expected 'uniform' or 'normal'"
+    )
+
+
+# Module-level so it's reachable from tests; not part of the public surface.
+_MAX_TRUNCATION_REJECTS = 1000
+
+
+def _truncated_gauss(rng: random.Random, sigma: float, bound: float) -> float:
+    """Sample from N(0, sigma) truncated to [-bound, +bound] via rejection.
+
+    For the typical ±3σ bound (which is what our tolerance convention
+    implies) the reject rate is ~0.27% — rejection sampling is fine. The
+    1000-iteration cap is a safety net for callers that pass pathological
+    bounds (bound much smaller than sigma); in that case we fall through
+    to a clamped sample so we never spin.
+    """
+    if sigma == 0.0:
+        return 0.0
+    abs_bound = abs(bound)
+    for _ in range(_MAX_TRUNCATION_REJECTS):
+        x = rng.gauss(0.0, sigma)
+        if -abs_bound <= x <= abs_bound:
+            return x
+    # Pathological case: bound << sigma. Clamp to ±bound so the function
+    # is still total. This branch is unreachable for sane inputs.
+    return max(-abs_bound, min(abs_bound, rng.gauss(0.0, sigma)))
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Process variation — per-.MODEL parameter perturbation
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ModelTolerance:
+    """Process-variation rule for one ``.MODEL`` card.
+
+    Per Monte Carlo run, each parameter is sampled once and the perturbed
+    value is written back to the ``.MODEL`` line; every transistor instance
+    using this model inherits the same perturbation (foundry-correlated
+    process variation).
+    """
+
+    model_name: str
+    parameters: dict[str, ToleranceSpec]
+
+
+def sample_model_perturbation(
+    sampler: MCSampler,
+    model_name: str,
+    nominals: dict[str, float],
+    tolerances: dict[str, ToleranceSpec],
+) -> dict[str, float]:
+    """Sample one run's perturbed parameters for one ``.MODEL`` card.
+
+    For each ``param`` in ``tolerances`` that has a numeric nominal in
+    ``nominals``, returns ``perturbed_value = nominal + sample_offset(...)``.
+    Params absent from ``nominals`` are silently skipped — the model card
+    didn't declare them, so we shouldn't invent them.
+
+    Each ``(model, param)`` pair draws from its own sub-stream
+    (``"model:<MODEL>.<PARAM>"``) so adding a new perturbed parameter
+    doesn't shift the sample sequence of the existing ones.
+    """
+    perturbed: dict[str, float] = {}
+    for param, spec in tolerances.items():
+        nominal = nominals.get(param)
+        if nominal is None:
+            logger.debug(
+                "MC: model %s param %s has no nominal in card; skipping perturbation",
+                model_name, param,
             )
-        raise ValueError(
-            f"Unknown distribution {dist!r}; expected 'uniform' or 'normal'"
+            continue
+        delta = sampler.sample_offset(
+            nominal, spec, stream=f"model:{model_name}.{param}"
         )
+        perturbed[param] = nominal + delta
+    return perturbed
+
+
+def _locate_model_card(
+    lines: list[str], model_name: str
+) -> tuple[int, int] | None:
+    """Find ``[start, end)`` line indices for a ``.MODEL <name>`` card.
+
+    Returns the half-open range covering the directive line plus any
+    continuation lines (``+`` prefix). Returns ``None`` if not found.
+    Comparison is case-insensitive (SPICE convention). Shared by
+    ``perturb_model_in_text`` and ``extract_model_card``.
+    """
+    target_lower = model_name.lower()
+    n = len(lines)
+    for i in range(n):
+        m = _RE_MODEL_DECL.match(lines[i])
+        if not m or m.group(1).lower() != target_lower:
+            continue
+        end = i + 1
+        while end < n and _RE_CONTINUATION.match(lines[end]):
+            end += 1
+        return i, end
+    return None
+
+
+def perturb_model_in_text(
+    netlist_text: str,
+    model_name: str,
+    perturbations: dict[str, float],
+) -> str:
+    """Rewrite the ``.MODEL <model_name> ...`` card to apply parameter overrides.
+
+    Existing ``param=value`` tokens are replaced in place; new params are
+    appended inside the trailing ``)``. Continuation lines (``+`` prefix)
+    are merged for editing then split back. Case-insensitive on the
+    directive and parameter names.
+
+    Raises ``ValueError`` if ``model_name`` isn't found.
+    """
+    if not perturbations:
+        return netlist_text
+
+    lines = netlist_text.splitlines(keepends=True)
+    located = _locate_model_card(lines, model_name)
+    if located is None:
+        raise ValueError(f".MODEL {model_name!r} not found in netlist")
+
+    start, end = located
+    merged = "".join(lines[start:end])
+    rewritten = _rewrite_model_card(merged, perturbations)
+    new_lines = rewritten.splitlines(keepends=True)
+    return "".join(lines[:start] + new_lines + lines[end:])
+
+
+def _rewrite_model_card(card_text: str, perturbations: dict[str, float]) -> str:
+    """Rewrite one merged ``.MODEL`` card (continuation lines joined) in place.
+
+    Existing ``KEY=VALUE`` tokens are replaced via cached per-key regex.
+    Tokens absent from the card get appended inside the trailing ``)``.
+    """
+    text = card_text
+    trailing_nl = ""
+    if text.endswith("\n"):
+        trailing_nl = "\n"
+        text = text[:-1]
+
+    remaining = dict(perturbations)
+    for param, new_value in list(perturbations.items()):
+        replacement = f"{param}={format_value(new_value)}"
+        text, count = _re_param_assign(param).subn(replacement, text, count=1)
+        if count > 0:
+            remaining.pop(param, None)
+
+    if remaining:
+        appended = " ".join(
+            f"{p}={format_value(v)}" for p, v in remaining.items()
+        )
+        if text.rstrip().endswith(")"):
+            stripped = text.rstrip()
+            tail = text[len(stripped):]
+            text = stripped[:-1] + " " + appended + ")" + tail
+        else:
+            text = text + " " + appended
+
+    return text + trailing_nl
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Mismatch (Pelgrom-scaled per-instance)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MismatchRule:
+    """Pelgrom-law mismatch coefficients for one device prefix.
+
+    σ(ΔVTH) = AVT / √(W·L) — typical 65nm: 3-5 mV·µm; 28nm: 1-2 mV·µm.
+    σ(ΔK)/K = AK  / √(W·L) — typical 1-2 %·µm.
+
+    Units: ``AVT`` in volts·µm (so ``3e-3`` for 3 mV·µm), ``AK`` as the
+    K-mismatch fraction-µm coefficient (so ``0.02`` for 2 %·µm).
+
+    ``vth_param`` / ``k_param`` name which model-card parameters carry the
+    threshold and current-factor — defaults match Level-1 SPICE
+    (``VTO``/``KP``); BSIM users should pass ``VTH0``/``U0``.
+
+    ``min_wl_um2`` guards against division-by-zero / runaway σ for
+    ill-defined instances (W·L < this in µm² uses this floor).
+    """
+
+    prefix: str
+    avt: float = 0.0
+    ak: float = 0.0
+    distribution: Distribution = "normal"
+    vth_param: str = "VTO"
+    k_param: str = "KP"
+    min_wl_um2: float = 1e-3
+
+
+@dataclass(frozen=True)
+class InstanceGeometry:
+    """Geometric inputs needed to compute Pelgrom σ for one transistor."""
+
+    ref: str
+    model_name: str
+    width_m: float
+    length_m: float
+
+
+def sample_instance_mismatch(
+    sampler: MCSampler,
+    instance: InstanceGeometry,
+    rule: MismatchRule,
+) -> dict[str, float]:
+    """Sample ΔVTH and ΔK/K for one transistor instance.
+
+    Returns a dict with keys ``"dvth"`` (volts) and ``"dk_over_k"``
+    (dimensionless fraction). Either may be 0.0 if the corresponding
+    coefficient was 0. Per-instance independent given a seeded sampler.
+
+    Each ``(instance, channel)`` pair draws from its own sub-stream
+    (``"mismatch:<REF>.dvth"`` / ``"mismatch:<REF>.dk_over_k"``) so
+    adding a new transistor doesn't perturb existing ones' samples.
+    """
+    # Convert W·L to µm² for the Pelgrom denominator (coefficients given
+    # in mV·µm and %·µm conventions).
+    w_um = instance.width_m * 1e6
+    l_um = instance.length_m * 1e6
+    wl_um2 = max(w_um * l_um, rule.min_wl_um2)
+    sqrt_wl = math.sqrt(wl_um2)
+
+    dvth = 0.0
+    if rule.avt > 0.0:
+        sigma_vth = rule.avt / sqrt_wl
+        spec = ToleranceSpec(
+            tolerance=3.0 * sigma_vth,  # sample_offset divides by 3
+            distribution=rule.distribution,
+            kind="absolute",
+        )
+        dvth = sampler.sample_offset(
+            0.0, spec, stream=f"mismatch:{instance.ref}.dvth"
+        )
+
+    dk_over_k = 0.0
+    if rule.ak > 0.0:
+        sigma_dk_over_k = rule.ak / sqrt_wl
+        spec = ToleranceSpec(
+            tolerance=3.0 * sigma_dk_over_k,
+            distribution=rule.distribution,
+            kind="absolute",
+        )
+        dk_over_k = sampler.sample_offset(
+            0.0, spec, stream=f"mismatch:{instance.ref}.dk_over_k"
+        )
+
+    return {"dvth": dvth, "dk_over_k": dk_over_k}
+
+
+def variant_model_name(base_model: str, instance_ref: str) -> str:
+    """Generate a stable variant model name for a per-instance card.
+
+    Foundry preprocessors emit names like ``NMOS_lvt_M1`` — a base-derived,
+    instance-derived flat string. Avoid characters SPICE parsers reject
+    (e.g. ``.``).
+    """
+    safe_ref = instance_ref.replace(".", "_")
+    return f"{base_model}__{safe_ref}"
+
+
+def render_variant_model_card(
+    base_card: str,
+    variant_name: str,
+    overrides: dict[str, float],
+) -> str:
+    """Produce a new ``.MODEL`` card cloning ``base_card`` with overrides.
+
+    ``base_card`` is the merged text of an existing ``.MODEL`` card (after
+    process perturbation, if any). Replaces the model name with
+    ``variant_name`` and applies the parameter overrides via the same
+    rewriter the process step uses.
+    """
+    renamed = _RE_MODEL_RENAME.sub(rf"\g<1>{variant_name}", base_card, count=1)
+    if overrides:
+        renamed = _rewrite_model_card(renamed, overrides)
+    return renamed
+
+
+def extract_model_card(netlist_text: str, model_name: str) -> str | None:
+    """Return the merged text of a ``.MODEL`` card by name, or None."""
+    lines = netlist_text.splitlines(keepends=True)
+    located = _locate_model_card(lines, model_name)
+    if located is None:
+        return None
+    start, end = located
+    return "".join(lines[start:end])
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: .PARAM perturbation
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ParamTolerance:
+    """Perturbation rule for one ``.PARAM`` directive.
+
+    Sampled once per Monte Carlo run. The user is expected to wire the
+    ``.PARAM`` into model/component cards via ``{param}`` substitution
+    (e.g. ``.MODEL NMOS1 NMOS(VTO={vto_n})`` with ``.PARAM vto_n=0.7``);
+    we just rewrite the ``.PARAM`` value per run.
+    """
+
+    name: str
+    spec: ToleranceSpec
+
+
+def perturb_param_in_text(
+    netlist_text: str,
+    name: str,
+    new_value: float,
+) -> str:
+    """Rewrite ``.PARAM <name>=<value>`` in place.
+
+    Handles both ``.PARAM name=val`` and ``.PARAM name = val`` forms and is
+    case-insensitive on the directive and parameter name. Raises
+    ``ValueError`` if no matching ``.PARAM`` is present.
+    """
+    new_text, count = _re_param_directive(name).subn(
+        lambda m: f"{m.group(1)}{name}{m.group(2)}{format_value(new_value)}",
+        netlist_text,
+        count=1,
+    )
+    if count == 0:
+        raise ValueError(f".PARAM {name!r} not found in netlist")
+    return new_text
+
+
+# ---------------------------------------------------------------------------
+# Netlist parsing helpers — extract nominals for the various MC phases
+# ---------------------------------------------------------------------------
+
+
+def parse_model_params(card_text: str) -> dict[str, float]:
+    """Parse all ``KEY=VALUE`` tokens from a ``.MODEL`` card into a float dict.
+
+    Continuation lines must already be merged. Skips tokens whose value
+    can't be parsed via ``parse_spice_value`` (parametric expressions like
+    ``{vto_n}`` or behavioral). Keys are upper-cased per SPICE convention.
+    """
+    out: dict[str, float] = {}
+    for m in _RE_KEY_VALUE.finditer(card_text):
+        parsed = parse_value(m.group(2))
+        if parsed is None:
+            continue
+        out[m.group(1).upper()] = parsed
+    return out
+
+
+def inject_card_before_end(netlist_text: str, card: str) -> str:
+    """Insert a ``.MODEL`` card (or any directive block) just before ``.END``.
+
+    SPICE simulators reject definitions after ``.END`` — for variant model
+    cards we want them visible to the rest of the deck. If no ``.END`` is
+    present, append at the end (with leading newline).
+    """
+    lines = netlist_text.splitlines(keepends=True)
+    insert_at = None
+    for idx, line in enumerate(lines):
+        if _RE_END_DIRECTIVE.match(line):
+            # Stop at the first top-level ``.END`` (we'd be wrong on
+            # ``.ENDS``-only netlists, but those don't simulate anyway).
+            stripped = line.strip().lower()
+            if stripped == ".end" or stripped.startswith(".end "):
+                insert_at = idx
+                break
+    if not card.endswith("\n"):
+        card = card + "\n"
+    if insert_at is None:
+        sep = "" if netlist_text.endswith("\n") or not netlist_text else "\n"
+        return netlist_text + sep + card
+    new_lines = lines[:insert_at] + [card] + lines[insert_at:]
+    return "".join(new_lines)
+
+
+def rewrite_instance_model(
+    netlist_text: str,
+    instance_ref: str,
+    new_model_name: str,
+) -> str:
+    """Replace the model token on a transistor (M/Q/J) instance line.
+
+    The instance line is matched by reference (case-insensitive). After
+    the nodes (3 for M/Q/J, 4 for M with bulk), the next non-numeric
+    token is the model name — we replace just that token. Any trailing
+    parameters (``W=10u L=1u m=2``) are preserved verbatim. Raises
+    ``ValueError`` if the instance isn't found.
+    """
+    m = _re_instance_line(instance_ref).search(netlist_text)
+    if not m:
+        raise ValueError(f"Instance {instance_ref!r} not found in netlist")
+
+    head = m.group(1) + m.group(2)
+    tail = m.group(3)
+
+    tokens = tail.split()
+    # Find the first token without ``=`` (the model name); it's preceded
+    # by node names (which also lack ``=``) — but those are pure SPICE
+    # node identifiers without numeric values. The simplest robust heuristic:
+    # the model name is the LAST token before any ``KEY=VALUE`` token, OR
+    # the last token if no params follow.
+    last_no_eq = None
+    for i, t in enumerate(tokens):
+        if "=" in t:
+            break
+        last_no_eq = i
+    if last_no_eq is None:
+        raise ValueError(
+            f"Instance {instance_ref!r} has no model token to rewrite: {tail!r}"
+        )
+
+    tokens[last_no_eq] = new_model_name
+    new_tail = " ".join(tokens)
+    # Preserve trailing newline if the original line had one.
+    line_end = "\n" if tail.endswith("\n") or "\n" in tail else ""
+    new_line = head + new_tail + line_end
+
+    # Rebuild full text: replace just the matched line.
+    start = m.start()
+    end = m.end()
+    return netlist_text[:start] + new_line + netlist_text[end:]
+
+
+def extract_mosfet_instances(netlist_text: str) -> list[InstanceGeometry]:
+    """Find every ``Mxxx`` instance and parse its model name + W/L geometry.
+
+    W/L are read from the ``W=`` / ``L=`` parameter tokens on the instance
+    line, parsed via ``parse_spice_value`` so engineering suffixes
+    (``10u``, ``180n``) work. Instances missing W or L are skipped with a
+    debug log — Pelgrom σ is undefined without geometry.
+
+    Subcircuit-instantiated transistors (``X1.M1``) are not visible at the
+    top level and so are not returned; only direct ``Mxxx`` lines.
+    """
+    instances: list[InstanceGeometry] = []
+    for m in _RE_MOSFET_INSTANCE.finditer(netlist_text):
+        ref = m.group(1)
+        rest = m.group(2)
+        tokens = rest.split()
+        # Find the model token — last non-= token before any "=" token.
+        last_no_eq_idx = None
+        for i, t in enumerate(tokens):
+            if "=" in t:
+                break
+            last_no_eq_idx = i
+        if last_no_eq_idx is None:
+            continue
+        model_name = tokens[last_no_eq_idx]
+        # Mine W=, L= from the params tail
+        params_text = " ".join(tokens[last_no_eq_idx + 1 :])
+        w = _find_param_value(params_text, "W")
+        l_val = _find_param_value(params_text, "L")
+        if w is None or l_val is None:
+            logger.debug(
+                "MC: instance %s has no W/L parameter, skipping mismatch (params=%r)",
+                ref, params_text,
+            )
+            continue
+        instances.append(
+            InstanceGeometry(
+                ref=ref, model_name=model_name, width_m=w, length_m=l_val
+            )
+        )
+    return instances
+
+
+def _find_param_value(params_text: str, key: str) -> float | None:
+    """Find ``KEY=VALUE`` in a parameter blob and parse VALUE as float."""
+    m = _re_param_value_in_blob(key).search(params_text)
+    return parse_value(m.group(1)) if m else None
+
+
+def find_mismatch_rule(
+    instance_ref: str,
+    rules: list[MismatchRule],
+) -> MismatchRule | None:
+    """Return the first rule whose prefix matches the instance ref."""
+    for rule in rules:
+        if instance_ref.upper().startswith(rule.prefix.upper()):
+            return rule
+    return None
+
+
+def parse_param_nominal(netlist_text: str, name: str) -> float | None:
+    """Read the nominal value from ``.PARAM <name>=<value>``.
+
+    Returns ``None`` when the param is absent or its value isn't a plain
+    number (e.g. expressions like ``{2*Rd}``). Phase 3 silently skips such
+    params — they're already user-side expressions.
+    """
+    m = _re_param_nominal(name).search(netlist_text)
+    return parse_value(m.group(1)) if m else None
 
 
 def expand_tolerances(

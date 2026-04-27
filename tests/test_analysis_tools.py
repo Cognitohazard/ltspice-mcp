@@ -267,6 +267,47 @@ class TestGetOperatingPoint:
         assert "V(out)" in text
         assert "I(R1)" in text
 
+    async def test_rejects_ac_raw(self, state_no_sim: SessionState, work_dir: Path):
+        """``extract_operating_point`` reads ``wave[0]`` for every trace.
+        On an AC raw that's the magnitude at the first frequency, not a
+        DC bias. We used to silently return those AC magnitudes labeled
+        as voltages (``V(in)=1`` from an ``AC 1`` source) — now we reject."""
+        from ltspice_mcp.errors import ResultError
+
+        raw_file = work_dir / "ac.raw"
+        raw = _make_raw_mock(
+            plotname="AC Analysis",
+            trace_names=["V(out)", "V(in)"],
+            waves={
+                "V(out)": np.array([0.5 + 0j, 0.4 + 0.1j]),
+                "V(in)": np.array([1.0 + 0j, 1.0 + 0j]),
+            },
+            axis=np.array([1.0, 10.0]),
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        with pytest.raises(ResultError, match="AC/Noise"):
+            await handle_operating_point(
+                OperatingPointInput(raw_file=raw_file.name), state_no_sim
+            )
+
+    async def test_rejects_transient_raw(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        from ltspice_mcp.errors import ResultError
+
+        raw_file = work_dir / "tran.raw"
+        raw = _make_raw_mock(
+            plotname="Transient Analysis",
+            trace_names=["V(out)"],
+            waves={"V(out)": np.array([0.0, 1.0, 2.0])},
+            axis=np.array([0.0, 1e-6, 2e-6]),
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        with pytest.raises(ResultError, match="t=0"):
+            await handle_operating_point(
+                OperatingPointInput(raw_file=raw_file.name), state_no_sim
+            )
+
 
 @pytest.mark.asyncio
 class TestGetSimulationSummary:
