@@ -10,9 +10,7 @@ class LTSpiceMCPError(Exception):
     dispatch layer as ``structuredContent`` on the error response.
     """
 
-    def __init__(
-        self, *args: object, suggestions: list[dict[str, Any]] | None = None
-    ) -> None:
+    def __init__(self, *args: object, suggestions: list[dict[str, Any]] | None = None) -> None:
         super().__init__(*args)
         self.suggestions: list[dict[str, Any]] = suggestions or []
 

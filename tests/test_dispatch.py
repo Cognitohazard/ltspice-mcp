@@ -41,9 +41,7 @@ class TestDispatchTable:
                 registered.input_model.model_validate({})
             except ValidationError:
                 continue
-            raise AssertionError(
-                f"{name} accepted empty args despite required fields {required}"
-            )
+            raise AssertionError(f"{name} accepted empty args despite required fields {required}")
 
 
 class TestToolSchemas:
@@ -86,7 +84,9 @@ class TestToolProfiles:
         """Unrecognized profile name should behave like 'full'."""
         full_defs, _ = get_tools_for_profile("full")
         other_defs, _ = get_tools_for_profile("nonexistent")
-        assert {tool_def.name for tool_def in full_defs} == {tool_def.name for tool_def in other_defs}
+        assert {tool_def.name for tool_def in full_defs} == {
+            tool_def.name for tool_def in other_defs
+        }
 
     def test_filtered_tools_not_in_agentic(self):
         """Verify specific tools that should NOT be in agentic profile."""

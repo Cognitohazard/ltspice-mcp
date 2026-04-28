@@ -307,9 +307,7 @@ class TestPinDirection:
     def test_rotation_flips_direction(self):
         """A pin on the right edge under R0 should report left under R180."""
         d_r0 = _pin_direction(90, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R0")
-        d_r180 = _pin_direction(
-            90, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R180"
-        )
+        d_r180 = _pin_direction(90, 40, self.BBOX_X, self.BBOX_Y, self.BBOX_W, self.BBOX_H, "R180")
         assert d_r0 == "right"
         assert d_r180 == "left"
 

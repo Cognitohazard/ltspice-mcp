@@ -25,6 +25,4 @@ class TestSimulationWithoutSimulator:
 
     async def test_run_path_escape(self, state_no_sim: SessionState):
         with pytest.raises(SimulationError):
-            await handle_run_simulation(
-                RunSimulationInput(netlist="/etc/passwd"), state_no_sim
-            )
+            await handle_run_simulation(RunSimulationInput(netlist="/etc/passwd"), state_no_sim)
