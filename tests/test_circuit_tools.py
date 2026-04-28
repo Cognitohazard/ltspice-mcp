@@ -9,11 +9,14 @@ from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.circuit import (
     handle_create_netlist,
+    handle_create_schematic,
+    handle_diff_circuit,
     handle_edit_directive,
     handle_list_components,
     handle_parameter,
     handle_read_circuit,
     handle_set_component_value,
+    handle_validate_netlist,
 )
 
 
@@ -57,9 +60,7 @@ class TestCreateNetlist:
                 state_no_sim,
             )
 
-    async def test_overwrite_replaces_existing(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
+    async def test_overwrite_replaces_existing(self, state_no_sim: SessionState, work_dir: Path):
         """``overwrite=True`` skips the FileExistsError path so iterating on
         a design doesn't force read+edit roundtrips. The earlier behaviour
         (always refuse) was friction during early stress-testing."""
@@ -144,6 +145,52 @@ class TestListComponents:
                 state_no_sim,
             )
 
+    async def test_b_source_does_not_crash(self, state_no_sim: SessionState, work_dir: Path):
+        """Bug K: a behavioural source whose value has commas inside ``if(...)``
+        defeats spicelib's component-line regex. ``list_components`` used to
+        return ``Internal error in ltspice_list_components``; we now degrade
+        the offending component to ``"<unparseable>"`` and finish the listing."""
+        cir = work_dir / "with_b.cir"
+        cir.write_text(
+            "* B-source torture test\n"
+            "R1 a b 1k\n"
+            "B1 amp 0 V = if(3.5*V(vp)>10, 10, if(3.5*V(vp)<-10, -10, 3.5*V(vp)))\n"
+            "C1 b 0 100n\n"
+            ".tran 0 1m\n"
+            ".end\n"
+        )
+        result = await handle_list_components({"path": cir.name}, state_no_sim)
+        text = result.content[0].text
+        # All three components should appear; the B-source's value gets
+        # the unparseable placeholder rather than aborting the whole call.
+        assert "R1" in text
+        assert "B1" in text
+        assert "C1" in text
+        assert "<unparseable>" in text
+
+
+@pytest.mark.asyncio
+class TestReadCircuitDegrades:
+    async def test_b_source_degrades_gracefully(self, state_no_sim: SessionState, work_dir: Path):
+        """Same bug surfaced through ``read_circuit`` (which iterates every
+        component, not just the prefix-filtered subset)."""
+        from ltspice_mcp.tools.circuit import handle_read_circuit
+
+        cir = work_dir / "with_b.cir"
+        cir.write_text(
+            "* B-source torture test\n"
+            "R1 a b 1k\n"
+            "B1 amp 0 V = if(3.5*V(vp)>10, 10, if(3.5*V(vp)<-10, -10, 3.5*V(vp)))\n"
+            ".tran 0 1m\n"
+            ".end\n"
+        )
+        result = await handle_read_circuit({"path": cir.name, "format": "json"}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        refs = {c["reference"] for c in data["components"]}
+        assert "R1" in refs
+        assert "B1" in refs
+
 
 @pytest.mark.asyncio
 class TestParameter:
@@ -218,6 +265,50 @@ class TestSetComponentValue:
                 state_no_sim,
             )
 
+    async def test_batch_with_unknown_ref_is_atomic(
+        self, state_no_sim: SessionState, sample_netlist: Path
+    ):
+        """Bug J: a batch ``set_component_value`` with one missing ref used
+        to crash AFTER applying earlier writes, leaving the netlist
+        half-modified. Validation must happen before any write."""
+        before = sample_netlist.read_bytes()  # noqa: ASYNC240
+        with pytest.raises(NetlistError, match="not found"):
+            await handle_set_component_value(
+                {
+                    "path": sample_netlist.name,
+                    "values": {"R1": "20k", "C1": "47n", "RX": "1k"},
+                },
+                state_no_sim,
+            )
+        # Nothing should have been written.
+        assert sample_netlist.read_bytes() == before  # noqa: ASYNC240
+
+    async def test_value_with_whitespace_rejected(
+        self, state_no_sim: SessionState, sample_netlist: Path
+    ):
+        """Bug L: ``set_component_value(R1, "hello world")`` used to write a
+        space-separated value into the netlist line, turning ``hello`` into
+        a phantom node and ``world`` into a stray token — irrecoverable
+        without manual editing."""
+        with pytest.raises(NetlistError, match="whitespace"):
+            await handle_set_component_value(
+                {"path": sample_netlist.name, "reference": "R1", "value": "hello world"},
+                state_no_sim,
+            )
+
+    async def test_brace_expression_allowed(
+        self, state_no_sim: SessionState, sample_netlist: Path
+    ):
+        """SPICE expressions in braces include spaces and must NOT be rejected."""
+        await handle_set_component_value(
+            {
+                "path": sample_netlist.name,
+                "reference": "R1",
+                "value": "{ 1k * 2 }",
+            },
+            state_no_sim,
+        )
+
     async def test_mosfet_value_with_params_replaces_both(
         self, state_no_sim: SessionState, work_dir: Path
     ):
@@ -277,3 +368,96 @@ class TestEditDirective:
             state_no_sim,
         )
         assert "Removed" in result.content[0].text
+
+
+@pytest.mark.asyncio
+class TestCreateSchematic:
+    async def test_seeds_empty_asc(self, state_no_sim: SessionState, work_dir: Path):
+        result = await handle_create_schematic({"name": "seed"}, state_no_sim)
+        out = work_dir / "seed.asc"
+        assert out.exists()
+        body = out.read_text()
+        assert body.startswith("Version 4")
+        assert "SHEET 1 880 680" in body
+        assert "seed.asc" in result.content[0].text
+
+    async def test_custom_dimensions(self, state_no_sim: SessionState, work_dir: Path):
+        await handle_create_schematic({"name": "small", "width": 320, "height": 240}, state_no_sim)
+        body = (work_dir / "small.asc").read_text()
+        assert "SHEET 1 320 240" in body
+
+    async def test_rejects_duplicate(self, state_no_sim: SessionState, work_dir: Path):
+        await handle_create_schematic({"name": "dup"}, state_no_sim)
+        with pytest.raises(NetlistError, match="already exists"):
+            await handle_create_schematic({"name": "dup"}, state_no_sim)
+
+
+@pytest.mark.asyncio
+class TestValidateNetlist:
+    async def test_clean_netlist(self, state_no_sim: SessionState, work_dir: Path):
+        cir = work_dir / "clean.cir"
+        cir.write_text("* clean\nVin in 0 1\nR1 in 0 1k\n.tran 0 1m\n.end\n")
+        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert data["issue_count"] == 0
+
+    async def test_flags_bad_meas(self, state_no_sim: SessionState, work_dir: Path):
+        cir = work_dir / "bad.cir"
+        cir.write_text(
+            "* bad meas\nVin in 0 AC 1\nR1 in 0 1k\n.ac dec 100 1 1Meg\n"
+            ".meas ac fc WHEN vdb(out)=-3\n.end\n"
+        )
+        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert data["issue_count"] >= 1
+        assert any("vdb" in iss["directive"] for iss in data["issues"])
+
+    async def test_flags_bsource_with_commas(self, state_no_sim: SessionState, work_dir: Path):
+        cir = work_dir / "b.cir"
+        cir.write_text(
+            "* b-source\n"
+            "B1 amp 0 V = if(3.5*V(vp)>10, 10, if(3.5*V(vp)<-10, -10, 3.5*V(vp)))\n"
+            "R1 amp 0 1k\n"
+            ".tran 0 1m\n.end\n"
+        )
+        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert any("Behavioural" in iss["message"] for iss in data["issues"])
+
+
+@pytest.mark.asyncio
+class TestDiffCircuit:
+    async def test_value_change_surfaces(self, state_no_sim: SessionState, work_dir: Path):
+        a = work_dir / "a.cir"
+        b = work_dir / "b.cir"
+        a.write_text("* a\nR1 in out 1k\nC1 out 0 100n\n.end\n")
+        b.write_text("* b\nR1 in out 4.7k\nC1 out 0 100n\n.end\n")
+        result = await handle_diff_circuit({"path_a": a.name, "path_b": b.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        changed = data["components_changed"]
+        assert any(c["reference"].upper() == "R1" and c["after"] == "4.7k" for c in changed)
+
+    async def test_added_and_removed(self, state_no_sim: SessionState, work_dir: Path):
+        a = work_dir / "a.cir"
+        b = work_dir / "b.cir"
+        a.write_text("* a\nR1 in out 1k\n.end\n")
+        b.write_text("* b\nR1 in out 1k\nC1 out 0 100n\n.end\n")
+        result = await handle_diff_circuit({"path_a": a.name, "path_b": b.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert "C1" in [r.upper() for r in data["components_added"]]
+
+    async def test_directive_diff(self, state_no_sim: SessionState, work_dir: Path):
+        a = work_dir / "a.cir"
+        b = work_dir / "b.cir"
+        a.write_text("* a\nR1 in out 1k\n.tran 0 1m\n.end\n")
+        b.write_text("* b\nR1 in out 1k\n.ac dec 100 1 1Meg\n.end\n")
+        result = await handle_diff_circuit({"path_a": a.name, "path_b": b.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert any(".ac" in d for d in data["directives_added"])
+        assert any(".tran" in d for d in data["directives_removed"])

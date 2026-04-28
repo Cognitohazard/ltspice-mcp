@@ -13,7 +13,6 @@ from ltspice_mcp.tools.analysis import (
     FilterMetricsInput,
     FindCrossingInput,
     GainAtInput,
-    MeasurementsInput,
     MeasurementStatsInput,
     OperatingPointInput,
     PeriodicMetricsInput,
@@ -30,7 +29,6 @@ from ltspice_mcp.tools.analysis import (
     handle_find_crossing,
     handle_gain_at,
     handle_measurement_stats,
-    handle_measurements,
     handle_operating_point,
     handle_periodic_metrics,
     handle_pulse_response,
@@ -98,6 +96,36 @@ class TestSignalStats:
         assert "Min:" in text
         assert "Max:" in text
         assert result.structuredContent["analysis_type"] == "transient"
+
+    async def test_dc_sweep_classification(self, state_no_sim: SessionState, work_dir: Path):
+        """Bug E: a .DC raw used to report ``analysis_type='transient'`` and
+        ``t_start_used`` / ``duration`` whose units were temperature, not
+        seconds. The handler now branches on ``Plotname`` and surfaces
+        ``sweep_start_used`` / ``sweep_end_used`` instead."""
+        raw_file = work_dir / "dc.raw"
+        temps = np.linspace(-40, 125, 34)
+        raw = _make_raw_mock(
+            plotname="DC transfer characteristic",
+            trace_names=["temperature", "V(vref)"],
+            waves={"temperature": temps, "V(vref)": 3.15 + 0.001 * temps},
+            axis=temps,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_signal_stats(
+            SignalStatsInput(raw_file=raw_file.name, signal="V(vref)"),
+            state_no_sim,
+        )
+        data = result.structuredContent
+        assert data is not None
+        assert data["analysis_type"] == "dc"
+        assert "sweep_start_used" in data
+        assert "sweep_end_used" in data
+        # Should NOT carry the time-domain-only fields.
+        assert "t_start_used" not in data
+        assert "duration" not in data
+        # No RMS/std for DC sweeps — those are time-weighted and meaningless
+        # over a swept variable.
+        assert "rms" not in data
 
     async def test_signal_not_found(self, state_no_sim: SessionState, fake_raw: Path):
         with pytest.raises(ResultError, match="not found"):
@@ -230,23 +258,6 @@ class TestQueryValue:
 
 
 @pytest.mark.asyncio
-class TestGetMeasurements:
-    async def test_invalid_log(self, state_no_sim: SessionState, work_dir: Path):
-        log = work_dir / "bad.log"
-        log.write_text("not a real spice log")
-        with pytest.raises(ResultError):
-            await handle_measurements(MeasurementsInput(log_file=log.name), state_no_sim)
-
-    async def test_no_measurements_with_errors(self, state_no_sim: SessionState, work_dir: Path):
-        log = work_dir / "err.log"
-        log.write_text(
-            "Circuit: * test\nFatal Error: missing model XYZ\nTotal elapsed time: 0.001 seconds.\n"
-        )
-        result = await handle_measurements(MeasurementsInput(log_file=log.name), state_no_sim)
-        assert "errors in log" in result.content[0].text
-
-
-@pytest.mark.asyncio
 class TestGetOperatingPoint:
     async def test_basic(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = work_dir / "op.raw"
@@ -286,13 +297,9 @@ class TestGetOperatingPoint:
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="AC/Noise"):
-            await handle_operating_point(
-                OperatingPointInput(raw_file=raw_file.name), state_no_sim
-            )
+            await handle_operating_point(OperatingPointInput(raw_file=raw_file.name), state_no_sim)
 
-    async def test_rejects_transient_raw(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
+    async def test_rejects_transient_raw(self, state_no_sim: SessionState, work_dir: Path):
         from ltspice_mcp.errors import ResultError
 
         raw_file = work_dir / "tran.raw"
@@ -304,9 +311,7 @@ class TestGetOperatingPoint:
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
         with pytest.raises(ResultError, match="t=0"):
-            await handle_operating_point(
-                OperatingPointInput(raw_file=raw_file.name), state_no_sim
-            )
+            await handle_operating_point(OperatingPointInput(raw_file=raw_file.name), state_no_sim)
 
 
 @pytest.mark.asyncio
@@ -332,22 +337,42 @@ class TestFormatMeasurements:
     def test_single_step(self):
         from ltspice_mcp.tools.analysis import _format_measurements
 
-        text = _format_measurements({"fc": [1591.5], "vp": [3.3]}, step_count=1)
+        text = _format_measurements(
+            {"fc": {"values": [1591.5]}, "vp": {"values": [3.3]}}, step_count=1
+        )
         assert "fc" in text
         assert "1591.5" in text or "1.5915e" in text
 
     def test_failed_value(self):
         from ltspice_mcp.tools.analysis import _format_measurements
 
-        text = _format_measurements({"fc": [None]}, step_count=1)
+        text = _format_measurements({"fc": {"values": [None]}}, step_count=1)
         assert "FAILED" in text
 
     def test_multi_step(self):
         from ltspice_mcp.tools.analysis import _format_measurements
 
-        text = _format_measurements({"fc": [1.0, 2.0, None]}, step_count=3)
+        text = _format_measurements({"fc": {"values": [1.0, 2.0, None]}}, step_count=3)
         assert "3 steps" in text
         assert "FAILED" in text
+
+    def test_window_metadata_appears(self):
+        """``range_from`` / ``range_to`` should be folded into the line, not surfaced as
+        separate measurements."""
+        from ltspice_mcp.tools.analysis import _format_measurements
+
+        text = _format_measurements(
+            {"v_rms": {"values": [0.707], "range_from": 0.002, "range_to": 0.01}},
+            step_count=1,
+        )
+        assert "FROM=0.002" in text
+        assert "TO=0.01" in text
+
+    def test_at_metadata_appears(self):
+        from ltspice_mcp.tools.analysis import _format_measurements
+
+        text = _format_measurements({"vref_op": {"values": [3.18], "at": 1.03}}, step_count=1)
+        assert "AT=1.03" in text
 
     def test_empty_with_errors(self):
         from ltspice_mcp.tools.analysis import _format_measurements

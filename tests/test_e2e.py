@@ -54,6 +54,11 @@ def _server_params(work_dir: Path) -> StdioServerParameters:
         "LTSPICE_MCP_CONFIG": str(config),
         "LTSPICE_MCP_WORKING_DIR": str(work_dir),
         "LTSPICE_MCP_ALLOWED_PATHS": str(work_dir),
+        # Isolate from any global ``recent.json`` index left over from
+        # the developer's local sessions; otherwise tests asserting an
+        # empty results list pick up unrelated jobs.
+        "LTSPICE_MCP_HOME": str(work_dir),
+        "XDG_STATE_HOME": str(work_dir),
     }
     return StdioServerParameters(
         command=sys.executable,
@@ -138,7 +143,6 @@ class TestServerLifecycle:
                 "ltspice_cancel_job",
                 "ltspice_signal_stats",
                 "ltspice_query_value",
-                "ltspice_measurements",
                 "ltspice_operating_point",
                 "ltspice_simulation_summary",
                 "ltspice_configure_sweep",
@@ -147,7 +151,6 @@ class TestServerLifecycle:
                 "ltspice_run_montecarlo",
                 "ltspice_batch_results",
                 "ltspice_find_model",
-                "ltspice_model_info",
                 "ltspice_load_library",
                 "ltspice_unload_library",
                 "ltspice_list_libraries",
@@ -393,11 +396,6 @@ class TestAnalysisDegraded:
                 {"raw_file": "missing.raw", "signal": "V(out)"},
             )
             _assert_tool_error(result, "not found")
-
-    async def test_get_measurements_missing_file(self, tmp_path):
-        async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_measurements", {"log_file": "missing.log"})
-            _assert_tool_error(result, "No such file")
 
     async def test_get_simulation_summary_missing_file(self, tmp_path):
         async with mcp_session(tmp_path) as session:

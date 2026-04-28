@@ -15,8 +15,9 @@ return derived metrics. Organized by what the tool answers:
         ltspice_periodic_metrics    — period/frequency/duty/jitter
 
     .MEAS extraction:
-        ltspice_measurements        — raw .MEAS values per step
         ltspice_measurement_stats   — aggregate .MEAS across sweep/MC
+                                       (single-run .MEAS values are folded
+                                        into ltspice_simulation_summary)
 
     High-level overview:
         ltspice_simulation_summary  — sim type, signals, warnings, key metrics
@@ -24,6 +25,7 @@ return derived metrics. Organized by what the tool answers:
 
 import contextlib
 import math
+from pathlib import Path
 from typing import Literal, TypedDict
 
 import numpy as np
@@ -49,7 +51,7 @@ from ltspice_mcp.lib.ac_analysis import (
     prepare_ac_arrays,
 )
 from ltspice_mcp.lib.format import parse_spice_value
-from ltspice_mcp.lib.log_parser import MeasurementsOutput, parse_measurements
+from ltspice_mcp.lib.log_parser import parse_measurements
 from ltspice_mcp.lib.raw_parser import (
     OperatingPointOutput,
     build_simulation_summary,
@@ -200,16 +202,16 @@ class QueryValueInput(ToolInput):
     )
 
 
-class MeasurementsInput(ToolInput):
-    log_file: str = Field(description="Path to .log file from simulation")
-    format: Literal["json", "text"] | None = Field(
-        default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
-    )
-
-
 class OperatingPointInput(ToolInput):
     raw_file: str = Field(description="Path to .raw result file from simulation")
+    step: int = Field(
+        default=0,
+        description=(
+            "Step index for stepped .OP runs (e.g. ``.step temp ...`` + ``.op``). "
+            "Default 0 returns the first step. Out-of-range values raise a "
+            "structured error rather than silently returning the wrong step."
+        ),
+    )
     format: Literal["json", "text"] | None = Field(
         default=None,
         description="Response format: 'json' for structured data, 'text' for human-readable",
@@ -218,7 +220,14 @@ class OperatingPointInput(ToolInput):
 
 class SimulationSummaryInput(ToolInput):
     raw_file: str = Field(description="Path to .raw result file from simulation")
-    log_file: str | None = Field(default=None, description="Optional path to .log file")
+    log_file: str | None = Field(
+        default=None,
+        description=(
+            "Optional path to .log file. Defaults to ``raw_file`` with the "
+            "extension swapped to ``.log`` — pass an explicit value only if "
+            "the log lives somewhere unusual."
+        ),
+    )
     signal: str | None = Field(
         default=None,
         description="Signal for AC bandwidth metrics (e.g., 'V(outp)'). Required for AC analysis.",
@@ -266,9 +275,15 @@ class SimulationSummaryInput(ToolInput):
             "abs_mean": {"type": "number"},
             "peak_to_peak": {"type": "number"},
             "point_count": {"type": "integer"},
+            # Transient-only window metadata
             "t_start_used": {"type": ["number", "null"]},
             "t_end_used": {"type": ["number", "null"]},
             "duration": {"type": ["number", "null"]},
+            # DC-sweep window metadata (axis is the swept variable, not time)
+            "sweep_start_used": {"type": ["number", "null"]},
+            "sweep_end_used": {"type": ["number", "null"]},
+            "sweep_span": {"type": ["number", "null"]},
+            # AC-only fields
             "min_db": {"type": "number"},
             "max_db": {"type": "number"},
             "mean_db": {"type": "number"},
@@ -334,6 +349,13 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
         axis = np.real(axis)
     wave_real = np.asarray(wave)
 
+    # Bug E: distinguish DC sweep (axis = sweep variable, e.g. ``temp``)
+    # from transient (axis = time). Trapezoidal mean/RMS over a sweep axis
+    # is mathematically meaningless; the t_start/t_end labels are misleading
+    # too since the units aren't seconds.
+    sim_type = detect_sim_type(raw).lower()
+    is_dc_sweep = "dc transfer" in sim_type or "dc " in sim_type
+
     ts = _parse_time(args.t_start, "t_start")
     te = _parse_time(args.t_end, "t_end")
     try:
@@ -346,20 +368,34 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
     except ValueError as e:
         raise ResultError(str(e)) from e
 
-    stats = {
-        "analysis_type": "transient",
-        "min": core["min"],
-        "max": core["max"],
-        "mean": core["mean"],
-        "rms": core["rms"],
-        "std": core["std"],
-        "abs_mean": core["abs_mean"],
-        "peak_to_peak": core["pk_pk"],
-        "point_count": core["num_samples"],
-        "t_start_used": core["t_start"],
-        "t_end_used": core["t_end"],
-        "duration": core["duration"],
-    }
+    if is_dc_sweep:
+        stats = {
+            "analysis_type": "dc",
+            "min": core["min"],
+            "max": core["max"],
+            "mean": core["mean"],
+            "abs_mean": core["abs_mean"],
+            "peak_to_peak": core["pk_pk"],
+            "point_count": core["num_samples"],
+            "sweep_start_used": core["t_start"],
+            "sweep_end_used": core["t_end"],
+            "sweep_span": core["duration"],
+        }
+    else:
+        stats = {
+            "analysis_type": "transient",
+            "min": core["min"],
+            "max": core["max"],
+            "mean": core["mean"],
+            "rms": core["rms"],
+            "std": core["std"],
+            "abs_mean": core["abs_mean"],
+            "peak_to_peak": core["pk_pk"],
+            "point_count": core["num_samples"],
+            "t_start_used": core["t_start"],
+            "t_end_used": core["t_end"],
+            "duration": core["duration"],
+        }
     window_note = (
         f" (window [{core['t_start']:.6g}, {core['t_end']:.6g}] s)"
         if ts is not None or te is not None
@@ -371,11 +407,16 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
         f"Max:          {stats['max']:.6g}",
         f"Peak-to-Peak: {stats['peak_to_peak']:.6g}",
         f"Mean:         {stats['mean']:.6g}",
-        f"RMS:          {stats['rms']:.6g}",
-        f"Std:          {stats['std']:.6g}",
-        f"Abs mean:     {stats['abs_mean']:.6g}",
-        f"Duration:     {stats['duration']:.6g} s  ({stats['point_count']} samples)",
     ]
+    if "rms" in stats:
+        lines.append(f"RMS:          {stats['rms']:.6g}")
+    if "std" in stats:
+        lines.append(f"Std:          {stats['std']:.6g}")
+    lines.append(f"Abs mean:     {stats['abs_mean']:.6g}")
+    if "duration" in stats:
+        lines.append(f"Duration:     {stats['duration']:.6g} s  ({stats['point_count']} samples)")
+    elif "sweep_span" in stats:
+        lines.append(f"Sweep span:   {stats['sweep_span']:.6g}  ({stats['point_count']} samples)")
     return format_response("\n".join(lines), {"signal": signal, **stats}, fmt)
 
 
@@ -452,7 +493,11 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
 def _format_measurements(
     measurements: dict, step_count: int, errors: list[str] | None = None
 ) -> str:
-    """Format .MEAS results for display. Shared between handlers."""
+    """Format .MEAS results for display. Shared between handlers.
+
+    Accepts the new structured shape (``{name: {"values": [...], ...}}``)
+    where each entry may carry ``range_from`` / ``range_to`` / ``at`` metadata.
+    """
     if not measurements:
         if errors:
             lines = ["No .MEAS results — errors in log:", ""]
@@ -461,58 +506,45 @@ def _format_measurements(
             return "\n".join(lines)
         return "No .MEAS results found in log file"
 
+    def _meta_suffix(entry: dict) -> str:
+        bits: list[str] = []
+        if entry.get("range_from") is not None or entry.get("range_to") is not None:
+            lo = entry.get("range_from")
+            hi = entry.get("range_to")
+            if lo is not None and hi is not None:
+                bits.append(f"FROM={lo:g} TO={hi:g}")
+            elif lo is not None:
+                bits.append(f"FROM={lo:g}")
+            elif hi is not None:
+                bits.append(f"TO={hi:g}")
+        if entry.get("at") is not None:
+            bits.append(f"AT={entry['at']:g}")
+        return f"  ({', '.join(bits)})" if bits else ""
+
     if step_count <= 1:
         lines = [".MEAS Results:", ""]
-        for name, values in measurements.items():
+        for name, entry in measurements.items():
+            values = entry.get("values", [])
             value = values[0] if values else None
+            suffix = _meta_suffix(entry)
             if value is None:
-                lines.append(f"  {name} = FAILED")
+                lines.append(f"  {name} = FAILED{suffix}")
             else:
-                lines.append(f"  {name} = {value:.6g}")
+                lines.append(f"  {name} = {value:.6g}{suffix}")
     else:
         lines = [f".MEAS Results ({step_count} steps):", ""]
-        for name, values in measurements.items():
-            value_strs = []
+        for name, entry in measurements.items():
+            values = entry.get("values", [])
+            value_strs: list[str] = []
             for val in values:
                 if val is None:
                     value_strs.append("FAILED")
                 else:
                     value_strs.append(f"{val:.6g}")
-            lines.append(f"  {name}: [{', '.join(value_strs)}]")
+            suffix = _meta_suffix(entry)
+            lines.append(f"  {name}: [{', '.join(value_strs)}]{suffix}")
 
     return "\n".join(lines)
-
-
-@registry.tool(
-    name="ltspice_measurements",
-    description=(
-        "Extract .MEAS measurement results from a simulation log file. "
-        "Returns all measurements exactly as computed by the simulator."
-    ),
-    input_model=MeasurementsInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=MeasurementsOutput,
-)
-async def handle_measurements(args: MeasurementsInput, state: SessionState):
-    """Extract .MEAS measurement results from simulation log file."""
-    log_path = safe_path(args.log_file, state)
-    fmt = args.format
-
-    try:
-        meas_data = parse_measurements(log_path)
-    except ResultError:
-        raise
-    except Exception as e:
-        raise ResultError(f"Failed to parse log file: {e}") from e
-
-    return format_response(
-        _format_measurements(
-            meas_data["measurements"], meas_data["step_count"], meas_data.get("errors")
-        ),
-        meas_data,
-        fmt,
-    )
 
 
 @registry.tool(
@@ -530,7 +562,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     raw = services.load_raw(raw_path, state)
 
     sim_type = detect_sim_type(raw)
-    # ``extract_operating_point`` reads ``wave[0]`` for every trace. That's
+    # ``extract_operating_point`` reads ``wave[step]`` for every trace. That's
     # the DC bias point only for ``.OP`` (and ``.DC`` — point 0 is the
     # sweep's starting bias). For AC/Noise it's the magnitude at the first
     # frequency point — the "voltages" returned would be AC magnitudes
@@ -551,12 +583,25 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
             "the converged DC bias. Run a separate ``.OP`` analysis."
         )
 
+    services.validate_step(raw, args.step)
+    op_step_count = services.get_step_count(raw)
+    op_data: dict
+
     try:
-        op_data = extract_operating_point(raw)
+        op_data = dict(extract_operating_point(raw, step=args.step))
     except Exception as e:
         raise ResultError(f"Failed to extract operating point: {e}") from e
 
+    op_data["step"] = args.step
+    op_data["step_count"] = op_step_count
+
     lines = ["DC Operating Point", ""]
+    if op_step_count > 1:
+        lines.append(
+            f"Step {args.step} of {op_step_count} (use step=N to read other "
+            "iterations of stepped .OP runs)"
+        )
+        lines.append("")
 
     if op_data["voltages"]:
         lines.append("Node Voltages:")
@@ -592,8 +637,17 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
             "measurements": {
                 "type": "object",
                 "additionalProperties": {
-                    "type": "array",
-                    "items": {"type": ["number", "null"]},
+                    "type": "object",
+                    "properties": {
+                        "values": {
+                            "type": "array",
+                            "items": {"type": ["number", "null"]},
+                        },
+                        "range_from": {"type": ["number", "null"]},
+                        "range_to": {"type": ["number", "null"]},
+                        "at": {"type": ["number", "null"]},
+                    },
+                    "required": ["values"],
                 },
             },
             "fourier": {"type": "array", "items": {"type": "object"}},
@@ -617,6 +671,12 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
     log_path = None
     if args.log_file is not None:
         log_path = safe_path(args.log_file, state)
+    else:
+        # Friction A: every analysis call shouldn't have to plumb both
+        # ``raw_file`` and the adjacent ``.log``. Auto-derive when missing.
+        derived = raw_path.with_suffix(".log")
+        if derived.exists():
+            log_path = derived
 
     raw = services.load_raw(raw_path, state)
 
@@ -820,7 +880,24 @@ class PeriodicMetricsInput(ToolInput):
 
 
 class MeasurementStatsInput(ToolInput):
-    log_file: str = Field(description="Path to .log file from a .step or Monte Carlo run")
+    log_file: str | None = Field(
+        default=None,
+        description=(
+            "Path to .log file from a single ``.step`` run that already "
+            "concatenates every step's .MEAS results. For Monte Carlo / "
+            "multi-run sweep jobs that emit one log per run, pass ``job_id`` "
+            "instead and the aggregator walks every run's log."
+        ),
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Batch job ID from ``run_montecarlo`` / ``run_sweep``. The tool "
+            "loads each completed run's log, concatenates the .MEAS results "
+            "(one row per run), and aggregates. Mutually exclusive with "
+            "``log_file``."
+        ),
+    )
     measurement: str | None = Field(
         default=None,
         description="If given, stats for only this .MEAS; otherwise all measurements.",
@@ -1120,6 +1197,58 @@ async def handle_periodic_metrics(args: PeriodicMetricsInput, state: SessionStat
     return format_response("\n".join(lines), data, args.format)
 
 
+def _aggregate_job_measurements(
+    job_id: str, state: SessionState
+) -> tuple[dict[str, list[float | None]], int]:
+    """Walk every completed run's .log and concatenate ``.MEAS`` results.
+
+    Friction K: ``measurement_stats`` historically required a single
+    multi-step log, but the MC engine emits one log per run. This helper
+    reconciles by collecting per-run scalar values keyed by .MEAS name.
+
+    Returns ``(flat_values, run_count)`` where ``flat_values[name]`` is a
+    list with one entry per run (``None`` for runs that don't have a
+    matching .MEAS).
+    """
+    batch_job = services.resolve_batch_job(job_id, state)
+
+    if not batch_job.run_results:
+        raise ResultError(
+            f"Batch job {job_id!r} has no completed runs yet — wait for it "
+            "to finish (use ltspice_check_job to monitor)."
+        )
+
+    flat_values: dict[str, list[float | None]] = {}
+    seen_names: list[str] = []
+    runs_processed = 0
+    for run_index in sorted(batch_job.run_results.keys()):
+        run = batch_job.run_results[run_index]
+        log_path_str = run.get("log_file")
+        if not log_path_str:
+            continue
+        log_path = Path(log_path_str)
+        try:
+            data = parse_measurements(log_path)
+        except Exception:
+            # Missing/unreadable per-run log — skip silently. Aggregation
+            # over partial runs is the documented behaviour.
+            continue
+        runs_processed += 1
+        for name, entry in data.get("measurements", {}).items():
+            values = list(entry.get("values", []))
+            scalar = values[0] if values else None
+            if name not in flat_values:
+                flat_values[name] = [None] * (runs_processed - 1)
+                seen_names.append(name)
+            flat_values[name].append(scalar)
+        # Backfill any names that didn't appear in this run with ``None``.
+        for name in seen_names:
+            if len(flat_values[name]) < runs_processed:
+                flat_values[name].append(None)
+
+    return flat_values, runs_processed
+
+
 @registry.tool(
     name="ltspice_measurement_stats",
     description=(
@@ -1132,7 +1261,7 @@ async def handle_periodic_metrics(args: PeriodicMetricsInput, state: SessionStat
         "count, and an optional histogram (set histogram_bins=0 to skip).\n\n"
         "Requires either a parametric sweep (.step) or Monte Carlo. On a "
         "single-run simulation there's only one value per measurement, so "
-        "stats collapse to trivial values — use ltspice_measurements "
+        "stats collapse to trivial values — use ltspice_simulation_summary "
         "instead to just read the scalars.\n\n"
         "Works with .MEAS from any analysis type (.tran/.ac/.dc/.op) — the "
         "measurement directives themselves embed the analysis context. Pass "
@@ -1145,33 +1274,52 @@ async def handle_periodic_metrics(args: PeriodicMetricsInput, state: SessionStat
     output_model=MeasurementStatsResponse,
 )
 async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionState):
-    log_path = safe_path(args.log_file, state)
-    try:
-        meas_data = parse_measurements(log_path)
-    except ResultError:
-        raise
-    except Exception as e:
-        raise ResultError(f"Failed to parse log file: {e}") from e
-
-    measurements = meas_data.get("measurements", {})
-    if not measurements:
-        errors = meas_data.get("errors") or []
-        err_block = (
-            "\n".join(f"  {e}" for e in errors)
-            if errors
-            else "  (log contained no .MEAS results and no diagnostics)"
+    if args.log_file is not None and args.job_id is not None:
+        raise ResultError(
+            "Pass either ``log_file`` (single .step log) or ``job_id`` "
+            "(walk every run's log of a Monte Carlo / sweep batch), not both."
         )
-        raise ResultError(f"No .MEAS results in log:\n{err_block}")
+    if args.log_file is None and args.job_id is None:
+        raise ResultError("Provide either ``log_file`` or ``job_id``.")
+
+    if args.job_id is not None:
+        flat_values, run_count = _aggregate_job_measurements(args.job_id, state)
+        if not flat_values:
+            raise ResultError(f"No .MEAS results found across the runs of job {args.job_id!r}.")
+        steps_label = f"{run_count} run(s)"
+    elif args.log_file is not None:
+        log_path = safe_path(args.log_file, state)
+        try:
+            meas_data = parse_measurements(log_path)
+        except ResultError:
+            raise
+        except Exception as e:
+            raise ResultError(f"Failed to parse log file: {e}") from e
+
+        measurements = meas_data.get("measurements", {})
+        if not measurements:
+            errors = meas_data.get("errors") or []
+            err_block = (
+                "\n".join(f"  {e}" for e in errors)
+                if errors
+                else "  (log contained no .MEAS results and no diagnostics)"
+            )
+            raise ResultError(f"No .MEAS results in log:\n{err_block}")
+
+        flat_values = {name: list(entry.get("values", [])) for name, entry in measurements.items()}
+        steps_label = f"{meas_data.get('step_count', 1)} step(s)"
+    else:  # unreachable — earlier guard rejects this combination
+        raise ResultError("Provide either ``log_file`` or ``job_id``.")
 
     stats = _run(
         compute_measurement_stats,
-        measurements,
+        flat_values,
         histogram_bins=args.histogram_bins,
         measurement=args.measurement,
     )
 
     lines = [
-        f"Measurement Stats ({meas_data.get('step_count', len(next(iter(measurements.values()))))} step(s))",
+        f"Measurement Stats ({steps_label})",
         "",
     ]
     for name, entry in stats.items():
@@ -1234,8 +1382,6 @@ def _load_ac_signal(
         return prepare_ac_arrays(axis, wave)
     except ValueError as e:
         raise ResultError(str(e)) from e
-
-
 
 
 # ---- Input models ---------------------------------------------------------
