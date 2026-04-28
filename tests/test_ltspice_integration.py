@@ -190,23 +190,28 @@ class TestMeasExtraction:
         return job
 
     async def test_get_measurements(self, ltspice_state: SessionState, rc_netlist: Path):
-        from ltspice_mcp.tools.analysis import handle_measurements
+        from ltspice_mcp.tools.analysis import handle_simulation_summary
 
         job = await self._run_and_get_job(ltspice_state, rc_netlist.name)
-        assert job.log_file and job.log_file.exists()
+        assert job.raw_file and job.log_file and job.log_file.exists()
 
-        result = await handle_measurements({"log_file": str(job.log_file)}, ltspice_state)
+        result = await handle_simulation_summary(
+            {"raw_file": str(job.raw_file), "log_file": str(job.log_file)}, ltspice_state
+        )
         text = result.content[0].text
-        # With Windows-native output dir, .MEAS should work
+        # With Windows-native output dir, .MEAS should work and the summary
+        # surfaces the result alongside other metadata.
         assert "fc" in text.lower(), f"Expected 'fc' measurement, got: {text[:300]}"
 
     async def test_transient_measurements(self, ltspice_state: SessionState, tran_netlist: Path):
-        from ltspice_mcp.tools.analysis import handle_measurements
+        from ltspice_mcp.tools.analysis import handle_simulation_summary
 
         job = await self._run_and_get_job(ltspice_state, tran_netlist.name)
-        assert job.log_file and job.log_file.exists()
+        assert job.raw_file and job.log_file and job.log_file.exists()
 
-        result = await handle_measurements({"log_file": str(job.log_file)}, ltspice_state)
+        result = await handle_simulation_summary(
+            {"raw_file": str(job.raw_file), "log_file": str(job.log_file)}, ltspice_state
+        )
         text = result.content[0].text
         assert "vout_max" in text.lower(), f"Expected 'vout_max' measurement, got: {text[:300]}"
 
@@ -231,9 +236,7 @@ class TestACAnalysis:
         job = await self._run_and_get_job(ltspice_state, rc_netlist.name)
         assert job.raw_file and job.raw_file.exists()
 
-        result = await handle_simulation_summary(
-            {"raw_file": str(job.raw_file)}, ltspice_state
-        )
+        result = await handle_simulation_summary({"raw_file": str(job.raw_file)}, ltspice_state)
         text = result.content[0].text
         assert "V(out)" in text or "v(out)" in text.lower()
 
@@ -243,9 +246,7 @@ class TestACAnalysis:
         job = await self._run_and_get_job(ltspice_state, rc_netlist.name)
         assert job.raw_file and job.raw_file.exists()
 
-        result = await handle_simulation_summary(
-            {"raw_file": str(job.raw_file)}, ltspice_state
-        )
+        result = await handle_simulation_summary({"raw_file": str(job.raw_file)}, ltspice_state)
         text = result.content[0].text
         assert "frequency" in text.lower() or "ac" in text.lower()
 
@@ -618,9 +619,7 @@ class TestSweepIntegration:
         await asyncio.wait_for(batch_job.done_event.wait(), timeout=120)
 
         # Query results for V(out)
-        results = await handle_batch_results(
-            {"job_id": job_id, "signal": "V(out)"}, ltspice_state
-        )
+        results = await handle_batch_results({"job_id": job_id, "signal": "V(out)"}, ltspice_state)
         text = results.content[0].text
         assert "Batch Results" in text
         assert "V(out)" in text

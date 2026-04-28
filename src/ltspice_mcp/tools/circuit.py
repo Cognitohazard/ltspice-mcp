@@ -7,12 +7,14 @@ and raise NetlistError if given a non-.asc file.
 """
 
 import asyncio
+import bisect
 import contextlib
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from mcp import types
 from pydantic import Field
@@ -28,6 +30,7 @@ from spicelib.editor.base_schematic import (
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import atomic_write_text, services
+from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, get_symbol_info
 from ltspice_mcp.state import SessionState
@@ -98,6 +101,7 @@ def _get_edit_lock(path: Path) -> asyncio.Lock:
     _edit_locks[path] = asyncio.Lock()
     return _edit_locks[path]
 
+
 # Rotation string -> ERotation enum mapping (shared by move/add handlers)
 _ROTATION_MAP: dict[str, ERotation] = {
     "R0": ERotation.R0,
@@ -128,6 +132,61 @@ def _parse_rotation(rotation: str) -> ERotation:
 _PARAM_TOKEN_RE = re.compile(r"(\w+)\s*=\s*([^\s=]+)")
 
 
+def _validate_component_value(reference: str, value: str) -> None:
+    """Reject values that would corrupt the netlist line on write.
+
+    spicelib writes the value verbatim into the component line; spaces in
+    a non-parameterised, non-quoted value bleed into a phantom node and
+    irrecoverably break the netlist (Bug L). The check is permissive of:
+    - SPICE expressions in braces (``{1/(2*pi*RC)}``) — braces protect spaces
+    - quoted strings (``"a b"``)
+    - ``KEY=VALUE`` parameter lists (handled by ``_apply_component_value``)
+    """
+    if not isinstance(value, str):  # type: ignore[reportUnnecessaryIsInstance]
+        # Pydantic should have rejected non-strings already, but guard
+        # anyway since this writes to disk verbatim.
+        raise NetlistError(
+            f"Component '{reference}' value must be a string, got {type(value).__name__}"
+        )
+    stripped = value.strip()
+    if not stripped:
+        raise NetlistError(f"Component '{reference}' value must not be empty")
+    if "\n" in stripped or "\r" in stripped:
+        raise NetlistError(
+            f"Component '{reference}' value must be a single line; "
+            f"got embedded newline in {value!r}"
+        )
+    # Brace-balanced expression or quoted literal — spaces are safe.
+    if (stripped.startswith("{") and stripped.endswith("}")) or (
+        stripped.startswith('"') and stripped.endswith('"')
+    ):
+        return
+    # ``[MODEL_NAME] KEY=VALUE [KEY=VALUE ...]`` is valid: at most one bare
+    # head token (the model name) followed by a non-empty list of KEY=VALUE
+    # tokens. The pure-params and head+params forms collapse into one rule.
+    if "=" in stripped:
+        tokens = stripped.split()
+        head_tokens: list[str] = []
+        for tok in tokens:
+            if "=" in tok:
+                break
+            head_tokens.append(tok)
+        rest = tokens[len(head_tokens) :]
+        if (
+            len(head_tokens) <= 1
+            and rest
+            and all(bool(_PARAM_TOKEN_RE.fullmatch(tok)) for tok in rest)
+        ):
+            return
+    if any(c.isspace() for c in stripped):
+        raise NetlistError(
+            f"Component '{reference}' value {value!r} contains whitespace. "
+            "Wrap SPICE expressions in braces ({...}) or use the parameter "
+            "form (e.g. 'NMOS1 W=10u L=1u'). A bare space-separated value "
+            "would corrupt the netlist line."
+        )
+
+
 def _apply_component_value(editor, reference: str, value: str) -> None:
     """Set a component's value, splitting trailing ``KEY=VALUE`` tokens off.
 
@@ -140,7 +199,8 @@ def _apply_component_value(editor, reference: str, value: str) -> None:
     the params section via the same regex), keeping the model/value field
     for ``set_component_value``.
     """
-    if not isinstance(value, str) or "=" not in value:
+    _validate_component_value(reference, value)
+    if "=" not in value:
         editor.set_component_value(reference, value)
         return
     params: dict[str, str] = {}
@@ -177,9 +237,7 @@ def _format_available_refs(refs: list[str] | set[str], cap: int = 20) -> str:
     return ", ".join(sorted_refs)
 
 
-def _require_component(
-    editor: "AscEditor | SpiceEditor", reference: str
-) -> list[str]:
+def _require_component(editor: "AscEditor | SpiceEditor", reference: str) -> list[str]:
     """Verify a component reference exists in the editor.
 
     Calls ``editor.get_components()`` exactly once and reuses the result for
@@ -191,8 +249,7 @@ def _require_component(
     comps = editor.get_components()
     if reference not in comps:
         raise NetlistError(
-            f"Component '{reference}' not found. "
-            f"Available: {_format_available_refs(comps)}"
+            f"Component '{reference}' not found. Available: {_format_available_refs(comps)}"
         )
     return comps
 
@@ -212,6 +269,7 @@ def _collect_component_geometry(editor: AscEditor) -> list[dict]:
         result.append({"ref": ref, **geo["bounding_box"], "pins": geo["pins"]})
     return result
 
+
 # Type alias for the union returned by _make_editor / _get_editor.
 # Schematic-only handlers narrow this to AscEditor after _require_asc.
 Editor = AscEditor | SpiceEditor
@@ -228,40 +286,91 @@ class CreateNetlistInput(ToolInput):
 
 class CircuitReadInput(ToolInput):
     path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
-    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
 
 
 class ListComponentsInput(ToolInput):
     path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
-    prefix: str | None = Field(default=None, description="Filter by reference prefix (e.g., 'R', 'M', 'C')")
-    reference: str | None = Field(default=None, description="Look up a single component by reference (e.g., 'R1')")
+    prefix: str | None = Field(
+        default=None, description="Filter by reference prefix (e.g., 'R', 'M', 'C')"
+    )
+    reference: str | None = Field(
+        default=None, description="Look up a single component by reference (e.g., 'R1')"
+    )
     offset: int = Field(default=0, description="Pagination offset")
     limit: int = Field(default=50, description="Max results to return")
-    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
 
 
 class SetComponentValueInput(ToolInput):
     path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
-    reference: str | None = Field(default=None, description="Component reference for single mode (e.g., 'R1')")
-    value: str | None = Field(default=None, description="New value for single mode (e.g., '10k', '100n')")
+    reference: str | None = Field(
+        default=None, description="Component reference for single mode (e.g., 'R1')"
+    )
+    value: str | None = Field(
+        default=None, description="New value for single mode (e.g., '10k', '100n')"
+    )
     values: dict[str, str] | None = Field(
-        default=None, description="Batch mode: {reference: value} dict (e.g., {'R1': '10k', 'C1': '100n'})"
+        default=None,
+        description="Batch mode: {reference: value} dict (e.g., {'R1': '10k', 'C1': '100n'})",
     )
 
 
 class ParameterInput(ToolInput):
     path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
-    name: str | None = Field(default=None, description="Parameter name to set (omit to read all params)")
-    value: str | None = Field(default=None, description="Parameter value (required when name is specified)")
-    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
+    name: str | None = Field(
+        default=None, description="Parameter name to set (omit to read all params)"
+    )
+    value: str | None = Field(
+        default=None, description="Parameter value (required when name is specified)"
+    )
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
 
 
 class EditDirectiveInput(ToolInput):
     path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
     action: Literal["add", "remove"] = Field(description="Whether to add or remove the directive")
     instruction: str = Field(
-        description="SPICE directive text (e.g., '.tran 10m', '.ac dec 100 1 1G'). "
-        "For remove: exact match or regex with 'regex:' prefix."
+        description=(
+            "SPICE directive text (e.g., '.tran 10m', '.ac dec 100 1 1G'). "
+            "For ``kind='comment'`` this is the comment text instead. "
+            "For remove: exact match or regex with 'regex:' prefix; the "
+            "match is run against directives AND comments so callers can "
+            "remove either kind without knowing which it is."
+        ),
+    )
+    kind: Literal["directive", "comment"] = Field(
+        default="directive",
+        description=(
+            "``directive`` (default) — emit a SPICE directive line. "
+            "``comment`` — emit a free-text annotation. .asc-only; the "
+            "tool refuses ``kind='comment'`` on .cir/.net since plain "
+            "netlists already accept ``*`` / ``;`` comments inline."
+        ),
+    )
+    x: int | None = Field(
+        default=None,
+        description=(
+            "Optional X coordinate when adding to an .asc schematic. "
+            "Default places the directive in the lower-left corner."
+        ),
+    )
+    y: int | None = Field(
+        default=None,
+        description="Optional Y coordinate (see ``x``).",
+    )
+    size: int = Field(
+        default=2,
+        description="Font size (.asc only). 1=small, 2=normal, 3=large.",
     )
 
 
@@ -283,7 +392,9 @@ class MoveComponentInput(ToolInput):
 class SetComponentAttributeInput(ToolInput):
     path: str = Field(description="Path to .asc schematic")
     reference: str = Field(description="Component reference (e.g., 'M1', 'R1')")
-    attribute: str = Field(description="Attribute name (e.g., 'SpiceLine', 'SpiceModel', 'Value2')")
+    attribute: str = Field(
+        description="Attribute name (e.g., 'SpiceLine', 'SpiceModel', 'Value2')"
+    )
     value: str = Field(description="Attribute value (e.g., 'W=10u L=0.5u')")
 
 
@@ -297,7 +408,9 @@ class AddComponentInput(ToolInput):
     symbol: str = Field(description="Symbol name (e.g., 'nmos', 'pmos', 'res', 'cap', 'voltage')")
     x: int = Field(description="X coordinate (LTspice grid units)")
     y: int = Field(description="Y coordinate (LTspice grid units)")
-    value: str | None = Field(default=None, description="Component value (e.g., '10k', 'NMOS_3V3')")
+    value: str | None = Field(
+        default=None, description="Component value (e.g., '10k', 'NMOS_3V3')"
+    )
     rotation: Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"] = Field(
         default="R0", description="Rotation/mirror (PMOS typically M180, NMOS typically R0)"
     )
@@ -310,21 +423,17 @@ class AddComponentInput(ToolInput):
 class NetLabelInput(ToolInput):
     path: str
     net: str = Field(description="Net name ('0' for ground, or a name like 'VDD', 'outp')")
-    x: int | None = Field(default=None, description="X coordinate (required unless pin is specified)")
-    y: int | None = Field(default=None, description="Y coordinate (required unless pin is specified)")
+    x: int | None = Field(
+        default=None, description="X coordinate (required unless pin is specified)"
+    )
+    y: int | None = Field(
+        default=None, description="Y coordinate (required unless pin is specified)"
+    )
     pin: str | None = Field(
         default=None,
         description="Component pin reference (e.g., 'M3.S') — places label at the pin's coordinates",
     )
     action: Literal["add", "remove"] = "add"
-
-
-class AddTextInput(ToolInput):
-    path: str = Field(description="Path to .asc schematic")
-    text: str = Field(description="Text content to display on the schematic")
-    x: int = Field(description="X coordinate for text placement")
-    y: int = Field(description="Y coordinate for text placement")
-    size: int = Field(default=2, description="Font size (1=small, 2=normal, 3=large)")
 
 
 class WaypointInput(StrictModel):
@@ -351,14 +460,26 @@ class ConnectInput(ToolInput):
 
 class SymbolInfoInput(ToolInput):
     symbol: str = Field(description="Symbol name (e.g., 'nmos', 'pmos', 'res', 'cap', 'voltage')")
-    x: int = Field(default=0, description="Placement X coordinate (for computing absolute positions)")
-    y: int = Field(default=0, description="Placement Y coordinate (for computing absolute positions)")
+    x: int = Field(
+        default=0, description="Placement X coordinate (for computing absolute positions)"
+    )
+    y: int = Field(
+        default=0, description="Placement Y coordinate (for computing absolute positions)"
+    )
     rotation: Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"] = "R0"
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
 
 
 class ComponentInfoInput(ToolInput):
     path: str = Field(description="Path to .asc schematic")
     reference: str = Field(description="Component reference (e.g., 'M1', 'R1')")
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -456,11 +577,32 @@ async def _editing_asc(path: Path, state: SessionState) -> AsyncIterator[AscEdit
     ),
     profiles=("full",),
 )
-async def handle_create_netlist(args: CreateNetlistInput, state: SessionState) -> types.CallToolResult:
+async def handle_create_netlist(
+    args: CreateNetlistInput, state: SessionState
+) -> types.CallToolResult:
     """Create a new SPICE netlist file from content string."""
     name = args.name
     content = args.content
     target_path = safe_path(f"{name}.cir", state)
+
+    # Friction N: pre-flight every directive line through the same Layer-A
+    # validator that ``edit_directive`` uses, so known-bad patterns
+    # (vdb()/phase()/group_delay() inside .MEAS, etc.) are refused at
+    # write time rather than only after a wasted simulation run.
+    bad_directives: list[str] = []
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("."):
+            continue
+        err = validate_directive(line, simulator="LTspice")
+        if err is not None:
+            bad_directives.append(f"  {line}\n    {err.message}\n    Suggestion: {err.suggestion}")
+    if bad_directives:
+        joined = "\n".join(bad_directives)
+        raise NetlistError(
+            "Refusing to create netlist; one or more directives are known "
+            "to fail in LTspice:\n" + joined
+        )
 
     if not content.strip().upper().endswith(".END"):
         content = content.rstrip() + "\n.END\n"
@@ -671,7 +813,13 @@ async def handle_list_components(args: ListComponentsInput, state: SessionState)
     comp_list = []
     comp_lines = []
     for comp_ref in page:
-        value = editor.get_component_value(comp_ref)
+        try:
+            value = editor.get_component_value(comp_ref)
+        except Exception:
+            # spicelib's component-line regex chokes on B-sources with
+            # commas in if(...) expressions; degrade gracefully rather
+            # than abort the whole listing (Bug K).
+            value = "<unparseable>"
         comp_lines.append(f"{comp_ref}  {value}")
         comp_list.append({"reference": comp_ref, "value": value})
 
@@ -704,7 +852,9 @@ async def handle_list_components(args: ListComponentsInput, state: SessionState)
     ),
     profiles=("full",),
 )
-async def handle_set_component_value(args: SetComponentValueInput, state: SessionState) -> types.CallToolResult:
+async def handle_set_component_value(
+    args: SetComponentValueInput, state: SessionState
+) -> types.CallToolResult:
     """Set component value(s). Accepts single or batch mode.
 
     Single mode: provide 'reference' and 'value'.
@@ -727,11 +877,26 @@ async def handle_set_component_value(args: SetComponentValueInput, state: Sessio
 
     async with _editing(file_path, state) as editor:
         if values_dict is not None:
-            # Batch mode
+            # Batch mode — validate every (ref, value) pair BEFORE writing
+            # anything, so a bad ref or unparseable value doesn't corrupt
+            # earlier successful writes (Bug J).
             if not isinstance(values_dict, dict):
                 raise NetlistError("'values' must be an object mapping references to new values")
             if not values_dict:
                 raise NetlistError("'values' dict must not be empty")
+            unknown_refs: list[str] = []
+            for ref in values_dict:
+                try:
+                    editor.get_component_value(ref)
+                except Exception:
+                    unknown_refs.append(ref)
+            if unknown_refs:
+                raise NetlistError(
+                    "Component(s) not found: " + ", ".join(repr(r) for r in unknown_refs)
+                )
+            # Validate value syntax up-front so we don't half-apply.
+            for ref, val in values_dict.items():
+                _validate_component_value(ref, val)
             for ref, val in values_dict.items():
                 _apply_component_value(editor, ref, val)
             changes = [f"{ref}: {val}" for ref, val in values_dict.items()]
@@ -811,9 +976,7 @@ async def handle_parameter(args: ParameterInput, state: SessionState):
         with contextlib.suppress(Exception):
             value = editor.get_parameter(param_name)
         if value is None:
-            raise NetlistError(
-                f"Parameter '{param_name}' not found in {file_path.name}"
-            )
+            raise NetlistError(f"Parameter '{param_name}' not found in {file_path.name}")
         return format_response(
             f".PARAM {param_name} = {value}",
             {"parameters": {param_name: value}},
@@ -837,7 +1000,13 @@ async def handle_parameter(args: ParameterInput, state: SessionState):
 
 @registry.tool(
     name="ltspice_edit_directive",
-    description="Add or remove a SPICE directive (.tran, .ac, .param, etc.).",
+    description=(
+        "Add or remove a SPICE directive or .asc free-text comment. Set "
+        "``kind=comment`` for annotation text; default is a SPICE directive. "
+        "Works on .cir/.net and .asc; ``kind=comment`` is .asc-only. "
+        "``remove`` matches against directives AND comments, so callers can "
+        "delete either kind without knowing which it is."
+    ),
     input_model=EditDirectiveInput,
     annotations=types.ToolAnnotations(
         readOnlyHint=False,
@@ -847,52 +1016,142 @@ async def handle_parameter(args: ParameterInput, state: SessionState):
     ),
     profiles=("full",),
 )
-async def handle_edit_directive(args: EditDirectiveInput, state: SessionState) -> types.CallToolResult:
-    """Add or remove a SPICE directive. Works on .cir/.net and .asc."""
+async def handle_edit_directive(
+    args: EditDirectiveInput, state: SessionState
+) -> types.CallToolResult:
+    """Add or remove a SPICE directive (or .asc comment). Works on .cir/.net and .asc."""
     file_path = safe_path(args.path, state)
 
     action = args.action
     instruction = args.instruction
+    kind = args.kind
 
     if not instruction.strip():
         raise NetlistError("Directive instruction must not be empty")
 
     async with _editing(file_path, state) as editor:
         if action == "add":
-            if not instruction.strip().startswith("."):
-                raise NetlistError(
-                    "SPICE directives must start with '.' (e.g. .tran, .ac, .param)"
+            if kind == "comment":
+                if not _is_asc(file_path):
+                    raise NetlistError(
+                        "kind='comment' is .asc-only — for .cir/.net files "
+                        "add a literal ``*`` or ``;`` comment in the file directly."
+                    )
+                # ``_is_asc`` above guarantees AscEditor; cast for the type checker.
+                asc_editor = cast(AscEditor, editor)
+                comment = Text(
+                    coord=Point(
+                        args.x if args.x is not None else 0, args.y if args.y is not None else 0
+                    ),
+                    text=instruction,
+                    type=TextTypeEnum.COMMENT,
+                    size=args.size,
                 )
-            # Pre-flight validation: catch known-bad patterns (e.g. vdb()
-            # in .MEAS) before they reach the simulator and fail post-hoc
-            # inside the .log.
-            err = validate_directive(instruction, simulator="LTspice")
-            if err is not None:
-                raise NetlistError(f"{err.message}\n  Suggestion: {err.suggestion}")
-            editor.add_instruction(instruction)
-            result = f"Added directive: {instruction}"
+                asc_editor.directives.append(comment)
+                result = f"Added comment: {instruction}"
+            else:
+                stripped = instruction.strip()
+                # Friction D guard: a leading ``!`` / ``.`` was the giveaway
+                # that the old ``add_text`` user actually wanted a directive.
+                if not stripped.startswith("."):
+                    raise NetlistError(
+                        "SPICE directives must start with '.' (e.g. .tran, "
+                        ".ac, .param). For free-text annotations on .asc "
+                        "schematics, set kind='comment'."
+                    )
+                # Pre-flight validation: catch known-bad patterns (e.g. vdb()
+                # in .MEAS) before they reach the simulator and fail post-hoc
+                # inside the .log.
+                err = validate_directive(instruction, simulator="LTspice")
+                if err is not None:
+                    raise NetlistError(f"{err.message}\n  Suggestion: {err.suggestion}")
+                editor.add_instruction(instruction)
+                result = f"Added directive: {instruction}"
 
         elif action == "remove":
-            if instruction.startswith("regex:"):
-                pattern = instruction[6:]
-                # Reject empty regex — an empty pattern matches every line
-                # and would wipe out the entire file.
-                if not pattern.strip():
-                    raise NetlistError(
-                        "Empty regex pattern would match every directive; "
-                        "provide an explicit regex after 'regex:'."
-                    )
-                editor.remove_Xinstruction(pattern)
-            elif any(char in instruction for char in r"\[]().*+?^${}|"):
-                editor.remove_Xinstruction(instruction)
-            else:
-                editor.remove_instruction(instruction)
-            result = f"Removed directive: {instruction}"
+            removed = _remove_directive_or_comment(editor, instruction)
+            result = f"Removed {removed.label}: {instruction}"
 
         else:
             raise NetlistError(f"Invalid action '{action}'. Must be 'add' or 'remove'.")
 
     return text_response(result)
+
+
+@dataclass(frozen=True)
+class _RemoveResult:
+    """Tag describing what kind of entry was removed."""
+
+    label: str
+
+
+def _remove_directive_or_comment(editor, instruction: str) -> "_RemoveResult":
+    """Remove a directive or comment matching ``instruction`` (regex- or literal).
+
+    spicelib distinguishes "directives" (``.foo``) from "comments" (free
+    text in TEXT entries). The user-facing ``edit_directive remove`` should
+    not require them to know which kind they're targeting; this helper
+    hits both when applicable.
+    """
+    if instruction.startswith("regex:"):
+        pattern = instruction[6:]
+        if not pattern.strip():
+            raise NetlistError(
+                "Empty regex pattern would match every directive; "
+                "provide an explicit regex after 'regex:'."
+            )
+        editor.remove_Xinstruction(pattern)
+        # Best-effort: also remove TEXT-COMMENT entries whose body matches.
+        _strip_matching_comments(editor, re.compile(pattern))
+        return _RemoveResult(label="directive(s)/comment(s)")
+    if any(char in instruction for char in r"\[]().*+?^${}|"):
+        editor.remove_Xinstruction(instruction)
+        _strip_matching_comments(editor, re.compile(instruction))
+        return _RemoveResult(label="directive(s)/comment(s)")
+    editor.remove_instruction(instruction)
+    _strip_matching_comments(editor, instruction)
+    return _RemoveResult(label="directive")
+
+
+def _asc_directive_lines(editor: AscEditor) -> list[str]:
+    """Return the SPICE-directive text bodies from an .asc editor.
+
+    Free-text COMMENT TEXT entries are filtered out — only DIRECTIVE-type
+    entries flow through. Used by both ``edit_directive`` and
+    ``validate_netlist`` so the ``.asc`` directive boundary is defined in
+    exactly one place.
+    """
+    return [
+        d.text
+        for d in editor.directives
+        if getattr(d, "type", None) == TextTypeEnum.DIRECTIVE and isinstance(d.text, str)
+    ]
+
+
+def _strip_matching_comments(editor, matcher) -> None:
+    """Best-effort removal of TEXT-COMMENT entries whose body matches.
+
+    ``matcher`` is either a literal string (exact match) or a compiled
+    regex. ``editor.directives`` only exists on AscEditor — silently
+    no-op for netlist-mode editors.
+    """
+    directives = getattr(editor, "directives", None)
+    if directives is None:
+        return
+    keep = []
+    for entry in directives:
+        body = getattr(entry, "text", None)
+        entry_kind = getattr(entry, "type", None)
+        if entry_kind == TextTypeEnum.COMMENT and isinstance(body, str):
+            if isinstance(matcher, str):
+                if body.strip() == matcher.strip():
+                    continue
+            else:
+                if matcher.search(body):
+                    continue
+        keep.append(entry)
+    if len(keep) != len(directives):
+        directives[:] = keep
 
 
 # ---------------------------------------------------------------------------
@@ -912,7 +1171,9 @@ async def handle_edit_directive(args: EditDirectiveInput, state: SessionState) -
     ),
     profiles=("full",),
 )
-async def handle_remove_component(args: RemoveComponentInput, state: SessionState) -> types.CallToolResult:
+async def handle_remove_component(
+    args: RemoveComponentInput, state: SessionState
+) -> types.CallToolResult:
     """Remove a component from a schematic by reference designator."""
     asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
@@ -961,7 +1222,9 @@ async def handle_remove_component(args: RemoveComponentInput, state: SessionStat
     ),
     profiles=("full",),
 )
-async def handle_move_component(args: MoveComponentInput, state: SessionState) -> types.CallToolResult:
+async def handle_move_component(
+    args: MoveComponentInput, state: SessionState
+) -> types.CallToolResult:
     """Move or rotate a component in a schematic."""
     asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
@@ -1044,7 +1307,9 @@ async def handle_set_component_attribute(
         },
     },
 )
-async def handle_add_component(args: AddComponentInput, state: SessionState) -> types.CallToolResult:
+async def handle_add_component(
+    args: AddComponentInput, state: SessionState
+) -> types.CallToolResult:
     """Add a new component to an .asc schematic."""
     asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
@@ -1076,8 +1341,14 @@ async def handle_add_component(args: AddComponentInput, state: SessionState) -> 
             )
 
         _create_component(
-            editor, reference, symbol, x, y, erot,
-            value=value, attributes=args.attributes,
+            editor,
+            reference,
+            symbol,
+            x,
+            y,
+            erot,
+            value=value,
+            attributes=args.attributes,
         )
 
     result = f"Added {reference} ({symbol}) at ({x},{y})"
@@ -1086,7 +1357,12 @@ async def handle_add_component(args: AddComponentInput, state: SessionState) -> 
 
     sym_info = get_symbol_info(symbol)
     if sym_info is None:
-        fallback_data = {"reference": reference, "symbol": symbol, "position": {"x": x, "y": y}, "rotation": rotation}
+        fallback_data = {
+            "reference": reference,
+            "symbol": symbol,
+            "position": {"x": x, "y": y},
+            "rotation": rotation,
+        }
         return format_response(result, fallback_data, None)
 
     geometry = compute_placed_geometry(sym_info, x, y, rotation)
@@ -1136,7 +1412,9 @@ _previous_exports: dict[Path, list[str]] = {}
     ),
     profiles=("full", "agentic"),
 )
-async def handle_export_netlist(args: ExportNetlistInput, state: SessionState) -> types.CallToolResult:
+async def handle_export_netlist(
+    args: ExportNetlistInput, state: SessionState
+) -> types.CallToolResult:
     """Export an .asc schematic to a SPICE netlist (.net) using LTspice."""
     asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
@@ -1209,9 +1487,7 @@ async def handle_export_netlist(args: ExportNetlistInput, state: SessionState) -
         },
     },
 )
-async def handle_symbol_info(
-    args: SymbolInfoInput, state: SessionState
-) -> types.CallToolResult:
+async def handle_symbol_info(args: SymbolInfoInput, state: SessionState) -> types.CallToolResult:
     """Get symbol geometry info for schematic layout planning."""
     symbol = args.symbol
     sym_info = get_symbol_info(symbol)
@@ -1238,7 +1514,7 @@ async def handle_symbol_info(
     bb = geometry["bounding_box"]
     lines.append(f"Bounding box: ({bb['x']},{bb['y']}) {bb['width']}x{bb['height']}")
 
-    return format_response("\n".join(lines), data, None)
+    return format_response("\n".join(lines), data, args.format)
 
 
 @registry.tool(
@@ -1320,12 +1596,10 @@ async def handle_component_info(
             data.setdefault("attributes", {})[attr_name] = attr_val
             lines.append(f"{attr_name}: {attr_val}")
 
-    return format_response("\n".join(lines), data, None)
+    return format_response("\n".join(lines), data, args.format)
 
 
-def _resolve_pin(
-    pin_ref: str, editor: AscEditor
-) -> tuple[int, int]:
+def _resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
     """Resolve a pin reference ('M1.D' or 'net:VDD') to absolute (x, y) coordinates.
 
     Raises NetlistError if the reference cannot be resolved.
@@ -1334,9 +1608,7 @@ def _resolve_pin(
         # Look up a FLAG/net label position in the .asc
         net_name = pin_ref[4:]
         matches = [
-            (int(lbl.coord.X), int(lbl.coord.Y))
-            for lbl in editor.labels
-            if lbl.text == net_name
+            (int(lbl.coord.X), int(lbl.coord.Y)) for lbl in editor.labels if lbl.text == net_name
         ]
         if not matches:
             raise NetlistError(
@@ -1398,9 +1670,7 @@ def _resolve_pin(
     ),
     profiles=("full", "agentic"),
 )
-async def handle_add_net_label(
-    args: NetLabelInput, state: SessionState
-) -> types.CallToolResult:
+async def handle_add_net_label(args: NetLabelInput, state: SessionState) -> types.CallToolResult:
     """Add or remove a FLAG (net label or ground) in a schematic."""
     asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
@@ -1443,37 +1713,6 @@ async def handle_add_net_label(
 
     result += f"Added {label_desc} at ({x},{y})"
     return text_response(result)
-
-
-@registry.tool(
-    name="ltspice_add_text",
-    description="Add a comment text annotation to an .asc schematic.",
-    input_model=AddTextInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-)
-async def handle_add_text(
-    args: AddTextInput, state: SessionState
-) -> types.CallToolResult:
-    """Add a comment text to a schematic."""
-    asc_path = safe_path(args.path, state)
-    _require_asc(asc_path)
-
-    async with _editing_asc(asc_path, state) as editor:
-        comment = Text(
-            coord=Point(args.x, args.y),
-            text=args.text,
-            type=TextTypeEnum.COMMENT,
-            size=args.size,
-        )
-        editor.directives.append(comment)
-
-    return text_response(f"Added text at ({args.x},{args.y}): {args.text}")
 
 
 @registry.tool(
@@ -1522,9 +1761,7 @@ async def handle_add_text(
         },
     },
 )
-async def handle_connect(
-    args: ConnectInput, state: SessionState
-) -> types.CallToolResult:
+async def handle_connect(args: ConnectInput, state: SessionState) -> types.CallToolResult:
     """Connect two pins with auto-routed or waypoint-guided wires."""
     asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
@@ -1741,3 +1978,420 @@ async def handle_connect(
         data["warnings"] = warnings
 
     return format_response("\n".join(result_lines), data, None)
+
+
+# ---------------------------------------------------------------------------
+# New tools: schematic seeding, netlist validation, .step querying, diff
+# ---------------------------------------------------------------------------
+
+
+class CreateSchematicInput(ToolInput):
+    name: str = Field(description="File name without the .asc extension")
+    width: int = Field(
+        default=880,
+        description="Sheet width (LTspice grid units). 880 matches LTspice's default.",
+    )
+    height: int = Field(
+        default=680,
+        description="Sheet height (LTspice grid units). 680 matches LTspice's default.",
+    )
+    overwrite: bool = Field(
+        default=False,
+        description="Overwrite an existing file at this path. Default is to refuse.",
+    )
+
+
+@registry.tool(
+    name="ltspice_create_schematic",
+    description=(
+        "Create an empty .asc schematic ready for incremental editing via "
+        "ltspice_add_component / ltspice_connect / ltspice_add_net_label. "
+        "Tip: prefer ``ltspice_create_netlist`` + .cir for design iteration; "
+        "use this only when a visual schematic is the deliverable."
+    ),
+    input_model=CreateSchematicInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    ),
+    profiles=("full",),
+)
+async def handle_create_schematic(
+    args: CreateSchematicInput, state: SessionState
+) -> types.CallToolResult:
+    """Create an empty .asc schematic file."""
+    target_path = safe_path(f"{args.name}.asc", state)
+    if args.width <= 0 or args.height <= 0:
+        raise NetlistError(
+            f"Sheet dimensions must be positive; got width={args.width}, height={args.height}"
+        )
+    body = f"Version 4\nSHEET 1 {args.width} {args.height}\n"
+    try:
+        atomic_write_text(target_path, body, overwrite=args.overwrite, durable=False)
+    except FileExistsError as e:
+        raise NetlistError(
+            f"File already exists: {target_path}. Pass overwrite=true to replace it."
+        ) from e
+    return text_response(
+        f"Created schematic: {target_path}\n  Sheet: {args.width} x {args.height}"
+    )
+
+
+class ValidateNetlistInput(ToolInput):
+    path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
+
+
+@registry.tool(
+    name="ltspice_validate_netlist",
+    description=(
+        "Run static checks over a netlist or schematic before simulation: "
+        "rejects known-bad .MEAS patterns (vdb()/phase()/group_delay()), "
+        "flags spicelib-unparseable B-source lines, and surfaces directives "
+        "that the LTspice runner is known to reject. Returns a structured "
+        "list of issues; an empty list means the file passes the static gate."
+    ),
+    input_model=ValidateNetlistInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "file": {"type": "string"},
+            "issue_count": {"type": "integer"},
+            "issues": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "severity": {"type": "string", "enum": ["error", "warning"]},
+                        "line": {"type": ["integer", "null"]},
+                        "directive": {"type": "string"},
+                        "message": {"type": "string"},
+                        "suggestion": {"type": ["string", "null"]},
+                    },
+                },
+            },
+        },
+    },
+)
+async def handle_validate_netlist(
+    args: ValidateNetlistInput, state: SessionState
+) -> types.CallToolResult:
+    """Static validation pass over a netlist / schematic."""
+    file_path = safe_path(args.path, state)
+    fmt = args.format
+
+    if _is_asc(file_path):
+        try:
+            content = "\n".join(_asc_directive_lines(_get_asc_editor(file_path, state)))
+        except Exception as e:
+            raise NetlistError(f"Failed to open .asc: {e}") from e
+    else:
+        content = file_path.read_text(encoding="utf-8", errors="replace")
+
+    issues: list[dict] = []
+    for lineno, raw_line in enumerate(content.splitlines(), 1):
+        line = raw_line.strip()
+        if not line.startswith("."):
+            continue
+        err = validate_directive(line, simulator="LTspice")
+        if err is not None:
+            issues.append(
+                {
+                    "severity": "error",
+                    "line": lineno,
+                    "directive": line,
+                    "message": err.message,
+                    "suggestion": err.suggestion,
+                }
+            )
+
+    # Sniff for B-sources whose value field contains commas inside if(...)
+    # — those defeat spicelib's component-line regex (Bug K).
+    if not _is_asc(file_path):
+        for lineno, raw_line in enumerate(content.splitlines(), 1):
+            line = raw_line.lstrip()
+            if line[:1].upper() != "B":
+                continue
+            if "if(" in line.lower() and "," in line:
+                issues.append(
+                    {
+                        "severity": "warning",
+                        "line": lineno,
+                        "directive": line.rstrip(),
+                        "message": (
+                            "Behavioural source uses an ``if(...)`` expression "
+                            "with commas — spicelib's component-line regex "
+                            "rejects this shape, so ``read_circuit`` and "
+                            "``list_components`` will report ``<unparseable>`` "
+                            "for this ref. The LTspice simulator parses it fine."
+                        ),
+                        "suggestion": (
+                            "If you need spicelib to introspect the value, "
+                            "rewrite as ``limit(...)`` or split into multiple "
+                            "B-sources without commas."
+                        ),
+                    }
+                )
+
+    summary = {"file": str(file_path), "issue_count": len(issues), "issues": issues}
+    if not issues:
+        return format_response(f"OK: no issues in {file_path.name}", summary, fmt)
+    lines = [f"{file_path.name}: {len(issues)} issue(s)"]
+    for issue in issues:
+        loc = f":{issue['line']}" if issue.get("line") else ""
+        lines.append(f"  [{issue['severity']}] line{loc}: {issue['message']}")
+        if issue.get("directive"):
+            lines.append(f"    {issue['directive']}")
+        if issue.get("suggestion"):
+            lines.append(f"    Suggestion: {issue['suggestion']}")
+    return format_response("\n".join(lines), summary, fmt)
+
+
+class DiffCircuitInput(ToolInput):
+    path_a: str = Field(description="Path to the first circuit file (.cir, .net, or .asc)")
+    path_b: str = Field(description="Path to the second circuit file (.cir, .net, or .asc)")
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
+
+
+def _components_and_directives(path: Path) -> tuple[dict[str, str], set[str]]:
+    """Return (components, directive_lines) for a circuit file in one read.
+
+    Reuses ``services.extract_{asc,netlist}_info`` so unparseable B-sources,
+    AscEditor dispatch, and directive collection all flow through the
+    canonical path. No second disk read.
+    """
+    try:
+        ed = _make_editor(path)
+    except Exception:
+        return {}, set()
+    if _is_asc(path):
+        assert isinstance(ed, AscEditor)  # _make_editor dispatches on extension
+        info = services.extract_asc_info(ed, path)
+        components = {comp["reference"]: str(comp["value"]) for comp in info["components"]}
+        directives = {d.strip() for d in info.get("directives", []) if d.strip().startswith(".")}
+        return components, directives
+    info = services.extract_netlist_info(ed, path)
+    components = {comp["reference"]: str(comp["value"]) for comp in info["components"]}
+    directives = {
+        line.strip()
+        for line in info.get("content", "").splitlines()
+        if line.strip().startswith(".")
+    }
+    return components, directives
+
+
+@registry.tool(
+    name="ltspice_diff_circuit",
+    description=(
+        "Structural diff between two circuit files: reports added/removed "
+        "components, components whose value changed, and added/removed "
+        ".PARAM/.MEAS/.MODEL directives. Use after ``set_component_value`` "
+        "or ``edit_directive`` to confirm that the intended change "
+        "actually landed."
+    ),
+    input_model=DiffCircuitInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+)
+async def handle_diff_circuit(args: DiffCircuitInput, state: SessionState) -> types.CallToolResult:
+    """Structural diff between two circuit files."""
+    path_a = safe_path(args.path_a, state)
+    path_b = safe_path(args.path_b, state)
+
+    a, da = _components_and_directives(path_a)
+    b, db = _components_and_directives(path_b)
+
+    added = sorted(set(b) - set(a))
+    removed = sorted(set(a) - set(b))
+    changed: list[dict[str, str]] = []
+    for ref in sorted(set(a) & set(b)):
+        if a[ref] != b[ref]:
+            changed.append({"reference": ref, "before": a[ref], "after": b[ref]})
+
+    directive_added = sorted(db - da)
+    directive_removed = sorted(da - db)
+
+    data = {
+        "path_a": str(path_a),
+        "path_b": str(path_b),
+        "components_added": added,
+        "components_removed": removed,
+        "components_changed": changed,
+        "directives_added": directive_added,
+        "directives_removed": directive_removed,
+    }
+
+    lines = [f"Diff: {path_a.name} -> {path_b.name}"]
+    if added:
+        lines.append("Components added:")
+        for r in added:
+            lines.append(f"  + {r}: {b[r]}")
+    if removed:
+        lines.append("Components removed:")
+        for r in removed:
+            lines.append(f"  - {r}: {a[r]}")
+    if changed:
+        lines.append("Components changed:")
+        for c in changed:
+            lines.append(f"  ~ {c['reference']}: {c['before']} -> {c['after']}")
+    if directive_added:
+        lines.append("Directives added:")
+        for d in directive_added:
+            lines.append(f"  + {d}")
+    if directive_removed:
+        lines.append("Directives removed:")
+        for d in directive_removed:
+            lines.append(f"  - {d}")
+    if not (added or removed or changed or directive_added or directive_removed):
+        lines.append("(no structural differences)")
+
+    return format_response("\n".join(lines), data, args.format)
+
+
+class StepGetInput(ToolInput):
+    raw_file: str = Field(description="Path to a stepped .raw result")
+    axis: str = Field(
+        description=(
+            "Step parameter name to query (e.g. ``temp``, ``RS``). For .DC "
+            "sweeps the axis is the swept variable; for .step parametric "
+            "runs it's the parameter that was stepped."
+        ),
+    )
+    value: str = Field(
+        description="SPICE-notation target value (e.g. ``27``, ``1k``, ``100u``).",
+    )
+    signal: str = Field(description="Signal to read at the chosen step (e.g. ``V(out)``).")
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
+
+
+@registry.tool(
+    name="ltspice_step_get",
+    description=(
+        "Look up a signal at a chosen value of a .step / .DC sweep axis "
+        "(e.g. ``axis='temp', value='27'``). Avoids the manual run_index → "
+        "params lookup users had to do via ltspice_batch_results."
+    ),
+    input_model=StepGetInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+)
+async def handle_step_get(args: StepGetInput, state: SessionState) -> types.CallToolResult:
+    """Query a signal at a specific axis value of a stepped .raw result."""
+    raw_path = safe_path(args.raw_file, state)
+    raw = services.load_raw(raw_path, state)
+
+    try:
+        target = parse_spice_value(args.value)
+    except ValueError as e:
+        raise NetlistError(f"Invalid value {args.value!r}: {e}") from e
+
+    signal = services.validate_signal(raw, args.signal)
+
+    # Strategy: if ``axis`` matches the .raw's axis name (case-insensitive),
+    # use the axis values directly. Otherwise fall back to .step parameter
+    # lookup via spicelib's ``get_steps``.
+    raw_axis_name = ""
+    try:
+        plot = raw.get_raw_property("Plotname")
+        if plot:
+            # Plotname doesn't carry the axis name; pull from trace 0.
+            raw_axis_name = raw.get_trace_names()[0]
+    except Exception:
+        pass
+
+    axis_lower = args.axis.lower()
+    if raw_axis_name and axis_lower == raw_axis_name.lower():
+        try:
+            axis_vals = list(raw.get_axis(step=0))
+        except Exception as e:
+            raise NetlistError(
+                f"Cannot read axis values: {e}. Use ltspice_query_value if "
+                "the raw doesn't have an explicit axis."
+            ) from e
+        # nearest neighbour
+        ins = bisect.bisect_left(axis_vals, target)
+        if ins == 0:
+            idx = 0
+        elif ins == len(axis_vals):
+            idx = len(axis_vals) - 1
+        else:
+            idx = (
+                ins - 1
+                if abs(axis_vals[ins - 1] - target) <= abs(axis_vals[ins] - target)
+                else ins
+            )
+        wave = raw.get_wave(signal, step=0)
+        actual = float(axis_vals[idx])
+        value = float(wave[idx])
+        data = {
+            "signal": signal,
+            "axis": args.axis,
+            "requested_value": target,
+            "actual_value": actual,
+            "value": value,
+        }
+        return format_response(f"{signal} at {args.axis}={actual:g}: {value:g}", data, args.format)
+
+    # Fallback: spicelib step lookup.
+    try:
+        steps = raw.get_steps()
+    except Exception as e:
+        raise NetlistError(f"Raw file has no .step iterations: {e}") from e
+
+    best_idx = None
+    best_actual: float | None = None
+    for i, step_record in enumerate(steps):
+        # spicelib returns dicts like {"temp": -40, "RS": 1000}.
+        if isinstance(step_record, dict):
+            v = step_record.get(args.axis)
+            if v is None:
+                # try case-insensitive match
+                for k, val in step_record.items():
+                    if k.lower() == axis_lower:
+                        v = val
+                        break
+            if v is None:
+                continue
+            try:
+                v_f = float(v)
+            except (TypeError, ValueError):
+                continue
+            if best_actual is None or abs(v_f - target) < abs(best_actual - target):
+                best_actual = v_f
+                best_idx = i
+
+    if best_idx is None:
+        raise NetlistError(
+            f"Step axis {args.axis!r} not found in this raw file. "
+            "Available axes: "
+            + (", ".join(steps[0].keys()) if steps and isinstance(steps[0], dict) else "<none>")
+        )
+
+    wave = raw.get_wave(signal, step=best_idx)
+    point = float(wave[0]) if len(wave) else float("nan")
+    data = {
+        "signal": signal,
+        "axis": args.axis,
+        "requested_value": target,
+        "actual_value": best_actual,
+        "step_index": best_idx,
+        "value": point,
+    }
+    return format_response(
+        f"{signal} at {args.axis}={best_actual:g} (step {best_idx}): {point:g}",
+        data,
+        args.format,
+    )

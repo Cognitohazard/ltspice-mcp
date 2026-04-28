@@ -8,10 +8,10 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.circuit import (
     AddComponentInput,
-    AddTextInput,
     CircuitReadInput,
     ComponentInfoInput,
     ConnectInput,
+    EditDirectiveInput,
     MoveComponentInput,
     NetLabelInput,
     RemoveComponentInput,
@@ -19,9 +19,9 @@ from ltspice_mcp.tools.circuit import (
     SymbolInfoInput,
     handle_add_component,
     handle_add_net_label,
-    handle_add_text,
     handle_component_info,
     handle_connect,
+    handle_edit_directive,
     handle_list_components,
     handle_move_component,
     handle_read_circuit,
@@ -34,9 +34,7 @@ from ltspice_mcp.tools.circuit import (
 @pytest.mark.asyncio
 class TestReadAscCircuit:
     async def test_reads_components(self, asc_state: SessionState, asc_file: Path):
-        result = await handle_read_circuit(
-            CircuitReadInput(path=asc_file.name), asc_state
-        )
+        result = await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
         text = result.content[0].text
         assert "C1" in text
         assert "R1" in text
@@ -64,9 +62,7 @@ class TestGetSymbolInfo:
 
     async def test_unknown_symbol(self, asc_state: SessionState):
         with pytest.raises(NetlistError, match="not found"):
-            await handle_symbol_info(
-                SymbolInfoInput(symbol="bogus_xyz_zzz"), asc_state
-            )
+            await handle_symbol_info(SymbolInfoInput(symbol="bogus_xyz_zzz"), asc_state)
 
 
 @pytest.mark.asyncio
@@ -103,9 +99,7 @@ class TestRemoveComponent:
         )
         assert "Removed C1" in result.content[0].text
         # Confirm not present anymore
-        read = await handle_read_circuit(
-            CircuitReadInput(path=asc_file.name), asc_state
-        )
+        read = await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
         comp_refs = [c["reference"] for c in read.structuredContent["components"]]
         assert "C1" not in comp_refs
 
@@ -127,9 +121,7 @@ class TestMoveComponent:
 
     async def test_move_with_rotation(self, asc_state: SessionState, asc_file: Path):
         result = await handle_move_component(
-            MoveComponentInput(
-                path=asc_file.name, reference="R1", x=300, y=200, rotation="R180"
-            ),
+            MoveComponentInput(path=asc_file.name, reference="R1", x=300, y=200, rotation="R180"),
             asc_state,
         )
         assert "R180" in result.content[0].text
@@ -178,9 +170,7 @@ class TestAddComponent:
     async def test_add_duplicate(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="already exists"):
             await handle_add_component(
-                AddComponentInput(
-                    path=asc_file.name, reference="R1", symbol="res", x=0, y=0
-                ),
+                AddComponentInput(path=asc_file.name, reference="R1", symbol="res", x=0, y=0),
                 asc_state,
             )
 
@@ -203,16 +193,12 @@ class TestAddNetLabel:
 
     async def test_missing_xy_and_pin(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="Either pin or both"):
-            await handle_add_net_label(
-                NetLabelInput(path=asc_file.name, net="X"), asc_state
-            )
+            await handle_add_net_label(NetLabelInput(path=asc_file.name, net="X"), asc_state)
 
     async def test_remove_existing(self, asc_state: SessionState, asc_file: Path):
         # Draft1.asc has "filtered" label at (208, 128)
         result = await handle_add_net_label(
-            NetLabelInput(
-                path=asc_file.name, net="filtered", x=208, y=128, action="remove"
-            ),
+            NetLabelInput(path=asc_file.name, net="filtered", x=208, y=128, action="remove"),
             asc_state,
         )
         assert "Removed" in result.content[0].text
@@ -220,9 +206,7 @@ class TestAddNetLabel:
     async def test_remove_nonexistent(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="No"):
             await handle_add_net_label(
-                NetLabelInput(
-                    path=asc_file.name, net="zz", x=999, y=999, action="remove"
-                ),
+                NetLabelInput(path=asc_file.name, net="zz", x=999, y=999, action="remove"),
                 asc_state,
             )
 
@@ -236,13 +220,51 @@ class TestAddNetLabel:
 
 
 @pytest.mark.asyncio
-class TestAddText:
-    async def test_add(self, asc_state: SessionState, asc_file: Path):
-        result = await handle_add_text(
-            AddTextInput(path=asc_file.name, text="Test note", x=100, y=200),
+class TestEditDirectiveCommentKind:
+    async def test_add_comment_via_edit_directive(self, asc_state: SessionState, asc_file: Path):
+        """Free-text annotations now go through ``edit_directive`` with
+        ``kind='comment'`` instead of the old ``add_text`` tool."""
+        result = await handle_edit_directive(
+            EditDirectiveInput(
+                path=asc_file.name,
+                action="add",
+                instruction="Test note",
+                kind="comment",
+                x=100,
+                y=200,
+            ),
             asc_state,
         )
         assert "Test note" in result.content[0].text
+
+    async def test_remove_spans_directive_and_comment(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        """``remove`` should hit comments too — previously you could
+        ``add_text`` a stray ``;.foo`` line and ``edit_directive remove``
+        couldn't touch it."""
+        await handle_edit_directive(
+            EditDirectiveInput(
+                path=asc_file.name,
+                action="add",
+                instruction="zap me",
+                kind="comment",
+            ),
+            asc_state,
+        )
+        await handle_edit_directive(
+            EditDirectiveInput(
+                path=asc_file.name,
+                action="remove",
+                instruction="regex:zap me",
+            ),
+            asc_state,
+        )
+        # Comment should be gone — re-removing yields no error since the
+        # underlying spicelib calls are tolerant of misses. ASC files may
+        # contain Latin-1 µ characters, so read raw bytes and replace.
+        text = asc_file.read_bytes().decode("utf-8", errors="replace")  # noqa: ASYNC240
+        assert "zap me" not in text
 
 
 @pytest.mark.asyncio
@@ -263,9 +285,7 @@ class TestConnect:
                 asc_state,
             )
 
-    async def test_multiple_ground_labels_error(
-        self, asc_state: SessionState, asc_file: Path
-    ):
+    async def test_multiple_ground_labels_error(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="Multiple '0'"):
             await handle_connect(
                 ConnectInput(

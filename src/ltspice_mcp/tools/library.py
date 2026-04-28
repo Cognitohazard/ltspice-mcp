@@ -7,7 +7,6 @@ from pydantic import Field
 
 from ltspice_mcp.errors import LibraryError
 from ltspice_mcp.lib.mcp_logging import mcp_log
-from ltspice_mcp.lib.services import format_suggestion_block
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     PAGINATION_SCHEMA,
@@ -22,19 +21,36 @@ from ltspice_mcp.tools._base import (
 )
 
 
-class GetModelInfoInput(ToolInput):
-    name: str = Field(description="Model or subcircuit name (case-insensitive)")
-    full: bool = Field(default=False, description="Include full SPICE definition text")
-    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
-
-
 class FindModelInput(ToolInput):
     name: str = Field(description="Model/subcircuit name to match (case-insensitive)")
-    exact: bool = Field(default=False, description="Only return the exact case-insensitive match (score=1.0) if any; skips fuzzy scoring.")
-    limit: int = Field(default=5, description="Max suggestions to return (1-25). Ignored when exact=true.")
-    cutoff: float = Field(default=0.6, description="Minimum fuzzy similarity ratio (0.0-1.0). Lower = more matches, noisier. Ignored when exact=true.")
-    include_builtin: bool = Field(default=False, description="Also walk built-in simulator libraries (slower; lazy-parses all built-ins on first call).")
-    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
+    exact: bool = Field(
+        default=False,
+        description="Only return the exact case-insensitive match (score=1.0) if any; skips fuzzy scoring.",
+    )
+    limit: int = Field(
+        default=5, description="Max suggestions to return (1-25). Ignored when exact=true."
+    )
+    cutoff: float = Field(
+        default=0.6,
+        description="Minimum fuzzy similarity ratio (0.0-1.0). Lower = more matches, noisier. Ignored when exact=true.",
+    )
+    include_builtin: bool = Field(
+        default=False,
+        description="Also walk built-in simulator libraries (slower; lazy-parses all built-ins on first call).",
+    )
+    full: bool = Field(
+        default=False,
+        description=(
+            "Include the full SPICE definition text + parameter list of every "
+            "returned candidate. Folds the old ``model_info`` tool "
+            "into this one — call ``find_model(name=X, exact=true, full=true)`` "
+            "for a single model's body."
+        ),
+    )
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
 
 
 class LoadLibraryInput(ToolInput):
@@ -50,78 +66,10 @@ class ListLibrariesInput(ToolInput):
     path: str | None = Field(default=None, description="Filter to a specific library path")
     offset: int = Field(default=0, description="Pagination offset")
     limit: int = Field(default=50, description="Max results to return")
-    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
-
-
-@registry.tool(
-    name="ltspice_model_info",
-    description=(
-        "Get SPICE model/subcircuit details including parameters and ready-to-use "
-        ".include directive. Set full=true to get the complete SPICE definition text."
-    ),
-    input_model=GetModelInfoInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_schema={
-        "type": "object",
-        "properties": {
-            "name": {"type": "string"},
-            "type": {"type": "string"},
-            "source_path": {"type": "string"},
-            "include_directive": {"type": "string"},
-            "parameters": {"type": "array", "items": {"type": "string"}},
-            "raw_text": {"type": "string"},
-        },
-    },
-)
-async def handle_model_info(args: GetModelInfoInput, state: SessionState):
-    """Get SPICE model/subcircuit details."""
-    name = args.name
-    full = args.full
-    fmt = args.format
-
-    try:
-        info = state.libraries.get_model_info(name, full)
-    except Exception as e:
-        raise LibraryError(f"Failed to get model info: {e}") from e
-
-    if info is None:
-        suggestions = state.libraries.find_similar_models(
-            name, limit=3, cutoff=0.6, include_builtin=False
-        )
-        msg = f"Model '{name}' not found in loaded libraries."
-        if suggestions:
-            block = format_suggestion_block({name: suggestions}, header="Did you mean:")
-            raise LibraryError(
-                f"{msg}{block}\n\nUse ltspice_find_model to browse more candidates.",
-                suggestions=suggestions,
-            )
-        raise LibraryError(
-            f"{msg} Load a library containing it with ltspice_load_library, "
-            "or lower the cutoff via ltspice_find_model(cutoff=...) for a wider search."
-        )
-
-    lines = [
-        f"Model: {info['name']}",
-        f"Type: {info['type']}",
-        f"Source: {info['source_path']}",
-        "",
-        "Include directive:",
-        f"  {info['include_directive']}",
-        "",
-    ]
-
-    if info["parameters"]:
-        lines.append("Parameters:")
-        for param in info["parameters"]:
-            lines.append(f"  {param}")
-        lines.append("")
-
-    if full and "raw_text" in info:
-        lines.append("Full SPICE definition:")
-        lines.append(info["raw_text"])
-
-    return format_response("\n".join(lines), info, fmt)
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
 
 
 @registry.tool(
@@ -179,6 +127,18 @@ async def handle_find_model(args: FindModelInput, state: SessionState):
     except Exception as e:
         raise LibraryError(f"Model search failed: {e}") from e
 
+    if args.full and results:
+        # Folds the old ``model_info`` tool: enrich each candidate
+        # with the full SPICE definition text. ``get_model_info`` is the
+        # cheapest way to get this since it reuses the parsed library cache.
+        for r in results:
+            try:
+                info = state.libraries.get_model_info(r["name"], full=True)
+            except Exception:
+                continue
+            if info is not None and "raw_text" in info:
+                r["raw_text"] = info["raw_text"]
+
     data = {
         "query": name,
         "results": results,
@@ -196,15 +156,16 @@ async def handle_find_model(args: FindModelInput, state: SessionState):
         else:
             hint = " Try lowering cutoff or ltspice_load_library to add more sources."
         reason = "No exact match" if exact else f"No fuzzy matches (cutoff={cutoff})"
-        return format_response(
-            f"{reason} for '{name}' in {scope} libraries.{hint}", data, fmt
-        )
+        return format_response(f"{reason} for '{name}' in {scope} libraries.{hint}", data, fmt)
 
     mode = "Exact match" if exact else f"Fuzzy matches (cutoff={cutoff})"
     lines = [f"{mode} for '{name}' in {scope} libraries:", ""]
     for r in results:
         lines.append(f"  {r['name']} ({r['type']}, score={r['score']}) - {r['source_path']}")
         lines.append(f"    {r['include_directive']}")
+        if args.full and "raw_text" in r:
+            for body_line in str(r["raw_text"]).splitlines():
+                lines.append(f"      {body_line}")
     return format_response("\n".join(lines), data, fmt)
 
 
@@ -267,7 +228,9 @@ async def handle_load_library(args: LoadLibraryInput, state: SessionState) -> ty
     ),
     profiles=("full",),
 )
-async def handle_unload_library(args: UnloadLibraryInput, state: SessionState) -> types.CallToolResult:
+async def handle_unload_library(
+    args: UnloadLibraryInput, state: SessionState
+) -> types.CallToolResult:
     """Unload a library from the session.
 
     Args:
@@ -386,4 +349,3 @@ async def handle_list_libraries(args: ListLibrariesInput, state: SessionState):
 
     data = {"libraries": lib_data, "pagination": pagination_metadata(total, offset, limit)}
     return format_response("\n".join(lines), data, fmt)
-

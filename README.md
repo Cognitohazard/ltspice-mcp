@@ -165,7 +165,7 @@ persistence entirely.
 
 | Profile | Tools | Use case |
 |-|-|-|
-| `full` (default) | All 47 tools | Backwards-compatible default for any MCP client |
+| `full` (default) | All 48 tools | Backwards-compatible default for any MCP client |
 | `agentic` | 33 | **Recommended** when your client supports skill files |
 
 The **agentic** profile removes netlist-editing wrappers, sweep/MC configuration tools, niche schematic operations, and library session management — things a capable LLM agent does better through direct file editing. It keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, AscEditor-dependent ops, and library search — the tools that provide genuine leverage over what an LLM can do natively.
@@ -190,7 +190,7 @@ Copy the relevant skill into whatever location your MCP client uses for persiste
 
 ## Tools
 
-All 47 tools are prefixed with `ltspice_` to avoid namespace conflicts with other MCP servers. Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) for client auto-approval decisions.
+All 48 tools are prefixed with `ltspice_` to avoid namespace conflicts with other MCP servers. Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) for client auto-approval decisions.
 
 ### Circuit editing (16 tools)
 
