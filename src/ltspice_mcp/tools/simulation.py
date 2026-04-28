@@ -58,7 +58,9 @@ class CheckJobInput(ToolInput):
         default=None,
         description="Job ID returned by ltspice_run_simulation. Omit to list jobs.",
     )
-    status: Literal["running", "queued", "completed", "failed", "timeout", "cancelled", "all"] | None = Field(
+    status: (
+        Literal["running", "queued", "completed", "failed", "timeout", "cancelled", "all"] | None
+    ) = Field(
         default=None,
         description="Filter by status when listing jobs.",
     )
@@ -156,7 +158,9 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     # leave an orphaned "running" job with no task to advance it
     runner = _get_or_create_runner(state)
     state.add_job(job)
-    await mcp_log("info", f"Simulation started: {netlist_path.name} ({default_simulator.__name__})")
+    await mcp_log(
+        "info", f"Simulation started: {netlist_path.name} ({default_simulator.__name__})"
+    )
     job.task = asyncio.create_task(runner.start_simulation(netlist_path, job, state))
 
     # Decide sync vs async
@@ -410,7 +414,12 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
             )
         return format_response(text, data, fmt)
     elif job.status == "completed":
-        duration = (job.completed_at - job.started_at).total_seconds() if job.completed_at else 0
+        duration = (
+            services.job_duration_seconds(
+                job.started_at, job.completed_at, label=f"sim job {job.job_id}"
+            )
+            or 0
+        )
         if job.raw_file is None or job.log_file is None:
             raise ResultError(
                 f"Job {job_id} completed but result files are missing.\n"
@@ -427,7 +436,12 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
             summary["suggestions"] = suggestions
         return _format_success_response(job_id, summary, fmt)
     elif job.status == "failed":
-        duration = (job.completed_at - job.started_at).total_seconds() if job.completed_at else 0
+        duration = (
+            services.job_duration_seconds(
+                job.started_at, job.completed_at, label=f"sim job {job.job_id}"
+            )
+            or 0
+        )
         error_msg = job.error or "Unknown error"
         data = {"job_id": job_id, "status": "failed", "duration": duration, "error": job.error}
         if job.log_file and job.log_file.exists():
@@ -442,7 +456,12 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
             fmt,
         )
     elif job.status == "timeout":
-        duration = (job.completed_at - job.started_at).total_seconds() if job.completed_at else 0
+        duration = (
+            services.job_duration_seconds(
+                job.started_at, job.completed_at, label=f"sim job {job.job_id}"
+            )
+            or 0
+        )
         log_excerpt = ""
         if job.log_file and job.log_file.exists():
             log_excerpt = f"\n\nLog excerpt:\n{extract_error_context(job.log_file, max_lines=20)}"
@@ -478,7 +497,9 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
     elif status_filter:
         jobs_to_show = [job for job in state.jobs.values() if job.status == status_filter]
     else:
-        jobs_to_show = [job for job in state.jobs.values() if job.status in NON_TERMINAL_LIVE_STATUSES]
+        jobs_to_show = [
+            job for job in state.jobs.values() if job.status in NON_TERMINAL_LIVE_STATUSES
+        ]
 
     # Sort by started_at (most recent first)
     jobs_to_show.sort(key=lambda j: j.started_at, reverse=True)
@@ -498,10 +519,15 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
 
     for job in jobs_to_show:
         if job.completed_at:
-            duration = (job.completed_at - job.started_at).total_seconds()
+            duration = (
+                services.job_duration_seconds(
+                    job.started_at, job.completed_at, label=f"sim job {job.job_id}"
+                )
+                or 0.0
+            )
             duration_str = f"{duration:.1f}s"
         else:
-            duration = (now() - job.started_at).total_seconds()
+            duration = max(0.0, (now() - job.started_at).total_seconds())
             duration_str = f"{duration:.1f}s (running)"
 
         started_str = job.started_at.strftime("%Y-%m-%d %H:%M")

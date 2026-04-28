@@ -483,11 +483,7 @@ def classify_filter(
     passband_tol = flatness_db * _PASSBAND_SIDE_TOL
 
     # BPF: peak interior, both endpoints well below peak.
-    if (
-        0.1 < frac_peak < 0.9
-        and drop_lo >= _CLEAR_DROP_DB
-        and drop_hi >= _CLEAR_DROP_DB
-    ):
+    if 0.1 < frac_peak < 0.9 and drop_lo >= _CLEAR_DROP_DB and drop_hi >= _CLEAR_DROP_DB:
         return "bandpass"
 
     # BSF: notch interior, both endpoints near the peak (not just above min).
@@ -637,11 +633,23 @@ def compute_filter_metrics(
         )
 
     pb_mask_final = (freqs >= f_pb_lo) & (freqs <= f_pb_hi)
-    passband_ripple = (
-        float(np.max(mag_db[pb_mask_final]) - np.min(mag_db[pb_mask_final]))
-        if pb_mask_final.any()
-        else 0.0
-    )
+    if pb_mask_final.any():
+        pb_mag = mag_db[pb_mask_final]
+        pb_span = float(np.max(pb_mag) - np.min(pb_mag))
+        # Friction F: a monotonic response (e.g. textbook LPF passband) has
+        # no actual ripple — the auto-detected passband just clips the
+        # roll-off at ``flatness_db``. Distinguish "ripple" (oscillation)
+        # from "monotonic passband variation" by checking sign changes in
+        # the first difference.
+        if pb_mag.size >= 3:
+            diffs = np.diff(pb_mag)
+            sign_changes = int(np.sum(np.diff(np.sign(diffs)) != 0))
+            is_monotonic = sign_changes <= 1
+        else:
+            is_monotonic = True
+        passband_ripple = 0.0 if is_monotonic else pb_span
+    else:
+        passband_ripple = 0.0
 
     cutoff_level = pb_gain + ref_db  # ref_db is negative → cutoff is below passband
 
@@ -744,10 +752,7 @@ def compute_filter_metrics(
             float(mag_db[idx_min - 1] - mag_db[idx_min]),
             float(mag_db[idx_min + 1] - mag_db[idx_min]),
         )
-        if (
-            neighbor_gap > _NOTCH_UNDERSAMPLED_GAP_DB
-            and filter_type in ("bandstop", "unknown")
-        ):
+        if neighbor_gap > _NOTCH_UNDERSAMPLED_GAP_DB and filter_type in ("bandstop", "unknown"):
             warnings.append(
                 f"Minimum at {float(freqs[idx_min]):.6g} Hz is flanked by "
                 f"samples ≥{neighbor_gap:.1f} dB higher — the true null likely "

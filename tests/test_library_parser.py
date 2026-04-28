@@ -101,11 +101,7 @@ class TestParseLibraryFile:
         # Regression: '.SUBCKT name node1 node2 PARAMS: key=value' previously
         # parsed PARAMS: and key=value as additional node names.
         lib = tmp_path / "params.lib"
-        lib.write_text(
-            ".SUBCKT myamp in out vcc PARAMS: gain=10 offset=0\n"
-            "R1 in out 1k\n"
-            ".ENDS\n"
-        )
+        lib.write_text(".SUBCKT myamp in out vcc PARAMS: gain=10 offset=0\nR1 in out 1k\n.ENDS\n")
         index = parse_library_file(lib)
         m = index.models[0]
         assert m.parameters == {"node1": "in", "node2": "out", "node3": "vcc"}
@@ -203,3 +199,36 @@ class TestParseLibraryFile:
         index = parse_library_file(lib)
         names = {m.name for m in index.models}
         assert "UTF8MODEL" in names
+
+    def test_utf16_le_without_bom(self, tmp_path: Path):
+        """Some LTspice 26+ installs ship ``standard.{mos,bjt}`` as UTF-16 LE
+        WITHOUT a BOM. Bug H: ``load_library`` returned 0 models for those
+        files. Heuristic null-byte detection picks them up now."""
+        lib = tmp_path / "no_bom.mos"
+        text = ".MODEL NMOS_NB NMOS(VTO=2.0 KP=0.05)\n.MODEL PMOS_NB PMOS(VTO=-1.5)\n"
+        lib.write_bytes(text.encode("utf-16-le"))
+
+        index = parse_library_file(lib)
+        names = {m.name for m in index.models}
+        assert "NMOS_NB" in names
+        assert "PMOS_NB" in names
+
+    def test_utf16_be_without_bom(self, tmp_path: Path):
+        lib = tmp_path / "no_bom_be.mos"
+        text = ".MODEL BE_MODEL NMOS(VTO=2.0)\n"
+        lib.write_bytes(text.encode("utf-16-be"))
+
+        index = parse_library_file(lib)
+        names = {m.name for m in index.models}
+        assert "BE_MODEL" in names
+
+    def test_utf8_ascii_without_bom_still_works(self, tmp_path: Path):
+        """Pure ASCII / UTF-8 libraries (most third-party .lib files) must
+        not be misclassified as UTF-16 by the heuristic."""
+        lib = tmp_path / "ascii.lib"
+        # ASCII text — no null bytes anywhere.
+        lib.write_bytes(b".MODEL ASCII_ONE NPN(BF=100)\n")
+
+        index = parse_library_file(lib)
+        names = {m.name for m in index.models}
+        assert "ASCII_ONE" in names

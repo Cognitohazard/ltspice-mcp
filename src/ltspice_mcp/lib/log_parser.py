@@ -5,8 +5,10 @@ For .raw file parsing (waveform data, statistics), see raw_parser.py.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
+import tempfile
 from pathlib import Path
 from typing import TypedDict
 
@@ -35,17 +37,43 @@ class LogDiagnostics(TypedDict):
     meas_errors: list[MeasErrorEntry]
 
 
+class _MeasurementMetadata(TypedDict, total=False):
+    """Optional metadata folded into a .MEAS result."""
+
+    range_from: float | None
+    range_to: float | None
+    at: float | None
+
+
+class MeasurementEntry(_MeasurementMetadata):
+    """One .MEAS result, with optional range/at metadata folded in.
+
+    ``values`` is one entry per .step iteration (length 1 for unstepped runs).
+    ``range_from`` / ``range_to`` carry the FROM/TO bounds for windowed measurements.
+    ``at`` carries the AT/WHEN time/freq for point measurements. Missing when
+    not applicable (use ``.get`` rather than ``[]`` to access).
+    """
+
+    values: list[float | None]
+
+
 class MeasurementsOutput(TypedDict):
     """Return shape of :func:`parse_measurements`.
 
     ``errors`` is populated only on the empty-measurements path (the log
     had no .MEAS results and the parser surfaced why). Always present in
     the return value — ``None`` when the measurement parse succeeded.
+
+    ``measurements`` is keyed by .meas name; each entry is a structured
+    :class:`MeasurementEntry` with ``values`` plus folded-in ``range_from``,
+    ``range_to``, and ``at`` metadata. The flat ``name_from`` / ``name_to`` /
+    ``name_at`` keys that spicelib emits are not surfaced separately.
     """
 
-    measurements: dict[str, list[float | None]]
+    measurements: dict[str, MeasurementEntry]
     step_count: int
     errors: list[str] | None
+
 
 _MAX_DIAGNOSTICS = 50
 
@@ -381,27 +409,99 @@ def parse_success_summary(raw_file: Path, log_file: Path, duration: float) -> di
     return result
 
 
+# Suffixes that spicelib's LTSpiceLogReader peels off into separate flat
+# measurements alongside the parent .MEAS name (e.g. ``v_rms`` →
+# ``v_rms_from`` and ``v_rms_to`` for FROM/TO window bounds, ``v_rms_at``
+# for AT/WHEN). These are metadata, not measurements — we fold them into
+# the parent's :class:`MeasurementEntry` and never surface them as their
+# own entries.
+_MEAS_METADATA_SUFFIXES: tuple[tuple[str, str], ...] = (
+    ("_from", "range_from"),
+    ("_to", "range_to"),
+    ("_at", "at"),
+)
+
+# Patterns we sanitize out of LTspice .FOUR blocks before handing them to
+# spicelib's LTSpiceLogReader. Upstream regex (``r"\d+.\d+"`` in
+# ``ltsteps.py:354``) does not match ``-nan`` / ``inf`` and crashes with
+# ``'NoneType' object has no attribute 'group'``. Replacing with ``0.0``
+# preserves the rest of the log so .MEAS results, errors, and any other
+# Fourier blocks survive.
+_RE_FOURIER_NAN = re.compile(
+    r"^(Total Harmonic Distortion|Partial Harmonic Distortion):\s*[-+]?(?:nan|inf)%?",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _sanitize_log_for_reader(content: str) -> str:
+    """Replace ``-nan``/``inf`` THD/PHD lines with ``0.0%`` so spicelib parses."""
+
+    def _sub(match: re.Match[str]) -> str:
+        return f"{match.group(1)}: 0.0%"
+
+    return _RE_FOURIER_NAN.sub(_sub, content)
+
+
+def make_log_reader(log_path: Path) -> LTSpiceLogReader:
+    """Build an LTSpiceLogReader, sanitizing known crash patterns on retry.
+
+    Spicelib's Fourier-block parser crashes on ``-nan``/``inf`` THD values
+    — common when the analysed signal is identically zero. We retry once
+    with a sanitized copy in a temp file before giving up.
+    """
+    try:
+        return LTSpiceLogReader(str(log_path))
+    except (AttributeError, ValueError) as first_err:
+        try:
+            content = log_path.read_text(errors="replace")
+        except OSError as e:
+            raise ResultError(f"Could not parse log file: {first_err}") from e
+        sanitized = _sanitize_log_for_reader(content)
+        if sanitized == content:
+            raise ResultError(f"Could not parse log file: {first_err}") from first_err
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=log_path.suffix,
+            prefix=f"{log_path.stem}.sanitized.",
+            delete=False,
+            encoding="utf-8",
+        ) as tmp:
+            tmp.write(sanitized)
+            tmp_path = Path(tmp.name)
+        try:
+            try:
+                return LTSpiceLogReader(str(tmp_path))
+            except Exception as e:
+                raise ResultError(f"Could not parse log file: {e}") from e
+        finally:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
+    except Exception as e:
+        raise ResultError(f"Could not parse log file: {e}") from e
+
+
 def parse_measurements(
     log_path: Path, reader: LTSpiceLogReader | None = None
 ) -> MeasurementsOutput:
     """Parse .MEAS measurement results from simulation log file.
+
+    The flat ``name_from`` / ``name_to`` / ``name_at`` keys that spicelib
+    emits as side-effects of ``FROM``/``TO``/``AT`` arguments are folded
+    into the parent measurement's :class:`MeasurementEntry` rather than
+    surfaced as standalone entries.
 
     Args:
         log_path: Path to .log file
         reader: Optional pre-built LTSpiceLogReader (avoids re-parsing)
 
     Returns:
-        Dictionary with measurements dict (name -> list of values) and step_count.
-        Values are Python float (or None for failed measurements).
+        :class:`MeasurementsOutput` with structured measurements.
 
     Raises:
         ResultError: If log file cannot be parsed
     """
     if reader is None:
-        try:
-            reader = LTSpiceLogReader(str(log_path))
-        except Exception as e:
-            raise ResultError(f"Could not parse log file: {e}") from e
+        reader = make_log_reader(log_path)
 
     measure_names = reader.get_measure_names()
     if not measure_names:
@@ -410,30 +510,52 @@ def parse_measurements(
         errors_list = diagnostics["errors"] or None
         return {"measurements": {}, "step_count": 0, "errors": errors_list}
 
-    measurements: dict[str, list[float | None]] = {}
-    for name in measure_names:
-        values = reader.dataset.get(name.lower(), [])  # dataset uses lowercase keys
-        python_values = []
+    def _coerce(values: list) -> list[float | None]:
+        out: list[float | None] = []
         for val in values:
             if val is None or (isinstance(val, str) and val.upper() == "FAILED"):
-                python_values.append(None)
+                out.append(None)
             elif isinstance(val, complex):
-                python_values.append(float(abs(val)))
+                out.append(float(abs(val)))
             elif hasattr(val, "item") and not isinstance(val, str):
-                python_values.append(float(val.item()))  # numpy scalar
+                out.append(float(val.item()))  # numpy scalar
             else:
-                # Try to coerce to float; on failure record as None (failed
-                # measurement) instead of crashing the whole call.
                 try:
-                    python_values.append(float(val))
+                    out.append(float(val))
                 except (TypeError, ValueError):
-                    logger.warning(
-                        f"Measurement '{name}' has non-numeric value {val!r}; recording as None"
-                    )
-                    python_values.append(None)
-        measurements[name] = python_values
+                    logger.warning("Measurement value %r is non-numeric; recording as None", val)
+                    out.append(None)
+        return out
 
-    step_count = len(measurements[measure_names[0]]) if measurements else 0
+    # Pass 1: split flat names into parent + metadata-suffix.
+    measure_name_set = set(measure_names)
+    parents: dict[str, list[float | None]] = {}
+    metadata: dict[str, dict[str, float | None]] = {}
+    for name in measure_names:
+        coerced = _coerce(reader.dataset.get(name.lower(), []))
+        suffix_match = next(
+            ((suffix, key) for suffix, key in _MEAS_METADATA_SUFFIXES if name.endswith(suffix)),
+            None,
+        )
+        if suffix_match:
+            suffix, meta_key = suffix_match
+            parent_name = name[: -len(suffix)]
+            if parent_name in measure_name_set:
+                # First non-None scalar wins; window/AT bounds are constants
+                # per-measurement so any later step would echo the same value.
+                first_val = next((v for v in coerced if v is not None), None)
+                metadata.setdefault(parent_name, {})[meta_key] = first_val
+                continue
+        parents[name] = coerced
+
+    measurements: dict[str, MeasurementEntry] = {}
+    for name, values in parents.items():
+        entry: MeasurementEntry = {"values": values}
+        for meta_key, meta_val in metadata.get(name, {}).items():
+            entry[meta_key] = meta_val  # type: ignore[literal-required]
+        measurements[name] = entry
+
+    step_count = len(next(iter(parents.values()))) if parents else 0
 
     return {"measurements": measurements, "step_count": step_count, "errors": None}
 
@@ -452,7 +574,7 @@ def parse_fourier_data(log_path: Path, reader: LTSpiceLogReader | None = None) -
     """
     if reader is None:
         try:
-            reader = LTSpiceLogReader(str(log_path))
+            reader = make_log_reader(log_path)
         except Exception:
             # If log parsing fails, return empty (graceful degradation)
             return []

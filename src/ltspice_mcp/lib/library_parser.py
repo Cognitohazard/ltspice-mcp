@@ -20,21 +20,58 @@ _BOM_ENCODINGS: tuple[tuple[bytes, str], ...] = (
 )
 
 
+def _detect_utf16_endianness(probe: bytes) -> str | None:
+    """Heuristic: ``"utf-16-le"`` / ``"utf-16-be"`` if every other byte is null.
+
+    LTspice's bundled ``lib/cmp/standard.{mos,bjt,...}`` files are UTF-16 LE
+    *without* a BOM in some installs. ASCII text in UTF-16 LE produces a
+    null byte at every odd position; UTF-16 BE puts the null at every even
+    position. Counting nulls in a small head-of-file probe is a cheap and
+    reliable disambiguator that avoids false-positives on real binary blobs
+    (those have mixed null distributions).
+    """
+    if len(probe) < 4 or len(probe) % 2:
+        probe = probe[: (len(probe) // 2) * 2]
+        if not probe:
+            return None
+    odd_nulls = sum(1 for i in range(1, len(probe), 2) if probe[i] == 0)
+    even_nulls = sum(1 for i in range(0, len(probe), 2) if probe[i] == 0)
+    half = len(probe) // 2
+    # A high concentration of nulls on one side and few on the other is
+    # the signature of UTF-16 ASCII text.
+    if odd_nulls > 0.8 * half and even_nulls < 0.2 * half:
+        return "utf-16-le"
+    if even_nulls > 0.8 * half and odd_nulls < 0.2 * half:
+        return "utf-16-be"
+    return None
+
+
 def _read_library_text(path: Path) -> str:
     """Read a SPICE library file with encoding auto-detection.
 
     LTspice's bundled ``lib/cmp/standard.{mos,bjt,...}`` files are UTF-16 LE
-    with a BOM. Earlier versions of this parser assumed UTF-8 (the platform
-    default for ``Path.read_text``) and silently produced empty model lists
-    for those files — so ``find_model(include_builtin=True)`` couldn't find
-    any of LTspice's stock parts. We now sniff the BOM and decode
-    accordingly, falling back to UTF-8 with replacement for ASCII files
-    without a BOM (which covers most third-party .lib files).
+    — with a BOM in some installs and **without** in others. Earlier versions
+    of this parser assumed UTF-8 (the platform default for ``Path.read_text``)
+    and silently produced empty model lists for those files — so
+    ``find_model(include_builtin=True)`` couldn't find any of LTspice's
+    stock parts.
+
+    Resolution order:
+
+    1. BOM sniff (UTF-32 LE/BE, UTF-16 LE/BE, UTF-8 with BOM).
+    2. Heuristic null-byte scan for UTF-16 LE/BE without BOM (the
+       LTspice 26+ ``standard.bjt``/``standard.mos`` shape).
+    3. UTF-8 with ``errors="replace"`` as the catch-all for ASCII /
+       most third-party ``.lib`` files.
     """
     raw = path.read_bytes()
     for bom, encoding in _BOM_ENCODINGS:
         if raw.startswith(bom):
-            return raw[len(bom):].decode(encoding, errors="replace")
+            return raw[len(bom) :].decode(encoding, errors="replace")
+    # Probe the first 256 bytes for a UTF-16 LE/BE pattern without a BOM.
+    encoding = _detect_utf16_endianness(raw[:256])
+    if encoding is not None:
+        return raw.decode(encoding, errors="replace")
     return raw.decode("utf-8", errors="replace")
 
 

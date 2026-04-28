@@ -80,8 +80,22 @@ def compute_batch_stats(
             if np.iscomplexobj(wave):
                 wave = np.abs(wave)
 
-            if at is not None:
+            point: float | None = None
+            try:
                 axis = np.asarray(raw.get_axis(step=0))
+                axis_size = axis.size
+            except Exception:
+                # Friction J: ``.op`` raws have no axis; the wave is a single
+                # scalar. ``peak``/``mean``/``min`` collapse to one value.
+                axis = None  # type: ignore[assignment]
+                axis_size = 0
+
+            if axis is None or axis_size == 0:
+                if wave.size == 0:
+                    continue
+                point = float(wave[0])
+                peak = mean_val = min_val = point
+            elif at is not None:
                 if np.iscomplexobj(axis):
                     axis = np.real(axis)
                 if axis.size == 0:
@@ -103,15 +117,19 @@ def compute_batch_stats(
                 mean_val = float(np.mean(wave))
                 min_val = float(np.min(wave))
 
-            per_run_summaries.append(
-                {
-                    "run_index": run_index,
-                    "params": run.get("params", {}),
-                    "peak": peak,
-                    "mean": mean_val,
-                    "min": min_val,
-                }
-            )
+            entry: dict = {
+                "run_index": run_index,
+                "params": run.get("params", {}),
+                "peak": peak,
+                "mean": mean_val,
+                "min": min_val,
+            }
+            # Friction J: when peak/mean/min collapse (point query or .op),
+            # surface a single ``value`` field too so downstream code doesn't
+            # need to know which mode produced the row.
+            if peak == mean_val == min_val:
+                entry["value"] = peak
+            per_run_summaries.append(entry)
             peak_values.append(peak)
 
         except Exception:
