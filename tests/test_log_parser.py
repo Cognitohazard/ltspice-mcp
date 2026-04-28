@@ -19,21 +19,18 @@ class TestExtractMissingRefs:
     def test_missing_model_quoted_name(self, tmp_path: Path):
         log = tmp_path / "missing_model.log"
         log.write_text(
-            'Error on line 2 : s1 n003 n001 n002 0 sw Unable to find '
-            'definition of model "sw"\n'
+            'Error on line 2 : s1 n003 n001 n002 0 sw Unable to find definition of model "sw"\n'
         )
         assert extract_missing_refs(log) == ["sw"]
 
     def test_missing_model_dialog_variant(self, tmp_path: Path):
         log = tmp_path / "missing_model.log"
-        log.write_text("Can't find definition of model \"NMOS_3v3\"\n")
+        log.write_text('Can\'t find definition of model "NMOS_3v3"\n')
         assert extract_missing_refs(log) == ["NMOS_3v3"]
 
     def test_unknown_subcircuit_last_token(self, tmp_path: Path):
         log = tmp_path / "missing_subckt.log"
-        log.write_text(
-            "Fatal Error: Unknown subcircuit called in: xu1 n004 n001 vcc 0 lm741\n"
-        )
+        log.write_text("Fatal Error: Unknown subcircuit called in: xu1 n004 n001 vcc 0 lm741\n")
         assert extract_missing_refs(log) == ["lm741"]
 
     def test_dedupes_repeated_refs(self, tmp_path: Path):
@@ -117,9 +114,7 @@ class TestExtractLogDiagnostics:
         suggestion pointing at mag()/filter_metrics."""
         log = tmp_path / "meas.log"
         log.write_text(
-            "/tmp/x.cir(9): No such function defined.\n"
-            ".meas AC fc_3dB WHEN vdb(out)=-3\n"
-            "^^^\n"
+            "/tmp/x.cir(9): No such function defined.\n.meas AC fc_3dB WHEN vdb(out)=-3\n^^^\n"
         )
         result = extract_log_diagnostics(log)
         assert len(result["meas_errors"]) == 1
@@ -136,9 +131,7 @@ class TestExtractLogDiagnostics:
         captured in meas_errors but with suggestion=None."""
         log = tmp_path / "meas2.log"
         log.write_text(
-            "/tmp/x.cir(7): unrecognized .meas form\n"
-            ".meas AC bogus FUNNYCLAUSE V(out)\n"
-            "^^^\n"
+            "/tmp/x.cir(7): unrecognized .meas form\n.meas AC bogus FUNNYCLAUSE V(out)\n^^^\n"
         )
         result = extract_log_diagnostics(log)
         assert len(result["meas_errors"]) == 1
@@ -147,11 +140,7 @@ class TestExtractLogDiagnostics:
     def test_non_meas_error_not_in_meas_errors(self, tmp_path: Path):
         """Component-level errors don't show up as .MEAS errors."""
         log = tmp_path / "comp.log"
-        log.write_text(
-            "/tmp/x.cir(3): bad component value\n"
-            "R1 in out abc\n"
-            "         ^^^\n"
-        )
+        log.write_text("/tmp/x.cir(3): bad component value\nR1 in out abc\n         ^^^\n")
         result = extract_log_diagnostics(log)
         assert len(result["errors"]) == 1
         assert result["meas_errors"] == []
@@ -182,7 +171,16 @@ class TestExtractErrorContext:
 
     def test_with_error_returns_context(self, tmp_path: Path):
         log = tmp_path / "err.log"
-        lines = ["line 0", "line 1", "line 2", "Error: bad", "line 4", "line 5", "line 6", "line 7"]
+        lines = [
+            "line 0",
+            "line 1",
+            "line 2",
+            "Error: bad",
+            "line 4",
+            "line 5",
+            "line 6",
+            "line 7",
+        ]
         log.write_text("\n".join(lines))
         result = extract_error_context(log, max_lines=20)
         assert "Error: bad" in result
@@ -249,9 +247,7 @@ class TestParseMeasurements:
     def test_no_measurements_with_errors(self, tmp_path: Path):
         log = tmp_path / "noerr.log"
         log.write_text(
-            "Circuit: * test\n"
-            "Fatal Error: missing model XYZ\n"
-            "Total elapsed time: 0.001 seconds.\n"
+            "Circuit: * test\nFatal Error: missing model XYZ\nTotal elapsed time: 0.001 seconds.\n"
         )
         result = parse_measurements(log)
         assert result["measurements"] == {}
@@ -288,5 +284,59 @@ class TestParseMeasurementsValid:
             "Total elapsed time: 0.001 seconds.\n"
         )
         result = parse_measurements(log)
-        assert "fc" in result["measurements"] or "fc_at" in result["measurements"]
+        assert "fc" in result["measurements"]
+        # ``_at`` metadata should be folded into the parent entry, not surfaced
+        # as its own measurement.
+        assert "fc_at" not in result["measurements"]
+        entry = result["measurements"]["fc"]
+        assert entry["values"] == [0.707] or entry["values"] == [0.707000000000]
+        assert entry.get("at") == pytest.approx(1591.5)
         assert result["step_count"] >= 1
+
+
+class TestParseMeasurementsFourierNan:
+    def test_nan_thd_does_not_crash(self, tmp_path: Path):
+        """Bug A: ``Total Harmonic Distortion: -nan%`` used to crash the
+        spicelib reader with ``'NoneType' object has no attribute 'group'``,
+        wiping out any .MEAS results in the same log."""
+        log = tmp_path / "nan_four.log"
+        log.write_text(
+            "Circuit: * test\n"
+            "\n"
+            "Fourier components of V(out)\n"
+            "N-Period=1\n"
+            "DC component:0\n"
+            "\n"
+            "Harmonic\tFrequency\t Fourier \tNormalized\t Phase  \tNormalized\n"
+            " Number \t  [Hz]   \tComponent\t Component\t[degree]\tNormalized Phase [deg]\n"
+            "    1   \t 1.000e+03\t 0.000e+00\t-nan      \t    0.00°\t    0.00°\n"
+            "Total Harmonic Distortion:   -nan%\n"
+            "\n"
+            "vrms_late: RMS(V(out) )=0 FROM 0.03 TO 0.05\n"
+            "Total elapsed time: 0.001 seconds.\n"
+        )
+        # Should NOT raise — the sanitizer should let .MEAS still parse.
+        result = parse_measurements(log)
+        # The .MEAS line is present in the log, so the parser should surface it.
+        assert "vrms_late" in result["measurements"]
+        entry = result["measurements"]["vrms_late"]
+        assert entry["values"] == [0.0]
+        assert entry.get("range_from") == pytest.approx(0.03)
+        assert entry.get("range_to") == pytest.approx(0.05)
+
+
+class TestParseMeasurementsFromTo:
+    def test_from_to_keys_folded(self, tmp_path: Path):
+        log = tmp_path / "fromto.log"
+        log.write_text(
+            "Circuit: * test\n"
+            "\n"
+            "vmax_late: MAX(V(out) )=9.81 FROM 0.04 TO 0.06\n"
+            "Total elapsed time: 0.001 seconds.\n"
+        )
+        result = parse_measurements(log)
+        assert set(result["measurements"]) == {"vmax_late"}
+        entry = result["measurements"]["vmax_late"]
+        assert entry["values"][0] == pytest.approx(9.81)
+        assert entry.get("range_from") == pytest.approx(0.04)
+        assert entry.get("range_to") == pytest.approx(0.06)

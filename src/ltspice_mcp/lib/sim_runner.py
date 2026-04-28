@@ -107,14 +107,28 @@ class SimulationRunner(RunnerBase):
             return
 
         job.completed_at = now()
-        job.raw_file = Path(raw_file)
-        job.log_file = Path(log_file)
+        # Bug I guard: spicelib signals failure by passing ``raw_file="."``
+        # (a directory placeholder) and a ``.fail`` log file. Treat that as
+        # "no raw produced" rather than storing ``Path(".")`` and trying to
+        # stat the working directory below. The ``"."`` string and ``.fail``
+        # suffix together cover spicelib's signalling without an extra stat.
+        raw_path = Path(raw_file)
+        log_path = Path(log_file)
+        raw_is_placeholder = raw_file in ("", ".") or log_path.suffix == ".fail"
+        if raw_is_placeholder:
+            job.raw_file = None
+        else:
+            job.raw_file = raw_path
+        job.log_file = log_path
 
-        try:
-            raw_size = job.raw_file.stat().st_size if job.raw_file else 0
-        except OSError as e:
-            logger.debug("Could not stat raw file %s: %s", job.raw_file, e)
+        if raw_is_placeholder:
             raw_size = 0
+        else:
+            try:
+                raw_size = job.raw_file.stat().st_size if job.raw_file else 0
+            except OSError as e:
+                logger.debug("Could not stat raw file %s: %s", job.raw_file, e)
+                raw_size = 0
 
         self._runners.pop(job_id, None)
         if raw_size == 0:
@@ -158,9 +172,7 @@ class SimulationRunner(RunnerBase):
         finally:
             self._runners.pop(job_id, None)
 
-    async def cancel(
-        self, job: SimulationJob, state: SessionState | None = None
-    ) -> None:
+    async def cancel(self, job: SimulationJob, state: SessionState | None = None) -> None:
         """Cancel a running simulation and record the cancelled state."""
         await self.kill(job.job_id)
         if job.status not in NON_TERMINAL_LIVE_STATUSES:

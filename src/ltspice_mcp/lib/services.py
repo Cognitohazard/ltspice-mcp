@@ -8,6 +8,7 @@ logic. All functions raise domain exceptions rather than returning error text.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,8 @@ from ltspice_mcp.lib.log_parser import (
 )
 from ltspice_mcp.lib.raw_parser import get_step_count
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
+
+logger = logging.getLogger(__name__)
 
 Editor = AscEditor | SpiceEditor
 
@@ -52,9 +55,7 @@ def suggestions_from_errors(
     """Zero-cost when ``errors`` is falsy — skips the log re-read entirely."""
     if not errors:
         return None
-    return _suggestions_for_refs(
-        missing_refs_from_text("\n".join(errors)), libraries
-    )
+    return _suggestions_for_refs(missing_refs_from_text("\n".join(errors)), libraries)
 
 
 def extract_model_suggestions(
@@ -129,9 +130,7 @@ def resolve_job(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
     raise ResultError(f"Job not found: {job_id}")
 
 
-def _resolve_result_file(
-    job_id: str, state: SessionState, field: str, label: str
-) -> Path:
+def _resolve_result_file(job_id: str, state: SessionState, field: str, label: str) -> Path:
     """Resolve a result file (raw or log) from a simulation or batch job."""
     job = resolve_job(job_id, state)
 
@@ -262,9 +261,9 @@ def get_batch_status(batch_job: BatchJob) -> dict[str, Any]:
             "eta_s": snap["eta_s"],
         }
 
-    duration = None
-    if batch_job.completed_at and batch_job.started_at:
-        duration = (batch_job.completed_at - batch_job.started_at).total_seconds()
+    duration = job_duration_seconds(
+        batch_job.started_at, batch_job.completed_at, label=f"batch job {batch_job.job_id}"
+    )
 
     return {
         **base,
@@ -272,6 +271,33 @@ def get_batch_status(batch_job: BatchJob) -> dict[str, Any]:
         "successful": batch_job.completed_runs - batch_job.failed_runs,
         "error": batch_job.error,
     }
+
+
+def job_duration_seconds(
+    started_at: Any | None,
+    completed_at: Any | None,
+    *,
+    label: str = "job",
+) -> float | None:
+    """Compute ``completed_at - started_at`` in seconds, clamped at 0.
+
+    Bug F guard: clock skew, persistence round-trips, or out-of-order
+    timestamps occasionally produce negative durations. Clamping with a
+    warning surfaces the anomaly without leaking garbage to clients.
+    """
+    if not started_at or not completed_at:
+        return None
+    delta = (completed_at - started_at).total_seconds()
+    if delta < 0:
+        logger.warning(
+            "%s reports negative duration (%.3fs); started_at=%s completed_at=%s — clamping to 0.",
+            label,
+            delta,
+            started_at.isoformat(),
+            completed_at.isoformat(),
+        )
+        return 0.0
+    return delta
 
 
 def get_batch_signal_data(
@@ -362,8 +388,7 @@ def extract_asc_info(editor: AscEditor, file_path: Path) -> dict[str, Any]:
         )
 
     label_data = [
-        {"text": lbl.text, "x": int(lbl.coord.X), "y": int(lbl.coord.Y)}
-        for lbl in editor.labels
+        {"text": lbl.text, "x": int(lbl.coord.X), "y": int(lbl.coord.Y)} for lbl in editor.labels
     ]
     directive_data = [directive.text for directive in editor.directives]
 
@@ -378,12 +403,26 @@ def extract_asc_info(editor: AscEditor, file_path: Path) -> dict[str, Any]:
 
 
 def extract_netlist_info(editor: Editor, file_path: Path) -> dict[str, Any]:
-    """Extract structured netlist data from a ``SpiceEditor``-compatible editor."""
+    """Extract structured netlist data from a ``SpiceEditor``-compatible editor.
+
+    spicelib raises ``UnrecognizedSyntaxError`` for netlist constructs its
+    regex doesn't model — most commonly behavioural sources with commas
+    inside ``if(...)`` expressions. We fall back to ``"<unparseable>"`` for
+    those components rather than aborting the whole read (Bug K).
+    """
     content = file_path.read_text(encoding="utf-8", errors="replace")
-    components = editor.get_components()
+    components = list(editor.get_components())
     comp_list = []
     for comp_ref in components:
-        value = editor.get_component_value(comp_ref)
+        try:
+            value = editor.get_component_value(comp_ref)
+        except Exception as e:
+            logger.debug(
+                "extract_netlist_info: %s value unparseable by spicelib: %s",
+                comp_ref,
+                e,
+            )
+            value = "<unparseable>"
         comp_list.append({"reference": comp_ref, "value": value})
 
     return {

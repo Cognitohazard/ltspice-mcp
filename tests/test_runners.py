@@ -37,9 +37,7 @@ def sim_runner(loop, work_dir: Path) -> SimulationRunner:
 
 @pytest.fixture
 def sweep_runner(loop, work_dir: Path) -> SweepRunner:
-    return SweepRunner(
-        loop=loop, simulator_class=FakeSim, output_folder=work_dir, max_parallel=1
-    )
+    return SweepRunner(loop=loop, simulator_class=FakeSim, output_folder=work_dir, max_parallel=1)
 
 
 @pytest.fixture
@@ -49,9 +47,7 @@ def mc_runner(loop, work_dir: Path) -> MonteCarloRunner:
     )
 
 
-def _make_job(
-    state: SessionState, work_dir: Path, status: str = "running"
-) -> SimulationJob:
+def _make_job(state: SessionState, work_dir: Path, status: str = "running") -> SimulationJob:
     job = SimulationJob(
         job_id="sim_test_1",
         netlist=work_dir / "n.cir",
@@ -115,6 +111,20 @@ class TestSimulationRunnerHandleCompletion:
         # Status should not change from cancelled
         assert job.status == "cancelled"
 
+    def test_completion_dot_placeholder_marks_failed(
+        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        """Bug I: spicelib signals failure by passing ``raw_file="."`` and a
+        ``.fail`` log file. Treating ``Path(".")`` as a real raw file
+        would let ``stat()`` succeed (directory size is non-zero) and
+        leak ``status="completed"`` + ``raw_file="."`` to clients."""
+        job = _make_job(state_no_sim, work_dir)
+        log = work_dir / "out.fail"
+        log.write_text("Error on line 2 : Q1 c b e mystery — undefined model\n")
+        sim_runner._handle_completion(job.job_id, ".", str(log), state_no_sim)
+        assert job.status == "failed"
+        assert job.raw_file is None
+        assert job.error is not None and "no output" in job.error
 
 
 class TestSimulationRunnerCancel:
@@ -127,9 +137,7 @@ class TestSimulationRunnerCancel:
         await sim_runner.cancel(job)
 
 
-def _make_batch(
-    state: SessionState, work_dir: Path, *, job_type: str = "sweep"
-) -> BatchJob:
+def _make_batch(state: SessionState, work_dir: Path, *, job_type: str = "sweep") -> BatchJob:
     bj = BatchJob(
         job_id=f"{job_type}_test",
         job_type=job_type,  # type: ignore[arg-type]
@@ -654,11 +662,7 @@ class TestPerturbModelInText:
     def test_continuation_lines_merged(self):
         from ltspice_mcp.lib.montecarlo import perturb_model_in_text
 
-        text = (
-            ".MODEL NMOS1 NMOS(VTO=0.7\n"
-            "+ KP=100u LAMBDA=0.02)\n"
-            ".END\n"
-        )
+        text = ".MODEL NMOS1 NMOS(VTO=0.7\n+ KP=100u LAMBDA=0.02)\n.END\n"
         out = perturb_model_in_text(text, "NMOS1", {"VTO": 0.715})
         assert "0.715" in out
 
@@ -689,12 +693,10 @@ class TestPelgromMismatch:
         sampler_big = MCSampler(seed=1)
         sampler_small = MCSampler(seed=2)
         big_samples = [
-            sample_instance_mismatch(sampler_big, big, rule)["dvth"]
-            for _ in range(2000)
+            sample_instance_mismatch(sampler_big, big, rule)["dvth"] for _ in range(2000)
         ]
         small_samples = [
-            sample_instance_mismatch(sampler_small, small, rule)["dvth"]
-            for _ in range(2000)
+            sample_instance_mismatch(sampler_small, small, rule)["dvth"] for _ in range(2000)
         ]
         sigma_big = statistics.stdev(big_samples)
         sigma_small = statistics.stdev(small_samples)
@@ -723,9 +725,7 @@ class TestVariantModelGeneration:
         from ltspice_mcp.lib.montecarlo import render_variant_model_card
 
         base = ".MODEL NMOS1 NMOS(VTO=0.7 KP=100u LAMBDA=0.02)\n"
-        variant = render_variant_model_card(
-            base, "NMOS1__M1", {"VTO": 0.714, "KP": 0.000098}
-        )
+        variant = render_variant_model_card(base, "NMOS1__M1", {"VTO": 0.714, "KP": 0.000098})
         assert ".MODEL NMOS1__M1" in variant
         # Make sure the original NMOS1 token isn't left behind in the card
         assert ".MODEL NMOS1 " not in variant

@@ -117,9 +117,7 @@ class MonteCarloRunner(BatchRunnerBase):
             max_parallel,
         )
 
-    async def start_montecarlo(
-        self, batch_job: BatchJob, state: SessionState
-    ) -> None:
+    async def start_montecarlo(self, batch_job: BatchJob, state: SessionState) -> None:
         """Submit the Monte Carlo analysis to a worker thread; return immediately."""
         cancel_event = self._register_cancel(batch_job.job_id)
         # Keyed by 1-based runno; populated at submission time and popped
@@ -160,6 +158,7 @@ class MonteCarloRunner(BatchRunnerBase):
                 mc_config.component_overrides,
             )
             rcl_nominals: dict[str, float] = {}
+            unparseable_refs: list[tuple[str, str]] = []
             for ref in tol_map:
                 try:
                     raw_val = editor.get_component_value(ref)
@@ -167,34 +166,40 @@ class MonteCarloRunner(BatchRunnerBase):
                     continue
                 parsed = parse_value(raw_val)
                 if parsed is None:
-                    logger.debug(
-                        "MC job %s: skipping %s — value %r not parseable",
-                        batch_job.job_id, ref, raw_val,
+                    # Friction I: parameter-driven values (``{RS}``) cannot
+                    # be perturbed at the component level — the user has
+                    # to perturb the .PARAM via ``param_tolerances``
+                    # instead. Surface this rather than silently dropping.
+                    unparseable_refs.append((ref, str(raw_val)))
+                    logger.warning(
+                        "MC job %s: %s value %r is not a numeric literal — "
+                        "skipping. To perturb parameter-driven values, add "
+                        "the underlying .PARAM name to ``param_tolerances``.",
+                        batch_job.job_id,
+                        ref,
+                        raw_val,
                     )
                     continue
                 rcl_nominals[ref] = parsed
 
             # ---- Phase 1 setup: per-.MODEL nominals ----
             baseline_text = "".join(editor.netlist)
-            model_tolerances: list[ModelTolerance] = list(
-                mc_config.model_tolerances or []
-            )
+            model_tolerances: list[ModelTolerance] = list(mc_config.model_tolerances or [])
             model_nominals: dict[str, dict[str, float]] = {}
             for mt in model_tolerances:
                 card = extract_model_card(baseline_text, mt.model_name)
                 if card is None:
                     logger.warning(
                         "MC job %s: .MODEL %s not found in netlist; ignoring rule",
-                        batch_job.job_id, mt.model_name,
+                        batch_job.job_id,
+                        mt.model_name,
                     )
                     continue
                 model_nominals[mt.model_name] = parse_model_params(card)
 
             # ---- Phase 2 setup: MOSFET instance geometry + per-instance caches ----
             mismatch_rules = list(mc_config.mismatch_rules or [])
-            mosfet_instances = (
-                extract_mosfet_instances(baseline_text) if mismatch_rules else []
-            )
+            mosfet_instances = extract_mosfet_instances(baseline_text) if mismatch_rules else []
             # Precompute per-instance state that's stable across runs:
             # - rule lookup (linear scan over rules → O(1) dict lookup per run)
             # - whether the instance's model is also being process-perturbed
@@ -217,16 +222,15 @@ class MonteCarloRunner(BatchRunnerBase):
                     stable_base_params[inst.model_name] = parse_model_params(base_card)
 
             # ---- Phase 3 setup: .PARAM nominals ----
-            param_tolerances: list[ParamTolerance] = list(
-                mc_config.param_tolerances or []
-            )
+            param_tolerances: list[ParamTolerance] = list(mc_config.param_tolerances or [])
             param_nominals: dict[str, float] = {}
             for pt in param_tolerances:
                 nominal = parse_param_nominal(baseline_text, pt.name)
                 if nominal is None:
                     logger.warning(
                         "MC job %s: .PARAM %s not found or non-numeric; ignoring rule",
-                        batch_job.job_id, pt.name,
+                        batch_job.job_id,
+                        pt.name,
                     )
                     continue
                 param_nominals[pt.name] = nominal
@@ -331,8 +335,11 @@ class MonteCarloRunner(BatchRunnerBase):
                     if deltas["dvth"] == 0.0 and deltas["dk_over_k"] == 0.0:
                         continue
                     base_params = _resolve_base_params(
-                        instance.model_name, model_nominals, run_perturbations,
-                        stable_base_params, text,
+                        instance.model_name,
+                        model_nominals,
+                        run_perturbations,
+                        stable_base_params,
+                        text,
                     )
                     if base_params is None:
                         continue
@@ -343,24 +350,18 @@ class MonteCarloRunner(BatchRunnerBase):
                     if base_card is None:
                         continue
                     variant = variant_model_name(instance.model_name, instance.ref)
-                    variant_card = render_variant_model_card(
-                        base_card, variant, overrides
-                    )
+                    variant_card = render_variant_model_card(base_card, variant, overrides)
                     text = inject_card_before_end(text, variant_card)
                     text = rewrite_instance_model(text, instance.ref, variant)
                     run_params[f"{instance.ref}.dvth"] = format_value(deltas["dvth"])
-                    run_params[f"{instance.ref}.dk_over_k"] = format_value(
-                        deltas["dk_over_k"]
-                    )
+                    run_params[f"{instance.ref}.dk_over_k"] = format_value(deltas["dk_over_k"])
 
                 # ---- Phase 3: .PARAM perturbation ----
                 for pt in param_tolerances:
                     nominal = param_nominals.get(pt.name)
                     if nominal is None:
                         continue
-                    delta = run_sampler.sample_offset(
-                        nominal, pt.spec, stream=f"param:{pt.name}"
-                    )
+                    delta = run_sampler.sample_offset(nominal, pt.spec, stream=f"param:{pt.name}")
                     new_value = nominal + delta
                     text = perturb_param_in_text(text, pt.name, new_value)
                     run_params[f"PARAM.{pt.name}"] = format_value(new_value)
@@ -409,9 +410,7 @@ class MonteCarloRunner(BatchRunnerBase):
         if not batch_job:
             logger.warning("Run completion for unknown MC batch job %s", job_id)
             return
-        self._record_run_completion(
-            batch_job, raw_file, log_file, state, kind="MC", runno=runno
-        )
+        self._record_run_completion(batch_job, raw_file, log_file, state, kind="MC", runno=runno)
         # Stash actual perturbed values so batch_results / measurement_stats
         # can correlate measurements with each run's component values.
         if params and runno is not None:

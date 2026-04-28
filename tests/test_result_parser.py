@@ -232,8 +232,7 @@ class TestExtractLogDiagnostics:
     def test_warning_both_casings(self, work_dir: Path):
         log = work_dir / "warn.log"
         log.write_text(
-            'Warning: Multiple definitions of model "2N2222"\n'
-            "WARNING: Node U1:11 is floating\n"
+            'Warning: Multiple definitions of model "2N2222"\nWARNING: Node U1:11 is floating\n'
         )
         result = extract_log_diagnostics(log)
         assert len(result["warnings"]) == 2
