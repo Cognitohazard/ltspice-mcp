@@ -115,6 +115,17 @@ def generate_sweep_range(
                 raise ValueError(
                     "Log scale step must be != 1 (step=1 is a degenerate multiplier)."
                 )
+            # Direction must agree: ascending range needs step>1 (grow each
+            # iteration); descending needs step<1. Otherwise log(stop/start)
+            # and log(step) have opposite signs and n comes out negative,
+            # which lets numpy raise a cryptic "Number of samples, -N, must
+            # be non-negative" error from inside geomspace.
+            if (stop > start and step < 1) or (stop < start and step > 1):
+                raise ValueError(
+                    f"Log sweep step direction does not match range: "
+                    f"start={start}, stop={stop}, step={step}. "
+                    f"Use step>1 for ascending ranges and 0<step<1 for descending."
+                )
             n = round(math.log(stop / start) / math.log(step)) + 1
             arr = np.geomspace(start, stop, n)
     else:
