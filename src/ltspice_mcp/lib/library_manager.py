@@ -93,49 +93,89 @@ class LibraryManager:
     def _detect_ltspice_paths(self) -> list[Path]:
         """Detect LTSpice library files on current platform.
 
-        Returns:
-            List of .lib file paths
+        LTspice's stock parts live in ``lib/cmp/standard.{bjt,mos,dio,cap,ind,...}``
+        — those files do NOT have a ``.lib`` extension. We accept them by
+        suffix list rather than only ``*.lib`` so ``find_model(include_builtin=
+        True)`` actually surfaces ``2N3904`` etc.
+
+        We also probe both the legacy ``LTspiceXVII`` install paths and the
+        modern ADI LTspice 26+ paths (``%LOCALAPPDATA%/LTspice/lib`` plus the
+        system-wide ``Program Files/ADI/LTspice/lib`` directory).
         """
-        candidates = []
+        candidates: list[Path] = []
 
         if is_wsl():
             users_dir = Path("/mnt/c/Users")
             if users_dir.exists():
                 for user_path in users_dir.iterdir():
-                    if user_path.is_dir():
-                        lib_path = user_path / "Documents/LTspiceXVII/lib"
-                        if lib_path.exists():
-                            candidates.append(lib_path)
-                        lib_path = user_path / "AppData/Local/Programs/ADI/LTspice/lib"
-                        if lib_path.exists():
-                            candidates.append(lib_path)
+                    if not user_path.is_dir():
+                        continue
+                    for rel in (
+                        "Documents/LTspiceXVII/lib",
+                        "AppData/Local/Programs/ADI/LTspice/lib",
+                        "AppData/Local/LTspice/lib",  # ADI LTspice 26+ user
+                    ):
+                        lp = user_path / rel
+                        if lp.exists():
+                            candidates.append(lp)
+            # System-wide install (ADI LTspice 26+)
+            for sys_path in (
+                Path("/mnt/c/Program Files/ADI/LTspice/lib"),
+                Path("/mnt/c/Program Files (x86)/ADI/LTspice/lib"),
+            ):
+                if sys_path.exists():
+                    candidates.append(sys_path)
 
         elif sys.platform == "win32":
-            # Native Windows
             home = Path.home()
             candidates.extend(
                 [
                     home / "Documents/LTspiceXVII/lib",
                     home / "AppData/Local/Programs/ADI/LTspice/lib",
+                    home / "AppData/Local/LTspice/lib",
                     Path("C:/Program Files/ADI/LTspice/lib"),
+                    Path("C:/Program Files (x86)/ADI/LTspice/lib"),
                 ]
             )
 
         else:
-            # Linux/Mac - check Wine installations
             wine_prefixes = [
                 Path.home() / ".wine/drive_c/Program Files/ADI/LTspice/lib",
                 Path.home() / ".wine/drive_c/Program Files (x86)/ADI/LTspice/lib",
             ]
             candidates.extend(wine_prefixes)
 
-        lib_files = []
+        # Suffixes we treat as SPICE library files. ``standard.bjt`` /
+        # ``standard.mos`` are bundled stock parts; the ``.lib`` / ``.mod``
+        # extensions cover third-party packs that LTspice users drop into
+        # the same ``sub`` / ``cmp`` directories.
+        accepted_suffixes = {
+            ".lib",
+            ".mod",
+            ".bjt",
+            ".mos",
+            ".dio",
+            ".cap",
+            ".ind",
+            ".res",
+            ".jft",
+            ".bead",
+        }
+        lib_files: list[Path] = []
+        seen: set[Path] = set()
         for candidate in candidates:
-            if candidate.exists() and candidate.is_dir():
-                for lib_file in candidate.rglob("*.lib"):
-                    if lib_file.is_file():
-                        lib_files.append(lib_file)
-                        logger.debug(f"Found LTSpice library: {lib_file}")
+            if not (candidate.exists() and candidate.is_dir()):
+                continue
+            for f in candidate.rglob("*"):
+                if not f.is_file():
+                    continue
+                if f.suffix.lower() not in accepted_suffixes:
+                    continue
+                if f in seen:
+                    continue
+                seen.add(f)
+                lib_files.append(f)
+                logger.debug("Found LTSpice library: %s", f)
 
         return lib_files
 

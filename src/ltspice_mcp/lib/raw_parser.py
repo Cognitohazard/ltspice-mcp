@@ -27,11 +27,23 @@ from ltspice_mcp.lib.log_parser import (
 )
 
 
-class OperatingPointOutput(TypedDict):
-    """Return shape of :func:`extract_operating_point`."""
+class _OperatingPointStepMeta(TypedDict, total=False):
+    """Optional step metadata populated by the tool layer."""
+
+    step: int
+    step_count: int
+
+
+class OperatingPointOutput(_OperatingPointStepMeta):
+    """Return shape of :func:`extract_operating_point`.
+
+    ``step`` / ``step_count`` are present only when the result is built by
+    the tool layer for a stepped .OP run.
+    """
 
     voltages: dict[str, float]
     currents: dict[str, float]
+
 
 # Smallest positive normal float — floor for magnitude before log10 to avoid -inf
 _FLOAT_TINY = np.finfo(float).tiny
@@ -119,8 +131,7 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
 
     if len(axis) == 0 or len(wave) == 0:
         raise ValueError(
-            f"Signal '{trace_name}' has no data points at step {step}; "
-            "cannot query value."
+            f"Signal '{trace_name}' has no data points at step {step}; cannot query value."
         )
 
     # Binary search for nearest point
@@ -152,14 +163,16 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
     return result
 
 
-def extract_operating_point(raw: RawRead) -> OperatingPointOutput:
+def extract_operating_point(raw: RawRead, step: int = 0) -> OperatingPointOutput:
     """Extract DC operating point data (all node voltages and branch currents).
 
     Works best with Operating Point (.OP) simulations, but can extract
-    first-point values from any simulation type.
+    first-point values from any simulation type. ``step`` selects which
+    iteration of a stepped .OP run to return (0 by default).
 
     Args:
         raw: Loaded RawRead instance
+        step: Step index for stepped .OP / .DC runs.
 
     Returns:
         Dictionary with 'voltages' and 'currents' dicts mapping trace names to values.
@@ -171,7 +184,7 @@ def extract_operating_point(raw: RawRead) -> OperatingPointOutput:
     currents = {}
 
     for trace in trace_names:
-        wave = raw.get_wave(trace, step=0)
+        wave = raw.get_wave(trace, step=step)
         if len(wave) == 0:
             continue
         value = float(wave[0])
@@ -268,11 +281,21 @@ def build_simulation_summary(
     trace_names = raw.get_trace_names()
     step_count = get_step_count(raw)
 
-    axis = raw.get_axis(step=0)
-    point_count = len(axis)
+    # Bug D: stepped ``.op`` raw files have no axis — spicelib raises
+    # "This RAW file does not have an axis." Treat that as a valid degenerate
+    # case (no range, no point_count beyond step_count) instead of aborting
+    # the whole summary.
+    try:
+        axis = raw.get_axis(step=0)
+        point_count = len(axis)
+        has_axis = True
+    except Exception:
+        axis = None  # type: ignore[assignment]
+        point_count = step_count
+        has_axis = False
 
     range_info: dict = {}
-    if point_count > 0:
+    if has_axis and point_count > 0 and axis is not None:
         if _RE_TRANSIENT.search(sim_type):
             range_info = {"time_start": float(axis[0]), "time_end": float(axis[-1])}
         elif is_ac_analysis(sim_type):
@@ -285,6 +308,10 @@ def build_simulation_summary(
             range_info = {"sweep_start": float(axis[0]), "sweep_end": float(axis[-1])}
         # Operating Point has no range (single point)
 
+    # ``point_count`` is the per-step axis length (sweep points on .AC/.DC,
+    # samples on .tran). ``step_count`` is the number of ``.step`` iterations
+    # — 1 for unstepped runs. Together they describe the raw shape unambiguously;
+    # don't surface alias keys.
     summary = {
         "sim_type": sim_type,
         "range": range_info,
@@ -294,9 +321,11 @@ def build_simulation_summary(
     }
 
     if log_path and log_path.exists():
+        from ltspice_mcp.lib.log_parser import make_log_reader
+
         log_reader: LTSpiceLogReader | None = None
         with contextlib.suppress(Exception):
-            log_reader = LTSpiceLogReader(str(log_path))
+            log_reader = make_log_reader(log_path)
 
         if log_reader is not None:
             try:
