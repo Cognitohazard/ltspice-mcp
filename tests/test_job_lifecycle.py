@@ -205,8 +205,7 @@ class TestStateMachineStructure:
                 if target in special:
                     continue
                 assert target in STATUS_TO_EVENT, (
-                    f"batch transition {source} → {target} lands on a status "
-                    f"with no event mapping"
+                    f"batch transition {source} → {target} lands on a status with no event mapping"
                 )
 
     def test_terminal_statuses_have_no_outgoing(self) -> None:
@@ -217,14 +216,10 @@ class TestStateMachineStructure:
         """
         for source, targets in VALID_SIM_TRANSITIONS.items():
             if source in TERMINAL_STATUSES and source != "interrupted":
-                assert not targets, (
-                    f"sim terminal status {source} has outgoing edges: {targets}"
-                )
+                assert not targets, f"sim terminal status {source} has outgoing edges: {targets}"
         for source, targets in VALID_BATCH_TRANSITIONS.items():
             if source in TERMINAL_STATUSES:
-                assert not targets, (
-                    f"batch terminal status {source} has outgoing edges: {targets}"
-                )
+                assert not targets, f"batch terminal status {source} has outgoing edges: {targets}"
 
     def test_no_status_writes_outside_lifecycle_module(self) -> None:
         """Production code must not mutate ``job.status`` directly.

@@ -128,7 +128,9 @@ class TestResolveResultFile:
     def test_batch_first_run_present(self, state_no_sim: SessionState, tmp_path: Path):
         raw = tmp_path / "r0.raw"
         raw.write_text("d")
-        _make_batch(state_no_sim, run_results={0: {"raw_file": raw, "log_file": raw, "params": {}}})
+        _make_batch(
+            state_no_sim, run_results={0: {"raw_file": raw, "log_file": raw, "params": {}}}
+        )
         assert services.resolve_raw_file("b1", state_no_sim) == raw
 
 
@@ -178,16 +180,16 @@ class TestGetBatchSignalData:
 
 class TestExtractModelSuggestions:
     def test_none_when_log_missing(self, state_no_sim: SessionState, tmp_path: Path):
-        assert services.extract_model_suggestions(tmp_path / "no.log", state_no_sim.libraries) is None
+        assert (
+            services.extract_model_suggestions(tmp_path / "no.log", state_no_sim.libraries) is None
+        )
 
     def test_none_for_clean_log(self, state_no_sim: SessionState, tmp_path: Path):
         log = tmp_path / "clean.log"
         log.write_text("Total elapsed time: 0.01 seconds.\n")
         assert services.extract_model_suggestions(log, state_no_sim.libraries) is None
 
-    def test_none_when_no_libraries_loaded(
-        self, state_no_sim: SessionState, tmp_path: Path
-    ):
+    def test_none_when_no_libraries_loaded(self, state_no_sim: SessionState, tmp_path: Path):
         log = tmp_path / "err.log"
         log.write_text('Error on line 2 : s1 0 0 sw Unable to find definition of model "sw"\n')
         assert services.extract_model_suggestions(log, state_no_sim.libraries) is None

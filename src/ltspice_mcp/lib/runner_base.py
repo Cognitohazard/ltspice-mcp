@@ -79,6 +79,7 @@ def wrap_runner_for_runno_callbacks(runner: SimRunner) -> SimRunner:
     runner.run = runno_aware_run  # type: ignore[method-assign]
     return runner
 
+
 logger = logging.getLogger(__name__)
 
 _SIMRUNNER_TIMEOUT = 600
@@ -110,9 +111,7 @@ class RunnerBase:
             timeout=_SIMRUNNER_TIMEOUT,
         )
 
-    def _bridge(
-        self, handler: Callable[..., Any], *args: Any, context: str = ""
-    ) -> bool:
+    def _bridge(self, handler: Callable[..., Any], *args: Any, context: str = "") -> bool:
         """Schedule ``handler`` on the event loop from a worker thread.
 
         Returns True on success, False if the loop is closed (graceful
@@ -220,9 +219,7 @@ class BatchRunnerBase(RunnerBase):
             raw_file.name,
         )
 
-    async def cancel(
-        self, batch_job: BatchJob, state: SessionState | None = None
-    ) -> None:
+    async def cancel(self, batch_job: BatchJob, state: SessionState | None = None) -> None:
         """Cancel a running batch job (sweep or Monte Carlo).
 
         Signals the cancel event so in-flight callbacks skip their
@@ -272,9 +269,7 @@ class BatchRunnerBase(RunnerBase):
                 exc,
             )
             return
-        logger.error(
-            "%s job %s failed: %s", kind, batch_job.job_id, exc, exc_info=True
-        )
+        logger.error("%s job %s failed: %s", kind, batch_job.job_id, exc, exc_info=True)
         batch_job.error = f"{kind} execution failed: {exc}"
         transition(
             batch_job,

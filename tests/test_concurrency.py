@@ -90,10 +90,7 @@ class TestJobStoreConcurrentThreads:
             )
             job_store.save_job(job)
 
-        threads = [
-            threading.Thread(target=save, args=(f"sim_thread_{i}",))
-            for i in range(32)
-        ]
+        threads = [threading.Thread(target=save, args=(f"sim_thread_{i}",)) for i in range(32)]
         for t in threads:
             t.start()
         for t in threads:
@@ -103,9 +100,7 @@ class TestJobStoreConcurrentThreads:
         sim_jobs, _ = job_store.load_jobs_for_circuit(circuit)
         assert {j.job_id for j in sim_jobs} == {f"sim_thread_{i}" for i in range(32)}
 
-    def test_same_job_rewritten_from_many_threads_stays_valid(
-        self, tmp_path: Path
-    ) -> None:
+    def test_same_job_rewritten_from_many_threads_stays_valid(self, tmp_path: Path) -> None:
         """Concurrent writes to the same file must never leave a torn JSON."""
         circuit = tmp_path / "rc.cir"
         circuit.write_text("")

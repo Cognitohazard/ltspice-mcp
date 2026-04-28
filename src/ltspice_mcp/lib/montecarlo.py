@@ -272,9 +272,7 @@ def _draw_zero_centred(
         return _truncated_gauss(rng, bound / 3.0, bound)
     if dist == "uniform":
         return rng.uniform(-bound, +bound)
-    raise ValueError(
-        f"Unknown distribution {dist!r}; expected 'uniform' or 'normal'"
-    )
+    raise ValueError(f"Unknown distribution {dist!r}; expected 'uniform' or 'normal'")
 
 
 # Module-level so it's reachable from tests; not part of the public surface.
@@ -344,19 +342,16 @@ def sample_model_perturbation(
         if nominal is None:
             logger.debug(
                 "MC: model %s param %s has no nominal in card; skipping perturbation",
-                model_name, param,
+                model_name,
+                param,
             )
             continue
-        delta = sampler.sample_offset(
-            nominal, spec, stream=f"model:{model_name}.{param}"
-        )
+        delta = sampler.sample_offset(nominal, spec, stream=f"model:{model_name}.{param}")
         perturbed[param] = nominal + delta
     return perturbed
 
 
-def _locate_model_card(
-    lines: list[str], model_name: str
-) -> tuple[int, int] | None:
+def _locate_model_card(lines: list[str], model_name: str) -> tuple[int, int] | None:
     """Find ``[start, end)`` line indices for a ``.MODEL <name>`` card.
 
     Returns the half-open range covering the directive line plus any
@@ -426,12 +421,10 @@ def _rewrite_model_card(card_text: str, perturbations: dict[str, float]) -> str:
             remaining.pop(param, None)
 
     if remaining:
-        appended = " ".join(
-            f"{p}={format_value(v)}" for p, v in remaining.items()
-        )
+        appended = " ".join(f"{p}={format_value(v)}" for p, v in remaining.items())
         if text.rstrip().endswith(")"):
             stripped = text.rstrip()
-            tail = text[len(stripped):]
+            tail = text[len(stripped) :]
             text = stripped[:-1] + " " + appended + ")" + tail
         else:
             text = text + " " + appended
@@ -511,9 +504,7 @@ def sample_instance_mismatch(
             distribution=rule.distribution,
             kind="absolute",
         )
-        dvth = sampler.sample_offset(
-            0.0, spec, stream=f"mismatch:{instance.ref}.dvth"
-        )
+        dvth = sampler.sample_offset(0.0, spec, stream=f"mismatch:{instance.ref}.dvth")
 
     dk_over_k = 0.0
     if rule.ak > 0.0:
@@ -523,9 +514,7 @@ def sample_instance_mismatch(
             distribution=rule.distribution,
             kind="absolute",
         )
-        dk_over_k = sampler.sample_offset(
-            0.0, spec, stream=f"mismatch:{instance.ref}.dk_over_k"
-        )
+        dk_over_k = sampler.sample_offset(0.0, spec, stream=f"mismatch:{instance.ref}.dk_over_k")
 
     return {"dvth": dvth, "dk_over_k": dk_over_k}
 
@@ -687,9 +676,7 @@ def rewrite_instance_model(
             break
         last_no_eq = i
     if last_no_eq is None:
-        raise ValueError(
-            f"Instance {instance_ref!r} has no model token to rewrite: {tail!r}"
-        )
+        raise ValueError(f"Instance {instance_ref!r} has no model token to rewrite: {tail!r}")
 
     tokens[last_no_eq] = new_model_name
     new_tail = " ".join(tokens)
@@ -735,13 +722,12 @@ def extract_mosfet_instances(netlist_text: str) -> list[InstanceGeometry]:
         if w is None or l_val is None:
             logger.debug(
                 "MC: instance %s has no W/L parameter, skipping mismatch (params=%r)",
-                ref, params_text,
+                ref,
+                params_text,
             )
             continue
         instances.append(
-            InstanceGeometry(
-                ref=ref, model_name=model_name, width_m=w, length_m=l_val
-            )
+            InstanceGeometry(ref=ref, model_name=model_name, width_m=w, length_m=l_val)
         )
     return instances
 
@@ -802,7 +788,8 @@ def expand_tolerances(
         else:
             continue
         resolved[ref] = ToleranceSpec(
-            tolerance=tol, distribution=dist  # type: ignore[arg-type]
+            tolerance=tol,
+            distribution=dist,  # type: ignore[arg-type]
         )
     if skipped:
         logger.debug(

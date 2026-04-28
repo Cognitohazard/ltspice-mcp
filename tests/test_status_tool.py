@@ -42,16 +42,12 @@ class TestGetServerStatus:
         assert result.structuredContent["simulators"]["fake"]["default"] is True
 
     async def test_json_format(self, state_no_sim: SessionState):
-        result = await handle_server_status(
-            ServerStatusInput(format="json"), state_no_sim
-        )
+        result = await handle_server_status(ServerStatusInput(format="json"), state_no_sim)
         assert result.structuredContent is not None
         assert "configuration" in result.structuredContent
         assert "runtime" in result.structuredContent
 
-    async def test_config_file_present(
-        self, state_no_sim: SessionState, work_dir
-    ):
+    async def test_config_file_present(self, state_no_sim: SessionState, work_dir):
         cfg = work_dir / "ltspice-mcp.toml"
         cfg.write_text("[simulator]\nname = 'ltspice'\n")
         result = await handle_server_status(ServerStatusInput(), state_no_sim)

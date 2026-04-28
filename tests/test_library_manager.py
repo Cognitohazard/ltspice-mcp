@@ -196,9 +196,7 @@ class TestFindSimilarModels:
     def test_empty_when_no_libs_loaded(self, empty_manager: LibraryManager):
         assert empty_manager.find_similar_models("anything") == []
 
-    def test_include_builtin_walks_builtin(
-        self, empty_manager: LibraryManager, fuzzy_lib: Path
-    ):
+    def test_include_builtin_walks_builtin(self, empty_manager: LibraryManager, fuzzy_lib: Path):
         empty_manager._builtin_paths = [fuzzy_lib]
         no_builtin = empty_manager.find_similar_models("2N3905", include_builtin=False)
         with_builtin = empty_manager.find_similar_models("2N3905", include_builtin=True)
@@ -225,11 +223,11 @@ class TestFindSimilarModels:
         empty_manager.load_library(lib)
         results = empty_manager.find_similar_models("2N3905", limit=5, cutoff=0.0)
         top_two_names = {r["name"] for r in results[:2]}
-        assert top_two_names == {"2N3904", "2N3906"}, f"got ranking: {[r['name'] for r in results]}"
+        assert top_two_names == {"2N3904", "2N3906"}, (
+            f"got ranking: {[r['name'] for r in results]}"
+        )
 
-    def test_part_suffix_variant_ranks_high(
-        self, empty_manager: LibraryManager, tmp_path: Path
-    ):
+    def test_part_suffix_variant_ranks_high(self, empty_manager: LibraryManager, tmp_path: Path):
         """LTC3406 should find LTC3406A/B near the top (substring bias)."""
         lib = tmp_path / "ltc.lib"
         lib.write_text(

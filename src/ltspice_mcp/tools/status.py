@@ -219,7 +219,8 @@ async def handle_recent(args: RecentInput, state: SessionState):
             interrupted = c.get("interrupted_job_ids") or []
             if interrupted:
                 lines.append(
-                    "    interrupted jobs: " + ", ".join(interrupted[:5])
+                    "    interrupted jobs: "
+                    + ", ".join(interrupted[:5])
                     + ("" if len(interrupted) <= 5 else f" (+{len(interrupted) - 5} more)")
                 )
         text = "\n".join(lines)

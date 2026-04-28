@@ -295,13 +295,9 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     # first-tool-call latency on those circuits doesn't surprise the user.
     # Circuits outside this budget fall back to lazy load on first tool call.
     if config.persist_jobs and config.preload_recent_count > 0:
-        preloaded = state.job_registry.preload_recent(
-            max_circuits=config.preload_recent_count
-        )
+        preloaded = state.job_registry.preload_recent(max_circuits=config.preload_recent_count)
         if preloaded:
-            logger.info(
-                "Preloaded persisted jobs for %d recent circuit(s)", preloaded
-            )
+            logger.info("Preloaded persisted jobs for %d recent circuit(s)", preloaded)
 
     logger.info("Startup complete. Server ready for MCP connections.")
 

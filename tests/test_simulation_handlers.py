@@ -65,9 +65,7 @@ def _make_job(
 class TestCheckJob:
     async def test_running(self, state_no_sim: SessionState):
         _make_job(state_no_sim, status="running")
-        result = await handle_check_job(
-            CheckJobInput(job_id="j1"), state_no_sim
-        )
+        result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
         assert "still running" in result.content[0].text
         assert result.structuredContent["status"] == "running"
 
@@ -94,9 +92,7 @@ class TestCheckJob:
         with pytest.raises(ResultError, match="result files are missing"):
             await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
 
-    async def test_completed_files_removed(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
+    async def test_completed_files_removed(self, state_no_sim: SessionState, work_dir: Path):
         raw = work_dir / "x.raw"
         log = work_dir / "x.log"
         raw.write_text("d")
@@ -119,9 +115,7 @@ class TestCheckJob:
     async def test_list_filter_status(self, state_no_sim: SessionState):
         _make_job(state_no_sim, job_id="r1", status="running")
         _make_job(state_no_sim, job_id="c1", status="completed")
-        result = await handle_check_job(
-            CheckJobInput(status="completed"), state_no_sim
-        )
+        result = await handle_check_job(CheckJobInput(status="completed"), state_no_sim)
         text = result.content[0].text
         assert "c1" in text
         assert "r1" not in text
@@ -136,9 +130,7 @@ class TestCheckJob:
 
     async def test_list_filter_none_match(self, state_no_sim: SessionState):
         _make_job(state_no_sim, status="running")
-        result = await handle_check_job(
-            CheckJobInput(status="failed"), state_no_sim
-        )
+        result = await handle_check_job(CheckJobInput(status="failed"), state_no_sim)
         assert "No jobs with status" in result.content[0].text
 
 
@@ -204,9 +196,7 @@ class TestCancelJob:
 class TestRunSimulationStubbed:
     """Test handle_run_simulation by stubbing the runner."""
 
-    async def test_async_returns_job_id(
-        self, state_with_sim: SessionState, sample_netlist: Path
-    ):
+    async def test_async_returns_job_id(self, state_with_sim: SessionState, sample_netlist: Path):
         fake_runner = MagicMock()
         fake_runner.start_simulation = AsyncMock()
         with patch(
@@ -221,9 +211,7 @@ class TestRunSimulationStubbed:
         assert "Job ID:" in text
         assert len(state_with_sim.jobs) == 1
 
-    async def test_sync_timeout(
-        self, state_with_sim: SessionState, sample_netlist: Path
-    ):
+    async def test_sync_timeout(self, state_with_sim: SessionState, sample_netlist: Path):
         fake_runner = MagicMock()
         fake_runner.start_simulation = AsyncMock()
         fake_runner.kill = AsyncMock()
@@ -232,9 +220,7 @@ class TestRunSimulationStubbed:
             return_value=fake_runner,
         ):
             result = await handle_run_simulation(
-                RunSimulationInput(
-                    netlist=sample_netlist.name, timeout=0.05, wait=False
-                ),
+                RunSimulationInput(netlist=sample_netlist.name, timeout=0.05, wait=False),
                 state_with_sim,
             )
         text = result.content[0].text
@@ -260,17 +246,13 @@ class TestRunSimulationStubbed:
             return_value=fake_runner,
         ):
             result = await handle_run_simulation(
-                RunSimulationInput(
-                    netlist=sample_netlist.name, timeout=5, wait=False
-                ),
+                RunSimulationInput(netlist=sample_netlist.name, timeout=5, wait=False),
                 state_with_sim,
             )
         text = result.content[0].text
         assert "failed" in text.lower()
 
-    async def test_sync_cancelled(
-        self, state_with_sim: SessionState, sample_netlist: Path
-    ):
+    async def test_sync_cancelled(self, state_with_sim: SessionState, sample_netlist: Path):
         async def start_sim(netlist_path, job, state):
             job.status = "cancelled"
             job.completed_at = now()
@@ -283,9 +265,7 @@ class TestRunSimulationStubbed:
             return_value=fake_runner,
         ):
             result = await handle_run_simulation(
-                RunSimulationInput(
-                    netlist=sample_netlist.name, timeout=5, wait=False
-                ),
+                RunSimulationInput(netlist=sample_netlist.name, timeout=5, wait=False),
                 state_with_sim,
             )
         assert "cancelled" in result.content[0].text.lower()

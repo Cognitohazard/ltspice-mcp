@@ -50,18 +50,14 @@ class TestReadResource:
         assert result.contents
         assert '"count": 0' in _text(result.contents[0])
 
-    def test_read_netlists_with_files(
-        self, state_no_sim: SessionState, sample_netlist: Path
-    ):
+    def test_read_netlists_with_files(self, state_no_sim: SessionState, sample_netlist: Path):
         result = handle_read_resource("ltspice://netlists/", state_no_sim)
         text = _text(result.contents[0])
         assert "rc_filter.cir" in text
         assert '"count": 1' in text
 
     def test_read_netlist_content(self, state_no_sim: SessionState, sample_netlist: Path):
-        result = handle_read_resource(
-            f"ltspice://netlists/{sample_netlist.name}", state_no_sim
-        )
+        result = handle_read_resource(f"ltspice://netlists/{sample_netlist.name}", state_no_sim)
         text = _text(result.contents[0])
         assert "R1 in out 1k" in text
 

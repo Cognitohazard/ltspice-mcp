@@ -131,12 +131,8 @@ class TestComputeBatchStatsAt:
         # Each run has a different value at t=2.0; ``at`` picks that point.
         run0 = tmp_path / "r0.raw"
         run1 = tmp_path / "r1.raw"
-        self._write_transient_raw(
-            run0, [0.0, 1.0, 2.0, 3.0], {"V(out)": [0.0, 5.0, 10.0, 5.0]}
-        )
-        self._write_transient_raw(
-            run1, [0.0, 1.0, 2.0, 3.0], {"V(out)": [0.0, 3.0, 6.0, 3.0]}
-        )
+        self._write_transient_raw(run0, [0.0, 1.0, 2.0, 3.0], {"V(out)": [0.0, 5.0, 10.0, 5.0]})
+        self._write_transient_raw(run1, [0.0, 1.0, 2.0, 3.0], {"V(out)": [0.0, 3.0, 6.0, 3.0]})
 
         runs = {
             0: _make_run({"R": 1000.0}, raw_file=str(run0)),

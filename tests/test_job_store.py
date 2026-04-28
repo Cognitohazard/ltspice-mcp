@@ -33,9 +33,7 @@ def _sim_job(
 ) -> SimulationJob:
     """Build a SimulationJob with test defaults."""
     resolved_completed = (
-        (now() if status == "completed" else None)
-        if completed_at == "auto"
-        else completed_at
+        (now() if status == "completed" else None) if completed_at == "auto" else completed_at
     )
     return SimulationJob(
         job_id=job_id,
@@ -62,9 +60,7 @@ def _batch_job(
 ) -> BatchJob:
     """Build a BatchJob with test defaults."""
     resolved_completed = (
-        (now() if status == "completed" else None)
-        if completed_at == "auto"
-        else completed_at
+        (now() if status == "completed" else None) if completed_at == "auto" else completed_at
     )
     return BatchJob(
         job_id=job_id or f"{job_type}_456_deadbeef",
@@ -137,14 +133,20 @@ class TestSaveLoad:
         sweep_cfg = SweepConfig(
             netlist=circuit,
             dimensions=[
-                SweepDimension(
-                    type="component", name="R1", start=1.0, stop=10.0, points=3
-                )
+                SweepDimension(type="component", name="R1", start=1.0, stop=10.0, points=3)
             ],
         )
         run_results = {
-            0: {"raw_file": str(tmp_path / "run0.raw"), "log_file": str(tmp_path / "run0.log"), "params": {"R1": 1.0}},
-            1: {"raw_file": str(tmp_path / "run1.raw"), "log_file": str(tmp_path / "run1.log"), "params": {"R1": 5.0}},
+            0: {
+                "raw_file": str(tmp_path / "run0.raw"),
+                "log_file": str(tmp_path / "run0.log"),
+                "params": {"R1": 1.0},
+            },
+            1: {
+                "raw_file": str(tmp_path / "run1.raw"),
+                "log_file": str(tmp_path / "run1.log"),
+                "params": {"R1": 5.0},
+            },
         }
         original = _batch_job(
             circuit,
