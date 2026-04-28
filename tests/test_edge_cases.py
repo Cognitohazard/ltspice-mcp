@@ -288,7 +288,7 @@ class TestStabilityPhaseWrap:
         # Without np.unwrap, np.angle wraps -181° to +179° and the
         # gain-margin detection misses the crossing entirely.
         freqs = np.array([1.0, 10.0, 100.0, 1000.0, 10000.0])
-        mag_lin = np.array([10**0.5, 10**0.25, 1.0, 10**(-0.25), 10**(-0.5)])
+        mag_lin = np.array([10**0.5, 10**0.25, 1.0, 10 ** (-0.25), 10 ** (-0.5)])
         phase_rad = np.deg2rad(np.array([-90, -150, -179, -181, -210]))
         wave = mag_lin * np.exp(1j * phase_rad)
 
@@ -371,6 +371,85 @@ class TestSweepDirectionMismatch:
         with pytest.raises(ValueError, match="direction"):
             generate_sweep_range(1, 10, step=-1, points=None, scale="linear")
 
+    def test_log_ascending_with_shrinking_step_raises(self):
+        # Ascending range (1 → 100) with step < 1 produces log(100)/log(0.1) = -2,
+        # which yields n = -1 and crashes np.geomspace with "Number of samples,
+        # -1, must be non-negative." Should raise a clean direction-mismatch error.
+        with pytest.raises(ValueError, match="direction"):
+            generate_sweep_range(1, 100, step=0.1, points=None, scale="log")
+
+    def test_log_descending_with_growing_step_raises(self):
+        # Symmetric: descending range (100 → 1) with step > 1 also yields n = -1.
+        with pytest.raises(ValueError, match="direction"):
+            generate_sweep_range(100, 1, step=10.0, points=None, scale="log")
+
+    def test_log_descending_with_shrinking_step_works(self):
+        # Sanity: descending log sweep with step < 1 is the legitimate use.
+        result = generate_sweep_range(100, 1, step=0.1, points=None, scale="log")
+        assert result == pytest.approx([100.0, 10.0, 1.0])
+
+
+# ---------------------------------------------------------------------------
+# Bug V: parse_spice_value rejected SPICE values with trailing unit
+# annotations (1ms, 10us, 1uF, 100pF, 1mV, 10mA), even though the suffix
+# itself was valid. SPICE tradition treats trailing letters after the
+# scale suffix as ignorable unit annotations.
+# ---------------------------------------------------------------------------
+
+
+class TestParseSpiceTrailingUnits:
+    """Trailing unit letters after a valid suffix must be ignored."""
+
+    def test_milliseconds(self):
+        assert parse_spice_value("1ms") == pytest.approx(1e-3)
+
+    def test_microseconds(self):
+        assert parse_spice_value("10us") == pytest.approx(10e-6)
+
+    def test_nanoseconds(self):
+        assert parse_spice_value("5ns") == pytest.approx(5e-9)
+
+    def test_picoseconds(self):
+        assert parse_spice_value("100ps") == pytest.approx(100e-12)
+
+    def test_microfarads(self):
+        assert parse_spice_value("1uF") == pytest.approx(1e-6)
+
+    def test_picofarads(self):
+        assert parse_spice_value("10pF") == pytest.approx(10e-12)
+
+    def test_millihenries(self):
+        assert parse_spice_value("1mH") == pytest.approx(1e-3)
+
+    def test_megahertz(self):
+        # 'MegHz' — suffix 'Meg' must match before the case-insensitive 'hz'
+        # tail is considered an annotation. Must not collapse to milli.
+        assert parse_spice_value("10MegHz") == pytest.approx(10e6)
+
+    def test_millivolts(self):
+        assert parse_spice_value("1mV") == pytest.approx(1e-3)
+
+    def test_milliamps(self):
+        assert parse_spice_value("10mA") == pytest.approx(10e-3)
+
+    def test_kilohms(self):
+        assert parse_spice_value("1kohm") == pytest.approx(1e3)
+
+    def test_no_suffix_with_trailing_garbage_still_raises(self):
+        # Conservative: only ignore the tail when it begins with a known
+        # suffix. '1Hz' has no recognised suffix prefix → still rejected.
+        with pytest.raises(ValueError, match="Cannot parse"):
+            parse_spice_value("1Hz")
+
+    def test_pure_garbage_still_raises(self):
+        with pytest.raises(ValueError, match="Cannot parse"):
+            parse_spice_value("hello")
+
+    def test_trailing_digits_still_rejected(self):
+        # Must not match — '1k1' has digits after the suffix; ambiguous.
+        with pytest.raises(ValueError, match="Cannot parse"):
+            parse_spice_value("1k1")
+
 
 # ---------------------------------------------------------------------------
 # Bug N: is_windows_native_path matches /mnt/cdrom (false positive)
@@ -380,19 +459,23 @@ class TestSweepDirectionMismatch:
 class TestIsWindowsNativePath:
     def test_drive_letter_match(self):
         from ltspice_mcp.lib.wsl import is_windows_native_path
+
         assert is_windows_native_path(Path("/mnt/c/Users/foo")) is True
 
     def test_cdrom_not_drive(self):
         from ltspice_mcp.lib.wsl import is_windows_native_path
+
         # /mnt/cdrom is not a Windows drive letter — must NOT match
         assert is_windows_native_path(Path("/mnt/cdrom/foo")) is False
 
     def test_extdata_not_drive(self):
         from ltspice_mcp.lib.wsl import is_windows_native_path
+
         assert is_windows_native_path(Path("/mnt/extdata/x")) is False
 
     def test_mnt_alone_not_drive(self):
         from ltspice_mcp.lib.wsl import is_windows_native_path
+
         assert is_windows_native_path(Path("/mnt")) is False
 
 
@@ -406,8 +489,11 @@ class TestParseMeasurementsUnparseable:
         from ltspice_mcp.lib.log_parser import parse_measurements
 
         class FakeReader:
-            def __init__(self, data): self.dataset = data
-            def get_measure_names(self): return list(self.dataset.keys())
+            def __init__(self, data):
+                self.dataset = data
+
+            def get_measure_names(self):
+                return list(self.dataset.keys())
 
         reader = FakeReader({"fc": ["unparseable", 100.0]})
         result = parse_measurements(Path("/tmp/x.log"), reader=reader)  # type: ignore[arg-type]
@@ -501,9 +587,7 @@ class TestConfigTomlValidation:
         assert cfg.default_timeout == 300.0
 
     def test_huge_timeout_rejected(self, tmp_path, monkeypatch):
-        cfg = self._load(
-            tmp_path, "[simulation]\ntimeout = 999999999\n", monkeypatch
-        )
+        cfg = self._load(tmp_path, "[simulation]\ntimeout = 999999999\n", monkeypatch)
         assert cfg.default_timeout == 300.0
 
     def test_zero_max_parallel_rejected(self, tmp_path, monkeypatch):
@@ -511,15 +595,11 @@ class TestConfigTomlValidation:
         assert cfg.max_parallel_sims == 4
 
     def test_negative_max_parallel_rejected(self, tmp_path, monkeypatch):
-        cfg = self._load(
-            tmp_path, "[simulation]\nmax_parallel = -1\n", monkeypatch
-        )
+        cfg = self._load(tmp_path, "[simulation]\nmax_parallel = -1\n", monkeypatch)
         assert cfg.max_parallel_sims == 4
 
     def test_invalid_log_level_rejected(self, tmp_path, monkeypatch):
-        cfg = self._load(
-            tmp_path, '[logging]\nlevel = "SUPERDEBUG"\n', monkeypatch
-        )
+        cfg = self._load(tmp_path, '[logging]\nlevel = "SUPERDEBUG"\n', monkeypatch)
         assert cfg.log_level == "INFO"
 
     def test_lowercase_log_level_normalized(self, tmp_path, monkeypatch):
@@ -578,7 +658,11 @@ class TestBatchPaginationValidation:
         )
         bj.completed_at = now() + timedelta(seconds=1)
         bj.run_results = {
-            i: {"raw_file": Path(f"/tmp/r{i}.raw"), "log_file": Path(f"/tmp/r{i}.log"), "params": {}}
+            i: {
+                "raw_file": Path(f"/tmp/r{i}.raw"),
+                "log_file": Path(f"/tmp/r{i}.log"),
+                "params": {},
+            }
             for i in range(n_runs)
         }
         state.batch_jobs["b1"] = bj
@@ -650,9 +734,7 @@ class TestMergeContinuationBlankLine:
     def test_multiple_blank_lines(self):
         from ltspice_mcp.lib.library_parser import _merge_continuation_lines
 
-        result = _merge_continuation_lines(
-            [".MODEL Q NPN", "", "", "+ BF=200", "+ IS=1e-14"]
-        )
+        result = _merge_continuation_lines([".MODEL Q NPN", "", "", "+ BF=200", "+ IS=1e-14"])
         assert result == [".MODEL Q NPN BF=200 IS=1e-14"]
 
 
@@ -779,9 +861,7 @@ class TestBuildSimulationSummaryRange:
     def test_empty_axis_does_not_crash(self):
         from ltspice_mcp.lib.raw_parser import build_simulation_summary
 
-        r = build_simulation_summary(
-            self._mk("Transient Analysis", np.array([])), None
-        )
+        r = build_simulation_summary(self._mk("Transient Analysis", np.array([])), None)
         assert r["range"] == {}
         assert r["point_count"] == 0
 
@@ -849,17 +929,13 @@ class TestSetComponentAttributeWraps:
 
 @pytest.mark.asyncio
 class TestListComponentsValidation:
-    async def test_reference_and_prefix_mutually_exclusive(
-        self, state_no_sim, sample_netlist
-    ):
+    async def test_reference_and_prefix_mutually_exclusive(self, state_no_sim, sample_netlist):
         from ltspice_mcp.errors import NetlistError
         from ltspice_mcp.tools.circuit import ListComponentsInput, handle_list_components
 
         with pytest.raises(NetlistError, match="mutually exclusive"):
             await handle_list_components(
-                ListComponentsInput(
-                    path=sample_netlist.name, reference="R1", prefix="C"
-                ),
+                ListComponentsInput(path=sample_netlist.name, reference="R1", prefix="C"),
                 state_no_sim,
             )
 
