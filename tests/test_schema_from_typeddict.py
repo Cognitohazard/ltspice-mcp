@@ -129,9 +129,7 @@ class TestNested:
         s = schema_from_typeddict(_NestedOuter)
         assert s["properties"]["inner"]["type"] == "object"
         assert s["properties"]["inner"]["properties"]["name"] == {"type": "string"}
-        assert s["properties"]["many"]["items"]["properties"]["value"] == {
-            "type": "integer"
-        }
+        assert s["properties"]["many"]["items"]["properties"]["value"] == {"type": "integer"}
 
 
 class _Opaque:

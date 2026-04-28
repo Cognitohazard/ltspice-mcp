@@ -56,8 +56,7 @@ def _migrate(data: dict, from_version: int) -> dict:
         migrate_fn = _MIGRATIONS.get(current)
         if migrate_fn is None:
             raise ValueError(
-                f"No migration path from schema_version {current} "
-                f"to {SCHEMA_VERSION}"
+                f"No migration path from schema_version {current} to {SCHEMA_VERSION}"
             )
         data = migrate_fn(data)
         current += 1
@@ -213,8 +212,7 @@ def _accept_schema(data: dict, source: Path) -> bool:
         return True
 
     logger.warning(
-        "Skipping job file %s: unsupported schema_version %d "
-        "(this build reads %s)",
+        "Skipping job file %s: unsupported schema_version %d (this build reads %s)",
         source,
         raw_version,
         sorted(SUPPORTED_VERSIONS),

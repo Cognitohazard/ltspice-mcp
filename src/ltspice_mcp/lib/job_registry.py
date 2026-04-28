@@ -107,11 +107,7 @@ class JobRegistry:
         lock is dropped here — safe once the job is out of the dict because
         no new ``persist_job`` calls can target it.
         """
-        finished = [
-            (jid, j)
-            for jid, j in jobs_dict.items()
-            if j.status in TERMINAL_STATUSES
-        ]
+        finished = [(jid, j) for jid, j in jobs_dict.items() if j.status in TERMINAL_STATUSES]
         overflow = len(finished) - _MAX_FINISHED_JOBS
         if overflow <= 0:
             return
@@ -276,9 +272,7 @@ class JobRegistry:
                 loaded += 1
             except Exception as e:
                 logger.debug("preload_recent: skipped %s: %s", raw_path, e)
-        logger.debug(
-            "preload_recent: loaded %d circuit(s) from recent index", loaded
-        )
+        logger.debug("preload_recent: loaded %d circuit(s) from recent index", loaded)
         return loaded
 
     # ------------------------------------------------------------------

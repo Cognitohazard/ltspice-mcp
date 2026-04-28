@@ -47,9 +47,7 @@ class TestConfigureSweep:
             ConfigureSweepInput(
                 netlist=sample_netlist.name,
                 parameters=[
-                    SweepParameter(
-                        name="R1", type="component", start=1000, stop=10000, step=1000
-                    )
+                    SweepParameter(name="R1", type="component", start=1000, stop=10000, step=1000)
                 ],
             ),
             state_no_sim,
@@ -64,9 +62,7 @@ class TestConfigureSweep:
             ConfigureSweepInput(
                 netlist=sample_netlist.name,
                 parameters=[
-                    SweepParameter(
-                        name="R1", type="component", start=1, stop=10, points=10
-                    )
+                    SweepParameter(name="R1", type="component", start=1, stop=10, points=10)
                 ],
             ),
             state_no_sim,
@@ -90,9 +86,7 @@ class TestConfigureSweep:
             state_no_sim,
         )
 
-    async def test_empty_parameters(
-        self, state_no_sim: SessionState, sample_netlist: Path
-    ):
+    async def test_empty_parameters(self, state_no_sim: SessionState, sample_netlist: Path):
         with pytest.raises(BatchJobError, match="At least one parameter"):
             await handle_configure_sweep(
                 ConfigureSweepInput(netlist=sample_netlist.name, parameters=[]),
@@ -120,16 +114,12 @@ class TestConfigureSweep:
                 state_no_sim,
             )
 
-    async def test_neither_step_nor_points(
-        self, state_no_sim: SessionState, sample_netlist: Path
-    ):
+    async def test_neither_step_nor_points(self, state_no_sim: SessionState, sample_netlist: Path):
         with pytest.raises(BatchJobError, match="one of step or points"):
             await handle_configure_sweep(
                 ConfigureSweepInput(
                     netlist=sample_netlist.name,
-                    parameters=[
-                        SweepParameter(name="R1", type="component", start=1, stop=10)
-                    ],
+                    parameters=[SweepParameter(name="R1", type="component", start=1, stop=10)],
                 ),
                 state_no_sim,
             )
@@ -140,9 +130,7 @@ class TestConfigureSweep:
                 ConfigureSweepInput(
                     netlist=sample_netlist.name,
                     parameters=[
-                        SweepParameter(
-                            name="R1", type="component", start=1, stop=10, step=0
-                        )
+                        SweepParameter(name="R1", type="component", start=1, stop=10, step=0)
                     ],
                 ),
                 state_no_sim,
@@ -154,27 +142,19 @@ class TestConfigureSweep:
                 ConfigureSweepInput(
                     netlist=sample_netlist.name,
                     parameters=[
-                        SweepParameter(
-                            name="R1", type="component", start=1, stop=10, points=1
-                        )
+                        SweepParameter(name="R1", type="component", start=1, stop=10, points=1)
                     ],
                 ),
                 state_no_sim,
             )
 
-    async def test_multi_dimension(
-        self, state_no_sim: SessionState, sample_netlist: Path
-    ):
+    async def test_multi_dimension(self, state_no_sim: SessionState, sample_netlist: Path):
         await handle_configure_sweep(
             ConfigureSweepInput(
                 netlist=sample_netlist.name,
                 parameters=[
-                    SweepParameter(
-                        name="R1", type="component", start=1, stop=10, points=3
-                    ),
-                    SweepParameter(
-                        name="C1", type="component", start=1e-9, stop=1e-6, points=4
-                    ),
+                    SweepParameter(name="R1", type="component", start=1, stop=10, points=3),
+                    SweepParameter(name="C1", type="component", start=1e-9, stop=1e-6, points=4),
                 ],
             ),
             state_no_sim,
@@ -193,9 +173,7 @@ class TestRunSweep:
             ConfigureSweepInput(
                 netlist=sample_netlist.name,
                 parameters=[
-                    SweepParameter(
-                        name="R1", type="component", start=1, stop=10, points=3
-                    )
+                    SweepParameter(name="R1", type="component", start=1, stop=10, points=3)
                 ],
             ),
             state_no_sim,
@@ -213,9 +191,7 @@ class TestConfigureMonteCarlo:
                 netlist=sample_netlist.name,
                 tolerances=[
                     MonteCarloTolerance(ref="R", tolerance=0.05, distribution="uniform"),
-                    MonteCarloTolerance(
-                        ref="R1", tolerance=0.01, distribution="gaussian"
-                    ),
+                    MonteCarloTolerance(ref="R1", tolerance=0.01, distribution="gaussian"),
                 ],
                 num_runs=50,
             ),
@@ -226,20 +202,14 @@ class TestConfigureMonteCarlo:
         assert "50" in text
         assert len(state_no_sim.mc_configs) == 1
 
-    async def test_empty_tolerances(
-        self, state_no_sim: SessionState, sample_netlist: Path
-    ):
+    async def test_empty_tolerances(self, state_no_sim: SessionState, sample_netlist: Path):
         with pytest.raises(BatchJobError, match="At least one tolerance"):
             await handle_configure_montecarlo(
-                ConfigureMonteCarloInput(
-                    netlist=sample_netlist.name, tolerances=[], num_runs=10
-                ),
+                ConfigureMonteCarloInput(netlist=sample_netlist.name, tolerances=[], num_runs=10),
                 state_no_sim,
             )
 
-    async def test_num_runs_too_high(
-        self, state_no_sim: SessionState, sample_netlist: Path
-    ):
+    async def test_num_runs_too_high(self, state_no_sim: SessionState, sample_netlist: Path):
         with pytest.raises(BatchJobError, match="num_runs must be"):
             await handle_configure_montecarlo(
                 ConfigureMonteCarloInput(
@@ -250,9 +220,7 @@ class TestConfigureMonteCarlo:
                 state_no_sim,
             )
 
-    async def test_num_runs_zero(
-        self, state_no_sim: SessionState, sample_netlist: Path
-    ):
+    async def test_num_runs_zero(self, state_no_sim: SessionState, sample_netlist: Path):
         with pytest.raises(BatchJobError, match="num_runs"):
             await handle_configure_montecarlo(
                 ConfigureMonteCarloInput(
@@ -268,9 +236,7 @@ class TestConfigureMonteCarlo:
 class TestRunMonteCarlo:
     async def test_unknown_config(self, state_no_sim: SessionState):
         with pytest.raises(BatchJobError, match="not found"):
-            await handle_run_montecarlo(
-                RunBatchInput(config_id="missing"), state_no_sim
-            )
+            await handle_run_montecarlo(RunBatchInput(config_id="missing"), state_no_sim)
 
     async def test_no_simulator(self, state_no_sim: SessionState, sample_netlist: Path):
         await handle_configure_montecarlo(
@@ -283,40 +249,30 @@ class TestRunMonteCarlo:
         )
         config_id = next(iter(state_no_sim.mc_configs.keys()))
         with pytest.raises(SimulationError, match="No simulator"):
-            await handle_run_montecarlo(
-                RunBatchInput(config_id=config_id), state_no_sim
-            )
+            await handle_run_montecarlo(RunBatchInput(config_id=config_id), state_no_sim)
 
 
 @pytest.mark.asyncio
 class TestGetBatchResults:
     async def test_unknown_job(self, state_no_sim: SessionState):
         with pytest.raises(BatchJobError):
-            await handle_batch_results(
-                GetBatchResultsInput(job_id="missing"), state_no_sim
-            )
+            await handle_batch_results(GetBatchResultsInput(job_id="missing"), state_no_sim)
 
     async def test_status_running(self, state_no_sim: SessionState):
         _make_batch(state_no_sim, status="running")
-        result = await handle_batch_results(
-            GetBatchResultsInput(job_id="b1"), state_no_sim
-        )
+        result = await handle_batch_results(GetBatchResultsInput(job_id="b1"), state_no_sim)
         assert "running" in result.content[0].text.lower()
 
     async def test_status_completed(self, state_no_sim: SessionState):
         _make_batch(state_no_sim, status="completed", completed_runs=5, total_runs=5)
-        result = await handle_batch_results(
-            GetBatchResultsInput(job_id="b1"), state_no_sim
-        )
+        result = await handle_batch_results(GetBatchResultsInput(job_id="b1"), state_no_sim)
         text = result.content[0].text.lower()
         assert "completed" in text
 
     async def test_status_failed(self, state_no_sim: SessionState):
         bj = _make_batch(state_no_sim, status="failed")
         bj.error = "test error"
-        result = await handle_batch_results(
-            GetBatchResultsInput(job_id="b1"), state_no_sim
-        )
+        result = await handle_batch_results(GetBatchResultsInput(job_id="b1"), state_no_sim)
         assert "failed" in result.content[0].text.lower()
 
     async def test_signal_no_completed_runs(self, state_no_sim: SessionState):
@@ -328,9 +284,7 @@ class TestGetBatchResults:
 
     async def test_status_cancelled(self, state_no_sim: SessionState):
         _make_batch(state_no_sim, status="cancelled", completed_runs=2, total_runs=10)
-        result = await handle_batch_results(
-            GetBatchResultsInput(job_id="b1"), state_no_sim
-        )
+        result = await handle_batch_results(GetBatchResultsInput(job_id="b1"), state_no_sim)
         assert "cancelled" in result.content[0].text.lower()
 
 

@@ -20,9 +20,7 @@ _EST = timezone(timedelta(hours=-5), name="EST")
 
 # Recognised netlist / schematic file extensions. Shared by the recent-
 # circuits tracker, sidecar loaders, and the netlist resource listing.
-CIRCUIT_EXTENSIONS: frozenset[str] = frozenset(
-    {".asc", ".net", ".sp", ".cir", ".spice"}
-)
+CIRCUIT_EXTENSIONS: frozenset[str] = frozenset({".asc", ".net", ".sp", ".cir", ".spice"})
 
 # macOS-only: fcntl.F_FULLFSYNC forces a platter-level flush. Plain fsync on
 # APFS/HFS+ stops at the drive's write cache, so durability-critical writes
@@ -180,9 +178,7 @@ def atomic_write(
     """
     binary = "b" in mode
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
-    )
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
     tmp_path = Path(tmp_name)
 
     # Permissions only need preserving when we might replace an existing file.
@@ -224,9 +220,7 @@ def atomic_write_text(
     overwrite: bool = True,
 ) -> None:
     """Write ``text`` to ``path`` atomically (and durably, by default)."""
-    with atomic_write(
-        path, encoding=encoding, durable=durable, overwrite=overwrite
-    ) as f:
+    with atomic_write(path, encoding=encoding, durable=durable, overwrite=overwrite) as f:
         f.write(text)
 
 

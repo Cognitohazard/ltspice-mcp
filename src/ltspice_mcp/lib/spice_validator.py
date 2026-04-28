@@ -75,10 +75,7 @@ _RULES: tuple[_Rule, ...] = (
             "phase() is not accepted in .MEAS directives — it's a "
             "waveform-viewer-only function. Use ph() instead."
         ),
-        suggestion=(
-            "Replace phase(...) with ph(...) — ph() is the "
-            ".MEAS-compatible spelling."
-        ),
+        suggestion=("Replace phase(...) with ph(...) — ph() is the .MEAS-compatible spelling."),
     ),
     _Rule(
         name="group_delay_in_meas",
@@ -97,9 +94,7 @@ _RULES: tuple[_Rule, ...] = (
 )
 
 
-def validate_directive(
-    directive: str, simulator: str = "LTspice"
-) -> ValidationError | None:
+def validate_directive(directive: str, simulator: str = "LTspice") -> ValidationError | None:
     """Check a directive against the blocklist for the given simulator.
 
     Returns the first matched rule's error, or None if no rule fires.

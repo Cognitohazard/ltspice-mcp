@@ -68,9 +68,7 @@ class TestLoad:
     def test_empty_when_no_index(self, recent_home: Path) -> None:
         assert recent.load() == []
 
-    def test_prune_missing_drops_deleted_files(
-        self, tmp_path: Path, recent_home: Path
-    ) -> None:
+    def test_prune_missing_drops_deleted_files(self, tmp_path: Path, recent_home: Path) -> None:
         alive = tmp_path / "alive.cir"
         dead = tmp_path / "dead.cir"
         alive.write_text("")
@@ -112,9 +110,7 @@ class TestSchemaVersion:
         assert on_disk["schema"] == recent.SCHEMA
         assert on_disk["schema_version"] == recent.SCHEMA_VERSION
 
-    def test_read_accepts_legacy_versionless_file(
-        self, recent_home: Path, tmp_path: Path
-    ) -> None:
+    def test_read_accepts_legacy_versionless_file(self, recent_home: Path, tmp_path: Path) -> None:
         recent_home.mkdir(parents=True, exist_ok=True)
         circuit = tmp_path / "rc.cir"
         circuit.write_text("")

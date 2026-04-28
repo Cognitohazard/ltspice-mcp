@@ -79,9 +79,7 @@ class SweepRunner(BatchRunnerBase):
 
         def execute_sweep() -> None:
             if batch_job.sweep_config is None:
-                raise BatchJobError(
-                    f"Sweep job {batch_job.job_id} has no sweep configuration"
-                )
+                raise BatchJobError(f"Sweep job {batch_job.job_id} has no sweep configuration")
 
             editor = SpiceEditor(str(batch_job.netlist))
             runner = wrap_runner_for_runno_callbacks(self._build_sim_runner())
@@ -89,9 +87,7 @@ class SweepRunner(BatchRunnerBase):
             stepper = _create_stepper(editor, runner)
 
             for dim in batch_job.sweep_config.dimensions:
-                values = generate_sweep_range(
-                    dim.start, dim.stop, dim.step, dim.points, dim.scale
-                )
+                values = generate_sweep_range(dim.start, dim.stop, dim.step, dim.points, dim.scale)
                 if dim.type == "component":
                     stepper.add_value_sweep(dim.name, values)
                 elif dim.type == "parameter":

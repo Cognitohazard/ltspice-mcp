@@ -16,9 +16,7 @@ logger = logging.getLogger(__name__)
 
 ToolProfile = Literal["full", "agentic"]
 VALID_PROFILES: frozenset[str] = frozenset({"full", "agentic"})
-VALID_LOG_LEVELS: frozenset[str] = frozenset(
-    {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-)
+VALID_LOG_LEVELS: frozenset[str] = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
 
 def _validate_numeric(
@@ -48,9 +46,7 @@ def _validate_numeric(
     too_low = val <= min_val if exclusive_min else val < min_val
     if too_low or val > max_val:
         low = f">{min_val}" if exclusive_min else str(min_val)
-        logger.warning(
-            "%s: %s must be %s-%s, got %s; ignoring", source, key, low, max_val, val
-        )
+        logger.warning("%s: %s must be %s-%s, got %s; ignoring", source, key, low, max_val, val)
         del config_dict[key]
     else:
         config_dict[key] = val
@@ -233,9 +229,7 @@ class ServerConfig:
                 if isinstance(raw, bool):
                     config_dict["persist_jobs"] = raw
                 else:
-                    logger.warning(
-                        "config: state.persist_jobs must be boolean; ignoring %r", raw
-                    )
+                    logger.warning("config: state.persist_jobs must be boolean; ignoring %r", raw)
 
             if "state" in toml_data and "preload_recent_count" in toml_data["state"]:
                 raw = toml_data["state"]["preload_recent_count"]
@@ -248,9 +242,7 @@ class ServerConfig:
                         raw,
                     )
 
-            _validate_numeric(
-                config_dict, "max_parallel_sims", int, 1, 128, source="config"
-            )
+            _validate_numeric(config_dict, "max_parallel_sims", int, 1, 128, source="config")
             _validate_numeric(
                 config_dict,
                 "default_timeout",
@@ -286,7 +278,13 @@ class ServerConfig:
             "LTSPICE_MCP_MAX_PARALLEL", config_dict, "max_parallel_sims", int, 1, 128
         )
         _load_bounded_env(
-            "LTSPICE_MCP_TIMEOUT", config_dict, "default_timeout", float, 0, 86400, exclusive_min=True
+            "LTSPICE_MCP_TIMEOUT",
+            config_dict,
+            "default_timeout",
+            float,
+            0,
+            86400,
+            exclusive_min=True,
         )
         _load_bounded_env(
             "LTSPICE_MCP_MAX_POINTS", config_dict, "max_points_returned", int, 1, 10_000_000

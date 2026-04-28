@@ -132,8 +132,7 @@ def transition(
     event = STATUS_TO_EVENT.get(new_status)
     if event is None:
         raise InvalidTransitionError(
-            f"no event mapping for status {new_status!r}; "
-            "update STATUS_TO_EVENT"
+            f"no event mapping for status {new_status!r}; update STATUS_TO_EVENT"
         )
     emit_job_event(event, job, **event_extra)
 

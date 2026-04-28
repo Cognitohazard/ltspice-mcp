@@ -138,6 +138,7 @@ def format_meas_errors(meas_errors: list[dict[str, Any]]) -> list[str]:
             lines.append(f"    Suggestion: {me['suggestion']}")
     return lines
 
+
 RO_ANNOTATIONS = types.ToolAnnotations(
     readOnlyHint=True,
     destructiveHint=False,

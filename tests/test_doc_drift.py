@@ -52,8 +52,7 @@ class TestToolCountInDocs:
         # "| `agentic` | 27 |" row in the tool-profile table.
         pattern = rf"\|\s*`agentic`\s*\|\s*{agentic}\s*\|"
         assert re.search(pattern, text), (
-            f"README.md tool-profile table must list {agentic} for the "
-            f"agentic profile"
+            f"README.md tool-profile table must list {agentic} for the agentic profile"
         )
 
     def test_claude_md_full_count_matches_registry(self) -> None:
@@ -69,8 +68,7 @@ class TestToolCountInDocs:
         text = (ROOT / "CLAUDE.md").read_text()
         pattern = rf"\|\s*`agentic`\s*\|\s*{agentic}\s*\|"
         assert re.search(pattern, text), (
-            f"CLAUDE.md tool-profile table must list {agentic} for the "
-            f"agentic profile"
+            f"CLAUDE.md tool-profile table must list {agentic} for the agentic profile"
         )
 
 

@@ -49,11 +49,17 @@ class SweepParameter(StrictModel):
     """Nested sweep parameter definition."""
 
     name: str = Field(description="Component reference (e.g., 'R1') or parameter name")
-    type: Literal["component", "parameter"] = Field(description="'component' for ref values, 'parameter' for .PARAM")
+    type: Literal["component", "parameter"] = Field(
+        description="'component' for ref values, 'parameter' for .PARAM"
+    )
     start: float = Field(description="Start value of sweep range")
     stop: float = Field(description="End value of sweep range")
-    step: float | None = Field(default=None, description="Step size (mutually exclusive with points)")
-    points: int | None = Field(default=None, description="Number of points (mutually exclusive with step)")
+    step: float | None = Field(
+        default=None, description="Step size (mutually exclusive with points)"
+    )
+    points: int | None = Field(
+        default=None, description="Number of points (mutually exclusive with step)"
+    )
     scale: Literal["linear", "log"] = Field(default="linear", description="Sweep scale")
 
 
@@ -63,12 +69,18 @@ class ConfigureSweepInput(ToolInput):
 
 
 class RunBatchInput(ToolInput):
-    config_id: str = Field(description="Configuration ID from configure_sweep or configure_montecarlo")
-    max_parallel: int | None = Field(default=None, description="Max concurrent simulations (default: server config)")
+    config_id: str = Field(
+        description="Configuration ID from configure_sweep or configure_montecarlo"
+    )
+    max_parallel: int | None = Field(
+        default=None, description="Max concurrent simulations (default: server config)"
+    )
 
 
 class MonteCarloTolerance(StrictModel):
-    ref: str = Field(description="Component ref (e.g., 'R1') or type name (e.g., 'resistors', 'R')")
+    ref: str = Field(
+        description="Component ref (e.g., 'R1') or type name (e.g., 'resistors', 'R')"
+    )
     tolerance: float = Field(description="Tolerance as fraction (e.g., 0.05 for 5%)")
     distribution: Literal["uniform", "gaussian", "normal"] = Field(
         default="uniform", description="Distribution type"
@@ -146,15 +158,13 @@ class MonteCarloMismatchRule(StrictModel):
     AVT: float = Field(
         default=0.0,
         description=(
-            "VTH-mismatch coefficient in V·µm (e.g. 3e-3 = 3 mV·µm). 0 disables "
-            "VTH mismatch."
+            "VTH-mismatch coefficient in V·µm (e.g. 3e-3 = 3 mV·µm). 0 disables VTH mismatch."
         ),
     )
     AK: float = Field(
         default=0.0,
         description=(
-            "K-mismatch coefficient in fraction·µm (e.g. 0.02 = 2%·µm). 0 disables "
-            "K mismatch."
+            "K-mismatch coefficient in fraction·µm (e.g. 0.02 = 2%·µm). 0 disables K mismatch."
         ),
     )
     distribution: Literal["uniform", "gaussian", "normal"] = Field(
@@ -236,7 +246,9 @@ class ConfigureMonteCarloInput(ToolInput):
 
 class GetBatchResultsInput(ToolInput):
     job_id: str = Field(description="Batch job ID from run_sweep or run_montecarlo")
-    signal: str | None = Field(default=None, description="Signal name for per-signal stats (e.g., 'V(out)')")
+    signal: str | None = Field(
+        default=None, description="Signal name for per-signal stats (e.g., 'V(out)')"
+    )
     filters: dict[str, str] | None = Field(
         default=None,
         description="Filter runs by parameter values (e.g., {'R1': '10k'}). Only with signal + raw.",
@@ -252,8 +264,13 @@ class GetBatchResultsInput(ToolInput):
     )
     offset: int = Field(default=0, description="Pagination offset for raw data")
     limit: int = Field(default=50, description="Max raw data rows to return")
-    raw: bool = Field(default=False, description="Return per-run raw data instead of aggregate stats")
-    format: Literal["json", "text"] | None = Field(default=None, description="Response format: 'json' for structured data, 'text' for human-readable")
+    raw: bool = Field(
+        default=False, description="Return per-run raw data instead of aggregate stats"
+    )
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -577,10 +594,7 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
     netlist_path = resolve_netlist_path(netlist_str, state)
 
     has_any_rule = bool(
-        tolerances_list
-        or model_tolerances_input
-        or mismatch_input
-        or param_tolerances_input
+        tolerances_list or model_tolerances_input or mismatch_input or param_tolerances_input
     )
     if not has_any_rule:
         raise BatchJobError(
@@ -628,9 +642,7 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
             params[param_name.upper()] = _spec_from_input(
                 spec_input.tolerance, spec_input.distribution, spec_input.kind
             )
-        model_tolerances.append(
-            ModelTolerance(model_name=mt.model, parameters=params)
-        )
+        model_tolerances.append(ModelTolerance(model_name=mt.model, parameters=params))
 
     mismatch_rules: list[MismatchRule] = []
     for mr in mismatch_input:
@@ -907,7 +919,9 @@ def _format_batch_status_text(data: dict) -> str:
         eta_str = ""
         if eta_s is not None:
             eta_str = (
-                f", ~{int(eta_s // 60)}m remaining" if eta_s >= 60 else f", ~{int(eta_s)}s remaining"
+                f", ~{int(eta_s // 60)}m remaining"
+                if eta_s >= 60
+                else f", ~{int(eta_s)}s remaining"
             )
         return (
             f"Batch job {data['job_id']} is running\n"
@@ -975,13 +989,17 @@ def _format_batch_aggregate_text(data: dict, batch_job: BatchJob) -> str:
     worst_run = data["worst_case_run"]
     if worst_run is not None:
         worst_params = batch_job.run_results[worst_run].get("params", {})
-        params_str = ", ".join(f"{k}={v}" for k, v in worst_params.items()) if worst_params else "no params"
+        params_str = (
+            ", ".join(f"{k}={v}" for k, v in worst_params.items()) if worst_params else "no params"
+        )
         lines.append(f"\nWorst-case run: #{worst_run} ({params_str})")
 
     best_run = data["best_case_run"]
     if best_run is not None:
         best_params = batch_job.run_results[best_run].get("params", {})
-        params_str = ", ".join(f"{k}={v}" for k, v in best_params.items()) if best_params else "no params"
+        params_str = (
+            ", ".join(f"{k}={v}" for k, v in best_params.items()) if best_params else "no params"
+        )
         lines.append(f"Best-case run:  #{best_run} ({params_str})")
 
     return "\n".join(lines)

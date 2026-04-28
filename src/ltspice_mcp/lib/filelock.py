@@ -69,9 +69,7 @@ def _acquire(fd: int, *, exclusive: bool, timeout: float) -> None:
             return
         except _LOCK_TRY_EXCS:
             if time.monotonic() - start >= timeout:
-                raise TimeoutError(
-                    f"Lock not acquired within {timeout:.1f}s"
-                ) from None
+                raise TimeoutError(f"Lock not acquired within {timeout:.1f}s") from None
             time.sleep(_LOCK_POLL_INTERVAL)
 
 

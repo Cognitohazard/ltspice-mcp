@@ -150,7 +150,9 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
             while j < len(lines) and lines[j].strip().startswith("PINATTR"):
                 attr_line = lines[j].strip()
                 if attr_line.startswith("PINATTR PinName"):
-                    pin_name = attr_line.split(None, 2)[2] if len(attr_line.split(None, 2)) > 2 else ""
+                    pin_name = (
+                        attr_line.split(None, 2)[2] if len(attr_line.split(None, 2)) > 2 else ""
+                    )
                 elif attr_line.startswith("PINATTR SpiceOrder"):
                     pin_order = int(attr_line.split()[-1])
                 j += 1
@@ -239,13 +241,15 @@ def compute_placed_geometry(
     bw, bh = symbol_info.bbox_width, symbol_info.bbox_height
     for pin in symbol_info.pins:
         rx, ry = _apply_rotation(pin.x, pin.y, rotation)
-        placed_pins.append({
-            "name": pin.name,
-            "order": pin.order,
-            "x": origin_x + rx,
-            "y": origin_y + ry,
-            "dir": _pin_direction(pin.x, pin.y, bx, by, bw, bh, rotation),
-        })
+        placed_pins.append(
+            {
+                "name": pin.name,
+                "order": pin.order,
+                "x": origin_x + rx,
+                "y": origin_y + ry,
+                "dir": _pin_direction(pin.x, pin.y, bx, by, bw, bh, rotation),
+            }
+        )
 
     # Transform the four corners of the symbol's local bounding box.
     # Symbols are typically centered around the origin, so bbox_x/bbox_y
