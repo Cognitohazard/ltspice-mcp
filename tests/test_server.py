@@ -65,8 +65,10 @@ class TestConfigureAscEditor:
     def test_wsl_no_lib_paths(self, tmp_path: Path):
         cfg = ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path])
         cfg.symbol_paths = []
-        with patch("ltspice_mcp.lib.wsl.is_wsl", return_value=True), \
-             patch("ltspice_mcp.lib.wsl.get_ltspice_lib_paths", return_value=[]):
+        with (
+            patch("ltspice_mcp.lib.wsl.is_wsl", return_value=True),
+            patch("ltspice_mcp.lib.wsl.get_ltspice_lib_paths", return_value=[]),
+        ):
             _configure_asc_editor(cfg, available={"ltspice": object})
 
     def test_wsl_with_lib_paths(self, tmp_path: Path):
@@ -74,8 +76,10 @@ class TestConfigureAscEditor:
         cfg.symbol_paths = []
         symdir = tmp_path / "wslsyms"
         symdir.mkdir()
-        with patch("ltspice_mcp.lib.wsl.is_wsl", return_value=True), \
-             patch("ltspice_mcp.lib.wsl.get_ltspice_lib_paths", return_value=[str(symdir)]):
+        with (
+            patch("ltspice_mcp.lib.wsl.is_wsl", return_value=True),
+            patch("ltspice_mcp.lib.wsl.get_ltspice_lib_paths", return_value=[str(symdir)]),
+        ):
             _configure_asc_editor(cfg, available={"ltspice": object})
 
 
@@ -111,23 +115,31 @@ class TestServerDispatch:
             assert len(tools) > 0
 
     async def test_call_unknown_tool(self, state_no_sim: SessionState):
-        with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)), \
-             pytest.raises(ValueError, match="Unknown tool"):
+        with (
+            patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)),
+            pytest.raises(ValueError, match="Unknown tool"),
+        ):
             await call_tool("ltspice_nonexistent", {})
 
     async def test_call_validation_error(self, state_no_sim: SessionState):
-        with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)), \
-             pytest.raises(ValueError, match="Invalid arguments"):
+        with (
+            patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)),
+            pytest.raises(ValueError, match="Invalid arguments"),
+        ):
             await call_tool("ltspice_create_netlist", {"missing": "field"})
 
     async def test_call_path_security_error(self, state_no_sim: SessionState):
-        with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)), \
-             pytest.raises(PathSecurityError, match="Allowed paths"):
+        with (
+            patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)),
+            pytest.raises(PathSecurityError, match="Allowed paths"),
+        ):
             await call_tool("ltspice_read_circuit", {"path": "/etc/passwd"})
 
     async def test_call_ltspice_error_with_hint(self, state_no_sim: SessionState):
-        with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)), \
-             pytest.raises(NetlistError) as excinfo:
+        with (
+            patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)),
+            pytest.raises(NetlistError) as excinfo,
+        ):
             await call_tool("ltspice_read_circuit", {"path": "missing.cir"})
         msg = str(excinfo.value)
         assert "ltspice_read_circuit" in msg or "ltspice_list_components" in msg
@@ -140,8 +152,10 @@ class TestServerDispatch:
     async def test_read_resource_invalid_uri(self, state_no_sim: SessionState):
         from pydantic import AnyUrl
 
-        with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)), \
-             pytest.raises(ValueError, match="Unknown"):
+        with (
+            patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)),
+            pytest.raises(ValueError, match="Unknown"),
+        ):
             await read_resource(AnyUrl("ltspice://nonexistent"))
 
     async def test_read_resource_valid(self, state_no_sim: SessionState):
@@ -155,21 +169,23 @@ class TestServerDispatch:
     async def test_error_with_suggestions_returns_structured_result(
         self, state_no_sim: SessionState, tmp_path
     ):
-        """LibraryError with suggestions should surface as isError=True + structuredContent."""
+        """LibraryError with suggestions should surface as isError=True + structuredContent.
+
+        ``model_info`` was folded into ``find_model``, so this exercises the
+        same fuzzy-match suggestion path through ``find_model`` instead.
+        """
         from mcp import types as mcp_types
 
-        # Load a library so get_model_info has candidates for fuzzy matching
         lib = state_no_sim.working_dir / "mini.lib"
         lib.write_text(".MODEL 2N2222 NPN(BF=200)\n")
         state_no_sim.libraries.load_library(lib)
 
         with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)):
-            result = await call_tool(
-                "ltspice_model_info", {"name": "2N2223"}
-            )
+            result = await call_tool("ltspice_find_model", {"name": "2N2223"})
         assert isinstance(result, mcp_types.CallToolResult)
-        assert result.isError is True
+        # find_model returns success with fuzzy matches rather than an error
+        # — assert the candidate is still surfaced.
+        assert result.isError is False
         assert result.structuredContent is not None
-        assert "suggestions" in result.structuredContent
-        names = [s["name"] for s in result.structuredContent["suggestions"]]
+        names = [r["name"] for r in result.structuredContent["results"]]
         assert "2N2222" in names

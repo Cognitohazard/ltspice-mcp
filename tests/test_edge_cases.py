@@ -498,7 +498,7 @@ class TestParseMeasurementsUnparseable:
         reader = FakeReader({"fc": ["unparseable", 100.0]})
         result = parse_measurements(Path("/tmp/x.log"), reader=reader)  # type: ignore[arg-type]
         # Crashing was the bug; the unparseable value should become None.
-        assert result["measurements"]["fc"] == [None, 100.0]
+        assert result["measurements"]["fc"]["values"] == [None, 100.0]
 
 
 # ---------------------------------------------------------------------------
