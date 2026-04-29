@@ -121,10 +121,10 @@ def compute_batch_stats(
                 "run_index": run_index,
                 "params": run.get("params", {}),
             }
-            # Friction Fr2/J: when peak/mean/min collapse (point query via
-            # ``at=`` or .op single-sample raw), drop the redundant trio and
-            # surface just ``value``. Otherwise keep peak/mean/min so callers
-            # can see the per-run waveform shape.
+            # When peak/mean/min collapse (point query via ``at=`` or .op
+            # single-sample raw), drop the redundant trio and surface just
+            # ``value``. Otherwise keep peak/mean/min so callers can see
+            # the per-run waveform shape.
             if peak == mean_val == min_val:
                 entry["value"] = peak
             else:

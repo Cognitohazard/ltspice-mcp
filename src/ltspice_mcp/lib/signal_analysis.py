@@ -13,7 +13,7 @@ rejects AC analysis before calling in.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, TypedDict
 
 import numpy as np
 from scipy.signal import find_peaks
@@ -112,13 +112,7 @@ class HistogramBin(TypedDict):
 
 
 class MeasurementStatsEntry(TypedDict):
-    """Per-measurement aggregate stats in :func:`compute_measurement_stats`.
-
-    ``aggregated_field`` is set by the tool layer to mark whether stats
-    describe the per-run scalar level (``"value"``) or the WHEN-clause
-    crossing point (``"at"``). ``compute_measurement_stats`` itself
-    doesn't populate it — it sees whichever field the caller chose.
-    """
+    """Per-measurement aggregate stats in :func:`compute_measurement_stats`."""
 
     total_count: int
     valid_count: int
@@ -133,7 +127,6 @@ class MeasurementStatsEntry(TypedDict):
     best_step_index: int | None
     worst_step_index: int | None
     histogram: list[HistogramBin]
-    aggregated_field: NotRequired[str]
 
 
 def window_and_clean(

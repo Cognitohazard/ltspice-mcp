@@ -278,6 +278,8 @@ async def handle_unload_library(
                         "path": {"type": "string"},
                         "subcircuits": {"type": "array", "items": {"type": "string"}},
                         "models": {"type": "array", "items": {"type": "string"}},
+                        "models_total": {"type": "integer"},
+                        "models_truncated": {"type": "boolean"},
                     },
                 },
             },
@@ -321,14 +323,16 @@ async def handle_list_libraries(args: ListLibrariesInput, state: SessionState):
         return format_response("\n".join(lines), data, fmt)
 
     # Detail mode: include both .SUBCKT and .MODEL names per library. A
-    # foundry .bjt typically has hundreds of .MODEL cards and zero
-    # .SUBCKTs — historically we only surfaced subcircuits, leaving the
-    # caller with no way to enumerate (Bug N4).
+    # foundry .bjt typically has hundreds of .MODEL cards and zero .SUBCKTs;
+    # we previously only surfaced subcircuits.
     try:
         result = state.libraries.search_user_libraries("", 0, 999999)
     except Exception as e:
         raise LibraryError(f"Failed to list models: {e}") from e
 
+    # Source paths come from a single canonical source (LibraryManager
+    # records the resolved path), so an exact-string keying matches every
+    # candidate without the O(L*S) substring scan the previous loop did.
     subcircuits_by_path: dict[str, list[str]] = {}
     models_by_path: dict[str, list[str]] = {}
     for r in result["results"]:
@@ -338,36 +342,35 @@ async def handle_list_libraries(args: ListLibrariesInput, state: SessionState):
         elif r["type"] == ".MODEL":
             models_by_path.setdefault(src, []).append(r["name"])
 
+    DETAIL_NAME_CAP = 25
     lines = [header]
     lib_data = []
     for lib_path in libs_page:
         lib_str = str(lib_path)
-        matching_subs: list[str] = []
-        matching_models: list[str] = []
-        for src, names in subcircuits_by_path.items():
-            if lib_str in src:
-                matching_subs.extend(names)
-        for src, names in models_by_path.items():
-            if lib_str in src:
-                matching_models.extend(names)
+        matching_subs = sorted(subcircuits_by_path.get(lib_str, []))
+        matching_models = sorted(models_by_path.get(lib_str, []))
         lines.append(f"  {lib_path}")
         if matching_subs:
-            for name in sorted(matching_subs):
+            for name in matching_subs:
                 lines.append(f"    .SUBCKT {name}")
         if matching_models:
-            shown = sorted(matching_models)
-            cap = 25
-            for name in shown[:cap]:
+            for name in matching_models[:DETAIL_NAME_CAP]:
                 lines.append(f"    .MODEL  {name}")
-            if len(shown) > cap:
-                lines.append(f"    .MODEL  ... (+{len(shown) - cap} more)")
+            if len(matching_models) > DETAIL_NAME_CAP:
+                lines.append(f"    .MODEL  ... (+{len(matching_models) - DETAIL_NAME_CAP} more)")
         if not matching_subs and not matching_models:
             lines.append("    (no subcircuits or models)")
+        # Cap structuredContent identically — a foundry library can carry
+        # thousands of .MODEL cards and we don't want every recent client
+        # to load all of them just to render a list.
+        models_truncated = len(matching_models) > DETAIL_NAME_CAP
         lib_data.append(
             {
-                "path": str(lib_path),
-                "subcircuits": sorted(matching_subs),
-                "models": sorted(matching_models),
+                "path": lib_str,
+                "subcircuits": matching_subs,
+                "models": matching_models[:DETAIL_NAME_CAP],
+                "models_total": len(matching_models),
+                "models_truncated": models_truncated,
             }
         )
 
