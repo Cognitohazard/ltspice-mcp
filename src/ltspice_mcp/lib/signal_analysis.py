@@ -440,6 +440,24 @@ def analyze_pulse_response(
             "widen the window or pass explicit initial_value/final_value."
         )
 
+    # Fr4: after the auto-level logic settles, refuse windows that contain
+    # a full transition + return (e.g. a PULSE with rising AND falling
+    # edges inside the window). The y peak-to-peak swing dwarfs the
+    # initial→final delta, so overshoot_pct would explode (peak / |tiny
+    # delta| → millions of percent). Skip on explicit-level path so the
+    # caller can deliberately work near zero.
+    if initial_value is None and final_value is None:
+        y_pk_pk = float(np.max(y) - np.min(y))
+        if y_pk_pk > _LEVEL_EPSILON and abs_delta < 0.1 * y_pk_pk:
+            raise ValueError(
+                f"Window contains a peak-to-peak swing of {y_pk_pk:.3g} but "
+                f"|final - initial| is only {abs_delta:.3g} — the window "
+                f"appears to capture a full pulse (rise AND fall) rather "
+                f"than a single monotonic step. Narrow t_start/t_end to one "
+                f"transition, or pass explicit initial_value/final_value if "
+                f"this is intentional."
+            )
+
     direction = "rising" if delta > 0 else "falling"
 
     if direction == "rising":

@@ -350,19 +350,22 @@ def find_crossings_any_quantity(
 # ---------------------------------------------------------------------------
 
 
-class GainAtPoint(TypedDict):
+class _GainAtPointOptional(TypedDict, total=False):
+    phase_deg_unwrapped: float
+
+
+class GainAtPoint(_GainAtPointOptional):
     """One gain/phase sample emitted by :func:`gain_at_frequencies`.
 
-    ``phase_deg_unwrapped`` is always present but set to ``None`` when the
-    caller did not request ``include_unwrapped_phase`` — a stable shape is
-    easier for clients to consume than optional-presence.
+    ``phase_deg_unwrapped`` is only present when the caller passes
+    ``include_unwrapped_phase=True`` — otherwise the key is omitted entirely
+    rather than carrying a redundant ``null``.
     """
 
     frequency_hz: float
     magnitude_db: float
     magnitude_linear: float
     phase_deg: float
-    phase_deg_unwrapped: float | None
 
 
 def gain_at_frequencies(
@@ -408,12 +411,9 @@ def gain_at_frequencies(
             "magnitude_db": float(m_db),
             "magnitude_linear": float(10.0 ** (m_db / 20.0)),
             "phase_deg": float(p_deg_wrapped),
-            "phase_deg_unwrapped": (
-                float(log_interp(freqs, phase_deg_unwrapped, f))
-                if include_unwrapped_phase
-                else None
-            ),
         }
+        if include_unwrapped_phase:
+            entry["phase_deg_unwrapped"] = float(log_interp(freqs, phase_deg_unwrapped, f))
         points.append(entry)
 
     return points, warnings
@@ -557,8 +557,10 @@ def _estimate_order_from_slope(slope_db_per_dec: float) -> int | None:
     """Round a roll-off slope to an integer filter order, or ``None`` if far
     from any integer multiple of 20 dB/dec.
 
-    Tolerance of ±2 dB/dec around the integer target keeps us honest on
-    sweeps that are a little short of true asymptotic region.
+    Tolerance of ±3 dB/dec around the integer target — keeps the
+    heuristic noise-tolerant on real-world slopes (a 2-stage opamp loop
+    legitimately measures -17.97 dB/dec near unity) without rounding a
+    2nd-order roll-off (-40 dB/dec) up to 3.
     """
     if not np.isfinite(slope_db_per_dec):
         return None
@@ -566,7 +568,7 @@ def _estimate_order_from_slope(slope_db_per_dec: float) -> int | None:
     order_i = round(order_f)
     if order_i < 1:
         return None
-    if abs(order_f - order_i) * 20.0 > 2.0:
+    if abs(order_f - order_i) * 20.0 > 3.0:
         return None
     return order_i
 
@@ -872,6 +874,21 @@ def compute_stability_metrics(
 
     dc_gain_db = float(mag_db[0])
     hf_gain_db = float(mag_db[-1])
+
+    # Loop probes start near 0° at DC; CS-amp / inverting outputs start
+    # near ±180°. Margins are computed against -180° and presume the
+    # loop-probe convention, so warn when the input doesn't look like
+    # one — otherwise a closed-loop AC sweep produces a negative phase
+    # margin labelled "unconditional", which is contradictory.
+    dc_phase = float(phase_deg[0])
+    if abs(abs(dc_phase) - 180.0) < 10.0:
+        warnings.append(
+            f"DC phase is {dc_phase:.0f}° — the input doesn't look like a "
+            "loop-gain probe (those start near 0°). Phase margin is computed "
+            "against -180° and will be misleading on a closed-loop or "
+            "inverting-amplifier output. Wire a Middlebrook probe and run AC "
+            "on the loop signal instead."
+        )
 
     unity_crossings = detect_crossings(
         freqs,
