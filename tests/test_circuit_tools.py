@@ -369,6 +369,61 @@ class TestEditDirective:
         )
         assert "Removed" in result.content[0].text
 
+    async def test_remove_literal_with_parens(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """directives containing ``(``/``)`` (every .meas/.four
+        on V(...)/I(...)) used to silently no-op because the legacy
+        heuristic routed them through the regex path where unescaped
+        parens became capture groups. Verify literal match works AND the
+        directive actually disappears from the file."""
+        cir = work_dir / "with_parens.cir"
+        cir.write_text(
+            "* with parens\nV1 in 0 5\n.tran 1m\n"
+            ".meas tran v_avg AVG V(in)\n"
+            ".four 1k V(in)\n.end\n"
+        )
+        await handle_edit_directive(
+            {"path": cir.name, "action": "remove", "instruction": ".meas tran v_avg AVG V(in)"},
+            state_no_sim,
+        )
+        await handle_edit_directive(
+            {"path": cir.name, "action": "remove", "instruction": ".four 1k V(in)"},
+            state_no_sim,
+        )
+        body = cir.read_text()
+        assert ".meas tran v_avg" not in body
+        assert ".four 1k" not in body
+
+    async def test_remove_no_match_raises(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """Silent success when nothing matched was the trap that v4-N1
+        exposed — typos or stale lines made the user believe they cleaned
+        the netlist when nothing changed. Now it errors."""
+        cir = work_dir / "no_match.cir"
+        cir.write_text("* test\nV1 a 0 5\n.tran 1m\n.end\n")
+        with pytest.raises(NetlistError, match="No directive or comment matched"):
+            await handle_edit_directive(
+                {"path": cir.name, "action": "remove", "instruction": ".does_not_exist"},
+                state_no_sim,
+            )
+
+    async def test_remove_regex_explicit(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """``regex:`` prefix still works for callers that intend regex."""
+        cir = work_dir / "regex.cir"
+        cir.write_text(
+            "* regex test\nV1 a 0 5\n.tran 1m\n.meas tran v_a MAX V(a)\n.end\n"
+        )
+        await handle_edit_directive(
+            {"path": cir.name, "action": "remove", "instruction": "regex:^\\.meas .*"},
+            state_no_sim,
+        )
+        body = cir.read_text()
+        assert ".meas" not in body
+
 
 @pytest.mark.asyncio
 class TestCreateSchematic:
@@ -428,7 +483,7 @@ class TestValidateNetlist:
         assert any("Behavioural" in iss["message"] for iss in data["issues"])
 
     async def test_flags_meas_op_in_tran(self, state_no_sim: SessionState, work_dir: Path):
-        """Bug N6: ``.meas op`` in a transient run is silently dropped by
+        """``.meas op`` in a transient run is silently dropped by
         LTspice. The validator should call this out so the user retypes."""
         cir = work_dir / "meas_op_mismatch.cir"
         cir.write_text(
@@ -457,6 +512,50 @@ class TestValidateNetlist:
         data = result.structuredContent
         assert data is not None
         assert not any(".meas op" in iss["message"] for iss in data["issues"])
+
+    async def test_flags_meas_tran_in_ac(self, state_no_sim: SessionState, work_dir: Path):
+        """the analysis-vs-meas check used to only catch
+        .meas op. Other kinds (.meas tran under .ac, etc.) were silently
+        dropped by LTspice. Now they're flagged symmetrically."""
+        cir = work_dir / "meas_tran_in_ac.cir"
+        cir.write_text(
+            "V1 in 0 AC 1\nR1 in out 1k\nC1 out 0 1n\n"
+            ".ac dec 100 1 1Meg\n"
+            ".meas tran v_max MAX V(out)\n.end\n"
+        )
+        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert any(".meas tran" in iss["message"] for iss in data["issues"])
+
+    async def test_flags_duplicate_analysis(self, state_no_sim: SessionState, work_dir: Path):
+        """``.tran 1m`` + ``.tran 2m`` makes LTspice fail with
+        "More than one analysis specified." Catch it in the static gate."""
+        cir = work_dir / "dup.cir"
+        cir.write_text(
+            "* dup\nV1 a 0 5\nR1 a 0 1k\n.tran 1m\n.tran 2m\n.end\n"
+        )
+        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert any(
+            "Duplicate" in iss["message"] or "Multiple distinct" in iss["message"]
+            for iss in data["issues"]
+        )
+
+    async def test_flags_multiple_distinct_analyses(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """Two different analyses (``.tran`` and ``.ac``) is the same kind
+        of failure for LTspice — flag it too."""
+        cir = work_dir / "two_kinds.cir"
+        cir.write_text(
+            "V1 a 0 AC 1\nR1 a 0 1k\n.tran 1m\n.ac dec 10 1 1k\n.end\n"
+        )
+        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert any("Multiple distinct" in iss["message"] for iss in data["issues"])
 
 
 @pytest.mark.asyncio
