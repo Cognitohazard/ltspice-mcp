@@ -37,8 +37,8 @@ from ltspice_mcp.tools._base import (
     pagination_metadata,
     registry,
     require_simulator,
-    resolve_netlist_path,
     resolve_output_folder,
+    resolve_runnable_netlist,
     text_response,
 )
 
@@ -384,7 +384,7 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
     netlist_str = args.netlist
     parameters = args.parameters
 
-    netlist_path = resolve_netlist_path(netlist_str, state)
+    netlist_path = resolve_runnable_netlist(netlist_str, state)
 
     if not parameters:
         raise BatchJobError("At least one parameter dimension is required")
@@ -591,7 +591,7 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
     param_tolerances_input = args.param_tolerances
     num_runs = int(args.num_runs)
 
-    netlist_path = resolve_netlist_path(netlist_str, state)
+    netlist_path = resolve_runnable_netlist(netlist_str, state)
 
     has_any_rule = bool(
         tolerances_list or model_tolerances_input or mismatch_input or param_tolerances_input
@@ -856,6 +856,25 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
             "best_case_run": {"type": ["integer", "null"]},
             "runs": {"type": "array", "items": {"type": "object"}},
             "pagination": PAGINATION_SCHEMA,
+            "convergence_warnings": {
+                "type": "array",
+                "description": (
+                    "Per-run convergence-fallback markers (Gmin stepping, "
+                    "source stepping, etc.) detected in the per-run logs. "
+                    "Present only when at least one run hit a fallback."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "run_index": {"type": "integer"},
+                        "markers": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": ["run_index", "markers"],
+                },
+            },
         },
     },
 )
@@ -933,14 +952,25 @@ def _format_batch_status_text(data: dict) -> str:
         )
     if status == "completed":
         duration = data["duration"] or 0.0
-        return (
+        text = (
             f"Batch job {data['job_id']} completed\n"
             f"Type: {data['job_type']}\n"
             f"Total runs: {data['total_runs']}\n"
             f"Successful: {data['successful']}\n"
             f"Failed: {data['failed_runs']}\n"
-            f"Duration: {duration:.1f}s\n\n"
-            f"Use ltspice_batch_results('{data['job_id']}', signal='V(out)') to query results"
+            f"Duration: {duration:.1f}s"
+        )
+        flagged = data.get("convergence_warnings") or []
+        if flagged:
+            run_ids = ", ".join(str(f["run_index"]) for f in flagged[:10])
+            more = "" if len(flagged) <= 10 else f", … (+{len(flagged) - 10} more)"
+            text += (
+                f"\n\nWarning: {len(flagged)} of {data['total_runs']} run(s) hit "
+                f"convergence fallbacks (Gmin/source stepping or worse) — bias "
+                f"point may be degenerate. Run indices: {run_ids}{more}"
+            )
+        return text + (
+            f"\n\nUse ltspice_batch_results('{data['job_id']}', signal='V(out)') to query results"
         )
     if status == "failed":
         return (

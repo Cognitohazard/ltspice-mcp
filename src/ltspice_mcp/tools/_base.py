@@ -452,6 +452,39 @@ def resolve_netlist_path(netlist_str: str, state: SessionState) -> Path:
     return netlist_path
 
 
+def resolve_runnable_netlist(netlist_str: str, state: SessionState) -> Path:
+    """Resolve a path AND auto-export ``.asc`` → ``.net`` if needed.
+
+    spicelib's ``SpiceEditor`` (used by the sweep / Monte Carlo runners)
+    rejects ``.asc`` schematics — it expects the ``^*`` netlist comment
+    header and otherwise fails with a cryptic ``Expected pattern "^\\*"
+    not found``. This helper detects ``.asc`` and runs the LTspice
+    ``create_netlist`` exporter to produce a sidecar ``.net``, so
+    callers (sweep / MC config) can store the runnable path up front.
+    """
+    netlist_path = resolve_netlist_path(netlist_str, state)
+    if netlist_path.suffix.lower() != ".asc":
+        return netlist_path
+
+    ltspice_cls = state.available_simulators.get("ltspice")
+    if ltspice_cls is None:
+        raise SimulationError(
+            f"{netlist_path.name} is an .asc schematic and the active runner "
+            "needs a netlist. Run ltspice_export_netlist first, or configure "
+            "LTspice as a simulator. Available: "
+            f"{list(state.available_simulators.keys())}"
+        )
+    try:
+        net_path = Path(ltspice_cls.create_netlist(str(netlist_path)))
+    except Exception as e:
+        raise SimulationError(
+            f"Auto-exporting {netlist_path.name} to a netlist failed: {e}"
+        ) from e
+    if not net_path.exists():
+        raise SimulationError(f"Auto-export of {netlist_path.name} produced no .net file")
+    return net_path
+
+
 # ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
