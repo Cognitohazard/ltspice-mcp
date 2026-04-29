@@ -11,6 +11,7 @@ from ltspice_mcp.lib.log_parser import (
     extract_missing_refs,
     parse_fourier_data,
     parse_measurements,
+    parse_step_iterations,
     parse_success_summary,
 )
 
@@ -340,3 +341,44 @@ class TestParseMeasurementsFromTo:
         assert entry["values"][0] == pytest.approx(9.81)
         assert entry.get("range_from") == pytest.approx(0.04)
         assert entry.get("range_to") == pytest.approx(0.06)
+
+
+class TestParseStepIterations:
+    def test_single_param_per_line(self, tmp_path: Path):
+        """Bug N2: ``.step param X list ...`` writes ``.step x=val`` per
+        iteration. The .raw header doesn't carry the param mapping, so
+        ``step_get`` walks the log instead.
+        """
+        log = tmp_path / "step.log"
+        log.write_text(
+            "LTspice 26.0 for Windows\n"
+            ".step rval=100\n"
+            ".step rval=1000\n"
+            ".step rval=10000\n"
+            "Total elapsed time: 0.01 seconds.\n"
+        )
+        iters = parse_step_iterations(log)
+        assert iters == [{"rval": 100.0}, {"rval": 1000.0}, {"rval": 10000.0}]
+
+    def test_multiple_params_per_line(self, tmp_path: Path):
+        # LTspice writes already-evaluated float numbers in .step lines,
+        # not engineering-notation tokens like "1k". So the parser only
+        # accepts plain floats — use those in the fixture.
+        log = tmp_path / "step.log"
+        log.write_text(
+            ".step rval=1000, cval=1e-08\n"
+            ".step rval=2000, cval=2e-08\n"
+        )
+        iters = parse_step_iterations(log)
+        assert iters == [
+            {"rval": 1000.0, "cval": 1e-08},
+            {"rval": 2000.0, "cval": 2e-08},
+        ]
+
+    def test_no_step_lines(self, tmp_path: Path):
+        log = tmp_path / "nostep.log"
+        log.write_text("LTspice 26.0\nTotal elapsed time: 0.01 seconds.\n")
+        assert parse_step_iterations(log) == []
+
+    def test_missing_log_returns_empty(self, tmp_path: Path):
+        assert parse_step_iterations(tmp_path / "nope.log") == []
