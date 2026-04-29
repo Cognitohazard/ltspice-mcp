@@ -13,7 +13,7 @@ rejects AC analysis before calling in.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 import numpy as np
 from scipy.signal import find_peaks
@@ -112,7 +112,13 @@ class HistogramBin(TypedDict):
 
 
 class MeasurementStatsEntry(TypedDict):
-    """Per-measurement aggregate stats in :func:`compute_measurement_stats`."""
+    """Per-measurement aggregate stats in :func:`compute_measurement_stats`.
+
+    ``aggregated_field`` is set by the tool layer to mark whether stats
+    describe the per-run scalar level (``"value"``) or the WHEN-clause
+    crossing point (``"at"``). ``compute_measurement_stats`` itself
+    doesn't populate it — it sees whichever field the caller chose.
+    """
 
     total_count: int
     valid_count: int
@@ -127,6 +133,7 @@ class MeasurementStatsEntry(TypedDict):
     best_step_index: int | None
     worst_step_index: int | None
     histogram: list[HistogramBin]
+    aggregated_field: NotRequired[str]
 
 
 def window_and_clean(
@@ -398,29 +405,46 @@ def analyze_pulse_response(
             "explicit initial_value/final_value."
         )
 
-    # Refuse auto level estimates whose source window has high variance —
-    # straddling an edge or unsettled ringing produces silently wrong
-    # overshoot/settling numbers. The error message tells the caller how
-    # to fix it (explicit initial_value/final_value or tighter window).
+    # Auto-level estimate gating (Fr4): only HARD-fail when both ends are
+    # noisy — that means the user picked a window with no quiet region and
+    # we genuinely can't bootstrap. When only ONE end is noisy, fall back
+    # to the boundary sample on that side (y[0] or y[-1]) and surface a
+    # warning. The other end's stable mean is still trusted.
     abs_delta = abs(delta)
     start_std, end_std = _level_stability(y)
     threshold = _AUTO_LEVEL_VARIANCE_THRESHOLD * abs_delta
-    if initial_value is None and start_std > threshold:
+    start_noisy = initial_value is None and start_std > threshold
+    end_noisy = final_value is None and end_std > threshold
+    if start_noisy and end_noisy:
         raise ValueError(
-            f"Auto-detected initial_value is unreliable: leading-10% stddev "
-            f"({start_std:.3g}) exceeds {_AUTO_LEVEL_VARIANCE_THRESHOLD * 100:.0f}% "
-            f"of |final - initial| ({abs_delta:.3g}) — the window likely "
-            f"straddles the input edge or includes pre-edge ringing. "
-            f"Pass an explicit initial_value, or tighten t_start past the "
-            f"transition."
+            f"Auto-detected levels are unreliable on both ends of the window "
+            f"(leading stddev {start_std:.3g}, trailing stddev {end_std:.3g}; "
+            f"|final - initial| {abs_delta:.3g}). Pass explicit "
+            f"initial_value AND final_value, or pick a window that includes "
+            f"a quiet region on either the pre-step or post-step side."
         )
-    if final_value is None and end_std > threshold:
+    if start_noisy:
+        iv = float(y[0])
+        delta = fv - iv
+        abs_delta = abs(delta)
+        warnings.append(
+            f"Leading-10% stddev ({start_std:.3g}) high vs |final-initial| "
+            f"({abs_delta:.3g}); using y[0]={iv:.6g} as initial_value. "
+            "Pass an explicit initial_value to suppress."
+        )
+    if end_noisy:
+        fv = float(y[-1])
+        delta = fv - iv
+        abs_delta = abs(delta)
+        warnings.append(
+            f"Trailing-10% stddev ({end_std:.3g}) high vs |final-initial| "
+            f"({abs_delta:.3g}); using y[-1]={fv:.6g} as final_value. "
+            "Response may not be fully settled."
+        )
+    if abs_delta < _LEVEL_EPSILON:
         raise ValueError(
-            f"Auto-detected final_value is unreliable: trailing-10% stddev "
-            f"({end_std:.3g}) exceeds {_AUTO_LEVEL_VARIANCE_THRESHOLD * 100:.0f}% "
-            f"of |final - initial| ({abs_delta:.3g}) — the response hasn't "
-            f"settled by window end. Pass an explicit final_value, or "
-            f"extend t_end past the settling time."
+            f"After fallback, |final - initial| collapsed to {abs_delta:.3e}; "
+            "widen the window or pass explicit initial_value/final_value."
         )
 
     direction = "rising" if delta > 0 else "falling"

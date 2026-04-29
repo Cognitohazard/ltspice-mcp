@@ -113,6 +113,13 @@ _BARE_ERROR_PHRASES = [
     "questionable use of curly braces",
 ]
 
+# LTspice writes one ``.step <name>=<value>[, ...]`` line per iteration of a
+# .step parametric run — useful when the .raw lacks an axis (e.g. .step param
+# RVAL + .tran) and ``RawRead.get_steps()`` returns nothing.
+_RE_STEP_LINE = re.compile(r"^\.step\s+(.+)$", re.IGNORECASE)
+_RE_STEP_KV = re.compile(r"([A-Za-z_][\w]*)\s*=\s*([^,\s]+)")
+
+
 # Missing .MODEL — appears in log as:
 #   Error on line 2 : s1 n003 n001 n002 0 sw Unable to find definition of model "sw"
 # (rarer GUI-dialog phrasing "Can't find definition of model" is also tolerated).
@@ -127,6 +134,36 @@ _RE_MISSING_SUBCKT = re.compile(
     r"Unknown subcircuit called in:\s+(.+?)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
+
+
+def parse_step_iterations(log_path: Path) -> list[dict[str, float]]:
+    """Parse ``.step name=value[, ...]`` lines from an LTspice log.
+
+    Returns one dict per step iteration, in the order they appeared.
+    Empty list if the log has no .step lines (i.e. unstepped run).
+
+    Used as a fallback by ``step_get`` when ``.step param NAME`` runs leave
+    spicelib's ``RawRead.get_steps()`` empty — the parameter→step mapping
+    is recorded in the log even when it's absent from the .raw header.
+    """
+    iterations: list[dict[str, float]] = []
+    try:
+        text = log_path.read_text(errors="replace")
+    except OSError:
+        return iterations
+    for line in text.splitlines():
+        m = _RE_STEP_LINE.match(line.strip())
+        if not m:
+            continue
+        params: dict[str, float] = {}
+        for kv in _RE_STEP_KV.finditer(m.group(1)):
+            try:
+                params[kv.group(1)] = float(kv.group(2))
+            except ValueError:
+                continue
+        if params:
+            iterations.append(params)
+    return iterations
 
 
 def missing_refs_from_text(text: str) -> list[str]:
