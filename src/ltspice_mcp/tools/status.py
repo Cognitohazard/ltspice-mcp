@@ -178,6 +178,7 @@ class RecentInput(ToolInput):
                         "exists": {"type": "boolean"},
                         "last_touched": {"type": ["string", "null"]},
                         "total_jobs": {"type": "integer"},
+                        "total_runs": {"type": "integer"},
                         "status_counts": {"type": "object"},
                         "interrupted_job_ids": {"type": "array", "items": {"type": "string"}},
                     },
@@ -214,8 +215,11 @@ async def handle_recent(args: RecentInput, state: SessionState):
             parts = [f"{k}={v}" for k, v in sorted(counts.items())]
             counts_str = ", ".join(parts) if parts else "no jobs"
             last = c.get("last_touched") or "unknown"
+            jobs_n = c.get("total_jobs") or 0
+            runs_n = c.get("total_runs") or 0
+            run_str = f", {runs_n} runs" if runs_n != jobs_n else ""
             lines.append(f"  {c['path']}{missing}")
-            lines.append(f"    last touched: {last}  ·  {counts_str}")
+            lines.append(f"    last touched: {last}  ·  {counts_str}{run_str}")
             interrupted = c.get("interrupted_job_ids") or []
             if interrupted:
                 lines.append(
