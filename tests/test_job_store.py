@@ -273,6 +273,25 @@ class TestSummarize:
         summary = job_store.summarize_circuit(circuit)
         assert summary["total_jobs"] == 0
 
+    def test_summary_filters_by_netlist_path(self, tmp_path: Path) -> None:
+        """Bug N1: the sidecar directory is shared across every circuit in
+        the same parent dir. ``summarize_circuit`` must filter by netlist
+        path or each circuit reports the directory's aggregate counts."""
+        circuit_a = tmp_path / "a.cir"
+        circuit_b = tmp_path / "b.cir"
+        circuit_a.write_text("")
+        circuit_b.write_text("")
+        # 2 jobs against A, 3 against B — they all land in the same sidecar.
+        for jid in ("sim_a1", "sim_a2"):
+            job_store.save_job(_sim_job(circuit_a, job_id=jid))
+        for jid in ("sim_b1", "sim_b2", "sim_b3"):
+            job_store.save_job(_sim_job(circuit_b, job_id=jid))
+
+        summary_a = job_store.summarize_circuit(circuit_a)
+        summary_b = job_store.summarize_circuit(circuit_b)
+        assert summary_a["total_jobs"] == 2
+        assert summary_b["total_jobs"] == 3
+
 
 class TestLoadSkipsCorrupt:
     def test_unparseable_file_is_skipped(self, tmp_path: Path) -> None:

@@ -427,6 +427,37 @@ class TestValidateNetlist:
         assert data is not None
         assert any("Behavioural" in iss["message"] for iss in data["issues"])
 
+    async def test_flags_meas_op_in_tran(self, state_no_sim: SessionState, work_dir: Path):
+        """Bug N6: ``.meas op`` in a transient run is silently dropped by
+        LTspice. The validator should call this out so the user retypes."""
+        cir = work_dir / "meas_op_mismatch.cir"
+        cir.write_text(
+            "* meas op under .tran\n"
+            "V1 vdd 0 5\n"
+            "R1 vdd a 1k\n"
+            "C1 a 0 1n\n"
+            ".tran 0 1m\n"
+            ".meas op v_op_a FIND V(a)\n"
+            ".end\n"
+        )
+        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        meas_op_issues = [iss for iss in data["issues"] if ".meas op" in iss["message"]]
+        assert meas_op_issues, "validator should flag .meas op without .op analysis"
+        assert ".meas tran" in (meas_op_issues[0].get("suggestion") or "")
+
+    async def test_meas_op_with_op_passes(self, state_no_sim: SessionState, work_dir: Path):
+        """Inverse of the previous test: .meas op + .op is valid."""
+        cir = work_dir / "meas_op_ok.cir"
+        cir.write_text(
+            "V1 vdd 0 5\nR1 vdd a 1k\n.op\n.meas op v_op_a FIND V(a)\n.end\n"
+        )
+        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert not any(".meas op" in iss["message"] for iss in data["issues"])
+
 
 @pytest.mark.asyncio
 class TestDiffCircuit:

@@ -237,6 +237,26 @@ class TestEditDirectiveCommentKind:
         )
         assert "Test note" in result.content[0].text
 
+    async def test_comment_rejects_directive_prefix(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        """Fr5: ``kind='comment'`` with an instruction that starts with
+        ``!`` or ``.`` is almost always a mis-typed kind — refuse and
+        steer the caller to ``kind='directive'``."""
+        from ltspice_mcp.errors import NetlistError
+
+        for instruction in ("!.tran 1m", ".ac dec 100 1 1Meg"):
+            with pytest.raises(NetlistError, match="looks like a SPICE directive"):
+                await handle_edit_directive(
+                    EditDirectiveInput(
+                        path=asc_file.name,
+                        action="add",
+                        instruction=instruction,
+                        kind="comment",
+                    ),
+                    asc_state,
+                )
+
     async def test_remove_spans_directive_and_comment(
         self, asc_state: SessionState, asc_file: Path
     ):
