@@ -259,7 +259,11 @@ async def handle_unload_library(
 
 @registry.tool(
     name="ltspice_list_libraries",
-    description="List loaded libraries. With detail=true, also shows subcircuit models from each library.",
+    description=(
+        "List loaded libraries. With detail=true, also shows the .SUBCKT and "
+        ".MODEL names defined in each library (so foundry .bjt/.mod files "
+        "with hundreds of .MODEL cards are discoverable without guessing)."
+    ),
     input_model=ListLibrariesInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full",),
@@ -273,6 +277,7 @@ async def handle_unload_library(
                     "properties": {
                         "path": {"type": "string"},
                         "subcircuits": {"type": "array", "items": {"type": "string"}},
+                        "models": {"type": "array", "items": {"type": "string"}},
                     },
                 },
             },
@@ -281,7 +286,7 @@ async def handle_unload_library(
     },
 )
 async def handle_list_libraries(args: ListLibrariesInput, state: SessionState):
-    """List loaded libraries, optionally with subcircuit detail."""
+    """List loaded libraries, optionally with subcircuit + model detail."""
     detail = args.detail
     fmt = args.format
     filter_path = None
@@ -315,34 +320,56 @@ async def handle_list_libraries(args: ListLibrariesInput, state: SessionState):
         data = {"libraries": lib_data, "pagination": pagination_metadata(total, offset, limit)}
         return format_response("\n".join(lines), data, fmt)
 
-    # Detail mode: include subcircuit names per library
+    # Detail mode: include both .SUBCKT and .MODEL names per library. A
+    # foundry .bjt typically has hundreds of .MODEL cards and zero
+    # .SUBCKTs — historically we only surfaced subcircuits, leaving the
+    # caller with no way to enumerate (Bug N4).
     try:
         result = state.libraries.search_user_libraries("", 0, 999999)
     except Exception as e:
-        raise LibraryError(f"Failed to list subcircuits: {e}") from e
-
-    subcircuits = [r for r in result["results"] if r["type"] == ".SUBCKT"]
+        raise LibraryError(f"Failed to list models: {e}") from e
 
     subcircuits_by_path: dict[str, list[str]] = {}
-    for sc in subcircuits:
-        src = sc["source_path"]
-        subcircuits_by_path.setdefault(src, []).append(sc["name"])
+    models_by_path: dict[str, list[str]] = {}
+    for r in result["results"]:
+        src = r["source_path"]
+        if r["type"] == ".SUBCKT":
+            subcircuits_by_path.setdefault(src, []).append(r["name"])
+        elif r["type"] == ".MODEL":
+            models_by_path.setdefault(src, []).append(r["name"])
 
     lines = [header]
     lib_data = []
     for lib_path in libs_page:
         lib_str = str(lib_path)
         matching_subs: list[str] = []
+        matching_models: list[str] = []
         for src, names in subcircuits_by_path.items():
             if lib_str in src:
                 matching_subs.extend(names)
+        for src, names in models_by_path.items():
+            if lib_str in src:
+                matching_models.extend(names)
         lines.append(f"  {lib_path}")
         if matching_subs:
             for name in sorted(matching_subs):
                 lines.append(f"    .SUBCKT {name}")
-        else:
-            lines.append("    (no subcircuits)")
-        lib_data.append({"path": str(lib_path), "subcircuits": sorted(matching_subs)})
+        if matching_models:
+            shown = sorted(matching_models)
+            cap = 25
+            for name in shown[:cap]:
+                lines.append(f"    .MODEL  {name}")
+            if len(shown) > cap:
+                lines.append(f"    .MODEL  ... (+{len(shown) - cap} more)")
+        if not matching_subs and not matching_models:
+            lines.append("    (no subcircuits or models)")
+        lib_data.append(
+            {
+                "path": str(lib_path),
+                "subcircuits": sorted(matching_subs),
+                "models": sorted(matching_models),
+            }
+        )
 
     if has_more:
         lines.append(f"\nNext page: ltspice_list_libraries(detail=true, offset={offset + limit})")

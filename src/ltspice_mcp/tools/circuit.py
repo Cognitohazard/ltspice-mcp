@@ -31,6 +31,7 @@ from spicelib.editor.base_schematic import (
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import atomic_write_text, services
 from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.log_parser import parse_step_iterations
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, get_symbol_info
 from ltspice_mcp.state import SessionState
@@ -377,6 +378,15 @@ class EditDirectiveInput(ToolInput):
 class RemoveComponentInput(ToolInput):
     path: str = Field(description="Path to .asc schematic")
     reference: str = Field(description="Component reference to remove (e.g., 'R1', 'M3')")
+    cleanup_wires: bool = Field(
+        default=False,
+        description=(
+            "When true, also delete every wire whose endpoint touches one of "
+            "the removed component's pins (Fr7). Default false keeps the v2 "
+            "behaviour of leaving wires in place and surfacing a warning, so "
+            "callers can opt in once they've confirmed the removal is clean."
+        ),
+    )
 
 
 class MoveComponentInput(ToolInput):
@@ -1037,6 +1047,17 @@ async def handle_edit_directive(
                         "kind='comment' is .asc-only — for .cir/.net files "
                         "add a literal ``*`` or ``;`` comment in the file directly."
                     )
+                # Fr5: refuse comment text that *looks* like a directive —
+                # that's almost always a mis-typed ``kind`` and would silently
+                # render as ``* !.tran 1m`` (a comment of a directive).
+                stripped_comment = instruction.lstrip()
+                if stripped_comment.startswith("!") or stripped_comment.startswith("."):
+                    raise NetlistError(
+                        f"Comment text starts with {stripped_comment[:1]!r}, which "
+                        "looks like a SPICE directive (e.g. '.tran', '!.ac'). "
+                        "Use kind='directive' to add a directive, or rephrase the "
+                        "comment so it doesn't begin with '!' or '.'."
+                    )
                 # ``_is_asc`` above guarantees AscEditor; cast for the type checker.
                 asc_editor = cast(AscEditor, editor)
                 comment = Text(
@@ -1194,9 +1215,22 @@ async def handle_remove_component(
 
     async with _editing_asc(asc_path, state) as editor:
         editor.remove_component(reference)
+        deleted_wires = 0
+        if args.cleanup_wires and pin_coords:
+            kept_wires = []
+            for w in editor.wires:
+                v1 = (int(w.V1.X), int(w.V1.Y))
+                v2 = (int(w.V2.X), int(w.V2.Y))
+                if v1 in pin_coords or v2 in pin_coords:
+                    deleted_wires += 1
+                    continue
+                kept_wires.append(w)
+            editor.wires = kept_wires
 
     result = f"Removed {reference} from {asc_path.name}"
-    if pin_coords:
+    if args.cleanup_wires and deleted_wires:
+        result += f" (also deleted {deleted_wires} attached wire(s))"
+    elif pin_coords and not args.cleanup_wires:
         editor_post = _get_asc_editor(asc_path, state)
         orphaned_at: list[str] = []
         for w in editor_post.wires:
@@ -1205,7 +1239,10 @@ async def handle_remove_component(
                     orphaned_at.append(f"({coord[0]},{coord[1]})")
                     pin_coords.discard(coord)
         if orphaned_at:
-            result += f"\n\nWarning: orphaned wires remain at: {', '.join(orphaned_at)}"
+            result += (
+                f"\n\nWarning: orphaned wires remain at: {', '.join(orphaned_at)}. "
+                "Re-run with cleanup_wires=true to delete them."
+            )
 
     return text_response(result)
 
@@ -2096,6 +2133,28 @@ async def handle_validate_netlist(
         content = file_path.read_text(encoding="utf-8", errors="replace")
 
     issues: list[dict] = []
+    # First pass: which analysis types are present? Used below to flag
+    # ``.meas op`` directives that LTspice silently drops on non-.op runs.
+    analyses: set[str] = set()
+    meas_op_lines: list[tuple[int, str]] = []
+    for lineno, raw_line in enumerate(content.splitlines(), 1):
+        line = raw_line.strip()
+        lower = line.lower()
+        if lower.startswith(".tran"):
+            analyses.add("tran")
+        elif lower.startswith(".ac"):
+            analyses.add("ac")
+        elif lower.startswith(".dc"):
+            analyses.add("dc")
+        elif lower.startswith(".op") and not lower.startswith(".option"):
+            analyses.add("op")
+        elif lower.startswith(".noise"):
+            analyses.add("noise")
+        if lower.startswith(".meas"):
+            tokens = lower.split()
+            if len(tokens) >= 2 and tokens[1] == "op":
+                meas_op_lines.append((lineno, line))
+
     for lineno, raw_line in enumerate(content.splitlines(), 1):
         line = raw_line.strip()
         if not line.startswith("."):
@@ -2109,6 +2168,30 @@ async def handle_validate_netlist(
                     "directive": line,
                     "message": err.message,
                     "suggestion": err.suggestion,
+                }
+            )
+
+    # Bug N6: ``.meas op`` runs ONLY when there's an .op analysis. LTspice
+    # silently drops these from the log on .tran/.ac/.dc runs — leaving the
+    # user thinking the measurement was computed. Surface the mismatch.
+    if meas_op_lines and "op" not in analyses:
+        active = ", ".join(sorted(analyses)) or "none"
+        target_kind = next(iter(sorted(analyses)), "tran")
+        for lineno, line in meas_op_lines:
+            issues.append(
+                {
+                    "severity": "error",
+                    "line": lineno,
+                    "directive": line,
+                    "message": (
+                        f".meas op requires an .op analysis but the active analysis "
+                        f"directives are: {active}. LTspice silently drops .meas op "
+                        f"on non-.op runs, so this measurement won't appear in the log."
+                    ),
+                    "suggestion": (
+                        f"Use ``.meas {target_kind} ...`` to match the analysis, or "
+                        "add a separate .op simulation."
+                    ),
                 }
             )
 
@@ -2345,17 +2428,28 @@ async def handle_step_get(args: StepGetInput, state: SessionState) -> types.Call
         }
         return format_response(f"{signal} at {args.axis}={actual:g}: {value:g}", data, args.format)
 
-    # Fallback: spicelib step lookup.
+    # Fallback: spicelib step lookup, falling back to .log parsing if
+    # spicelib returns nothing (which it does for ``.step param NAME``
+    # runs — the parameter map is in the log, not the .raw header).
     try:
-        steps = raw.get_steps()
-    except Exception as e:
-        raise NetlistError(f"Raw file has no .step iterations: {e}") from e
+        steps = list(raw.get_steps() or [])
+    except Exception:
+        steps = []
+
+    if not any(isinstance(s, dict) and s for s in steps):
+        log_path = raw_path.with_suffix(".log")
+        if log_path.exists():
+            steps = list(parse_step_iterations(log_path))
 
     best_idx = None
     best_actual: float | None = None
+    available_axes: list[str] = []
     for i, step_record in enumerate(steps):
         # spicelib returns dicts like {"temp": -40, "RS": 1000}.
         if isinstance(step_record, dict):
+            for k in step_record:
+                if k not in available_axes:
+                    available_axes.append(k)
             v = step_record.get(args.axis)
             if v is None:
                 # try case-insensitive match
@@ -2376,8 +2470,7 @@ async def handle_step_get(args: StepGetInput, state: SessionState) -> types.Call
     if best_idx is None:
         raise NetlistError(
             f"Step axis {args.axis!r} not found in this raw file. "
-            "Available axes: "
-            + (", ".join(steps[0].keys()) if steps and isinstance(steps[0], dict) else "<none>")
+            "Available axes: " + (", ".join(available_axes) if available_axes else "<none>")
         )
 
     wave = raw.get_wave(signal, step=best_idx)
