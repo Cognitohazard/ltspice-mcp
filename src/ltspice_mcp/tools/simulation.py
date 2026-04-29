@@ -480,8 +480,18 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
             fmt,
         )
     elif job.status == "cancelled":
-        data = {"job_id": job_id, "status": "cancelled", "netlist": str(job.netlist)}
-        return format_response(f"Job {job_id} was cancelled\nNetlist: {job.netlist}", data, fmt)
+        duration = services.job_duration_seconds(
+            job.started_at, job.completed_at, label=f"sim job {job.job_id}"
+        )
+        data: dict = {"job_id": job_id, "status": "cancelled", "netlist": str(job.netlist)}
+        if duration is not None:
+            data["duration"] = duration
+        suffix = f" after {duration:.2f}s" if duration is not None else ""
+        return format_response(
+            f"Job {job_id} was cancelled{suffix}\nNetlist: {job.netlist}",
+            data,
+            fmt,
+        )
     else:
         data = {"job_id": job_id, "status": job.status}
         return format_response(f"Job {job_id} has unexpected status: {job.status}", data, fmt)
