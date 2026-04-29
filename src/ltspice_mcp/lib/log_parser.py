@@ -118,6 +118,13 @@ _BARE_ERROR_PHRASES = [
 # RVAL + .tran) and ``RawRead.get_steps()`` returns nothing.
 _RE_STEP_LINE = re.compile(r"^\.step\s+(.+)$", re.IGNORECASE)
 _RE_STEP_KV = re.compile(r"([A-Za-z_]\w*)\s*=\s*([^,\s]+)")
+# Stepped ``.op`` runs don't write ``.step name=val`` markers — LTspice
+# logs one of these per iteration instead. Counting them is the only
+# reliable signal that the bias point ran multiple times.
+_RE_OP_ITERATION = re.compile(
+    r"^\s*Direct Newton iteration succeeded in finding operating point",
+    re.IGNORECASE,
+)
 
 
 # Missing .MODEL — appears in log as:
@@ -136,7 +143,34 @@ _RE_MISSING_SUBCKT = re.compile(
 )
 
 
-def parse_step_iterations(log_path: Path) -> list[dict[str, float]]:
+def read_log_text(log_path: Path) -> str:
+    """Read a log file, returning empty string on I/O failure.
+
+    Public so callers (e.g. ``raw_parser.build_simulation_summary``) can
+    pre-read the log buffer once and pass the text to every parser that
+    needs it instead of triggering one syscall per parser.
+    """
+    try:
+        return log_path.read_text(errors="replace")
+    except OSError:
+        return ""
+
+
+def _resolve_log_text(log_path: Path | None, text: str | None) -> str:
+    """Resolve ``(log_path, text)`` to a text buffer, preferring an
+    explicit ``text`` over re-reading the file. Empty string on missing
+    inputs / I/O failure.
+    """
+    if text is not None:
+        return text
+    if log_path is None:
+        return ""
+    return read_log_text(log_path)
+
+
+def parse_step_iterations(
+    log_path: Path | None = None, *, text: str | None = None
+) -> list[dict[str, float]]:
     """Parse ``.step name=value[, ...]`` lines from an LTspice log.
 
     Returns one dict per step iteration, in the order they appeared.
@@ -147,16 +181,16 @@ def parse_step_iterations(log_path: Path) -> list[dict[str, float]]:
     spicelib's ``RawRead.get_steps()`` empty — the parameter→step mapping
     is recorded in the log even when it's absent from the .raw header.
 
+    Pass ``text`` to parse a pre-read log buffer (avoids a second read in
+    callers that already have the contents). When both ``log_path`` and
+    ``text`` are given, ``text`` wins.
+
     Non-numeric values (e.g. ``5k``) are silently dropped from a row;
     LTspice always writes already-evaluated floats, so this only matters
     for hand-crafted test fixtures.
     """
     iterations: list[dict[str, float]] = []
-    try:
-        text = log_path.read_text(errors="replace")
-    except OSError:
-        return iterations
-    for line in text.splitlines():
+    for line in _resolve_log_text(log_path, text).splitlines():
         m = _RE_STEP_LINE.match(line.strip())
         if not m:
             continue
@@ -169,6 +203,51 @@ def parse_step_iterations(log_path: Path) -> list[dict[str, float]]:
         if params:
             iterations.append(params)
     return iterations
+
+
+def count_op_iterations(
+    log_path: Path | None = None, *, text: str | None = None
+) -> int:
+    """Count "Direct Newton iteration succeeded" lines in an LTspice log.
+
+    Stepped ``.op`` runs solve the bias point once per step but do NOT
+    write ``.step <name>=<value>`` lines (only ``.tran``/``.ac`` step
+    iterations do). The Newton-iteration message is the only reliable
+    signal that the .op ran multiple times.
+
+    See :func:`parse_step_iterations` for the ``text`` keyword usage.
+    """
+    text = _resolve_log_text(log_path, text)
+    return sum(1 for line in text.splitlines() if _RE_OP_ITERATION.match(line))
+
+
+def scan_op_step_log(
+    log_path: Path | None = None, *, text: str | None = None
+) -> tuple[list[dict[str, float]], int]:
+    """Single-pass equivalent of ``parse_step_iterations`` +
+    ``count_op_iterations``. Returns ``(iterations, op_count)``.
+
+    Used by stepped-``.op`` detection in :func:`build_simulation_summary`
+    where both signals are needed and walking the log twice is wasteful.
+    """
+    iterations: list[dict[str, float]] = []
+    op_count = 0
+    for line in _resolve_log_text(log_path, text).splitlines():
+        if _RE_OP_ITERATION.match(line):
+            op_count += 1
+            continue
+        m = _RE_STEP_LINE.match(line.strip())
+        if not m:
+            continue
+        params: dict[str, float] = {}
+        for kv in _RE_STEP_KV.finditer(m.group(1)):
+            try:
+                params[kv.group(1)] = float(kv.group(2))
+            except ValueError:
+                continue
+        if params:
+            iterations.append(params)
+    return iterations, op_count
 
 
 def missing_refs_from_text(text: str) -> list[str]:

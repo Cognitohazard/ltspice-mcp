@@ -366,11 +366,17 @@ def summarize_circuit(circuit_path: Path) -> dict[str, Any]:
     folder holds records for every circuit in that directory. Filter to
     just the rows whose persisted ``netlist`` field matches ``circuit_path``
     — otherwise every circuit in the dir reports the directory's totals.
+
+    A batch job (``kind="batch"``) shows up as ONE entry under ``total_jobs``
+    but has ``total_runs`` underlying simulation iterations. Both numbers
+    are surfaced separately so a 100-run MC isn't mistaken for "circuit
+    ran once".
     """
     target = sidecar_dir(circuit_path)
     counts: dict[str, int] = {}
     interrupted_ids: list[str] = []
     total = 0
+    total_runs = 0
     try:
         match_path = str(circuit_path.resolve())
     except OSError:
@@ -392,6 +398,14 @@ def summarize_circuit(circuit_path: Path) -> dict[str, Any]:
             status, _ = _finalize_loaded_status(str(data.get("status", "unknown")))
             counts[status] = counts.get(status, 0) + 1
             total += 1
+            if data.get("kind") == "batch":
+                runs = data.get("total_runs")
+                if isinstance(runs, int) and runs > 0:
+                    total_runs += runs
+                else:
+                    total_runs += 1
+            else:
+                total_runs += 1
             if status == INTERRUPTED_STATUS:
                 jid = str(data.get("job_id", ""))
                 if jid:
@@ -400,6 +414,7 @@ def summarize_circuit(circuit_path: Path) -> dict[str, Any]:
         "path": str(circuit_path),
         "exists": circuit_path.exists(),
         "total_jobs": total,
+        "total_runs": total_runs,
         "status_counts": counts,
         "interrupted_job_ids": interrupted_ids,
     }

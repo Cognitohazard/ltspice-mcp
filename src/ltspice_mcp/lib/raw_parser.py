@@ -106,6 +106,42 @@ def get_step_count(raw: RawRead) -> int:
         return 1
 
 
+def real_axis(axis: np.ndarray) -> np.ndarray:
+    """Return the real part of a SPICE axis. AC frequency axes are stored
+    as ``complex(freq, 0)`` by spicelib — strip the imaginary tag for
+    ordering / nearest-neighbour lookups. Real axes pass through unchanged.
+    """
+    return np.real(axis) if np.iscomplexobj(axis) else axis
+
+
+def nearest_index(axis: np.ndarray, target: float) -> int:
+    """Return the axis index nearest to ``target`` (binary search, O(log N)).
+
+    SPICE sweep axes are monotonic so ``np.searchsorted`` finds the bracket
+    in one call; the closer-of-pair check picks the better neighbour.
+    """
+    ins = int(np.searchsorted(axis, target))
+    if ins == 0:
+        return 0
+    if ins >= len(axis):
+        return len(axis) - 1
+    return ins - 1 if abs(axis[ins - 1] - target) < abs(axis[ins] - target) else ins
+
+
+def sample_to_dict(sample: complex | float | np.generic) -> dict[str, float]:
+    """Convert a wave sample to a JSON-friendly dict.
+
+    Complex AC samples emit ``magnitude_db`` + ``phase_deg`` (with the same
+    zero-floor as :func:`safe_magnitude_db`); real samples emit ``value``.
+    """
+    if np.iscomplexobj(sample):
+        return {
+            "magnitude_db": float(safe_magnitude_db(np.asarray([sample]))[0]),
+            "phase_deg": float(np.angle(complex(sample), deg=True)),  # type: ignore[arg-type]
+        }
+    return {"value": float(np.real(sample))}
+
+
 def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int = 0) -> dict:
     """Query signal value at a specific time/frequency (nearest neighbor).
 
@@ -126,41 +162,21 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
     Raises:
         ValueError: If the trace contains no data points.
     """
-    axis = raw.get_axis(step=step)
+    axis = real_axis(np.asarray(raw.get_axis(step=step)))
     wave = raw.get_wave(trace_name, step=step)
 
-    if len(axis) == 0 or len(wave) == 0:
+    if axis.size == 0 or len(wave) == 0:
         raise ValueError(
             f"Signal '{trace_name}' has no data points at step {step}; cannot query value."
         )
 
-    # Binary search for nearest point
-    idx = np.searchsorted(axis, target_x)
-
-    if idx == 0:
-        closest_idx = 0
-    elif idx == len(axis):
-        closest_idx = len(axis) - 1
-    else:
-        # Choose closer of idx-1 or idx
-        closest_idx = idx - 1 if abs(axis[idx - 1] - target_x) < abs(axis[idx] - target_x) else idx
-
-    actual_x = float(axis[closest_idx])
-
-    result = {
+    closest_idx = nearest_index(axis, target_x)
+    return {
         "trace": trace_name,
         "requested_x": float(target_x),
-        "actual_x": actual_x,
+        "actual_x": float(axis[closest_idx]),
+        **sample_to_dict(wave[closest_idx]),
     }
-
-    if np.iscomplexobj(wave):
-        value = wave[closest_idx]
-        result["magnitude_db"] = float(20 * np.log10(np.abs(value)))
-        result["phase_deg"] = float(np.angle(value, deg=True))
-    else:
-        result["value"] = float(wave[closest_idx])
-
-    return result
 
 
 def extract_operating_point(raw: RawRead, step: int = 0) -> OperatingPointOutput:
@@ -321,7 +337,7 @@ def build_simulation_summary(
     }
 
     if log_path and log_path.exists():
-        from ltspice_mcp.lib.log_parser import make_log_reader, parse_step_iterations
+        from ltspice_mcp.lib.log_parser import make_log_reader, scan_op_step_log
 
         log_reader: LTSpiceLogReader | None = None
         with contextlib.suppress(Exception):
@@ -348,20 +364,30 @@ def build_simulation_summary(
 
         # Stepped ``.op`` runs the bias point per step, but LTspice only
         # writes step 0 to the .raw — leaving the user thinking it's the
-        # only step. Only worth checking when an .op summary has a single
-        # raw step; the .step lookup is otherwise a wasted log read.
+        # only step. Two signals: ``.step name=value`` lines (only emitted
+        # for ``.tran``/``.ac`` steps) and the Newton-iteration counter
+        # (the only signal for stepped ``.op``). Single log walk picks up
+        # both.
         if step_count <= 1 and "operating" in sim_type.lower():
-            try:
-                log_steps = parse_step_iterations(log_path)
-            except Exception:
-                log_steps = []
-            if len(log_steps) > 1:
-                param_name = next(iter(log_steps[0].keys()), "param")
+            log_steps, op_iters = scan_op_step_log(log_path)
+            iteration_count = max(len(log_steps), op_iters)
+            if iteration_count > 1:
+                if log_steps:
+                    param_name = next(iter(log_steps[0].keys()), "param")
+                    suggestion = (
+                        f"Convert to '.dc {param_name} START STOP STEP' to "
+                        "access every bias point."
+                    )
+                else:
+                    suggestion = (
+                        "Convert the parametric .op to '.dc <param> START STOP "
+                        "STEP' or wrap the .op inside a .tran to capture every "
+                        "bias point."
+                    )
                 warnings.append(
-                    f"Stepped .op detected: log shows {len(log_steps)} iterations "
-                    f"of {param_name!r} but the .raw only carries step 0. Convert "
-                    f"to '.dc {param_name} START STOP STEP' to access every bias "
-                    "point."
+                    f"Stepped .op detected: log shows {iteration_count} bias-"
+                    "point iterations but the .raw only carries step 0. "
+                    + suggestion
                 )
 
         if warnings:

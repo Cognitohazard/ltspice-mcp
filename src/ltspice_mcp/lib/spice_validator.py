@@ -24,6 +24,16 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Literal
+
+# Analysis directives that LTspice accepts. Used by validate_netlist to
+# match ``.meas <kind>`` against the active analysis and detect duplicates.
+# Note that ``.meas noise`` is not a valid form even though ``.noise`` is —
+# the meas-side set is intentionally narrower.
+ANALYSIS_KINDS: frozenset[str] = frozenset({"tran", "ac", "dc", "op", "noise"})
+MEAS_KINDS: frozenset[str] = frozenset({"tran", "ac", "dc", "op"})
+
+AnalysisKind = Literal["tran", "ac", "dc", "op", "noise"]
 
 
 @dataclass(frozen=True)
