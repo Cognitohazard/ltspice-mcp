@@ -244,13 +244,16 @@ class SimulationSummaryInput(ToolInput):
         "Scalar summary of one signal in a .raw result. Use this when you need "
         "a single number per metric (average, RMS, peak, etc.) — not a waveform "
         "or a trend.\n\n"
-        "Transient/DC: returns time-weighted mean, RMS, std, abs-mean, and "
-        "min/max/pk-pk using trapezoidal integration (RMS = sqrt(∫ y² dt / T)). "
-        "This is correct on LTspice's adaptive timestep — simple np.mean(y) "
-        "would overweight densely sampled regions. Optionally restrict to a "
-        "[t_start, t_end] window; passing no window averages the whole "
-        "waveform including any startup transient, which is usually wrong for "
-        "RMS/mean. Rejects AC analysis for the windowed path.\n\n"
+        "Transient: time-weighted mean, RMS, std, abs-mean, and min/max/pk-pk "
+        "using trapezoidal integration (RMS = sqrt(∫ y² dt / T)). This is "
+        "correct on LTspice's adaptive timestep — simple np.mean(y) would "
+        "overweight densely sampled regions. Optionally restrict to "
+        "[t_start, t_end]; passing no window averages the whole waveform "
+        "including any startup transient, which is usually wrong for RMS/mean.\n\n"
+        "DC: returns min/max/pk-pk and the simple/abs mean over the swept "
+        "axis, plus ``sweep_start_used``/``sweep_end_used``/``sweep_span``. "
+        "RMS and std are deliberately omitted — they're meaningless on a "
+        "non-time axis. Use t_start/t_end to restrict the sweep range.\n\n"
         "AC: returns magnitude (dB) min/max/mean and phase (deg) min/max. "
         "t_start/t_end are ignored for AC — use ltspice_query_value for a "
         "point at a specific frequency.\n\n"
@@ -1199,16 +1202,21 @@ async def handle_periodic_metrics(args: PeriodicMetricsInput, state: SessionStat
 
 def _aggregate_job_measurements(
     job_id: str, state: SessionState
-) -> tuple[dict[str, list[float | None]], int]:
+) -> tuple[dict[str, list[float | None]], int, dict[str, str]]:
     """Walk every completed run's .log and concatenate ``.MEAS`` results.
 
     Friction K: ``measurement_stats`` historically required a single
     multi-step log, but the MC engine emits one log per run. This helper
     reconciles by collecting per-run scalar values keyed by .MEAS name.
 
-    Returns ``(flat_values, run_count)`` where ``flat_values[name]`` is a
-    list with one entry per run (``None`` for runs that don't have a
-    matching .MEAS).
+    For ``WHEN``-style .MEAS, the per-run scalar in ``values`` is the
+    trigger level (constant across runs by definition) — the *interesting*
+    per-run axis lives in the folded ``at`` field. When that pattern is
+    detected (constant ``values``, varying ``at``) the aggregator swaps to
+    the ``at`` axis automatically (Bug N3).
+
+    Returns ``(flat_values, run_count, axis_map)`` where ``axis_map[name]``
+    is ``"value"`` or ``"at"`` describing which field was aggregated.
     """
     batch_job = services.resolve_batch_job(job_id, state)
 
@@ -1218,7 +1226,8 @@ def _aggregate_job_measurements(
             "to finish (use ltspice_check_job to monitor)."
         )
 
-    flat_values: dict[str, list[float | None]] = {}
+    raw_values: dict[str, list[float | None]] = {}
+    raw_ats: dict[str, list[float | None]] = {}
     seen_names: list[str] = []
     runs_processed = 0
     for run_index in sorted(batch_job.run_results.keys()):
@@ -1237,16 +1246,39 @@ def _aggregate_job_measurements(
         for name, entry in data.get("measurements", {}).items():
             values = list(entry.get("values", []))
             scalar = values[0] if values else None
-            if name not in flat_values:
-                flat_values[name] = [None] * (runs_processed - 1)
+            at_raw = entry.get("at")
+            at_val = float(at_raw) if isinstance(at_raw, int | float) else None
+            if name not in raw_values:
+                raw_values[name] = [None] * (runs_processed - 1)
+                raw_ats[name] = [None] * (runs_processed - 1)
                 seen_names.append(name)
-            flat_values[name].append(scalar)
+            raw_values[name].append(scalar)
+            raw_ats[name].append(at_val)
         # Backfill any names that didn't appear in this run with ``None``.
         for name in seen_names:
-            if len(flat_values[name]) < runs_processed:
-                flat_values[name].append(None)
+            if len(raw_values[name]) < runs_processed:
+                raw_values[name].append(None)
+                raw_ats[name].append(None)
 
-    return flat_values, runs_processed
+    flat_values: dict[str, list[float | None]] = {}
+    axis_map: dict[str, str] = {}
+    for name in seen_names:
+        vals = raw_values[name]
+        ats = raw_ats[name]
+        valid_vals = [v for v in vals if v is not None]
+        valid_ats = [a for a in ats if a is not None]
+        # Swap to ``at`` when the level is constant (or all-None) and the
+        # per-run frequency varies — the WHEN-style case from Bug N3.
+        levels_constant = len({round(v, 12) for v in valid_vals}) <= 1
+        ats_vary = len({round(a, 12) for a in valid_ats}) > 1
+        if levels_constant and ats_vary:
+            flat_values[name] = ats
+            axis_map[name] = "at"
+        else:
+            flat_values[name] = vals
+            axis_map[name] = "value"
+
+    return flat_values, runs_processed, axis_map
 
 
 @registry.tool(
@@ -1282,8 +1314,9 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
     if args.log_file is None and args.job_id is None:
         raise ResultError("Provide either ``log_file`` or ``job_id``.")
 
+    axis_map: dict[str, str] = {}
     if args.job_id is not None:
-        flat_values, run_count = _aggregate_job_measurements(args.job_id, state)
+        flat_values, run_count, axis_map = _aggregate_job_measurements(args.job_id, state)
         if not flat_values:
             raise ResultError(f"No .MEAS results found across the runs of job {args.job_id!r}.")
         steps_label = f"{run_count} run(s)"
@@ -1307,6 +1340,7 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
             raise ResultError(f"No .MEAS results in log:\n{err_block}")
 
         flat_values = {name: list(entry.get("values", [])) for name, entry in measurements.items()}
+        axis_map = {name: "value" for name in flat_values}
         steps_label = f"{meas_data.get('step_count', 1)} step(s)"
     else:  # unreachable — earlier guard rejects this combination
         raise ResultError("Provide either ``log_file`` or ``job_id``.")
@@ -1317,6 +1351,11 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
         histogram_bins=args.histogram_bins,
         measurement=args.measurement,
     )
+    # Surface which field each stat block was computed from so a downstream
+    # consumer can tell "this is the level (constant)" from "this is the
+    # WHEN-clause crossing frequency".
+    for name, entry in stats.items():
+        entry["aggregated_field"] = axis_map.get(name, "value")
 
     lines = [
         f"Measurement Stats ({steps_label})",
@@ -1324,9 +1363,10 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
     ]
     for name, entry in stats.items():
         lines.append(f"{name}:")
+        field = entry.get("aggregated_field", "value")
         lines.append(
             f"  valid {entry['valid_count']}/{entry['total_count']} "
-            f"(failed {entry['failure_count']})"
+            f"(failed {entry['failure_count']})  field={field}"
         )
         if entry["valid_count"] > 0:
             lines.append(
