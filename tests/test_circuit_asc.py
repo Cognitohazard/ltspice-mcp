@@ -237,9 +237,7 @@ class TestEditDirectiveCommentKind:
         )
         assert "Test note" in result.content[0].text
 
-    async def test_comment_rejects_directive_prefix(
-        self, asc_state: SessionState, asc_file: Path
-    ):
+    async def test_comment_rejects_directive_prefix(self, asc_state: SessionState, asc_file: Path):
         """Fr5: ``kind='comment'`` with an instruction that starts with
         ``!`` or ``.`` is almost always a mis-typed kind — refuse and
         steer the caller to ``kind='directive'``."""

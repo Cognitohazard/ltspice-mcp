@@ -154,7 +154,7 @@ TOML sections: `[simulator]`, `[security]`, `[simulation]`, `[analysis]`, `[plot
 
 | Profile | Tools | Use case |
 |-|-|-|
-| `full` (default) | All 48 | Any MCP client, automation, non-agent LLMs |
+| `full` (default) | All 49 | Any MCP client, automation, non-agent LLMs |
 | `agentic` | 33 | LLM agents with native file access (Read/Edit/Write) |
 
 The "agentic" profile removes netlist-editing wrapper tools (e.g., `create_netlist`, `read_circuit`, `set_component_value`, `parameter`, `edit_directive`) and library session management — these are things capable agents do natively. It keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, AscEditor-dependent ops, and library search.

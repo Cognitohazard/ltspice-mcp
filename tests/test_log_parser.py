@@ -367,10 +367,7 @@ class TestParseStepIterations:
         # not engineering-notation tokens like "1k". So the parser only
         # accepts plain floats — use those in the fixture.
         log = tmp_path / "step.log"
-        log.write_text(
-            ".step rval=1000, cval=1e-08\n"
-            ".step rval=2000, cval=2e-08\n"
-        )
+        log.write_text(".step rval=1000, cval=1e-08\n.step rval=2000, cval=2e-08\n")
         iters = parse_step_iterations(log)
         assert iters == [
             {"rval": 1000.0, "cval": 1e-08},

@@ -369,9 +369,7 @@ class TestEditDirective:
         )
         assert "Removed" in result.content[0].text
 
-    async def test_remove_literal_with_parens(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
+    async def test_remove_literal_with_parens(self, state_no_sim: SessionState, work_dir: Path):
         """directives containing ``(``/``)`` (every .meas/.four
         on V(...)/I(...)) used to silently no-op because the legacy
         heuristic routed them through the regex path where unescaped
@@ -395,9 +393,7 @@ class TestEditDirective:
         assert ".meas tran v_avg" not in body
         assert ".four 1k" not in body
 
-    async def test_remove_no_match_raises(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
+    async def test_remove_no_match_raises(self, state_no_sim: SessionState, work_dir: Path):
         """Silent success when nothing matched was the trap that v4-N1
         exposed — typos or stale lines made the user believe they cleaned
         the netlist when nothing changed. Now it errors."""
@@ -409,14 +405,10 @@ class TestEditDirective:
                 state_no_sim,
             )
 
-    async def test_remove_regex_explicit(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
+    async def test_remove_regex_explicit(self, state_no_sim: SessionState, work_dir: Path):
         """``regex:`` prefix still works for callers that intend regex."""
         cir = work_dir / "regex.cir"
-        cir.write_text(
-            "* regex test\nV1 a 0 5\n.tran 1m\n.meas tran v_a MAX V(a)\n.end\n"
-        )
+        cir.write_text("* regex test\nV1 a 0 5\n.tran 1m\n.meas tran v_a MAX V(a)\n.end\n")
         await handle_edit_directive(
             {"path": cir.name, "action": "remove", "instruction": "regex:^\\.meas .*"},
             state_no_sim,
@@ -505,9 +497,7 @@ class TestValidateNetlist:
     async def test_meas_op_with_op_passes(self, state_no_sim: SessionState, work_dir: Path):
         """Inverse of the previous test: .meas op + .op is valid."""
         cir = work_dir / "meas_op_ok.cir"
-        cir.write_text(
-            "V1 vdd 0 5\nR1 vdd a 1k\n.op\n.meas op v_op_a FIND V(a)\n.end\n"
-        )
+        cir.write_text("V1 vdd 0 5\nR1 vdd a 1k\n.op\n.meas op v_op_a FIND V(a)\n.end\n")
         result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
         data = result.structuredContent
         assert data is not None
@@ -532,9 +522,7 @@ class TestValidateNetlist:
         """``.tran 1m`` + ``.tran 2m`` makes LTspice fail with
         "More than one analysis specified." Catch it in the static gate."""
         cir = work_dir / "dup.cir"
-        cir.write_text(
-            "* dup\nV1 a 0 5\nR1 a 0 1k\n.tran 1m\n.tran 2m\n.end\n"
-        )
+        cir.write_text("* dup\nV1 a 0 5\nR1 a 0 1k\n.tran 1m\n.tran 2m\n.end\n")
         result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
         data = result.structuredContent
         assert data is not None
@@ -549,9 +537,7 @@ class TestValidateNetlist:
         """Two different analyses (``.tran`` and ``.ac``) is the same kind
         of failure for LTspice — flag it too."""
         cir = work_dir / "two_kinds.cir"
-        cir.write_text(
-            "V1 a 0 AC 1\nR1 a 0 1k\n.tran 1m\n.ac dec 10 1 1k\n.end\n"
-        )
+        cir.write_text("V1 a 0 AC 1\nR1 a 0 1k\n.tran 1m\n.ac dec 10 1 1k\n.end\n")
         result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
         data = result.structuredContent
         assert data is not None
