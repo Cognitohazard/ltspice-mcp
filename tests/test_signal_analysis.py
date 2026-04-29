@@ -316,29 +316,44 @@ class TestAnalyzePulseResponse:
         assert result["settling_time"] is not None
         assert 0 < result["settling_time"] < 11e-3
 
-    def test_window_straddles_edge_refuses_auto_initial(self):
+    def test_window_straddles_edge_falls_back_to_first_sample(self):
         """When the leading 10% straddles the input edge, the auto-detected
-        initial_value mixes pre/post-edge samples and silently produces
-        wrong overshoot. Reject rather than report a corrupt result.
+        initial_value is unreliable. Fr4 relaxed this: instead of refusing
+        outright, fall back to y[0] (which IS the level at t_start) and
+        emit a warning so the caller knows the auto-level was bypassed.
         """
         # No pre-pad: window starts at t=0 with the step right there.
         t, y = _second_order_step(zeta=0.2, wn=2 * math.pi * 1000, t_end=20e-3, pre_pad=0.0)
-        with pytest.raises(ValueError, match="initial_value is unreliable"):
-            analyze_pulse_response(t, y)
+        result = analyze_pulse_response(t, y)
+        assert result["initial_value"] == pytest.approx(float(y[0]), abs=1e-9)
+        assert any("initial_value" in w for w in result["warnings"])
 
     def test_explicit_initial_bypasses_variance_check(self):
-        """Variance check fires only on the auto path; explicit values are honored."""
+        """Variance check fires only on the auto path; explicit values are honored
+        and produce no warning."""
         t, y = _second_order_step(zeta=0.2, wn=2 * math.pi * 1000, t_end=20e-3, pre_pad=0.0)
         # User accepts the responsibility by passing initial_value explicitly.
         result = analyze_pulse_response(t, y, initial_value=0.0)
         assert result["initial_value"] == 0.0
         assert result["overshoot_pct"] > 0
+        assert not any("initial_value" in w for w in result["warnings"])
 
-    def test_unsettled_signal_refuses_auto_final(self):
-        """When the response hasn't settled by window end, refuse auto final_value."""
-        # Truncate the window before the ringing dies down.
+    def test_unsettled_signal_falls_back_to_last_sample(self):
+        """When the response hasn't settled by window end, Fr4 falls back to
+        y[-1] for final_value with a warning rather than raising."""
         t, y = _second_order_step(zeta=0.05, wn=2 * math.pi * 1000, t_end=2e-3, n=2001)
-        with pytest.raises(ValueError, match="final_value is unreliable"):
+        result = analyze_pulse_response(t, y)
+        assert result["steady_state_value"] == pytest.approx(float(y[-1]), abs=1e-9)
+        assert any("final_value" in w for w in result["warnings"])
+
+    def test_both_ends_noisy_still_raises(self):
+        """When BOTH ends are inside transient, neither fallback can rescue
+        the run — preserve the hard-fail in that case."""
+        # Tiny window placed entirely inside the ringing region.
+        t = np.linspace(0.5e-3, 1.5e-3, 5001)
+        wn = 2 * math.pi * 5000
+        y = 1.0 - np.exp(-0.05 * wn * t) * np.cos(wn * t)
+        with pytest.raises(ValueError, match="unreliable on both ends"):
             analyze_pulse_response(t, y)
 
     def test_invalid_tolerance(self):
