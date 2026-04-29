@@ -11,11 +11,12 @@ import bisect
 import contextlib
 import re
 from collections.abc import AsyncIterator
+from collections.abc import Set as AbstractSet
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
+import numpy as np
 from mcp import types
 from pydantic import Field
 from spicelib import AscEditor, SpiceEditor
@@ -32,7 +33,8 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import atomic_write_text, services
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.log_parser import parse_step_iterations
-from ltspice_mcp.lib.spice_validator import validate_directive
+from ltspice_mcp.lib.raw_parser import nearest_index, real_axis, sample_to_dict
+from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS, MEAS_KINDS, validate_directive
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, get_symbol_info
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
@@ -344,9 +346,11 @@ class EditDirectiveInput(ToolInput):
         description=(
             "SPICE directive text (e.g., '.tran 10m', '.ac dec 100 1 1G'). "
             "For ``kind='comment'`` this is the comment text instead. "
-            "For remove: exact match or regex with 'regex:' prefix; the "
-            "match is run against directives AND comments so callers can "
-            "remove either kind without knowing which it is."
+            "For remove: literal exact match by default — copy the line "
+            "verbatim from ``read_circuit``. Pass ``regex:<pattern>`` to "
+            "use a regex (matches against directives AND comments). Raises "
+            "an error when nothing matched, so a typo can't silently leave "
+            "the directive in place."
         ),
     )
     kind: Literal["directive", "comment"] = Field(
@@ -1090,8 +1094,8 @@ async def handle_edit_directive(
                 result = f"Added directive: {instruction}"
 
         elif action == "remove":
-            removed = _remove_directive_or_comment(editor, instruction)
-            result = f"Removed {removed.label}: {instruction}"
+            label = _remove_directive_or_comment(editor, instruction)
+            result = f"Removed {label}: {instruction}"
 
         else:
             raise NetlistError(f"Invalid action '{action}'. Must be 'add' or 'remove'.")
@@ -1099,20 +1103,18 @@ async def handle_edit_directive(
     return text_response(result)
 
 
-@dataclass(frozen=True)
-class _RemoveResult:
-    """Tag describing what kind of entry was removed."""
+def _remove_directive_or_comment(editor, instruction: str) -> str:
+    """Remove a directive or comment matching ``instruction``.
 
-    label: str
+    Treats the input as a literal exact-match by default — common SPICE
+    directives contain ``(`` and ``)`` (every ``.meas``/``.four``/``.print``
+    referencing ``V(node)``) which would silently turn into regex capture
+    groups under any "metachar means regex" heuristic. Pass an explicit
+    ``regex:`` prefix to opt in to regex matching.
 
-
-def _remove_directive_or_comment(editor, instruction: str) -> "_RemoveResult":
-    """Remove a directive or comment matching ``instruction`` (regex- or literal).
-
-    spicelib distinguishes "directives" (``.foo``) from "comments" (free
-    text in TEXT entries). The user-facing ``edit_directive remove`` should
-    not require them to know which kind they're targeting; this helper
-    hits both when applicable.
+    Returns a label describing what was removed. Raises NetlistError when
+    nothing matched, so the user can't think they cleaned a directive
+    that's still in the file.
     """
     if instruction.startswith("regex:"):
         pattern = instruction[6:]
@@ -1121,17 +1123,28 @@ def _remove_directive_or_comment(editor, instruction: str) -> "_RemoveResult":
                 "Empty regex pattern would match every directive; "
                 "provide an explicit regex after 'regex:'."
             )
-        editor.remove_Xinstruction(pattern)
-        # Best-effort: also remove TEXT-COMMENT entries whose body matches.
-        _strip_matching_comments(editor, re.compile(pattern))
-        return _RemoveResult(label="directive(s)/comment(s)")
-    if any(char in instruction for char in r"\[]().*+?^${}|"):
-        editor.remove_Xinstruction(instruction)
-        _strip_matching_comments(editor, re.compile(instruction))
-        return _RemoveResult(label="directive(s)/comment(s)")
-    editor.remove_instruction(instruction)
-    _strip_matching_comments(editor, instruction)
-    return _RemoveResult(label="directive")
+        try:
+            compiled = re.compile(pattern)
+        except re.error as e:
+            raise NetlistError(f"Invalid regex {pattern!r}: {e}") from e
+        directive_hit = bool(editor.remove_Xinstruction(pattern))
+        comment_hit = _strip_matching_comments(editor, compiled)
+        if not (directive_hit or comment_hit):
+            raise NetlistError(
+                f"No directive or comment matched regex {pattern!r}. "
+                "Use ltspice_read_circuit to see what's actually in the file."
+            )
+        return "directive(s)/comment(s)"
+
+    directive_hit = bool(editor.remove_instruction(instruction))
+    comment_hit = _strip_matching_comments(editor, instruction)
+    if not (directive_hit or comment_hit):
+        raise NetlistError(
+            f"No directive or comment matched {instruction!r} exactly. "
+            "Match is literal by default — pass 'regex:<pattern>' for regex "
+            "matching, or copy the line verbatim from ltspice_read_circuit."
+        )
+    return "directive"
 
 
 def _asc_directive_lines(editor: AscEditor) -> list[str]:
@@ -1149,16 +1162,18 @@ def _asc_directive_lines(editor: AscEditor) -> list[str]:
     ]
 
 
-def _strip_matching_comments(editor, matcher) -> None:
+def _strip_matching_comments(editor, matcher) -> bool:
     """Best-effort removal of TEXT-COMMENT entries whose body matches.
 
     ``matcher`` is either a literal string (exact match) or a compiled
     regex. ``editor.directives`` only exists on AscEditor — silently
-    no-op for netlist-mode editors.
+    no-op for netlist-mode editors. Returns True when at least one
+    comment was removed so the caller can decide whether the overall
+    remove operation hit anything.
     """
     directives = getattr(editor, "directives", None)
     if directives is None:
-        return
+        return False
     keep = []
     for entry in directives:
         body = getattr(entry, "text", None)
@@ -1173,6 +1188,8 @@ def _strip_matching_comments(editor, matcher) -> None:
         keep.append(entry)
     if len(keep) != len(directives):
         directives[:] = keep
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -2076,6 +2093,106 @@ async def handle_create_schematic(
     )
 
 
+def _analysis_kind(line_lower: str) -> str | None:
+    """Return the analysis-kind token (``tran``/``ac``/``dc``/``op``/``noise``)
+    if ``line_lower`` is a directive of that kind, else None.
+
+    ``.option`` looks like ``.op`` to a naive prefix match, so it gets an
+    explicit guard here.
+    """
+    for kind in ANALYSIS_KINDS:
+        if line_lower.startswith(f".{kind}"):
+            if kind == "op" and line_lower.startswith(".option"):
+                return None
+            return kind
+    return None
+
+
+def _b_source_unparseable_issue(lineno: int, line: str) -> dict:
+    """Issue dict for a B-source whose ``if(...)`` body breaks spicelib's
+    component regex (Bug K). The simulator parses the line fine — only
+    spicelib introspection (read_circuit, list_components) is affected.
+    """
+    return {
+        "severity": "warning",
+        "line": lineno,
+        "directive": line,
+        "message": (
+            "Behavioural source uses an ``if(...)`` expression with commas — "
+            "spicelib's component-line regex rejects this shape, so "
+            "``read_circuit`` and ``list_components`` will report "
+            "``<unparseable>`` for this ref. The LTspice simulator parses it fine."
+        ),
+        "suggestion": (
+            "If you need spicelib to introspect the value, rewrite as "
+            "``limit(...)`` or split into multiple B-sources without commas."
+        ),
+    }
+
+
+def _multiple_analyses_issue(
+    analysis_lines: dict[str, list[tuple[int, str]]],
+    duplicate_kinds: list[str],
+) -> dict:
+    """Build the issue surfaced when a netlist has more than one analysis
+    directive (LTspice rejects with "More than one analysis specified")."""
+    flat = sorted((ln, body, k) for k, entries in analysis_lines.items() for ln, body in entries)
+    first_lineno, first_line, _ = flat[0] if flat else (None, "", None)
+    if duplicate_kinds:
+        kind_str = ", ".join(f".{k}" for k in duplicate_kinds)
+        message = (
+            f"Duplicate analysis directive ({kind_str}). LTspice rejects "
+            "this with 'More than one analysis specified.'"
+        )
+    else:
+        kind_str = ", ".join(f".{k}" for k in sorted(analysis_lines))
+        message = (
+            f"Multiple distinct analysis directives ({kind_str}). LTspice "
+            "rejects this with 'More than one analysis specified.'"
+        )
+    return {
+        "severity": "error",
+        "line": first_lineno,
+        "directive": first_line,
+        "message": message,
+        "suggestion": "Keep exactly one analysis directive; remove the others.",
+    }
+
+
+def _meas_mismatch_issue(
+    lineno: int, line: str, kind: str, active_kinds: "AbstractSet[str]"
+) -> dict:
+    """Issue for a ``.meas <kind>`` whose analysis isn't in the file
+    (LTspice silently drops these)."""
+    active = ", ".join(sorted(active_kinds)) or "none"
+    if len(active_kinds) == 1:
+        target = next(iter(active_kinds))
+        suggestion = (
+            f"Use ``.meas {target} ...`` to match the analysis, "
+            f"or add a separate .{kind} simulation."
+        )
+    elif active_kinds:
+        options = ", ".join(f".meas {k}" for k in sorted(active_kinds))
+        suggestion = (
+            f"Use one of the analysis-matching forms ({options}), or add "
+            f"a separate .{kind} simulation."
+        )
+    else:
+        suggestion = f"Add a .{kind} directive, or remove the .meas {kind} lines."
+    return {
+        "severity": "error",
+        "line": lineno,
+        "directive": line,
+        "message": (
+            f".meas {kind} requires a .{kind} analysis but the active "
+            f"analysis directives are: {active}. LTspice silently drops "
+            f".meas {kind} on non-.{kind} runs, so this measurement "
+            "won't appear in the log."
+        ),
+        "suggestion": suggestion,
+    }
+
+
 class ValidateNetlistInput(ToolInput):
     path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
     format: Literal["json", "text"] | None = Field(
@@ -2133,29 +2250,29 @@ async def handle_validate_netlist(
         content = file_path.read_text(encoding="utf-8", errors="replace")
 
     issues: list[dict] = []
-    # Single pass: validate directives, collect analysis types present, and
-    # bookmark ``.meas op`` lines so we can cross-check at the end.
-    analyses: set[str] = set()
-    meas_op_lines: list[tuple[int, str]] = []
+    # Single pass: validate directives, collect each analysis directive,
+    # bookmark every ``.meas <kind>`` line, and (on netlists) sniff
+    # B-sources whose ``if(...)`` body breaks spicelib's component regex.
+    sniff_b_source = not _is_asc(file_path)
+    analysis_lines: dict[str, list[tuple[int, str]]] = {}
+    meas_lines: list[tuple[int, str, str]] = []
     for lineno, raw_line in enumerate(content.splitlines(), 1):
         line = raw_line.strip()
+        if sniff_b_source and line[:1].upper() == "B":
+            lower_b = line.lower()
+            if "if(" in lower_b and "," in line:
+                issues.append(_b_source_unparseable_issue(lineno, line))
+            continue
         if not line.startswith("."):
             continue
         lower = line.lower()
-        if lower.startswith(".tran"):
-            analyses.add("tran")
-        elif lower.startswith(".ac"):
-            analyses.add("ac")
-        elif lower.startswith(".dc"):
-            analyses.add("dc")
-        elif lower.startswith(".op") and not lower.startswith(".option"):
-            analyses.add("op")
-        elif lower.startswith(".noise"):
-            analyses.add("noise")
+        analysis_kind = _analysis_kind(lower)
+        if analysis_kind is not None:
+            analysis_lines.setdefault(analysis_kind, []).append((lineno, line))
         elif lower.startswith(".meas"):
             tokens = lower.split()
-            if len(tokens) >= 2 and tokens[1] == "op":
-                meas_op_lines.append((lineno, line))
+            if len(tokens) >= 2 and tokens[1] in MEAS_KINDS:
+                meas_lines.append((lineno, line, tokens[1]))
         err = validate_directive(line, simulator="LTspice")
         if err is not None:
             issues.append(
@@ -2168,66 +2285,19 @@ async def handle_validate_netlist(
                 }
             )
 
-    # ``.meas op`` runs ONLY when there's an .op analysis. LTspice silently
-    # drops these from the log on .tran/.ac/.dc runs — leaving the user
-    # thinking the measurement was computed.
-    if meas_op_lines and "op" not in analyses:
-        active = ", ".join(sorted(analyses)) or "none"
-        if len(analyses) == 1:
-            suggestion = (
-                f"Use ``.meas {next(iter(analyses))} ...`` to match the analysis, "
-                "or add a separate .op simulation."
-            )
-        elif analyses:
-            options = ", ".join(f".meas {k}" for k in sorted(analyses))
-            suggestion = (
-                f"Use one of the analysis-matching forms ({options}), or add a "
-                "separate .op simulation."
-            )
-        else:
-            suggestion = "Add an .op directive, or remove the .meas op lines."
-        for lineno, line in meas_op_lines:
-            issues.append(
-                {
-                    "severity": "error",
-                    "line": lineno,
-                    "directive": line,
-                    "message": (
-                        f".meas op requires an .op analysis but the active analysis "
-                        f"directives are: {active}. LTspice silently drops .meas op "
-                        f"on non-.op runs, so this measurement won't appear in the log."
-                    ),
-                    "suggestion": suggestion,
-                }
-            )
+    # LTspice rejects more than one analysis directive with "More than one
+    # analysis specified."
+    duplicate_kinds = sorted(k for k, entries in analysis_lines.items() if len(entries) > 1)
+    if duplicate_kinds or len(analysis_lines) > 1:
+        issues.append(_multiple_analyses_issue(analysis_lines, duplicate_kinds))
 
-    # Sniff for B-sources whose value field contains commas inside if(...)
-    # — those defeat spicelib's component-line regex (Bug K).
-    if not _is_asc(file_path):
-        for lineno, raw_line in enumerate(content.splitlines(), 1):
-            line = raw_line.lstrip()
-            if line[:1].upper() != "B":
-                continue
-            if "if(" in line.lower() and "," in line:
-                issues.append(
-                    {
-                        "severity": "warning",
-                        "line": lineno,
-                        "directive": line.rstrip(),
-                        "message": (
-                            "Behavioural source uses an ``if(...)`` expression "
-                            "with commas — spicelib's component-line regex "
-                            "rejects this shape, so ``read_circuit`` and "
-                            "``list_components`` will report ``<unparseable>`` "
-                            "for this ref. The LTspice simulator parses it fine."
-                        ),
-                        "suggestion": (
-                            "If you need spicelib to introspect the value, "
-                            "rewrite as ``limit(...)`` or split into multiple "
-                            "B-sources without commas."
-                        ),
-                    }
-                )
+    # ``.meas <kind>`` runs only when the matching analysis is present.
+    # LTspice silently drops mismatched .meas lines from the log.
+    active_kinds = analysis_lines.keys()
+    for lineno, line, kind in meas_lines:
+        if kind in active_kinds:
+            continue
+        issues.append(_meas_mismatch_issue(lineno, line, kind, active_kinds))
 
     summary = {"file": str(file_path), "issue_count": len(issues), "issues": issues}
     if not issues:
@@ -2360,6 +2430,15 @@ class StepGetInput(ToolInput):
         description="SPICE-notation target value (e.g. ``27``, ``1k``, ``100u``).",
     )
     signal: str = Field(description="Signal to read at the chosen step (e.g. ``V(out)``).")
+    at: str | None = Field(
+        default=None,
+        description=(
+            "Optional inner-axis position to query within the chosen step "
+            "(time for .tran, frequency for .ac). Defaults to the first "
+            "sample, which is the only useful answer for stepped .op runs "
+            "but rarely the right one for .ac/.tran. SPICE notation."
+        ),
+    )
     format: Literal["json", "text"] | None = Field(
         default=None,
         description="Response format: 'json' for structured data, 'text' for human-readable",
@@ -2482,17 +2561,55 @@ async def handle_step_get(args: StepGetInput, state: SessionState) -> types.Call
         )
 
     wave = raw.get_wave(signal, step=best_idx)
-    point = float(wave[0]) if len(wave) else float("nan")
-    data = {
+    if len(wave) == 0:
+        raise NetlistError(
+            f"Step {best_idx} of {signal!r} contains no samples; "
+            "verify the simulation completed and the signal exists in this step."
+        )
+
+    # Pick the inner-axis sample. Default is index 0 (correct for .op
+    # results); when ``at=`` is given, find the nearest neighbour on the
+    # per-step axis (frequency for .AC, time for .TRAN).
+    inner_idx = 0
+    target_at: float | None = None
+    actual_at: float | None = None
+    if args.at is not None:
+        try:
+            target_at = parse_spice_value(args.at)
+        except ValueError as e:
+            raise NetlistError(f"Invalid at {args.at!r}: {e}") from e
+        try:
+            inner_axis = real_axis(np.asarray(raw.get_axis(step=best_idx)))
+        except Exception as e:
+            raise NetlistError(
+                f"Cannot read inner axis for at={args.at!r}: {e}. "
+                "Drop the ``at`` argument for .op-style raws."
+            ) from e
+        if inner_axis.size == 0:
+            raise NetlistError(
+                f"Step {best_idx} has an empty axis; ``at`` cannot be applied."
+            )
+        inner_idx = nearest_index(inner_axis, target_at)
+        actual_at = float(inner_axis[inner_idx])
+
+    sample_dict = sample_to_dict(wave[inner_idx])
+    data: dict = {
         "signal": signal,
         "axis": args.axis,
         "requested_value": target,
         "actual_value": best_actual,
         "step_index": best_idx,
-        "value": point,
+        **sample_dict,
     }
-    return format_response(
-        f"{signal} at {args.axis}={best_actual:g} (step {best_idx}): {point:g}",
-        data,
-        args.format,
+    if target_at is not None:
+        data["requested_at"] = target_at
+        data["actual_at"] = actual_at
+
+    sample_str = (
+        f"{sample_dict['value']:g}"
+        if "value" in sample_dict
+        else f"{sample_dict['magnitude_db']:.3f} dB / {sample_dict['phase_deg']:.2f}°"
     )
+    at_str = f", at={actual_at:g}" if actual_at is not None else ""
+    summary = f"{signal} at {args.axis}={best_actual:g} (step {best_idx}){at_str}: {sample_str}"
+    return format_response(summary, data, args.format)
