@@ -54,6 +54,7 @@ _FLOAT_TINY = np.finfo(float).tiny
 _RE_TRANSIENT = re.compile(r"\bTRANSIENT\b", re.IGNORECASE)
 _RE_AC = re.compile(r"\bAC\b", re.IGNORECASE)
 _RE_DC = re.compile(r"\bDC\b", re.IGNORECASE)
+_RE_NOISE = re.compile(r"\bNOISE\b", re.IGNORECASE)
 
 
 def safe_magnitude_db(wave: np.ndarray) -> np.ndarray:
@@ -89,6 +90,16 @@ def is_ac_analysis(sim_type: str) -> bool:
     (e.g. "characteristic", "backup", "BACK") don't false-positive.
     """
     return bool(_RE_AC.search(sim_type))
+
+
+def is_noise_analysis(sim_type: str) -> bool:
+    """Check if the sim type is a Noise Spectral Density run.
+
+    LTspice's Plotname is ``Noise Spectral Density - (V/Hz½ or A/Hz½)``;
+    the word-boundary match avoids false positives on hypothetical
+    composite types like "DC NOISE ANALYSIS".
+    """
+    return bool(_RE_NOISE.search(sim_type))
 
 
 def get_step_count(raw: RawRead) -> int:
@@ -314,8 +325,9 @@ def build_simulation_summary(
     if has_axis and point_count > 0 and axis is not None:
         if _RE_TRANSIENT.search(sim_type):
             range_info = {"time_start": float(axis[0]), "time_end": float(axis[-1])}
-        elif is_ac_analysis(sim_type):
-            # AC axis values may be complex (frequency + j0); take real part
+        elif is_ac_analysis(sim_type) or is_noise_analysis(sim_type):
+            # AC and noise both sweep over frequency. Axis values may be
+            # complex (frequency + j0); take real part.
             range_info = {
                 "freq_start": float(axis[0].real),
                 "freq_end": float(axis[-1].real),
@@ -386,8 +398,7 @@ def build_simulation_summary(
                     )
                 warnings.append(
                     f"Stepped .op detected: log shows {iteration_count} bias-"
-                    "point iterations but the .raw only carries step 0. "
-                    + suggestion
+                    "point iterations but the .raw only carries step 0. " + suggestion
                 )
 
         if warnings:
