@@ -59,6 +59,7 @@ from ltspice_mcp.lib.raw_parser import (
     detect_sim_type,
     extract_operating_point,
     is_ac_analysis,
+    is_noise_analysis,
     query_point_value,
     safe_magnitude_db,
 )
@@ -257,6 +258,11 @@ class SimulationSummaryInput(ToolInput):
         "AC: returns magnitude (dB) min/max/mean and phase (deg) min/max. "
         "t_start/t_end are ignored for AC — use ltspice_query_value for a "
         "point at a specific frequency.\n\n"
+        "Noise: returns min/max/pk-pk and the simple/abs mean of the noise "
+        "spectral density over the frequency axis, plus ``freq_start_used``/"
+        "``freq_end_used``. RMS/std/duration are omitted; t_start/t_end are "
+        "rejected — pass them via ltspice_query_value at specific frequencies "
+        "instead.\n\n"
         "Related tools: for rise/fall times use ltspice_edge_metrics; for "
         "overshoot/settling use ltspice_pulse_response; for period/duty use "
         "ltspice_periodic_metrics; to aggregate .MEAS values across a sweep "
@@ -286,6 +292,9 @@ class SimulationSummaryInput(ToolInput):
             "sweep_start_used": {"type": ["number", "null"]},
             "sweep_end_used": {"type": ["number", "null"]},
             "sweep_span": {"type": ["number", "null"]},
+            # Noise-only window metadata (axis is frequency)
+            "freq_start_used": {"type": ["number", "null"]},
+            "freq_end_used": {"type": ["number", "null"]},
             # AC-only fields
             "min_db": {"type": "number"},
             "max_db": {"type": "number"},
@@ -356,8 +365,17 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
     # from transient (axis = time). Trapezoidal mean/RMS over a sweep axis
     # is mathematically meaningless; the t_start/t_end labels are misleading
     # too since the units aren't seconds.
-    sim_type = detect_sim_type(raw).lower()
+    sim_type_raw = detect_sim_type(raw)
+    sim_type = sim_type_raw.lower()
     is_dc_sweep = "dc transfer" in sim_type or "dc " in sim_type
+    is_noise = is_noise_analysis(sim_type_raw)
+
+    if is_noise and (args.t_start is not None or args.t_end is not None):
+        raise ResultError(
+            "t_start/t_end windowing is not supported for Noise analysis (axis is "
+            "frequency, not time). Use ltspice_query_value to look up a specific "
+            "frequency."
+        )
 
     ts = _parse_time(args.t_start, "t_start")
     te = _parse_time(args.t_end, "t_end")
@@ -371,7 +389,22 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
     except ValueError as e:
         raise ResultError(str(e)) from e
 
-    if is_dc_sweep:
+    if is_noise:
+        # Noise spectral density (V/√Hz) over a frequency axis. Trapezoidal
+        # mean/RMS over a frequency axis is meaningless; min/max is the
+        # interesting "worst-case noise density" reading.
+        stats = {
+            "analysis_type": "noise",
+            "min": core["min"],
+            "max": core["max"],
+            "mean": core["mean"],
+            "abs_mean": core["abs_mean"],
+            "peak_to_peak": core["pk_pk"],
+            "point_count": core["num_samples"],
+            "freq_start_used": core["t_start"],
+            "freq_end_used": core["t_end"],
+        }
+    elif is_dc_sweep:
         stats = {
             "analysis_type": "dc",
             "min": core["min"],
@@ -420,6 +453,11 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
         lines.append(f"Duration:     {stats['duration']:.6g} s  ({stats['point_count']} samples)")
     elif "sweep_span" in stats:
         lines.append(f"Sweep span:   {stats['sweep_span']:.6g}  ({stats['point_count']} samples)")
+    elif "freq_start_used" in stats:
+        lines.append(
+            f"Frequency:    {stats['freq_start_used']:.6g}..{stats['freq_end_used']:.6g} Hz"
+            f"  ({stats['point_count']} samples)"
+        )
     return format_response("\n".join(lines), {"signal": signal, **stats}, fmt)
 
 
@@ -509,19 +547,32 @@ def _format_measurements(
             return "\n".join(lines)
         return "No .MEAS results found in log file"
 
+    def _fmt_meta(value: object) -> str:
+        # Per-step lists (Fr3) are summarised as ``[lo..hi]`` rather than
+        # echoed in full — the per-step values already accompany them in
+        # the entry's ``values`` field.
+        if isinstance(value, list):
+            nums = [v for v in value if isinstance(v, int | float)]
+            if not nums:
+                return "[…]"
+            return f"[{min(nums):g}..{max(nums):g}]"
+        if isinstance(value, int | float):
+            return f"{value:g}"
+        return str(value)
+
     def _meta_suffix(entry: dict) -> str:
         bits: list[str] = []
         if entry.get("range_from") is not None or entry.get("range_to") is not None:
             lo = entry.get("range_from")
             hi = entry.get("range_to")
             if lo is not None and hi is not None:
-                bits.append(f"FROM={lo:g} TO={hi:g}")
+                bits.append(f"FROM={_fmt_meta(lo)} TO={_fmt_meta(hi)}")
             elif lo is not None:
-                bits.append(f"FROM={lo:g}")
+                bits.append(f"FROM={_fmt_meta(lo)}")
             elif hi is not None:
-                bits.append(f"TO={hi:g}")
+                bits.append(f"TO={_fmt_meta(hi)}")
         if entry.get("at") is not None:
-            bits.append(f"AT={entry['at']:g}")
+            bits.append(f"AT={_fmt_meta(entry['at'])}")
         return f"  ({', '.join(bits)})" if bits else ""
 
     if step_count <= 1:
@@ -646,9 +697,21 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
                             "type": "array",
                             "items": {"type": ["number", "null"]},
                         },
-                        "range_from": {"type": ["number", "null"]},
-                        "range_to": {"type": ["number", "null"]},
-                        "at": {"type": ["number", "null"]},
+                        # Scalar when the bound is constant across .step
+                        # iterations; list (one entry per step) when it
+                        # varies (e.g. TRIG/TARG marker times).
+                        "range_from": {
+                            "type": ["number", "array", "null"],
+                            "items": {"type": ["number", "null"]},
+                        },
+                        "range_to": {
+                            "type": ["number", "array", "null"],
+                            "items": {"type": ["number", "null"]},
+                        },
+                        "at": {
+                            "type": ["number", "array", "null"],
+                            "items": {"type": ["number", "null"]},
+                        },
                     },
                     "required": ["values"],
                 },
@@ -1282,6 +1345,10 @@ def _aggregate_job_measurements(
             row = entry.get("values", [])
             scalar = row[0] if row else None
             at_raw = entry.get("at")
+            # Per-step lists collapse to the first scalar (Fr3): batch runs
+            # usually have step_count=1 so this is a no-op, but guard anyway.
+            if isinstance(at_raw, list):
+                at_raw = next((v for v in at_raw if v is not None), None)
             at_val = float(at_raw) if isinstance(at_raw, int | float) else None
             bucket = samples.get(name)
             if bucket is None:
