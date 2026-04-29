@@ -595,10 +595,10 @@ async def handle_create_netlist(
     content = args.content
     target_path = safe_path(f"{name}.cir", state)
 
-    # Friction N: pre-flight every directive line through the same Layer-A
-    # validator that ``edit_directive`` uses, so known-bad patterns
-    # (vdb()/phase()/group_delay() inside .MEAS, etc.) are refused at
-    # write time rather than only after a wasted simulation run.
+    # Pre-flight every directive line through the same validator that
+    # ``edit_directive`` uses, so known-bad patterns (vdb()/phase()/
+    # group_delay() inside .MEAS, etc.) are refused at write time rather
+    # than only after a wasted simulation run.
     bad_directives: list[str] = []
     for raw_line in content.splitlines():
         line = raw_line.strip()
@@ -1072,8 +1072,8 @@ async def handle_edit_directive(
                 result = f"Added comment: {instruction}"
             else:
                 stripped = instruction.strip()
-                # Friction D guard: a leading ``!`` / ``.`` was the giveaway
-                # that the old ``add_text`` user actually wanted a directive.
+                # A leading ``!`` / ``.`` is the giveaway that the user
+                # actually wanted a directive, not free text.
                 if not stripped.startswith("."):
                     raise NetlistError(
                         "SPICE directives must start with '.' (e.g. .tran, "
@@ -2133,12 +2133,14 @@ async def handle_validate_netlist(
         content = file_path.read_text(encoding="utf-8", errors="replace")
 
     issues: list[dict] = []
-    # First pass: which analysis types are present? Used below to flag
-    # ``.meas op`` directives that LTspice silently drops on non-.op runs.
+    # Single pass: validate directives, collect analysis types present, and
+    # bookmark ``.meas op`` lines so we can cross-check at the end.
     analyses: set[str] = set()
     meas_op_lines: list[tuple[int, str]] = []
     for lineno, raw_line in enumerate(content.splitlines(), 1):
         line = raw_line.strip()
+        if not line.startswith("."):
+            continue
         lower = line.lower()
         if lower.startswith(".tran"):
             analyses.add("tran")
@@ -2150,15 +2152,10 @@ async def handle_validate_netlist(
             analyses.add("op")
         elif lower.startswith(".noise"):
             analyses.add("noise")
-        if lower.startswith(".meas"):
+        elif lower.startswith(".meas"):
             tokens = lower.split()
             if len(tokens) >= 2 and tokens[1] == "op":
                 meas_op_lines.append((lineno, line))
-
-    for lineno, raw_line in enumerate(content.splitlines(), 1):
-        line = raw_line.strip()
-        if not line.startswith("."):
-            continue
         err = validate_directive(line, simulator="LTspice")
         if err is not None:
             issues.append(
@@ -2171,12 +2168,24 @@ async def handle_validate_netlist(
                 }
             )
 
-    # Bug N6: ``.meas op`` runs ONLY when there's an .op analysis. LTspice
-    # silently drops these from the log on .tran/.ac/.dc runs — leaving the
-    # user thinking the measurement was computed. Surface the mismatch.
+    # ``.meas op`` runs ONLY when there's an .op analysis. LTspice silently
+    # drops these from the log on .tran/.ac/.dc runs — leaving the user
+    # thinking the measurement was computed.
     if meas_op_lines and "op" not in analyses:
         active = ", ".join(sorted(analyses)) or "none"
-        target_kind = next(iter(sorted(analyses)), "tran")
+        if len(analyses) == 1:
+            suggestion = (
+                f"Use ``.meas {next(iter(analyses))} ...`` to match the analysis, "
+                "or add a separate .op simulation."
+            )
+        elif analyses:
+            options = ", ".join(f".meas {k}" for k in sorted(analyses))
+            suggestion = (
+                f"Use one of the analysis-matching forms ({options}), or add a "
+                "separate .op simulation."
+            )
+        else:
+            suggestion = "Add an .op directive, or remove the .meas op lines."
         for lineno, line in meas_op_lines:
             issues.append(
                 {
@@ -2188,10 +2197,7 @@ async def handle_validate_netlist(
                         f"directives are: {active}. LTspice silently drops .meas op "
                         f"on non-.op runs, so this measurement won't appear in the log."
                     ),
-                    "suggestion": (
-                        f"Use ``.meas {target_kind} ...`` to match the analysis, or "
-                        "add a separate .op simulation."
-                    ),
+                    "suggestion": suggestion,
                 }
             )
 
@@ -2437,37 +2443,39 @@ async def handle_step_get(args: StepGetInput, state: SessionState) -> types.Call
         steps = []
 
     if not any(isinstance(s, dict) and s for s in steps):
-        log_path = raw_path.with_suffix(".log")
-        if log_path.exists():
-            steps = list(parse_step_iterations(log_path))
+        # parse_step_iterations swallows OSError, so no .exists() guard.
+        steps = list(parse_step_iterations(raw_path.with_suffix(".log")))
 
     best_idx = None
     best_actual: float | None = None
-    available_axes: list[str] = []
     for i, step_record in enumerate(steps):
-        # spicelib returns dicts like {"temp": -40, "RS": 1000}.
-        if isinstance(step_record, dict):
-            for k in step_record:
-                if k not in available_axes:
-                    available_axes.append(k)
-            v = step_record.get(args.axis)
-            if v is None:
-                # try case-insensitive match
-                for k, val in step_record.items():
-                    if k.lower() == axis_lower:
-                        v = val
-                        break
-            if v is None:
-                continue
-            try:
-                v_f = float(v)
-            except (TypeError, ValueError):
-                continue
-            if best_actual is None or abs(v_f - target) < abs(best_actual - target):
-                best_actual = v_f
-                best_idx = i
+        if not isinstance(step_record, dict):
+            continue
+        v = step_record.get(args.axis)
+        if v is None:
+            # try case-insensitive match
+            for k, val in step_record.items():
+                if k.lower() == axis_lower:
+                    v = val
+                    break
+        if v is None:
+            continue
+        try:
+            v_f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if best_actual is None or abs(v_f - target) < abs(best_actual - target):
+            best_actual = v_f
+            best_idx = i
 
     if best_idx is None:
+        # Build the axis listing only on the error path.
+        available_axes: list[str] = []
+        for step_record in steps:
+            if isinstance(step_record, dict):
+                for k in step_record:
+                    if k not in available_axes:
+                        available_axes.append(k)
         raise NetlistError(
             f"Step axis {args.axis!r} not found in this raw file. "
             "Available axes: " + (", ".join(available_axes) if available_axes else "<none>")

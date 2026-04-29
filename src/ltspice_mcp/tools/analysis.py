@@ -934,8 +934,22 @@ class PeriodicMetricsResponse(PeriodicMetricsOutput):
     signal: str
 
 
+AggregatedField = Literal["value", "at"]
+
+
+class MeasurementStatsResponseEntry(MeasurementStatsEntry):
+    """Per-measurement stats entry as returned by the MCP layer.
+
+    Adds ``aggregated_field`` to the lib-level :class:`MeasurementStatsEntry`
+    so callers can tell which per-run scalar (the trigger level or the
+    WHEN-clause crossing point) the stats describe.
+    """
+
+    aggregated_field: AggregatedField
+
+
 class MeasurementStatsResponse(TypedDict):
-    stats: dict[str, MeasurementStatsEntry]
+    stats: dict[str, MeasurementStatsResponseEntry]
 
 
 # ---------------------------------------------------------------------------
@@ -1200,20 +1214,26 @@ async def handle_periodic_metrics(args: PeriodicMetricsInput, state: SessionStat
     return format_response("\n".join(lines), data, args.format)
 
 
+class _MeasSamples(TypedDict):
+    """Per-name accumulator used inside :func:`_aggregate_job_measurements`."""
+
+    values: list[float | None]
+    ats: list[float | None]
+
+
 def _aggregate_job_measurements(
     job_id: str, state: SessionState
-) -> tuple[dict[str, list[float | None]], int, dict[str, str]]:
+) -> tuple[dict[str, list[float | None]], int, dict[str, AggregatedField]]:
     """Walk every completed run's .log and concatenate ``.MEAS`` results.
 
-    Friction K: ``measurement_stats`` historically required a single
-    multi-step log, but the MC engine emits one log per run. This helper
-    reconciles by collecting per-run scalar values keyed by .MEAS name.
+    The MC engine emits one log per run; this reconciles by collecting
+    per-run scalar values keyed by .MEAS name.
 
     For ``WHEN``-style .MEAS, the per-run scalar in ``values`` is the
-    trigger level (constant across runs by definition) — the *interesting*
+    trigger level (constant across runs by definition) — the interesting
     per-run axis lives in the folded ``at`` field. When that pattern is
     detected (constant ``values``, varying ``at``) the aggregator swaps to
-    the ``at`` axis automatically (Bug N3).
+    the ``at`` axis automatically.
 
     Returns ``(flat_values, run_count, axis_map)`` where ``axis_map[name]``
     is ``"value"`` or ``"at"`` describing which field was aggregated.
@@ -1226,49 +1246,49 @@ def _aggregate_job_measurements(
             "to finish (use ltspice_check_job to monitor)."
         )
 
-    raw_values: dict[str, list[float | None]] = {}
-    raw_ats: dict[str, list[float | None]] = {}
-    seen_names: list[str] = []
+    samples: dict[str, _MeasSamples] = {}
     runs_processed = 0
     for run_index in sorted(batch_job.run_results.keys()):
         run = batch_job.run_results[run_index]
         log_path_str = run.get("log_file")
         if not log_path_str:
             continue
-        log_path = Path(log_path_str)
         try:
-            data = parse_measurements(log_path)
+            data = parse_measurements(Path(log_path_str))
         except Exception:
             # Missing/unreadable per-run log — skip silently. Aggregation
             # over partial runs is the documented behaviour.
             continue
         runs_processed += 1
         for name, entry in data.get("measurements", {}).items():
-            values = list(entry.get("values", []))
-            scalar = values[0] if values else None
+            row = entry.get("values", [])
+            scalar = row[0] if row else None
             at_raw = entry.get("at")
             at_val = float(at_raw) if isinstance(at_raw, int | float) else None
-            if name not in raw_values:
-                raw_values[name] = [None] * (runs_processed - 1)
-                raw_ats[name] = [None] * (runs_processed - 1)
-                seen_names.append(name)
-            raw_values[name].append(scalar)
-            raw_ats[name].append(at_val)
-        # Backfill any names that didn't appear in this run with ``None``.
-        for name in seen_names:
-            if len(raw_values[name]) < runs_processed:
-                raw_values[name].append(None)
-                raw_ats[name].append(None)
+            bucket = samples.get(name)
+            if bucket is None:
+                bucket = _MeasSamples(
+                    values=[None] * (runs_processed - 1),
+                    ats=[None] * (runs_processed - 1),
+                )
+                samples[name] = bucket
+            bucket["values"].append(scalar)
+            bucket["ats"].append(at_val)
+        # Backfill any names that didn't appear in this run.
+        for bucket in samples.values():
+            if len(bucket["values"]) < runs_processed:
+                bucket["values"].append(None)
+                bucket["ats"].append(None)
 
     flat_values: dict[str, list[float | None]] = {}
-    axis_map: dict[str, str] = {}
-    for name in seen_names:
-        vals = raw_values[name]
-        ats = raw_ats[name]
+    axis_map: dict[str, AggregatedField] = {}
+    for name, bucket in samples.items():
+        vals = bucket["values"]
+        ats = bucket["ats"]
+        # Swap to ``at`` when the level is constant (or all-None) and the
+        # per-run frequency varies — the WHEN-style case.
         valid_vals = [v for v in vals if v is not None]
         valid_ats = [a for a in ats if a is not None]
-        # Swap to ``at`` when the level is constant (or all-None) and the
-        # per-run frequency varies — the WHEN-style case from Bug N3.
         levels_constant = len({round(v, 12) for v in valid_vals}) <= 1
         ats_vary = len({round(a, 12) for a in valid_ats}) > 1
         if levels_constant and ats_vary:
@@ -1314,7 +1334,7 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
     if args.log_file is None and args.job_id is None:
         raise ResultError("Provide either ``log_file`` or ``job_id``.")
 
-    axis_map: dict[str, str] = {}
+    axis_map: dict[str, AggregatedField] = {}
     if args.job_id is not None:
         flat_values, run_count, axis_map = _aggregate_job_measurements(args.job_id, state)
         if not flat_values:
@@ -1340,7 +1360,7 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
             raise ResultError(f"No .MEAS results in log:\n{err_block}")
 
         flat_values = {name: list(entry.get("values", [])) for name, entry in measurements.items()}
-        axis_map = {name: "value" for name in flat_values}
+        axis_map = dict.fromkeys(flat_values, "value")
         steps_label = f"{meas_data.get('step_count', 1)} step(s)"
     else:  # unreachable — earlier guard rejects this combination
         raise ResultError("Provide either ``log_file`` or ``job_id``.")

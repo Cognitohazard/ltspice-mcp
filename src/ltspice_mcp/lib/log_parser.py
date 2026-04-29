@@ -117,7 +117,7 @@ _BARE_ERROR_PHRASES = [
 # .step parametric run — useful when the .raw lacks an axis (e.g. .step param
 # RVAL + .tran) and ``RawRead.get_steps()`` returns nothing.
 _RE_STEP_LINE = re.compile(r"^\.step\s+(.+)$", re.IGNORECASE)
-_RE_STEP_KV = re.compile(r"([A-Za-z_][\w]*)\s*=\s*([^,\s]+)")
+_RE_STEP_KV = re.compile(r"([A-Za-z_]\w*)\s*=\s*([^,\s]+)")
 
 
 # Missing .MODEL — appears in log as:
@@ -140,11 +140,16 @@ def parse_step_iterations(log_path: Path) -> list[dict[str, float]]:
     """Parse ``.step name=value[, ...]`` lines from an LTspice log.
 
     Returns one dict per step iteration, in the order they appeared.
-    Empty list if the log has no .step lines (i.e. unstepped run).
+    Empty list if the log has no .step lines (i.e. unstepped run) or
+    can't be read.
 
     Used as a fallback by ``step_get`` when ``.step param NAME`` runs leave
     spicelib's ``RawRead.get_steps()`` empty — the parameter→step mapping
     is recorded in the log even when it's absent from the .raw header.
+
+    Non-numeric values (e.g. ``5k``) are silently dropped from a row;
+    LTspice always writes already-evaluated floats, so this only matters
+    for hand-crafted test fixtures.
     """
     iterations: list[dict[str, float]] = []
     try:

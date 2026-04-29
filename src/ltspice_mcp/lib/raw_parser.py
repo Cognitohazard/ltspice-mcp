@@ -335,11 +335,10 @@ def build_simulation_summary(
             except Exception:
                 pass
 
-        warnings_extra: list[str] = []
+        warnings: list[str] = []
         try:
             diagnostics = extract_log_diagnostics(log_path)
-            if diagnostics["warnings"]:
-                summary["warnings"] = diagnostics["warnings"]
+            warnings = list(diagnostics["warnings"])
             if diagnostics["errors"]:
                 summary["errors"] = diagnostics["errors"]
             if diagnostics.get("meas_errors"):
@@ -347,33 +346,33 @@ def build_simulation_summary(
         except Exception:
             pass
 
-        # Bug N5: stepped ``.op`` runs the bias point per step, but LTspice
-        # only writes step-0 into the .raw — leaving the user thinking step
-        # 0 is the only step. Detect the mismatch from the log.
-        try:
-            log_steps = parse_step_iterations(log_path)
-        except Exception:
-            log_steps = []
-        if (
-            len(log_steps) > 1
-            and step_count <= 1
-            and "operating" in sim_type.lower()
-        ):
-            param_name = next(iter(log_steps[0].keys()), "param")
-            warnings_extra.append(
-                f"Stepped .op detected: log shows {len(log_steps)} iterations "
-                f"of {param_name!r} but the .raw only carries step 0. Convert "
-                f"to '.dc {param_name} START STOP STEP' to access every bias "
-                "point."
-            )
+        # Stepped ``.op`` runs the bias point per step, but LTspice only
+        # writes step 0 to the .raw — leaving the user thinking it's the
+        # only step. Only worth checking when an .op summary has a single
+        # raw step; the .step lookup is otherwise a wasted log read.
+        if step_count <= 1 and "operating" in sim_type.lower():
+            try:
+                log_steps = parse_step_iterations(log_path)
+            except Exception:
+                log_steps = []
+            if len(log_steps) > 1:
+                param_name = next(iter(log_steps[0].keys()), "param")
+                warnings.append(
+                    f"Stepped .op detected: log shows {len(log_steps)} iterations "
+                    f"of {param_name!r} but the .raw only carries step 0. Convert "
+                    f"to '.dc {param_name} START STOP STEP' to access every bias "
+                    "point."
+                )
+
+        if warnings:
+            summary["warnings"] = warnings
 
         if log_reader is not None:
             try:
                 fourier_data = parse_fourier_data(log_path, reader=log_reader)
                 if fourier_data:
-                    # Bug N7: drop entries that contain no usable harmonics
-                    # — the empty stub from a -nan THD recovery isn't worth
-                    # surfacing.
+                    # Drop entries with neither THD nor harmonics — the empty
+                    # stub from a -nan recovery isn't worth surfacing.
                     fourier_data = [
                         f for f in fourier_data if f.get("thd") is not None or f.get("harmonics")
                     ]
@@ -381,9 +380,6 @@ def build_simulation_summary(
                         summary["fourier"] = fourier_data
             except Exception:
                 pass
-
-        if warnings_extra:
-            summary.setdefault("warnings", []).extend(warnings_extra)
 
     if duration is not None:
         summary["duration"] = float(duration)
