@@ -274,7 +274,7 @@ class TestSummarize:
         assert summary["total_jobs"] == 0
 
     def test_summary_filters_by_netlist_path(self, tmp_path: Path) -> None:
-        """Bug N1: the sidecar directory is shared across every circuit in
+        """the sidecar directory is shared across every circuit in
         the same parent dir. ``summarize_circuit`` must filter by netlist
         path or each circuit reports the directory's aggregate counts."""
         circuit_a = tmp_path / "a.cir"
@@ -291,6 +291,21 @@ class TestSummarize:
         summary_b = job_store.summarize_circuit(circuit_b)
         assert summary_a["total_jobs"] == 2
         assert summary_b["total_jobs"] == 3
+
+    def test_summary_separates_batch_total_runs(self, tmp_path: Path) -> None:
+        """a batch job is one ``total_jobs`` entry but counts its
+        ``total_runs`` underlying simulations under ``total_runs`` so a
+        100-run MC isn't mistaken for "circuit ran once"."""
+        circuit = tmp_path / "rc_mc.cir"
+        circuit.write_text("")
+        job_store.save_job(_sim_job(circuit, job_id="sim_warmup"))
+        batch = _batch_job(circuit, job_id="mc_run", job_type="montecarlo")
+        # _batch_job sets total_runs=3 by default
+        job_store.save_job(batch)
+
+        summary = job_store.summarize_circuit(circuit)
+        assert summary["total_jobs"] == 2  # 1 sim + 1 batch
+        assert summary["total_runs"] == 4  # 1 sim + 3 MC iterations
 
 
 class TestLoadSkipsCorrupt:
