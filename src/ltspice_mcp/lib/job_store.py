@@ -360,15 +360,21 @@ def load_jobs_for_circuit(
 
 
 def summarize_circuit(circuit_path: Path) -> dict[str, Any]:
-    """Return a lightweight summary of a circuit's persisted jobs.
+    """Return a lightweight summary of one circuit's persisted jobs.
 
-    Used by the ``ltspice://recent`` resource to avoid pulling every job
-    into memory just to show counts.
+    The sidecar dir is per-directory, so a single ``.ltspice-mcp/jobs/``
+    folder holds records for every circuit in that directory. Filter to
+    just the rows whose persisted ``netlist`` field matches ``circuit_path``
+    — otherwise every circuit in the dir reports the directory's totals.
     """
     target = sidecar_dir(circuit_path)
     counts: dict[str, int] = {}
     interrupted_ids: list[str] = []
     total = 0
+    try:
+        match_path = str(circuit_path.resolve())
+    except OSError:
+        match_path = str(circuit_path)
     if target.is_dir():
         for file_path in target.glob("*.json"):
             try:
@@ -377,6 +383,9 @@ def summarize_circuit(circuit_path: Path) -> dict[str, Any]:
             except (OSError, json.JSONDecodeError):
                 continue
             if not _accept_schema(data, file_path):
+                continue
+            record_netlist = str(data.get("netlist", ""))
+            if record_netlist != match_path:
                 continue
             # Running/queued in a persisted record means the prior server
             # died — treat as interrupted for summary purposes.

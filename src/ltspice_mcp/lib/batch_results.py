@@ -120,15 +120,17 @@ def compute_batch_stats(
             entry: dict = {
                 "run_index": run_index,
                 "params": run.get("params", {}),
-                "peak": peak,
-                "mean": mean_val,
-                "min": min_val,
             }
-            # Friction J: when peak/mean/min collapse (point query or .op),
-            # surface a single ``value`` field too so downstream code doesn't
-            # need to know which mode produced the row.
+            # Friction Fr2/J: when peak/mean/min collapse (point query via
+            # ``at=`` or .op single-sample raw), drop the redundant trio and
+            # surface just ``value``. Otherwise keep peak/mean/min so callers
+            # can see the per-run waveform shape.
             if peak == mean_val == min_val:
                 entry["value"] = peak
+            else:
+                entry["peak"] = peak
+                entry["mean"] = mean_val
+                entry["min"] = min_val
             per_run_summaries.append(entry)
             peak_values.append(peak)
 
