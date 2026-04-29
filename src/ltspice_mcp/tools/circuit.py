@@ -14,12 +14,13 @@ from collections.abc import AsyncIterator
 from collections.abc import Set as AbstractSet
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, NamedTuple, cast
 
 import numpy as np
 from mcp import types
 from pydantic import Field
 from spicelib import AscEditor, SpiceEditor
+from spicelib.editor.asc_editor import LTSPICE_ATTRIBUTES, LTSPICE_PARAMETERS
 from spicelib.editor.base_schematic import (
     ERotation,
     Line,
@@ -103,6 +104,14 @@ def _get_edit_lock(path: Path) -> asyncio.Lock:
         # If all locks are held, allow temporary overshoot rather than break safety
     _edit_locks[path] = asyncio.Lock()
     return _edit_locks[path]
+
+
+# Standard LTspice SYMATTR slot names. Anything outside this set is
+# silently ignored at netlist-export time, so we reject up-front rather
+# than letting a typo no-op silently. Sourced from spicelib so a future
+# release that adds a slot is picked up without a code change here.
+_LTSPICE_ATTR_NAMES: frozenset[str] = frozenset(LTSPICE_PARAMETERS + LTSPICE_ATTRIBUTES)
+_LTSPICE_ATTR_CANONICAL: dict[str, str] = {n.lower(): n for n in _LTSPICE_ATTR_NAMES}
 
 
 # Rotation string -> ERotation enum mapping (shared by move/add handlers)
@@ -271,6 +280,88 @@ def _collect_component_geometry(editor: AscEditor) -> list[dict]:
         geo = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
         result.append({"ref": ref, **geo["bounding_box"], "pins": geo["pins"]})
     return result
+
+
+def _component_pin_coords(editor: AscEditor, reference: str) -> set[tuple[int, int]]:
+    """Pin coordinates for a single component, ``set()`` if symbol unknown."""
+    if reference not in editor.components:
+        return set()
+    comp = editor.components[reference]
+    if not comp.symbol:
+        return set()
+    sym_info = get_symbol_info(comp.symbol)
+    if sym_info is None:
+        return set()
+    pos, erot = editor.get_component_position(reference)
+    rot_str = erot.name if erot else "R0"
+    geo = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
+    return {(p["x"], p["y"]) for p in geo["pins"]}
+
+
+def _other_components_pin_coords(editor: AscEditor, exclude_ref: str) -> set[tuple[int, int]]:
+    """Union of pin coordinates for every component except ``exclude_ref``.
+
+    Used by remove/move handlers to filter orphaned-wire warnings: a wire
+    endpoint that coincides with another component's pin isn't actually
+    orphaned, it's that component's wire.
+    """
+    coords: set[tuple[int, int]] = set()
+    for ref in editor.get_components():
+        if ref == exclude_ref:
+            continue
+        coords.update(_component_pin_coords(editor, ref))
+    return coords
+
+
+def _trace_nets(editor: AscEditor) -> dict[tuple[int, int], frozenset[str]]:
+    """Map each wire/pin/label coordinate to the set of FLAG labels on its net.
+
+    Net membership is computed by union-find over wire endpoints: two points
+    are on the same net iff there's a chain of wires connecting them. Then
+    every component pin and FLAG label is unioned with whatever wire endpoint
+    sits at its coordinate. The returned dict lets callers ask
+    ``"what labels does the net at (x,y) resolve to?"`` in O(1).
+
+    Used by connect / add_net_label to detect named-net shorts and floating
+    labels at edit time, before LTspice silently drops them.
+    """
+    parent: dict[tuple[int, int], tuple[int, int]] = {}
+
+    def find(p: tuple[int, int]) -> tuple[int, int]:
+        if p not in parent:
+            parent[p] = p
+            return p
+        while parent[p] != p:
+            parent[p] = parent[parent[p]]
+            p = parent[p]
+        return p
+
+    def union(a: tuple[int, int], b: tuple[int, int]) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for w in editor.wires:
+        union((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y)))
+    for ref in editor.get_components():
+        for coord in _component_pin_coords(editor, ref):
+            find(coord)  # ensure node exists
+    for lbl in editor.labels:
+        find((int(lbl.coord.X), int(lbl.coord.Y)))
+
+    labels_by_root: dict[tuple[int, int], set[str]] = {}
+    for lbl in editor.labels:
+        coord = (int(lbl.coord.X), int(lbl.coord.Y))
+        labels_by_root.setdefault(find(coord), set()).add(lbl.text)
+
+    return {p: frozenset(labels_by_root.get(find(p), set())) for p in parent}
+
+
+def _net_label_at(
+    nets: dict[tuple[int, int], frozenset[str]], coord: tuple[int, int]
+) -> frozenset[str]:
+    """Labels on the net at ``coord``; empty when net is unnamed."""
+    return nets.get(coord, frozenset())
 
 
 # Type alias for the union returned by _make_editor / _get_editor.
@@ -668,6 +759,11 @@ async def handle_create_netlist(
                         "x": {"type": "number"},
                         "y": {"type": "number"},
                         "rotation": {"type": "string"},
+                        # Optional non-default SYMATTR map (.asc only).
+                        "attributes": {
+                            "type": "object",
+                            "additionalProperties": {"type": "string"},
+                        },
                     },
                 },
             },
@@ -767,6 +863,13 @@ def _format_circuit_text(file_path: Path, data: dict) -> str:
                     "properties": {
                         "reference": {"type": "string"},
                         "value": {"type": "string"},
+                        # Optional per-component SYMATTR map for .asc files
+                        # (omitted for .cir/.net and for .asc components
+                        # without non-default attributes).
+                        "attributes": {
+                            "type": "object",
+                            "additionalProperties": {"type": "string"},
+                        },
                     },
                 },
             },
@@ -824,7 +927,8 @@ async def handle_list_components(args: ListComponentsInput, state: SessionState)
 
     page, total, offset, limit = paginate(components, args)
 
-    comp_list = []
+    is_asc = isinstance(editor, AscEditor)
+    comp_list: list[dict] = []
     comp_lines = []
     for comp_ref in page:
         try:
@@ -834,8 +938,23 @@ async def handle_list_components(args: ListComponentsInput, state: SessionState)
             # commas in if(...) expressions; degrade gracefully rather
             # than abort the whole listing (Bug K).
             value = "<unparseable>"
-        comp_lines.append(f"{comp_ref}  {value}")
-        comp_list.append({"reference": comp_ref, "value": value})
+        entry: dict = {"reference": comp_ref, "value": value}
+        # Surface non-default SYMATTRs (SpiceLine, SpiceModel, …) for
+        # .asc components so callers don't need a per-component
+        # component_info round-trip to spot W=10u/L=0.5u-style overrides.
+        if is_asc and comp_ref in editor.components:
+            attrs = {
+                k: v
+                for k, v in (editor.components[comp_ref].attributes or {}).items()
+                if k not in ("Value", "InstName") and v
+            }
+            if attrs:
+                entry["attributes"] = attrs
+        line = f"{comp_ref}  {value}"
+        if entry.get("attributes"):
+            line += "  " + " ".join(f"{k}={v}" for k, v in entry["attributes"].items())
+        comp_lines.append(line)
+        comp_list.append(entry)
 
     header = f"Showing {offset + 1}-{offset + len(page)} of {total} components"
     if prefix:
@@ -1218,27 +1337,24 @@ async def handle_remove_component(
 
     reference = args.reference
 
-    # Collect pin positions before removal to check for orphaned wires
+    # Collect pin positions before removal to check for orphaned wires.
+    # Other components' pins are excluded so we don't blame this remove
+    # for wires that legitimately belong to a neighbour.
     editor_pre = _get_asc_editor(asc_path, state)
     _require_component(editor_pre, reference)
-    comp = editor_pre.components[reference]
-    sym_info = get_symbol_info(comp.symbol) if comp.symbol else None
-    pin_coords: set[tuple[int, int]] = set()
-    if sym_info is not None:
-        pos, erot = editor_pre.get_component_position(reference)
-        rot_str = erot.name if erot else "R0"
-        geo = compute_placed_geometry(sym_info, int(pos.X), int(pos.Y), rot_str)
-        pin_coords = {(p["x"], p["y"]) for p in geo["pins"]}
+    pin_coords = _component_pin_coords(editor_pre, reference)
+    other_pins = _other_components_pin_coords(editor_pre, reference)
+    target_only_pins = pin_coords - other_pins
 
     async with _editing_asc(asc_path, state) as editor:
         editor.remove_component(reference)
         deleted_wires = 0
-        if args.cleanup_wires and pin_coords:
+        if args.cleanup_wires and target_only_pins:
             kept_wires = []
             for w in editor.wires:
                 v1 = (int(w.V1.X), int(w.V1.Y))
                 v2 = (int(w.V2.X), int(w.V2.Y))
-                if v1 in pin_coords or v2 in pin_coords:
+                if v1 in target_only_pins or v2 in target_only_pins:
                     deleted_wires += 1
                     continue
                 kept_wires.append(w)
@@ -1247,14 +1363,14 @@ async def handle_remove_component(
     result = f"Removed {reference} from {asc_path.name}"
     if args.cleanup_wires and deleted_wires:
         result += f" (also deleted {deleted_wires} attached wire(s))"
-    elif pin_coords and not args.cleanup_wires:
+    elif target_only_pins and not args.cleanup_wires:
         editor_post = _get_asc_editor(asc_path, state)
         orphaned_at: list[str] = []
         for w in editor_post.wires:
             for coord in [(int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))]:
-                if coord in pin_coords:
+                if coord in target_only_pins:
                     orphaned_at.append(f"({coord[0]},{coord[1]})")
-                    pin_coords.discard(coord)
+                    target_only_pins.discard(coord)
         if orphaned_at:
             result += (
                 f"\n\nWarning: orphaned wires remain at: {', '.join(orphaned_at)}. "
@@ -1266,7 +1382,12 @@ async def handle_remove_component(
 
 @registry.tool(
     name="ltspice_move_component",
-    description="Move and/or rotate a component in an .asc schematic.",
+    description=(
+        "Move and/or rotate a component in an .asc schematic. Warns if the "
+        "new position overlaps another component's bounding box, and lists "
+        "wire endpoints orphaned by the move (the component's old pin "
+        "coordinates are no longer connected to anything)."
+    ),
     input_model=MoveComponentInput,
     annotations=types.ToolAnnotations(
         readOnlyHint=False,
@@ -1292,18 +1413,74 @@ async def handle_move_component(
         _require_component(editor, reference)
         old_pos, old_rot = editor.get_component_position(reference)
 
-        new_rot = _parse_rotation(rotation) if rotation is not None else old_rot
+        # Snapshot OLD pin coordinates and OTHER components' pins before
+        # the position change — used after to detect orphaned wires
+        # without blaming this move for neighbours' wires.
+        old_pin_coords = _component_pin_coords(editor, reference)
+        other_pins = _other_components_pin_coords(editor, reference)
 
+        new_rot = _parse_rotation(rotation) if rotation is not None else old_rot
         new_pos = Point(x, y)
         editor.set_component_position(reference, new_pos, new_rot)
 
+        new_pin_coords = _component_pin_coords(editor, reference)
+
+        # Overlap check mirrors add_component's: any other component whose
+        # bounding box intersects the moved one's NEW bounding box.
+        moved_bb: dict[str, int] | None = None
+        comp = editor.components[reference]
+        if comp.symbol:
+            moved_sym = get_symbol_info(comp.symbol)
+            if moved_sym is not None:
+                rot_str = new_rot.name
+                moved_bb = compute_placed_geometry(moved_sym, x, y, rot_str)["bounding_box"]
+        overlap_warnings: list[str] = []
+        if moved_bb is not None:
+            for ebb in _collect_component_geometry(editor):
+                if ebb["ref"] == reference:
+                    continue
+                if _bboxes_overlap(moved_bb, ebb):
+                    overlap_warnings.append(f"Overlaps {ebb['ref']} bounding box")
+
+        # Wires whose endpoint sat on a pin that moved — and that pin's
+        # coordinate isn't now another component's pin — are orphaned by
+        # the move. Don't auto-delete; surface so the caller can fix routing.
+        abandoned_pins = old_pin_coords - new_pin_coords - other_pins
+        orphan_coords: list[tuple[int, int]] = []
+        if abandoned_pins:
+            for w in editor.wires:
+                for coord in (
+                    (int(w.V1.X), int(w.V1.Y)),
+                    (int(w.V2.X), int(w.V2.Y)),
+                ):
+                    if coord in abandoned_pins and coord not in orphan_coords:
+                        orphan_coords.append(coord)
+
     rot_str = f"R{new_rot.value}" if new_rot.value < 360 else f"M{new_rot.value - 360}"
-    return text_response(f"Moved {reference}: ({old_pos.X},{old_pos.Y}) -> ({x},{y}) {rot_str}")
+    msg = f"Moved {reference}: ({old_pos.X},{old_pos.Y}) -> ({x},{y}) {rot_str}"
+    if overlap_warnings:
+        msg += "\n\nWarnings:"
+        for w_msg in overlap_warnings:
+            msg += f"\n  {w_msg}"
+    if orphan_coords:
+        coord_str = ", ".join(f"({cx},{cy})" for cx, cy in orphan_coords)
+        msg += (
+            f"\n\nWarning: wires left at old pin coordinates with no "
+            f"connection: {coord_str}. Re-route or delete these wires."
+        )
+    return text_response(msg)
 
 
 @registry.tool(
     name="ltspice_set_component_attribute",
-    description="Set a schematic-only component attribute such as SpiceLine or SpiceModel.",
+    description=(
+        "Set a schematic-only component attribute. The standard LTspice slots "
+        "are ``Value``, ``Value2``, ``SpiceLine``, ``SpiceLine2``, "
+        "``SpiceModel``, ``InstName`` — anything else is rejected, since "
+        "LTspice silently ignores unknown SYMATTR keys at netlist time. To "
+        "set arbitrary KEY=val pairs (e.g. ``W=10u L=0.5u``), pass them as "
+        "the ``SpiceLine`` value."
+    ),
     input_model=SetComponentAttributeInput,
     annotations=types.ToolAnnotations(
         readOnlyHint=False,
@@ -1326,6 +1503,20 @@ async def handle_set_component_attribute(
 
     if not attribute.strip():
         raise NetlistError("Attribute name must not be empty")
+
+    if attribute not in _LTSPICE_ATTR_NAMES:
+        canonical = _LTSPICE_ATTR_CANONICAL.get(attribute.lower())
+        if canonical:
+            raise NetlistError(
+                f"Unknown attribute {attribute!r}. Did you mean {canonical!r}? "
+                f"LTspice attribute names are case-sensitive."
+            )
+        raise NetlistError(
+            f"Unknown attribute {attribute!r}. LTspice silently ignores "
+            f"unrecognised SYMATTR keys at netlist time. Valid attributes: "
+            f"{', '.join(sorted(_LTSPICE_ATTR_NAMES))}. For arbitrary KEY=val "
+            "pairs, set them through 'SpiceLine' instead."
+        )
 
     async with _editing_asc(asc_path, state) as editor:
         _require_component(editor, reference)
@@ -1763,10 +1954,56 @@ async def handle_add_net_label(args: NetLabelInput, state: SessionState) -> type
                     )
                     break
 
+        # Floating-label detection: a FLAG placed at a coordinate with
+        # no wire endpoint and no component pin is silently ignored at
+        # netlist time. Surface a warning so the caller can verify; don't
+        # refuse outright since a common workflow is "place labels first,
+        # wire them up later".
+        wire_endpoints = {(int(w.V1.X), int(w.V1.Y)) for w in editor.wires} | {
+            (int(w.V2.X), int(w.V2.Y)) for w in editor.wires
+        }
+        all_pin_coords: set[tuple[int, int]] = set()
+        for ref in editor.get_components():
+            all_pin_coords.update(_component_pin_coords(editor, ref))
+        is_floating = (x, y) not in wire_endpoints and (x, y) not in all_pin_coords
+
+        # Net-label conflict: adding a label to a coord that's already
+        # on a different named net would short the two nets at netlist
+        # time. Catch deliberately, with a clear message.
+        if net != "0":
+            nets = _trace_nets(editor)
+            existing = _net_label_at(nets, (x, y))
+            other_labels = {n for n in existing if n != net and n != "0"}
+            if other_labels:
+                raise NetlistError(
+                    f"Refused to add net '{net}' at ({x},{y}): the wire "
+                    f"network at this coordinate already carries the label(s) "
+                    f"{sorted(other_labels)}. Adding '{net}' would short "
+                    f"those nets together. Remove the existing label(s) "
+                    f"first or pick a different coordinate."
+                )
+
         editor.labels.append(Text(coord=Point(x, y), text=net, type=TextTypeEnum.LABEL))
 
+    if is_floating:
+        result = (
+            f"Warning: ({x},{y}) has no wire endpoint or component pin — "
+            f"LTspice will ignore this floating label until you wire it up.\n"
+        ) + result
     result += f"Added {label_desc} at ({x},{y})"
     return text_response(result)
+
+
+class _ConnectPlan(NamedTuple):
+    """Validated connect route ready to commit to the editor."""
+
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+    points: list[tuple[int, int]]
+    segments: list[tuple[int, int, int, int]]
+    warnings: list[str]
 
 
 @registry.tool(
@@ -1820,36 +2057,84 @@ async def handle_connect(args: ConnectInput, state: SessionState) -> types.CallT
     asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
 
-    # Collect component geometry and existing wires for validation
     pre_editor = _get_asc_editor(asc_path, state)
-    component_geo = _collect_component_geometry(pre_editor)
+    plan = _plan_connect_route(pre_editor, args.from_pin, args.to_pin, args.waypoints)
+
+    async with _editing_asc(asc_path, state) as ed:
+        for sx1, sy1, sx2, sy2 in plan.segments:
+            ed.wires.append(Line(Point(sx1, sy1), Point(sx2, sy2)))
+
+    x1, y1, x2, y2, segments, warnings = (
+        plan.x1,
+        plan.y1,
+        plan.x2,
+        plan.y2,
+        plan.segments,
+        plan.warnings,
+    )
+    points = plan.points
+
+    result_lines = [f"Connected {args.from_pin} to {args.to_pin}"]
+    result_lines.append(f"  From: ({x1},{y1})  To: ({x2},{y2})")
+    for sx1, sy1, sx2, sy2 in segments:
+        result_lines.append(f"  Wire: ({sx1},{sy1})->({sx2},{sy2})")
+
+    if warnings:
+        result_lines.append("")
+        result_lines.append("Warnings:")
+        for w in warnings:
+            result_lines.append(f"  {w}")
+
+    data: dict = {
+        "from": {"ref": args.from_pin, "x": x1, "y": y1},
+        "to": {"ref": args.to_pin, "x": x2, "y": y2},
+        "wire_count": len(segments),
+        "points": [{"x": p[0], "y": p[1]} for p in points],
+    }
+    if warnings:
+        data["warnings"] = warnings
+
+    return format_response("\n".join(result_lines), data, None)
+
+
+def _plan_connect_route(
+    editor: AscEditor,
+    from_pin: str,
+    to_pin: str,
+    waypoints: list[WaypointInput],
+) -> _ConnectPlan:
+    """Resolve, route, and validate a wire path between two pins.
+
+    Returns a :class:`_ConnectPlan` whose ``segments`` are ready to append
+    to ``editor.wires`` directly. Raises ``NetlistError`` for any
+    validation failure (zero-length route, diagonal segment, pin
+    collision, wire-junction overlap, named-net short).
+
+    Shared by ``handle_connect`` and the ``connect`` op of
+    ``apply_schematic_ops`` so both paths apply identical safety checks.
+    """
+    component_geo = _collect_component_geometry(editor)
     existing_wires = [
-        (int(w.V1.X), int(w.V1.Y), int(w.V2.X), int(w.V2.Y)) for w in pre_editor.wires
+        (int(w.V1.X), int(w.V1.Y), int(w.V2.X), int(w.V2.Y)) for w in editor.wires
     ]
 
-    # Resolve pins (read-only — no edits yet)
-    x1, y1 = _resolve_pin(args.from_pin, pre_editor)
-    x2, y2 = _resolve_pin(args.to_pin, pre_editor)
+    x1, y1 = _resolve_pin(from_pin, editor)
+    x2, y2 = _resolve_pin(to_pin, editor)
 
-    # Reject zero-length connections — they would emit no wires and silently
-    # report success, which is almost always a user error.
-    if (x1, y1) == (x2, y2) and not args.waypoints:
+    if (x1, y1) == (x2, y2) and not waypoints:
         raise NetlistError(
-            f"Cannot connect {args.from_pin} to {args.to_pin}: "
+            f"Cannot connect {from_pin} to {to_pin}: "
             f"both endpoints resolve to the same coordinate ({x1},{y1})."
         )
 
-    # Build list of points: from → [waypoints] → to (dedup consecutive)
-    raw_points = [(x1, y1)]
-    for wp in args.waypoints:
-        raw_points.append((wp.x, wp.y))
+    raw_points: list[tuple[int, int]] = [(x1, y1)]
+    raw_points.extend((wp.x, wp.y) for wp in waypoints)
     raw_points.append((x2, y2))
-    points = [raw_points[0]]
+    points: list[tuple[int, int]] = [raw_points[0]]
     for pt in raw_points[1:]:
         if pt != points[-1]:
             points.append(pt)
 
-    # Compute segments (not yet added to editor)
     segments: list[tuple[int, int, int, int]] = []
     for i in range(len(points) - 1):
         px1, py1 = points[i]
@@ -1857,32 +2142,46 @@ async def handle_connect(args: ConnectInput, state: SessionState) -> types.CallT
         if px1 != px2 or py1 != py2:
             segments.append((px1, py1, px2, py2))
 
-    # If after dedup we ended up with no segments at all (e.g. waypoints all
-    # collapse onto one of the endpoints), reject as a no-op.
     if not segments:
         raise NetlistError(
-            f"Cannot connect {args.from_pin} to {args.to_pin}: "
+            f"Cannot connect {from_pin} to {to_pin}: "
             "the requested route has zero length after deduplicating waypoints."
         )
 
-    # --- Validate before adding wires ---
-    errors: list[str] = []
-    warnings: list[str] = []
     endpoints = {(x1, y1), (x2, y2)}
     skip_refs = {
         ref.rsplit(".", 1)[0]
-        for ref in (args.from_pin, args.to_pin)
+        for ref in (from_pin, to_pin)
         if "." in ref and not ref.startswith("net:")
     }
+    errors: list[str] = []
+    warnings: list[str] = []
 
-    # Diagonal wires (error — never valid)
+    # Net-label conflict — checked first because it's a "wrong intent"
+    # error: rejecting it gives the user a clearer signal than a route
+    # geometry complaint. Skip when either side uses ``net:`` form (those
+    # are already named explicitly).
+    if not from_pin.startswith("net:") and not to_pin.startswith("net:"):
+        nets = _trace_nets(editor)
+        from_labels = _net_label_at(nets, (x1, y1))
+        to_labels = _net_label_at(nets, (x2, y2))
+        if from_labels and to_labels and from_labels.isdisjoint(to_labels):
+            raise NetlistError(
+                f"Refused to connect {from_pin} to {to_pin}: "
+                f"Net-label conflict — {from_pin} is on net "
+                f"{sorted(from_labels)} and {to_pin} is on net "
+                f"{sorted(to_labels)}. Connecting them would short the two "
+                f"named nets. Pick one labelling and rewire, or use "
+                f"add_net_label to merge them deliberately."
+            )
+
     for sx1, sy1, sx2, sy2 in segments:
         if sx1 != sx2 and sy1 != sy2:
             errors.append(f"Diagonal wire ({sx1},{sy1})->({sx2},{sy2}): not orthogonal")
 
-    # Pin collision check (error — will create unintended connection)
-    # A pin is safe if it's already wired to the same net as our target
-    # (i.e., an existing wire connects both the pin and one of our endpoints).
+    # Pin-collision check: a pin is safe if it's already wired to the
+    # same net as our target (an existing wire reaches both that pin and
+    # one of our endpoints), e.g. T-junction onto a power rail.
     def _pin_on_target_net(px: int, py: int) -> bool:
         for ex1, ey1, ex2, ey2 in existing_wires:
             wire_pts = {(ex1, ey1), (ex2, ey2)}
@@ -1911,14 +2210,14 @@ async def handle_connect(args: ConnectInput, state: SessionState) -> types.CallT
                         "will create unintended connection"
                     )
 
-    # Wire junction check (error — will create unintended junction)
-    # Allow overlaps where the existing wire connects to one of our endpoints
-    # (e.g., T-junction onto a power rail that reaches the target net label)
+    # Wire-junction check: forbid overlaps with existing wires unless the
+    # existing wire already terminates at one of our endpoints (intended
+    # T-junction).
     for sx1, sy1, sx2, sy2 in segments:
         for ex1, ey1, ex2, ey2 in existing_wires:
             ext_endpoints = {(ex1, ey1), (ex2, ey2)}
             if ext_endpoints & endpoints:
-                continue  # existing wire shares an endpoint — intentional junction
+                continue
             if sx1 == sx2 and ex1 == ex2 and sx1 == ex1:
                 new_min, new_max = min(sy1, sy2), max(sy1, sy2)
                 ext_min, ext_max = min(ey1, ey2), max(ey1, ey2)
@@ -1968,15 +2267,13 @@ async def handle_connect(args: ConnectInput, state: SessionState) -> types.CallT
                         "will create unintended junction"
                     )
 
-    # Refuse to add wires if any errors detected
     if errors:
-        error_lines = [f"Refused to connect {args.from_pin} to {args.to_pin}:"]
+        error_lines = [f"Refused to connect {from_pin} to {to_pin}:"]
         for e in errors:
             error_lines.append(f"  {e}")
         error_lines.append("\nFix the route with different waypoints to avoid these issues.")
         raise NetlistError("\n".join(error_lines))
 
-    # Non-blocking warnings
     total_length = sum(abs(sx2 - sx1) + abs(sy2 - sy1) for sx1, sy1, sx2, sy2 in segments)
     if total_length > 400:
         warnings.append(
@@ -2006,32 +2303,7 @@ async def handle_connect(args: ConnectInput, state: SessionState) -> types.CallT
                         f"({bx},{by})-({bx + bw},{by + bh})"
                     )
 
-    # All checks passed — now add the wires
-    async with _editing_asc(asc_path, state) as ed:
-        for sx1, sy1, sx2, sy2 in segments:
-            ed.wires.append(Line(Point(sx1, sy1), Point(sx2, sy2)))
-
-    result_lines = [f"Connected {args.from_pin} to {args.to_pin}"]
-    result_lines.append(f"  From: ({x1},{y1})  To: ({x2},{y2})")
-    for sx1, sy1, sx2, sy2 in segments:
-        result_lines.append(f"  Wire: ({sx1},{sy1})->({sx2},{sy2})")
-
-    if warnings:
-        result_lines.append("")
-        result_lines.append("Warnings:")
-        for w in warnings:
-            result_lines.append(f"  {w}")
-
-    data: dict = {
-        "from": {"ref": args.from_pin, "x": x1, "y": y1},
-        "to": {"ref": args.to_pin, "x": x2, "y": y2},
-        "wire_count": len(segments),
-        "points": [{"x": p[0], "y": p[1]} for p in points],
-    }
-    if warnings:
-        data["warnings"] = warnings
-
-    return format_response("\n".join(result_lines), data, None)
+    return _ConnectPlan(x1, y1, x2, y2, points, segments, warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -2586,9 +2858,7 @@ async def handle_step_get(args: StepGetInput, state: SessionState) -> types.Call
                 "Drop the ``at`` argument for .op-style raws."
             ) from e
         if inner_axis.size == 0:
-            raise NetlistError(
-                f"Step {best_idx} has an empty axis; ``at`` cannot be applied."
-            )
+            raise NetlistError(f"Step {best_idx} has an empty axis; ``at`` cannot be applied.")
         inner_idx = nearest_index(inner_axis, target_at)
         actual_at = float(inner_axis[inner_idx])
 
@@ -2613,3 +2883,343 @@ async def handle_step_get(args: StepGetInput, state: SessionState) -> types.Call
     at_str = f", at={actual_at:g}" if actual_at is not None else ""
     summary = f"{signal} at {args.axis}={best_actual:g} (step {best_idx}){at_str}: {sample_str}"
     return format_response(summary, data, args.format)
+
+
+# ---------------------------------------------------------------------------
+# Batch-transaction op (Fr1) — apply many edits to one .asc atomically.
+# ---------------------------------------------------------------------------
+
+
+_RotationLiteral = Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"]
+
+
+class _OpAddComponent(StrictModel):
+    op: Literal["add_component"]
+    reference: str
+    symbol: str
+    x: int
+    y: int
+    rotation: _RotationLiteral = "R0"
+    value: str | None = None
+    attributes: dict[str, str] | None = None
+
+
+class _OpSetComponentValue(StrictModel):
+    op: Literal["set_component_value"]
+    reference: str
+    value: str
+
+
+class _OpSetComponentAttribute(StrictModel):
+    op: Literal["set_component_attribute"]
+    reference: str
+    attribute: str
+    value: str
+
+
+class _OpRemoveComponent(StrictModel):
+    op: Literal["remove_component"]
+    reference: str
+    cleanup_wires: bool = False
+
+
+class _OpMoveComponent(StrictModel):
+    op: Literal["move_component"]
+    reference: str
+    x: int
+    y: int
+    rotation: _RotationLiteral | None = None
+
+
+class _OpAddNetLabel(StrictModel):
+    op: Literal["add_net_label"]
+    net: str
+    pin: str | None = None
+    x: int | None = None
+    y: int | None = None
+
+
+class _OpConnect(StrictModel):
+    op: Literal["connect"]
+    from_pin: str
+    to_pin: str
+    waypoints: list[WaypointInput] = Field(default_factory=list)
+
+
+class _OpAddDirective(StrictModel):
+    op: Literal["add_directive"]
+    instruction: str
+    kind: Literal["directive", "comment"] = "directive"
+    x: int | None = None
+    y: int | None = None
+    size: int = 2
+
+
+SchematicOp = (
+    _OpAddComponent
+    | _OpSetComponentValue
+    | _OpSetComponentAttribute
+    | _OpRemoveComponent
+    | _OpMoveComponent
+    | _OpAddNetLabel
+    | _OpConnect
+    | _OpAddDirective
+)
+
+
+class ApplySchematicOpsInput(ToolInput):
+    path: str = Field(description="Path to .asc schematic")
+    ops: list[SchematicOp] = Field(
+        description=(
+            "List of edit operations applied in order against a single in-memory "
+            "AscEditor. The file is saved once at the end iff every op succeeded "
+            "(or stop_on_error=false). Each op is tagged by its ``op`` field; see "
+            "the schema for per-op fields."
+        )
+    )
+    stop_on_error: bool = Field(
+        default=True,
+        description=(
+            "When true (default), the first op that raises aborts the transaction "
+            "and nothing is saved. When false, every op runs and per-op errors "
+            "are recorded in ``results``; the file IS saved with whatever ops "
+            "did succeed — set false only when failures are recoverable."
+        ),
+    )
+
+
+def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dict[str, object]:
+    """Apply one schematic op against ``editor`` in place, return its result.
+
+    Mirrors the validation done by the per-op tools but skips the load /
+    save / lock dance — the caller (``handle_apply_schematic_ops``) holds
+    the lock and saves once at the end.
+
+    Raises ``NetlistError`` on any per-op validation failure; the caller
+    decides whether to abort or continue based on ``stop_on_error``.
+    """
+    if isinstance(op, _OpAddComponent):
+        if get_symbol_info(op.symbol) is None:
+            raise NetlistError(f"Symbol '{op.symbol}' not found in any configured symbol library.")
+        if op.reference in editor.components:
+            raise NetlistError(f"Component '{op.reference}' already exists in {asc_path.name}.")
+        erot = _parse_rotation(op.rotation)
+        _create_component(
+            editor,
+            op.reference,
+            op.symbol,
+            op.x,
+            op.y,
+            erot,
+            value=op.value,
+            attributes=op.attributes,
+        )
+        return {"op": "add_component", "reference": op.reference}
+
+    if isinstance(op, _OpSetComponentValue):
+        if op.reference not in editor.components:
+            raise NetlistError(f"Component '{op.reference}' not found.")
+        _apply_component_value(editor, op.reference, op.value)
+        return {"op": "set_component_value", "reference": op.reference, "value": op.value}
+
+    if isinstance(op, _OpSetComponentAttribute):
+        if op.attribute not in _LTSPICE_ATTR_NAMES:
+            raise NetlistError(
+                f"Unknown attribute {op.attribute!r}. Valid: "
+                f"{', '.join(sorted(_LTSPICE_ATTR_NAMES))}."
+            )
+        if op.reference not in editor.components:
+            raise NetlistError(f"Component '{op.reference}' not found.")
+        editor.set_component_attribute(op.reference, op.attribute, op.value)
+        return {
+            "op": "set_component_attribute",
+            "reference": op.reference,
+            "attribute": op.attribute,
+        }
+
+    if isinstance(op, _OpRemoveComponent):
+        if op.reference not in editor.components:
+            raise NetlistError(f"Component '{op.reference}' not found.")
+        target_only = _component_pin_coords(editor, op.reference) - _other_components_pin_coords(
+            editor, op.reference
+        )
+        editor.remove_component(op.reference)
+        if op.cleanup_wires and target_only:
+            editor.wires = [
+                w
+                for w in editor.wires
+                if (int(w.V1.X), int(w.V1.Y)) not in target_only
+                and (int(w.V2.X), int(w.V2.Y)) not in target_only
+            ]
+        return {"op": "remove_component", "reference": op.reference}
+
+    if isinstance(op, _OpMoveComponent):
+        if op.reference not in editor.components:
+            raise NetlistError(f"Component '{op.reference}' not found.")
+        new_rot = (
+            _parse_rotation(op.rotation)
+            if op.rotation is not None
+            else editor.get_component_position(op.reference)[1]
+        )
+        editor.set_component_position(op.reference, Point(op.x, op.y), new_rot)
+        return {"op": "move_component", "reference": op.reference}
+
+    if isinstance(op, _OpAddNetLabel):
+        if op.pin is not None:
+            x, y = _resolve_pin(op.pin, editor)
+        elif op.x is not None and op.y is not None:
+            x, y = op.x, op.y
+        else:
+            raise NetlistError("add_net_label needs either pin or both x and y.")
+        editor.labels.append(Text(coord=Point(x, y), text=op.net, type=TextTypeEnum.LABEL))
+        return {"op": "add_net_label", "net": op.net, "x": x, "y": y}
+
+    if isinstance(op, _OpConnect):
+        plan = _plan_connect_route(editor, op.from_pin, op.to_pin, op.waypoints)
+        for sx1, sy1, sx2, sy2 in plan.segments:
+            editor.wires.append(Line(Point(sx1, sy1), Point(sx2, sy2)))
+        return {
+            "op": "connect",
+            "from_pin": op.from_pin,
+            "to_pin": op.to_pin,
+            "wire_count": len(plan.segments),
+        }
+
+    if isinstance(op, _OpAddDirective):
+        # Inline the minimal directive-validation that edit_directive does.
+        # Comments allow any text; SPICE directives go through validate_directive.
+        if op.kind == "directive":
+            err = validate_directive(op.instruction, simulator="LTspice")
+            if err is not None:
+                raise NetlistError(
+                    f"Refusing directive {op.instruction!r}: {err.message} ({err.suggestion})"
+                )
+        coord = Point(op.x if op.x is not None else 16, op.y if op.y is not None else 16)
+        text_type = TextTypeEnum.DIRECTIVE if op.kind == "directive" else TextTypeEnum.COMMENT
+        editor.directives.append(
+            Text(coord=coord, text=op.instruction, type=text_type, size=op.size)
+        )
+        return {"op": "add_directive", "instruction": op.instruction}
+
+    raise NetlistError(f"Unknown op type: {type(op).__name__}")
+
+
+@registry.tool(
+    name="ltspice_apply_schematic_ops",
+    description=(
+        "Apply many .asc edits in one transaction. Loads the schematic once, "
+        "runs each op against the in-memory editor in order, and saves once at "
+        "the end. Cuts the typical 25+ tool calls to build a real circuit "
+        "(add_component × N + connect × N + add_net_label × N + edit_directive "
+        "× N) down to a single round-trip.\n\n"
+        "Supported ops (each tagged via the ``op`` field): ``add_component``, "
+        "``set_component_value``, ``set_component_attribute``, "
+        "``remove_component``, ``move_component``, ``add_net_label``, "
+        "``connect``, ``add_directive``.\n\n"
+        "By default, the first op that raises aborts the whole transaction "
+        "and nothing is written to disk. Set ``stop_on_error=false`` to run "
+        "every op and persist whatever subset succeeded — useful when each op "
+        "is independent and partial progress is acceptable. Errors are "
+        "recorded under each op's ``error`` field; successes carry the "
+        "per-op result keys (e.g. ``wire_count``)."
+    ),
+    input_model=ApplySchematicOpsInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    ),
+    profiles=("full",),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "applied_count": {"type": "integer"},
+            "failed_count": {"type": "integer"},
+            "saved": {"type": "boolean"},
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "index": {"type": "integer"},
+                        "op": {"type": "string"},
+                        "ok": {"type": "boolean"},
+                        "error": {"type": ["string", "null"]},
+                    },
+                    "required": ["index", "op", "ok"],
+                },
+            },
+        },
+        "required": ["path", "applied_count", "failed_count", "saved", "results"],
+    },
+)
+async def handle_apply_schematic_ops(
+    args: ApplySchematicOpsInput, state: SessionState
+) -> types.CallToolResult:
+    """Apply a list of schematic edits in one transaction (Fr1)."""
+    asc_path = safe_path(args.path, state)
+    _require_asc(asc_path)
+
+    if not args.ops:
+        raise NetlistError("ops list is empty — pass at least one op.")
+
+    results: list[dict[str, object]] = []
+    applied = 0
+    failed = 0
+    saved = False
+    abort_reason: str | None = None
+
+    async with _get_edit_lock(asc_path):
+        editor = _get_asc_editor(asc_path, state)
+        for i, op in enumerate(args.ops):
+            entry: dict[str, object] = {"index": i, "op": op.op, "ok": True, "error": None}
+            try:
+                op_result = _apply_op_inplace(editor, op, asc_path)
+                entry.update({k: v for k, v in op_result.items() if k != "op"})
+                applied += 1
+            except (NetlistError, ValueError) as e:
+                entry["ok"] = False
+                entry["error"] = str(e)
+                failed += 1
+                results.append(entry)
+                if args.stop_on_error:
+                    abort_reason = f"op #{i} ({op.op}) failed: {e}"
+                    break
+                else:
+                    continue
+            results.append(entry)
+
+        if args.stop_on_error and failed:
+            # Evict from cache so the next caller re-reads from disk; the
+            # in-memory mutations on ``editor`` are discarded with the
+            # local reference once this scope exits.
+            state.editors.invalidate(asc_path)
+        else:
+            editor.save_netlist(str(asc_path))
+            state.editors.invalidate(asc_path)
+            saved = True
+
+    summary_lines = [f"apply_schematic_ops on {asc_path.name}: {applied} ok, {failed} failed"]
+    if abort_reason:
+        summary_lines.append(f"Transaction aborted — {abort_reason}")
+        summary_lines.append("No changes were saved.")
+    elif saved:
+        summary_lines.append("All changes saved.")
+    for r in results:
+        marker = "ok" if r["ok"] else "ERR"
+        prefix = f"  [{r['index']}] {r['op']}  {marker}"
+        if r["ok"]:
+            summary_lines.append(prefix)
+        else:
+            summary_lines.append(f"{prefix}  {r['error']}")
+
+    data = {
+        "path": str(asc_path),
+        "applied_count": applied,
+        "failed_count": failed,
+        "saved": saved,
+        "results": results,
+    }
+    return format_response("\n".join(summary_lines), data, None)
