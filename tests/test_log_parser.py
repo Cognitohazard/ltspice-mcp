@@ -6,6 +6,7 @@ import pytest
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.log_parser import (
+    count_op_iterations,
     extract_error_context,
     extract_log_diagnostics,
     extract_missing_refs,
@@ -13,6 +14,7 @@ from ltspice_mcp.lib.log_parser import (
     parse_measurements,
     parse_step_iterations,
     parse_success_summary,
+    read_log_text,
 )
 
 
@@ -345,7 +347,7 @@ class TestParseMeasurementsFromTo:
 
 class TestParseStepIterations:
     def test_single_param_per_line(self, tmp_path: Path):
-        """Bug N2: ``.step param X list ...`` writes ``.step x=val`` per
+        """``.step param X list ...`` writes ``.step x=val`` per
         iteration. The .raw header doesn't carry the param mapping, so
         ``step_get`` walks the log instead.
         """
@@ -382,3 +384,44 @@ class TestParseStepIterations:
 
     def test_missing_log_returns_empty(self, tmp_path: Path):
         assert parse_step_iterations(tmp_path / "nope.log") == []
+
+    def test_text_kw_avoids_second_read(self, tmp_path: Path):
+        """Pre-read content can be passed via ``text=`` so callers reading
+        the log multiple times don't trigger N read syscalls."""
+        log = tmp_path / "step.log"
+        log.write_text(".step rval=10\n.step rval=20\n")
+        text = read_log_text(log)
+        assert parse_step_iterations(text=text) == [{"rval": 10.0}, {"rval": 20.0}]
+
+
+class TestCountOpIterations:
+    def test_real_ltspice_op_log(self, tmp_path: Path):
+        """real stepped .op logs DON'T write ``.step name=val``
+        markers — only the Newton-iteration message. Counting those is the
+        only reliable signal that the bias point ran multiple times."""
+        log = tmp_path / "stepped_op.log"
+        log.write_text(
+            "LTspice 26.0 for Windows\nsolver = Normal\n"
+            "Direct Newton iteration succeeded in finding operating point.\n"
+            "Direct Newton iteration succeeded in finding operating point.\n"
+            "Direct Newton iteration succeeded in finding operating point.\n"
+            "Total elapsed time: 0.05 seconds.\n"
+        )
+        assert count_op_iterations(log) == 3
+
+    def test_unstepped_op_returns_one(self, tmp_path: Path):
+        log = tmp_path / "single_op.log"
+        log.write_text(
+            "LTspice 26.0\n"
+            "Direct Newton iteration succeeded in finding operating point.\n"
+            "Total elapsed time: 0.01 seconds.\n"
+        )
+        assert count_op_iterations(log) == 1
+
+    def test_no_op_line_returns_zero(self, tmp_path: Path):
+        log = tmp_path / "no_op.log"
+        log.write_text("LTspice 26.0\nTotal elapsed time: 0.01 seconds.\n")
+        assert count_op_iterations(log) == 0
+
+    def test_missing_log_returns_zero(self, tmp_path: Path):
+        assert count_op_iterations(tmp_path / "nope.log") == 0
