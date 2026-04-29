@@ -38,11 +38,17 @@ class LogDiagnostics(TypedDict):
 
 
 class _MeasurementMetadata(TypedDict, total=False):
-    """Optional metadata folded into a .MEAS result."""
+    """Optional metadata folded into a .MEAS result.
 
-    range_from: float | None
-    range_to: float | None
-    at: float | None
+    Each metadata field is either a scalar (when the value is constant
+    across .step iterations — e.g. a literal ``FROM=2m``) or a list of
+    per-step values (when LTspice computed a different marker per step,
+    e.g. TRIG/TARG times of a per-step rise time).
+    """
+
+    range_from: float | list[float | None] | None
+    range_to: float | list[float | None] | None
+    at: float | list[float | None] | None
 
 
 class MeasurementEntry(_MeasurementMetadata):
@@ -51,7 +57,9 @@ class MeasurementEntry(_MeasurementMetadata):
     ``values`` is one entry per .step iteration (length 1 for unstepped runs).
     ``range_from`` / ``range_to`` carry the FROM/TO bounds for windowed measurements.
     ``at`` carries the AT/WHEN time/freq for point measurements. Missing when
-    not applicable (use ``.get`` rather than ``[]`` to access).
+    not applicable (use ``.get`` rather than ``[]`` to access). When the
+    underlying value varies per .step, the field is a list aligned with
+    ``values`` rather than a single scalar.
     """
 
     values: list[float | None]
@@ -117,7 +125,10 @@ _BARE_ERROR_PHRASES = [
 # .step parametric run — useful when the .raw lacks an axis (e.g. .step param
 # RVAL + .tran) and ``RawRead.get_steps()`` returns nothing.
 _RE_STEP_LINE = re.compile(r"^\.step\s+(.+)$", re.IGNORECASE)
-_RE_STEP_KV = re.compile(r"([A-Za-z_]\w*)\s*=\s*([^,\s]+)")
+# Value capture stops at whitespace/comma AND at the trailing degree symbol
+# LTspice writes for ``.step temp=-40°``. Without the ``°`` exclusion the
+# captured value is ``-40°``, which downstream value-parsing rejects.
+_RE_STEP_KV = re.compile(r"([A-Za-z_]\w*)\s*=\s*([^,\s°]+)")
 # Stepped ``.op`` runs don't write ``.step name=val`` markers — LTspice
 # logs one of these per iteration instead. Counting them is the only
 # reliable signal that the bias point ran multiple times.
@@ -205,9 +216,7 @@ def parse_step_iterations(
     return iterations
 
 
-def count_op_iterations(
-    log_path: Path | None = None, *, text: str | None = None
-) -> int:
+def count_op_iterations(log_path: Path | None = None, *, text: str | None = None) -> int:
     """Count "Direct Newton iteration succeeded" lines in an LTspice log.
 
     Stepped ``.op`` runs solve the bias point once per step but do NOT
@@ -651,7 +660,7 @@ def parse_measurements(
     # Pass 1: split flat names into parent + metadata-suffix.
     measure_name_set = set(measure_names)
     parents: dict[str, list[float | None]] = {}
-    metadata: dict[str, dict[str, float | None]] = {}
+    metadata: dict[str, dict[str, float | list[float | None] | None]] = {}
     for name in measure_names:
         coerced = _coerce(reader.dataset.get(name.lower(), []))
         suffix_match = next(
@@ -662,10 +671,18 @@ def parse_measurements(
             suffix, meta_key = suffix_match
             parent_name = name[: -len(suffix)]
             if parent_name in measure_name_set:
-                # First non-None scalar wins; window/AT bounds are constants
-                # per-measurement so any later step would echo the same value.
-                first_val = next((v for v in coerced if v is not None), None)
-                metadata.setdefault(parent_name, {})[meta_key] = first_val
+                # Literal FROM/TO bounds are constants → collapse to a scalar.
+                # TRIG/TARG marker times vary per step → keep the per-step list
+                # so the user can correlate each rise time with the marker
+                # times that produced it.
+                non_none = [v for v in coerced if v is not None]
+                if not non_none:
+                    folded: float | list[float | None] | None = None
+                elif all(v == non_none[0] for v in non_none) and len(coerced) == len(non_none):
+                    folded = non_none[0]
+                else:
+                    folded = coerced
+                metadata.setdefault(parent_name, {})[meta_key] = folded
                 continue
         parents[name] = coerced
 

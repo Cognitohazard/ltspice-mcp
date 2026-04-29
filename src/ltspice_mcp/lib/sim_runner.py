@@ -8,7 +8,11 @@ from spicelib.sim.sim_runner import SimRunner
 
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.job_lifecycle import transition
-from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, SimulationJob
+from ltspice_mcp.lib.job_types import (
+    NON_TERMINAL_LIVE_STATUSES,
+    TERMINAL_STATUSES,
+    SimulationJob,
+)
 from ltspice_mcp.lib.log_parser import extract_error_context
 from ltspice_mcp.lib.runner_base import RunnerBase
 from ltspice_mcp.lib.sweep_utils import generate_id
@@ -102,7 +106,7 @@ class SimulationRunner(RunnerBase):
         if not job:
             logger.warning("Completed job %s not found in state", job_id)
             return
-        if job.status in ("cancelled", "completed", "failed"):
+        if job.status in TERMINAL_STATUSES:
             logger.debug("Job %s already in terminal state: %s", job_id, job.status)
             return
 

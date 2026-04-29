@@ -152,6 +152,11 @@ class BatchJob:
     sweep_config: SweepConfig | None = None
     mc_config: MonteCarloConfig | None = None
     task: asyncio.Task | None = field(default=None, repr=False)
+    # Cached convergence-warning scan; populated lazily by
+    # ``services.scan_batch_convergence`` once the job is terminal.
+    # ``None`` means "not scanned yet"; an empty list means "scanned, no
+    # warnings found".
+    convergence_warnings: list[dict] | None = field(default=None, repr=False)
 
 
 @dataclass

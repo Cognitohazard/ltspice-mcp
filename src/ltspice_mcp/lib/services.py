@@ -26,6 +26,7 @@ from ltspice_mcp.lib.log_parser import (
     extract_missing_refs,
     missing_refs_from_text,
     parse_measurements,
+    read_log_text,
 )
 from ltspice_mcp.lib.raw_parser import get_step_count
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
@@ -265,12 +266,59 @@ def get_batch_status(batch_job: BatchJob) -> dict[str, Any]:
         batch_job.started_at, batch_job.completed_at, label=f"batch job {batch_job.job_id}"
     )
 
-    return {
+    out: dict[str, Any] = {
         **base,
         "duration": duration,
         "successful": batch_job.completed_runs - batch_job.failed_runs,
         "error": batch_job.error,
     }
+    convergence = scan_batch_convergence(batch_job)
+    if convergence:
+        out["convergence_warnings"] = convergence
+    return out
+
+
+# Substrings that indicate the per-run OP convergence didn't take the
+# direct path. Presence doesn't prove the result is wrong, but it does
+# mean the bias point may have landed on a degenerate solution that
+# yields garbage AC results — worth surfacing alongside aggregate stats.
+_CONVERGENCE_FLAG_SUBSTRINGS: tuple[str, ...] = (
+    "direct newton iteration failed",
+    "gmin stepping",
+    "source stepping",
+    "no convergence",
+    "singular matrix",
+    "time step too small",
+)
+
+
+def scan_batch_convergence(batch_job: BatchJob) -> list[dict[str, Any]]:
+    """Walk every per-run log and surface convergence-fallback markers.
+
+    Returns an empty list while the job is still running — the per-run
+    logs are still being written and re-reading every poll loop is a
+    waste. Once the job is terminal the result is cached on the
+    ``BatchJob`` so the (status, signal-data) round-trip a typical poll
+    issues doesn't pay for two full walks.
+    """
+    if batch_job.status not in ("completed", "failed", "cancelled"):
+        return []
+    cached = batch_job.convergence_warnings
+    if cached is not None:
+        return cached
+    flagged: list[dict[str, Any]] = []
+    for run_index in sorted(batch_job.run_results.keys()):
+        log_str = batch_job.run_results[run_index].get("log_file")
+        if not log_str:
+            continue
+        text = read_log_text(Path(log_str)).lower()
+        if not text:
+            continue
+        markers = [s for s in _CONVERGENCE_FLAG_SUBSTRINGS if s in text]
+        if markers:
+            flagged.append({"run_index": run_index, "markers": markers})
+    batch_job.convergence_warnings = flagged
+    return flagged
 
 
 def job_duration_seconds(
@@ -333,6 +381,8 @@ def get_batch_signal_data(
 
     matching_run_results = {idx: batch_job.run_results[idx] for idx in matching_indices}
 
+    convergence = scan_batch_convergence(batch_job)
+
     if raw:
         paginated_indices = matching_indices[offset : offset + limit]
         if not paginated_indices:
@@ -342,7 +392,7 @@ def get_batch_signal_data(
             )
         paginated_run_results = {idx: batch_job.run_results[idx] for idx in paginated_indices}
         page_stats = compute_batch_stats(paginated_run_results, signal, at=at)
-        return {
+        out_raw: dict[str, Any] = {
             "mode": "raw",
             "job_id": batch_job.job_id,
             "job_type": batch_job.job_type,
@@ -354,12 +404,15 @@ def get_batch_signal_data(
             "offset": offset,
             "limit": limit,
         }
+        if convergence:
+            out_raw["convergence_warnings"] = convergence
+        return out_raw
 
     batch_stats = compute_batch_stats(matching_run_results, signal, at=at)
     if batch_stats["run_count"] == 0:
         raise ResultError(f"Signal '{signal}' not found in any completed run")
 
-    return {
+    out: dict[str, Any] = {
         "mode": "aggregate",
         "job_id": batch_job.job_id,
         "job_type": batch_job.job_type,
@@ -373,6 +426,9 @@ def get_batch_signal_data(
         "worst_case_run": batch_stats["worst_case_run"],
         "best_case_run": batch_stats["best_case_run"],
     }
+    if convergence:
+        out["convergence_warnings"] = convergence
+    return out
 
 
 def extract_asc_info(editor: AscEditor, file_path: Path) -> dict[str, Any]:
@@ -383,9 +439,18 @@ def extract_asc_info(editor: AscEditor, file_path: Path) -> dict[str, Any]:
         value = editor.get_component_value(ref)
         pos, rot = editor.get_component_position(ref)
         rot_str = f"R{rot.value}" if rot.value < 360 else f"M{rot.value - 360}"
-        comp_data.append(
-            {"reference": ref, "value": value, "x": pos.X, "y": pos.Y, "rotation": rot_str}
-        )
+        # Surface non-default SYMATTRs (e.g., SpiceLine, SpiceModel) so
+        # callers don't need a per-component component_info round-trip.
+        comp = editor.components[ref]
+        attrs = {
+            k: v
+            for k, v in (comp.attributes or {}).items()
+            if k not in ("Value", "InstName") and v
+        }
+        entry = {"reference": ref, "value": value, "x": pos.X, "y": pos.Y, "rotation": rot_str}
+        if attrs:
+            entry["attributes"] = attrs
+        comp_data.append(entry)
 
     label_data = [
         {"text": lbl.text, "x": int(lbl.coord.X), "y": int(lbl.coord.Y)} for lbl in editor.labels
