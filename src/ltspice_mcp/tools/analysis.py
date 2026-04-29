@@ -692,15 +692,33 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
     if suggestions:
         summary["suggestions"] = suggestions
 
-    # Compute AC bandwidth metrics only when signal is explicitly specified
+    # Compute AC bandwidth metrics on AC raws. When ``signal`` is omitted,
+    # auto-pick the first V(...) trace and warn — the previous behaviour
+    # silently dropped ac_bandwidth_metrics from the response, leaving
+    # users to wonder why their AC summary had no metrics (Fr4).
     ac_metrics = None
-    if is_ac_analysis(summary["sim_type"]) and args.signal:
-        with contextlib.suppress(Exception):
-            ac_metrics = compute_ac_bandwidth_metrics(raw, args.signal, 0)
+    ac_signal_used: str | None = None
+    if is_ac_analysis(summary["sim_type"]):
+        ac_signal_used = args.signal
+        if ac_signal_used is None:
+            ac_signal_used = next(
+                (t for t in summary["signals"] if t.upper().startswith("V(")), None
+            )
+            if ac_signal_used is not None:
+                summary.setdefault("warnings", []).append(
+                    f"AC summary built without an explicit ``signal``; "
+                    f"defaulted to {ac_signal_used!r} for ac_bandwidth_metrics. "
+                    "Pass ``signal=`` to choose a different trace."
+                )
+        if ac_signal_used:
+            with contextlib.suppress(Exception):
+                ac_metrics = compute_ac_bandwidth_metrics(raw, ac_signal_used, 0)
 
     json_data = dict(summary)
     if ac_metrics:
         json_data["ac_bandwidth_metrics"] = ac_metrics
+    if ac_signal_used and ac_signal_used != args.signal:
+        json_data["ac_signal_used"] = ac_signal_used
 
     if fmt == "json":
         return format_response("", json_data, fmt)

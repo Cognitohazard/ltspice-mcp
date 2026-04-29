@@ -210,10 +210,18 @@ async def _wait_for_completion(
         # Timeout - this is NOT a simulator error, it's a tool-level kill.
         # Kill the spice process first, then record status=timeout (NOT
         # cancelled) so the user sees the real cause.
-        duration = time.time() - start_time
         await runner.kill(job.job_id)
         if job.status == "running":
-            transition(job, "timeout", state=state, duration_s=duration)
+            transition(job, "timeout", state=state)
+        # Use the post-kill elapsed (same source as check_job) so a
+        # downstream consumer reading both endpoints sees a consistent
+        # number rather than the user-set timeout limit.
+        duration = (
+            services.job_duration_seconds(
+                job.started_at, job.completed_at, label=f"sim job {job.job_id}"
+            )
+            or time.time() - start_time
+        )
 
         # Extract log context if available
         log_excerpt = ""
