@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import string
 
-from hypothesis import HealthCheck, given, settings, strategies as st
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from ltspice_mcp.lib.spice_lex import emit, lex
 from ltspice_mcp.lib.spice_lex_views import (
@@ -85,7 +86,7 @@ def _capacitor_line() -> st.SearchStrategy[str]:
 
 def _mosfet_line() -> st.SearchStrategy[str]:
     return st.builds(
-        lambda r, d, g, s, b, m, w, l: f"{r} {d} {g} {s} {b} {m} W={w} L={l}\n",
+        lambda r, d, g, s, b, m, w, ll: f"{r} {d} {g} {s} {b} {m} W={w} L={ll}\n",
         _mosfet_ref, _node, _node, _node, _node, _ident, _value, _value,
     )
 
@@ -131,7 +132,7 @@ def _any_card_line() -> st.SearchStrategy[str]:
 
 
 def _netlist() -> st.SearchStrategy[str]:
-    """Build a netlist from 1–10 card lines."""
+    """Build a netlist from 1 to 10 card lines."""
     return st.lists(_any_card_line(), min_size=1, max_size=10).map("".join)
 
 
