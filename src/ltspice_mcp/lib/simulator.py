@@ -1,6 +1,7 @@
 """Simulator detection and selection logic."""
 
 import logging
+import os
 
 from spicelib.simulators.ltspice_simulator import LTspice
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
@@ -11,6 +12,17 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.wsl import is_wsl
 
 logger = logging.getLogger(__name__)
+
+
+def _detection_disabled() -> bool:
+    """Return True when env var ``LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION`` is truthy.
+
+    Lets tests force the "degraded mode" code path on systems where a
+    simulator binary happens to be on ``PATH`` (e.g. CI hosts with
+    ngspice installed for unrelated reasons).
+    """
+    val = os.environ.get("LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION", "").strip().lower()
+    return val in ("1", "true", "yes", "on")
 
 
 def _get_ltspice_class() -> type:
@@ -79,6 +91,12 @@ def detect_simulators(config: ServerConfig | None = None) -> dict[str, type]:
         Dictionary mapping simulator name to class for all available simulators.
         Returns empty dict if no simulators are detected (server can still start).
     """
+    if _detection_disabled():
+        logger.info(
+            "Simulator detection disabled via LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION"
+        )
+        return {}
+
     if config is not None:
         _apply_simulator_exe(config)
 
