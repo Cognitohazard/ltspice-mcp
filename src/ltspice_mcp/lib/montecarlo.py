@@ -36,12 +36,23 @@ import hashlib
 import logging
 import math
 import random
-import re
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Literal
 
-from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
+from ltspice_mcp.lib.spice_lex import (
+    TokenKind,
+    emit,
+    lex,
+    tokenize_body,
+)
+from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end as _ops_inject
+from ltspice_mcp.lib.spice_lex_views import (
+    InstanceLine,
+    ModelCard,
+    ParamCard,
+    find_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,67 +65,6 @@ ToleranceKind = Literal["relative", "absolute"]
 # semantics. Sources, controlled sources, and switches are excluded —
 # their values often encode behavior, not magnitudes.
 _PERTURBABLE_PREFIXES: frozenset[str] = frozenset({"R", "C", "L"})
-
-
-# Module-level regex constants — every helper that touches a netlist runs
-# inside the per-MC-run hot path (up to N_runs × N_instances times). We
-# compile once here and reference them; per-call ``re.compile`` is the
-# kind of thing that quietly dominates a 10000-run job.
-_RE_CONTINUATION = re.compile(r"^\s*\+")
-_RE_MODEL_DECL = re.compile(r"^\s*\.model\s+(\S+)\b", re.IGNORECASE)
-_RE_MODEL_RENAME = re.compile(r"^(\s*\.model\s+)\S+", re.IGNORECASE)
-# ``.END``, ``.ENDS``, and ``.ENDC`` all start with ``.end`` — caller
-# checks the next char to disambiguate.
-_RE_END_DIRECTIVE = re.compile(r"^\s*\.end\b", re.IGNORECASE)
-_RE_KEY_VALUE = re.compile(r"(\w+)\s*=\s*([^\s)\,]+)")
-_RE_MOSFET_INSTANCE = re.compile(
-    r"^\s*(M\w+)\s+(.*)$",
-    re.IGNORECASE | re.MULTILINE,
-)
-
-
-# Per-key regex caches — keyed by the param/ref name so we don't rebuild
-# the same pattern every time the runner loop hits the same instance.
-@lru_cache(maxsize=256)
-def _re_param_assign(param: str) -> re.Pattern[str]:
-    """``\\bPARAM\\s*=\\s*<token>``, case-insensitive."""
-    return re.compile(
-        rf"\b({re.escape(param)})\s*=\s*([^\s)\,]+)",
-        re.IGNORECASE,
-    )
-
-
-@lru_cache(maxsize=256)
-def _re_param_directive(name: str) -> re.Pattern[str]:
-    """``^.PARAM <name>=<token>`` (multiline)."""
-    return re.compile(
-        rf"^(\s*\.param\s+){re.escape(name)}(\s*=\s*)([^\s\n]+)",
-        re.IGNORECASE | re.MULTILINE,
-    )
-
-
-@lru_cache(maxsize=256)
-def _re_instance_line(ref: str) -> re.Pattern[str]:
-    """``^<ref> <rest>`` (multiline) — used by rewrite_instance_model."""
-    return re.compile(
-        rf"^(\s*{re.escape(ref)})(\s+)(.*)$",
-        re.IGNORECASE | re.MULTILINE,
-    )
-
-
-@lru_cache(maxsize=256)
-def _re_param_value_in_blob(key: str) -> re.Pattern[str]:
-    """``\\b<KEY>\\s*=\\s*<token>`` for mining W=/L= off an instance line."""
-    return re.compile(rf"\b{re.escape(key)}\s*=\s*([^\s]+)", re.IGNORECASE)
-
-
-@lru_cache(maxsize=64)
-def _re_param_nominal(name: str) -> re.Pattern[str]:
-    """``^.PARAM <name>=<token>`` for nominal extraction (read-only)."""
-    return re.compile(
-        rf"^\s*\.param\s+{re.escape(name)}\s*=\s*([^\s\n]+)",
-        re.IGNORECASE | re.MULTILINE,
-    )
 
 
 @dataclass(frozen=True)
@@ -351,27 +301,6 @@ def sample_model_perturbation(
     return perturbed
 
 
-def _locate_model_card(lines: list[str], model_name: str) -> tuple[int, int] | None:
-    """Find ``[start, end)`` line indices for a ``.MODEL <name>`` card.
-
-    Returns the half-open range covering the directive line plus any
-    continuation lines (``+`` prefix). Returns ``None`` if not found.
-    Comparison is case-insensitive (SPICE convention). Shared by
-    ``perturb_model_in_text`` and ``extract_model_card``.
-    """
-    target_lower = model_name.lower()
-    n = len(lines)
-    for i in range(n):
-        m = _RE_MODEL_DECL.match(lines[i])
-        if not m or m.group(1).lower() != target_lower:
-            continue
-        end = i + 1
-        while end < n and _RE_CONTINUATION.match(lines[end]):
-            end += 1
-        return i, end
-    return None
-
-
 def perturb_model_in_text(
     netlist_text: str,
     model_name: str,
@@ -380,56 +309,22 @@ def perturb_model_in_text(
     """Rewrite the ``.MODEL <model_name> ...`` card to apply parameter overrides.
 
     Existing ``param=value`` tokens are replaced in place; new params are
-    appended inside the trailing ``)``. Continuation lines (``+`` prefix)
-    are merged for editing then split back. Case-insensitive on the
-    directive and parameter names.
+    appended. Continuation lines and quoted/braced values are handled
+    correctly via the shared ``spice_lex`` parser.
 
     Raises ``ValueError`` if ``model_name`` isn't found.
     """
     if not perturbations:
         return netlist_text
-
-    lines = netlist_text.splitlines(keepends=True)
-    located = _locate_model_card(lines, model_name)
-    if located is None:
+    result = lex(netlist_text)
+    view = find_model(result.cards, model_name)
+    if view is None:
         raise ValueError(f".MODEL {model_name!r} not found in netlist")
-
-    start, end = located
-    merged = "".join(lines[start:end])
-    rewritten = _rewrite_model_card(merged, perturbations)
-    new_lines = rewritten.splitlines(keepends=True)
-    return "".join(lines[:start] + new_lines + lines[end:])
+    for param, new_value in perturbations.items():
+        view.set_param(param, new_value)
+    return emit(result.cards)
 
 
-def _rewrite_model_card(card_text: str, perturbations: dict[str, float]) -> str:
-    """Rewrite one merged ``.MODEL`` card (continuation lines joined) in place.
-
-    Existing ``KEY=VALUE`` tokens are replaced via cached per-key regex.
-    Tokens absent from the card get appended inside the trailing ``)``.
-    """
-    text = card_text
-    trailing_nl = ""
-    if text.endswith("\n"):
-        trailing_nl = "\n"
-        text = text[:-1]
-
-    remaining = dict(perturbations)
-    for param, new_value in list(perturbations.items()):
-        replacement = f"{param}={format_value(new_value)}"
-        text, count = _re_param_assign(param).subn(replacement, text, count=1)
-        if count > 0:
-            remaining.pop(param, None)
-
-    if remaining:
-        appended = " ".join(f"{p}={format_value(v)}" for p, v in remaining.items())
-        if text.rstrip().endswith(")"):
-            stripped = text.rstrip()
-            tail = text[len(stripped) :]
-            text = stripped[:-1] + " " + appended + ")" + tail
-        else:
-            text = text + " " + appended
-
-    return text + trailing_nl
 
 
 # ---------------------------------------------------------------------------
@@ -539,23 +434,31 @@ def render_variant_model_card(
 
     ``base_card`` is the merged text of an existing ``.MODEL`` card (after
     process perturbation, if any). Replaces the model name with
-    ``variant_name`` and applies the parameter overrides via the same
-    rewriter the process step uses.
+    ``variant_name`` and applies the parameter overrides.
     """
-    renamed = _RE_MODEL_RENAME.sub(rf"\g<1>{variant_name}", base_card, count=1)
-    if overrides:
-        renamed = _rewrite_model_card(renamed, overrides)
-    return renamed
+    cards = lex(base_card).cards
+    if not cards or cards[0].kind != "model":
+        return base_card  # malformed — pass through
+    view = ModelCard.from_card(cards[0])
+    view.set_name(variant_name)
+    for param, new_value in overrides.items():
+        view.set_param(param, new_value)
+    return emit(cards)
 
 
 def extract_model_card(netlist_text: str, model_name: str) -> str | None:
-    """Return the merged text of a ``.MODEL`` card by name, or None."""
-    lines = netlist_text.splitlines(keepends=True)
-    located = _locate_model_card(lines, model_name)
-    if located is None:
-        return None
-    start, end = located
-    return "".join(lines[start:end])
+    """Return the merged text of a ``.MODEL`` card by name, or None.
+
+    The returned text is the original raw lines (continuation lines
+    intact, leading/trailing whitespace and the trailing newline
+    preserved).
+    """
+    target = model_name.lower()
+    result = lex(netlist_text)
+    for c in result.cards:
+        if c.kind == "model" and c.name and c.name.lower() == target:
+            return "".join(c.raw_lines)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -584,18 +487,17 @@ def perturb_param_in_text(
 ) -> str:
     """Rewrite ``.PARAM <name>=<value>`` in place.
 
-    Handles both ``.PARAM name=val`` and ``.PARAM name = val`` forms and is
-    case-insensitive on the directive and parameter name. Raises
-    ``ValueError`` if no matching ``.PARAM`` is present.
+    Case-insensitive match on the param name. Raises ``ValueError`` if
+    no matching ``.PARAM`` is present.
     """
-    new_text, count = _re_param_directive(name).subn(
-        lambda m: f"{m.group(1)}{name}{m.group(2)}{format_value(new_value)}",
-        netlist_text,
-        count=1,
-    )
-    if count == 0:
-        raise ValueError(f".PARAM {name!r} not found in netlist")
-    return new_text
+    target = name.lower()
+    result = lex(netlist_text)
+    for c in result.cards:
+        if c.kind == "param" and c.name and c.name.lower() == target:
+            view = ParamCard.from_card(c)
+            view.set_value(new_value)
+            return emit(result.cards)
+    raise ValueError(f".PARAM {name!r} not found in netlist")
 
 
 # ---------------------------------------------------------------------------
@@ -606,42 +508,42 @@ def perturb_param_in_text(
 def parse_model_params(card_text: str) -> dict[str, float]:
     """Parse all ``KEY=VALUE`` tokens from a ``.MODEL`` card into a float dict.
 
-    Continuation lines must already be merged. Skips tokens whose value
-    can't be parsed via ``parse_spice_value`` (parametric expressions like
-    ``{vto_n}`` or behavioral). Keys are upper-cased per SPICE convention.
+    Walks tokens via ``tokenize_body`` so quoted values and brace
+    expressions (``KP={2*kp_n}``) are handled correctly. Skips tokens
+    whose value can't be parsed via ``parse_spice_value`` (parametric
+    expressions, behavioural). Keys are upper-cased per SPICE convention.
     """
     out: dict[str, float] = {}
-    for m in _RE_KEY_VALUE.finditer(card_text):
-        parsed = parse_value(m.group(2))
-        if parsed is None:
-            continue
-        out[m.group(1).upper()] = parsed
+
+    def _harvest(tokens: list) -> None:
+        for tok in tokens:
+            if tok.kind == TokenKind.KEY_VALUE:
+                parsed = parse_value(tok.value)
+                if parsed is not None:
+                    out[tok.key.upper()] = parsed
+            elif tok.kind == TokenKind.PARENED:
+                # Recurse into the .MODEL's parameter group.
+                _harvest(tokenize_body(tok.text[1:-1]))
+            elif tok.kind == TokenKind.COMMENT_TRAIL:
+                break
+
+    _harvest(tokenize_body(card_text))
     return out
 
 
 def inject_card_before_end(netlist_text: str, card: str) -> str:
     """Insert a ``.MODEL`` card (or any directive block) just before ``.END``.
 
-    SPICE simulators reject definitions after ``.END`` — for variant model
-    cards we want them visible to the rest of the deck. If no ``.END`` is
-    present, append at the end (with leading newline).
+    SPICE simulators reject definitions after ``.END`` — for variant
+    model cards we want them visible to the rest of the deck. If no
+    ``.END`` is present, append at the end. Routes through
+    ``spice_lex_ops.inject_card_before_end``.
     """
-    lines = netlist_text.splitlines(keepends=True)
-    insert_at = None
-    for idx, line in enumerate(lines):
-        if _RE_END_DIRECTIVE.match(line):
-            # Stop at the first top-level ``.END`` (we'd be wrong on
-            # ``.ENDS``-only netlists, but those don't simulate anyway).
-            stripped = line.strip().lower()
-            if stripped == ".end" or stripped.startswith(".end "):
-                insert_at = idx
-                break
     if not card.endswith("\n"):
         card = card + "\n"
-    if insert_at is None:
-        sep = "" if netlist_text.endswith("\n") or not netlist_text else "\n"
-        return netlist_text + sep + card
-    return "".join([*lines[:insert_at], card, *lines[insert_at:]])
+    cards = lex(netlist_text).cards
+    _ops_inject(cards, card)
+    return emit(cards)
 
 
 def rewrite_instance_model(
@@ -651,91 +553,65 @@ def rewrite_instance_model(
 ) -> str:
     """Replace the model token on a transistor (M/Q/J) instance line.
 
-    The instance line is matched by reference (case-insensitive). After
-    the nodes (3 for M/Q/J, 4 for M with bulk), the next non-numeric
-    token is the model name — we replace just that token. Any trailing
-    parameters (``W=10u L=1u m=2``) are preserved verbatim. Raises
+    The instance line is matched by reference (case-insensitive).
+    Routes through ``InstanceLine.set_model``, which uses the
+    classified-token rule to identify the model position correctly
+    even with quoted model names and trailing params. Raises
     ``ValueError`` if the instance isn't found.
     """
-    m = _re_instance_line(instance_ref).search(netlist_text)
-    if not m:
-        raise ValueError(f"Instance {instance_ref!r} not found in netlist")
-
-    head = m.group(1) + m.group(2)
-    tail = m.group(3)
-
-    tokens = tail.split()
-    # Find the first token without ``=`` (the model name); it's preceded
-    # by node names (which also lack ``=``) — but those are pure SPICE
-    # node identifiers without numeric values. The simplest robust heuristic:
-    # the model name is the LAST token before any ``KEY=VALUE`` token, OR
-    # the last token if no params follow.
-    last_no_eq = None
-    for i, t in enumerate(tokens):
-        if "=" in t:
-            break
-        last_no_eq = i
-    if last_no_eq is None:
-        raise ValueError(f"Instance {instance_ref!r} has no model token to rewrite: {tail!r}")
-
-    tokens[last_no_eq] = new_model_name
-    new_tail = " ".join(tokens)
-    # Preserve trailing newline if the original line had one.
-    line_end = "\n" if tail.endswith("\n") or "\n" in tail else ""
-    new_line = head + new_tail + line_end
-
-    # Rebuild full text: replace just the matched line.
-    start = m.start()
-    end = m.end()
-    return netlist_text[:start] + new_line + netlist_text[end:]
+    target = instance_ref.lower()
+    result = lex(netlist_text)
+    for c in result.cards:
+        if c.kind == "instance" and c.name and c.name.lower() == target:
+            view = InstanceLine.from_card(c)
+            if view.model is None:
+                raise ValueError(
+                    f"Instance {instance_ref!r} has no model token to rewrite: "
+                    f"{c.body!r}"
+                )
+            view.set_model(new_model_name)
+            return emit(result.cards)
+    raise ValueError(f"Instance {instance_ref!r} not found in netlist")
 
 
 def extract_mosfet_instances(netlist_text: str) -> list[InstanceGeometry]:
     """Find every ``Mxxx`` instance and parse its model name + W/L geometry.
 
-    W/L are read from the ``W=`` / ``L=`` parameter tokens on the instance
-    line, parsed via ``parse_spice_value`` so engineering suffixes
-    (``10u``, ``180n``) work. Instances missing W or L are skipped with a
-    debug log — Pelgrom σ is undefined without geometry.
-
-    Subcircuit-instantiated transistors (``X1.M1``) are not visible at the
-    top level and so are not returned; only direct ``Mxxx`` lines.
+    Top-level only — subcircuit-instantiated transistors (``X1.M1``)
+    aren't visible at the top level and so aren't returned. W/L are
+    pulled from the ``InstanceLine.params`` dict, parsed via
+    ``parse_spice_value`` so engineering suffixes (``10u``, ``180n``)
+    work. Instances missing W, L, or a model are skipped (Pelgrom σ
+    is undefined without those).
     """
     instances: list[InstanceGeometry] = []
-    for m in _RE_MOSFET_INSTANCE.finditer(netlist_text):
-        ref = m.group(1)
-        rest = m.group(2)
-        tokens = rest.split()
-        # Find the model token — last non-= token before any "=" token.
-        last_no_eq_idx = None
-        for i, t in enumerate(tokens):
-            if "=" in t:
-                break
-            last_no_eq_idx = i
-        if last_no_eq_idx is None:
+    result = lex(netlist_text)
+    for c in result.cards:
+        if c.kind != "instance" or not c.name or c.name[:1].upper() != "M":
             continue
-        model_name = tokens[last_no_eq_idx]
-        # Mine W=, L= from the params tail
-        params_text = " ".join(tokens[last_no_eq_idx + 1 :])
-        w = _find_param_value(params_text, "W")
-        l_val = _find_param_value(params_text, "L")
+        if c.scope != ():  # top-level only
+            continue
+        view = InstanceLine.from_card(c)
+        if view.model is None:
+            continue
+        w = parse_value(view.params.get("W", ""))
+        l_val = parse_value(view.params.get("L", ""))
         if w is None or l_val is None:
             logger.debug(
                 "MC: instance %s has no W/L parameter, skipping mismatch (params=%r)",
-                ref,
-                params_text,
+                view.ref,
+                view.params,
             )
             continue
         instances.append(
-            InstanceGeometry(ref=ref, model_name=model_name, width_m=w, length_m=l_val)
+            InstanceGeometry(
+                ref=view.ref,
+                model_name=view.model,
+                width_m=w,
+                length_m=l_val,
+            )
         )
     return instances
-
-
-def _find_param_value(params_text: str, key: str) -> float | None:
-    """Find ``KEY=VALUE`` in a parameter blob and parse VALUE as float."""
-    m = _re_param_value_in_blob(key).search(params_text)
-    return parse_value(m.group(1)) if m else None
 
 
 def find_mismatch_rule(
@@ -756,8 +632,13 @@ def parse_param_nominal(netlist_text: str, name: str) -> float | None:
     number (e.g. expressions like ``{2*Rd}``). Phase 3 silently skips such
     params — they're already user-side expressions.
     """
-    m = _re_param_nominal(name).search(netlist_text)
-    return parse_value(m.group(1)) if m else None
+    target = name.lower()
+    result = lex(netlist_text)
+    for c in result.cards:
+        if c.kind == "param" and c.name and c.name.lower() == target:
+            view = ParamCard.from_card(c)
+            return parse_value(view.value)
+    return None
 
 
 def expand_tolerances(
@@ -821,7 +702,7 @@ def parse_value(value: str | float) -> float | None:
 def format_value(value: float) -> str:
     """Format a perturbed float back to a SPICE-compatible literal.
 
-    Uses 10 significant figures so a parse → perturb → format → parse
-    round-trip doesn't drift past the perturbation noise.
+    Thin wrapper around ``format_spice_value`` kept as a public alias —
+    several callers import ``format_value`` from this module by name.
     """
-    return f"{value:.10g}"
+    return format_spice_value(value)

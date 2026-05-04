@@ -9,22 +9,21 @@ directive is written to disk.
 Layer A is intentionally a narrow blocklist of patterns we've actually
 hit, not an exhaustive grammar. It grows as we find more.
 
-Each rule has:
-- ``pattern``: case-insensitive regex matched against the directive text
-- ``simulators``: which simulators the rule applies to (empty = all)
-- ``message``: error text shown to the user
-- ``suggestion``: the alternative form to use
-
-Rules return a ``ValidationError`` with the message + suggestion when
-matched. Tool layer raises ``NetlistError`` from it so the response is
-structured and actionable.
+Implementation note: rules walk classified tokens (``MeasCard.function_calls``)
+rather than substring-matching regex. This keeps cases like
+``.MEAS WHEN x=vdb_safe`` (a variable name that happens to start with
+``vdb``) from being false-flagged, and opens the door to checks the
+regex couldn't do — signal-reference resolution, analysis-kind
+mismatches, etc.
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Literal
+
+from ltspice_mcp.lib.spice_lex import SpiceLexError, lex
+from ltspice_mcp.lib.spice_lex_views import MeasCard
 
 # Analysis directives that LTspice accepts. Used by validate_netlist to
 # match ``.meas <kind>`` against the active analysis and detect duplicates.
@@ -48,22 +47,18 @@ class ValidationError:
 @dataclass(frozen=True)
 class _Rule:
     name: str
-    pattern: re.Pattern[str]
+    blocked_function: str  # case-insensitive match against MeasCard function calls
     simulators: frozenset[str]  # empty => all simulators
     message: str
     suggestion: str
 
 
-# Common .MEAS pitfalls. Function names matched case-insensitively.
-_MEAS_PREFIX = r"^\s*\.meas(?:ure)?\b.*?"
-
 _RULES: tuple[_Rule, ...] = (
     _Rule(
         name="vdb_in_meas",
-        # Matches .MEAS ... vdb(...) anywhere in the directive. LTspice's
-        # measurement engine accepts mag/re/im/ph but NOT vdb — that's a
-        # waveform-viewer-only function.
-        pattern=re.compile(_MEAS_PREFIX + r"\bvdb\s*\(", re.IGNORECASE),
+        # LTspice's measurement engine accepts mag/re/im/ph but NOT vdb —
+        # that's a waveform-viewer-only function.
+        blocked_function="vdb",
         simulators=frozenset({"LTspice"}),
         message=(
             "vdb() is not accepted in .MEAS directives — it's a "
@@ -78,18 +73,19 @@ _RULES: tuple[_Rule, ...] = (
     ),
     _Rule(
         name="phase_in_meas",
-        # `phase()` has the same waveform-viewer-only restriction.
-        pattern=re.compile(_MEAS_PREFIX + r"\bphase\s*\(", re.IGNORECASE),
+        blocked_function="phase",
         simulators=frozenset({"LTspice"}),
         message=(
             "phase() is not accepted in .MEAS directives — it's a "
             "waveform-viewer-only function. Use ph() instead."
         ),
-        suggestion=("Replace phase(...) with ph(...) — ph() is the .MEAS-compatible spelling."),
+        suggestion=(
+            "Replace phase(...) with ph(...) — ph() is the .MEAS-compatible spelling."
+        ),
     ),
     _Rule(
         name="group_delay_in_meas",
-        pattern=re.compile(_MEAS_PREFIX + r"\bgroup_delay\s*\(", re.IGNORECASE),
+        blocked_function="group_delay",
         simulators=frozenset({"LTspice"}),
         message=(
             "group_delay() is not accepted in .MEAS directives — it's a "
@@ -108,22 +104,39 @@ def validate_directive(directive: str, simulator: str = "LTspice") -> Validation
     """Check a directive against the blocklist for the given simulator.
 
     Returns the first matched rule's error, or None if no rule fires.
-    Empty / whitespace-only input is a no-op.
+    Empty / whitespace-only input is a no-op. Non-``.MEAS`` directives
+    pass through unchecked (no current rule applies to them).
     """
     if not directive:
         return None
     stripped = directive.lstrip()
     if not stripped:
         return None
-    # All current rules target .MEAS — short-circuit other directives so
-    # the common .tran/.ac/.param case skips the regex loop entirely.
     if not stripped.lower().startswith(".meas"):
         return None
 
+    # Parse via spice_lex to get classified tokens.
+    text = directive if directive.endswith("\n") else directive + "\n"
+    try:
+        cards = lex(text).cards
+    except SpiceLexError:
+        # Tokenizer faults aren't a validator concern; let downstream
+        # catch them. Substring-fallback is intentionally not done — a
+        # broken directive shouldn't be silently approved.
+        return None
+    meas_cards = [c for c in cards if c.kind == "meas"]
+    if not meas_cards:
+        return None
+    try:
+        meas = MeasCard.from_card(meas_cards[0])
+    except SpiceLexError:
+        return None
+
+    called = {fc.name.lower() for fc in meas.function_calls}
     for rule in _RULES:
         if rule.simulators and simulator not in rule.simulators:
             continue
-        if rule.pattern.search(directive):
+        if rule.blocked_function.lower() in called:
             return ValidationError(
                 rule_name=rule.name,
                 message=rule.message,
