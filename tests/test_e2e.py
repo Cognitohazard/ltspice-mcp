@@ -59,6 +59,10 @@ def _server_params(work_dir: Path) -> StdioServerParameters:
         # empty results list pick up unrelated jobs.
         "LTSPICE_MCP_HOME": str(work_dir),
         "XDG_STATE_HOME": str(work_dir),
+        # Force "no simulator" code paths regardless of host: this test
+        # suite covers the degraded-mode behaviour, and a CI host with
+        # ngspice on ``PATH`` would otherwise satisfy auto-detection.
+        "LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION": "1",
     }
     return StdioServerParameters(
         command=sys.executable,
