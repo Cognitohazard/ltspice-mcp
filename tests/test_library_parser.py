@@ -126,6 +126,17 @@ class TestParseLibraryFile:
         index = parse_library_file(lib)
         assert len(index.models) == 0  # skipped due to missing .ENDS
 
+    def test_parse_subckt_implicit_params_with_spaces(self, tmp_path: Path):
+        # Whitespace around `=` in implicit PARAMS form: ``gain = 10``
+        # must be classified as a param default, not a third port.
+        lib = tmp_path / "spaced.lib"
+        lib.write_text(".SUBCKT amp in out gain = 10\nR1 in out 1k\n.ENDS\n")
+        index = parse_library_file(lib)
+        assert len(index.models) == 1
+        m = index.models[0]
+        assert m.parameters == {"node1": "in", "node2": "out"}
+        assert "node3" not in m.parameters  # `gain` is not a port
+
     def test_parse_mixed_file(self, tmp_path: Path):
         lib = tmp_path / "mixed.lib"
         lib.write_text(

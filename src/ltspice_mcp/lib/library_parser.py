@@ -1,78 +1,13 @@
 """Component library parsing utilities."""
 
-import codecs
 import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ltspice_mcp.lib.encoding import read_spice_text as _read_library_text
+
 logger = logging.getLogger(__name__)
-
-
-# BOM probes for the encodings we care about. Order matters: UTF-32 BOMs start
-# with the same two bytes as UTF-16, so check the longer ones first.
-_BOM_ENCODINGS: tuple[tuple[bytes, str], ...] = (
-    (codecs.BOM_UTF32_LE, "utf-32-le"),
-    (codecs.BOM_UTF32_BE, "utf-32-be"),
-    (codecs.BOM_UTF16_LE, "utf-16-le"),
-    (codecs.BOM_UTF16_BE, "utf-16-be"),
-    (codecs.BOM_UTF8, "utf-8-sig"),
-)
-
-
-def _detect_utf16_endianness(probe: bytes) -> str | None:
-    """Heuristic: ``"utf-16-le"`` / ``"utf-16-be"`` if every other byte is null.
-
-    LTspice's bundled ``lib/cmp/standard.{mos,bjt,...}`` files are UTF-16 LE
-    *without* a BOM in some installs. ASCII text in UTF-16 LE produces a
-    null byte at every odd position; UTF-16 BE puts the null at every even
-    position. Counting nulls in a small head-of-file probe is a cheap and
-    reliable disambiguator that avoids false-positives on real binary blobs
-    (those have mixed null distributions).
-    """
-    if len(probe) < 4 or len(probe) % 2:
-        probe = probe[: (len(probe) // 2) * 2]
-        if not probe:
-            return None
-    odd_nulls = sum(1 for i in range(1, len(probe), 2) if probe[i] == 0)
-    even_nulls = sum(1 for i in range(0, len(probe), 2) if probe[i] == 0)
-    half = len(probe) // 2
-    # A high concentration of nulls on one side and few on the other is
-    # the signature of UTF-16 ASCII text.
-    if odd_nulls > 0.8 * half and even_nulls < 0.2 * half:
-        return "utf-16-le"
-    if even_nulls > 0.8 * half and odd_nulls < 0.2 * half:
-        return "utf-16-be"
-    return None
-
-
-def _read_library_text(path: Path) -> str:
-    """Read a SPICE library file with encoding auto-detection.
-
-    LTspice's bundled ``lib/cmp/standard.{mos,bjt,...}`` files are UTF-16 LE
-    — with a BOM in some installs and **without** in others. Earlier versions
-    of this parser assumed UTF-8 (the platform default for ``Path.read_text``)
-    and silently produced empty model lists for those files — so
-    ``find_model(include_builtin=True)`` couldn't find any of LTspice's
-    stock parts.
-
-    Resolution order:
-
-    1. BOM sniff (UTF-32 LE/BE, UTF-16 LE/BE, UTF-8 with BOM).
-    2. Heuristic null-byte scan for UTF-16 LE/BE without BOM (the
-       LTspice 26+ ``standard.bjt``/``standard.mos`` shape).
-    3. UTF-8 with ``errors="replace"`` as the catch-all for ASCII /
-       most third-party ``.lib`` files.
-    """
-    raw = path.read_bytes()
-    for bom, encoding in _BOM_ENCODINGS:
-        if raw.startswith(bom):
-            return raw[len(bom) :].decode(encoding, errors="replace")
-    # Probe the first 256 bytes for a UTF-16 LE/BE pattern without a BOM.
-    encoding = _detect_utf16_endianness(raw[:256])
-    if encoding is not None:
-        return raw.decode(encoding, errors="replace")
-    return raw.decode("utf-8", errors="replace")
 
 
 @dataclass(frozen=True)
@@ -225,6 +160,12 @@ def _extract_parameters(param_text: str, limit: int = 5) -> dict[str, str]:
 def parse_library_file(path: Path) -> LibraryIndex:
     """Parse SPICE library file and extract .MODEL and .SUBCKT definitions.
 
+    Routes through ``spice_lex`` so continuation lines, balanced
+    expressions, and quoted tokens are handled correctly. Compared to
+    the legacy regex implementation, this version recognises ``.MODEL``
+    cards inside ``.SUBCKT`` blocks (still indexed) and avoids the
+    "param body lost when the closing paren spans a line" failure mode.
+
     Args:
         path: Path to library file (.lib, .mod, etc.)
 
@@ -234,130 +175,84 @@ def parse_library_file(path: Path) -> LibraryIndex:
     Raises:
         OSError: If file cannot be read
     """
+    from itertools import chain, islice
+
+    from ltspice_mcp.lib.spice_lex import find_matching_ends, lex
+    from ltspice_mcp.lib.spice_lex_views import ModelCard, SubcktCard
+
     try:
         content = _read_library_text(path)
     except OSError as e:
         logger.error(f"Failed to read library file {path}: {e}")
         raise
 
-    lines = content.split("\n")
-    merged = _merge_continuation_lines(lines)
+    cards = lex(content).cards
+    models: list[ModelEntry] = []
 
-    models = []
-
-    # Regex patterns.
-    # Model type is `[^\s(]+` (not `\S+`) so it does not greedily swallow the
-    # opening paren when there is no space before it: `.MODEL Q NPN(BF=200)`
-    # parses correctly as type=NPN, params=BF=200.
-    model_pattern = re.compile(
-        r"^\s*\.MODEL\s+(\S+)\s+([^\s(]+)\s*(?:\((.*?)\))?",
-        re.IGNORECASE,
-    )
-    subckt_pattern = re.compile(r"^\s*\.SUBCKT\s+(\S+)", re.IGNORECASE)
-    ends_pattern = re.compile(r"^\s*\.ENDS", re.IGNORECASE)
-
-    i = 0
-    while i < len(merged):
-        line = merged[i]
-
-        model_match = model_pattern.match(line)
-        if model_match:
-            name = model_match.group(1)
-            param_text = model_match.group(3) or ""
-
-            # .MODEL definitions are typically single-line (after continuation merge)
-            raw_text = line
-            line_count = 1
-
-            parameters = _extract_parameters(param_text)
-
+    for idx, c in enumerate(cards):
+        if c.kind == "model":
             try:
-                entry = ModelEntry(
-                    name=name,
-                    name_lower=name.lower(),
-                    model_type=".MODEL",
-                    source_path=path,
-                    line_start=i + 1,  # 1-indexed
-                    line_count=line_count,
-                    raw_text=raw_text,
-                    parameters=parameters,
-                )
-                models.append(entry)
-                logger.debug(f"Parsed .MODEL {name} from {path.name}")
+                view = ModelCard.from_card(c)
             except Exception as e:
-                logger.warning(f"Malformed .MODEL at line {i + 1} in {path}: {e}")
-
-            i += 1
-            continue
-
-        subckt_match = subckt_pattern.match(line)
-        if subckt_match:
-            name = subckt_match.group(1)
-            start_line = i
-            raw_lines = [line]
-
-            # Find matching .ENDS, tracking nesting depth so an inner .SUBCKT
-            # / .ENDS pair doesn't accidentally terminate the outer one.
-            i += 1
-            depth = 1
-            found_ends = False
-            while i < len(merged):
-                current_line = merged[i]
-                raw_lines.append(current_line)
-
-                if subckt_pattern.match(current_line):
-                    depth += 1
-                elif ends_pattern.match(current_line):
-                    depth -= 1
-                    if depth == 0:
-                        found_ends = True
-                        i += 1
-                        break
-
-                i += 1
-
-            if not found_ends:
                 logger.warning(
-                    f"Malformed .SUBCKT {name} at line {start_line + 1} in {path}: missing .ENDS"
+                    f"Malformed .MODEL at line {c.line_start} in {path}: {e}"
                 )
                 continue
-
-            raw_text = "\n".join(raw_lines)
-            line_count = len(raw_lines)
-
-            # Extract node list from first line for parameters summary.
-            # .SUBCKT name [node1 node2 ...] [PARAMS: key=value ...]
-            # Stop at the first token that is "PARAMS:" or contains "=", since
-            # those mark the start of subcircuit parameters, not nodes.
-            parts = line.split()
-            node_tokens: list[str] = []
-            for tok in parts[2:]:
-                if tok.upper() == "PARAMS:" or "=" in tok:
-                    break
-                node_tokens.append(tok)
-                if len(node_tokens) >= 5:
-                    break
-            parameters = {f"node{i + 1}": node for i, node in enumerate(node_tokens)}
-
-            try:
-                entry = ModelEntry(
-                    name=name,
-                    name_lower=name.lower(),
-                    model_type=".SUBCKT",
-                    source_path=path,
-                    line_start=start_line + 1,  # 1-indexed
-                    line_count=line_count,
-                    raw_text=raw_text,
-                    parameters=parameters,
+            params = dict(islice(view.params.items(), 5))
+            entry = ModelEntry(
+                name=view.name,
+                name_lower=view.name.lower(),
+                model_type=".MODEL",
+                source_path=path,
+                line_start=c.line_start,
+                line_count=len(c.raw_lines),
+                raw_text="".join(c.raw_lines).rstrip("\n"),
+                parameters=params,
+            )
+            models.append(entry)
+            logger.debug(f"Parsed .MODEL {view.name} from {path.name}")
+        elif c.kind == "subckt" and c.name:
+            closer_idx = find_matching_ends(cards, idx)
+            if closer_idx is None:
+                logger.warning(
+                    f"Malformed .SUBCKT {c.name} at line {c.line_start} in {path}: "
+                    "missing .ENDS"
                 )
-                models.append(entry)
-                logger.debug(f"Parsed .SUBCKT {name} from {path.name}")
+                continue
+            raw_text = "".join(
+                chain.from_iterable(
+                    sc.raw_lines for sc in cards[idx : closer_idx + 1]
+                )
+            ).rstrip("\n")
+            # Parse ports / param defaults via the typed view so
+            # whitespace-around-equals (``gain = 10``) is correctly
+            # classified as a param default, not a port.
+            try:
+                subckt_view = SubcktCard.from_card(c)
+                ports = subckt_view.ports[:5]
             except Exception as e:
-                logger.warning(f"Malformed .SUBCKT at line {start_line + 1} in {path}: {e}")
-
-            continue
-
-        i += 1
+                logger.warning(
+                    f"Malformed .SUBCKT {c.name} at line {c.line_start} in {path}: {e}"
+                )
+                continue
+            parameters = {f"node{i + 1}": node for i, node in enumerate(ports)}
+            line_count = (
+                cards[closer_idx].line_start
+                - c.line_start
+                + len(cards[closer_idx].raw_lines)
+            )
+            entry = ModelEntry(
+                name=c.name,
+                name_lower=c.name.lower(),
+                model_type=".SUBCKT",
+                source_path=path,
+                line_start=c.line_start,
+                line_count=line_count,
+                raw_text=raw_text,
+                parameters=parameters,
+            )
+            models.append(entry)
+            logger.debug(f"Parsed .SUBCKT {c.name} from {path.name}")
 
     logger.info(f"Parsed {len(models)} models/subcircuits from {path}")
     return LibraryIndex(path=path, models=models)

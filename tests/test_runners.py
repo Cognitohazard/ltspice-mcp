@@ -956,3 +956,165 @@ class TestTruncatedGaussian:
         # Truncation at ±3σ shrinks σ by ~2-3% (analytical) — well within
         # the ±10% bound below.
         assert 3.0 < sigma_est < 3.5
+
+
+class TestMCRunnerCardFlowIntegration:
+    """Integration coverage for the per-run card-mutation hot path.
+
+    ``execute_montecarlo`` is an async closure inside ``MonteCarloRunner``
+    that's hard to unit-test directly. These tests exercise the same
+    composition (lex → build lookup dicts → Phase 1/2/3 mutations →
+    emit) the runner uses, so a regression in any of:
+
+    - lookup-dict construction
+    - per-key shifts after sequential setters
+    - variant-card injection updating the model dict
+    - emit pushing back to the right shape
+
+    is caught here rather than only at simulation time.
+    """
+
+    def _baseline_netlist(self) -> str:
+        return (
+            "* MC integration test\n"
+            ".PARAM Vdd=5\n"
+            ".MODEL NMOS1 NMOS(VTO=0.7 KP=100u)\n"
+            "M1 out gate 0 0 NMOS1 W=10u L=1u\n"
+            "M2 out gate 0 0 NMOS1 W=20u L=1u\n"
+            "R1 vdd out 1k\n"
+            ".TRAN 1m\n"
+            ".END\n"
+        )
+
+    def test_phase1_model_perturbation_mutates_card_in_place(self):
+        from ltspice_mcp.lib.spice_lex import SpiceCard, lex
+        from ltspice_mcp.lib.spice_lex_views import ModelCard
+
+        cards = lex(self._baseline_netlist()).cards
+        model_by_name: dict[str, SpiceCard] = {
+            c.name.lower(): c for c in cards if c.kind == "model" and c.name
+        }
+        # Phase 1: perturb VTO and KP on NMOS1.
+        view = ModelCard.from_card(model_by_name["nmos1"])
+        view.set_param("VTO", 0.715)
+        view.set_param("KP", 95e-6)
+        # The cached model card now reflects both edits — the second
+        # set_param relied on _shift_cached_param_tokens to keep KP's
+        # body_offset aligned after the VTO length change.
+        from ltspice_mcp.lib.spice_lex import emit
+
+        text = emit(cards)
+        assert "VTO=0.715" in text
+        assert "KP=9.5e-05" in text
+        # The corruption signature (KP glued to VTO's value) must be absent.
+        assert "VTO=0.715KP" not in text
+
+    def test_phase2_variant_injection_updates_lookup(self):
+        from ltspice_mcp.lib.montecarlo import (
+            render_variant_model_card,
+            variant_model_name,
+        )
+        from ltspice_mcp.lib.spice_lex import SpiceCard, emit, lex
+        from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end
+        from ltspice_mcp.lib.spice_lex_views import InstanceLine
+
+        cards = lex(self._baseline_netlist()).cards
+        model_by_name: dict[str, SpiceCard] = {
+            c.name.lower(): c for c in cards if c.kind == "model" and c.name
+        }
+        instance_by_ref: dict[str, SpiceCard] = {
+            c.name.lower(): c for c in cards if c.kind == "instance" and c.name
+        }
+        base = model_by_name["nmos1"]
+        variant = variant_model_name("NMOS1", "M1")
+        variant_text = render_variant_model_card(
+            "".join(base.raw_lines), variant, {"VTO": 0.715}
+        )
+        new_card = inject_card_before_end(cards, variant_text)
+        # The runner registers the new model in the lookup dict so a
+        # subsequent Phase-2 instance referencing it could resolve.
+        if new_card.name:
+            model_by_name[new_card.name.lower()] = new_card
+        assert variant.lower() in model_by_name
+        # Rewrite M1's model token through the cached instance card.
+        InstanceLine.from_card(instance_by_ref["m1"]).set_model(variant)
+
+        out = emit(cards)
+        assert variant in out
+        # Variant card must land before the .END.
+        assert out.index(variant) < out.lower().rindex(".end")
+        # M1 line uses the variant; M2 still references the base model.
+        for line in out.splitlines():
+            if line.startswith("M1 "):
+                assert variant in line
+            elif line.startswith("M2 "):
+                assert "NMOS1" in line and variant not in line
+
+    def test_phase3_param_perturbation_mutates_param_card(self):
+        from ltspice_mcp.lib.spice_lex import SpiceCard, emit, lex
+        from ltspice_mcp.lib.spice_lex_views import ParamCard
+
+        cards = lex(self._baseline_netlist()).cards
+        param_by_name: dict[str, SpiceCard] = {
+            c.name.lower(): c for c in cards if c.kind == "param" and c.name
+        }
+        ParamCard.from_card(param_by_name["vdd"]).set_value(3.3)
+        out = emit(cards)
+        assert "Vdd=3.3" in out
+        assert "Vdd=5" not in out
+
+    def test_full_run_compose_phases_in_order(self):
+        # Replicates execute_montecarlo's per-run flow: build lookup
+        # dicts once after lex, apply all three phases, emit. Verifies
+        # the composition produces a self-consistent netlist with all
+        # mutations present.
+        from ltspice_mcp.lib.montecarlo import (
+            render_variant_model_card,
+            variant_model_name,
+        )
+        from ltspice_mcp.lib.spice_lex import SpiceCard, emit, lex
+        from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end
+        from ltspice_mcp.lib.spice_lex_views import (
+            InstanceLine,
+            ModelCard,
+            ParamCard,
+        )
+
+        cards = lex(self._baseline_netlist()).cards
+        model_by_name: dict[str, SpiceCard] = {
+            c.name.lower(): c for c in cards if c.kind == "model" and c.name
+        }
+        instance_by_ref: dict[str, SpiceCard] = {
+            c.name.lower(): c for c in cards if c.kind == "instance" and c.name
+        }
+        param_by_name: dict[str, SpiceCard] = {
+            c.name.lower(): c for c in cards if c.kind == "param" and c.name
+        }
+
+        # Phase 1
+        ModelCard.from_card(model_by_name["nmos1"]).set_param("VTO", 0.71)
+
+        # Phase 2 — variant for M1 only
+        base = model_by_name["nmos1"]
+        variant = variant_model_name("NMOS1", "M1")
+        variant_text = render_variant_model_card(
+            "".join(base.raw_lines), variant, {"VTO": 0.72}
+        )
+        new_card = inject_card_before_end(cards, variant_text)
+        if new_card.name:
+            model_by_name[new_card.name.lower()] = new_card
+        InstanceLine.from_card(instance_by_ref["m1"]).set_model(variant)
+
+        # Phase 3
+        ParamCard.from_card(param_by_name["vdd"]).set_value(3.3)
+
+        out = emit(cards)
+        # All three phases visible.
+        assert "VTO=0.71" in out  # Phase 1
+        assert variant in out  # Phase 2 variant card
+        assert "Vdd=3.3" in out  # Phase 3
+        # Re-parse to confirm the result is structurally valid.
+        re_cards = lex(out).cards
+        models = [c.name for c in re_cards if c.kind == "model"]
+        assert "NMOS1" in models
+        assert variant in models

@@ -27,38 +27,40 @@ from ltspice_mcp.lib.montecarlo import (
     extract_mosfet_instances,
     find_mismatch_rule,
     format_value,
-    inject_card_before_end,
     parse_model_params,
     parse_param_nominal,
     parse_value,
-    perturb_model_in_text,
-    perturb_param_in_text,
     render_variant_model_card,
-    rewrite_instance_model,
     sample_instance_mismatch,
     sample_model_perturbation,
     variant_model_name,
 )
 from ltspice_mcp.lib.observability import emit_job_event
 from ltspice_mcp.lib.runner_base import BatchRunnerBase, wrap_runner_for_runno_callbacks
+from ltspice_mcp.lib.spice_lex import SpiceCard, emit, lex
+from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end as _ops_inject_card
+from ltspice_mcp.lib.spice_lex_views import (
+    InstanceLine,
+    ModelCard,
+    ParamCard,
+)
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
 
 
-def _resolve_base_params(
+def _resolve_base_params_from_cards(
     model_name: str,
     model_nominals: dict[str, dict[str, float]],
     run_perturbations: dict[str, dict[str, float]],
     stable_cache: dict[str, dict[str, float]],
-    text: str,
+    model_by_name: dict[str, SpiceCard],
 ) -> dict[str, float] | None:
-    """Resolve a model's *currently effective* params for this run.
+    """Resolve a model's effective params for this run via the lookup dict.
 
-    For models also covered by Phase 1 process variation, layer the run's
-    perturbations on top of the nominals. For models without a Phase 1
-    rule, fall back to the precomputed ``stable_cache``; if that doesn't
-    have an entry either, parse the card lazily from ``text``.
+    Order: Phase-1 nominals + run perturbations → stable cache → parse
+    the model card body lazily. ``model_by_name`` is the per-run dict
+    keyed by lowercased model name.
     """
     if model_name in model_nominals:
         params = dict(model_nominals[model_name])
@@ -67,10 +69,10 @@ def _resolve_base_params(
     cached = stable_cache.get(model_name)
     if cached is not None:
         return cached
-    card = extract_model_card(text, model_name)
+    card = model_by_name.get(model_name.lower())
     if card is None:
         return None
-    parsed = parse_model_params(card)
+    parsed = parse_model_params(card.body)
     stable_cache[model_name] = parsed
     return parsed
 
@@ -303,9 +305,25 @@ class MonteCarloRunner(BatchRunnerBase):
                     editor.set_component_value(ref, formatted)
                     run_params[ref] = formatted
 
-                # The remaining phases work on text. Snapshot the current
-                # editor state, apply text rewrites, then push back.
+                # Lex once per run, build name → card lookup tables for
+                # all three phases, mutate in place, emit once.
                 text = "".join(editor.netlist)
+                cards = lex(text).cards
+                model_by_name: dict[str, SpiceCard] = {
+                    c.name.lower(): c
+                    for c in cards
+                    if c.kind == "model" and c.name
+                }
+                instance_by_ref: dict[str, SpiceCard] = {
+                    c.name.lower(): c
+                    for c in cards
+                    if c.kind == "instance" and c.name
+                }
+                param_by_name: dict[str, SpiceCard] = {
+                    c.name.lower(): c
+                    for c in cards
+                    if c.kind == "param" and c.name
+                }
 
                 # ---- Phase 1: process variation (.MODEL perturbation) ----
                 # ``run_perturbations[model]`` accumulates this run's
@@ -321,7 +339,12 @@ class MonteCarloRunner(BatchRunnerBase):
                     )
                     if not perturbations:
                         continue
-                    text = perturb_model_in_text(text, mt.model_name, perturbations)
+                    model_card = model_by_name.get(mt.model_name.lower())
+                    if model_card is None:
+                        continue
+                    model_view = ModelCard.from_card(model_card)
+                    for p, v in perturbations.items():
+                        model_view.set_param(p, v)
                     run_perturbations[mt.model_name] = perturbations
                     for p, v in perturbations.items():
                         run_params[f"{mt.model_name}.{p}"] = format_value(v)
@@ -334,25 +357,32 @@ class MonteCarloRunner(BatchRunnerBase):
                     deltas = sample_instance_mismatch(run_sampler, instance, rule)
                     if deltas["dvth"] == 0.0 and deltas["dk_over_k"] == 0.0:
                         continue
-                    base_params = _resolve_base_params(
+                    base_params = _resolve_base_params_from_cards(
                         instance.model_name,
                         model_nominals,
                         run_perturbations,
                         stable_base_params,
-                        text,
+                        model_by_name,
                     )
                     if base_params is None:
                         continue
                     overrides = _build_mismatch_overrides(deltas, rule, base_params)
                     if not overrides:
                         continue
-                    base_card = extract_model_card(text, instance.model_name)
+                    base_card = model_by_name.get(instance.model_name.lower())
                     if base_card is None:
                         continue
+                    base_card_text = "".join(base_card.raw_lines)
                     variant = variant_model_name(instance.model_name, instance.ref)
-                    variant_card = render_variant_model_card(base_card, variant, overrides)
-                    text = inject_card_before_end(text, variant_card)
-                    text = rewrite_instance_model(text, instance.ref, variant)
+                    variant_card_text = render_variant_model_card(
+                        base_card_text, variant, overrides
+                    )
+                    new_card = _ops_inject_card(cards, variant_card_text)
+                    if new_card.name:
+                        model_by_name[new_card.name.lower()] = new_card
+                    inst_card = instance_by_ref.get(instance.ref.lower())
+                    if inst_card is not None:
+                        InstanceLine.from_card(inst_card).set_model(variant)
                     run_params[f"{instance.ref}.dvth"] = format_value(deltas["dvth"])
                     run_params[f"{instance.ref}.dk_over_k"] = format_value(deltas["dk_over_k"])
 
@@ -363,13 +393,16 @@ class MonteCarloRunner(BatchRunnerBase):
                         continue
                     delta = run_sampler.sample_offset(nominal, pt.spec, stream=f"param:{pt.name}")
                     new_value = nominal + delta
-                    text = perturb_param_in_text(text, pt.name, new_value)
+                    param_card = param_by_name.get(pt.name.lower())
+                    if param_card is not None:
+                        ParamCard.from_card(param_card).set_value(new_value)
                     run_params[f"PARAM.{pt.name}"] = format_value(new_value)
 
-                # Push the rewritten text back into the editor's line list.
-                # SpiceEditor expects each entry to be a single line ending
-                # in "\n" (its save_netlist iterates the list verbatim).
-                new_lines = text.splitlines(keepends=True)
+                # Emit once and push the rewritten lines back into the
+                # editor. SpiceEditor expects each entry to be one line
+                # ending in "\n".
+                new_text = emit(cards)
+                new_lines = new_text.splitlines(keepends=True)
                 if new_lines and not new_lines[-1].endswith("\n"):
                     new_lines[-1] = new_lines[-1] + "\n"
                 editor.netlist = new_lines
