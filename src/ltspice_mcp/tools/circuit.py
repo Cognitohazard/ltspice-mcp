@@ -35,6 +35,7 @@ from ltspice_mcp.lib import atomic_write_text, services
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.log_parser import parse_step_iterations
 from ltspice_mcp.lib.raw_parser import nearest_index, real_axis, sample_to_dict
+from ltspice_mcp.lib.spice_lex import SpiceLexError, TokenKind, tokenize_body
 from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS, MEAS_KINDS, validate_directive
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, get_symbol_info
 from ltspice_mcp.state import SessionState
@@ -207,20 +208,37 @@ def _apply_component_value(editor, reference: str, value: str) -> None:
     Calling it with ``"NMOS1 W=10u L=1u"`` against an existing ``M1 ... NMOS1 W=20u L=1u``
     leaves both sets in place (``... NMOS1 W=10u L=1u W=20u L=1u``), which
     LTspice may parse either way. To DWIM, we split off any ``KEY=VALUE``
-    tokens and route them through ``set_component_parameters`` (which edits
-    the params section via the same regex), keeping the model/value field
-    for ``set_component_value``.
+    tokens and route them through ``set_component_parameters``, keeping
+    the model/value field for ``set_component_value``.
+
+    Token-based split via ``spice_lex.tokenize_body``: head is every
+    ``BARE`` / ``QUOTED`` / ``BRACED`` token before any ``KEY_VALUE``
+    token; params are the ``KEY_VALUE`` tokens. The classified-token
+    layer knows model-name vs param-name by construction, so adversarial
+    cases like ``M1 d g s b "NMOS lvt" W=10u`` and
+    ``R1 n1 n2 {1/(2*pi*RC)}`` route correctly.
     """
     _validate_component_value(reference, value)
     if "=" not in value:
         editor.set_component_value(reference, value)
         return
+    try:
+        tokens = tokenize_body(value)
+    except SpiceLexError as e:
+        raise NetlistError(f"Component '{reference}' value {value!r} failed to parse: {e}") from e
     params: dict[str, str] = {}
-    head_end = len(value)
-    for m in _PARAM_TOKEN_RE.finditer(value):
-        params[m.group(1)] = m.group(2)
-        head_end = min(head_end, m.start())
-    head = value[:head_end].strip()
+    head_parts: list[str] = []
+    for tok in tokens:
+        if tok.kind == TokenKind.KEY_VALUE:
+            assert tok.key is not None
+            assert tok.value is not None
+            params[tok.key] = tok.value
+        elif tok.kind in (TokenKind.BARE, TokenKind.QUOTED, TokenKind.BRACED):
+            head_parts.append(tok.text)
+        # COMMENT_TRAIL / EQUALS / PARENED outside KEY_VALUE: ignore
+        # for value-setting purposes — _validate_component_value
+        # already rejected the shapes that would corrupt the netlist.
+    head = " ".join(head_parts)
     if head:
         editor.set_component_value(reference, head)
     if params:
