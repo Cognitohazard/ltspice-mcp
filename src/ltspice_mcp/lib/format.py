@@ -72,3 +72,15 @@ def parse_spice_value(s: str) -> float:
         f"Cannot parse '{s}' as SPICE value. "
         f"Expected number or number with suffix: {', '.join(suf for suf, _ in _SCALE_FACTORS)}"
     )
+
+
+def format_spice_value(value: float | str) -> str:
+    """Render a numeric value for emission into a SPICE netlist.
+
+    Strings pass through verbatim — callers are responsible for quoting,
+    bracing, etc. Floats use ``%.10g`` so a parse → format → parse
+    round-trip doesn't drift past meaningful precision.
+    """
+    if isinstance(value, str):
+        return value
+    return f"{value:.10g}"
