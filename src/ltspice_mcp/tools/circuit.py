@@ -35,7 +35,7 @@ from ltspice_mcp.lib import atomic_write_text, services
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.log_parser import parse_step_iterations
 from ltspice_mcp.lib.raw_parser import nearest_index, real_axis, sample_to_dict
-from ltspice_mcp.lib.spice_lex import SpiceLexError, TokenKind, tokenize_body
+from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, tokenize_body
 from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS, MEAS_KINDS, validate_directive
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, get_symbol_info
 from ltspice_mcp.state import SessionState
@@ -174,6 +174,23 @@ def _validate_component_value(reference: str, value: str) -> None:
         stripped.startswith('"') and stripped.endswith('"')
     ):
         return
+    # Independent-source waveform spec: ``PULSE(...)``, ``SIN(...)``,
+    # ``EXP(...)``, ``PWL(...)``, ``SFFM(...)``, ``TABLE(...)``, ``AM(...)``,
+    # ``NOISE(...)``. The keyword is followed by a balanced parenthetical
+    # group whose parens protect the embedded whitespace. Optionally
+    # preceded by a DC magnitude (``"1 PULSE(...)"``) and followed by an
+    # ``AC <mag>`` annotation (``"PULSE(...) AC 1"``).
+    try:
+        toks = tokenize_body(stripped)
+    except SpiceLexError:
+        toks = []
+    if toks and any(t.kind == TokenKind.PARENED for t in toks):
+        # If the body is a sequence of BARE/PARENED tokens (no stray
+        # equals signs, no unbalanced quotes), the parens protect their
+        # internal whitespace from corrupting the netlist line.
+        ok_kinds = (TokenKind.BARE, TokenKind.PARENED, TokenKind.QUOTED, TokenKind.BRACED)
+        if all(t.kind in ok_kinds for t in toks):
+            return
     # ``[MODEL_NAME] KEY=VALUE [KEY=VALUE ...]`` is valid: at most one bare
     # head token (the model name) followed by a non-empty list of KEY=VALUE
     # tokens. The pure-params and head+params forms collapse into one rule.
@@ -331,17 +348,35 @@ def _other_components_pin_coords(editor: AscEditor, exclude_ref: str) -> set[tup
     return coords
 
 
-def _trace_nets(editor: AscEditor) -> dict[tuple[int, int], frozenset[str]]:
-    """Map each wire/pin/label coordinate to the set of FLAG labels on its net.
+def _point_on_segment(
+    point: tuple[int, int], v1: tuple[int, int], v2: tuple[int, int]
+) -> bool:
+    """True iff ``point`` lies on the orthogonal wire segment ``v1 → v2``."""
+    px, py = point
+    x1, y1 = v1
+    x2, y2 = v2
+    if x1 == x2:
+        return px == x1 and min(y1, y2) <= py <= max(y1, y2)
+    if y1 == y2:
+        return py == y1 and min(x1, x2) <= px <= max(x1, x2)
+    # Diagonal wire — shouldn't happen in LTspice, but if it does, fall
+    # back to endpoint-only matching.
+    return point in (v1, v2)
 
-    Net membership is computed by union-find over wire endpoints: two points
-    are on the same net iff there's a chain of wires connecting them. Then
-    every component pin and FLAG label is unioned with whatever wire endpoint
-    sits at its coordinate. The returned dict lets callers ask
-    ``"what labels does the net at (x,y) resolve to?"`` in O(1).
 
-    Used by connect / add_net_label to detect named-net shorts and floating
-    labels at edit time, before LTspice silently drops them.
+def _trace_nets(
+    editor: AscEditor,
+    extra_segments: list[tuple[int, int, int, int]] | None = None,
+) -> dict[tuple[int, int], frozenset[str]]:
+    """Map each pin/label/wire coordinate to the labels on its net.
+
+    Segment-aware: a label or pin lying anywhere ON a wire (not just at
+    an endpoint) is unioned with that wire — endpoint-only matching
+    misses FLAGs placed mid-segment.
+
+    ``extra_segments`` lets the caller include not-yet-committed wire
+    segments (e.g. the route ``connect`` is about to add) so the
+    short-detection check operates on the post-route net layout.
     """
     parent: dict[tuple[int, int], tuple[int, int]] = {}
 
@@ -359,13 +394,43 @@ def _trace_nets(editor: AscEditor) -> dict[tuple[int, int], frozenset[str]]:
         if ra != rb:
             parent[ra] = rb
 
-    for w in editor.wires:
-        union((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y)))
+    # Collect every "interest point": pin coords + label coords + wire
+    # endpoints. A wire that touches one of these in its interior pulls
+    # it into the same connected component as its endpoints.
+    interest_points: set[tuple[int, int]] = set()
     for ref in editor.get_components():
         for coord in _component_pin_coords(editor, ref):
-            find(coord)  # ensure node exists
+            interest_points.add(coord)
+            find(coord)
     for lbl in editor.labels:
-        find((int(lbl.coord.X), int(lbl.coord.Y)))
+        coord = (int(lbl.coord.X), int(lbl.coord.Y))
+        interest_points.add(coord)
+        find(coord)
+
+    segments: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    for w in editor.wires:
+        segments.append(
+            ((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y)))
+        )
+    if extra_segments:
+        for sx1, sy1, sx2, sy2 in extra_segments:
+            segments.append(((sx1, sy1), (sx2, sy2)))
+
+    # Wire endpoints are interest points themselves.
+    for v1, v2 in segments:
+        interest_points.add(v1)
+        interest_points.add(v2)
+        union(v1, v2)
+
+    # For each segment, union every interest point lying on it with the
+    # segment's endpoints. This is O(segments * interest_points) — fine
+    # for typical schematics (a few hundred of each).
+    for v1, v2 in segments:
+        for pt in interest_points:
+            if pt in (v1, v2):
+                continue
+            if _point_on_segment(pt, v1, v2):
+                union(pt, v1)
 
     labels_by_root: dict[tuple[int, int], set[str]] = {}
     for lbl in editor.labels:
@@ -380,6 +445,12 @@ def _net_label_at(
 ) -> frozenset[str]:
     """Labels on the net at ``coord``; empty when net is unnamed."""
     return nets.get(coord, frozenset())
+
+
+def _named_labels(labels: frozenset[str]) -> set[str]:
+    """Strip ground ('0') from a label set so 'short to ground' isn't
+    flagged as a conflict by detect-multi-label net checks."""
+    return {lbl for lbl in labels if lbl != "0"}
 
 
 # Type alias for the union returned by _make_editor / _get_editor.
@@ -813,7 +884,7 @@ async def handle_read_circuit(args: CircuitReadInput, state: SessionState):
     if _is_asc(file_path):
         data = services.extract_asc_info(_get_asc_editor(file_path, state), file_path)
     else:
-        data = services.extract_netlist_info(_get_editor(file_path, state), file_path)
+        data = services.extract_netlist_info(file_path)
     return format_response(_format_circuit_text(file_path, data), data, fmt)
 
 
@@ -899,6 +970,9 @@ async def handle_list_components(args: ListComponentsInput, state: SessionState)
     """List all components, optionally filtered by prefix. If a single
     reference is provided, return just that component's value.
     Works on .cir/.net and .asc.
+
+    .cir/.net reads use the spice_lex pipeline (no spicelib editor) so
+    BOM/UTF-16 files and unclosed-``.SUBCKT`` files don't crash.
     """
     file_path = safe_path(args.path, state)
     fmt = args.format
@@ -908,6 +982,9 @@ async def handle_list_components(args: ListComponentsInput, state: SessionState)
             "'reference' (single lookup) and 'prefix' (filter) are mutually "
             "exclusive — provide one, not both."
         )
+
+    if not _is_asc(file_path):
+        return await _list_components_netlist(args, file_path, fmt)
 
     editor = _get_editor(file_path, state)
 
@@ -991,6 +1068,92 @@ async def handle_list_components(args: ListComponentsInput, state: SessionState)
     return format_response(result, data, fmt)
 
 
+async def _list_components_netlist(
+    args: ListComponentsInput, file_path: Path, fmt
+) -> types.CallToolResult:
+    """List components in a .cir/.net file via spice_lex (no editor).
+
+    Mirrors the editor-based path's response shape: single-ref lookup
+    returns ``{reference, value}``; multi-ref returns a paginated list
+    with ``{components, pagination}``.
+    """
+    from ltspice_mcp.lib.encoding import read_spice_text
+    from ltspice_mcp.lib.spice_lex import lex
+    from ltspice_mcp.lib.spice_lex_views import (
+        InstanceLine,
+        body_has_stray_kv_remnant,
+        instances_by_ref,
+    )
+
+    try:
+        content = read_spice_text(file_path)
+    except FileNotFoundError as e:
+        raise NetlistError(f"File not found: {file_path}") from e
+    cards = lex(content).cards
+    refs_to_card = instances_by_ref(cards)
+
+    def _value_of(card: SpiceCard) -> str:
+        if body_has_stray_kv_remnant(card.body):
+            return "<unparseable>"
+        try:
+            return InstanceLine.from_card(card).display_value()
+        except Exception:
+            return "<unparseable>"
+
+    reference = args.reference
+    if reference is not None:
+        match = refs_to_card.get(reference.lower())
+        if match is None:
+            raise NetlistError(f"Component '{reference}' not found")
+        value = _value_of(match)
+        data = {"reference": reference, "value": value}
+        return format_response(f"{reference} = {value}", data, fmt)
+
+    prefix = args.prefix
+    if prefix is not None and (len(prefix) != 1 or not prefix.isalpha()):
+        raise NetlistError(
+            f"Component prefix must be a single letter (e.g. 'R', 'C'), got {prefix!r}"
+        )
+
+    if prefix:
+        upper = prefix.upper()
+        components = [c.name for c in refs_to_card.values() if c.name and c.name[:1].upper() == upper]
+    else:
+        components = [c.name for c in refs_to_card.values() if c.name]
+
+    if not components:
+        msg = (
+            f"No components matching prefix '{prefix}' found" if prefix else "No components found"
+        )
+        return format_response(
+            msg, {"components": [], "pagination": pagination_metadata(0, 0, 50)}, fmt
+        )
+
+    page, total, offset, limit = paginate(components, args)
+    comp_list: list[dict] = []
+    comp_lines: list[str] = []
+    for ref in page:
+        card = refs_to_card.get(ref.lower())
+        value = _value_of(card) if card is not None else ""
+        comp_list.append({"reference": ref, "value": value})
+        comp_lines.append(f"{ref}  {value}")
+
+    header = f"Showing {offset + 1}-{offset + len(page)} of {total} components"
+    if prefix:
+        header += f" (prefix '{prefix}')"
+    body = header + "\n\n" + "\n".join(comp_lines)
+    if offset + len(page) < total:
+        body += f"\n\nNext page: ltspice_list_components(path=..., offset={offset + limit})"
+
+    data = {
+        "components": comp_list,
+        "pagination": pagination_metadata(total, offset, limit),
+    }
+    if prefix:
+        data["prefix"] = prefix
+    return format_response(body, data, fmt)
+
+
 @registry.tool(
     name="ltspice_set_component_value",
     description="Set component value(s) in a circuit file. Supports single or batch mode.",
@@ -1011,6 +1174,12 @@ async def handle_set_component_value(
     Single mode: provide 'reference' and 'value'.
     Batch mode: provide 'values' dict mapping references to new values.
     Works on .cir/.net and .asc.
+
+    For .cir/.net, edits route through the typed spice_lex dispatcher
+    (``lib.component_value.apply_value_to_instance``) which knows the
+    body shape per element class — preserves B-source ``V=``/``I=``
+    prefixes, replaces only the trailing gain on E/G positional forms,
+    accepts multi-token V/I source specs (PULSE/SIN/...).
     """
     file_path = safe_path(args.path, state)
 
@@ -1018,54 +1187,112 @@ async def handle_set_component_value(
     reference = args.reference
     value = args.value
 
-    # Reject ambiguous input: single and batch mode are mutually exclusive.
     single_mode_args = reference is not None or value is not None
     if values_dict is not None and single_mode_args:
         raise NetlistError(
             "Single mode ('reference'+'value') and batch mode ('values') "
             "are mutually exclusive — provide one, not both."
         )
+    if values_dict is None and not single_mode_args:
+        raise NetlistError(
+            "Provide either 'reference'+'value' (single) or 'values' dict (batch)"
+        )
+    if single_mode_args and (reference is None or value is None):
+        raise NetlistError(
+            "Single mode requires both 'reference' and 'value'"
+        )
 
-    async with _editing(file_path, state) as editor:
-        if values_dict is not None:
-            # Batch mode — validate every (ref, value) pair BEFORE writing
-            # anything, so a bad ref or unparseable value doesn't corrupt
-            # earlier successful writes (Bug J).
-            if not isinstance(values_dict, dict):
-                raise NetlistError("'values' must be an object mapping references to new values")
-            if not values_dict:
-                raise NetlistError("'values' dict must not be empty")
-            unknown_refs: list[str] = []
-            for ref in values_dict:
-                try:
-                    editor.get_component_value(ref)
-                except Exception:
-                    unknown_refs.append(ref)
-            if unknown_refs:
-                raise NetlistError(
-                    "Component(s) not found: " + ", ".join(repr(r) for r in unknown_refs)
-                )
-            # Validate value syntax up-front so we don't half-apply.
-            for ref, val in values_dict.items():
-                _validate_component_value(ref, val)
-            for ref, val in values_dict.items():
-                _apply_component_value(editor, ref, val)
-            changes = [f"{ref}: {val}" for ref, val in values_dict.items()]
-            result = f"Updated {len(values_dict)} component(s):\n" + "\n".join(changes)
-        elif reference is not None and value is not None:
-            # Single mode
-            try:
-                old_value = editor.get_component_value(reference)
-            except Exception:
-                raise NetlistError(f"Component '{reference}' not found") from None
-            _apply_component_value(editor, reference, value)
-            result = f"Set {reference}: {old_value} -> {value}"
-        else:
+    if values_dict is not None:
+        if not isinstance(values_dict, dict):
+            raise NetlistError("'values' must be an object mapping references to new values")
+        if not values_dict:
+            raise NetlistError("'values' dict must not be empty")
+        pairs: list[tuple[str, str]] = list(values_dict.items())
+    else:
+        assert reference is not None and value is not None
+        pairs = [(reference, value)]
+
+    if _is_asc(file_path):
+        return await _set_component_value_asc(file_path, pairs, state)
+    return await _set_component_value_netlist(file_path, pairs, state)
+
+
+async def _set_component_value_netlist(
+    file_path: Path,
+    pairs: list[tuple[str, str]],
+    state: SessionState,
+) -> types.CallToolResult:
+    """Apply value changes to a .cir/.net via spice_lex typed dispatch.
+
+    Validates every (ref, value) pair before mutating. The typed
+    dispatch in ``lib/component_value`` rejects shape-mismatched values
+    (e.g. a brace expression on a B-source with no V=/I= prefix) before
+    any card is touched, so partial writes can't happen.
+    """
+    from ltspice_mcp.lib.component_value import apply_value_to_instance
+    from ltspice_mcp.lib.encoding import read_spice_text
+    from ltspice_mcp.lib.spice_lex import lex, write_cards
+    from ltspice_mcp.lib.spice_lex_views import instances_by_ref
+
+    async with _get_edit_lock(file_path):
+        cards = lex(read_spice_text(file_path)).cards
+        refs_to_card = instances_by_ref(cards)
+
+        unknown_refs = [ref for ref, _ in pairs if ref.lower() not in refs_to_card]
+        if unknown_refs:
+            available = sorted(refs_to_card.values(), key=lambda c: c.name or "")
+            available_names = [c.name for c in available if c.name]
             raise NetlistError(
-                "Provide either 'reference'+'value' (single) or 'values' dict (batch)"
+                f"Component(s) not found: {', '.join(repr(r) for r in unknown_refs)}. "
+                f"Available: {_format_available_refs(available_names)}"
             )
 
-    return text_response(result)
+        changes: list[str] = []
+        for ref, val in pairs:
+            applied = apply_value_to_instance(refs_to_card[ref.lower()], val)
+            changes.append(f"{applied.reference}: {applied.old_summary} -> {applied.new_summary}")
+
+        write_cards(cards, file_path)
+        state.editors.invalidate(file_path)
+
+    if len(pairs) == 1:
+        return text_response(f"Set {changes[0]}")
+    return text_response(f"Updated {len(pairs)} component(s):\n" + "\n".join(changes))
+
+
+async def _set_component_value_asc(
+    file_path: Path,
+    pairs: list[tuple[str, str]],
+    state: SessionState,
+) -> types.CallToolResult:
+    """Apply value changes to an .asc via the cached AscEditor.
+
+    .asc components carry separate Value / Value2 / SpiceLine slots that
+    AscEditor knows how to address; we keep that path. The new validator
+    still gates whitespace shapes through.
+    """
+    async with _editing(file_path, state) as editor:
+        unknown_refs: list[str] = []
+        for ref, _ in pairs:
+            try:
+                editor.get_component_value(ref)
+            except Exception:
+                unknown_refs.append(ref)
+        if unknown_refs:
+            raise NetlistError(
+                "Component(s) not found: " + ", ".join(repr(r) for r in unknown_refs)
+            )
+        for ref, val in pairs:
+            _validate_component_value(ref, val)
+        changes: list[str] = []
+        for ref, val in pairs:
+            old_value = editor.get_component_value(ref)
+            _apply_component_value(editor, ref, val)
+            changes.append(f"{ref}: {old_value} -> {val}")
+
+    if len(pairs) == 1:
+        return text_response(f"Set {changes[0]}")
+    return text_response(f"Updated {len(pairs)} component(s):\n" + "\n".join(changes))
 
 
 @registry.tool(
@@ -2178,20 +2405,46 @@ def _plan_connect_route(
     # Net-label conflict — checked first because it's a "wrong intent"
     # error: rejecting it gives the user a clearer signal than a route
     # geometry complaint. Skip when either side uses ``net:`` form (those
-    # are already named explicitly).
+    # are already named explicitly). Two-phase check:
+    #   1) BEFORE state — endpoints resolve to two different already-named
+    #      nets (the standard short).
+    #   2) AFTER state — proposed route drags a mid-segment label into
+    #      the union, merging an additional named net.
     if not from_pin.startswith("net:") and not to_pin.startswith("net:"):
-        nets = _trace_nets(editor)
-        from_labels = _net_label_at(nets, (x1, y1))
-        to_labels = _net_label_at(nets, (x2, y2))
-        if from_labels and to_labels and from_labels.isdisjoint(to_labels):
+        nets_before = _trace_nets(editor)
+        from_labels_before = _named_labels(_net_label_at(nets_before, (x1, y1)))
+        to_labels_before = _named_labels(_net_label_at(nets_before, (x2, y2)))
+        if (
+            from_labels_before
+            and to_labels_before
+            and from_labels_before.isdisjoint(to_labels_before)
+        ):
             raise NetlistError(
                 f"Refused to connect {from_pin} to {to_pin}: "
                 f"Net-label conflict — {from_pin} is on net "
-                f"{sorted(from_labels)} and {to_pin} is on net "
-                f"{sorted(to_labels)}. Connecting them would short the two "
-                f"named nets. Pick one labelling and rewire, or use "
-                f"add_net_label to merge them deliberately."
+                f"{sorted(from_labels_before)} and {to_pin} is on net "
+                f"{sorted(to_labels_before)}. Connecting them would short "
+                f"the two named nets. Pick one labelling and rewire, or "
+                f"use add_net_label to merge them deliberately."
             )
+        nets_after = _trace_nets(editor, extra_segments=segments)
+        from_labels_after = _named_labels(_net_label_at(nets_after, (x1, y1)))
+        to_labels_after = _named_labels(_net_label_at(nets_after, (x2, y2)))
+        unioned = from_labels_after | to_labels_after
+        if len(unioned) >= 2:
+            # Some labels seen post-route weren't there pre-route on
+            # either endpoint — that's the mid-segment case.
+            unioned_before = from_labels_before | to_labels_before
+            new_labels = unioned - unioned_before
+            if new_labels:
+                raise NetlistError(
+                    f"Refused to connect {from_pin} to {to_pin}: "
+                    f"Net-label conflict — the proposed route would "
+                    f"merge named nets {sorted(unioned)} (a label on a "
+                    f"mid-segment of the wire path adds "
+                    f"{sorted(new_labels)} to the merged net). Reroute "
+                    "to avoid the labelled wire."
+                )
 
     for sx1, sy1, sx2, sy2 in segments:
         if sx1 != sx2 and sy1 != sy2:
@@ -2217,12 +2470,7 @@ def _plan_connect_route(
             if _pin_on_target_net(px, py):
                 continue
             for sx1, sy1, sx2, sy2 in segments:
-                on_wire = False
-                if sy1 == sy2 and py == sy1:
-                    on_wire = min(sx1, sx2) <= px <= max(sx1, sx2)
-                elif sx1 == sx2 and px == sx1:
-                    on_wire = min(sy1, sy2) <= py <= max(sy1, sy2)
-                if on_wire:
+                if _point_on_segment((px, py), (sx1, sy1), (sx2, sy2)):
                     errors.append(
                         f"Wire passes through {cg['ref']}.{pin['name']} at ({px},{py}): "
                         "will create unintended connection"
@@ -2619,17 +2867,20 @@ def _components_and_directives(path: Path) -> tuple[dict[str, str], set[str]]:
     AscEditor dispatch, and directive collection all flow through the
     canonical path. No second disk read.
     """
-    try:
-        ed = _make_editor(path)
-    except Exception:
-        return {}, set()
     if _is_asc(path):
-        assert isinstance(ed, AscEditor)  # _make_editor dispatches on extension
+        try:
+            ed = _make_editor(path)
+        except Exception:
+            return {}, set()
+        assert isinstance(ed, AscEditor)
         info = services.extract_asc_info(ed, path)
         components = {comp["reference"]: str(comp["value"]) for comp in info["components"]}
         directives = {d.strip() for d in info.get("directives", []) if d.strip().startswith(".")}
         return components, directives
-    info = services.extract_netlist_info(ed, path)
+    try:
+        info = services.extract_netlist_info(path)
+    except Exception:
+        return {}, set()
     components = {comp["reference"]: str(comp["value"]) for comp in info["components"]}
     directives = {
         line.strip()

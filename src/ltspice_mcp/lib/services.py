@@ -467,32 +467,53 @@ def extract_asc_info(editor: AscEditor, file_path: Path) -> dict[str, Any]:
     }
 
 
-def extract_netlist_info(editor: Editor, file_path: Path) -> dict[str, Any]:
-    """Extract structured netlist data from a ``SpiceEditor``-compatible editor.
+def extract_netlist_info(file_path: Path) -> dict[str, Any]:
+    """Extract structured netlist data via spice_lex + ``lib.encoding``.
 
-    spicelib raises ``UnrecognizedSyntaxError`` for netlist constructs its
-    regex doesn't model — most commonly behavioural sources with commas
-    inside ``if(...)`` expressions. We fall back to ``"<unparseable>"`` for
-    those components rather than aborting the whole read (Bug K).
+    Honours BOMs and UTF-16-no-BOM via ``read_spice_text``; walks
+    truncated/hierarchical netlists via the spice_lex foundation and
+    surfaces its warnings (e.g. unclosed ``.SUBCKT``) instead of raising.
+    Component values come from ``InstanceLine`` views — uniform across
+    behavioural sources, B-source ``V=expr`` forms, and active devices.
     """
-    content = file_path.read_text(encoding="utf-8", errors="replace")
-    components = list(editor.get_components())
-    comp_list = []
-    for comp_ref in components:
+    from ltspice_mcp.errors import NetlistError
+    from ltspice_mcp.lib.encoding import read_spice_text
+    from ltspice_mcp.lib.spice_lex import lex
+    from ltspice_mcp.lib.spice_lex_views import (
+        InstanceLine,
+        body_has_stray_kv_remnant,
+    )
+
+    try:
+        content = read_spice_text(file_path)
+    except FileNotFoundError as e:
+        raise NetlistError(f"File not found: {file_path}") from e
+    result = lex(content)
+    comp_list: list[dict[str, Any]] = []
+    for card in result.cards:
+        if card.kind != "instance" or not card.name:
+            continue
+        if body_has_stray_kv_remnant(card.body):
+            comp_list.append({"reference": card.name, "value": "<unparseable>"})
+            continue
         try:
-            value = editor.get_component_value(comp_ref)
+            inst = InstanceLine.from_card(card)
         except Exception as e:
             logger.debug(
-                "extract_netlist_info: %s value unparseable by spicelib: %s",
-                comp_ref,
+                "extract_netlist_info: %s failed to parse via InstanceLine: %s",
+                card.name,
                 e,
             )
-            value = "<unparseable>"
-        comp_list.append({"reference": comp_ref, "value": value})
+            comp_list.append({"reference": card.name, "value": "<unparseable>"})
+            continue
+        comp_list.append({"reference": card.name, "value": inst.display_value()})
 
-    return {
+    out: dict[str, Any] = {
         "file": str(file_path),
         "type": "netlist",
         "content": content,
         "components": comp_list,
     }
+    if result.warnings:
+        out["warnings"] = list(result.warnings)
+    return out

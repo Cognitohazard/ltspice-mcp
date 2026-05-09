@@ -15,6 +15,7 @@ from pathlib import Path
 from spicelib import SpiceEditor
 
 from ltspice_mcp.errors import BatchJobError
+from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_types import BatchJob
 from ltspice_mcp.lib.montecarlo import (
@@ -150,21 +151,46 @@ class MonteCarloRunner(BatchRunnerBase):
             runner = wrap_runner_for_runno_callbacks(self._build_sim_runner())
             self._register_runner(batch_job.job_id, runner)
 
+            # Read baseline text directly via the encoding-aware pipeline.
+            # The spicelib editor is kept around only as the runner-submission
+            # vehicle; we never READ ``editor.netlist`` because spicelib's
+            # ``SpiceEditor.netlist`` contains ``SpiceCircuit`` objects (not
+            # strings) for ``.subckt`` blocks, which breaks any join over the
+            # list on hierarchical netlists.
+            baseline_text = read_spice_text(batch_job.netlist)
+            baseline_cards = lex(baseline_text).cards
             editor = SpiceEditor(str(batch_job.netlist))
 
             # ---- Phase 0: R/C/L tolerance resolution + nominal extraction ----
-            all_refs = list(editor.get_components("*"))
+            # Walk the lexed cards instead of editor.get_components — works
+            # uniformly across flat and hierarchical netlists.
+            all_refs = [
+                c.name for c in baseline_cards
+                if c.kind == "instance" and c.name
+            ]
             tol_map = expand_tolerances(
                 all_refs,
                 mc_config.type_tolerances,
                 mc_config.component_overrides,
             )
+            baseline_inst_by_ref: dict[str, SpiceCard] = {
+                c.name.lower(): c
+                for c in baseline_cards
+                if c.kind == "instance" and c.name
+            }
             rcl_nominals: dict[str, float] = {}
             unparseable_refs: list[tuple[str, str]] = []
             for ref in tol_map:
+                card = baseline_inst_by_ref.get(ref.lower())
+                if card is None:
+                    continue
                 try:
-                    raw_val = editor.get_component_value(ref)
+                    inst_view = InstanceLine.from_card(card)
                 except Exception:
+                    continue
+                raw_val = inst_view.value
+                if raw_val is None:
+                    # M/Q/J/X have model name in the slot, no numeric value
                     continue
                 parsed = parse_value(raw_val)
                 if parsed is None:
@@ -185,7 +211,6 @@ class MonteCarloRunner(BatchRunnerBase):
                 rcl_nominals[ref] = parsed
 
             # ---- Phase 1 setup: per-.MODEL nominals ----
-            baseline_text = "".join(editor.netlist)
             model_tolerances: list[ModelTolerance] = list(mc_config.model_tolerances or [])
             model_nominals: dict[str, dict[str, float]] = {}
             for mt in model_tolerances:
@@ -264,13 +289,6 @@ class MonteCarloRunner(BatchRunnerBase):
                 mc_config.seed,
             )
 
-            # Snapshot the baseline editor.netlist once, so per-iteration
-            # reset is an in-memory list copy rather than a disk re-read.
-            # ``editor.reset_netlist()`` works but reopens the file each
-            # iteration; for a 1000-run job that's 1000 file reads we can
-            # avoid. Snapshot is shallow-safe — the list contains strings
-            # (immutable), and we replace the list reference per iteration.
-            baseline_lines: list[str] = list(editor.netlist)
             # Sub-streams are also keyed by run index so two runs with the
             # same global seed produce independent samples. Run-index
             # isolation is what makes ``num_runs=N`` reproducible.
@@ -281,20 +299,34 @@ class MonteCarloRunner(BatchRunnerBase):
                 runno = run_i + 1  # spicelib's runno is 1-based.
                 run_params: dict[str, str] = {}
 
-                # In-memory reset: replace the editor's line list with a
-                # fresh copy of the baseline. Cheaper than reset_netlist()
-                # which re-reads the file from disk per iteration.
-                editor.netlist = list(baseline_lines)
-
-                # Per-run sampler — sub-streams within this iteration use
-                # short keys ("rcl:R1", "model:NMOS1.VTO", "mismatch:M1.dvth")
-                # without colliding across runs, since the run namespace
-                # is encoded once at derive() time.
+                # Re-lex baseline text per iteration. ~0.6 ms on a 200-
+                # card netlist — measured ~2.4× faster than
+                # ``copy.deepcopy(baseline_cards)`` because the dataclass
+                # tree (raw_lines + tokens) is expensive to clone.
+                cards = lex(baseline_text).cards
                 run_sampler = sampler.derive(f"run{runno}")
+
+                # Single pass over cards to build the three lookup tables.
+                model_by_name: dict[str, SpiceCard] = {}
+                instance_by_ref: dict[str, SpiceCard] = {}
+                param_by_name: dict[str, SpiceCard] = {}
+                for c in cards:
+                    if not c.name:
+                        continue
+                    key = c.name.lower()
+                    if c.kind == "model":
+                        model_by_name[key] = c
+                    elif c.kind == "instance":
+                        instance_by_ref[key] = c
+                    elif c.kind == "param":
+                        param_by_name[key] = c
 
                 # ---- R/C/L (per-ref stream within the run sampler) ----
                 for ref, spec in tol_map.items():
                     if ref not in rcl_nominals:
+                        continue
+                    inst_card = instance_by_ref.get(ref.lower())
+                    if inst_card is None:
                         continue
                     perturbed = run_sampler.sample(
                         rcl_nominals[ref],
@@ -302,28 +334,8 @@ class MonteCarloRunner(BatchRunnerBase):
                         stream=f"rcl:{ref}",
                     )
                     formatted = format_value(perturbed)
-                    editor.set_component_value(ref, formatted)
+                    InstanceLine.from_card(inst_card).set_value(formatted)
                     run_params[ref] = formatted
-
-                # Lex once per run, build name → card lookup tables for
-                # all three phases, mutate in place, emit once.
-                text = "".join(editor.netlist)
-                cards = lex(text).cards
-                model_by_name: dict[str, SpiceCard] = {
-                    c.name.lower(): c
-                    for c in cards
-                    if c.kind == "model" and c.name
-                }
-                instance_by_ref: dict[str, SpiceCard] = {
-                    c.name.lower(): c
-                    for c in cards
-                    if c.kind == "instance" and c.name
-                }
-                param_by_name: dict[str, SpiceCard] = {
-                    c.name.lower(): c
-                    for c in cards
-                    if c.kind == "param" and c.name
-                }
 
                 # ---- Phase 1: process variation (.MODEL perturbation) ----
                 # ``run_perturbations[model]`` accumulates this run's

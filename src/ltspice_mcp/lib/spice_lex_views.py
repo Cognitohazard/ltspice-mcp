@@ -529,6 +529,47 @@ class InstanceLine:
         self._model_token = None
         self._param_tokens.clear()
 
+    def display_value(self) -> str:
+        """Single-string projection for display: model name for M/Q/J/X,
+        value field for R/C/L/V/I/E/F/G/H, KV pair for B-sources, empty
+        for malformed bodies."""
+        if self.model is not None:
+            return self.model
+        if self.value is not None:
+            return self.value
+        for key in ("V", "I", "v", "i"):
+            if key in self.params:
+                return f"{key}={self.params[key]}"
+        if self.params:
+            k0, v0 = next(iter(self.params.items()))
+            return f"{k0}={v0}"
+        return ""
+
+
+def body_has_stray_kv_remnant(body: str) -> bool:
+    """True iff the body's KV parser left orphan tokens after the first
+    KEY=VALUE — typically a function-call expression where whitespace
+    around ``=`` made the lexer split mid-value (e.g. ``B1 amp 0 V = if(...)``
+    keeps ``V=if`` and dangles the ``(...)``). Callers surface ``<unparseable>``
+    rather than render the truncated form."""
+    try:
+        toks = tokenize_body(body)
+    except Exception:
+        return False
+    seen_kv = False
+    for tok in toks:
+        if tok.kind == TokenKind.KEY_VALUE:
+            seen_kv = True
+            continue
+        if seen_kv and tok.kind in (TokenKind.PARENED, TokenKind.BARE):
+            return True
+    return False
+
+
+def instances_by_ref(cards) -> dict[str, SpiceCard]:
+    """Lowercased ``ref`` → instance-card lookup. Skips cards with no ref."""
+    return {c.name.lower(): c for c in cards if c.kind == "instance" and c.name}
+
 
 # ---------------------------------------------------------------------------
 # .SUBCKT
