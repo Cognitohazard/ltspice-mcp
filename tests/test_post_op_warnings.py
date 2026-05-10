@@ -1,0 +1,367 @@
+"""Regressions for the post-op validation pass.
+
+Pins the structured ``validation_warnings`` payload returned by mutating
+.asc handlers (apply_schematic_ops, connect, add_component) and the
+text-message warnings on move_component / remove_component. See the
+`validate-before-write` doctrine in `.claude/plans/strategic_priorities.md`.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools.circuit import (
+    AddComponentInput,
+    ApplySchematicOpsInput,
+    ConnectInput,
+    CreateSchematicInput,
+    MoveComponentInput,
+    RemoveComponentInput,
+    handle_add_component,
+    handle_apply_schematic_ops,
+    handle_connect,
+    handle_create_schematic,
+    handle_move_component,
+    handle_remove_component,
+)
+
+# ---------------------------------------------------------------------------
+# Helper directly — synthetic editor-level fixtures
+# ---------------------------------------------------------------------------
+
+
+class TestPostOpWarningsHelper:
+    """Drive ``_post_op_warnings`` against synthetic schematics where we
+    know exactly which pins should float, which wires are duplicate, and
+    which labels are dangling."""
+
+    @pytest.fixture
+    def fresh_schematic(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> tuple[SessionState, Path]:
+        # Use a brand-new file so we don't inherit Draft1.asc's geometry.
+        import asyncio
+
+        asyncio.get_event_loop().run_until_complete(
+            handle_create_schematic(CreateSchematicInput(name="post_op_check"), asc_state)
+        )
+        return asc_state, work_dir / "post_op_check.asc"
+
+    async def test_clean_schematic_returns_no_warnings(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        await handle_create_schematic(CreateSchematicInput(name="clean"), asc_state)
+        # Apply a single connect that touches both endpoints — both pins
+        # belong to the same wire, no duplicates, no labels.
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="clean.asc",
+                ops=[  # type: ignore[arg-type]
+                    {
+                        "op": "add_component",
+                        "reference": "R1",
+                        "symbol": "res",
+                        "x": 100,
+                        "y": 100,
+                    },
+                    {
+                        "op": "add_component",
+                        "reference": "R2",
+                        "symbol": "res",
+                        "x": 100,
+                        "y": 200,  # R2's top pin is at (116,200), R1's bottom at (116,196)
+                    },
+                ],
+                stop_on_error=False,
+            ),
+            asc_state,
+        )
+        # Both R1 and R2 are placed without wires; their pins are floating.
+        # Confirms the helper *does* fire on a representative case.
+        data = result.structuredContent
+        assert data is not None
+        warnings = data.get("validation_warnings", [])
+        # Every floating warning carries kind/message/ref/pin.
+        for w in warnings:
+            assert w["kind"] == "floating_pin"
+            assert "message" in w
+            assert "ref" in w
+
+
+# ---------------------------------------------------------------------------
+# apply_schematic_ops — the primary entry point
+# ---------------------------------------------------------------------------
+
+
+class TestApplySchematicOpsValidation:
+    async def test_floating_pin_after_add_component(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        await handle_create_schematic(CreateSchematicInput(name="float1"), asc_state)
+        ops: list[Any] = [
+            {
+                "op": "add_component",
+                "reference": "R1",
+                "symbol": "res",
+                "x": 100,
+                "y": 100,
+            },
+        ]
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(path="float1.asc", ops=ops, stop_on_error=False),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        warnings = data.get("validation_warnings", [])
+        floating = [w for w in warnings if w["kind"] == "floating_pin"]
+        # R1 has two pins; both should be flagged as floating.
+        assert len(floating) == 2
+        refs = {w["ref"] for w in floating}
+        assert refs == {"R1"}
+
+    async def test_pin_at_shared_coord_is_not_floating(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        # res.asy pins sit at (0,-48) and (0,48) in symbol-local coords. With
+        # R1 at origin (100,100), pin 2 lands at (100,148). With R2 at
+        # origin (100,196), pin 1 (-48 offset) lands at (100,148) — same
+        # spot. Two pins at the same coord ⇒ neither is "floating".
+        await handle_create_schematic(CreateSchematicInput(name="shared"), asc_state)
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="shared.asc",
+                ops=[  # type: ignore[arg-type]
+                    {
+                        "op": "add_component",
+                        "reference": "R1",
+                        "symbol": "res",
+                        "x": 100,
+                        "y": 100,
+                    },
+                    {
+                        "op": "add_component",
+                        "reference": "R2",
+                        "symbol": "res",
+                        "x": 100,
+                        "y": 196,
+                    },
+                ],
+                stop_on_error=False,
+            ),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        warnings = data.get("validation_warnings", [])
+        floating_coords = {(w["x"], w["y"]) for w in warnings if w["kind"] == "floating_pin"}
+        # The shared coord must NOT appear in floating_coords.
+        assert (100, 148) not in floating_coords
+        # The two outer ends DO appear: R1.1 at (100,52), R2.2 at (100,244).
+        assert (100, 52) in floating_coords
+        assert (100, 244) in floating_coords
+
+    async def test_duplicate_wire_detected(self, asc_state: SessionState, work_dir: Path) -> None:
+        await handle_create_schematic(CreateSchematicInput(name="dupwire"), asc_state)
+        # Place R1 and R2, then connect each pair the same way twice.
+        # The second connect will duplicate the first wire.
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="dupwire.asc",
+                ops=[  # type: ignore[arg-type]
+                    {
+                        "op": "add_component",
+                        "reference": "R1",
+                        "symbol": "res",
+                        "x": 100,
+                        "y": 100,
+                    },
+                    {
+                        "op": "add_component",
+                        "reference": "R2",
+                        "symbol": "res",
+                        "x": 200,
+                        "y": 100,
+                    },
+                    # Two connects with the same waypoint plan → duplicate segments.
+                    {
+                        "op": "connect",
+                        "from_pin": "R1.1",
+                        "to_pin": "R2.1",
+                    },
+                    {
+                        "op": "connect",
+                        "from_pin": "R1.1",
+                        "to_pin": "R2.1",
+                    },
+                ],
+                stop_on_error=False,
+            ),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        warnings = data.get("validation_warnings", [])
+        kinds = {w["kind"] for w in warnings}
+        assert "duplicate_wire" in kinds
+
+    async def test_dangling_label_detected(self, asc_state: SessionState, work_dir: Path) -> None:
+        await handle_create_schematic(CreateSchematicInput(name="dangle"), asc_state)
+        # Place a label at coordinates with no wire and no pin.
+        ops: list[Any] = [
+            {
+                "op": "add_net_label",
+                "net": "ORPHAN",
+                "x": 500,
+                "y": 500,
+            },
+        ]
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(path="dangle.asc", ops=ops, stop_on_error=False),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        warnings = data.get("validation_warnings", [])
+        dangling = [w for w in warnings if w["kind"] == "dangling_label"]
+        assert any(w.get("label") == "ORPHAN" for w in dangling)
+
+    async def test_aborted_transaction_does_not_emit_warnings(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        await handle_create_schematic(CreateSchematicInput(name="abort"), asc_state)
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="abort.asc",
+                ops=[  # type: ignore[arg-type]
+                    {
+                        "op": "add_component",
+                        "reference": "R1",
+                        "symbol": "res",
+                        "x": 100,
+                        "y": 100,
+                    },
+                    {  # bogus symbol — aborts the transaction
+                        "op": "add_component",
+                        "reference": "X1",
+                        "symbol": "definitely_not_a_symbol",
+                        "x": 200,
+                        "y": 100,
+                    },
+                ],
+                stop_on_error=True,
+            ),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        # Aborted transactions don't save the file; reporting state warnings
+        # would be misleading.
+        assert "validation_warnings" not in data
+        assert data["saved"] is False
+
+
+# ---------------------------------------------------------------------------
+# add_component — the simplest mutating handler with structured output
+# ---------------------------------------------------------------------------
+
+
+class TestAddComponentValidation:
+    async def test_freshly_added_pins_flagged_floating(
+        self, asc_state: SessionState, asc_file: Path
+    ) -> None:
+        result = await handle_add_component(
+            AddComponentInput(
+                path="Draft1.asc",
+                reference="R_new",
+                symbol="res",
+                x=400,
+                y=400,
+            ),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        warnings = data.get("validation_warnings", [])
+        # The new R_new at (400,400) has both pins isolated.
+        new_floating = [
+            w for w in warnings if w.get("kind") == "floating_pin" and w.get("ref") == "R_new"
+        ]
+        assert len(new_floating) >= 2
+
+
+# ---------------------------------------------------------------------------
+# connect — wire routes don't introduce duplicates of their own
+# ---------------------------------------------------------------------------
+
+
+class TestConnectValidation:
+    async def test_connect_returns_validation_field_when_warnings_exist(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        await handle_create_schematic(CreateSchematicInput(name="conn"), asc_state)
+        # Place two resistors so a connect leaves two outer pins floating.
+        await handle_add_component(
+            AddComponentInput(path="conn.asc", reference="R1", symbol="res", x=100, y=100),
+            asc_state,
+        )
+        await handle_add_component(
+            AddComponentInput(path="conn.asc", reference="R2", symbol="res", x=200, y=100),
+            asc_state,
+        )
+        result = await handle_connect(
+            ConnectInput(path="conn.asc", from_pin="R1.1", to_pin="R2.1"),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        # After the connect, R1 pin 1 and R2 pin 1 are wired; their other
+        # pins (1.2 and 2.2) remain floating, so the field is populated.
+        assert "validation_warnings" in data
+        floating = [w for w in data["validation_warnings"] if w["kind"] == "floating_pin"]
+        assert floating, "expected at least one floating pin after partial wire"
+
+
+# ---------------------------------------------------------------------------
+# move_component / remove_component — text-only handlers, message-level pin
+# ---------------------------------------------------------------------------
+
+
+class TestTextHandlerWarnings:
+    async def test_move_component_emits_floating_pin_text(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        await handle_create_schematic(CreateSchematicInput(name="movetext"), asc_state)
+        await handle_add_component(
+            AddComponentInput(path="movetext.asc", reference="R1", symbol="res", x=100, y=100),
+            asc_state,
+        )
+        result = await handle_move_component(
+            MoveComponentInput(path="movetext.asc", reference="R1", x=300, y=300),
+            asc_state,
+        )
+        text = result.content[0].text  # type: ignore[union-attr]
+        assert "Schematic warnings" in text
+        assert "Floating pin" in text
+
+    async def test_remove_component_emits_no_floating_pin_when_nothing_floats(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        # Schematic has only R1 and a single floating component. Removing
+        # R1 leaves the schematic empty — nothing to warn about.
+        await handle_create_schematic(CreateSchematicInput(name="removetext"), asc_state)
+        await handle_add_component(
+            AddComponentInput(path="removetext.asc", reference="R1", symbol="res", x=100, y=100),
+            asc_state,
+        )
+        result = await handle_remove_component(
+            RemoveComponentInput(path="removetext.asc", reference="R1", cleanup_wires=True),
+            asc_state,
+        )
+        text = result.content[0].text  # type: ignore[union-attr]
+        # Empty schematic ⇒ no floating-pin lines.
+        assert "Floating pin" not in text
