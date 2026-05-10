@@ -33,6 +33,7 @@ from spicelib.editor.base_schematic import (
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import atomic_write_text, services
 from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.log_parser import parse_step_iterations
 from ltspice_mcp.lib.raw_parser import nearest_index, real_axis, sample_to_dict
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, tokenize_body
@@ -264,11 +265,8 @@ def _apply_component_value(editor, reference: str, value: str) -> None:
 
 def _bboxes_overlap(a: dict, b: dict) -> bool:
     """AABB overlap test between two bounding boxes with {x, y, width, height}."""
-    return (
-        a["x"] < b["x"] + b["width"]
-        and a["x"] + a["width"] > b["x"]
-        and a["y"] < b["y"] + b["height"]
-        and a["y"] + a["height"] > b["y"]
+    return BBox.from_origin_size(a["x"], a["y"], a["width"], a["height"]).overlaps(
+        BBox.from_origin_size(b["x"], b["y"], b["width"], b["height"])
     )
 
 
@@ -1997,7 +1995,7 @@ async def handle_symbol_info(args: SymbolInfoInput, state: SessionState) -> type
     lines = [f"Symbol: {sym_info.name}"]
     if sym_info.description:
         lines.append(f"Description: {sym_info.description}")
-    lines.append(f"Size: {sym_info.bbox_width}x{sym_info.bbox_height}")
+    lines.append(f"Size: {sym_info.bbox.width}x{sym_info.bbox.height}")
     lines.append(f"Pins (at {args.rotation}, origin ({args.x},{args.y})):")
     for pin in geometry["pins"]:
         lines.append(f"  {pin['name']}: ({pin['x']}, {pin['y']})")

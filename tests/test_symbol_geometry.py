@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.symbol_geometry import (
     PinInfo,
     SymbolInfo,
@@ -131,8 +132,8 @@ class TestParseAsyFile:
         # RECTANGLE coords: (-64,-96), (64,96)
         # PIN coords: (0,-96), (-48,0), (0,96)
         # x range: -64..64 = 128, y range: -96..96 = 192
-        assert info.bbox_width == 128
-        assert info.bbox_height == 192
+        assert info.bbox.width == 128
+        assert info.bbox.height == 192
 
     def test_empty_file(self, tmp_path: Path):
         """An empty symbol file should parse without error."""
@@ -141,8 +142,8 @@ class TestParseAsyFile:
         info = parse_asy_file(p)
         assert info.name == "empty"
         assert info.pins == ()
-        assert info.bbox_width == 0
-        assert info.bbox_height == 0
+        assert info.bbox.width == 0
+        assert info.bbox.height == 0
 
     def test_pin_without_attributes(self, tmp_path: Path):
         """A PIN line without PINATTR should still be parsed."""
@@ -161,11 +162,30 @@ class TestParseAsyFile:
         p = tmp_path / "shapes.asy"
         p.write_text(content)
         info = parse_asy_file(p)
-        # CIRCLE: (-10,-20), (30,40) -> x: -10..30, y: -20..40
-        # ARC: (-5,-15), (25,35), (0,0), (10,10) -> x: -5..25, y: -15..35
-        # Combined: x: -10..30 = 40, y: -20..40 = 60
-        assert info.bbox_width == 40
-        assert info.bbox_height == 60
+        # CIRCLE bbox: (-10,-20)..(30,40)
+        # ARC bbox:   (-5,-15)..(25,35)  (start/end (0,0)(10,10) lie on the arc, inside its bbox)
+        # Combined:   x ∈ [-10, 30] (w=40), y ∈ [-20, 40] (h=60)
+        assert info.bbox.width == 40
+        assert info.bbox.height == 60
+
+    def test_arc_bbox_ignores_start_end_points(self, tmp_path: Path):
+        """Regression: the ARC bbox is the underlying ellipse's bounding rectangle.
+
+        The previous regex parser pair-collected all 8 ints in the ARC line,
+        which would let synthetic out-of-bbox start/end points expand the bbox.
+        Real LTspice files always place start/end on the arc, so they're inside
+        the ellipse bbox; the typed parser pins this contract regardless.
+        """
+        # Synthetic file: ARC bbox is (0,0)..(10,10) but start/end are far outside.
+        content = "Version 4\nARC Normal 0 0 10 10 999 999 -999 -999\n"
+        p = tmp_path / "arc_synth.asy"
+        p.write_text(content)
+        info = parse_asy_file(p)
+        # Bbox should follow the ellipse rectangle alone.
+        assert info.bbox.x1 == 0
+        assert info.bbox.y1 == 0
+        assert info.bbox.x2 == 10
+        assert info.bbox.y2 == 10
 
 
 # ---------------------------------------------------------------------------
@@ -190,10 +210,7 @@ class TestComputePlacedGeometry:
                 PinInfo(name="A", order=1, x=0, y=-50),
                 PinInfo(name="B", order=2, x=0, y=50),
             ),
-            bbox_x=-10,
-            bbox_y=-50,
-            bbox_width=20,
-            bbox_height=100,
+            bbox=BBox(-10, -50, 10, 50),
         )
 
     def test_r0_placement(self, simple_symbol: SymbolInfo):
