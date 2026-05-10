@@ -45,6 +45,7 @@ from ltspice_mcp.tools._base import (
     PAGINATION_SCHEMA,
     PIN_SCHEMA,
     RO_ANNOTATIONS,
+    VALIDATION_WARNINGS_SCHEMA,
     StrictModel,
     ToolInput,
     format_response,
@@ -346,9 +347,7 @@ def _other_components_pin_coords(editor: AscEditor, exclude_ref: str) -> set[tup
     return coords
 
 
-def _point_on_segment(
-    point: tuple[int, int], v1: tuple[int, int], v2: tuple[int, int]
-) -> bool:
+def _point_on_segment(point: tuple[int, int], v1: tuple[int, int], v2: tuple[int, int]) -> bool:
     """True iff ``point`` lies on the orthogonal wire segment ``v1 → v2``."""
     px, py = point
     x1, y1 = v1
@@ -407,9 +406,7 @@ def _trace_nets(
 
     segments: list[tuple[tuple[int, int], tuple[int, int]]] = []
     for w in editor.wires:
-        segments.append(
-            ((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y)))
-        )
+        segments.append(((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))))
     if extra_segments:
         for sx1, sy1, sx2, sy2 in extra_segments:
             segments.append(((sx1, sy1), (sx2, sy2)))
@@ -449,6 +446,110 @@ def _named_labels(labels: frozenset[str]) -> set[str]:
     """Strip ground ('0') from a label set so 'short to ground' isn't
     flagged as a conflict by detect-multi-label net checks."""
     return {lbl for lbl in labels if lbl != "0"}
+
+
+def _post_op_warnings(editor: AscEditor) -> list[dict]:
+    """Schematic-state advisories surfaced after a mutating op succeeds.
+
+    Returns structured warnings the agent can act on without a follow-up
+    inspection turn:
+
+    - ``floating_pin`` — a component pin with no wire passing through,
+      no net label sitting on it, and no other component pin sharing
+      the coordinate.
+    - ``duplicate_wire`` — two wire segments sharing the same endpoints
+      (in either order). Pure noise, costs nothing to drop.
+    - ``dangling_label`` — a net label whose coordinate is neither on a
+      wire nor at any component pin.
+
+    Read-only on the editor. Cheap to compute during an existing edit
+    session; intended for callers to surface in their response payload.
+    """
+    pins: list[tuple[str, str, int, int]] = []
+    for entry in _collect_component_geometry(editor):
+        ref = entry["ref"]
+        for p in entry["pins"]:
+            pins.append((ref, p["name"], p["x"], p["y"]))
+
+    pin_count_at: dict[tuple[int, int], int] = {}
+    for _, _, x, y in pins:
+        pin_count_at[(x, y)] = pin_count_at.get((x, y), 0) + 1
+
+    segments = [((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires]
+    label_coords = {(int(lbl.coord.X), int(lbl.coord.Y)) for lbl in editor.labels}
+
+    def _on_any_wire(coord: tuple[int, int]) -> bool:
+        return any(coord in (v1, v2) or _point_on_segment(coord, v1, v2) for v1, v2 in segments)
+
+    warnings: list[dict] = []
+
+    for ref, name, x, y in pins:
+        coord = (x, y)
+        if pin_count_at[coord] > 1:
+            continue
+        if coord in label_coords:
+            continue
+        if _on_any_wire(coord):
+            continue
+        pin_label = f"{ref}.{name}" if name else ref
+        warnings.append(
+            {
+                "kind": "floating_pin",
+                "ref": ref,
+                "pin": name,
+                "x": x,
+                "y": y,
+                "message": f"Floating pin: {pin_label} at ({x},{y})",
+            }
+        )
+
+    seen_segments: dict[tuple[tuple[int, int], tuple[int, int]], int] = {}
+    for v1, v2 in segments:
+        if v1 == v2:
+            continue
+        key = (v1, v2) if v1 <= v2 else (v2, v1)
+        seen_segments[key] = seen_segments.get(key, 0) + 1
+    for (a, b), count in seen_segments.items():
+        if count > 1:
+            warnings.append(
+                {
+                    "kind": "duplicate_wire",
+                    "from": {"x": a[0], "y": a[1]},
+                    "to": {"x": b[0], "y": b[1]},
+                    "count": count,
+                    "message": (f"Duplicate wire ({count}×): ({a[0]},{a[1]})->({b[0]},{b[1]})"),
+                }
+            )
+
+    pin_coords = pin_count_at.keys()
+    for lbl in editor.labels:
+        coord = (int(lbl.coord.X), int(lbl.coord.Y))
+        if coord in pin_coords:
+            continue
+        if _on_any_wire(coord):
+            continue
+        warnings.append(
+            {
+                "kind": "dangling_label",
+                "label": lbl.text,
+                "x": coord[0],
+                "y": coord[1],
+                "message": f"Dangling label '{lbl.text}' at ({coord[0]},{coord[1]})",
+            }
+        )
+
+    return warnings
+
+
+def _validation_warnings_lines(warnings: list[dict]) -> list[str]:
+    """Format ``_post_op_warnings`` output as message lines for a text response.
+
+    Returns ``[]`` when ``warnings`` is empty so callers can ``lines.extend``
+    unconditionally without an outer guard.
+    """
+    if not warnings:
+        return []
+    return ["", "Schematic warnings:", *(f"  {w['message']}" for w in warnings)]
 
 
 # Type alias for the union returned by _make_editor / _get_editor.
@@ -1115,7 +1216,9 @@ async def _list_components_netlist(
 
     if prefix:
         upper = prefix.upper()
-        components = [c.name for c in refs_to_card.values() if c.name and c.name[:1].upper() == upper]
+        components = [
+            c.name for c in refs_to_card.values() if c.name and c.name[:1].upper() == upper
+        ]
     else:
         components = [c.name for c in refs_to_card.values() if c.name]
 
@@ -1192,13 +1295,9 @@ async def handle_set_component_value(
             "are mutually exclusive — provide one, not both."
         )
     if values_dict is None and not single_mode_args:
-        raise NetlistError(
-            "Provide either 'reference'+'value' (single) or 'values' dict (batch)"
-        )
+        raise NetlistError("Provide either 'reference'+'value' (single) or 'values' dict (batch)")
     if single_mode_args and (reference is None or value is None):
-        raise NetlistError(
-            "Single mode requires both 'reference' and 'value'"
-        )
+        raise NetlistError("Single mode requires both 'reference' and 'value'")
 
     if values_dict is not None:
         if not isinstance(values_dict, dict):
@@ -1602,6 +1701,7 @@ async def handle_remove_component(
                     continue
                 kept_wires.append(w)
             editor.wires = kept_wires
+        validation_warnings = _post_op_warnings(editor)
 
     result = f"Removed {reference} from {asc_path.name}"
     if args.cleanup_wires and deleted_wires:
@@ -1619,6 +1719,9 @@ async def handle_remove_component(
                 f"\n\nWarning: orphaned wires remain at: {', '.join(orphaned_at)}. "
                 "Re-run with cleanup_wires=true to delete them."
             )
+    extra_lines = _validation_warnings_lines(validation_warnings)
+    if extra_lines:
+        result += "\n" + "\n".join(extra_lines)
 
     return text_response(result)
 
@@ -1699,6 +1802,8 @@ async def handle_move_component(
                     if coord in abandoned_pins and coord not in orphan_coords:
                         orphan_coords.append(coord)
 
+        validation_warnings = _post_op_warnings(editor)
+
     rot_str = f"R{new_rot.value}" if new_rot.value < 360 else f"M{new_rot.value - 360}"
     msg = f"Moved {reference}: ({old_pos.X},{old_pos.Y}) -> ({x},{y}) {rot_str}"
     if overlap_warnings:
@@ -1711,6 +1816,9 @@ async def handle_move_component(
             f"\n\nWarning: wires left at old pin coordinates with no "
             f"connection: {coord_str}. Re-route or delete these wires."
         )
+    extra_lines = _validation_warnings_lines(validation_warnings)
+    if extra_lines:
+        msg += "\n" + "\n".join(extra_lines)
     return text_response(msg)
 
 
@@ -1792,6 +1900,7 @@ async def handle_set_component_attribute(
             "pins": {"type": "array", "items": PIN_SCHEMA},
             "bounding_box": BBOX_SCHEMA,
             "warnings": {"type": "array", "items": {"type": "string"}},
+            "validation_warnings": VALIDATION_WARNINGS_SCHEMA,
         },
     },
 )
@@ -1838,6 +1947,7 @@ async def handle_add_component(
             value=value,
             attributes=args.attributes,
         )
+        validation_warnings = _post_op_warnings(editor)
 
     result = f"Added {reference} ({symbol}) at ({x},{y})"
     if value is not None:
@@ -1881,6 +1991,11 @@ async def handle_add_component(
     }
     if warnings:
         data["warnings"] = warnings
+    if validation_warnings:
+        data["validation_warnings"] = validation_warnings
+    extra_lines = _validation_warnings_lines(validation_warnings)
+    if extra_lines:
+        result += "\n" + "\n".join(extra_lines)
 
     return format_response(result, data, None)
 
@@ -2292,6 +2407,7 @@ class _ConnectPlan(NamedTuple):
                 },
             },
             "warnings": {"type": "array", "items": {"type": "string"}},
+            "validation_warnings": VALIDATION_WARNINGS_SCHEMA,
         },
     },
 )
@@ -2306,6 +2422,7 @@ async def handle_connect(args: ConnectInput, state: SessionState) -> types.CallT
     async with _editing_asc(asc_path, state) as ed:
         for sx1, sy1, sx2, sy2 in plan.segments:
             ed.wires.append(Line(Point(sx1, sy1), Point(sx2, sy2)))
+        validation_warnings = _post_op_warnings(ed)
 
     x1, y1, x2, y2, segments, warnings = (
         plan.x1,
@@ -2336,6 +2453,9 @@ async def handle_connect(args: ConnectInput, state: SessionState) -> types.CallT
     }
     if warnings:
         data["warnings"] = warnings
+    if validation_warnings:
+        data["validation_warnings"] = validation_warnings
+    result_lines.extend(_validation_warnings_lines(validation_warnings))
 
     return format_response("\n".join(result_lines), data, None)
 
@@ -2357,9 +2477,7 @@ def _plan_connect_route(
     ``apply_schematic_ops`` so both paths apply identical safety checks.
     """
     component_geo = _collect_component_geometry(editor)
-    existing_wires = [
-        (int(w.V1.X), int(w.V1.Y), int(w.V2.X), int(w.V2.Y)) for w in editor.wires
-    ]
+    existing_wires = [(int(w.V1.X), int(w.V1.Y), int(w.V2.X), int(w.V2.Y)) for w in editor.wires]
 
     x1, y1 = _resolve_pin(from_pin, editor)
     x2, y2 = _resolve_pin(to_pin, editor)
@@ -3418,6 +3536,7 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
                     "required": ["index", "op", "ok"],
                 },
             },
+            "validation_warnings": VALIDATION_WARNINGS_SCHEMA,
         },
         "required": ["path", "applied_count", "failed_count", "saved", "results"],
     },
@@ -3458,12 +3577,14 @@ async def handle_apply_schematic_ops(
                     continue
             results.append(entry)
 
+        validation_warnings: list[dict] = []
         if args.stop_on_error and failed:
             # Evict from cache so the next caller re-reads from disk; the
             # in-memory mutations on ``editor`` are discarded with the
             # local reference once this scope exits.
             state.editors.invalidate(asc_path)
         else:
+            validation_warnings = _post_op_warnings(editor)
             editor.save_netlist(str(asc_path))
             state.editors.invalidate(asc_path)
             saved = True
@@ -3482,11 +3603,14 @@ async def handle_apply_schematic_ops(
         else:
             summary_lines.append(f"{prefix}  {r['error']}")
 
-    data = {
+    data: dict = {
         "path": str(asc_path),
         "applied_count": applied,
         "failed_count": failed,
         "saved": saved,
         "results": results,
     }
+    if validation_warnings:
+        data["validation_warnings"] = validation_warnings
+    summary_lines.extend(_validation_warnings_lines(validation_warnings))
     return format_response("\n".join(summary_lines), data, None)

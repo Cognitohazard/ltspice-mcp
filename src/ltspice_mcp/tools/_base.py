@@ -106,6 +106,42 @@ BBOX_SCHEMA: dict[str, Any] = {
     },
 }
 
+# Structured advisories emitted by mutating .asc handlers after a successful
+# op. ``message`` is always present and human-readable; the other keys
+# depend on ``kind``. New kinds extend ``VALIDATION_WARNING_KINDS`` and the
+# schema enum together so producers and consumers stay in lockstep.
+VALIDATION_WARNING_KINDS: tuple[str, ...] = (
+    "floating_pin",
+    "duplicate_wire",
+    "dangling_label",
+)
+
+VALIDATION_WARNINGS_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "enum": list(VALIDATION_WARNING_KINDS)},
+            "message": {"type": "string"},
+            "ref": {"type": "string"},
+            "pin": {"type": "string"},
+            "label": {"type": "string"},
+            "x": {"type": "integer"},
+            "y": {"type": "integer"},
+            "from": {
+                "type": "object",
+                "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+            },
+            "to": {
+                "type": "object",
+                "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+            },
+            "count": {"type": "integer"},
+        },
+        "required": ["kind", "message"],
+    },
+}
+
 # Structured .MEAS parse errors surfaced from extract_log_diagnostics.
 # Each entry is the offending directive plus an optional fix suggestion
 # pulled from the spice_validator blocklist.
