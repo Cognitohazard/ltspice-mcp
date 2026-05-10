@@ -6,11 +6,13 @@ compute absolute coordinates for placed components.
 """
 
 import logging
-import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from spicelib import AscEditor
+
+from ltspice_mcp.lib.geometry import BBox
 
 logger = logging.getLogger(__name__)
 
@@ -42,34 +44,118 @@ class PinInfo:
         return {"name": self.name, "order": self.order, "x": self.x, "y": self.y}
 
 
+# .asy graphic primitives. Bbox-relevant fields only — line style ("Normal",
+# "Dotted", ...) is parsed but discarded since nothing downstream uses it.
+
+
+@dataclass(frozen=True)
+class LineEl:
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
+    def points(self) -> tuple[tuple[int, int], tuple[int, int]]:
+        return ((self.x1, self.y1), (self.x2, self.y2))
+
+
+@dataclass(frozen=True)
+class RectEl:
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
+    def points(self) -> tuple[tuple[int, int], tuple[int, int]]:
+        return ((self.x1, self.y1), (self.x2, self.y2))
+
+
+@dataclass(frozen=True)
+class CircleEl:
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
+    def points(self) -> tuple[tuple[int, int], tuple[int, int]]:
+        return ((self.x1, self.y1), (self.x2, self.y2))
+
+
+@dataclass(frozen=True)
+class ArcEl:
+    """Arc described by its underlying ellipse's bounding rectangle.
+
+    LTspice's ARC syntax is ``ARC <style> x1 y1 x2 y2 sx sy ex ey`` where
+    (x1,y1)-(x2,y2) is the ellipse bbox and (sx,sy)/(ex,ey) are the start
+    and end points (which lie on the arc, hence inside the bbox). For the
+    bbox of the arc itself we therefore only need the four bbox corners.
+    """
+
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
+    def points(self) -> tuple[tuple[int, int], tuple[int, int]]:
+        return ((self.x1, self.y1), (self.x2, self.y2))
+
+
+Element = LineEl | RectEl | CircleEl | ArcEl
+
+
+def _parse_shape(line: str) -> Element | None:
+    """Parse one graphic-primitive line. Returns ``None`` for non-shape lines."""
+    parts = line.split()
+    if len(parts) < 6:
+        return None
+    kw = parts[0]
+    try:
+        x1, y1, x2, y2 = int(parts[2]), int(parts[3]), int(parts[4]), int(parts[5])
+    except ValueError:
+        return None
+    if kw == "LINE":
+        return LineEl(x1, y1, x2, y2)
+    if kw == "RECTANGLE":
+        return RectEl(x1, y1, x2, y2)
+    if kw == "CIRCLE":
+        return CircleEl(x1, y1, x2, y2)
+    if kw == "ARC":
+        return ArcEl(x1, y1, x2, y2)
+    return None
+
+
+def bbox_from_elements(
+    elements: Sequence[Element], extra_points: Sequence[tuple[int, int]] | None = None
+) -> BBox | None:
+    """Smallest BBox enclosing all element points and any extras (e.g. pins)."""
+    pts: list[tuple[int, int]] = []
+    for e in elements:
+        pts.extend(e.points())
+    if extra_points:
+        pts.extend(extra_points)
+    return BBox.from_points(pts)
+
+
 @dataclass(frozen=True)
 class SymbolInfo:
     """Parsed symbol metadata: pins, bounding box, description.
 
-    The bounding box is described in the symbol's local coordinate space.
-    LTspice symbols are typically centered around the origin, so ``bbox_x``
-    and ``bbox_y`` are usually negative.
+    The bounding box is in the symbol's local coordinate space. LTspice
+    symbols are typically centered around the origin, so ``bbox.x1`` and
+    ``bbox.y1`` are usually negative.
     """
 
     name: str
     description: str
     pins: tuple[PinInfo, ...]
-    bbox_x: int
-    bbox_y: int
-    bbox_width: int
-    bbox_height: int
+    bbox: BBox
 
     def to_dict(self) -> dict:
         return {
             "symbol": self.name,
             "description": self.description,
             "pins": [p.to_dict() for p in self.pins],
-            "bounding_box": {
-                "x": self.bbox_x,
-                "y": self.bbox_y,
-                "width": self.bbox_width,
-                "height": self.bbox_height,
-            },
+            "bounding_box": self.bbox.to_origin_size_dict(),
         }
 
 
@@ -127,23 +213,20 @@ def _find_asy_file(symbol: str) -> Path | None:
 
 def parse_asy_file(asy_path: Path) -> SymbolInfo:
     """Parse a .asy symbol file to extract pins, bounding box, and description."""
-    content = asy_path.read_text()
-    lines = content.splitlines()
+    lines = asy_path.read_text().splitlines()
 
     pins: list[PinInfo] = []
     description = ""
-    all_x: list[int] = []
-    all_y: list[int] = []
+    elements: list[Element] = []
 
     i = 0
     while i < len(lines):
         line = lines[i].strip()
 
-        # PIN x y ...
+        # PIN x y ...  followed by zero or more PINATTR lines
         if line.startswith("PIN "):
             parts = line.split()
             px, py = int(parts[1]), int(parts[2])
-            # Read PINATTR lines following the PIN
             pin_name = ""
             pin_order = 0
             j = i + 1
@@ -157,69 +240,47 @@ def parse_asy_file(asy_path: Path) -> SymbolInfo:
                     pin_order = int(attr_line.split()[-1])
                 j += 1
             pins.append(PinInfo(name=pin_name, order=pin_order, x=px, y=py))
-            all_x.append(px)
-            all_y.append(py)
             i = j
             continue
 
-        # LINE Normal x1 y1 x2 y2
-        if line.startswith("LINE "):
-            parts = line.split()
-            if len(parts) >= 6:
-                x1, y1, x2, y2 = int(parts[2]), int(parts[3]), int(parts[4]), int(parts[5])
-                all_x.extend([x1, x2])
-                all_y.extend([y1, y2])
+        # Graphic primitives — typed parse contributes via .points()
+        shape = _parse_shape(line)
+        if shape is not None:
+            elements.append(shape)
 
-        # RECTANGLE / CIRCLE / ARC — also contribute to bounding box
-        if line.startswith("RECTANGLE ") or line.startswith("CIRCLE ") or line.startswith("ARC "):
-            coords = re.findall(r"-?\d+", line)
-            for ci in range(0, len(coords) - 1, 2):
-                all_x.append(int(coords[ci]))
-                all_y.append(int(coords[ci + 1]))
-
-        # SYMATTR Description
         if line.startswith("SYMATTR Description"):
             description = line.split(None, 2)[2] if len(line.split(None, 2)) > 2 else ""
 
         i += 1
 
-    # Compute bounding box from all geometry points (preserve min coords;
-    # symbols can have negative coordinates since they're typically centered).
-    if all_x and all_y:
-        bbox_x = min(all_x)
-        bbox_y = min(all_y)
-        bbox_width = max(all_x) - bbox_x
-        bbox_height = max(all_y) - bbox_y
-    else:
-        bbox_x = 0
-        bbox_y = 0
-        bbox_width = 0
-        bbox_height = 0
+    pin_points = [(p.x, p.y) for p in pins]
+    bbox = bbox_from_elements(elements, extra_points=pin_points) or BBox(0, 0, 0, 0)
 
-    symbol_name = asy_path.stem
     pins.sort(key=lambda p: p.order)
     return SymbolInfo(
-        name=symbol_name,
+        name=asy_path.stem,
         description=description,
         pins=tuple(pins),
-        bbox_x=bbox_x,
-        bbox_y=bbox_y,
-        bbox_width=bbox_width,
-        bbox_height=bbox_height,
+        bbox=bbox,
     )
 
 
-# Cache parsed symbols to avoid re-reading .asy files
-_symbol_cache: dict[str, SymbolInfo] = {}
+# Cache parsed symbols (and resolution misses) to avoid re-walking .asy paths.
+_symbol_cache: dict[str, SymbolInfo | None] = {}
 
 
 def get_symbol_info(symbol: str) -> SymbolInfo | None:
-    """Get symbol info by name. Returns None if symbol file not found."""
+    """Get symbol info by name. Returns ``None`` if symbol file not found.
+
+    Negative results are cached too — without that, every reference to a
+    missing symbol re-walks the entire library search path via ``rglob``.
+    """
     if symbol in _symbol_cache:
         return _symbol_cache[symbol]
 
     asy_path = _find_asy_file(symbol)
     if asy_path is None:
+        _symbol_cache[symbol] = None
         return None
 
     info = parse_asy_file(asy_path)
@@ -232,13 +293,12 @@ def compute_placed_geometry(
 ) -> dict:
     """Compute absolute pin positions and bounding box for a placed component.
 
-    Returns dict with 'pins' (list of {name, order, x, y}) and
+    Returns dict with 'pins' (list of {name, order, x, y, dir}) and
     'bounding_box' ({x, y, width, height}) in absolute schematic coordinates.
     """
-    # Transform pins
+    bb = symbol_info.bbox
+
     placed_pins = []
-    bx, by = symbol_info.bbox_x, symbol_info.bbox_y
-    bw, bh = symbol_info.bbox_width, symbol_info.bbox_height
     for pin in symbol_info.pins:
         rx, ry = _apply_rotation(pin.x, pin.y, rotation)
         placed_pins.append(
@@ -247,27 +307,15 @@ def compute_placed_geometry(
                 "order": pin.order,
                 "x": origin_x + rx,
                 "y": origin_y + ry,
-                "dir": _pin_direction(pin.x, pin.y, bx, by, bw, bh, rotation),
+                "dir": _pin_direction(pin.x, pin.y, bb.x1, bb.y1, bb.width, bb.height, rotation),
             }
         )
 
-    # Transform the four corners of the symbol's local bounding box.
-    # Symbols are typically centered around the origin, so bbox_x/bbox_y
-    # are usually negative.
-    corners = [
-        (bx, by),
-        (bx + bw, by),
-        (bx, by + bh),
-        (bx + bw, by + bh),
+    # Transform the four corners of the local bbox, then take the AABB of the result.
+    corners = [(bb.x1, bb.y1), (bb.x2, bb.y1), (bb.x1, bb.y2), (bb.x2, bb.y2)]
+    transformed = [
+        (origin_x + tx, origin_y + ty)
+        for tx, ty in (_apply_rotation(cx, cy, rotation) for cx, cy in corners)
     ]
-    transformed = [_apply_rotation(cx, cy, rotation) for cx, cy in corners]
-    tx = [c[0] for c in transformed]
-    ty = [c[1] for c in transformed]
-    bbox = {
-        "x": origin_x + min(tx),
-        "y": origin_y + min(ty),
-        "width": max(tx) - min(tx),
-        "height": max(ty) - min(ty),
-    }
-
-    return {"pins": placed_pins, "bounding_box": bbox}
+    placed = BBox.from_points(transformed) or BBox(origin_x, origin_y, origin_x, origin_y)
+    return {"pins": placed_pins, "bounding_box": placed.to_origin_size_dict()}
