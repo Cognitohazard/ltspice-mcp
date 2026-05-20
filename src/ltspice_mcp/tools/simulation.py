@@ -31,6 +31,27 @@ SYNC_TIMEOUT_THRESHOLD = 30.0  # Simulations <= 30s run synchronously by default
 HARD_MAX_TIMEOUT = 600.0  # 10 minutes - max for wait=true mode
 
 
+# Output-schema fragment shared by ``run_simulation`` and ``check_job`` —
+# both surface the post-completion summary built by
+# ``build_simulation_summary`` plus the job-tracking fields.
+_SIM_RESULT_FIELDS_SCHEMA: dict[str, dict] = {
+    "sim_type": {"type": "string"},
+    "duration": {"type": "number"},
+    "step_count": {"type": "integer"},
+    "raw_file": {"type": "string"},
+    "log_file": {"type": "string"},
+    "signals": {"type": "array", "items": {"type": "string"}},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "errors": {"type": "array", "items": {"type": "string"}},
+    "meas_errors": MEAS_ERRORS_SCHEMA,
+    "measurements": {"type": "object"},
+    "fourier": {"type": "array", "items": {"type": "object"}},
+    "range": {"type": "object"},
+    "point_count": {"type": "integer"},
+    "failed_measurements": {"type": "array", "items": {"type": "string"}},
+}
+
+
 class RunSimulationInput(ToolInput):
     """Inputs for ltspice_run_simulation."""
 
@@ -111,17 +132,9 @@ def _get_or_create_runner(state: SessionState) -> SimulationRunner:
         "properties": {
             "job_id": {"type": "string"},
             "status": {"type": "string"},
-            "sim_type": {"type": "string"},
-            "duration": {"type": "number"},
-            "step_count": {"type": "integer"},
-            "raw_file": {"type": "string"},
-            "log_file": {"type": "string"},
             "netlist": {"type": "string"},
             "simulator": {"type": "string"},
-            "signals": {"type": "array", "items": {"type": "string"}},
-            "warnings": {"type": "array", "items": {"type": "string"}},
-            "errors": {"type": "array", "items": {"type": "string"}},
-            "meas_errors": MEAS_ERRORS_SCHEMA,
+            **_SIM_RESULT_FIELDS_SCHEMA,
             "error": {"type": "string"},
         },
     },
@@ -283,9 +296,15 @@ async def _wait_for_completion(
 
 
 def _format_success_response(job_id: str, summary: dict, fmt: str | None = None):
-    """Format simulation success response with structured data."""
+    """Format simulation success response with structured data.
+
+    Summary shape comes from ``parse_success_summary``, which now
+    delegates to ``build_simulation_summary``. The new payload includes
+    ``range``, ``measurements``, ``fourier``, and ``meas_errors`` on top
+    of the legacy ``signals``/``step_count``/``sim_type`` fields.
+    """
     # Format signal list (first 20 signals)
-    signals = summary["trace_names"]
+    signals = summary.get("signals", [])
     signal_list = []
     for sig in signals[:20]:
         signal_list.append(f"  - {sig}")
@@ -298,6 +317,9 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
     warnings = summary.get("warnings", [])
     errors = summary.get("errors", [])
     meas_errors = summary.get("meas_errors", [])
+    measurements = summary.get("measurements", {})
+    fourier = summary.get("fourier", [])
+
     diagnostics_text = ""
     if errors:
         diagnostics_text += "\n\nErrors:\n" + "\n".join(f"  {e}" for e in errors)
@@ -306,6 +328,10 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
     meas_lines = format_meas_errors(meas_errors)
     if meas_lines:
         diagnostics_text += "\n\n" + "\n".join(meas_lines)
+    if measurements:
+        diagnostics_text += f"\n\nMeasurements: {len(measurements)} parsed"
+    if fourier:
+        diagnostics_text += f"\n\nFourier: {len(fourier)} signal(s)"
 
     text = (
         f"Simulation completed successfully\n"
@@ -329,10 +355,15 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
         "signals": signals,
         "warnings": warnings,
     }
-    if errors:
-        data["errors"] = errors
-    if meas_errors:
-        data["meas_errors"] = meas_errors
+    # Copy truthy summary fields through to the response. ``point_count``
+    # is special-cased to allow 0 (truthy in the schema but falsy in
+    # Python) — every other field is "omit when empty".
+    for key in ("errors", "meas_errors", "measurements", "fourier",
+                "range", "failed_measurements"):
+        if summary.get(key):
+            data[key] = summary[key]
+    if summary.get("point_count") is not None:
+        data["point_count"] = summary["point_count"]
     return format_response(text, data, fmt)
 
 
@@ -359,11 +390,7 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
             "netlist": {"type": "string"},
             "simulator": {"type": "string"},
             "elapsed": {"type": "number"},
-            "duration": {"type": "number"},
-            "sim_type": {"type": "string"},
-            "raw_file": {"type": "string"},
-            "log_file": {"type": "string"},
-            "signals": {"type": "array", "items": {"type": "string"}},
+            **_SIM_RESULT_FIELDS_SCHEMA,
             "error": {"type": "string"},
             "jobs": {
                 "type": "array",

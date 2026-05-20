@@ -81,6 +81,7 @@ class MeasurementsOutput(TypedDict):
     measurements: dict[str, MeasurementEntry]
     step_count: int
     errors: list[str] | None
+    failed_measurements: list[str]
 
 
 _MAX_DIAGNOSTICS = 50
@@ -463,78 +464,69 @@ def extract_error_context(log_file: Path, max_lines: int = 20) -> str:
 
 
 def parse_success_summary(raw_file: Path, log_file: Path, duration: float) -> dict:
-    """Parse simulation success summary from raw and log files.
+    """Build the success-path summary that ``run_simulation`` returns.
 
-    Extracts metadata about the simulation including type, trace names,
-    step count, and warnings.
+    Delegates to ``raw_parser.build_simulation_summary`` so the canonical
+    summary fields (``range``, ``measurements``, ``fourier``, ``meas_errors``)
+    are included alongside the legacy ``sim_type``/``step_count``/``signals``
+    fields. Adds ``raw_file``/``log_file`` for downstream tool chains that
+    feed these back into ``simulation_summary``, ``get_measurements``, etc.
 
-    Args:
-        raw_file: Path to .raw simulation output file
-        log_file: Path to .log simulation log file
-        duration: Simulation duration in seconds
+    Truncates ``warnings``/``errors`` to ``_MAX_DIAGNOSTICS`` entries with
+    the ``*_truncated`` sibling preserved from the prior implementation.
 
-    Returns:
-        Dictionary with keys:
-        - sim_type: Simulation type (e.g., "Transient Analysis")
-        - duration: Duration in seconds
-        - step_count: Number of parameter steps (1 for non-stepped)
-        - warnings: List of warning messages (first 5 only)
-        - trace_names: List of available signal/trace names
-        - raw_file: Path to raw file (as string)
-        - log_file: Path to log file (as string)
-
-        Returns partial data on parse errors (graceful degradation).
+    Returns partial data on parse errors (graceful degradation): an
+    unparseable raw still yields a dict carrying the paths and duration.
     """
-    result = {
+    from ltspice_mcp.lib.raw_parser import build_simulation_summary
+
+    result: dict = {
         "sim_type": "Unknown",
         "duration": duration,
         "step_count": 1,
         "warnings": [],
-        "trace_names": [],
+        "signals": [],
         "raw_file": str(raw_file),
         "log_file": str(log_file),
     }
 
     try:
-        raw_read = RawRead(str(raw_file), traces_to_read=None)
-
-        result["trace_names"] = raw_read.get_trace_names()
-
-        try:
-            sim_type = raw_read.get_raw_property("Plotname")
-            if sim_type:
-                result["sim_type"] = sim_type
-        except Exception:
-            pass
-
-        try:
-            n_steps = raw_read.get_steps()
-            if n_steps is not None:
-                result["step_count"] = len(n_steps)
-        except Exception:
-            pass
-
+        # Two-step load to keep the success-path bounded: read the header
+        # (no trace data) to discover the axis trace name, then re-open
+        # loading ONLY that single trace. ``build_simulation_summary``
+        # needs the axis to populate ``range`` and ``point_count``; it
+        # does NOT need V(*)/I(*) trace data. Loading "*" would
+        # materialise every signal on every completion — fine for a
+        # short .op, unbounded for a long .tran (Codex M3).
+        header = RawRead(str(raw_file), traces_to_read=None)
+        trace_names = header.get_trace_names()
+        axis_only = [trace_names[0]] if trace_names else None
+        raw_read = RawRead(str(raw_file), traces_to_read=axis_only)
     except Exception as e:
         logger.warning(f"Could not parse raw file {raw_file}: {e}")
+        # No raw — surface what diagnostics we can from the log alone.
+        if log_file.exists():
+            try:
+                diagnostics = extract_log_diagnostics(log_file)
+                result["warnings"] = diagnostics["warnings"]
+                if diagnostics["errors"]:
+                    result["errors"] = diagnostics["errors"]
+            except Exception as log_e:
+                logger.warning(f"Could not parse log file {log_file}: {log_e}")
+        return result
 
-    if log_file.exists():
-        try:
-            diagnostics = extract_log_diagnostics(log_file)
-            warnings = diagnostics["warnings"]
-            if len(warnings) > _MAX_DIAGNOSTICS:
-                result["warnings"] = warnings[:_MAX_DIAGNOSTICS]
-                result["warnings_truncated"] = len(warnings)
-            else:
-                result["warnings"] = warnings
-            errors = diagnostics["errors"]
-            if errors:
-                if len(errors) > _MAX_DIAGNOSTICS:
-                    result["errors"] = errors[:_MAX_DIAGNOSTICS]
-                    result["errors_truncated"] = len(errors)
-                else:
-                    result["errors"] = errors
-        except Exception as e:
-            logger.warning(f"Could not parse log file {log_file}: {e}")
+    log_path = log_file if log_file.exists() else None
+    summary = build_simulation_summary(raw_read, log_path, duration)
+    # ``summary`` doesn't carry ``raw_file``/``log_file``; they're already
+    # set in ``result`` above and survive ``update``.
+    result.update(summary)
+
+    # Diagnostics truncation (preserved from the legacy contract).
+    for key in ("warnings", "errors"):
+        items = result.get(key) or []
+        if len(items) > _MAX_DIAGNOSTICS:
+            result[f"{key}_truncated"] = len(items)
+            result[key] = items[:_MAX_DIAGNOSTICS]
 
     return result
 
@@ -557,6 +549,13 @@ _MEAS_METADATA_SUFFIXES: tuple[tuple[str, str], ...] = (
 # ``'NoneType' object has no attribute 'group'``. Replacing with ``0.0``
 # preserves the rest of the log so .MEAS results, errors, and any other
 # Fourier blocks survive.
+# Pattern for FAIL'ed .MEAS results. Spicelib's LTSpiceLogReader filters
+# these out of get_measure_names() — we re-extract them from the raw log
+# text so callers can distinguish "did not trigger" from "did not parse"
+# rather than seeing a silent absence (D-N2).
+_RE_MEAS_FAILED = re.compile(r"Measurement\s+\"([^\"]+)\"\s+FAIL[''`]?ed", re.IGNORECASE)
+
+
 _RE_FOURIER_NAN = re.compile(
     r"^(Total Harmonic Distortion|Partial Harmonic Distortion):\s*[-+]?(?:nan|inf)%?",
     re.IGNORECASE | re.MULTILINE,
@@ -633,12 +632,40 @@ def parse_measurements(
     if reader is None:
         reader = make_log_reader(log_path)
 
+    # Pull FAIL'ed measurements from the raw log text. Spicelib's reader
+    # filters them out, so without this pass they appear as a silent
+    # absence — indistinguishable from a measurement that wasn't parsed.
+    failed_names: list[str] = []
+    try:
+        log_text = log_path.read_text(encoding="utf-8", errors="replace")
+        # Preserve discovery order, drop duplicates (spicelib reports
+        # FAIL'ed once per step, but the name is the same).
+        seen: set[str] = set()
+        for match in _RE_MEAS_FAILED.finditer(log_text):
+            name = match.group(1)
+            if name not in seen:
+                seen.add(name)
+                failed_names.append(name)
+    except OSError:
+        pass
+
     measure_names = reader.get_measure_names()
     if not measure_names:
         # Surface any errors from the log that explain why measurements are missing
         diagnostics = extract_log_diagnostics(log_path)
         errors_list = diagnostics["errors"] or None
-        return {"measurements": {}, "step_count": 0, "errors": errors_list}
+        # Even when spicelib reports no measurements, FAIL'ed names still
+        # need to show up in ``measurements`` (value=None) so consumers
+        # don't see a silent absence — that was the original D-N2 defect.
+        measurements: dict[str, MeasurementEntry] = {
+            name: {"values": [None]} for name in failed_names
+        }
+        return {
+            "measurements": measurements,
+            "step_count": 0,
+            "errors": errors_list,
+            "failed_measurements": failed_names,
+        }
 
     def _coerce(values: list) -> list[float | None]:
         out: list[float | None] = []
@@ -695,7 +722,21 @@ def parse_measurements(
 
     step_count = len(next(iter(parents.values()))) if parents else 0
 
-    return {"measurements": measurements, "step_count": step_count, "errors": None}
+    # Merge FAIL'ed names that aren't already in measurements. Use
+    # ``values: [None] * step_count`` so consumers can branch on it the
+    # same way they do for any other None entry, and the per-step shape
+    # matches successful measurements.
+    for fname in failed_names:
+        if fname in measurements:
+            continue
+        measurements[fname] = {"values": [None] * max(step_count, 1)}
+
+    return {
+        "measurements": measurements,
+        "step_count": step_count,
+        "errors": None,
+        "failed_measurements": failed_names,
+    }
 
 
 def parse_fourier_data(log_path: Path, reader: LTSpiceLogReader | None = None) -> list[dict]:
@@ -720,44 +761,43 @@ def parse_fourier_data(log_path: Path, reader: LTSpiceLogReader | None = None) -
     if not hasattr(reader, "fourier") or not reader.fourier:
         return []
 
+    # ``reader.fourier`` is ``dict[signal, list[FourierData]]`` — one
+    # FourierData entry per .step iteration (length 1 for unstepped runs).
+    # We flatten and emit one result dict per FourierData.
     results = []
     try:
-        for signal_name, fourier_data in reader.fourier.items():
-            thd = None
-            if hasattr(fourier_data, "thd"):
-                thd = float(fourier_data.thd) if fourier_data.thd is not None else None
-
-            fundamental_freq = None
-            if hasattr(fourier_data, "fundamental_frequency"):
-                fundamental_freq = (
-                    float(fourier_data.fundamental_frequency)
-                    if fourier_data.fundamental_frequency is not None
+        for signal_name, fourier_list in reader.fourier.items():
+            for fourier_data in fourier_list:
+                thd = (
+                    float(fourier_data.thd) if getattr(fourier_data, "thd", None) is not None
                     else None
                 )
+                # Spicelib's FourierData doesn't have a `.fundamental_frequency`
+                # field; the fundamental is the first harmonic's frequency.
+                fundamental_freq = None
+                harmonics_raw = getattr(fourier_data, "harmonics", None) or []
+                if harmonics_raw:
+                    first = harmonics_raw[0]
+                    if hasattr(first, "frequency"):
+                        fundamental_freq = float(first.frequency)
 
-            harmonics = []
-            if hasattr(fourier_data, "harmonics") and fourier_data.harmonics:
-                for harmonic in fourier_data.harmonics:
-                    harm_dict = {
-                        "number": int(harmonic.number) if hasattr(harmonic, "number") else None,
-                        "frequency": (
-                            float(harmonic.frequency) if hasattr(harmonic, "frequency") else None
-                        ),
+                harmonics = []
+                for h in harmonics_raw:
+                    harmonics.append({
+                        "number": int(h.harmonic_number) if hasattr(h, "harmonic_number") else None,
+                        "frequency": float(h.frequency) if hasattr(h, "frequency") else None,
                         "magnitude": (
-                            float(harmonic.magnitude) if hasattr(harmonic, "magnitude") else None
+                            float(h.fourier_component) if hasattr(h, "fourier_component") else None
                         ),
-                        "phase": float(harmonic.phase) if hasattr(harmonic, "phase") else None,
-                    }
-                    harmonics.append(harm_dict)
+                        "phase": float(h.phase) if hasattr(h, "phase") else None,
+                    })
 
-            results.append(
-                {
+                results.append({
                     "signal": signal_name,
                     "thd": thd,
                     "fundamental_frequency": fundamental_freq,
                     "harmonics": harmonics,
-                }
-            )
+                })
     except Exception:
         # Graceful degradation - return partial data if format is unexpected
         pass

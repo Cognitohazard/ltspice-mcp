@@ -360,6 +360,12 @@ def build_simulation_summary(
                 meas_data = parse_measurements(log_path, reader=log_reader)
                 if meas_data["measurements"]:
                     summary["measurements"] = meas_data["measurements"]
+                # FAIL'ed measurements aren't in get_measure_names(); surface
+                # them as a separate list so consumers can distinguish "did
+                # not trigger" from "did not parse" (D-N2).
+                failed = meas_data.get("failed_measurements") or []
+                if failed:
+                    summary["failed_measurements"] = list(failed)
             except Exception:
                 pass
 

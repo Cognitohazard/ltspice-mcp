@@ -48,26 +48,44 @@ class TestParseFourierData:
         assert result == []
 
     def test_log_with_fourier_data(self, work_dir: Path):
-        """Parse a log file containing .FOUR results.
+        """Parse a log file containing .FOUR results — real LTspice format.
 
-        LTspice Fourier output format in log:
-        Fourier components of V(out)
-        DC component:0.00123
-        Harmonic  Frequency  Fourier   Normalized  Phase     Normalized
-        Number    [Hz]       Component Component   [degree]  Phase [deg]
-        1         1000       0.998     1.000       -0.5      0.000
-        2         2000       0.001     0.001       45.2      45.700
-        Total Harmonic Distortion: 0.12345%
+        Locks the D-N1 fix: ``reader.fourier[signal]`` is a
+        ``list[FourierData]`` (one per .step), not a single instance.
+        Pre-fix code treated the list as a single FourierData and
+        silently returned all entries with thd=None / harmonics=[].
         """
-        # The actual parsing depends on LTSpiceLogReader's Fourier parsing.
-        # Since we can't easily construct a log that LTSpiceLogReader will parse
-        # with Fourier data without knowing the exact format, we test the graceful
-        # degradation path.
-        log = work_dir / "fourier.log"
-        log.write_text("Circuit: test.cir\n.tran 0 10m 0 1u\nTotal elapsed time: 0.5 seconds.\n")
+        log = work_dir / "fourier_real.log"
+        log.write_text(
+            "Circuit: * test\n"
+            "\n"
+            "Direct Newton iteration for .op point succeeded.\n"
+            "\n"
+            "Fourier components of V(out)\n"
+            "N-Period=1\n"
+            "DC component:-3.7386e-07\n"
+            "\n"
+            "Harmonic\tFrequency\t Fourier \tNormalized\t Phase  \tNormalized\n"
+            " Number \t  [Hz]   \tComponent\t Component\t[degree]\tPhase [deg]\n"
+            "    1   \t 1.000e+03\t 8.464e-01\t 1.000e+00\t  122.15\xc2\xb0\t    0.00\xc2\xb0\n".encode("latin-1").decode("utf-8")
+            + "    2   \t 2.000e+03\t 7.414e-07\t 8.760e-07\t  177.22\xc2\xb0\t   55.07\xc2\xb0\n".encode("latin-1").decode("utf-8")
+            + "Partial Harmonic Distortion: 0.000251%\n"
+            "Total Harmonic Distortion:   0.014047%\n"
+            "\n"
+            "Total elapsed time: 0.001 seconds.\n"
+        )
         result = parse_fourier_data(log)
-        # LTSpiceLogReader won't find Fourier data here — returns empty
         assert isinstance(result, list)
+        assert len(result) == 1
+        entry = result[0]
+        assert entry["signal"] == "V(out)"
+        assert entry["thd"] == pytest.approx(0.014047)
+        assert entry["fundamental_frequency"] == pytest.approx(1000.0)
+        assert len(entry["harmonics"]) == 2
+        assert entry["harmonics"][0]["number"] == 1
+        assert entry["harmonics"][0]["frequency"] == pytest.approx(1000.0)
+        assert entry["harmonics"][0]["magnitude"] == pytest.approx(0.8464)
+        assert entry["harmonics"][0]["phase"] == pytest.approx(122.15)
 
 
 # --- build_simulation_summary tests ---
