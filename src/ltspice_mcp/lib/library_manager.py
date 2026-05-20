@@ -361,7 +361,8 @@ class LibraryManager:
                 "name": m.name,
                 "type": m.model_type,
                 "source_path": str(m.source_path),
-                "parameters": m.parameters,
+                "ports": m.ports,
+                "params": m.params,
             }
             for m in page
         ]
@@ -470,7 +471,8 @@ class LibraryManager:
             "type": model.model_type,
             "source_path": str(model.source_path),
             "include_directive": include_directive,
-            "parameters": model.parameters,
+            "ports": model.ports,
+            "params": model.params,
         }
 
         if full:

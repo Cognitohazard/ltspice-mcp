@@ -11,7 +11,14 @@ Resolution order:
 1. BOM sniff (UTF-32 LE/BE, UTF-16 LE/BE, UTF-8 with BOM).
 2. Heuristic null-byte scan for UTF-16 LE/BE without BOM (the
    LTspice 26+ ``standard.bjt`` / ``standard.mos`` shape).
-3. UTF-8 with ``errors="replace"`` as the catch-all.
+3. UTF-8 strict — if the bytes are clean UTF-8 (including pure ASCII),
+   decode as-is. This branch is the common case for hand-edited
+   netlists and the v6 stress-test corpus.
+4. CP1252 strict — Windows-edited LTspice files often carry a single
+   non-ASCII character (degree sign, mu, en-dash) in a comment without
+   any BOM. Trying CP1252 strictly before the lossy UTF-8 fallback
+   preserves those characters instead of replacing them with U+FFFD.
+5. UTF-8 with ``errors="replace"`` as the last-resort catch-all.
 """
 
 from __future__ import annotations
@@ -60,6 +67,19 @@ def decode_spice_bytes(raw: bytes) -> str:
     encoding = detect_utf16_endianness(raw[:256])
     if encoding is not None:
         return raw.decode(encoding, errors="replace")
+    # UTF-8 strict for clean ASCII and well-formed UTF-8 (no replacement).
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    # CP1252 strict — preserves degree signs / mu / en-dashes that
+    # Windows-edited LTspice files put in comments without a BOM (Fr4).
+    # cp1252 is a strict superset of Latin-1 for the printable range,
+    # so this also handles ISO-8859-1 inputs.
+    try:
+        return raw.decode("cp1252")
+    except UnicodeDecodeError:
+        pass
     return raw.decode("utf-8", errors="replace")
 
 

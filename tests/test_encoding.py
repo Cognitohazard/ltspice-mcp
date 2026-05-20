@@ -54,6 +54,22 @@ class TestDecodeSpiceBytes:
         text = "R1 a b 1k\n"
         assert decode_spice_bytes(text.encode("ascii")) == text
 
+    def test_cp1252_degree_sign_preserved(self) -> None:
+        # Fr4: Windows-edited LTspice files often have a single non-ASCII
+        # char (degree, mu, en-dash) without a BOM. cp1252 strict-decode
+        # preserves them instead of replacing with U+FFFD.
+        text = "* °C operating point\n"
+        raw = text.encode("cp1252")
+        # No BOM, no UTF-16 null pattern — would have fallen to utf-8
+        # errors="replace" before. Now: cp1252 strict succeeds.
+        assert decode_spice_bytes(raw) == text
+        assert "�" not in decode_spice_bytes(raw)
+
+    def test_cp1252_mu_sign_preserved(self) -> None:
+        text = "C1 a b 10µF\n"
+        raw = text.encode("cp1252")
+        assert decode_spice_bytes(raw) == text
+
     def test_invalid_utf8_replaces_rather_than_raises(self) -> None:
         # Mixed-encoding garbage must not raise — fall through to
         # utf-8 with errors="replace".

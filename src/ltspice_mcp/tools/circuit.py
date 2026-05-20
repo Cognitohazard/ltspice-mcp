@@ -1118,13 +1118,14 @@ async def handle_list_components(args: ListComponentsInput, state: SessionState)
 
     editor = _get_asc_editor(file_path, state)
 
-    # Single-component lookup mode (absorbed from get_component_value)
+    # Single-component lookup mode (absorbed from get_component_value).
+    # For .asc, read the Value SYMATTR directly so Value2 doesn't get
+    # concatenated into the displayed value (Fr3).
     reference = args.reference
     if reference is not None:
-        try:
-            value = editor.get_component_value(reference)
-        except Exception:
-            raise NetlistError(f"Component '{reference}' not found") from None
+        if reference not in editor.components:
+            raise NetlistError(f"Component '{reference}' not found")
+        value = services.asc_component_value(editor, reference)
         data = {"reference": reference, "value": value}
         return format_response(f"{reference} = {value}", data, fmt)
 
@@ -1157,7 +1158,13 @@ async def handle_list_components(args: ListComponentsInput, state: SessionState)
     comp_lines = []
     for comp_ref in page:
         try:
-            value = editor.get_component_value(comp_ref)
+            # For .asc, read Value SYMATTR directly (Fr3 — avoids the
+            # Value+Value2 concat). For .cir/.net this branch is not
+            # reached; netlists go through _list_components_netlist.
+            if is_asc:
+                value = services.asc_component_value(editor, comp_ref)
+            else:
+                value = editor.get_component_value(comp_ref)
         except Exception:
             # spicelib's component-line regex chokes on B-sources with
             # commas in if(...) expressions; degrade gracefully rather
