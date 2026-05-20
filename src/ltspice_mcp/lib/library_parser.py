@@ -22,7 +22,10 @@ class ModelEntry:
         line_start: Line number where definition starts (1-indexed)
         line_count: Number of lines in definition
         raw_text: Full SPICE definition text including continuation lines
-        parameters: First 5 key parameters extracted for summary view
+        ports: Port names for .SUBCKT (empty for .MODEL).
+        params: Default parameter values. For .MODEL, the first 5 key
+            parameters extracted from the model body. For .SUBCKT, the
+            ``param:`` clause defaults (e.g. ``gain=10``).
     """
 
     name: str
@@ -32,7 +35,8 @@ class ModelEntry:
     line_start: int
     line_count: int
     raw_text: str
-    parameters: dict[str, str]
+    ports: list[str]
+    params: dict[str, str]
 
 
 @dataclass
@@ -207,7 +211,8 @@ def parse_library_file(path: Path) -> LibraryIndex:
                 line_start=c.line_start,
                 line_count=len(c.raw_lines),
                 raw_text="".join(c.raw_lines).rstrip("\n"),
-                parameters=params,
+                ports=[],
+                params=params,
             )
             models.append(entry)
             logger.debug(f"Parsed .MODEL {view.name} from {path.name}")
@@ -229,13 +234,18 @@ def parse_library_file(path: Path) -> LibraryIndex:
             # classified as a param default, not a port.
             try:
                 subckt_view = SubcktCard.from_card(c)
-                ports = subckt_view.ports[:5]
+                # Surface the full port list — ``ports`` is part of the
+                # public ModelEntry contract that find_model and
+                # resources emit. Truncating would silently hand back
+                # incomplete pinning to callers instantiating the
+                # subckt (Codex M4).
+                ports = list(subckt_view.ports)
+                params = dict(subckt_view.param_defaults)
             except Exception as e:
                 logger.warning(
                     f"Malformed .SUBCKT {c.name} at line {c.line_start} in {path}: {e}"
                 )
                 continue
-            parameters = {f"node{i + 1}": node for i, node in enumerate(ports)}
             line_count = (
                 cards[closer_idx].line_start
                 - c.line_start
@@ -249,7 +259,8 @@ def parse_library_file(path: Path) -> LibraryIndex:
                 line_start=c.line_start,
                 line_count=line_count,
                 raw_text=raw_text,
-                parameters=parameters,
+                ports=ports,
+                params=params,
             )
             models.append(entry)
             logger.debug(f"Parsed .SUBCKT {c.name} from {path.name}")

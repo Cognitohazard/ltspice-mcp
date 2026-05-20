@@ -326,7 +326,8 @@ def _read_models(
             {
                 "name": m.name,
                 "type": m.model_type,
-                "parameters": m.parameters,
+                "ports": m.ports,
+                "params": m.params,
             }
             for m in index.models
         ]
