@@ -9,6 +9,7 @@ and raise NetlistError if given a non-.asc file.
 import asyncio
 import bisect
 import contextlib
+import io
 import re
 from collections.abc import AsyncIterator
 from collections.abc import Set as AbstractSet
@@ -36,8 +37,13 @@ from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.log_parser import parse_step_iterations
 from ltspice_mcp.lib.raw_parser import nearest_index, real_axis, sample_to_dict
-from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, tokenize_body
-from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS, MEAS_KINDS, validate_directive
+from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, lex, tokenize_body
+from ltspice_mcp.lib.spice_validator import (
+    ANALYSIS_KINDS,
+    MEAS_KINDS,
+    validate_directive,
+    validate_netlist_arity,
+)
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, get_symbol_info
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
@@ -82,6 +88,15 @@ def _create_component(
         comp.attributes["Value"] = value
     if attributes:
         for attr_name, attr_val in attributes.items():
+            # Spicelib's parser fails on subsequent reads of a SYMATTR line
+            # with no value, leaving the .asc permanently unreadable until
+            # manually edited. Reject up front (P-N1).
+            if attr_val == "":
+                raise NetlistError(
+                    f"Attribute {attr_name!r} on {reference!r}: empty value "
+                    "would corrupt the schematic. Omit the key to leave the "
+                    "attribute unset."
+                )
             comp.attributes[attr_name] = attr_val
     editor.add_component(comp)
 
@@ -823,32 +838,48 @@ def _require_asc(path: Path) -> None:
         raise NetlistError(f"This operation requires an .asc schematic, got '{path.suffix}'. ")
 
 
+def _atomic_save_editor(editor: Editor, target: Path) -> None:
+    """Render editor to a buffer, then atomically rename onto target.
+
+    Avoids partial-write corruption (P-N1): if rendering or writing fails,
+    the original file is untouched. Spicelib's save_netlist accepts an
+    io.StringIO sink (verified for AscEditor and SpiceEditor), so we can
+    skip the temp-file dance and reuse atomic_write_text's tested rename.
+    """
+    buf = io.StringIO()
+    editor.save_netlist(buf)
+    atomic_write_text(
+        target,
+        buf.getvalue(),
+        encoding=getattr(editor, "encoding", "utf-8") or "utf-8",
+        durable=False,
+    )
+
+
 @asynccontextmanager
 async def _editing(path: Path, state: SessionState) -> AsyncIterator[Editor]:
-    """Get a cached editor, yield it, then save and invalidate on success.
+    """Get a cached editor, yield it, save atomically on success.
 
-    If the caller raises, changes are not saved (fail-safe).
-    Uses per-file locking to prevent concurrent edits to the same file.
+    Cache is invalidated unconditionally — whether the yield body raised,
+    the save raised, or both succeeded. The cached editor is dirty after
+    any mutation; a failed save doesn't roll back the in-memory state.
     """
     async with _get_edit_lock(path):
         editor = _get_editor(path, state)
-        yield editor
-        editor.save_netlist(str(path))
-        state.editors.invalidate(path)
+        try:
+            yield editor
+            _atomic_save_editor(editor, path)
+        finally:
+            state.editors.invalidate(path)
 
 
 @asynccontextmanager
 async def _editing_asc(path: Path, state: SessionState) -> AsyncIterator[AscEditor]:
-    """Get a cached AscEditor, yield it, then save and invalidate on success.
-
-    Caller must have validated _require_asc first.
-    Uses per-file locking to prevent concurrent edits to the same file.
-    """
-    async with _get_edit_lock(path):
-        editor = _get_asc_editor(path, state)
+    """``_editing`` narrowed to ``AscEditor`` — caller must have validated
+    ``_require_asc`` first. Same save/rollback contract."""
+    async with _editing(path, state) as editor:
+        assert isinstance(editor, AscEditor)
         yield editor
-        editor.save_netlist(str(path))
-        state.editors.invalidate(path)
 
 
 # ---------------------------------------------------------------------------
@@ -1085,7 +1116,7 @@ async def handle_list_components(args: ListComponentsInput, state: SessionState)
     if not _is_asc(file_path):
         return await _list_components_netlist(args, file_path, fmt)
 
-    editor = _get_editor(file_path, state)
+    editor = _get_asc_editor(file_path, state)
 
     # Single-component lookup mode (absorbed from get_component_value)
     reference = args.reference
@@ -2953,6 +2984,17 @@ async def handle_validate_netlist(
             continue
         issues.append(_meas_mismatch_issue(lineno, line, kind, active_kinds))
 
+    # Element-arity pass (C-N4): walk lexer cards, consult ELEMENT_SPECS,
+    # flag instances with too few positional nodes or B-sources missing
+    # the V=/I= prefix. LTspice's "Expected 2 node names here" / "Unknown
+    # parameter" errors at runtime become up-front issues here.
+    try:
+        arity_cards = lex(content).cards
+    except SpiceLexError:
+        arity_cards = []
+    for arity_issue in validate_netlist_arity(arity_cards):
+        issues.append({"severity": "error", **arity_issue})
+
     summary = {"file": str(file_path), "issue_count": len(issues), "issues": issues}
     if not issues:
         return format_response(f"OK: no issues in {file_path.name}", summary, fmt)
@@ -3557,37 +3599,47 @@ async def handle_apply_schematic_ops(
     saved = False
     abort_reason: str | None = None
 
+    validation_warnings: list[dict] = []
     async with _get_edit_lock(asc_path):
         editor = _get_asc_editor(asc_path, state)
-        for i, op in enumerate(args.ops):
-            entry: dict[str, object] = {"index": i, "op": op.op, "ok": True, "error": None}
-            try:
-                op_result = _apply_op_inplace(editor, op, asc_path)
-                entry.update({k: v for k, v in op_result.items() if k != "op"})
-                applied += 1
-            except (NetlistError, ValueError) as e:
-                entry["ok"] = False
-                entry["error"] = str(e)
-                failed += 1
+        try:
+            for i, op in enumerate(args.ops):
+                entry: dict[str, object] = {"index": i, "op": op.op, "ok": True, "error": None}
+                try:
+                    op_result = _apply_op_inplace(editor, op, asc_path)
+                    entry.update({k: v for k, v in op_result.items() if k != "op"})
+                    applied += 1
+                except (NetlistError, ValueError) as e:
+                    entry["ok"] = False
+                    entry["error"] = str(e)
+                    failed += 1
+                    results.append(entry)
+                    if args.stop_on_error:
+                        abort_reason = f"op #{i} ({op.op}) failed: {e}"
+                        break
+                    else:
+                        continue
                 results.append(entry)
-                if args.stop_on_error:
-                    abort_reason = f"op #{i} ({op.op}) failed: {e}"
-                    break
-                else:
-                    continue
-            results.append(entry)
 
-        validation_warnings: list[dict] = []
-        if args.stop_on_error and failed:
-            # Evict from cache so the next caller re-reads from disk; the
-            # in-memory mutations on ``editor`` are discarded with the
-            # local reference once this scope exits.
+            if args.stop_on_error and failed:
+                # Evict from cache so the next caller re-reads from disk; the
+                # in-memory mutations on ``editor`` are discarded with the
+                # local reference once this scope exits.
+                state.editors.invalidate(asc_path)
+            else:
+                validation_warnings = _post_op_warnings(editor)
+                _atomic_save_editor(editor, asc_path)
+                state.editors.invalidate(asc_path)
+                saved = True
+        except BaseException:
+            # Uncaught exception (KeyboardInterrupt, CancelledError, or any
+            # non-NetlistError/ValueError from _apply_op_inplace). The file
+            # on disk is intact — _atomic_save_editor either hasn't run or
+            # renames atomically — but the cached editor has mutations
+            # from earlier ops in this batch. Evict so the next caller
+            # doesn't see them.
             state.editors.invalidate(asc_path)
-        else:
-            validation_warnings = _post_op_warnings(editor)
-            editor.save_netlist(str(asc_path))
-            state.editors.invalidate(asc_path)
-            saved = True
+            raise
 
     summary_lines = [f"apply_schematic_ops on {asc_path.name}: {applied} ok, {failed} failed"]
     if abort_reason:

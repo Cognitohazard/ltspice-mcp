@@ -365,3 +365,68 @@ class TestTextHandlerWarnings:
         text = result.content[0].text  # type: ignore[union-attr]
         # Empty schematic ⇒ no floating-pin lines.
         assert "Floating pin" not in text
+
+
+# ---------------------------------------------------------------------------
+# Item 3 — apply_schematic_ops cache safety on uncaught exception
+# ---------------------------------------------------------------------------
+
+
+class TestApplySchematicOpsRollback:
+    """E-N3/N4: an uncaught exception mid-batch (not NetlistError or
+    ValueError — those are caught per-op) must:
+      - leave the file on disk byte-identical to pre-call,
+      - invalidate the cached editor so prior ops' mutations don't leak,
+      - re-raise so the caller sees the failure.
+    """
+
+    async def test_uncaught_exception_invalidates_and_preserves_file(
+        self,
+        asc_state: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await handle_create_schematic(CreateSchematicInput(name="rollback"), asc_state)
+        target = work_dir / "rollback.asc"
+        original = target.read_bytes()
+
+        from ltspice_mcp.tools import circuit as circuit_mod
+
+        real_apply = circuit_mod._apply_op_inplace
+        call_count = {"n": 0}
+
+        def flaky_apply(editor, op, asc_path):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return real_apply(editor, op, asc_path)
+            # On the second op, raise a RuntimeError — outside the
+            # (NetlistError, ValueError) tuple the per-op handler catches.
+            raise RuntimeError("injected mid-batch failure")
+
+        monkeypatch.setattr(circuit_mod, "_apply_op_inplace", flaky_apply)
+
+        with pytest.raises(RuntimeError, match="injected"):
+            await handle_apply_schematic_ops(
+                ApplySchematicOpsInput(
+                    path="rollback.asc",
+                    ops=[  # type: ignore[arg-type]
+                        {"op": "add_component", "reference": "R1", "symbol": "res", "x": 100, "y": 100},
+                        {"op": "add_component", "reference": "R2", "symbol": "res", "x": 200, "y": 100},
+                    ],
+                    stop_on_error=True,
+                ),
+                asc_state,
+            )
+
+        # File unchanged — _atomic_save_editor never ran.
+        assert target.read_bytes() == original
+
+        # Cache eviction means a follow-up read sees the original empty
+        # schematic, not the dirty R1-but-no-R2 state.
+        monkeypatch.undo()
+        from ltspice_mcp.tools.circuit import handle_list_components
+
+        result = await handle_list_components({"path": "rollback.asc"}, asc_state)
+        text = result.content[0].text  # type: ignore[union-attr]
+        assert "R1" not in text
+        assert "R2" not in text

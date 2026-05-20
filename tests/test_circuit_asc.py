@@ -357,3 +357,158 @@ class TestConnect:
                 ),
                 asc_state,
             )
+
+
+@pytest.mark.asyncio
+class TestEmptyAttributeRejected:
+    """P-N1: add_component with empty SYMATTR value used to write a partial
+    SYMATTR line and crash mid-write, leaving the .asc permanently
+    unreadable. Reject up front."""
+
+    async def test_empty_attribute_raises(self, asc_state: SessionState, asc_file: Path):
+        original = asc_file.read_bytes()  # noqa: ASYNC240
+        with pytest.raises(NetlistError, match="empty value"):
+            await handle_add_component(
+                AddComponentInput(
+                    path=asc_file.name,
+                    reference="M_bad",
+                    symbol="res",
+                    x=600,
+                    y=600,
+                    attributes={"SpiceModel": ""},
+                ),
+                asc_state,
+            )
+        assert asc_file.read_bytes() == original  # noqa: ASYNC240
+
+
+@pytest.mark.asyncio
+class TestEditingAscRollback:
+    """Item 1: uncaught exceptions inside _editing_asc must invalidate the
+    cached editor so a later read doesn't see dirty in-memory mutations,
+    and the file on disk must remain intact."""
+
+    async def test_uncaught_exception_after_mutation_invalidates_cache(
+        self, asc_state: SessionState, asc_file: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Inject a failure after add_component has already mutated the
+        # editor in-memory but before save. _post_op_warnings runs in the
+        # handler body after _create_component, so raising from it
+        # simulates a real spicelib internal error mid-edit.
+        from ltspice_mcp.tools import circuit as circuit_mod
+
+        original = asc_file.read_bytes()  # noqa: ASYNC240
+        boom_calls = {"n": 0}
+
+        def boom(*_a, **_kw):
+            del _a, _kw
+            boom_calls["n"] += 1
+            raise RuntimeError("injected post-op failure")
+
+        monkeypatch.setattr(circuit_mod, "_post_op_warnings", boom)
+
+        with pytest.raises(RuntimeError, match="injected"):
+            await handle_add_component(
+                AddComponentInput(
+                    path=asc_file.name,
+                    reference="R_uncommitted",
+                    symbol="res",
+                    x=700,
+                    y=700,
+                ),
+                asc_state,
+            )
+
+        # The injection fired (sanity).
+        assert boom_calls["n"] == 1
+        # File on disk is unchanged — save runs only on the success path.
+        assert asc_file.read_bytes() == original  # noqa: ASYNC240
+        # Cache eviction means a fresh read doesn't see R_uncommitted.
+        monkeypatch.undo()
+        result = await handle_list_components({"path": asc_file.name}, asc_state)
+        assert "R_uncommitted" not in result.content[0].text
+
+
+@pytest.mark.asyncio
+class TestAtomicAscSave:
+    """Item 2: a failure while spicelib is rendering the .asc must not
+    leave a partially-written file on disk."""
+
+    async def test_save_failure_preserves_original(
+        self, asc_state: SessionState, asc_file: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from spicelib import AscEditor
+
+        original = asc_file.read_bytes()  # noqa: ASYNC240
+
+        # Inject a save that writes partial bytes to whatever sink it gets,
+        # then raises. Two cases to defeat:
+        #   1. Pre-fix path: editor.save_netlist(str(path)) opens the file
+        #      directly. A partial write would land on disk. To prove the
+        #      atomic-rename, route through the StringIO sink only (which
+        #      atomic_write_text uses) — so a partial sink write does NOT
+        #      reach the target.
+        #   2. Post-fix path: editor.save_netlist(buf), then
+        #      atomic_write_text(target, buf.getvalue(). On failure, the
+        #      sibling temp is cleaned up and target stays intact.
+        def failing_save(self_editor, sink):
+            del self_editor
+            # Write partial content to the sink (StringIO or file handle).
+            if hasattr(sink, "write"):
+                sink.write("Version 4\nSHEET 1 0 0\n!!CORRUPT!!\n")
+            elif isinstance(sink, str):
+                # Pre-fix code path: it would have passed a string path,
+                # so spicelib opens the file directly. Simulate spicelib
+                # writing partial content before crashing.
+                Path(sink).write_text("Version 4\nSHEET 1 0 0\n!!CORRUPT!!\n")
+            raise OSError("disk full simulation")
+
+        monkeypatch.setattr(AscEditor, "save_netlist", failing_save)
+
+        with pytest.raises(OSError, match="disk full"):
+            await handle_add_component(
+                AddComponentInput(
+                    path=asc_file.name,
+                    reference="R_aborted_save",
+                    symbol="res",
+                    x=600,
+                    y=600,
+                ),
+                asc_state,
+            )
+
+        # Atomic-rename guarantee: no partial write reached the target.
+        assert asc_file.read_bytes() == original  # noqa: ASYNC240
+
+    async def test_save_failure_evicts_cache(
+        self, asc_state: SessionState, asc_file: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Codex H1: a save that mutates the in-memory editor then crashes
+        must still invalidate the cache. Otherwise a follow-up read sees
+        the unsaved component."""
+        from spicelib import AscEditor
+
+        def failing_save(*args, **_kw):
+            raise OSError("disk full simulation")
+
+        monkeypatch.setattr(AscEditor, "save_netlist", failing_save)
+
+        with pytest.raises(OSError, match="disk full"):
+            await handle_add_component(
+                AddComponentInput(
+                    path=asc_file.name,
+                    reference="R_uncommitted",
+                    symbol="res",
+                    x=600,
+                    y=600,
+                ),
+                asc_state,
+            )
+
+        # Restore real save so the follow-up read works.
+        monkeypatch.undo()
+
+        # The component must NOT be visible — cache was evicted, fresh
+        # read from disk shows the pre-failure state.
+        result = await handle_list_components({"path": asc_file.name}, asc_state)
+        assert "R_uncommitted" not in result.content[0].text
