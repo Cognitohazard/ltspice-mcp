@@ -168,7 +168,7 @@ persistence entirely.
 | `full` (default) | All 49 tools | Backwards-compatible default for any MCP client |
 | `agentic` | 33 | **Recommended** when your client supports skill files |
 
-The **agentic** profile removes netlist-editing wrappers, sweep/MC configuration tools, niche schematic operations, and library session management — things a capable LLM agent does better through direct file editing. It keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, AscEditor-dependent ops, and library search — the tools that provide genuine leverage over what an LLM can do natively.
+The **agentic** profile removes netlist-editing wrappers, sweep/MC configuration tools, niche schematic operations, and library session management — work a capable LLM agent can do through direct file editing. It keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, AscEditor-dependent ops, and library search.
 
 ```toml
 [tools]
@@ -192,13 +192,14 @@ Copy the relevant skill into whatever location your MCP client uses for persiste
 
 All 49 tools are prefixed with `ltspice_` to avoid namespace conflicts with other MCP servers. Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) for client auto-approval decisions.
 
-### Circuit editing (17 tools)
+### Circuit editing (20 tools)
 
-Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispatch picks the right editor automatically.
+Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispatch picks the right editor automatically. Mutating tools that affect schematic topology run a post-op validation pass and return structured warnings (floating pins, dangling net labels, duplicate wire segments) alongside the result.
 
 | Tool | Description |
 |-|-|
 | `ltspice_create_netlist` | Create a new netlist from a content string |
+| `ltspice_create_schematic` | Create an empty `.asc` ready for incremental editing |
 | `ltspice_read_circuit` | Read and parse a circuit file (netlist text for `.cir`, schematic layout for `.asc`) |
 | `ltspice_list_components` | List components (optionally filtered by prefix) or look up a single component by reference |
 | `ltspice_set_component_value` | Set one component value, or batch-set many via a `values` dict |
@@ -210,11 +211,13 @@ Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispa
 | `ltspice_add_component` | Add a component with value, attributes, returns pin positions and bounding box |
 | `ltspice_connect` | Connect two pins by reference with waypoint routing; validates for pin collisions, wire junctions, and diagonal wires before adding |
 | `ltspice_add_net_label` | Add/remove net labels and ground flags (supports pin reference for placement) |
-| `ltspice_add_text` | Add comment text annotations to schematic |
 | `ltspice_symbol_info` | Get symbol pin positions, bounding box, pin directions, and description |
 | `ltspice_component_info` | Get placed component pin positions, bounding box, and attributes |
 | `ltspice_export_netlist` | Export `.asc` to `.net` netlist (shows diff against previous export) |
-| `ltspice_apply_schematic_ops` | Apply many `.asc` edits in one transaction (add/move/remove components, connect, label, directive); cuts a 25-call schematic build to 1 round-trip |
+| `ltspice_validate_netlist` | Static checks over a netlist or schematic before simulation (rejects known-bad `.MEAS` patterns, missing models, syntax errors) |
+| `ltspice_diff_circuit` | Structural diff between two circuit files (added/removed components, value changes, directive changes) |
+| `ltspice_step_get` | Look up a signal at a chosen value of a `.step`/`.DC` sweep axis |
+| `ltspice_apply_schematic_ops` | Apply many `.asc` edits in one transaction (add/move/remove components, connect, label, directive) |
 
 `.asc` schematic editing requires `.asy` symbol files. These are auto-detected on Windows and WSL; override with `[schematic] symbol_paths` in TOML or the `LTSPICE_MCP_SYMBOL_PATHS` env var.
 
@@ -226,7 +229,7 @@ Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispa
 | `ltspice_check_job` | Check a job's status by ID, or list all jobs |
 | `ltspice_cancel_job` | Cancel a running simulation |
 
-### Analysis (16 tools)
+### Analysis (15 tools)
 
 Scalar and overview tools work on any .raw file; waveform tools reject AC (use the AC-specific tools instead) and AC tools reject transient.
 
@@ -234,7 +237,6 @@ Scalar and overview tools work on any .raw file; waveform tools reject AC (use t
 |-|-|
 | `ltspice_signal_stats` | Signal statistics: min, max, mean, RMS, peak-to-peak (dB/phase for AC) |
 | `ltspice_query_value` | Query a signal's value at a specific time or frequency |
-| `ltspice_measurements` | Extract `.MEAS` directive results from the simulation log |
 | `ltspice_operating_point` | DC operating point: all node voltages and branch currents |
 | `ltspice_simulation_summary` | Full summary: simulation type, signals, measurements, warnings |
 | `ltspice_edge_metrics` | Transient rise/fall time and slew rate for one edge |
@@ -259,12 +261,11 @@ Scalar and overview tools work on any .raw file; waveform tools reject AC (use t
 | `ltspice_run_montecarlo` | Execute a configured Monte Carlo analysis (async, returns job ID) |
 | `ltspice_batch_results` | Query sweep/MC job progress, per-signal statistics, or per-run data |
 
-### Library management (5 tools)
+### Library management (4 tools)
 
 | Tool | Description |
 |-|-|
 | `ltspice_find_model` | Find model candidates by name (fuzzy by default; `exact=true` for exact case-insensitive match) |
-| `ltspice_model_info` | Get model parameters and the `.include` directive to use it |
 | `ltspice_load_library` | Load a `.lib`/`.mod` file or a directory of library files |
 | `ltspice_unload_library` | Unload a previously loaded library |
 | `ltspice_list_libraries` | List loaded libraries, optionally with their model names |
@@ -333,23 +334,44 @@ Tools           tools/circuit.py     — netlist and schematic editing
                 tools/library.py     — component library management
                 tools/status.py      — server diagnostics
 
-Core            lib/sim_runner.py        — spicelib SimRunner async integration
+Core            lib/spice_lex.py         — shared SPICE tokenizer (see docs/spice_lex.md)
+                lib/spice_lex_views.py   — typed card views (model, instance, param, subckt, meas)
+                lib/spice_lex_ops.py     — cross-card transformations (rename_subckt, rename_model)
+                lib/spice_validator.py   — static netlist checks (`.MEAS` linting, missing models)
+                lib/sim_runner.py        — spicelib SimRunner async integration
                 lib/sweep_runner.py      — parametric sweep execution
                 lib/montecarlo_runner.py — Monte Carlo execution
+                lib/montecarlo.py        — MC engine perturbing models and `.PARAM` values
                 lib/runner_manager.py    — centralized runner lifecycle and caching
+                lib/runner_base.py       — shared runner base class
                 lib/raw_parser.py        — .raw file parsing and statistics
                 lib/log_parser.py        — .log parsing (errors, measurements, Fourier)
+                lib/signal_analysis.py   — transient signal metrics (edges, periodicity, timing)
+                lib/ac_analysis.py       — AC analysis metrics (filter, stability, resonance)
                 lib/batch_results.py     — sweep/MC batch result extraction
+                lib/services.py          — service layer shared by tools and resources
+                lib/job_lifecycle.py     — job-state transitions
+                lib/job_registry.py      — in-memory job index
+                lib/job_store.py         — persistent sidecar job state
+                lib/job_types.py         — job dataclasses
+                lib/recent.py            — recent-circuits index
                 lib/ltspice_wsl.py       — WSL-aware LTspice subclass
                 lib/wsl.py               — WSL detection and path conversion
                 lib/simulator.py         — simulator detection and selection
                 lib/library_manager.py   — SPICE model library management
                 lib/library_parser.py    — .lib/.mod file parsing
+                lib/geometry.py          — typed BBox and `.asy` shape parsing
+                lib/symbol_geometry.py   — `.asy` symbol parsing, pin positions, rotation
+                lib/component_value.py   — component value parsing and validation
+                lib/encoding.py          — SPICE text decoding (UTF-16/Latin-1/mixed EOL)
                 lib/cache.py             — FileCache for editor and result instances
+                lib/filelock.py          — cross-process file locking
                 lib/pathutil.py          — path security (safe_path, resolve_safe_path)
                 lib/format.py            — output formatting helpers
                 lib/plotting.py          — matplotlib plot generation
                 lib/sweep_utils.py       — sweep parameter utilities
+                lib/mcp_logging.py       — structured logging helpers
+                lib/observability.py     — tool-call observability hooks
 
 Config          config.py  — TOML + env var configuration
                 state.py   — session state (jobs, editors, caches)
@@ -358,6 +380,8 @@ Config          config.py  — TOML + env var configuration
 
 ### Design notes
 
+- **Shared SPICE parser**: `lib/spice_lex` (see [docs/spice_lex.md](docs/spice_lex.md)) provides a single tokenizer + typed-card library used by the Monte Carlo engine, library parser, netlist validator, and circuit tools. Hand-rolled per-site regex passes have been migrated to it.
+- **Post-op validation pass**: schematic-mutating tools surface structured warnings (floating pins, dangling labels, duplicate wire segments) alongside the result, computed in the same editor session.
 - **Async wrapping**: spicelib is synchronous. Short-lived parser/editor calls run inline on the event loop (the MCP stdio transport processes one request at a time). Long-lived simulator work uses `asyncio.to_thread()` inside the runner layer (`sim_runner`, `sweep_runner`, `montecarlo_runner`).
 - **Path sandbox**: User-provided paths are validated against `config.allowed_paths`. Paths outside the sandbox raise `PathSecurityError`.
 - **Runner lifecycle**: `RunnerManager` owns all runner instances (sim, sweep, MC). It auto-invalidates cached runners when the event loop, simulator class, or output folder changes. Runners are never created directly.
@@ -365,6 +389,11 @@ Config          config.py  — TOML + env var configuration
 - **Tool annotations**: Every tool declares `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` for client auto-approval decisions.
 - **Output schemas**: All 19 data-returning tools declare `outputSchema` for client introspection of `structuredContent`. The remaining 16 text-only confirmation tools don't set `structuredContent` and omit `outputSchema`.
 - **Structured errors**: Typed error hierarchy (`PathSecurityError`, `NetlistError`, `SimulationError` variants) in `errors.py`. Handlers catch `LTSpiceMCPError` subtypes and return error text; unknown exceptions propagate to the MCP SDK.
+
+## Documentation
+
+- [docs/DESIGN.md](docs/DESIGN.md) — scope, architecture, design principles, non-goals, roadmap
+- [docs/spice_lex.md](docs/spice_lex.md) — SPICE parser architecture and public API
 
 ## Development
 
