@@ -727,6 +727,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
             "warnings": {"type": "array", "items": {"type": "string"}},
             "errors": {"type": "array", "items": {"type": "string"}},
             "meas_errors": MEAS_ERRORS_SCHEMA,
+            "failed_measurements": {"type": "array", "items": {"type": "string"}},
         },
     },
 )
@@ -819,6 +820,12 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
                 summary.get("step_count", 1),
             )
         )
+        lines.append("")
+
+    if summary.get("failed_measurements"):
+        lines.append("FAIL'ed measurements (logged but did not trigger):")
+        for name in summary["failed_measurements"]:
+            lines.append(f"  {name}")
         lines.append("")
 
     if "fourier" in summary:

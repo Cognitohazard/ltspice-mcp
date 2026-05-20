@@ -216,7 +216,7 @@ class TestParseSuccessSummary:
         )
         assert result["duration"] == 1.5
         assert result["sim_type"] == "Unknown"
-        assert result["trace_names"] == []
+        assert result["signals"] == []
         assert result["step_count"] == 1
 
     def test_missing_log_with_invalid_raw(self, tmp_path: Path):
@@ -326,6 +326,73 @@ class TestParseMeasurementsFourierNan:
         assert entry["values"] == [0.0]
         assert entry.get("range_from") == pytest.approx(0.03)
         assert entry.get("range_to") == pytest.approx(0.05)
+
+
+class TestParseMeasurementsFailed:
+    """D-N2: FAIL'ed .MEAS entries used to be silently absent. Spicelib's
+    get_measure_names() filters them out, so without text-log extraction
+    the user can't tell "did not trigger" from "did not parse"."""
+
+    def test_failed_measurement_surfaces_as_null(self, tmp_path: Path):
+        log = tmp_path / "failed.log"
+        log.write_text(
+            "Circuit: * test\n"
+            "\n"
+            "Direct Newton iteration for .op point succeeded.\n"
+            "v_avg: AVG(v(out))=0.5 FROM 0 TO 1\n"
+            'Measurement "tr_rise" FAIL\'ed\n'
+            "Date: today\n"
+            "Total elapsed time: 0.001 seconds.\n"
+        )
+        result = parse_measurements(log)
+        # Successful measurement still parses.
+        assert "v_avg" in result["measurements"]
+        # FAIL'ed measurement surfaces with a None value, not silently absent.
+        assert "tr_rise" in result["measurements"]
+        assert result["measurements"]["tr_rise"]["values"] == [None]
+        assert "tr_rise" in result["failed_measurements"]
+
+    def test_failed_measurement_dedupes_across_steps(self, tmp_path: Path):
+        log = tmp_path / "failed_steps.log"
+        log.write_text(
+            "Circuit: * test\n"
+            "\n"
+            'Measurement "tr_rise" FAIL\'ed\n'
+            'Measurement "tr_rise" FAIL\'ed\n'
+            'Measurement "tr_rise" FAIL\'ed\n'
+            "Total elapsed time: 0.001 seconds.\n"
+        )
+        result = parse_measurements(log)
+        # Three FAIL lines (one per step) collapse to a single entry.
+        assert result["failed_measurements"] == ["tr_rise"]
+
+    def test_no_failed_measurements_returns_empty_list(self, tmp_path: Path):
+        log = tmp_path / "clean.log"
+        log.write_text(
+            "Circuit: * test\n"
+            "\n"
+            "Direct Newton iteration for .op point succeeded.\n"
+            "v_avg: AVG(v(out))=0.5 FROM 0 TO 1\n"
+            "Total elapsed time: 0.001 seconds.\n"
+        )
+        result = parse_measurements(log)
+        assert result["failed_measurements"] == []
+
+    def test_only_failed_measurements_still_surface(self, tmp_path: Path):
+        # Smoke-test exposed: when EVERY .meas FAIL'ed, spicelib's
+        # get_measure_names() returns empty and the early-return path
+        # would have dropped the FAIL'ed names from ``measurements``.
+        log = tmp_path / "all_failed.log"
+        log.write_text(
+            "Circuit: * test\n"
+            "\n"
+            'Measurement "tr_rise" FAIL\'ed\n'
+            "Total elapsed time: 0.001 seconds.\n"
+        )
+        result = parse_measurements(log)
+        assert "tr_rise" in result["measurements"]
+        assert result["measurements"]["tr_rise"]["values"] == [None]
+        assert result["failed_measurements"] == ["tr_rise"]
 
 
 class TestParseMeasurementsFromTo:
