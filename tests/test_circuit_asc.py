@@ -360,6 +360,70 @@ class TestConnect:
 
 
 @pytest.mark.asyncio
+class TestAscValueExcludesValue2:
+    """Fr3: read_circuit / list_components on .asc used to concatenate
+    Value+Value2 into the displayed value AND duplicate Value2 under
+    attributes. Read Value alone; let Value2 stay only in attributes."""
+
+    async def test_list_components_excludes_value2(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        from ltspice_mcp.tools.circuit import (
+            CreateSchematicInput,
+            handle_create_schematic,
+        )
+
+        await handle_create_schematic(CreateSchematicInput(name="value2"), asc_state)
+        await handle_add_component(
+            AddComponentInput(
+                path="value2.asc",
+                reference="M1",
+                symbol="nmos",
+                x=200,
+                y=200,
+                value="NMOS_VTH04",
+                attributes={"Value2": "tag1", "SpiceLine": "W=10u L=0.5u"},
+            ),
+            asc_state,
+        )
+
+        result = await handle_list_components({"path": "value2.asc"}, asc_state)
+        comps = result.structuredContent["components"]  # type: ignore[index]
+        m1 = next(c for c in comps if c["reference"] == "M1")
+        # Value field is the Value SYMATTR alone, not "NMOS_VTH04 tag1".
+        assert m1["value"] == "NMOS_VTH04"
+        # Value2 still appears under attributes.
+        assert m1["attributes"]["Value2"] == "tag1"
+
+    async def test_single_ref_lookup_excludes_value2(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        from ltspice_mcp.tools.circuit import (
+            CreateSchematicInput,
+            handle_create_schematic,
+        )
+
+        await handle_create_schematic(CreateSchematicInput(name="value2_single"), asc_state)
+        await handle_add_component(
+            AddComponentInput(
+                path="value2_single.asc",
+                reference="M1",
+                symbol="nmos",
+                x=200,
+                y=200,
+                value="NMOS_VTH04",
+                attributes={"Value2": "tag1"},
+            ),
+            asc_state,
+        )
+
+        result = await handle_list_components(
+            {"path": "value2_single.asc", "reference": "M1"}, asc_state
+        )
+        assert result.structuredContent["value"] == "NMOS_VTH04"  # type: ignore[index]
+
+
+@pytest.mark.asyncio
 class TestEmptyAttributeRejected:
     """P-N1: add_component with empty SYMATTR value used to write a partial
     SYMATTR line and crash mid-write, leaving the .asc permanently

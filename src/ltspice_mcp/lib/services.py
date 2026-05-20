@@ -431,12 +431,30 @@ def get_batch_signal_data(
     return out
 
 
+def asc_component_value(editor: AscEditor, ref: str) -> str:
+    """Return a component's primary value from its ``Value`` SYMATTR only.
+
+    Spicelib's ``editor.get_component_value`` concatenates ``Value`` and
+    ``Value2`` into a single space-separated string, which then collides
+    with the ``attributes: {Value2: ...}`` map that downstream tools also
+    surface (Fr3). Read ``Value`` alone here and let ``Value2`` stay in
+    the attributes map without duplication.
+    """
+    comp = editor.components.get(ref)
+    if comp is None:
+        # Fall back to spicelib's lookup so the "component not found"
+        # error path is identical to the legacy code.
+        return editor.get_component_value(ref)
+    val = (comp.attributes or {}).get("Value", "")
+    return str(val) if val is not None else ""
+
+
 def extract_asc_info(editor: AscEditor, file_path: Path) -> dict[str, Any]:
     """Extract structured schematic data from an ``AscEditor``."""
     components = editor.get_components()
     comp_data = []
     for ref in components:
-        value = editor.get_component_value(ref)
+        value = asc_component_value(editor, ref)
         pos, rot = editor.get_component_position(ref)
         rot_str = f"R{rot.value}" if rot.value < 360 else f"M{rot.value - 360}"
         # Surface non-default SYMATTRs (e.g., SpiceLine, SpiceModel) so

@@ -79,7 +79,9 @@ class ListLibrariesInput(ToolInput):
         "libraries. Default is fuzzy matching — finds typos, case variants, and "
         "near-neighbour part numbers (e.g., '2N3905' → '2N3904'); pass exact=true "
         "to only return the exact case-insensitive match. Returns ranked candidates "
-        "with similarity score and ready-to-paste .include directive."
+        "with similarity score and ready-to-paste .include directive. Each "
+        "candidate carries ``ports`` (the .SUBCKT port list, empty for .MODEL) "
+        "and ``params`` (default parameter values from the body / ``params:`` clause)."
     ),
     input_model=FindModelInput,
     annotations=RO_ANNOTATIONS,
@@ -98,7 +100,11 @@ class ListLibrariesInput(ToolInput):
                         "source_path": {"type": "string"},
                         "include_directive": {"type": "string"},
                         "score": {"type": "number"},
-                        "parameters": {"type": "object"},
+                        "ports": {"type": "array", "items": {"type": "string"}},
+                        "params": {
+                            "type": "object",
+                            "additionalProperties": {"type": "string"},
+                        },
                     },
                 },
             },

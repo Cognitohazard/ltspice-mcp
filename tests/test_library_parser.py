@@ -56,8 +56,9 @@ class TestParseLibraryFile:
         m = index.models[0]
         assert m.name == "2N2222"
         assert m.model_type == ".MODEL"
-        assert m.parameters["BF"] == "200"
-        assert m.parameters["IS"] == "1e-14"
+        assert m.params["BF"] == "200"
+        assert m.params["IS"] == "1e-14"
+        assert m.ports == []
         assert m.source_path == lib
 
     def test_parse_model_no_space_before_paren(self, tmp_path: Path):
@@ -70,8 +71,8 @@ class TestParseLibraryFile:
         assert len(index.models) == 1
         m = index.models[0]
         assert m.name == "Q1"
-        assert m.parameters["BF"] == "200"
-        assert m.parameters["IS"] == "1e-14"
+        assert m.params["BF"] == "200"
+        assert m.params["IS"] == "1e-14"
 
     def test_parse_nested_subckt(self, tmp_path: Path):
         # Regression: a .SUBCKT containing another .SUBCKT was previously
@@ -104,7 +105,8 @@ class TestParseLibraryFile:
         lib.write_text(".SUBCKT myamp in out vcc PARAMS: gain=10 offset=0\nR1 in out 1k\n.ENDS\n")
         index = parse_library_file(lib)
         m = index.models[0]
-        assert m.parameters == {"node1": "in", "node2": "out", "node3": "vcc"}
+        assert m.ports == ["in", "out", "vcc"]
+        assert m.params == {"gain": "10", "offset": "0"}
 
     def test_parse_subckt_with_ends(self, tmp_path: Path):
         lib = tmp_path / "sub.lib"
@@ -115,8 +117,7 @@ class TestParseLibraryFile:
         m = index.models[0]
         assert m.name == "opamp"
         assert m.model_type == ".SUBCKT"
-        assert m.parameters["node1"] == "in+"
-        assert m.parameters["node2"] == "in-"
+        assert m.ports[:2] == ["in+", "in-"]
         assert m.line_count == 3
 
     def test_parse_subckt_missing_ends(self, tmp_path: Path):
@@ -134,8 +135,32 @@ class TestParseLibraryFile:
         index = parse_library_file(lib)
         assert len(index.models) == 1
         m = index.models[0]
-        assert m.parameters == {"node1": "in", "node2": "out"}
-        assert "node3" not in m.parameters  # `gain` is not a port
+        assert m.ports == ["in", "out"]
+        assert m.params == {"gain": "10"}
+
+    def test_subckt_with_param_defaults_surfaces_params(self, tmp_path: Path):
+        # Fr2: .SUBCKT with `params:` clause should expose both `ports`
+        # (the positional port list) and `params` (the default values).
+        lib = tmp_path / "amp.lib"
+        lib.write_text(".SUBCKT amp in out params: gain=10\nR1 in out {gain}k\n.ENDS\n")
+        index = parse_library_file(lib)
+        m = index.models[0]
+        assert m.ports == ["in", "out"]
+        assert m.params == {"gain": "10"}
+
+    def test_subckt_with_more_than_five_ports_keeps_all(self, tmp_path: Path):
+        # Codex M4: an opamp with 7 pins must not have its port list
+        # silently truncated to the first 5 — callers reading ports to
+        # instantiate the part would otherwise drop pins.
+        lib = tmp_path / "octal.lib"
+        lib.write_text(
+            ".SUBCKT octal_amp in+ in- out vcc vee enable trim\n"
+            "R1 in+ in- 1Meg\n"
+            ".ENDS\n"
+        )
+        index = parse_library_file(lib)
+        m = index.models[0]
+        assert m.ports == ["in+", "in-", "out", "vcc", "vee", "enable", "trim"]
 
     def test_parse_mixed_file(self, tmp_path: Path):
         lib = tmp_path / "mixed.lib"
