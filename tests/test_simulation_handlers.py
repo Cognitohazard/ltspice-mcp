@@ -144,7 +144,7 @@ class TestFormatSuccessResponse:
             "step_count": 1,
             "raw_file": "/tmp/x.raw",
             "log_file": "/tmp/x.log",
-            "trace_names": ["time", "V(out)"],
+            "signals": ["time", "V(out)"],
             "warnings": [],
         }
         result = _format_success_response("j1", summary, None)
@@ -164,7 +164,7 @@ class TestFormatSuccessResponse:
             "step_count": 1,
             "raw_file": "/tmp/x.raw",
             "log_file": "/tmp/x.log",
-            "trace_names": signals,
+            "signals": signals,
             "warnings": ["w1"],
             "errors": ["e1"],
         }
