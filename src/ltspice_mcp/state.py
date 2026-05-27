@@ -28,6 +28,7 @@ from ltspice_mcp.lib.job_types import (
 )
 from ltspice_mcp.lib.library_manager import LibraryManager
 from ltspice_mcp.lib.runner_manager import RunnerManager
+from ltspice_mcp.lib.simulator import simulator_dialect
 
 if TYPE_CHECKING:
     from ltspice_mcp.tools._base import RegisteredTool
@@ -87,6 +88,16 @@ class SessionState:
     mc_configs: dict[str, MonteCarloConfig] = field(default_factory=dict)
     _touched_recent: set[Path] = field(default_factory=set, repr=False)
     """Resolved circuit paths already recorded in the recent-circuits index this session."""
+
+    @property
+    def raw_dialect(self) -> str | None:
+        """spicelib ``RawRead`` dialect for the default simulator.
+
+        Returns ``None`` for LTspice (auto-detect works) and an explicit
+        dialect string for simulators whose raw files lack the ``Command:``
+        header that spicelib needs for auto-detection.
+        """
+        return simulator_dialect(self.default_simulator)
 
     @classmethod
     def create(cls, config: ServerConfig, available: dict[str, type]) -> "SessionState":

@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from pathlib import Path
 from typing import Literal
 
 from mcp import types
@@ -21,8 +22,8 @@ from ltspice_mcp.tools._base import (
     format_response,
     registry,
     require_simulator,
-    resolve_netlist_path,
     resolve_output_folder,
+    resolve_runnable_netlist,
     text_response,
 )
 
@@ -53,7 +54,7 @@ _SIM_RESULT_FIELDS_SCHEMA: dict[str, dict] = {
 
 
 class RunSimulationInput(ToolInput):
-    """Inputs for ltspice_run_simulation."""
+    """Inputs for run_simulation."""
 
     netlist: str = Field(description="Path to the netlist file (.cir, .net, .asc)")
     timeout: float | None = Field(
@@ -73,11 +74,11 @@ class RunSimulationInput(ToolInput):
 
 
 class CheckJobInput(ToolInput):
-    """Inputs for ltspice_check_job."""
+    """Inputs for check_job."""
 
     job_id: str | None = Field(
         default=None,
-        description="Job ID returned by ltspice_run_simulation. Omit to list jobs.",
+        description="Job ID returned by run_simulation. Omit to list jobs.",
     )
     status: (
         Literal["running", "queued", "completed", "failed", "timeout", "cancelled", "all"] | None
@@ -92,9 +93,47 @@ class CheckJobInput(ToolInput):
 
 
 class CancelJobInput(ToolInput):
-    """Inputs for ltspice_cancel_job."""
+    """Inputs for cancel_job."""
 
     job_id: str = Field(description="Job ID of the running simulation to cancel")
+
+
+def _check_ngspice_compat(netlist_path: Path, simulator_class: type) -> list[str]:
+    """Pre-flight check for ngspice-incompatible directives.
+
+    Returns a list of warnings to surface in the response. Raises
+    ``SimulationError`` for hard blockers (.step).
+    """
+    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+    if not issubclass(simulator_class, NGspiceSimulator):
+        return []
+    try:
+        content = netlist_path.read_text(errors="replace")
+    except OSError:
+        return []
+    warnings: list[str] = []
+    meas_names: list[str] = []
+    for line in content.splitlines():
+        stripped = line.strip().lower()
+        if stripped.startswith(".step"):
+            raise SimulationError(
+                "ngspice batch mode does not support .step directives. "
+                "Use configure_sweep + run_sweep for parametric sweeps, "
+                "or remove the .step line and set the parameter to a fixed value."
+            )
+        if stripped.startswith(".meas"):
+            parts = stripped.split()
+            if len(parts) >= 3:
+                meas_names.append(parts[2])
+    if meas_names:
+        names = ", ".join(meas_names)
+        warnings.append(
+            f"ngspice cannot evaluate .meas in batch mode. "
+            f"The following measurements will be skipped: {names}. "
+            f"Use signal_stats or query_value to compute them from the raw data."
+        )
+    return warnings
 
 
 def _get_or_create_runner(state: SessionState) -> SimulationRunner:
@@ -111,7 +150,7 @@ def _get_or_create_runner(state: SessionState) -> SimulationRunner:
 
 
 @registry.tool(
-    name="ltspice_run_simulation",
+    name="run_simulation",
     description=(
         "Run a SPICE simulation on a netlist file. "
         "Automatically runs synchronously for short simulations (<=30s timeout) "
@@ -151,10 +190,12 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     wait = args.wait
     fmt = args.format
 
-    netlist_path = resolve_netlist_path(netlist_str, state)
+    netlist_path = resolve_runnable_netlist(netlist_str, state)
     require_simulator(state)
     default_simulator = state.default_simulator
     assert default_simulator is not None  # guaranteed by require_simulator
+
+    preflight_warnings = _check_ngspice_compat(netlist_path, default_simulator)
 
     # Generate job ID and create job
     job_id = generate_job_id()
@@ -182,9 +223,11 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     # Else: async (return job ID immediately)
     if wait:
         effective_timeout = min(timeout, HARD_MAX_TIMEOUT)
-        return await _wait_for_completion(job, effective_timeout, runner, state, fmt)
+        return await _wait_for_completion(
+            job, effective_timeout, runner, state, fmt, preflight_warnings
+        )
     elif timeout <= SYNC_TIMEOUT_THRESHOLD:
-        return await _wait_for_completion(job, timeout, runner, state, fmt)
+        return await _wait_for_completion(job, timeout, runner, state, fmt, preflight_warnings)
     else:
         # Async path - return job ID immediately
         data = {
@@ -198,9 +241,9 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
             f"Job ID: {job_id}\n"
             f"Netlist: {netlist_path}\n"
             f"Simulator: {default_simulator.__name__}\n\n"
-            f"Use ltspice_check_job('{job_id}') to check status\n"
-            f"Use ltspice_check_job() to see all jobs\n"
-            f"Use ltspice_cancel_job('{job_id}') to cancel",
+            f"Use check_job('{job_id}') to check status\n"
+            f"Use check_job() to see all jobs\n"
+            f"Use cancel_job('{job_id}') to cancel",
             data,
             fmt,
         )
@@ -212,6 +255,7 @@ async def _wait_for_completion(
     runner: SimulationRunner,
     state: SessionState,
     fmt: str | None = None,
+    preflight_warnings: list[str] | None = None,
 ):
     """Wait for simulation to complete (sync mode)."""
     start_time = time.time()
@@ -265,7 +309,12 @@ async def _wait_for_completion(
                 f"Job {job.job_id} completed but result files are missing.\n"
                 f"raw_file: {job.raw_file}, log_file: {job.log_file}"
             )
-        summary = parse_success_summary(job.raw_file, job.log_file, duration)
+        summary = parse_success_summary(
+            job.raw_file, job.log_file, duration, dialect=state.raw_dialect
+        )
+        if preflight_warnings:
+            existing = summary.get("warnings") or []
+            summary["warnings"] = preflight_warnings + existing
         suggestions = services.suggestions_from_errors(summary.get("errors"), state.libraries)
         if suggestions:
             summary["suggestions"] = suggestions
@@ -368,7 +417,7 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
 
 
 @registry.tool(
-    name="ltspice_check_job",
+    name="check_job",
     description=(
         "Check status of a simulation job by ID, or list all jobs. "
         "Without job_id: lists active jobs (filter with status param). "
@@ -437,7 +486,7 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
                 f"Netlist: {job.netlist}\n"
                 f"Simulator: {job.simulator}\n"
                 f"Elapsed: {elapsed:.1f}s\n\n"
-                f"Use ltspice_cancel_job('{job_id}') to cancel"
+                f"Use cancel_job('{job_id}') to cancel"
             )
         else:
             text = (
@@ -445,7 +494,7 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
                 f"Netlist: {job.netlist}\n"
                 f"Simulator: {job.simulator}\n"
                 f"Elapsed: {elapsed:.1f}s\n\n"
-                f"Use ltspice_cancel_job('{job_id}') to cancel"
+                f"Use cancel_job('{job_id}') to cancel"
             )
         return format_response(text, data, fmt)
     elif job.status == "completed":
@@ -465,7 +514,9 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
                 f"Job {job_id} completed but result files have been removed.\n"
                 f"raw: {job.raw_file.exists()}, log: {job.log_file.exists()}"
             )
-        summary = parse_success_summary(job.raw_file, job.log_file, duration)
+        summary = parse_success_summary(
+            job.raw_file, job.log_file, duration, dialect=state.raw_dialect
+        )
         suggestions = services.suggestions_from_errors(summary.get("errors"), state.libraries)
         if suggestions:
             summary["suggestions"] = suggestions
@@ -597,7 +648,7 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
 
 
 @registry.tool(
-    name="ltspice_cancel_job",
+    name="cancel_job",
     description="Cancel a running simulation job. Kills the simulator process and marks the job as cancelled.",
     input_model=CancelJobInput,
     annotations=types.ToolAnnotations(

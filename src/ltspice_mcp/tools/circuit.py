@@ -888,7 +888,7 @@ async def _editing_asc(path: Path, state: SessionState) -> AsyncIterator[AscEdit
 
 
 @registry.tool(
-    name="ltspice_create_netlist",
+    name="create_netlist",
     description=(
         "Create a new SPICE netlist file from content string. Automatically appends .END if missing."
     ),
@@ -950,7 +950,7 @@ async def handle_create_netlist(
 
 
 @registry.tool(
-    name="ltspice_read_circuit",
+    name="read_circuit",
     description=(
         "Read and parse a circuit file (.cir/.net or .asc). For netlists: returns content "
         "and component values. For schematics: returns layout and directives."
@@ -1059,7 +1059,7 @@ def _format_circuit_text(file_path: Path, data: dict) -> str:
 
 
 @registry.tool(
-    name="ltspice_list_components",
+    name="list_components",
     description=(
         "List components in a circuit file, optionally filtered by type prefix, or "
         "return a single component value by reference."
@@ -1194,7 +1194,7 @@ async def handle_list_components(args: ListComponentsInput, state: SessionState)
     result = header + "\n\n" + "\n".join(comp_lines)
 
     if offset + len(page) < total:
-        result += f"\n\nNext page: ltspice_list_components(path=..., offset={offset + limit})"
+        result += f"\n\nNext page: list_components(path=..., offset={offset + limit})"
 
     data = {
         "components": comp_list,
@@ -1282,7 +1282,7 @@ async def _list_components_netlist(
         header += f" (prefix '{prefix}')"
     body = header + "\n\n" + "\n".join(comp_lines)
     if offset + len(page) < total:
-        body += f"\n\nNext page: ltspice_list_components(path=..., offset={offset + limit})"
+        body += f"\n\nNext page: list_components(path=..., offset={offset + limit})"
 
     data = {
         "components": comp_list,
@@ -1294,7 +1294,7 @@ async def _list_components_netlist(
 
 
 @registry.tool(
-    name="ltspice_set_component_value",
+    name="set_component_value",
     description="Set component value(s) in a circuit file. Supports single or batch mode.",
     input_model=SetComponentValueInput,
     annotations=types.ToolAnnotations(
@@ -1431,7 +1431,7 @@ async def _set_component_value_asc(
 
 
 @registry.tool(
-    name="ltspice_parameter",
+    name="parameter",
     description="Read or write .PARAM directive values in a circuit file.",
     input_model=ParameterInput,
     annotations=types.ToolAnnotations(
@@ -1512,7 +1512,7 @@ async def handle_parameter(args: ParameterInput, state: SessionState):
 
 
 @registry.tool(
-    name="ltspice_edit_directive",
+    name="edit_directive",
     description=(
         "Add or remove a SPICE directive or .asc free-text comment. Set "
         "``kind=comment`` for annotation text; default is a SPICE directive. "
@@ -1631,7 +1631,7 @@ def _remove_directive_or_comment(editor, instruction: str) -> str:
         if not (directive_hit or comment_hit):
             raise NetlistError(
                 f"No directive or comment matched regex {pattern!r}. "
-                "Use ltspice_read_circuit to see what's actually in the file."
+                "Use read_circuit to see what's actually in the file."
             )
         return "directive(s)/comment(s)"
 
@@ -1641,7 +1641,7 @@ def _remove_directive_or_comment(editor, instruction: str) -> str:
         raise NetlistError(
             f"No directive or comment matched {instruction!r} exactly. "
             "Match is literal by default — pass 'regex:<pattern>' for regex "
-            "matching, or copy the line verbatim from ltspice_read_circuit."
+            "matching, or copy the line verbatim from read_circuit."
         )
     return "directive"
 
@@ -1697,7 +1697,7 @@ def _strip_matching_comments(editor, matcher) -> bool:
 
 
 @registry.tool(
-    name="ltspice_remove_component",
+    name="remove_component",
     description="Remove a component from an .asc schematic by reference designator.",
     input_model=RemoveComponentInput,
     annotations=types.ToolAnnotations(
@@ -1765,7 +1765,7 @@ async def handle_remove_component(
 
 
 @registry.tool(
-    name="ltspice_move_component",
+    name="move_component",
     description=(
         "Move and/or rotate a component in an .asc schematic. Warns if the "
         "new position overlaps another component's bounding box, and lists "
@@ -1861,7 +1861,7 @@ async def handle_move_component(
 
 
 @registry.tool(
-    name="ltspice_set_component_attribute",
+    name="set_component_attribute",
     description=(
         "Set a schematic-only component attribute. The standard LTspice slots "
         "are ``Value``, ``Value2``, ``SpiceLine``, ``SpiceLine2``, "
@@ -1915,7 +1915,7 @@ async def handle_set_component_attribute(
 
 
 @registry.tool(
-    name="ltspice_add_component",
+    name="add_component",
     description="Add a new component to an .asc schematic at a specified grid position.",
     input_model=AddComponentInput,
     annotations=types.ToolAnnotations(
@@ -1963,7 +1963,7 @@ async def handle_add_component(
     if get_symbol_info(symbol) is None:
         raise NetlistError(
             f"Symbol '{symbol}' not found in any configured symbol library. "
-            "Use ltspice_symbol_info to verify the symbol name, or "
+            "Use symbol_info to verify the symbol name, or "
             "configure [schematic] symbol_paths in ltspice-mcp.toml."
         )
 
@@ -1971,8 +1971,8 @@ async def handle_add_component(
         if reference in editor.components:
             raise NetlistError(
                 f"Component '{reference}' already exists. "
-                "Use ltspice_set_component_value to modify it, "
-                "or ltspice_remove_component to remove it first."
+                "Use set_component_value to modify it, "
+                "or remove_component to remove it first."
             )
 
         _create_component(
@@ -2042,7 +2042,7 @@ _previous_exports: dict[Path, list[str]] = {}
 
 
 @registry.tool(
-    name="ltspice_export_netlist",
+    name="export_netlist",
     description="Export an .asc schematic to a SPICE netlist (.net) using LTspice.",
     input_model=ExportNetlistInput,
     annotations=types.ToolAnnotations(
@@ -2099,7 +2099,7 @@ async def handle_export_netlist(
 
 
 @registry.tool(
-    name="ltspice_symbol_info",
+    name="symbol_info",
     description=(
         "Get symbol pin positions, bounding box, and description. "
         "Optionally compute absolute positions for a given placement and rotation."
@@ -2159,7 +2159,7 @@ async def handle_symbol_info(args: SymbolInfoInput, state: SessionState) -> type
 
 
 @registry.tool(
-    name="ltspice_component_info",
+    name="component_info",
     description=(
         "Get a placed component's pin positions, bounding box, value, and attributes "
         "from an .asc schematic."
@@ -2254,7 +2254,7 @@ def _resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
         if not matches:
             raise NetlistError(
                 f"Net label '{net_name}' not found in schematic. "
-                "Add it with ltspice_add_net_label first."
+                "Add it with add_net_label first."
             )
         if len(matches) > 1:
             coords = ", ".join(f"({x},{y})" for x, y in matches)
@@ -2300,7 +2300,7 @@ def _resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
 
 
 @registry.tool(
-    name="ltspice_add_net_label",
+    name="add_net_label",
     description="Add a net label or ground flag to an .asc schematic at a wire junction.",
     input_model=NetLabelInput,
     annotations=types.ToolAnnotations(
@@ -2346,7 +2346,7 @@ async def handle_add_net_label(args: NetLabelInput, state: SessionState) -> type
                         f"Warning: '{net}' already exists at "
                         f"({int(lbl.coord.X)},{int(lbl.coord.Y)}). "
                         "Multiple labels with the same name will cause "
-                        "ltspice_connect to error on ambiguity.\n"
+                        "connect to error on ambiguity.\n"
                     )
                     break
 
@@ -2403,7 +2403,7 @@ class _ConnectPlan(NamedTuple):
 
 
 @registry.tool(
-    name="ltspice_connect",
+    name="connect",
     description=(
         "Connect two component pins with wire(s). Resolves pin positions automatically. "
         "Waypoints define the wire route through intermediate points. "
@@ -2748,11 +2748,11 @@ class CreateSchematicInput(ToolInput):
 
 
 @registry.tool(
-    name="ltspice_create_schematic",
+    name="create_schematic",
     description=(
         "Create an empty .asc schematic ready for incremental editing via "
-        "ltspice_add_component / ltspice_connect / ltspice_add_net_label. "
-        "Tip: prefer ``ltspice_create_netlist`` + .cir for design iteration; "
+        "add_component / connect / add_net_label. "
+        "Tip: prefer ``create_netlist`` + .cir for design iteration; "
         "use this only when a visual schematic is the deliverable."
     ),
     input_model=CreateSchematicInput,
@@ -2877,8 +2877,8 @@ def _meas_mismatch_issue(
         "directive": line,
         "message": (
             f".meas {kind} requires a .{kind} analysis but the active "
-            f"analysis directives are: {active}. LTspice silently drops "
-            f".meas {kind} on non-.{kind} runs, so this measurement "
+            f"analysis directives are: {active}. The simulator silently "
+            f"drops .meas {kind} on non-.{kind} runs, so this measurement "
             "won't appear in the log."
         ),
         "suggestion": suggestion,
@@ -2894,7 +2894,7 @@ class ValidateNetlistInput(ToolInput):
 
 
 @registry.tool(
-    name="ltspice_validate_netlist",
+    name="validate_netlist",
     description=(
         "Run static checks over a netlist or schematic before simulation: "
         "rejects known-bad .MEAS patterns (vdb()/phase()/group_delay()), "
@@ -3056,7 +3056,7 @@ def _components_and_directives(path: Path) -> tuple[dict[str, str], set[str]]:
 
 
 @registry.tool(
-    name="ltspice_diff_circuit",
+    name="diff_circuit",
     description=(
         "Structural diff between two circuit files: reports added/removed "
         "components, components whose value changed, and added/removed "
@@ -3083,8 +3083,20 @@ async def handle_diff_circuit(args: DiffCircuitInput, state: SessionState) -> ty
         if a[ref] != b[ref]:
             changed.append({"reference": ref, "before": a[ref], "after": b[ref]})
 
-    directive_added = sorted(db - da)
-    directive_removed = sorted(da - db)
+    # Case-insensitive directive comparison — SPICE directives are
+    # case-insensitive, so .end vs .END shouldn't appear as a diff.
+    da_by_lower: dict[str, list[str]] = {}
+    for d in da:
+        da_by_lower.setdefault(d.lower(), []).append(d)
+    db_by_lower: dict[str, list[str]] = {}
+    for d in db:
+        db_by_lower.setdefault(d.lower(), []).append(d)
+    directive_added = sorted(
+        d for k in db_by_lower.keys() - da_by_lower.keys() for d in db_by_lower[k]
+    )
+    directive_removed = sorted(
+        d for k in da_by_lower.keys() - db_by_lower.keys() for d in da_by_lower[k]
+    )
 
     data = {
         "path_a": str(path_a),
@@ -3152,11 +3164,11 @@ class StepGetInput(ToolInput):
 
 
 @registry.tool(
-    name="ltspice_step_get",
+    name="step_get",
     description=(
         "Look up a signal at a chosen value of a .step / .DC sweep axis "
         "(e.g. ``axis='temp', value='27'``). Avoids the manual run_index → "
-        "params lookup users had to do via ltspice_batch_results."
+        "params lookup users had to do via batch_results."
     ),
     input_model=StepGetInput,
     annotations=RO_ANNOTATIONS,
@@ -3192,7 +3204,7 @@ async def handle_step_get(args: StepGetInput, state: SessionState) -> types.Call
             axis_vals = list(raw.get_axis(step=0))
         except Exception as e:
             raise NetlistError(
-                f"Cannot read axis values: {e}. Use ltspice_query_value if "
+                f"Cannot read axis values: {e}. Use query_value if "
                 "the raw doesn't have an explicit axis."
             ) from e
         # nearest neighbour
@@ -3539,7 +3551,7 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
 
 
 @registry.tool(
-    name="ltspice_apply_schematic_ops",
+    name="apply_schematic_ops",
     description=(
         "Apply many .asc edits in one transaction. Loads the schematic once, "
         "runs each op against the in-memory editor in order, and saves once at "

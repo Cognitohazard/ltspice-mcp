@@ -239,7 +239,7 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     semantic meaning when the supplied signal is a loop gain, which this
     function can't verify. For full stability analysis with all
     crossovers, per-crossing margins, and a stability classification,
-    call ``ltspice_stability_metrics`` directly on a loop-gain signal.
+    call ``stability_metrics`` directly on a loop-gain signal.
     """
     # Deferred import — ac_analysis imports raw_parser at module load so
     # the edge in the other direction has to stay late-bound.
