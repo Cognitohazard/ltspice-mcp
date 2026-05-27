@@ -25,7 +25,7 @@ class ServerStatusInput(ToolInput):
 
 
 @registry.tool(
-    name="ltspice_server_status",
+    name="server_status",
     description=(
         "Get comprehensive server status including detected simulators, "
         "configuration settings, security sandbox paths, and runtime state. "
@@ -140,7 +140,7 @@ async def handle_server_status(args: ServerStatusInput, state: SessionState):
 
 
 class RecentInput(ToolInput):
-    """Inputs for the ltspice_recent tool."""
+    """Inputs for the recent tool."""
 
     format: Literal["json", "text"] | None = Field(
         default=None,
@@ -149,7 +149,7 @@ class RecentInput(ToolInput):
 
 
 @registry.tool(
-    name="ltspice_recent",
+    name="recent",
     description=(
         "Call on session start to find circuits the user was last working "
         "with, including jobs that were still running when the server "
@@ -159,7 +159,7 @@ class RecentInput(ToolInput):
         "persisted job count, status_counts (completed/failed/"
         "interrupted/etc.), and the IDs of any interrupted jobs.\n\n"
         "'interrupted' means a simulation was in flight when the server "
-        "stopped — recovery path is ltspice_check_job(job_id) to see "
+        "stopped — recovery path is check_job(job_id) to see "
         "whether results are recoverable or the run needs to be "
         "re-kicked. Does NOT start or cancel anything; purely read-only."
     ),
@@ -205,7 +205,7 @@ async def handle_recent(args: RecentInput, state: SessionState):
     if not circuits:
         text = (
             "No recent circuits recorded yet. Use any circuit tool to add one "
-            "(e.g., ltspice_run_simulation, ltspice_read_circuit)."
+            "(e.g., run_simulation, read_circuit)."
         )
     else:
         lines = [f"Recent circuits ({len(circuits)}):", ""]

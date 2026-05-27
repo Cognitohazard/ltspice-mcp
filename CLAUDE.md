@@ -78,7 +78,7 @@ Tool modules (circuit, simulation, analysis, advanced, library, status) use a de
 
 ```python
 @registry.tool(
-    name="ltspice_foo",
+    name="foo",
     description="...",
     input_model=FooInput,          # subclass of ToolInput (Pydantic)
     annotations=RO_ANNOTATIONS,    # or custom ToolAnnotations
@@ -101,17 +101,17 @@ To add a new tool: define it with `@registry.tool()` in the appropriate module a
 
 Direct editing of LTspice `.asc` schematics is a first-class feature. All circuit tools live in **`tools/circuit.py`** — extension-based dispatch picks `AscEditor` or `SpiceEditor` automatically:
 
-- **`ltspice_read_circuit`** works on both `.cir` and `.asc` — returns raw netlist for `.cir`, or schematic layout (positions, labels, wires) for `.asc`.
-- **`ltspice_list_components`** lists components (with optional `prefix` filter) or looks up a single component's value via `reference` param.
-- **`ltspice_set_component_value`** handles both single (`reference`+`value`) and batch (`values` dict) modes.
-- **`ltspice_parameter`** reads all .PARAM values (no args) or sets one (`name`+`value`).
-- **`ltspice_edit_directive`** adds or removes SPICE directives via `action: "add"|"remove"`.
-- **Schematic-only tools** (`ltspice_remove_component`, `ltspice_move_component`, `ltspice_set_component_attribute`, `ltspice_export_netlist`, `ltspice_connect`, `ltspice_add_net_label`, `ltspice_add_text`, `ltspice_symbol_info`, `ltspice_component_info`) validate `.asc` extension and use `_get_asc_editor()`.
-- **`ltspice_connect`** wires two pins by reference (e.g., `M1.D` → `M4a.D`) with waypoint routing. Validates before writing: refuses diagonal wires, pin collisions, and wire junction overlaps. Warns on long runs and bbox crossings.
-- **`ltspice_add_component`** returns pin positions (with direction), bounding box, and overlap warnings.
-- **`ltspice_symbol_info`** / **`ltspice_component_info`** provide pin geometry for layout planning.
-- **`ltspice_add_net_label`** supports `pin="M3.S"` for placement at pin coordinates.
-- **`ltspice_export_netlist`** shows diff against previous export.
+- **`read_circuit`** works on both `.cir` and `.asc` — returns raw netlist for `.cir`, or schematic layout (positions, labels, wires) for `.asc`.
+- **`list_components`** lists components (with optional `prefix` filter) or looks up a single component's value via `reference` param.
+- **`set_component_value`** handles both single (`reference`+`value`) and batch (`values` dict) modes.
+- **`parameter`** reads all .PARAM values (no args) or sets one (`name`+`value`).
+- **`edit_directive`** adds or removes SPICE directives via `action: "add"|"remove"`.
+- **Schematic-only tools** (`remove_component`, `move_component`, `set_component_attribute`, `export_netlist`, `connect`, `add_net_label`, `add_text`, `symbol_info`, `component_info`) validate `.asc` extension and use `_get_asc_editor()`.
+- **`connect`** wires two pins by reference (e.g., `M1.D` → `M4a.D`) with waypoint routing. Validates before writing: refuses diagonal wires, pin collisions, and wire junction overlaps. Warns on long runs and bbox crossings.
+- **`add_component`** returns pin positions (with direction), bounding box, and overlap warnings.
+- **`symbol_info`** / **`component_info`** provide pin geometry for layout planning.
+- **`add_net_label`** supports `pin="M3.S"` for placement at pin coordinates.
+- **`export_netlist`** shows diff against previous export.
 - All tools use `"path"` as the file parameter name.
 
 AscEditor requires `.asy` symbol library files. Platform handling in `server.py:_configure_asc_editor()`:

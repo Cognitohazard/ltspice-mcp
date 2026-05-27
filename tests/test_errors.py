@@ -84,7 +84,7 @@ class TestErrorHints:
 
         hint = _get_error_hint(ConvergenceError, "full")
         assert hint is not None
-        assert "ltspice_edit_directive" in hint
+        assert "edit_directive" in hint
 
     def test_agentic_hints_no_filtered_tools(self):
         """Agentic hints should not reference tools excluded from the profile."""
@@ -92,11 +92,11 @@ class TestErrorHints:
         from ltspice_mcp.tools import get_tools_for_profile
 
         filtered_tools = {
-            "ltspice_edit_directive",
-            "ltspice_read_circuit",
-            "ltspice_load_library",
-            "ltspice_unload_library",
-            "ltspice_list_libraries",
+            "edit_directive",
+            "read_circuit",
+            "load_library",
+            "unload_library",
+            "list_libraries",
         }
         agentic_defs, _ = get_tools_for_profile("agentic")
         agentic_tools = {tool_def.name for tool_def in agentic_defs}

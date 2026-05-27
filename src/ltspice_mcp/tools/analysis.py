@@ -4,23 +4,23 @@ All tools in this module consume simulation output files (.raw, .log) and
 return derived metrics. Organized by what the tool answers:
 
     Scalar summaries:
-        ltspice_signal_stats        — mean/RMS/pk-pk/etc for one signal
-        ltspice_query_value         — value at a specific time/frequency
-        ltspice_operating_point     — DC node voltages + branch currents
+        signal_stats        — mean/RMS/pk-pk/etc for one signal
+        query_value         — value at a specific time/frequency
+        operating_point     — DC node voltages + branch currents
 
     Waveform metrics (transient only, reject AC):
-        ltspice_edge_metrics        — rise/fall time + slew rate
-        ltspice_pulse_response      — overshoot/undershoot/settling
-        ltspice_timing_between      — signed delay between two signals
-        ltspice_periodic_metrics    — period/frequency/duty/jitter
+        edge_metrics        — rise/fall time + slew rate
+        pulse_response      — overshoot/undershoot/settling
+        timing_between      — signed delay between two signals
+        periodic_metrics    — period/frequency/duty/jitter
 
     .MEAS extraction:
-        ltspice_measurement_stats   — aggregate .MEAS across sweep/MC
+        measurement_stats   — aggregate .MEAS across sweep/MC
                                        (single-run .MEAS values are folded
-                                        into ltspice_simulation_summary)
+                                        into simulation_summary)
 
     High-level overview:
-        ltspice_simulation_summary  — sim type, signals, warnings, key metrics
+        simulation_summary  — sim type, signals, warnings, key metrics
 """
 
 import contextlib
@@ -114,7 +114,7 @@ def _reject_ac(raw) -> None:
     if is_ac_analysis(sim_type):
         raise ResultError(
             f"This tool requires transient analysis data; got {sim_type!r}. "
-            "Use ltspice_signal_stats or ltspice_simulation_summary for "
+            "Use signal_stats or simulation_summary for "
             "frequency-domain analysis."
         )
 
@@ -240,7 +240,7 @@ class SimulationSummaryInput(ToolInput):
 
 
 @registry.tool(
-    name="ltspice_signal_stats",
+    name="signal_stats",
     description=(
         "Scalar summary of one signal in a .raw result. Use this when you need "
         "a single number per metric (average, RMS, peak, etc.) — not a waveform "
@@ -256,17 +256,17 @@ class SimulationSummaryInput(ToolInput):
         "RMS and std are deliberately omitted — they're meaningless on a "
         "non-time axis. Use t_start/t_end to restrict the sweep range.\n\n"
         "AC: returns magnitude (dB) min/max/mean and phase (deg) min/max. "
-        "t_start/t_end are ignored for AC — use ltspice_query_value for a "
+        "t_start/t_end are ignored for AC — use query_value for a "
         "point at a specific frequency.\n\n"
         "Noise: returns min/max/pk-pk and the simple/abs mean of the noise "
         "spectral density over the frequency axis, plus ``freq_start_used``/"
         "``freq_end_used``. RMS/std/duration are omitted; t_start/t_end are "
-        "rejected — pass them via ltspice_query_value at specific frequencies "
+        "rejected — pass them via query_value at specific frequencies "
         "instead.\n\n"
-        "Related tools: for rise/fall times use ltspice_edge_metrics; for "
-        "overshoot/settling use ltspice_pulse_response; for period/duty use "
-        "ltspice_periodic_metrics; to aggregate .MEAS values across a sweep "
-        "use ltspice_measurement_stats."
+        "Related tools: for rise/fall times use edge_metrics; for "
+        "overshoot/settling use pulse_response; for period/duty use "
+        "periodic_metrics; to aggregate .MEAS values across a sweep "
+        "use measurement_stats."
     ),
     input_model=SignalStatsInput,
     annotations=RO_ANNOTATIONS,
@@ -327,7 +327,7 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
         if args.t_start is not None or args.t_end is not None:
             raise ResultError(
                 "t_start/t_end windowing is not supported for AC analysis. "
-                "Use ltspice_query_value to look up a specific frequency."
+                "Use query_value to look up a specific frequency."
             )
         magnitude_db = safe_magnitude_db(wave)
         phase_deg = np.angle(wave, deg=True)
@@ -373,7 +373,7 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
     if is_noise and (args.t_start is not None or args.t_end is not None):
         raise ResultError(
             "t_start/t_end windowing is not supported for Noise analysis (axis is "
-            "frequency, not time). Use ltspice_query_value to look up a specific "
+            "frequency, not time). Use query_value to look up a specific "
             "frequency."
         )
 
@@ -462,7 +462,7 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
 
 
 @registry.tool(
-    name="ltspice_query_value",
+    name="query_value",
     description=(
         "Look up the value of a signal at a specific time point (transient) or "
         "frequency (AC). Returns the nearest data point without interpolation."
@@ -602,7 +602,7 @@ def _format_measurements(
 
 
 @registry.tool(
-    name="ltspice_operating_point",
+    name="operating_point",
     description=("Read DC operating point data showing all node voltages and branch currents."),
     input_model=OperatingPointInput,
     annotations=RO_ANNOTATIONS,
@@ -672,7 +672,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
 
 
 @registry.tool(
-    name="ltspice_simulation_summary",
+    name="simulation_summary",
     description=(
         "Get a comprehensive simulation summary including type, signal list, data size, "
         ".MEAS results, Fourier analysis, AC bandwidth metrics, and warnings."
@@ -1046,7 +1046,7 @@ class MeasurementStatsResponse(TypedDict):
 
 
 @registry.tool(
-    name="ltspice_edge_metrics",
+    name="edge_metrics",
     description=(
         "Use when you need to quantify HOW FAST one transition happened: rise "
         "time, fall time, slew rate. Inputs a transient .raw plus a time "
@@ -1063,8 +1063,8 @@ class MeasurementStatsResponse(TypedDict):
         "otherwise you get the first edge in the full waveform, which is "
         "often the power-up artifact. Use edge_index only when multiple "
         "edges in the window are intentional.\n\n"
-        "For settling/overshoot after the edge, use ltspice_pulse_response. "
-        "For delay between two signals' edges, use ltspice_timing_between."
+        "For settling/overshoot after the edge, use pulse_response. "
+        "For delay between two signals' edges, use timing_between."
     ),
     input_model=EdgeMetricsInput,
     annotations=RO_ANNOTATIONS,
@@ -1104,7 +1104,7 @@ async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
 
 
 @registry.tool(
-    name="ltspice_pulse_response",
+    name="pulse_response",
     description=(
         "Use when you need step-response quality metrics: overshoot %, "
         "undershoot %, settling time, peak value and peak time. Inputs a "
@@ -1121,7 +1121,7 @@ async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
         "If the auto-detected initial/final (mean of first/last 10% of "
         "window) is contaminated by ringing, pass explicit initial_value/"
         "final_value. Rejects AC analysis.\n\n"
-        "For just rise/fall time without overshoot, use ltspice_edge_metrics."
+        "For just rise/fall time without overshoot, use edge_metrics."
     ),
     input_model=PulseResponseInput,
     annotations=RO_ANNOTATIONS,
@@ -1161,7 +1161,7 @@ async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
 
 
 @registry.tool(
-    name="ltspice_timing_between",
+    name="timing_between",
     description=(
         "Use when you need propagation delay / skew between TWO signals — "
         "e.g. input-to-output delay, clock-to-Q, input-skew. Inputs one "
@@ -1245,7 +1245,7 @@ async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
 
 
 @registry.tool(
-    name="ltspice_periodic_metrics",
+    name="periodic_metrics",
     description=(
         "Use for an oscillating transient signal (clock, oscillator output, "
         "switching waveform) when you need period, frequency, duty cycle, "
@@ -1262,7 +1262,7 @@ async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
         "running on 1-edge windows.\n\n"
         "Skip the startup transient via t_start/t_end; the first cycle is "
         "often wider than steady state. Rejects AC analysis. For a single "
-        "edge (not periodic), use ltspice_edge_metrics."
+        "edge (not periodic), use edge_metrics."
     ),
     input_model=PeriodicMetricsInput,
     annotations=RO_ANNOTATIONS,
@@ -1331,7 +1331,7 @@ def _aggregate_job_measurements(
     if not batch_job.run_results:
         raise ResultError(
             f"Batch job {job_id!r} has no completed runs yet — wait for it "
-            "to finish (use ltspice_check_job to monitor)."
+            "to finish (use check_job to monitor)."
         )
 
     samples: dict[str, _MeasSamples] = {}
@@ -1394,7 +1394,7 @@ def _aggregate_job_measurements(
 
 
 @registry.tool(
-    name="ltspice_measurement_stats",
+    name="measurement_stats",
     description=(
         "Use to AGGREGATE .MEAS scalar results across a .step sweep or Monte "
         "Carlo run. Answers questions like 'across 100 MC trials, what's the "
@@ -1405,7 +1405,7 @@ def _aggregate_job_measurements(
         "count, and an optional histogram (set histogram_bins=0 to skip).\n\n"
         "Requires either a parametric sweep (.step) or Monte Carlo. On a "
         "single-run simulation there's only one value per measurement, so "
-        "stats collapse to trivial values — use ltspice_simulation_summary "
+        "stats collapse to trivial values — use simulation_summary "
         "instead to just read the scalars.\n\n"
         "Works with .MEAS from any analysis type (.tran/.ac/.dc/.op) — the "
         "measurement directives themselves embed the analysis context. Pass "
@@ -1524,7 +1524,7 @@ def _load_ac_signal(
     if not is_ac_analysis(sim_type):
         raise ResultError(
             f"This tool requires AC analysis data; got {sim_type!r}. "
-            "Use ltspice_signal_stats (transient) or run a .AC sweep first."
+            "Use signal_stats (transient) or run a .AC sweep first."
         )
     signal = services.validate_signal(raw, signal)
     services.validate_step(raw, step)
@@ -1709,7 +1709,7 @@ class ResonancesResponse(ResonancesOutput):
 
 
 @registry.tool(
-    name="ltspice_find_crossing",
+    name="find_crossing",
     description=(
         "Low-level primitive: find all frequencies where a signal's magnitude "
         "(dB or linear) or phase crosses a given level. This is the escape "
@@ -1724,9 +1724,9 @@ class ResonancesResponse(ResonancesOutput):
         "increasing frequency. For phase queries, phase is UNWRAPPED first "
         "(continuous, no ±180° jumps) — so 'level=-180' really means -180° "
         "in absolute phase even on systems whose true phase goes past -360°.\n\n"
-        "Use the bundled tools for common questions: ltspice_filter_metrics "
-        "for -3 dB cutoffs, ltspice_stability_metrics for all unity-gain and "
-        "-180° crossings with margins, ltspice_gain_at for point queries "
+        "Use the bundled tools for common questions: filter_metrics "
+        "for -3 dB cutoffs, stability_metrics for all unity-gain and "
+        "-180° crossings with margins, gain_at for point queries "
         "without a crossing search."
     ),
     input_model=FindCrossingInput,
@@ -1780,10 +1780,10 @@ async def handle_find_crossing(args: FindCrossingInput, state: SessionState):
 
 
 @registry.tool(
-    name="ltspice_gain_at",
+    name="gain_at",
     description=(
         "Query magnitude (dB + linear) and phase at a list of frequencies. "
-        "Use this instead of calling ltspice_query_value N times — one "
+        "Use this instead of calling query_value N times — one "
         "simulation load, log-axis interpolation, consistent phase handling.\n\n"
         "Phase is reported wrapped to (-180°, 180°] by default (what you'd "
         "read off a Bode plot). Set include_unwrapped_phase=true to also "
@@ -1791,9 +1791,9 @@ async def handle_find_crossing(args: FindCrossingInput, state: SessionState):
         "or group-delay estimation.\n\n"
         "Frequencies outside the sweep range are clamped to the nearest "
         "endpoint and a warning is emitted — don't silently extrapolate.\n\n"
-        "For filter characterization use ltspice_filter_metrics; for "
-        "stability margins use ltspice_stability_metrics; for custom "
-        "crossing searches use ltspice_find_crossing."
+        "For filter characterization use filter_metrics; for "
+        "stability margins use stability_metrics; for custom "
+        "crossing searches use find_crossing."
     ),
     input_model=GainAtInput,
     annotations=RO_ANNOTATIONS,
@@ -1841,7 +1841,7 @@ def _parse_freq_pair(pair: list[str] | None, name: str) -> tuple[float, float] |
 
 
 @registry.tool(
-    name="ltspice_filter_metrics",
+    name="filter_metrics",
     description=(
         "Characterize a filter response: LPF / HPF / BPF / BSF type, cutoffs, "
         "passband gain & ripple, stopband rejection, transition bandwidth, "
@@ -1864,8 +1864,8 @@ def _parse_freq_pair(pair: list[str] | None, name: str) -> tuple[float, float] |
         "decades past cutoff). Returned only when slope is within ±2 dB/dec "
         "of an integer multiple of 20 dB/dec, else null — reports raw "
         "slope regardless.\n\n"
-        "For stability / loop-gain questions use ltspice_stability_metrics; "
-        "for resonant peaks & Q use ltspice_resonance."
+        "For stability / loop-gain questions use stability_metrics; "
+        "for resonant peaks & Q use resonance."
     ),
     input_model=FilterMetricsInput,
     annotations=RO_ANNOTATIONS,
@@ -1922,12 +1922,12 @@ async def handle_filter_metrics(args: FilterMetricsInput, state: SessionState):
 
 
 @registry.tool(
-    name="ltspice_stability_metrics",
+    name="stability_metrics",
     description=(
         "Find EVERY unity-gain and -180° phase crossover in a loop-gain AC "
         "sweep, report phase margin at each unity-gain crossing and gain "
         "margin at each -180° crossing. Replaces the single-crossing "
-        "approximation in ltspice_simulation_summary, which returns wrong "
+        "approximation in simulation_summary, which returns wrong "
         "margins on conditionally-stable systems.\n\n"
         "Run this on a LOOP-GAIN signal (typically a dedicated middlebrook "
         "probe or .AC of the open loop). Running on a closed-loop output "
@@ -1947,8 +1947,8 @@ async def handle_filter_metrics(args: FilterMetricsInput, state: SessionState):
         "(returned as null with stability='always_below_unity').\n"
         "  - Multiple crossovers trigger stability='conditional' and a "
         "warning — each one needs its own review.\n\n"
-        "For -3 dB filter cutoffs use ltspice_filter_metrics; for custom "
-        "crossings use ltspice_find_crossing."
+        "For -3 dB filter cutoffs use filter_metrics; for custom "
+        "crossings use find_crossing."
     ),
     input_model=StabilityMetricsInput,
     annotations=RO_ANNOTATIONS,
@@ -1996,7 +1996,7 @@ async def handle_stability_metrics(args: StabilityMetricsInput, state: SessionSt
 
 
 @registry.tool(
-    name="ltspice_roll_off",
+    name="roll_off",
     description=(
         "Magnitude slope between two frequencies, reported in dB/decade and "
         "dB/octave. Useful for sanity-checking the asymptotic slope of a "
@@ -2006,8 +2006,8 @@ async def handle_stability_metrics(args: StabilityMetricsInput, state: SessionSt
         "A rounded pole-order estimate is returned only when the slope is "
         "within ±2 dB/dec of an integer multiple of 20 dB/dec; noisy or "
         "non-asymptotic slopes get a null order and raw slope.\n\n"
-        "For a full filter characterization use ltspice_filter_metrics; for "
-        "resonance peaks use ltspice_resonance."
+        "For a full filter characterization use filter_metrics; for "
+        "resonance peaks use resonance."
     ),
     input_model=RollOffInput,
     annotations=RO_ANNOTATIONS,
@@ -2042,7 +2042,7 @@ async def handle_roll_off(args: RollOffInput, state: SessionState):
 
 
 @registry.tool(
-    name="ltspice_resonance",
+    name="resonance",
     description=(
         "Detect magnitude peaks in an AC sweep and estimate Q factor + "
         "-3 dB bandwidth for each. Useful for RLC resonators, crystal "
@@ -2055,8 +2055,8 @@ async def handle_roll_off(args: RollOffInput, state: SessionState):
         "passband (which isn't a resonance). Tight resonances (Q > 30) "
         "need dense sampling near f_peak — log sweeps with <50 pts/decade "
         "will under-sample the peak and give inflated Q/bandwidth.\n\n"
-        "For overall filter characterization use ltspice_filter_metrics; "
-        "for stability margins use ltspice_stability_metrics."
+        "For overall filter characterization use filter_metrics; "
+        "for stability margins use stability_metrics."
     ),
     input_model=ResonanceInput,
     annotations=RO_ANNOTATIONS,

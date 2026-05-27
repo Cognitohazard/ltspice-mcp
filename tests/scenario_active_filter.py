@@ -75,7 +75,7 @@ async def run():
         # Step 1: Check server status
         # ----------------------------------------------------------
         step(1, "Check server status")
-        r = await session.call_tool("ltspice_server_status", {}, read_timeout_seconds=TIMEOUT)
+        r = await session.call_tool("server_status", {}, read_timeout_seconds=TIMEOUT)
         print(text(r))
 
         has_simulator = "degraded" not in text(r)
@@ -107,7 +107,7 @@ async def run():
             """)
 
         r = await session.call_tool(
-            "ltspice_create_netlist",
+            "create_netlist",
             {"name": "sallen_key_lpf", "content": netlist},
             read_timeout_seconds=TIMEOUT,
         )
@@ -123,14 +123,14 @@ async def run():
         step(3, "Read circuit back and list components")
 
         r = await session.call_tool(
-            "ltspice_read_circuit",
+            "read_circuit",
             {"path": "sallen_key_lpf.cir"},
             read_timeout_seconds=TIMEOUT,
         )
         print(f"  Circuit content:\n{textwrap.indent(text(r), '    ')}")
 
         r = await session.call_tool(
-            "ltspice_list_components",
+            "list_components",
             {"path": "sallen_key_lpf.cir"},
             read_timeout_seconds=TIMEOUT,
         )
@@ -141,7 +141,7 @@ async def run():
         # ----------------------------------------------------------
         step(4, "Check parameters")
         r = await session.call_tool(
-            "ltspice_parameter",
+            "parameter",
             {"path": "sallen_key_lpf.cir"},
             read_timeout_seconds=TIMEOUT,
         )
@@ -152,7 +152,7 @@ async def run():
         # ----------------------------------------------------------
         step(5, "Change cutoff to ~500Hz (double R values)")
         r = await session.call_tool(
-            "ltspice_set_component_value",
+            "set_component_value",
             {"path": "sallen_key_lpf.cir", "values": {"R1": "31.8k", "R2": "31.8k"}},
             read_timeout_seconds=TIMEOUT,
         )
@@ -160,7 +160,7 @@ async def run():
 
         # Verify
         r = await session.call_tool(
-            "ltspice_list_components",
+            "list_components",
             {"path": "sallen_key_lpf.cir", "reference": "R1"},
             read_timeout_seconds=TIMEOUT,
         )
@@ -168,7 +168,7 @@ async def run():
 
         # Change back to 1kHz
         r = await session.call_tool(
-            "ltspice_set_component_value",
+            "set_component_value",
             {"path": "sallen_key_lpf.cir", "values": {"R1": "15.9k", "R2": "15.9k"}},
             read_timeout_seconds=TIMEOUT,
         )
@@ -183,7 +183,7 @@ async def run():
             print("  (Install LTspice and set simulator.path in ltspice-mcp.toml)")
         else:
             r = await session.call_tool(
-                "ltspice_run_simulation",
+                "run_simulation",
                 {"netlist": "sallen_key_lpf.cir", "wait": True},
                 read_timeout_seconds=SIM_TIMEOUT,
             )
@@ -210,7 +210,7 @@ async def run():
 
             # Simulation summary
             r = await session.call_tool(
-                "ltspice_simulation_summary",
+                "simulation_summary",
                 {"raw_file": "sallen_key_lpf.raw"},
                 read_timeout_seconds=TIMEOUT,
             )
@@ -218,7 +218,7 @@ async def run():
 
             # Signal stats at output
             r = await session.call_tool(
-                "ltspice_signal_stats",
+                "signal_stats",
                 {"raw_file": "sallen_key_lpf.raw", "signal": "V(out)"},
                 read_timeout_seconds=TIMEOUT,
             )
@@ -229,7 +229,7 @@ async def run():
         # ----------------------------------------------------------
         step(8, "Configure frequency sweep (vary R1)")
         r = await session.call_tool(
-            "ltspice_configure_sweep",
+            "configure_sweep",
             {
                 "netlist": "sallen_key_lpf.cir",
                 "parameters": [
@@ -251,7 +251,7 @@ async def run():
             if has_simulator and sweep_id:
                 step("8b", "Run sweep")
                 r = await session.call_tool(
-                    "ltspice_run_sweep",
+                    "run_sweep",
                     {"config_id": sweep_id.group(1)},
                     read_timeout_seconds=SIM_TIMEOUT,
                 )
@@ -264,7 +264,7 @@ async def run():
         # ----------------------------------------------------------
         step(9, "Configure Monte Carlo (5% resistors, 10% caps)")
         r = await session.call_tool(
-            "ltspice_configure_montecarlo",
+            "configure_montecarlo",
             {
                 "netlist": "sallen_key_lpf.cir",
                 "tolerances": [
@@ -281,7 +281,7 @@ async def run():
             if has_simulator and mc_id:
                 step("9b", "Run Monte Carlo")
                 r = await session.call_tool(
-                    "ltspice_run_montecarlo",
+                    "run_montecarlo",
                     {"config_id": mc_id.group(1)},
                     read_timeout_seconds=SIM_TIMEOUT,
                 )
