@@ -89,14 +89,20 @@ class SimulationRunner(RunnerBase):
             return runner
 
         try:
-            runner = await asyncio.to_thread(submit_sim)
-            self._runners[job_id] = runner
-            job.task = runner
+            # Transition BEFORE submitting: ngspice can complete in <100ms,
+            # racing the callback against asyncio.to_thread's resumption.
+            # If the callback fires first and finds the job in "queued" state,
+            # the queued→completed transition is illegal.
             transition(job, "running", state=state, simulator=job.simulator)
+            runner = await asyncio.to_thread(submit_sim)
+            if job.status not in TERMINAL_STATUSES:
+                self._runners[job_id] = runner
+                job.task = runner
         except Exception as e:
             logger.error("Failed to submit simulation %s: %s", job_id, e, exc_info=True)
-            job.error = f"Submission failed: {e}"
-            transition(job, "failed", state=state, error=job.error, phase="submission")
+            if job.status not in TERMINAL_STATUSES:
+                job.error = f"Submission failed: {e}"
+                transition(job, "failed", state=state, error=job.error, phase="submission")
 
     def _handle_completion(
         self, job_id: str, raw_file: str, log_file: str, state: SessionState
