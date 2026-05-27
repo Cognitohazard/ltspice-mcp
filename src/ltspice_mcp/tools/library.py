@@ -73,7 +73,7 @@ class ListLibrariesInput(ToolInput):
 
 
 @registry.tool(
-    name="ltspice_find_model",
+    name="find_model",
     description=(
         "Find model/subcircuit candidates across loaded (and optionally built-in) "
         "libraries. Default is fuzzy matching — finds typos, case variants, and "
@@ -156,11 +156,11 @@ async def handle_find_model(args: FindModelInput, state: SessionState):
 
     if not results:
         if exact:
-            hint = " Retry ltspice_find_model with exact=false for fuzzy matches."
+            hint = " Retry find_model with exact=false for fuzzy matches."
         elif not include_builtin:
             hint = " Try lowering cutoff or set include_builtin=true."
         else:
-            hint = " Try lowering cutoff or ltspice_load_library to add more sources."
+            hint = " Try lowering cutoff or load_library to add more sources."
         reason = "No exact match" if exact else f"No fuzzy matches (cutoff={cutoff})"
         return format_response(f"{reason} for '{name}' in {scope} libraries.{hint}", data, fmt)
 
@@ -176,7 +176,7 @@ async def handle_find_model(args: FindModelInput, state: SessionState):
 
 
 @registry.tool(
-    name="ltspice_load_library",
+    name="load_library",
     description=(
         "Load a SPICE library file (.lib, .mod) or directory of library files into the session."
     ),
@@ -223,7 +223,7 @@ async def handle_load_library(args: LoadLibraryInput, state: SessionState) -> ty
 
 
 @registry.tool(
-    name="ltspice_unload_library",
+    name="unload_library",
     description="Unload a previously loaded library from the session.",
     input_model=UnloadLibraryInput,
     annotations=types.ToolAnnotations(
@@ -264,7 +264,7 @@ async def handle_unload_library(
 
 
 @registry.tool(
-    name="ltspice_list_libraries",
+    name="list_libraries",
     description=(
         "List loaded libraries. With detail=true, also shows the .SUBCKT and "
         ".MODEL names defined in each library (so foundry .bjt/.mod files "
@@ -324,7 +324,7 @@ async def handle_list_libraries(args: ListLibrariesInput, state: SessionState):
             lines.append(f"  {lib_path}")
             lib_data.append({"path": str(lib_path)})
         if has_more:
-            lines.append(f"\nNext page: ltspice_list_libraries(offset={offset + limit})")
+            lines.append(f"\nNext page: list_libraries(offset={offset + limit})")
         data = {"libraries": lib_data, "pagination": pagination_metadata(total, offset, limit)}
         return format_response("\n".join(lines), data, fmt)
 
@@ -381,7 +381,7 @@ async def handle_list_libraries(args: ListLibrariesInput, state: SessionState):
         )
 
     if has_more:
-        lines.append(f"\nNext page: ltspice_list_libraries(detail=true, offset={offset + limit})")
+        lines.append(f"\nNext page: list_libraries(detail=true, offset={offset + limit})")
 
     data = {"libraries": lib_data, "pagination": pagination_metadata(total, offset, limit)}
     return format_response("\n".join(lines), data, fmt)

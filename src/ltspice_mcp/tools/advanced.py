@@ -354,7 +354,7 @@ def _resolve_mc_ref(ref: str) -> tuple[str, bool]:
 # Handler 1: configure_sweep
 # ---------------------------------------------------------------------------
 @registry.tool(
-    name="ltspice_configure_sweep",
+    name="configure_sweep",
     description=(
         "Configure a multi-parameter sweep for a netlist and return a config_id "
         "for later execution."
@@ -464,7 +464,7 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
         f"Netlist: {netlist_path}\n"
         f"Dimensions: {len(dimensions)}\n"
         f"Total simulations: {total_runs}\n\n"
-        f"Use ltspice_run_sweep('{config_id}') to execute"
+        f"Use run_sweep('{config_id}') to execute"
     )
 
 
@@ -472,7 +472,7 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
 # Handler 2: run_sweep
 # ---------------------------------------------------------------------------
 @registry.tool(
-    name="ltspice_run_sweep",
+    name="run_sweep",
     description=(
         "Execute a previously configured parameter sweep asynchronously and "
         "return a job_id immediately."
@@ -507,7 +507,7 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
     if not config:
         raise BatchJobError(
             f"Sweep config not found: {config_id}\n\n"
-            f"Use ltspice_configure_sweep() to create a sweep configuration first"
+            f"Use configure_sweep() to create a sweep configuration first"
         )
 
     require_simulator(state)
@@ -548,8 +548,8 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
         f"Sweep started\n"
         f"Job ID: {job_id}\n"
         f"Total runs: {total_runs}\n\n"
-        f"Use ltspice_batch_results('{job_id}') to monitor progress\n"
-        f"Use ltspice_batch_results('{job_id}', signal='...') to query results"
+        f"Use batch_results('{job_id}') to monitor progress\n"
+        f"Use batch_results('{job_id}', signal='...') to query results"
     )
 
 
@@ -557,7 +557,7 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
 # Handler 3: configure_montecarlo
 # ---------------------------------------------------------------------------
 @registry.tool(
-    name="ltspice_configure_montecarlo",
+    name="configure_montecarlo",
     description=(
         "Configure a Monte Carlo analysis with component tolerances and return "
         "a config_id for later execution."
@@ -728,7 +728,7 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
         f".PARAM perturbation: {param_summary}\n"
         f"Seed: {args.seed if args.seed is not None else 'fresh entropy'}\n"
         f"\n"
-        f"Use ltspice_run_montecarlo('{config_id}') to execute"
+        f"Use run_montecarlo('{config_id}') to execute"
     )
 
 
@@ -736,7 +736,7 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
 # Handler 4: run_montecarlo
 # ---------------------------------------------------------------------------
 @registry.tool(
-    name="ltspice_run_montecarlo",
+    name="run_montecarlo",
     description=(
         "Execute a previously configured Monte Carlo analysis asynchronously "
         "and return a job_id immediately."
@@ -771,7 +771,7 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
     if not config:
         raise BatchJobError(
             f"Monte Carlo config not found: {config_id}\n\n"
-            f"Use ltspice_configure_montecarlo() to create a Monte Carlo configuration first"
+            f"Use configure_montecarlo() to create a Monte Carlo configuration first"
         )
 
     require_simulator(state)
@@ -806,8 +806,8 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
         f"Monte Carlo started\n"
         f"Job ID: {job_id}\n"
         f"Total runs: {config.num_runs}\n\n"
-        f"Use ltspice_batch_results('{job_id}') to monitor progress\n"
-        f"Use ltspice_batch_results('{job_id}', signal='...') to query results"
+        f"Use batch_results('{job_id}') to monitor progress\n"
+        f"Use batch_results('{job_id}', signal='...') to query results"
     )
 
 
@@ -815,7 +815,7 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
 # Handler 5: get_batch_results (consolidated: status + results)
 # ---------------------------------------------------------------------------
 @registry.tool(
-    name="ltspice_batch_results",
+    name="batch_results",
     description=(
         "Query a batch simulation job (sweep or Monte Carlo). Without signal: "
         "returns job status and progress. With signal: returns aggregate statistics "
@@ -922,6 +922,7 @@ async def handle_batch_results(args: GetBatchResultsInput, state: SessionState):
         offset=offset,
         limit=limit,
         at=at_value,
+        dialect=state.raw_dialect,
     )
     if raw_mode:
         data["pagination"] = pagination_metadata(data["total_matching"], offset, limit)
@@ -948,7 +949,7 @@ def _format_batch_status_text(data: dict) -> str:
             f"Progress: {data['completed']}/{data['total']} runs complete{eta_str}\n"
             f"Failed: {data['failed']}\n"
             f"Netlist: {data['netlist']}\n\n"
-            f"Use ltspice_batch_results('{data['job_id']}', signal='...') to query partial results"
+            f"Use batch_results('{data['job_id']}', signal='...') to query partial results"
         )
     if status == "completed":
         duration = data["duration"] or 0.0
@@ -970,7 +971,7 @@ def _format_batch_status_text(data: dict) -> str:
                 f"point may be degenerate. Run indices: {run_ids}{more}"
             )
         return text + (
-            f"\n\nUse ltspice_batch_results('{data['job_id']}', signal='V(out)') to query results"
+            f"\n\nUse batch_results('{data['job_id']}', signal='V(out)') to query results"
         )
     if status == "failed":
         return (
@@ -1061,7 +1062,7 @@ def _format_batch_raw_text(data: dict) -> str:
     pagination = data["pagination"]
     if pagination["has_more"]:
         lines.append(
-            f"\nNext page: ltspice_batch_results('{data['job_id']}', signal='{data['signal']}', raw=true, offset={pagination['next_offset']})"
+            f"\nNext page: batch_results('{data['job_id']}', signal='{data['signal']}', raw=true, offset={pagination['next_offset']})"
         )
 
     return "\n".join(lines)

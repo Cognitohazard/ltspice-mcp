@@ -136,29 +136,29 @@ class TestServerLifecycle:
             result = await session.list_tools()
             names = {t.name for t in result.tools}
             expected = {
-                "ltspice_create_netlist",
-                "ltspice_read_circuit",
-                "ltspice_list_components",
-                "ltspice_set_component_value",
-                "ltspice_parameter",
-                "ltspice_edit_directive",
-                "ltspice_run_simulation",
-                "ltspice_check_job",
-                "ltspice_cancel_job",
-                "ltspice_signal_stats",
-                "ltspice_query_value",
-                "ltspice_operating_point",
-                "ltspice_simulation_summary",
-                "ltspice_configure_sweep",
-                "ltspice_run_sweep",
-                "ltspice_configure_montecarlo",
-                "ltspice_run_montecarlo",
-                "ltspice_batch_results",
-                "ltspice_find_model",
-                "ltspice_load_library",
-                "ltspice_unload_library",
-                "ltspice_list_libraries",
-                "ltspice_server_status",
+                "create_netlist",
+                "read_circuit",
+                "list_components",
+                "set_component_value",
+                "parameter",
+                "edit_directive",
+                "run_simulation",
+                "check_job",
+                "cancel_job",
+                "signal_stats",
+                "query_value",
+                "operating_point",
+                "simulation_summary",
+                "configure_sweep",
+                "run_sweep",
+                "configure_montecarlo",
+                "run_montecarlo",
+                "batch_results",
+                "find_model",
+                "load_library",
+                "unload_library",
+                "list_libraries",
+                "server_status",
             }
             missing = expected - names
             assert not missing, f"Missing tools: {missing}"
@@ -180,7 +180,7 @@ class TestCircuitTools:
         async with mcp_session(tmp_path) as session:
             result = await _call(
                 session,
-                "ltspice_create_netlist",
+                "create_netlist",
                 {"name": "noend", "content": "* No end\nR1 a b 1k\n"},
             )
             assert not result.isError
@@ -191,13 +191,13 @@ class TestCircuitTools:
         """Create a netlist, then read it back — verify components appear."""
         async with mcp_session(tmp_path) as session:
             result = await _call(
-                session, "ltspice_create_netlist", {"name": "rc_filter", "content": RC_NETLIST}
+                session, "create_netlist", {"name": "rc_filter", "content": RC_NETLIST}
             )
             assert not result.isError
             text = _text(result)
             assert "Components: 3" in text  # R1, C1, V1
 
-            result = await _call(session, "ltspice_read_circuit", {"path": "rc_filter.cir"})
+            result = await _call(session, "read_circuit", {"path": "rc_filter.cir"})
             assert not result.isError
             text = _text(result)
             assert "R1 in out 1k" in text
@@ -206,7 +206,7 @@ class TestCircuitTools:
     async def test_list_components_returns_all_with_values(self, tmp_path):
         (tmp_path / "comps.cir").write_text(MINIMAL_NETLIST)
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_list_components", {"path": "comps.cir"})
+            result = await _call(session, "list_components", {"path": "comps.cir"})
             assert not result.isError
             text = _text(result)
             assert "R1" in text and "1k" in text
@@ -217,7 +217,7 @@ class TestCircuitTools:
         (tmp_path / "prefix.cir").write_text(MINIMAL_NETLIST)
         async with mcp_session(tmp_path) as session:
             result = await _call(
-                session, "ltspice_list_components", {"path": "prefix.cir", "prefix": "R"}
+                session, "list_components", {"path": "prefix.cir", "prefix": "R"}
             )
             assert not result.isError
             text = _text(result)
@@ -231,7 +231,7 @@ class TestCircuitTools:
         (tmp_path / "ref.cir").write_text("* Test\nR1 a b 4.7k\n.END\n")
         async with mcp_session(tmp_path) as session:
             result = await _call(
-                session, "ltspice_list_components", {"path": "ref.cir", "reference": "R1"}
+                session, "list_components", {"path": "ref.cir", "reference": "R1"}
             )
             assert not result.isError
             text = _text(result)
@@ -244,7 +244,7 @@ class TestCircuitTools:
         async with mcp_session(tmp_path) as session:
             result = await _call(
                 session,
-                "ltspice_set_component_value",
+                "set_component_value",
                 {"path": "setval.cir", "reference": "R1", "value": "2.2k"},
             )
             assert not result.isError
@@ -252,7 +252,7 @@ class TestCircuitTools:
 
             # Round-trip
             result = await _call(
-                session, "ltspice_list_components", {"path": "setval.cir", "reference": "R1"}
+                session, "list_components", {"path": "setval.cir", "reference": "R1"}
             )
             assert "2.2k" in _text(result)
 
@@ -261,38 +261,38 @@ class TestCircuitTools:
         async with mcp_session(tmp_path) as session:
             result = await _call(
                 session,
-                "ltspice_set_component_value",
+                "set_component_value",
                 {"path": "batch.cir", "values": {"R1": "10k", "R2": "47k"}},
             )
             assert not result.isError
             assert "Updated 2 component(s)" in _text(result)
 
             r1 = await _call(
-                session, "ltspice_list_components", {"path": "batch.cir", "reference": "R1"}
+                session, "list_components", {"path": "batch.cir", "reference": "R1"}
             )
             assert "10k" in _text(r1)
             r2 = await _call(
-                session, "ltspice_list_components", {"path": "batch.cir", "reference": "R2"}
+                session, "list_components", {"path": "batch.cir", "reference": "R2"}
             )
             assert "47k" in _text(r2)
 
     async def test_parameter_get_then_set_then_verify(self, tmp_path):
         (tmp_path / "params.cir").write_text("* Test\nR1 a b {Rval}\n.param Rval=1k\n.END\n")
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_parameter", {"path": "params.cir"})
+            result = await _call(session, "parameter", {"path": "params.cir"})
             assert not result.isError
             assert ".PARAM" in _text(result).upper()
 
             result = await _call(
                 session,
-                "ltspice_parameter",
+                "parameter",
                 {"path": "params.cir", "name": "Rval", "value": "4.7k"},
             )
             assert not result.isError
             assert "4.7k" in _text(result)
 
             # Verify
-            result = await _call(session, "ltspice_parameter", {"path": "params.cir"})
+            result = await _call(session, "parameter", {"path": "params.cir"})
             assert "4.7k" in _text(result).lower() or "4700" in _text(result)
 
     async def test_edit_directive_roundtrip(self, tmp_path):
@@ -300,7 +300,7 @@ class TestCircuitTools:
         async with mcp_session(tmp_path) as session:
             result = await _call(
                 session,
-                "ltspice_edit_directive",
+                "edit_directive",
                 {"path": "dir.cir", "action": "add", "instruction": ".tran 1m"},
             )
             assert not result.isError
@@ -308,7 +308,7 @@ class TestCircuitTools:
 
             result = await _call(
                 session,
-                "ltspice_edit_directive",
+                "edit_directive",
                 {"path": "dir.cir", "action": "remove", "instruction": ".tran 1m"},
             )
             assert not result.isError
@@ -318,7 +318,7 @@ class TestCircuitTools:
         (tmp_path / "dup.cir").write_text("* Existing\nR1 a b 1k\n.END\n")
         async with mcp_session(tmp_path) as session:
             result = await _call(
-                session, "ltspice_create_netlist", {"name": "dup", "content": "* New\nR1 a b 2k"}
+                session, "create_netlist", {"name": "dup", "content": "* New\nR1 a b 2k"}
             )
             _assert_tool_error(result, "already exists")
 
@@ -326,7 +326,7 @@ class TestCircuitTools:
         (tmp_path / "noref.cir").write_text("* Test\nR1 a b 1k\n.END\n")
         async with mcp_session(tmp_path) as session:
             result = await _call(
-                session, "ltspice_list_components", {"path": "noref.cir", "reference": "C99"}
+                session, "list_components", {"path": "noref.cir", "reference": "C99"}
             )
             _assert_tool_error(result, "not found")
 
@@ -339,21 +339,21 @@ class TestCircuitTools:
 class TestSecurity:
     async def test_path_traversal_blocked(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_read_circuit", {"path": "../../../etc/passwd"})
+            result = await _call(session, "read_circuit", {"path": "../../../etc/passwd"})
             _assert_tool_error(result, "not allowed")
 
     async def test_absolute_path_outside_sandbox_blocked(self, tmp_path):
         async with mcp_session(tmp_path) as session:
             result = await _call(
                 session,
-                "ltspice_create_netlist",
+                "create_netlist",
                 {"name": "/tmp/evil", "content": "* Bad\nR1 a b 1k"},
             )
             _assert_tool_error(result, "outside")
 
     async def test_read_nonexistent_file_errors(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_read_circuit", {"path": "does_not_exist.cir"})
+            result = await _call(session, "read_circuit", {"path": "does_not_exist.cir"})
             _assert_tool_error(result, "not found")
 
 
@@ -366,22 +366,22 @@ class TestSimulationDegraded:
     async def test_run_simulation_reports_no_simulator(self, tmp_path):
         (tmp_path / "sim.cir").write_text("* Test\nR1 a b 1k\n.tran 1m\n.END\n")
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_run_simulation", {"netlist": "sim.cir"})
+            result = await _call(session, "run_simulation", {"netlist": "sim.cir"})
             _assert_tool_error(result, "simulator")
 
     async def test_check_job_nonexistent_returns_error(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_check_job", {"job_id": "nonexistent-123"})
+            result = await _call(session, "check_job", {"job_id": "nonexistent-123"})
             _assert_tool_error(result, "Job not found: nonexistent-123")
 
     async def test_cancel_job_nonexistent_returns_error(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_cancel_job", {"job_id": "nonexistent-456"})
+            result = await _call(session, "cancel_job", {"job_id": "nonexistent-456"})
             _assert_tool_error(result, "Job not found: nonexistent-456")
 
     async def test_check_job_list_empty(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_check_job", {})
+            result = await _call(session, "check_job", {})
             assert not result.isError
             assert "No active jobs" in _text(result)
 
@@ -396,7 +396,7 @@ class TestAnalysisDegraded:
         async with mcp_session(tmp_path) as session:
             result = await _call(
                 session,
-                "ltspice_signal_stats",
+                "signal_stats",
                 {"raw_file": "missing.raw", "signal": "V(out)"},
             )
             _assert_tool_error(result, "not found")
@@ -404,7 +404,7 @@ class TestAnalysisDegraded:
     async def test_get_simulation_summary_missing_file(self, tmp_path):
         async with mcp_session(tmp_path) as session:
             result = await _call(
-                session, "ltspice_simulation_summary", {"raw_file": "missing.raw"}
+                session, "simulation_summary", {"raw_file": "missing.raw"}
             )
             _assert_tool_error(result, "not found")
 
@@ -422,7 +422,7 @@ class TestAdvancedTools:
         async with mcp_session(tmp_path) as session:
             result = await _call(
                 session,
-                "ltspice_configure_sweep",
+                "configure_sweep",
                 {
                     "netlist": "sweep.cir",
                     "parameters": [
@@ -449,7 +449,7 @@ class TestAdvancedTools:
         async with mcp_session(tmp_path) as session:
             result = await _call(
                 session,
-                "ltspice_configure_montecarlo",
+                "configure_montecarlo",
                 {
                     "netlist": "mc.cir",
                     "tolerances": [{"ref": "R1", "tolerance": 0.05}],
@@ -470,7 +470,7 @@ class TestAdvancedTools:
         async with mcp_session(tmp_path) as session:
             cfg = await _call(
                 session,
-                "ltspice_configure_sweep",
+                "configure_sweep",
                 {
                     "netlist": "sw2.cir",
                     "parameters": [
@@ -482,18 +482,18 @@ class TestAdvancedTools:
             assert match, f"No config ID in: {_text(cfg)}"
             config_id = match.group(1)
 
-            result = await _call(session, "ltspice_run_sweep", {"config_id": config_id})
+            result = await _call(session, "run_sweep", {"config_id": config_id})
             _assert_tool_error(result, "simulator")
 
     async def test_run_sweep_invalid_config_id_errors(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_run_sweep", {"config_id": "sweep_bogus"})
+            result = await _call(session, "run_sweep", {"config_id": "sweep_bogus"})
             _assert_tool_error(result, "not found")
 
     async def test_get_batch_results_invalid_job_returns_error(self, tmp_path):
         """get_batch_results returns error for missing jobs."""
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_batch_results", {"job_id": "batch_bogus"})
+            result = await _call(session, "batch_results", {"job_id": "batch_bogus"})
             _assert_tool_error(result, "Batch job not found: batch_bogus")
 
 
@@ -505,26 +505,26 @@ class TestAdvancedTools:
 class TestLibraryTools:
     async def test_list_libraries_empty_says_no_libraries(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_list_libraries", {})
+            result = await _call(session, "list_libraries", {})
             assert not result.isError
             assert "No libraries loaded" in _text(result)
 
     async def test_find_model_no_results(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_find_model", {"name": "LM358"})
+            result = await _call(session, "find_model", {"name": "LM358"})
             assert not result.isError
             assert "No fuzzy matches" in _text(result)
 
     async def test_load_nonexistent_library_errors(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_load_library", {"path": "nonexistent.lib"})
+            result = await _call(session, "load_library", {"path": "nonexistent.lib"})
             _assert_tool_error(result, "does not exist")
 
     async def test_unload_not_loaded_library_errors(self, tmp_path):
         lib_file = tmp_path / "empty.lib"
         lib_file.write_text("")
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_unload_library", {"path": "empty.lib"})
+            result = await _call(session, "unload_library", {"path": "empty.lib"})
             _assert_tool_error(result, "not loaded")
 
 
@@ -536,7 +536,7 @@ class TestLibraryTools:
 class TestStatusTool:
     async def test_get_server_status_content(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_server_status", {})
+            result = await _call(session, "server_status", {})
             assert not result.isError
             text = _text(result)
             assert "=== LTSpice MCP Server Status ===" in text
@@ -636,7 +636,7 @@ class TestErrorHandling:
 
     async def test_missing_required_arg_returns_validation_error(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_read_circuit", {})
+            result = await _call(session, "read_circuit", {})
             assert result.isError  # SDK-level validation
             assert "path" in _text(result).lower()
 
@@ -645,7 +645,7 @@ class TestErrorHandling:
         async with mcp_session(tmp_path) as session:
             result = await _call(
                 session,
-                "ltspice_edit_directive",
+                "edit_directive",
                 {"path": "nondot.cir", "action": "add", "instruction": "not-a-directive"},
             )
             _assert_tool_error(result, "must start with '.'")
@@ -653,5 +653,5 @@ class TestErrorHandling:
     async def test_set_component_missing_both_modes_errors(self, tmp_path):
         (tmp_path / "badset.cir").write_text("* Test\nR1 a b 1k\n.END\n")
         async with mcp_session(tmp_path) as session:
-            result = await _call(session, "ltspice_set_component_value", {"path": "badset.cir"})
+            result = await _call(session, "set_component_value", {"path": "badset.cir"})
             _assert_tool_error(result, "reference")

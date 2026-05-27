@@ -27,7 +27,7 @@ class TestGetErrorHint:
     def test_known_full(self):
         hint = _get_error_hint(NetlistError, "full")
         assert hint is not None
-        assert "ltspice_read_circuit" in hint
+        assert "read_circuit" in hint
 
     def test_known_agentic(self):
         hint = _get_error_hint(LibraryError, "agentic")
@@ -126,23 +126,23 @@ class TestServerDispatch:
             patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)),
             pytest.raises(ValueError, match="Invalid arguments"),
         ):
-            await call_tool("ltspice_create_netlist", {"missing": "field"})
+            await call_tool("create_netlist", {"missing": "field"})
 
     async def test_call_path_security_error(self, state_no_sim: SessionState):
         with (
             patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)),
             pytest.raises(PathSecurityError, match="Allowed paths"),
         ):
-            await call_tool("ltspice_read_circuit", {"path": "/etc/passwd"})
+            await call_tool("read_circuit", {"path": "/etc/passwd"})
 
     async def test_call_ltspice_error_with_hint(self, state_no_sim: SessionState):
         with (
             patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)),
             pytest.raises(NetlistError) as excinfo,
         ):
-            await call_tool("ltspice_read_circuit", {"path": "missing.cir"})
+            await call_tool("read_circuit", {"path": "missing.cir"})
         msg = str(excinfo.value)
-        assert "ltspice_read_circuit" in msg or "ltspice_list_components" in msg
+        assert "read_circuit" in msg or "list_components" in msg
 
     async def test_list_resources(self, state_no_sim: SessionState):
         with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)):
@@ -181,7 +181,7 @@ class TestServerDispatch:
         state_no_sim.libraries.load_library(lib)
 
         with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)):
-            result = await call_tool("ltspice_find_model", {"name": "2N2223"})
+            result = await call_tool("find_model", {"name": "2N2223"})
         assert isinstance(result, mcp_types.CallToolResult)
         # find_model returns success with fuzzy matches rather than an error
         # — assert the candidate is still surfaced.
