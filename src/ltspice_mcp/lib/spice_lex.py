@@ -217,6 +217,22 @@ def _iter_atoms(body: str) -> Iterator[_Atom]:
             i = end + 1
             continue
 
+        # Single-quoted expressions (ngspice numparam: rth='(expr)').
+        # Treat like double-quoted strings — consume to the closing quote.
+        if c == "'":
+            end = body.find("'", i + 1)
+            if end < 0:
+                raise SpiceLexError(
+                    SpiceLexErrorCategory.UNTERMINATED_QUOTE,
+                    "unterminated single-quoted string",
+                    position=i,
+                    body=body,
+                    suggestion="add a closing ' after the opening quote",
+                )
+            yield _Atom(TokenKind.QUOTED.value, body[i : end + 1], i)
+            i = end + 1
+            continue
+
         if c == "{":
             end = _scan_balanced(body, i, "{", "}")
             yield _Atom(TokenKind.BRACED.value, body[i : end + 1], i)
