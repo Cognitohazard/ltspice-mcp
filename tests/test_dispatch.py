@@ -91,19 +91,19 @@ class TestToolProfiles:
     def test_filtered_tools_not_in_agentic(self):
         """Verify specific tools that should NOT be in agentic profile."""
         filtered_out = {
-            "ltspice_create_netlist",
-            "ltspice_read_circuit",
-            "ltspice_set_component_value",
-            "ltspice_parameter",
-            "ltspice_edit_directive",
-            "ltspice_configure_sweep",
-            "ltspice_configure_montecarlo",
-            "ltspice_remove_component",
-            "ltspice_move_component",
-            "ltspice_set_component_attribute",
-            "ltspice_load_library",
-            "ltspice_unload_library",
-            "ltspice_list_libraries",
+            "create_netlist",
+            "read_circuit",
+            "set_component_value",
+            "parameter",
+            "edit_directive",
+            "configure_sweep",
+            "configure_montecarlo",
+            "remove_component",
+            "move_component",
+            "set_component_attribute",
+            "load_library",
+            "unload_library",
+            "list_libraries",
         }
         _, handlers = get_tools_for_profile("agentic")
         present = filtered_out & set(handlers.keys())
@@ -148,8 +148,8 @@ class TestSchemaPostProcessing:
     def test_nested_model_inlining(self):
         """Tools with nested models should have schemas fully inlined."""
         defs, _ = get_tools_for_profile("full")
-        sweep_tools = [d for d in defs if d.name == "ltspice_configure_sweep"]
-        assert sweep_tools, "ltspice_configure_sweep not found"
+        sweep_tools = [d for d in defs if d.name == "configure_sweep"]
+        assert sweep_tools, "configure_sweep not found"
         schema = sweep_tools[0].inputSchema
         # parameters property should have inlined items schema
         params_prop = schema["properties"]["parameters"]

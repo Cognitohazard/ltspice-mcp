@@ -35,7 +35,7 @@ def _parse_runno(raw_file: Path) -> int | None:
     """Extract spicelib's 1-based runno from a raw/log filename, or None.
 
     Returns None for files whose basename doesn't match the spicelib pattern
-    (e.g., one-shot sims via `ltspice_run_simulation`, which use job_id stems).
+    (e.g., one-shot sims via `run_simulation`, which use job_id stems).
     Used as a fallback when the runno can't be captured at submission via
     ``wrap_runner_for_runno_callbacks``.
     """
@@ -49,10 +49,16 @@ def wrap_runner_for_runno_callbacks(runner: SimRunner) -> SimRunner:
     """Make ``runner.run`` inject ``task.runno`` into the user's callback.
 
     spicelib's per-run callback is ``(raw_file, log_file)`` — no task
-    ref, no runno. We submit with ``callback=None`` so spicelib doesn't
-    fire the user's callback before the rebind, read ``task.runno`` from
-    the returned RunTask, then patch ``task.callback`` to a closure that
-    calls the user's callback as ``user_cb(raw_file, log_file, runno=runno)``.
+    ref, no runno.  We wrap the user's callback in a closure that reads
+    ``runno`` from a mutable ref, pass the wrapper to ``original_run``
+    so the callback is set BEFORE the thread starts, then fill in the
+    ref from ``task.runno`` after ``run()`` returns.
+
+    The previous approach (post-patching ``task.callback`` after
+    ``task.start()``) races with fast simulators like ngspice (~50 ms)
+    — the thread can finish and check ``self.callback`` (still ``None``)
+    before the patch is applied.
+
     Idempotent via a sentinel attribute on the wrapper.
     """
     if getattr(runner.run, "_runno_aware", False):
@@ -63,16 +69,22 @@ def wrap_runner_for_runno_callbacks(runner: SimRunner) -> SimRunner:
     def runno_aware_run(*args, **kwargs):
         user_callback = kwargs.pop("callback", None)
         user_callback_args = kwargs.pop("callback_args", None)
-        task = original_run(*args, callback=None, callback_args=None, **kwargs)
-        if user_callback is not None and task is not None:
-            runno = task.runno
+        if user_callback is None:
+            return original_run(*args, callback=None, callback_args=None, **kwargs)
 
-            def runno_bound(raw_file: object, log_file: object, *cb_args: object) -> object:
-                return user_callback(raw_file, log_file, runno=runno)
+        # Predict the runno synchronously: spicelib increments _runno in
+        # _prepare_sim (called inside run() before the thread starts), then
+        # assigns RunTask(runno=self._runno). Reading _runno+1 here is safe
+        # because run() hasn't been called yet. This avoids the race where
+        # a fast simulator completes before original_run returns the task.
+        predicted_runno = runner._runno + 1
 
-            task.callback = runno_bound
-            if user_callback_args is not None:
-                task.callback_args = user_callback_args
+        def runno_bound(raw_file: object, log_file: object) -> object:
+            return user_callback(raw_file, log_file, runno=predicted_runno)
+
+        task = original_run(
+            *args, callback=runno_bound, callback_args=user_callback_args, **kwargs
+        )
         return task
 
     runno_aware_run._runno_aware = True  # type: ignore[attr-defined]

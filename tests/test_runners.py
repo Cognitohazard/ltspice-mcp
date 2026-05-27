@@ -345,9 +345,9 @@ class TestWrapRunnerForRunnoCallbacks:
         from ltspice_mcp.lib.runner_base import wrap_runner_for_runno_callbacks
 
         runner = MagicMock()
+        runner._runno = 6  # wrap predicts _runno + 1 = 7
 
         def fake_run(*args, callback=None, callback_args=None, **kwargs):
-            # Stash the post-wrap callback the wrapper sets on the task.
             task = MagicMock()
             task.runno = 7
             task.callback = callback
@@ -363,13 +363,13 @@ class TestWrapRunnerForRunnoCallbacks:
             captured["lf"] = lf
             captured["runno"] = runno
 
+        # The wrapper passes runno_bound as the callback to original_run;
+        # fake_run stashes it on task.callback so we can invoke it here.
         task = wrapped.run("netlist.cir", callback=user_cb)  # type: ignore[arg-type]
-        # The wrapper rebinds task.callback; invoking it should now
-        # forward runno=task.runno to the user callback.
         assert task is not None
-        rebound = task.callback
-        assert rebound is not None
-        rebound(Path("netlist_7.raw"), Path("netlist_7.log"))
+        runno_bound_cb = task.callback
+        assert runno_bound_cb is not None
+        runno_bound_cb(Path("netlist_7.raw"), Path("netlist_7.log"))
         assert captured == {
             "rf": Path("netlist_7.raw"),
             "lf": Path("netlist_7.log"),

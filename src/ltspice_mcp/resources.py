@@ -306,7 +306,7 @@ def _read_recent(
         "circuits": circuits,
         "count": len(circuits),
         "note": (
-            "Use ltspice_check_job(job_id) or ltspice_batch_results(job_id) to inspect "
+            "Use check_job(job_id) or batch_results(job_id) to inspect "
             "a specific job; interrupted jobs were running when the server last stopped."
         ),
     }
@@ -336,7 +336,7 @@ def _read_models(
     data = {
         "libraries": libraries,
         "note": (
-            "Use ltspice_find_model(include_builtin=true) to find models in built-in libraries."
+            "Use find_model(include_builtin=true) to find models in built-in libraries."
         ),
     }
     return _make_result(uri_str, json.dumps(data, indent=2))

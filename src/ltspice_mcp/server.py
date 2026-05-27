@@ -141,12 +141,12 @@ class _ErrorHint(NamedTuple):
 _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
     _err.MissingModelError: _ErrorHint(
         full=(
-            "Try ltspice_find_model to fuzzy-match against loaded libraries "
-            "(catches typos and near-neighbour part numbers), or ltspice_load_library "
+            "Try find_model to fuzzy-match against loaded libraries "
+            "(catches typos and near-neighbour part numbers), or load_library "
             "to load a library file containing it."
         ),
         agentic=(
-            "Try ltspice_find_model to fuzzy-match against loaded libraries "
+            "Try find_model to fuzzy-match against loaded libraries "
             "(catches typos), or load a library containing it and rerun."
         ),
     ),
@@ -154,7 +154,7 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
         full=(
             "Suggestions:\n"
             "  - Add .OPTIONS (e.g., .OPTIONS reltol=0.003 or .OPTIONS method=gear)\n"
-            "  - Use ltspice_edit_directive to add a .OPTIONS directive\n"
+            "  - Use edit_directive to add a .OPTIONS directive\n"
             "  - Check component values for very large/small ratios"
         ),
         agentic=(
@@ -167,7 +167,7 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
     _err.SingularMatrixError: _ErrorHint(
         full=(
             "This usually means a floating node or short circuit.\n"
-            "Use ltspice_read_circuit to inspect the netlist for connectivity issues."
+            "Use read_circuit to inspect the netlist for connectivity issues."
         ),
         agentic=(
             "This usually means a floating node or short circuit.\n"
@@ -175,36 +175,36 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
         ),
     ),
     _err.SimulationError: _ErrorHint(
-        full="Use ltspice_server_status to verify simulator availability.",
-        agentic="Use ltspice_server_status to verify simulator availability.",
+        full="Use server_status to verify simulator availability.",
+        agentic="Use server_status to verify simulator availability.",
     ),
     _err.NetlistError: _ErrorHint(
         full=(
-            "Use ltspice_read_circuit to inspect the file, or "
-            "ltspice_list_components to verify component references."
+            "Use read_circuit to inspect the file, or "
+            "list_components to verify component references."
         ),
         agentic=(
             "Inspect the netlist file directly, or use "
-            "ltspice_list_components to verify component references."
+            "list_components to verify component references."
         ),
     ),
     _err.ResultError: _ErrorHint(
         full=(
-            "Verify the simulation completed successfully with ltspice_check_job, "
-            "and check signal names with ltspice_simulation_summary."
+            "Verify the simulation completed successfully with check_job, "
+            "and check signal names with simulation_summary."
         ),
         agentic=(
-            "Verify the simulation completed successfully with ltspice_check_job, "
-            "and check signal names with ltspice_simulation_summary."
+            "Verify the simulation completed successfully with check_job, "
+            "and check signal names with simulation_summary."
         ),
     ),
     _err.LibraryError: _ErrorHint(
         full=(
-            "Use ltspice_list_libraries to see loaded libraries, or "
-            "ltspice_load_library to load a new one."
+            "Use list_libraries to see loaded libraries, or "
+            "load_library to load a new one."
         ),
         agentic=(
-            "Use ltspice_find_model to fuzzy-match against loaded libraries, "
+            "Use find_model to fuzzy-match against loaded libraries, "
             "or add .lib directives to the netlist manually."
         ),
     ),
@@ -359,7 +359,7 @@ async def call_tool(name: str, arguments: dict | None):
         allowed = ", ".join(str(p) for p in state.config.allowed_paths)
         raise PathSecurityError(
             f"{e}\n\nAllowed paths: {allowed}\n"
-            f"Use ltspice_server_status to see full sandbox configuration."
+            f"Use server_status to see full sandbox configuration."
         ) from None
     except LTSpiceMCPError as e:
         hint = _get_error_hint(type(e), state.config.tool_profile)

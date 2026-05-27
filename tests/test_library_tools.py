@@ -145,7 +145,7 @@ class TestFindModel:
         result = await handle_find_model(FindModelInput(name="2N3905", exact=True), state_no_sim)
         assert result.structuredContent["results"] == []
         assert "No exact match" in result.content[0].text
-        assert "ltspice_find_model" in result.content[0].text
+        assert "find_model" in result.content[0].text
         assert "exact=false" in result.content[0].text
 
     async def test_cutoff_filters(self, state_no_sim: SessionState, fuzzy_lib: Path):
