@@ -121,6 +121,18 @@ _BARE_ERROR_PHRASES = [
     "gmin/source stepping failed",
     "questionable use of curly braces",
 ]
+# ngspice-specific diagnostic patterns (not matched by the LTspice rules above).
+_RE_NGSPICE_MEAS_BLOCKED = re.compile(
+    r"No \.measure possible in batch mode", re.IGNORECASE
+)
+_RE_NGSPICE_UNIMPLEMENTED = re.compile(
+    r"unimplemented dot command '([^']+)'", re.IGNORECASE
+)
+# ngspice "Note:" lines carry per-component diagnostics (e.g. "v1: has
+# no value, DC 0 assumed"). Exclude the preamble "Compatibility modes"
+# note which is just informational noise.
+_RE_NGSPICE_NOTE = re.compile(r"^Note:\s+(.+)", re.IGNORECASE)
+_NGSPICE_NOTE_SKIP = {"compatibility modes selected"}
 
 # LTspice writes one ``.step <name>=<value>[, ...]`` line per iteration of a
 # .step parametric run — useful when the .raw lacks an axis (e.g. .step param
@@ -391,6 +403,25 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
             i += 1
             continue
 
+        # ngspice-specific diagnostics
+        if _RE_NGSPICE_MEAS_BLOCKED.search(stripped):
+            warnings.append(
+                stripped + " Use signal_stats or query_value for post-processing."
+            )
+            i += 1
+            continue
+        if _RE_NGSPICE_UNIMPLEMENTED.search(stripped):
+            errors.append(stripped)
+            i += 1
+            continue
+        m_note = _RE_NGSPICE_NOTE.match(stripped)
+        if m_note:
+            note_body = m_note.group(1).strip()
+            if not any(skip in note_body.lower() for skip in _NGSPICE_NOTE_SKIP):
+                warnings.append(stripped)
+            i += 1
+            continue
+
         i += 1
 
     return {"warnings": warnings, "errors": errors, "meas_errors": meas_errors}
@@ -463,7 +494,9 @@ def extract_error_context(log_file: Path, max_lines: int = 20) -> str:
         return f"(Error reading log file: {e})"
 
 
-def parse_success_summary(raw_file: Path, log_file: Path, duration: float) -> dict:
+def parse_success_summary(
+    raw_file: Path, log_file: Path, duration: float, *, dialect: str | None = None
+) -> dict:
     """Build the success-path summary that ``run_simulation`` returns.
 
     Delegates to ``raw_parser.build_simulation_summary`` so the canonical
@@ -498,10 +531,10 @@ def parse_success_summary(raw_file: Path, log_file: Path, duration: float) -> di
         # does NOT need V(*)/I(*) trace data. Loading "*" would
         # materialise every signal on every completion — fine for a
         # short .op, unbounded for a long .tran (Codex M3).
-        header = RawRead(str(raw_file), traces_to_read=None)
+        header = RawRead(str(raw_file), traces_to_read=None, dialect=dialect)
         trace_names = header.get_trace_names()
         axis_only = [trace_names[0]] if trace_names else None
-        raw_read = RawRead(str(raw_file), traces_to_read=axis_only)
+        raw_read = RawRead(str(raw_file), traces_to_read=axis_only, dialect=dialect)
     except Exception as e:
         logger.warning(f"Could not parse raw file {raw_file}: {e}")
         # No raw — surface what diagnostics we can from the log alone.
@@ -571,42 +604,74 @@ def _sanitize_log_for_reader(content: str) -> str:
     return _RE_FOURIER_NAN.sub(_sub, content)
 
 
+def _preprocess_ngspice_log(content: str) -> str | None:
+    """Strip ngspice preamble so ``LTSpiceLogReader``'s regex can match.
+
+    ngspice prepends ``Note: Compatibility modes selected: ...`` and
+    possibly blank lines before the ``Circuit:`` line that spicelib
+    expects near the top. Returns the trimmed content if a ``Circuit:``
+    line was found, else ``None``.
+    """
+    idx = content.find("\nCircuit:")
+    if idx == -1:
+        idx = content.find("Circuit:")
+        if idx == 0:
+            return None  # already at the start — no preprocessing needed
+        if idx == -1:
+            return None
+    return content[idx:].lstrip("\n")
+
+
 def make_log_reader(log_path: Path) -> LTSpiceLogReader:
     """Build an LTSpiceLogReader, sanitizing known crash patterns on retry.
 
     Spicelib's Fourier-block parser crashes on ``-nan``/``inf`` THD values
     — common when the analysed signal is identically zero. We retry once
     with a sanitized copy in a temp file before giving up.
+
+    Also preprocesses ngspice logs whose preamble trips up spicelib's
+    start-of-file regex.
     """
     try:
         return LTSpiceLogReader(str(log_path))
-    except (AttributeError, ValueError) as first_err:
+    except ResultError:
+        raise
+    except Exception as first_err:
         try:
             content = log_path.read_text(errors="replace")
         except OSError as e:
             raise ResultError(f"Could not parse log file: {first_err}") from e
+
+        # Try ngspice preamble stripping, then -nan sanitization, then both.
+        candidates: list[str] = []
+        preprocessed = _preprocess_ngspice_log(content)
         sanitized = _sanitize_log_for_reader(content)
-        if sanitized == content:
+        if preprocessed is not None:
+            candidates.append(preprocessed)
+            candidates.append(_sanitize_log_for_reader(preprocessed))
+        if sanitized != content:
+            candidates.append(sanitized)
+        if not candidates:
             raise ResultError(f"Could not parse log file: {first_err}") from first_err
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=log_path.suffix,
-            prefix=f"{log_path.stem}.sanitized.",
-            delete=False,
-            encoding="utf-8",
-        ) as tmp:
-            tmp.write(sanitized)
-            tmp_path = Path(tmp.name)
-        try:
+
+        for candidate in candidates:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=log_path.suffix,
+                prefix=f"{log_path.stem}.sanitized.",
+                delete=False,
+                encoding="utf-8",
+            ) as tmp:
+                tmp.write(candidate)
+                tmp_path = Path(tmp.name)
             try:
                 return LTSpiceLogReader(str(tmp_path))
-            except Exception as e:
-                raise ResultError(f"Could not parse log file: {e}") from e
-        finally:
-            with contextlib.suppress(OSError):
-                tmp_path.unlink()
-    except Exception as e:
-        raise ResultError(f"Could not parse log file: {e}") from e
+            except Exception:
+                continue
+            finally:
+                with contextlib.suppress(OSError):
+                    tmp_path.unlink()
+        raise ResultError(f"Could not parse log file: {first_err}") from first_err
 
 
 def parse_measurements(

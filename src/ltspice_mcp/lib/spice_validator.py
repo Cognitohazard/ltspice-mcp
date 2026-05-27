@@ -67,8 +67,8 @@ _RULES: tuple[_Rule, ...] = (
         ),
         suggestion=(
             "Use mag(V(node)) and convert to dB downstream, or rely on "
-            "ltspice_filter_metrics for −3 dB cutoffs and "
-            "ltspice_gain_at for point queries."
+            "filter_metrics for −3 dB cutoffs and "
+            "gain_at for point queries."
         ),
     ),
     _Rule(
@@ -92,7 +92,7 @@ _RULES: tuple[_Rule, ...] = (
             "waveform-viewer-only function in LTspice."
         ),
         suggestion=(
-            "Compute group delay via ltspice_gain_at with "
+            "Compute group delay via gain_at with "
             "include_unwrapped_phase=True, then numerically differentiate "
             "the unwrapped phase."
         ),

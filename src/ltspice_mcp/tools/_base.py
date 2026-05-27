@@ -506,7 +506,7 @@ def resolve_runnable_netlist(netlist_str: str, state: SessionState) -> Path:
     if ltspice_cls is None:
         raise SimulationError(
             f"{netlist_path.name} is an .asc schematic and the active runner "
-            "needs a netlist. Run ltspice_export_netlist first, or configure "
+            "needs a netlist. Run export_netlist first, or configure "
             "LTspice as a simulator. Available: "
             f"{list(state.available_simulators.keys())}"
         )
@@ -556,28 +556,48 @@ def safe_path(user_path: str, state: SessionState) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def _get_linux_output_dir(working_dir: Path) -> Path:
+    """Return a per-workspace Linux-native temp dir for simulation output.
+
+    Uses a hash of the working directory to isolate concurrent workspaces
+    that might share netlist stems.
+    """
+    import hashlib
+
+    dir_hash = hashlib.sha256(str(working_dir).encode()).hexdigest()[:12]
+    out = Path(f"/tmp/ltspice-mcp-{dir_hash}")
+    out.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return out
+
+
 def resolve_output_folder(state: SessionState) -> Path:
     """Determine the output folder for simulation files.
 
-    On WSL, if the working dir is on the Linux filesystem (not /mnt/),
-    uses a Windows-native temp dir instead. This ensures LTspice can write
-    its .db (SQLite) files, which is required for .MEAS results to appear
-    in .log files.
+    On WSL, if the working dir is on the Linux filesystem (not /mnt/):
+    - LTspice → Windows-native temp dir (SQLite .db writes fail on UNC paths)
+    - Other simulators → ``/tmp/ltspice-mcp`` (avoids cluttering the project root)
+
+    On non-WSL Linux or when the working dir is already on /mnt/,
+    returns the working dir as-is.
 
     Also adds the output dir to allowed_paths so analysis tools can read
     the result files via safe_path().
     """
+    from spicelib.simulators.ltspice_simulator import LTspice
+
     from ltspice_mcp.lib.wsl import get_windows_output_dir, is_windows_native_path, is_wsl
 
     if is_wsl() and not is_windows_native_path(state.working_dir):
-        win_dir = get_windows_output_dir()
-        if win_dir is not None:
-            if win_dir not in state.config.allowed_paths:
+        sim_cls = state.default_simulator
+        is_ltspice = sim_cls is not None and issubclass(sim_cls, LTspice)
+        out = get_windows_output_dir() if is_ltspice else _get_linux_output_dir(state.working_dir)
+        if out is not None:
+            if out not in state.config.allowed_paths:
                 logger.info(
-                    f"WSL: using Windows output dir {win_dir} "
+                    f"WSL: using output dir {out} "
                     f"(working_dir {state.working_dir} is on Linux filesystem)"
                 )
-                state.config.allowed_paths.append(win_dir)
-            return win_dir
+                state.config.allowed_paths.append(out)
+            return out
 
     return state.working_dir

@@ -77,6 +77,26 @@ def _apply_simulator_exe(config: ServerConfig) -> None:
         logger.warning(f"Failed to apply simulator_exe for {target_name}: {e}")
 
 
+_DIALECT_MAP: dict[str, str] = {
+    "NGspiceSimulator": "ngspice",
+    "Qspice": "qspice",
+    "XyceSimulator": "xyce",
+}
+
+
+def simulator_dialect(simulator_class: type | None) -> str | None:
+    """Return the spicelib ``RawRead`` dialect for a simulator class.
+
+    LTspice (and its WSL subclass) return ``None`` — spicelib auto-detects
+    the dialect from the ``Command:`` field. Other simulators need an
+    explicit hint because older versions (e.g. ngspice < 44) omit that
+    header.
+    """
+    if simulator_class is None:
+        return None
+    return _DIALECT_MAP.get(simulator_class.__name__)
+
+
 def detect_simulators(config: ServerConfig | None = None) -> dict[str, type]:
     """Detect available SPICE simulators on the system.
 

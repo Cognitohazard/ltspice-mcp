@@ -273,7 +273,7 @@ def find_crossings_any_quantity(
     max_results: int = 10,
     min_separation_decades: float = 0.0,
 ) -> tuple[list[CrossingWithQuantity], list[str]]:
-    """Crossing primitive that backs ``ltspice_find_crossing``.
+    """Crossing primitive that backs ``find_crossing``.
 
     Slices to ``[f_start, f_end]`` (inclusive, log-interpolation at the
     endpoints), selects the quantity to cross, and returns at most

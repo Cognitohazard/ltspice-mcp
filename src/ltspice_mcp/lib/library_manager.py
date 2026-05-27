@@ -220,12 +220,13 @@ class LibraryManager:
         for candidate in candidates:
             if candidate.exists() and candidate.is_dir():
                 lib_dir = candidate / "lib"
-                if lib_dir.exists():
-                    for pattern in ["*.lib", "*.mod"]:
-                        for lib_file in lib_dir.rglob(pattern):
-                            if lib_file.is_file():
-                                lib_files.append(lib_file)
-                                logger.debug(f"Found NGspice library: {lib_file}")
+                if not lib_dir.exists():
+                    continue
+                for pattern in ["*.lib", "*.mod"]:
+                    for lib_file in lib_dir.rglob(pattern):
+                        if lib_file.is_file():
+                            lib_files.append(lib_file)
+                            logger.debug(f"Found NGspice library: {lib_file}")
 
         return lib_files
 

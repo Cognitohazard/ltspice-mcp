@@ -169,10 +169,11 @@ def resolve_log_file(job_id: str, state: SessionState) -> Path:
 
 def load_raw(raw_path: Path, state: SessionState) -> RawRead:
     """Load and cache a ``RawRead`` instance."""
+    dialect = state.raw_dialect
     try:
         return state.results.get(
             raw_path,
-            lambda p: RawRead(str(p), traces_to_read="*"),
+            lambda p: RawRead(str(p), traces_to_read="*", dialect=dialect),
         )
     except FileNotFoundError:
         raise ResultError(f"Result file not found: {raw_path}") from None
@@ -207,7 +208,18 @@ def validate_signal(raw: RawRead, signal: str) -> str:
     available = ", ".join(trace_names[:10])
     if len(trace_names) > 10:
         available += f", ... ({len(trace_names)} total)"
-    raise ResultError(f"Signal '{signal}' not found. Available signals: {available}")
+    hint = ""
+    sig_lo = sig_lower
+    trace_lo = {t.lower() for t in trace_names}
+    if sig_lo in ("v(onoise)", "v(inoise)") and (
+        "onoise_spectrum" in trace_lo or "inoise_spectrum" in trace_lo
+    ):
+        hint = " (ngspice names noise signals 'onoise_spectrum'/'inoise_spectrum')"
+    elif sig_lo in ("onoise_spectrum", "inoise_spectrum") and (
+        "v(onoise)" in trace_lo or "v(inoise)" in trace_lo
+    ):
+        hint = " (LTspice names noise signals 'V(onoise)'/'V(inoise)')"
+    raise ResultError(f"Signal '{signal}' not found.{hint} Available signals: {available}")
 
 
 def validate_step(raw: RawRead, step: int) -> None:
@@ -357,6 +369,7 @@ def get_batch_signal_data(
     offset: int = 0,
     limit: int = 50,
     at: float | None = None,
+    dialect: str | None = None,
 ) -> dict[str, Any]:
     """Extract structured batch signal data for aggregated or raw mode."""
     if batch_job.completed_runs == 0:
@@ -391,7 +404,7 @@ def get_batch_signal_data(
                 f"offset={offset}, limit={limit}"
             )
         paginated_run_results = {idx: batch_job.run_results[idx] for idx in paginated_indices}
-        page_stats = compute_batch_stats(paginated_run_results, signal, at=at)
+        page_stats = compute_batch_stats(paginated_run_results, signal, at=at, dialect=dialect)
         out_raw: dict[str, Any] = {
             "mode": "raw",
             "job_id": batch_job.job_id,
@@ -408,7 +421,7 @@ def get_batch_signal_data(
             out_raw["convergence_warnings"] = convergence
         return out_raw
 
-    batch_stats = compute_batch_stats(matching_run_results, signal, at=at)
+    batch_stats = compute_batch_stats(matching_run_results, signal, at=at, dialect=dialect)
     if batch_stats["run_count"] == 0:
         raise ResultError(f"Signal '{signal}' not found in any completed run")
 

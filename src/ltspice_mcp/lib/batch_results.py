@@ -23,6 +23,7 @@ def compute_batch_stats(
     signal: str,
     *,
     at: float | None = None,
+    dialect: str | None = None,
 ) -> dict:
     """Compute aggregate statistics for a signal across all batch runs.
 
@@ -73,7 +74,7 @@ def compute_batch_stats(
             continue
 
         try:
-            raw = RawRead(raw_path, traces_to_read=signal)
+            raw = RawRead(raw_path, traces_to_read=signal, dialect=dialect)
             wave = raw.get_wave(signal, step=0)
 
             # AC (complex): use magnitude; transient: use raw values
