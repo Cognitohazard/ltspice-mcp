@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, mock_open, patch
 
 from ltspice_mcp.lib.wsl import (
     _resolve_win_env,
+    find_windows_ltspice_exe,
     get_ltspice_lib_paths,
     get_windows_output_dir,
     is_windows_native_path,
@@ -154,4 +155,62 @@ class TestGetLtspiceLibPaths:
         wsl_mod._is_wsl_cached = True
         with patch("ltspice_mcp.lib.wsl._resolve_win_env", return_value=None):
             assert get_ltspice_lib_paths() == []
+        wsl_mod._is_wsl_cached = None
+
+
+class TestFindWindowsLtspiceExe:
+    """WSL auto-detection of the Windows-side LTspice executable (Fix B)."""
+
+    def test_not_wsl(self):
+        import ltspice_mcp.lib.wsl as wsl_mod
+
+        wsl_mod._is_wsl_cached = False
+        assert find_windows_ltspice_exe() is None
+        wsl_mod._is_wsl_cached = None
+
+    def test_localappdata_adi_hit(self, tmp_path: Path):
+        import ltspice_mcp.lib.wsl as wsl_mod
+
+        wsl_mod._is_wsl_cached = True
+        exe = tmp_path / "Programs" / "ADI" / "LTspice" / "LTspice.exe"
+        exe.parent.mkdir(parents=True)
+        exe.write_text("stub")
+
+        def fake_env(var: str):
+            return tmp_path if var == "LOCALAPPDATA" else None
+
+        with patch("ltspice_mcp.lib.wsl._resolve_win_env", side_effect=fake_env):
+            assert find_windows_ltspice_exe() == exe
+        wsl_mod._is_wsl_cached = None
+
+    def test_program_files_legacy_hit(self, tmp_path: Path):
+        import ltspice_mcp.lib.wsl as wsl_mod
+
+        wsl_mod._is_wsl_cached = True
+        exe = tmp_path / "LTC" / "LTspiceXVII" / "XVIIx64.exe"
+        exe.parent.mkdir(parents=True)
+        exe.write_text("stub")
+
+        def fake_env(var: str):
+            return tmp_path if var == "ProgramFiles" else None
+
+        with patch("ltspice_mcp.lib.wsl._resolve_win_env", side_effect=fake_env):
+            assert find_windows_ltspice_exe() == exe
+        wsl_mod._is_wsl_cached = None
+
+    def test_no_install_found(self, tmp_path: Path):
+        import ltspice_mcp.lib.wsl as wsl_mod
+
+        wsl_mod._is_wsl_cached = True
+        # Bases resolve and exist, but no LTspice executable lives under them.
+        with patch("ltspice_mcp.lib.wsl._resolve_win_env", return_value=tmp_path):
+            assert find_windows_ltspice_exe() is None
+        wsl_mod._is_wsl_cached = None
+
+    def test_env_unresolvable(self):
+        import ltspice_mcp.lib.wsl as wsl_mod
+
+        wsl_mod._is_wsl_cached = True
+        with patch("ltspice_mcp.lib.wsl._resolve_win_env", return_value=None):
+            assert find_windows_ltspice_exe() is None
         wsl_mod._is_wsl_cached = None

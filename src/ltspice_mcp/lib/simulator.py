@@ -2,6 +2,7 @@
 
 import logging
 import os
+from pathlib import Path
 
 from spicelib.simulators.ltspice_simulator import LTspice
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
@@ -47,34 +48,127 @@ SIMULATORS: dict[str, type] = {
 }
 
 
-def _apply_simulator_exe(config: ServerConfig) -> None:
+def _exe_simulator_hint(exe_path: object) -> str | None:
+    """Best-guess which simulator an executable path belongs to, by filename.
+
+    Returns a simulator key (ltspice/ngspice/qspice/xyce) or None when the name
+    matches no known pattern (in which case callers should trust the user).
+    """
+    name = Path(str(exe_path)).name.lower()
+    if "ngspice" in name:
+        return "ngspice"
+    if "ltspice" in name or "xvii" in name or "scad3" in name:
+        return "ltspice"
+    if "qspice" in name:
+        return "qspice"
+    if "xyce" in name:
+        return "xyce"
+    return None
+
+
+def _apply_simulator_exe(config: ServerConfig, diagnostics: list[str] | None = None) -> bool:
     """Apply config.simulator_exe to the appropriate spicelib simulator class.
 
     If the user has configured an explicit simulator executable path,
     use spicelib's create_from() to register it before auto-detection.
     This is essential for WSL where LTspice lives on the Windows side
     and spicelib's default search paths won't find it.
+
+    Appends a human-readable note to ``diagnostics`` (if provided) when the
+    configured path is missing or rejected, so ``server_status`` can surface
+    the misconfiguration instead of leaving it buried in the server log.
+
+    Returns:
+        True if an explicit path was successfully applied (so callers can
+        suppress auto-detection — a working hardcoded path wins). False when
+        no path was configured, or it was missing / rejected.
     """
     if not config.simulator_exe:
-        return
+        return False
 
     exe_path = config.simulator_exe
+    target_name = config.simulator or "ltspice"
     if not exe_path.exists():
-        logger.warning(f"Configured simulator_exe does not exist: {exe_path}")
-        return
+        msg = (
+            f"Configured simulator path does not exist: {exe_path} "
+            f"(requested '{target_name}'). Falling back to auto-detection."
+        )
+        logger.warning(msg)
+        if diagnostics is not None:
+            diagnostics.append(msg)
+        return False
+
+    # Guard against binding a path to the wrong simulator: if the exe filename
+    # clearly belongs to a *different* known simulator than ``default``, skip it
+    # (and fall back to auto-detection) rather than binding e.g. LTspice.exe to
+    # ngspice — which silently mis-runs and hangs to timeout (NGv7-CONFIG-1).
+    guessed = _exe_simulator_hint(exe_path)
+    if guessed is not None and guessed != target_name:
+        msg = (
+            f"Configured simulator path {exe_path} looks like a {guessed} "
+            f"executable, but [simulator] default is '{target_name}'. Ignoring "
+            f"the path to avoid binding the wrong binary — set the correct path "
+            f"or change [simulator] default."
+        )
+        logger.warning(msg)
+        if diagnostics is not None:
+            diagnostics.append(msg)
+        return False
 
     # Determine which simulator class to configure
-    target_name = config.simulator or "ltspice"
     target_cls = SIMULATORS.get(target_name)
     if target_cls is None:
-        logger.warning(f"Unknown simulator '{target_name}' for exe override")
-        return
+        msg = f"Unknown simulator '{target_name}' for exe override"
+        logger.warning(msg)
+        if diagnostics is not None:
+            diagnostics.append(msg)
+        return False
 
     try:
         target_cls.create_from(str(exe_path))
         logger.info(f"Applied simulator_exe override for {target_name}: {exe_path}")
+        return True
     except Exception as e:
-        logger.warning(f"Failed to apply simulator_exe for {target_name}: {e}")
+        msg = f"Failed to apply configured simulator path for {target_name}: {e}"
+        logger.warning(msg)
+        if diagnostics is not None:
+            diagnostics.append(msg)
+        return False
+
+
+def _autodetect_wsl_ltspice(diagnostics: list[str] | None = None) -> None:
+    """Register LTspice on WSL by probing standard Windows install locations.
+
+    spicelib's stock LTspice detection only searches Wine paths on Linux, so
+    on WSL it never finds the Windows-side install under ``/mnt/<drive>/``.
+    When no explicit ``simulator_exe`` has already populated ``spice_exe``,
+    probe the common locations and register the first hit via ``create_from``.
+
+    This is a no-op off WSL, when LTspice is already configured, or when no
+    install is found. ``diagnostics`` (if provided) records a successful
+    auto-detection so the user can see where it was found.
+    """
+    if not is_wsl():
+        return
+
+    ltspice_cls = SIMULATORS["ltspice"]
+    # Already configured (explicit simulator_exe applied, or a prior call).
+    if getattr(ltspice_cls, "spice_exe", None):
+        return
+
+    from ltspice_mcp.lib.wsl import find_windows_ltspice_exe
+
+    exe = find_windows_ltspice_exe()
+    if exe is None:
+        return
+
+    try:
+        ltspice_cls.create_from(str(exe))
+        logger.info(f"Auto-detected LTspice on WSL: {exe}")
+        if diagnostics is not None:
+            diagnostics.append(f"Auto-detected LTspice on WSL at {exe}.")
+    except Exception as e:
+        logger.warning(f"WSL LTspice auto-detection failed for {exe}: {e}")
 
 
 _DIALECT_MAP: dict[str, str] = {
@@ -97,32 +191,51 @@ def simulator_dialect(simulator_class: type | None) -> str | None:
     return _DIALECT_MAP.get(simulator_class.__name__)
 
 
-def detect_simulators(config: ServerConfig | None = None) -> dict[str, type]:
+def detect_simulators(
+    config: ServerConfig | None = None,
+    diagnostics: list[str] | None = None,
+) -> dict[str, type]:
     """Detect available SPICE simulators on the system.
 
     If config is provided and has simulator_exe set, applies that override
     before running auto-detection. This allows WSL users to point to the
-    Windows-side LTspice executable.
+    Windows-side LTspice executable. On WSL, also probes standard Windows
+    LTspice install locations (which spicelib's Wine-only search misses) so
+    users don't have to hand-configure the path — but only when no explicit
+    working path was pinned (a valid hardcoded path wins and suppresses
+    auto-detection).
+
+    ``config.enabled_simulators`` is an allowlist: when non-empty, only the
+    listed simulators are probed/exposed. Empty (default) = probe all.
 
     Args:
-        config: Optional server config with simulator_exe override.
+        config: Optional server config with simulator_exe / enabled override.
+        diagnostics: Optional list to collect human-readable notes about
+            misconfiguration / fallback for surfacing via ``server_status``.
 
     Returns:
         Dictionary mapping simulator name to class for all available simulators.
         Returns empty dict if no simulators are detected (server can still start).
     """
     if _detection_disabled():
-        logger.info(
-            "Simulator detection disabled via LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION"
-        )
+        logger.info("Simulator detection disabled via LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION")
         return {}
 
-    if config is not None:
-        _apply_simulator_exe(config)
+    # A valid explicit path takes control: when applied, skip auto-detection.
+    applied = _apply_simulator_exe(config, diagnostics) if config is not None else False
+
+    # Resolve the candidate set: empty allowlist = every supported simulator.
+    names = _resolve_enabled_names(config, diagnostics)
+
+    # On WSL, fill in LTspice from the Windows side — unless an explicit path
+    # was already applied, or the user excluded ltspice from the allowlist.
+    if not applied and "ltspice" in names:
+        _autodetect_wsl_ltspice(diagnostics)
 
     available: dict[str, type] = {}
 
-    for name, cls in SIMULATORS.items():
+    for name in names:
+        cls = SIMULATORS[name]
         try:
             if cls.is_available():
                 logger.info(f"Detected simulator: {name}")
@@ -141,7 +254,43 @@ def detect_simulators(config: ServerConfig | None = None) -> dict[str, type]:
     return available
 
 
-def select_default_simulator(available: dict[str, type], config: ServerConfig) -> type | None:
+def _resolve_enabled_names(
+    config: ServerConfig | None,
+    diagnostics: list[str] | None = None,
+) -> list[str]:
+    """Resolve which simulator names to probe from ``config.enabled_simulators``.
+
+    Empty / unset allowlist → all supported simulators (preserving registry
+    order). Unknown names are dropped with a diagnostic. If a non-empty
+    allowlist contains no recognised names, returns an empty list (the user's
+    explicit — if mistaken — intent; the diagnostics explain the degraded mode).
+    """
+    enabled = list(config.enabled_simulators) if config and config.enabled_simulators else []
+    if not enabled:
+        return list(SIMULATORS)
+
+    names: list[str] = []
+    for raw in enabled:
+        name = raw.strip().lower()
+        if name in SIMULATORS:
+            if name not in names:
+                names.append(name)
+        else:
+            msg = (
+                f"Unknown simulator '{raw}' in [simulator] enabled "
+                f"(valid: {list(SIMULATORS)}); ignoring."
+            )
+            logger.warning(msg)
+            if diagnostics is not None:
+                diagnostics.append(msg)
+    return names
+
+
+def select_default_simulator(
+    available: dict[str, type],
+    config: ServerConfig,
+    diagnostics: list[str] | None = None,
+) -> type | None:
     """Select the default simulator based on config and availability.
 
     Selection logic:
@@ -154,6 +303,8 @@ def select_default_simulator(available: dict[str, type], config: ServerConfig) -
     Args:
         available: Dictionary of available simulators from detect_simulators()
         config: Server configuration with simulator preference
+        diagnostics: Optional list to collect a human-readable note when the
+            requested simulator is unavailable and a fallback is chosen.
 
     Returns:
         Simulator class to use as default, or None if no simulators available
@@ -169,12 +320,20 @@ def select_default_simulator(available: dict[str, type], config: ServerConfig) -
             logger.info(f"Using configured simulator: {preferred}")
             return available[preferred]
         else:
-            logger.warning(
-                f"Configured simulator '{config.simulator}' not available. "
-                f"Some features may not work correctly. "
-                f"Available simulators: {list(available.keys())}"
+            # Requested simulator missing — pick a fallback and record WHY,
+            # so the user isn't silently handed results from a simulator they
+            # didn't ask for.
+            fallback_name = "ltspice" if "ltspice" in available else next(iter(available))
+            fallback = available[fallback_name]
+            msg = (
+                f"Requested simulator '{config.simulator}' is not available "
+                f"(detected: {list(available.keys())}). Using '{fallback_name}' instead. "
+                f"Results will come from {fallback_name}, not {config.simulator}."
             )
-            # Fall through to auto-select
+            logger.warning(msg)
+            if diagnostics is not None:
+                diagnostics.append(msg)
+            return fallback
 
     # Prefer LTSpice if available (default when multiple simulators detected)
     if "ltspice" in available:

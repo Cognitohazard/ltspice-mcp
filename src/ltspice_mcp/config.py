@@ -98,7 +98,14 @@ class ServerConfig:
     """
 
     simulator: str | None = None
-    """Preferred simulator name (ltspice, ngspice, qspice, xyce). None = auto-select."""
+    """Preferred (default) simulator name (ltspice, ngspice, qspice, xyce).
+    None = auto-select. Must be one of ``enabled_simulators`` when that list
+    is non-empty."""
+
+    enabled_simulators: list[str] = field(default_factory=list)
+    """Allowlist of simulators to make available (ltspice, ngspice, qspice,
+    xyce). Empty (default) = auto-detect every supported simulator. When
+    non-empty, only the listed simulators are probed/exposed."""
 
     simulator_exe: Path | None = None
     """Explicit path to simulator executable. Overrides auto-detection."""
@@ -180,6 +187,15 @@ class ServerConfig:
                     config_dict["simulator"] = toml_data["simulator"]["default"] or None
                 if "path" in toml_data["simulator"] and toml_data["simulator"]["path"]:
                     config_dict["simulator_exe"] = Path(toml_data["simulator"]["path"])
+                if "enabled" in toml_data["simulator"]:
+                    raw = toml_data["simulator"]["enabled"]
+                    if isinstance(raw, list) and all(isinstance(x, str) for x in raw):
+                        config_dict["enabled_simulators"] = [x.strip().lower() for x in raw]
+                    else:
+                        logger.warning(
+                            "config: simulator.enabled must be a list of strings; ignoring %r",
+                            raw,
+                        )
 
             if "security" in toml_data and "allowed_paths" in toml_data["security"]:
                 config_dict["allowed_paths"] = [
@@ -264,6 +280,13 @@ class ServerConfig:
 
         if env_sim := os.getenv("LTSPICE_MCP_SIMULATOR"):
             config_dict["simulator"] = env_sim
+
+        if env_enabled := os.getenv("LTSPICE_MCP_ENABLED_SIMULATORS"):
+            # Comma- or os.pathsep-separated list of simulator names.
+            sep = "," if "," in env_enabled else os.pathsep
+            config_dict["enabled_simulators"] = [
+                x.strip().lower() for x in env_enabled.split(sep) if x.strip()
+            ]
 
         if env_exe := os.getenv("LTSPICE_MCP_SIMULATOR_EXE"):
             config_dict["simulator_exe"] = Path(env_exe)
@@ -364,6 +387,10 @@ def generate_default_config(path: Path) -> None:
         comment("Leave empty or set to null for auto-detection (prefers LTSpice if available)")
     )
     sim.add("default", "ltspice")
+    sim.add(nl())
+    sim.add(comment('Allowlist of simulators to expose, e.g. ["ltspice", "ngspice"].'))
+    sim.add(comment("Empty = auto-detect every supported simulator."))
+    sim.add("enabled", [])
     sim.add(nl())
     sim.add(comment("Explicit path to simulator executable (overrides auto-detection)"))
     sim.add(comment("Leave empty for auto-detection"))

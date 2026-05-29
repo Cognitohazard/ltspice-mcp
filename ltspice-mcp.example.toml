@@ -4,14 +4,21 @@
 # LTSPICE_MCP_* environment variables.
 
 [simulator]
-# Preferred simulator: ltspice, ngspice, qspice, xyce
+# Preferred (default) simulator: ltspice, ngspice, qspice, xyce
 # Leave empty for auto-detection (prefers LTSpice if available)
 default = "ltspice"
 
-# Explicit path to simulator executable (overrides auto-detection)
-# Leave empty for auto-detection. Required on WSL (Windows path via /mnt/c/).
+# Allowlist of simulators to expose. Empty = auto-detect every supported one.
+# When set, only the listed simulators are probed/exposed.
+# Example: enabled = ["ltspice", "ngspice"]
+enabled = []
+
+# Explicit path to simulator executable (overrides auto-detection).
+# A valid path here suppresses auto-detection for that simulator.
+# Leave empty for auto-detection. On WSL the standard Windows install
+# locations are auto-detected, so a path is no longer strictly required.
 # Examples:
-#   WSL:     "/mnt/c/Program Files/ADI/LTspice/LTspice.exe"
+#   WSL:     "/mnt/c/Users/<you>/AppData/Local/Programs/ADI/LTspice/LTspice.exe"
 #   Windows: "C:\\Program Files\\ADI\\LTspice\\LTspice.exe"
 #   Linux:   "" (auto-detect via Wine or PATH)
 path = ""

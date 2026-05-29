@@ -52,3 +52,27 @@ class TestGetServerStatus:
         cfg.write_text("[simulator]\nname = 'ltspice'\n")
         result = await handle_server_status(ServerStatusInput(), state_no_sim)
         assert "Config file:" in result.content[0].text
+
+    async def test_no_diagnostics_clean_status(self, state_no_sim: SessionState):
+        result = await handle_server_status(ServerStatusInput(format="json"), state_no_sim)
+        sc = result.structuredContent
+        assert sc["diagnostics"] == []
+        assert "Startup diagnostics" not in result.content[0].text
+
+    async def test_simulator_fallback_surfaced(self, config: ServerConfig):
+        """Fix A: requested≠active fallback must appear in server_status."""
+
+        class NG:
+            spice_exe: typing.ClassVar[list[str]] = ["ngspice"]
+
+        config.simulator = "ltspice"
+        state = SessionState.create(config, available={"ngspice": NG})
+        # Default format → human text in content + structuredContent both present.
+        result = await handle_server_status(ServerStatusInput(), state)
+        sc = result.structuredContent
+        assert sc["requested_simulator"] == "ltspice"
+        assert sc["default_simulator"] == "NG"
+        assert any("ngspice" in d for d in sc["diagnostics"])
+        text = result.content[0].text
+        assert "Startup diagnostics" in text
+        assert "Requested simulator: ltspice" in text
