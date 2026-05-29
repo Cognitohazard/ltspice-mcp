@@ -106,6 +106,45 @@ class TestExtractLogDiagnostics:
         result = extract_log_diagnostics(log)
         assert len(result["warnings"]) == 2
 
+    def test_bare_error_prefix_collected(self, tmp_path: Path):
+        """V7-P0-1: a bare ``ERROR:`` line (e.g. LTspice floating node) must
+        land in errors[] — without this a failed-physics run reads as success."""
+        log = tmp_path / "floating.log"
+        log.write_text(
+            "Circuit: * test\n"
+            "ERROR: Node flt is floating and connected to current source I1\n"
+            "Total elapsed time: 0.02 seconds.\n"
+        )
+        result = extract_log_diagnostics(log)
+        assert any("floating" in e for e in result["errors"])
+
+    def test_bare_error_colon_ngspice(self, tmp_path: Path):
+        log = tmp_path / "parse.log"
+        log.write_text("Error: circuit not parsed.\n")
+        result = extract_log_diagnostics(log)
+        assert any("circuit not parsed" in e for e in result["errors"])
+
+    def test_error_on_line_not_double_counted(self, tmp_path: Path):
+        """``Error on line N`` is caught by the specific rule, not also by the
+        new bare ``^Error:`` rule."""
+        log = tmp_path / "errline2.log"
+        log.write_text("Error on line 7 : bad token\n")
+        result = extract_log_diagnostics(log)
+        assert len(result["errors"]) == 1
+
+    def test_ngspice_warning_double_dash(self, tmp_path: Path):
+        log = tmp_path / "wdd.log"
+        log.write_text('Warning -- Version not specified on line "level=49"\n')
+        result = extract_log_diagnostics(log)
+        assert any("Version not specified" in w for w in result["warnings"])
+
+    def test_ngspice_fourier_ignored_surfaced(self, tmp_path: Path):
+        """NGv7-P1-1: the .fourier-skipped note must become a visible warning."""
+        log = tmp_path / "four.log"
+        log.write_text(".fourier line ignored since rawfile was produced.\n")
+        result = extract_log_diagnostics(log)
+        assert any("fourier" in w.lower() for w in result["warnings"])
+
     def test_bare_singular_matrix(self, tmp_path: Path):
         log = tmp_path / "sing.log"
         log.write_text("Time step too small\nsingular matrix\n")

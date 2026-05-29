@@ -81,6 +81,7 @@ class MeasurementsOutput(TypedDict):
     measurements: dict[str, MeasurementEntry]
     step_count: int
     errors: list[str] | None
+    warnings: list[str] | None
     failed_measurements: list[str]
 
 
@@ -108,8 +109,14 @@ _RE_CARET = re.compile(r"^\s*\^+\s*$")
 _RE_LINE_ERROR = re.compile(r"^Error on line \d+", re.IGNORECASE)
 # "Fatal Error:" — missing subcircuits/models
 _RE_FATAL = re.compile(r"^Fatal Error:", re.IGNORECASE)
-# Explicit warning prefix (LTspice uses both casings)
-_RE_WARNING = re.compile(r"^(?:Warning|WARNING):", re.IGNORECASE)
+# Explicit warning prefix — LTspice "Warning:" and ngspice "Warning --".
+_RE_WARNING = re.compile(r"^(?:Warning|WARNING)\s*(?:--|:)", re.IGNORECASE)
+# Explicit error prefix — LTspice "ERROR: Node ... is floating", ngspice
+# "Error: circuit not parsed.". Distinct from _RE_FATAL (^Fatal Error:) and
+# _RE_LINE_ERROR (^Error on line N), both of which are matched earlier so the
+# more specific rules win. Without this rule a hard ERROR line falls through and
+# a failed-physics run (e.g. a 1e9 V floating node) reports as a clean success.
+_RE_ERROR = re.compile(r"^(?:Error|ERROR)\s*:", re.IGNORECASE)
 # Bare convergence / runtime messages with no prefix.
 # These are matched anchored to the start of a (stripped) line so we don't
 # false-positive on phrases that merely *contain* one of these substrings
@@ -122,12 +129,12 @@ _BARE_ERROR_PHRASES = [
     "questionable use of curly braces",
 ]
 # ngspice-specific diagnostic patterns (not matched by the LTspice rules above).
-_RE_NGSPICE_MEAS_BLOCKED = re.compile(
-    r"No \.measure possible in batch mode", re.IGNORECASE
-)
-_RE_NGSPICE_UNIMPLEMENTED = re.compile(
-    r"unimplemented dot command '([^']+)'", re.IGNORECASE
-)
+_RE_NGSPICE_MEAS_BLOCKED = re.compile(r"No \.measure possible in batch mode", re.IGNORECASE)
+_RE_NGSPICE_UNIMPLEMENTED = re.compile(r"unimplemented dot command '([^']+)'", re.IGNORECASE)
+# ngspice skips .four/.fourier when run with -r rawfile (same batch-mode
+# limitation as .meas). It prints this note and produces no Fourier block;
+# without surfacing it the user asks for Fourier and silently gets nothing.
+_RE_NGSPICE_FOUR_BLOCKED = re.compile(r"\.fourier line ignored", re.IGNORECASE)
 # ngspice "Note:" lines carry per-component diagnostics (e.g. "v1: has
 # no value, DC 0 assumed"). Exclude the preamble "Compatibility modes"
 # note which is just informational noise.
@@ -388,7 +395,13 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
             i += 1
             continue
 
-        # Warning: / WARNING:
+        # Bare "Error:" / "ERROR:" prefix (floating node, circuit-not-parsed, ...)
+        if _RE_ERROR.match(stripped):
+            errors.append(stripped)
+            i += 1
+            continue
+
+        # Warning: / WARNING: / Warning --
         if _RE_WARNING.match(stripped):
             warnings.append(stripped)
             i += 1
@@ -405,8 +418,13 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
 
         # ngspice-specific diagnostics
         if _RE_NGSPICE_MEAS_BLOCKED.search(stripped):
+            warnings.append(stripped + " Use signal_stats or query_value for post-processing.")
+            i += 1
+            continue
+        if _RE_NGSPICE_FOUR_BLOCKED.search(stripped):
             warnings.append(
-                stripped + " Use signal_stats or query_value for post-processing."
+                stripped + " ngspice skips .four when writing a rawfile, so Fourier/THD "
+                "is unavailable for this run."
             )
             i += 1
             continue
@@ -716,9 +734,14 @@ def parse_measurements(
 
     measure_names = reader.get_measure_names()
     if not measure_names:
-        # Surface any errors from the log that explain why measurements are missing
+        # Surface any errors AND warnings from the log that explain why
+        # measurements are missing. ngspice's "No .measure possible in batch
+        # mode" is a *warning*-class diagnostic; without carrying it, callers
+        # (e.g. measurement_stats) report "no diagnostics" while every other
+        # tool surfaces the reason.
         diagnostics = extract_log_diagnostics(log_path)
         errors_list = diagnostics["errors"] or None
+        warnings_list = diagnostics["warnings"] or None
         # Even when spicelib reports no measurements, FAIL'ed names still
         # need to show up in ``measurements`` (value=None) so consumers
         # don't see a silent absence — that was the original D-N2 defect.
@@ -729,6 +752,7 @@ def parse_measurements(
             "measurements": measurements,
             "step_count": 0,
             "errors": errors_list,
+            "warnings": warnings_list,
             "failed_measurements": failed_names,
         }
 
@@ -800,6 +824,7 @@ def parse_measurements(
         "measurements": measurements,
         "step_count": step_count,
         "errors": None,
+        "warnings": None,
         "failed_measurements": failed_names,
     }
 
@@ -834,7 +859,8 @@ def parse_fourier_data(log_path: Path, reader: LTSpiceLogReader | None = None) -
         for signal_name, fourier_list in reader.fourier.items():
             for fourier_data in fourier_list:
                 thd = (
-                    float(fourier_data.thd) if getattr(fourier_data, "thd", None) is not None
+                    float(fourier_data.thd)
+                    if getattr(fourier_data, "thd", None) is not None
                     else None
                 )
                 # Spicelib's FourierData doesn't have a `.fundamental_frequency`
@@ -848,21 +874,30 @@ def parse_fourier_data(log_path: Path, reader: LTSpiceLogReader | None = None) -
 
                 harmonics = []
                 for h in harmonics_raw:
-                    harmonics.append({
-                        "number": int(h.harmonic_number) if hasattr(h, "harmonic_number") else None,
-                        "frequency": float(h.frequency) if hasattr(h, "frequency") else None,
-                        "magnitude": (
-                            float(h.fourier_component) if hasattr(h, "fourier_component") else None
-                        ),
-                        "phase": float(h.phase) if hasattr(h, "phase") else None,
-                    })
+                    harmonics.append(
+                        {
+                            "number": int(h.harmonic_number)
+                            if hasattr(h, "harmonic_number")
+                            else None,
+                            "frequency": float(h.frequency) if hasattr(h, "frequency") else None,
+                            "magnitude": (
+                                float(h.fourier_component)
+                                if hasattr(h, "fourier_component")
+                                else None
+                            ),
+                            "phase": float(h.phase) if hasattr(h, "phase") else None,
+                        }
+                    )
 
-                results.append({
-                    "signal": signal_name,
-                    "thd": thd,
-                    "fundamental_frequency": fundamental_freq,
-                    "harmonics": harmonics,
-                })
+                results.append(
+                    {
+                        "signal": signal_name,
+                        "thd": thd,
+                        "thd_unit": "%",  # thd is a percentage (LTspice "23.95%"), not a ratio
+                        "fundamental_frequency": fundamental_freq,
+                        "harmonics": harmonics,
+                    }
+                )
     except Exception:
         # Graceful degradation - return partial data if format is unexpected
         pass
