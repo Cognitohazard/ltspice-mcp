@@ -8,11 +8,22 @@ class LTSpiceMCPError(Exception):
 
     ``suggestions`` — optional ranked candidate dicts surfaced by the MCP
     dispatch layer as ``structuredContent`` on the error response.
+
+    ``show_hint`` — when False, the dispatch layer does NOT append the generic
+    per-error-type hint. Set it on errors that already carry precise, actionable
+    guidance (e.g. "use operating_point for .OP raws"), so the generic
+    "verify with check_job / simulation_summary" hint doesn't misdirect.
     """
 
-    def __init__(self, *args: object, suggestions: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        *args: object,
+        suggestions: list[dict[str, Any]] | None = None,
+        show_hint: bool = True,
+    ) -> None:
         super().__init__(*args)
         self.suggestions: list[dict[str, Any]] = suggestions or []
+        self.show_hint: bool = show_hint
 
 
 class PathSecurityError(LTSpiceMCPError):
