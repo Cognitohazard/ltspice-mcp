@@ -38,6 +38,12 @@ from ltspice_mcp.lib.raw_parser import safe_magnitude_db as magnitude_db
 # can snap the wrong way and invert the sign of the gain margin.
 _UNWRAP_WARN_STEP_DEG = 90.0
 
+# True half-power point: 20·log10(1/√2) = -3.0103 dB. Use this (not a rounded
+# -3.0) for "−3 dB" cutoff/bandwidth so filter_metrics and the AC summary agree
+# with find_crossing/gain_at, which already use the exact half-power level
+# (V7-IMP-4). The 0.0103 dB difference shifts a 1 kHz RC corner by ~0.24%.
+HALF_POWER_DB = -3.010299956639812
+
 # Shared type aliases — used by both lib function signatures and the
 # pydantic input models in tools/analysis.py, so the string literals live
 # in exactly one place.
@@ -596,7 +602,7 @@ def compute_filter_metrics(
     freqs: np.ndarray,
     H: np.ndarray,
     *,
-    ref_db: float = -3.0,
+    ref_db: float = HALF_POWER_DB,
     flatness_db: float = 1.0,
     passband_range: tuple[float, float] | None = None,
     stopband_range: tuple[float, float] | None = None,
@@ -699,6 +705,18 @@ def compute_filter_metrics(
             stopband_rejection = pb_gain - float(mag_db[0])
         elif filter_type == "bandpass":
             stopband_rejection = pb_gain - float(min(mag_db[0], mag_db[-1]))
+        if stopband_rejection is not None:
+            # For an unbounded roll-off (e.g. a 1st-order LPF) there is no
+            # intrinsic stopband edge, so this number is just |H| at the sweep
+            # endpoint — it grows with the sweep range, it is not a filter
+            # property. Flag it so it isn't over-interpreted (V7-IMP-2). Pass
+            # ``stopband_range`` for a defined-band rejection.
+            warnings.append(
+                "stopband_rejection/transition_bandwidth are measured at the "
+                "sweep endpoint (no stopband_range given); they depend on the "
+                "sweep range, not just the filter. Pass stopband_range for a "
+                "band-defined figure."
+            )
         elif filter_type == "bandstop":
             stopband_rejection = pb_gain - float(np.min(mag_db))
 
