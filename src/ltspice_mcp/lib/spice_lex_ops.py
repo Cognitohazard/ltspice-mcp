@@ -95,9 +95,7 @@ def inject_card_before_end(
     return new_card
 
 
-def _ensure_predecessor_ends_with_newline(
-    cards: list[SpiceCard], insert_idx: int
-) -> None:
+def _ensure_predecessor_ends_with_newline(cards: list[SpiceCard], insert_idx: int) -> None:
     """Patch ``cards[insert_idx - 1]``'s last raw_line so it ends with a newline.
 
     No-op when there is no predecessor (insert at the start) or when
@@ -196,9 +194,7 @@ def rename_subckt(
         if not c.scope:
             continue
         if any(s.lower() == target for s in c.scope):
-            new_scope = tuple(
-                new_name if s.lower() == target else s for s in c.scope
-            )
+            new_scope = tuple(new_name if s.lower() == target else s for s in c.scope)
             if new_scope != c.scope:
                 scope_updates.append((c, new_scope))
 
@@ -222,8 +218,6 @@ def rename_subckt(
         n_modified += 1
 
     return n_modified
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -273,5 +267,3 @@ def rename_model(
                 n_modified += 1
 
     return n_modified
-
-

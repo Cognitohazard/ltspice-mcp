@@ -150,7 +150,7 @@ class Token:
 
 
 # Characters that terminate a BARE token outside any nesting context.
-_BARE_TERMINATORS: frozenset[str] = frozenset(' \t\r\n={}(),"\';$')
+_BARE_TERMINATORS: frozenset[str] = frozenset(" \t\r\n={}(),\"';$")
 
 
 def tokenize_body(body: str) -> list[Token]:
@@ -331,7 +331,8 @@ def _merge_key_values(atoms: Sequence[_Atom]) -> Iterator[Token]:
             a.kind in (TokenKind.BARE.value, TokenKind.QUOTED.value)
             and i + 2 < n
             and atoms[i + 1].kind == _EQUALS
-            and atoms[i + 2].kind in {
+            and atoms[i + 2].kind
+            in {
                 TokenKind.BARE.value,
                 TokenKind.QUOTED.value,
                 TokenKind.BRACED.value,
@@ -503,9 +504,7 @@ class SpiceCard:
         # Update body and shift downstream segment offsets by the length delta.
         delta = len(new_text) - (body_end - body_start)
         self.body = self.body[:body_start] + new_text + self.body[body_end:]
-        self.body_layout = _shift_segments_after(
-            self.body_layout, seg, body_end, delta
-        )
+        self.body_layout = _shift_segments_after(self.body_layout, seg, body_end, delta)
         self.dirty = True
 
     def replace_body(self, new_body: str) -> None:
@@ -530,9 +529,7 @@ class SpiceCard:
         self.dirty = True
 
 
-def _segment_for_offset(
-    segments: list[BodySegment], offset: int
-) -> BodySegment | None:
+def _segment_for_offset(segments: list[BodySegment], offset: int) -> BodySegment | None:
     """Return the segment containing ``offset``, or ``None`` if out of range."""
     for seg in segments:
         if seg.body_start <= offset < seg.body_end or (
@@ -677,9 +674,7 @@ def _build_body_with_layout(
     return "".join(parts), segments
 
 
-def _truncate_segments(
-    segments: list[BodySegment], new_body_len: int
-) -> list[BodySegment]:
+def _truncate_segments(segments: list[BodySegment], new_body_len: int) -> list[BodySegment]:
     """Drop or shorten segments past ``new_body_len`` (used by inline-comment strip)."""
     out: list[BodySegment] = []
     for seg in segments:
@@ -915,8 +910,7 @@ def lex(netlist_text: str) -> LexResult:
         if kind == "ends":
             if not scope:
                 warnings.append(
-                    f"line {line_start}: .ENDS with no matching .SUBCKT; "
-                    "treating as top-level"
+                    f"line {line_start}: .ENDS with no matching .SUBCKT; treating as top-level"
                 )
                 card_scope: tuple[str, ...] = ()
             else:
@@ -1030,9 +1024,7 @@ def cards_from_editor(editor: object) -> LexResult:
         import tempfile
         from pathlib import Path
 
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".cir", delete=False, encoding="utf-8"
-        ) as f:
+        with tempfile.NamedTemporaryFile("w", suffix=".cir", delete=False, encoding="utf-8") as f:
             tmp = Path(f.name)
         try:
             editor.write_netlist(tmp)  # type: ignore[attr-defined]
@@ -1061,9 +1053,7 @@ def apply_to_editor(cards: Sequence[SpiceCard], editor: object) -> None:
     text = emit(cards)
 
     if hasattr(editor, "reset_netlist"):
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".cir", delete=False, encoding="utf-8"
-        ) as f:
+        with tempfile.NamedTemporaryFile("w", suffix=".cir", delete=False, encoding="utf-8") as f:
             f.write(text)
             tmp = Path(f.name)
         try:
@@ -1094,9 +1084,7 @@ def apply_to_editor(cards: Sequence[SpiceCard], editor: object) -> None:
 # ---------------------------------------------------------------------------
 
 
-def find_matching_ends(
-    cards: Sequence[SpiceCard], opener_idx: int
-) -> int | None:
+def find_matching_ends(cards: Sequence[SpiceCard], opener_idx: int) -> int | None:
     """Return the index of the ``.ENDS`` matching the ``.SUBCKT`` at ``opener_idx``.
 
     Walks forward at the opener's parent scope, tracking nested

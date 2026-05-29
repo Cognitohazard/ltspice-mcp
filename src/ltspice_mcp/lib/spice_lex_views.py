@@ -32,8 +32,7 @@ def _require_kind(card: SpiceCard, expected: str) -> None:
     """Guard against from_card on the wrong card kind."""
     if card.kind != expected:
         raise ValueError(
-            f"expected SpiceCard kind={expected!r}, got {card.kind!r} "
-            f"at line {card.line_start}"
+            f"expected SpiceCard kind={expected!r}, got {card.kind!r} at line {card.line_start}"
         )
 
 
@@ -233,9 +232,7 @@ class ParamCard:
         if tok is not None and tok.body_offset >= 0:
             new_text = f"{tok.key}={new_value}"
             try:
-                self.card.replace_span(
-                    tok.body_offset, tok.body_end, new_text
-                )
+                self.card.replace_span(tok.body_offset, tok.body_end, new_text)
                 self._kv_token = Token(
                     kind=TokenKind.KEY_VALUE,
                     text=new_text,
@@ -654,9 +651,7 @@ class SubcktCard:
         tok = self._name_token
         if tok is not None and tok.body_offset >= 0:
             try:
-                self.card.replace_span(
-                    tok.body_offset, tok.body_end, new_name
-                )
+                self.card.replace_span(tok.body_offset, tok.body_end, new_name)
                 self._name_token = Token(
                     kind=tok.kind,
                     text=new_name,
@@ -950,5 +945,3 @@ def _collect_function_calls(
             except SpiceLexError:
                 continue
             _collect_function_calls(inner_tokens, out_calls, out_signal_refs)
-
-

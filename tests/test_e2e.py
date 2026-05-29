@@ -216,9 +216,7 @@ class TestCircuitTools:
     async def test_list_components_prefix_excludes_others(self, tmp_path):
         (tmp_path / "prefix.cir").write_text(MINIMAL_NETLIST)
         async with mcp_session(tmp_path) as session:
-            result = await _call(
-                session, "list_components", {"path": "prefix.cir", "prefix": "R"}
-            )
+            result = await _call(session, "list_components", {"path": "prefix.cir", "prefix": "R"})
             assert not result.isError
             text = _text(result)
             assert "R1" in text
@@ -267,13 +265,9 @@ class TestCircuitTools:
             assert not result.isError
             assert "Updated 2 component(s)" in _text(result)
 
-            r1 = await _call(
-                session, "list_components", {"path": "batch.cir", "reference": "R1"}
-            )
+            r1 = await _call(session, "list_components", {"path": "batch.cir", "reference": "R1"})
             assert "10k" in _text(r1)
-            r2 = await _call(
-                session, "list_components", {"path": "batch.cir", "reference": "R2"}
-            )
+            r2 = await _call(session, "list_components", {"path": "batch.cir", "reference": "R2"})
             assert "47k" in _text(r2)
 
     async def test_parameter_get_then_set_then_verify(self, tmp_path):
@@ -403,9 +397,7 @@ class TestAnalysisDegraded:
 
     async def test_get_simulation_summary_missing_file(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await _call(
-                session, "simulation_summary", {"raw_file": "missing.raw"}
-            )
+            result = await _call(session, "simulation_summary", {"raw_file": "missing.raw"})
             _assert_tool_error(result, "not found")
 
 

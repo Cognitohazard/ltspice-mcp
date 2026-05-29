@@ -164,19 +164,14 @@ class MonteCarloRunner(BatchRunnerBase):
             # ---- Phase 0: R/C/L tolerance resolution + nominal extraction ----
             # Walk the lexed cards instead of editor.get_components — works
             # uniformly across flat and hierarchical netlists.
-            all_refs = [
-                c.name for c in baseline_cards
-                if c.kind == "instance" and c.name
-            ]
+            all_refs = [c.name for c in baseline_cards if c.kind == "instance" and c.name]
             tol_map = expand_tolerances(
                 all_refs,
                 mc_config.type_tolerances,
                 mc_config.component_overrides,
             )
             baseline_inst_by_ref: dict[str, SpiceCard] = {
-                c.name.lower(): c
-                for c in baseline_cards
-                if c.kind == "instance" and c.name
+                c.name.lower(): c for c in baseline_cards if c.kind == "instance" and c.name
             }
             rcl_nominals: dict[str, float] = {}
             unparseable_refs: list[tuple[str, str]] = []
