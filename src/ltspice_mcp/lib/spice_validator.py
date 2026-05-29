@@ -79,9 +79,7 @@ _RULES: tuple[_Rule, ...] = (
             "phase() is not accepted in .MEAS directives — it's a "
             "waveform-viewer-only function. Use ph() instead."
         ),
-        suggestion=(
-            "Replace phase(...) with ph(...) — ph() is the .MEAS-compatible spelling."
-        ),
+        suggestion=("Replace phase(...) with ph(...) — ph() is the .MEAS-compatible spelling."),
     ),
     _Rule(
         name="group_delay_in_meas",
@@ -198,26 +196,30 @@ def validate_netlist_arity(cards: list[SpiceCard]) -> list[dict[str, object]]:
             node_count = positionals_after_ref
 
         if node_count < required:
-            issues.append({
-                "line": card.line_start,
-                "directive": directive,
-                "message": (
-                    f"{inst.ref}: expected at least {required} "
-                    f"positional node(s) for a {prefix}-element, got {node_count}"
-                ),
-            })
+            issues.append(
+                {
+                    "line": card.line_start,
+                    "directive": directive,
+                    "message": (
+                        f"{inst.ref}: expected at least {required} "
+                        f"positional node(s) for a {prefix}-element, got {node_count}"
+                    ),
+                }
+            )
 
         if prefix == "B":
             kv_keys = {k.upper() for k in inst.params}
             if "V" not in kv_keys and "I" not in kv_keys:
-                issues.append({
-                    "line": card.line_start,
-                    "directive": directive,
-                    "message": (
-                        f"{inst.ref}: B-source requires V= or I= prefix on the expression "
-                        f"(got params {sorted(inst.params)})"
-                    ),
-                })
+                issues.append(
+                    {
+                        "line": card.line_start,
+                        "directive": directive,
+                        "message": (
+                            f"{inst.ref}: B-source requires V= or I= prefix on the expression "
+                            f"(got params {sorted(inst.params)})"
+                        ),
+                    }
+                )
 
     return issues
 

@@ -410,8 +410,20 @@ class TestApplySchematicOpsRollback:
                 ApplySchematicOpsInput(
                     path="rollback.asc",
                     ops=[  # type: ignore[arg-type]
-                        {"op": "add_component", "reference": "R1", "symbol": "res", "x": 100, "y": 100},
-                        {"op": "add_component", "reference": "R2", "symbol": "res", "x": 200, "y": 100},
+                        {
+                            "op": "add_component",
+                            "reference": "R1",
+                            "symbol": "res",
+                            "x": 100,
+                            "y": 100,
+                        },
+                        {
+                            "op": "add_component",
+                            "reference": "R2",
+                            "symbol": "res",
+                            "x": 200,
+                            "y": 100,
+                        },
                     ],
                     stop_on_error=True,
                 ),
