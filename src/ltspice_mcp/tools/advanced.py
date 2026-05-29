@@ -17,6 +17,7 @@ from ltspice_mcp.lib.montecarlo import (
     ParamTolerance,
     ToleranceSpec,
 )
+from ltspice_mcp.lib.spice_lex import lex
 from ltspice_mcp.lib.sweep_utils import (
     generate_batch_job_id,
     generate_config_id,
@@ -350,6 +351,40 @@ def _resolve_mc_ref(ref: str) -> tuple[str, bool]:
     return (ref, False)
 
 
+def _ngspice_preflight_warnings(netlist_path, state: SessionState) -> list[str]:
+    """ngspice batch-mode warnings for a base netlist (.meas/.four skipped).
+
+    Reuses the single-run pre-flight so the sweep/MC paths surface the same
+    "ngspice cannot evaluate .meas in batch mode" warning instead of silently
+    dropping measurements. A ``.step`` blocker is downgraded to a warning here
+    (batch substitutes parameters per-run, so it isn't fatal at config time).
+    """
+    if state.default_simulator is None:
+        return []
+    from ltspice_mcp.errors import SimulationError
+
+    try:
+        return services.ngspice_preflight_warnings(netlist_path, state.default_simulator)
+    except SimulationError as e:
+        return [str(e)]
+
+
+def _netlist_component_refs(netlist_path) -> set[str]:
+    """Uppercased component reference designators on instance lines of a netlist.
+
+    Enough to validate Monte Carlo component overrides against the netlist so an
+    unmatched ref (e.g. ``C99``) is flagged instead of silently perturbing
+    nothing. Delegates to the shared ``spice_lex`` tokenizer rather than
+    hand-scanning lines, so continuations, CRLF, and malformed input are
+    classified consistently with the rest of the codebase.
+    """
+    try:
+        text = netlist_path.read_text(errors="replace")
+    except OSError:
+        return set()
+    return {card.instance_ref.upper() for card in lex(text).cards if card.instance_ref}
+
+
 # ---------------------------------------------------------------------------
 # Handler 1: configure_sweep
 # ---------------------------------------------------------------------------
@@ -441,11 +476,15 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
             )
         )
 
-    # Compute total runs: product of each dimension's point count
+    # Compute total runs: product of each dimension's point count, and capture
+    # the resolved value list per dimension so the response can enumerate them
+    # (log vs linear spacing is otherwise unverifiable without running — Fr13).
     dim_sizes: list[int] = []
+    dim_values: list[tuple[str, list[float]]] = []
     for dim in dimensions:
         values = generate_sweep_range(dim.start, dim.stop, dim.step, dim.points, dim.scale)
         dim_sizes.append(len(values))
+        dim_values.append((dim.name, values))
 
     total_runs = prod(dim_sizes) if dim_sizes else 0
 
@@ -458,14 +497,27 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
         f"dimensions={len(dimensions)}, total_runs={total_runs}"
     )
 
-    return text_response(
-        f"Sweep configured\n"
-        f"Config ID: {config_id}\n"
-        f"Netlist: {netlist_path}\n"
-        f"Dimensions: {len(dimensions)}\n"
-        f"Total simulations: {total_runs}\n\n"
-        f"Use run_sweep('{config_id}') to execute"
-    )
+    lines = [
+        "Sweep configured",
+        f"Config ID: {config_id}",
+        f"Netlist: {netlist_path}",
+        f"Dimensions: {len(dimensions)}",
+        f"Total simulations: {total_runs}",
+    ]
+    for name, values in dim_values:
+        if len(values) <= 12:
+            preview = ", ".join(f"{v:g}" for v in values)
+        else:
+            preview = (
+                ", ".join(f"{v:g}" for v in values[:6])
+                + f", … ({len(values)} points) …, "
+                + ", ".join(f"{v:g}" for v in values[-2:])
+            )
+        lines.append(f"  {name}: [{preview}]")
+    for warn in _ngspice_preflight_warnings(netlist_path, state):
+        lines.append(f"\n⚠ {warn}")
+    lines.append(f"\nUse run_sweep('{config_id}') to execute")
+    return text_response("\n".join(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -716,7 +768,23 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
         f"mismatch rules={len(mismatch_rules)}, .PARAM rules={len(param_tolerances)}"
     )
 
-    return text_response(
+    # Validate per-component overrides against the netlist so an unmatched ref
+    # (e.g. C99) is flagged here rather than silently perturbing nothing and
+    # understating the variation with no signal to the user (V7-P1-4).
+    warnings: list[str] = []
+    if component_overrides:
+        netlist_refs = _netlist_component_refs(netlist_path)
+        if netlist_refs:
+            unmatched = [r for r in component_overrides if r.upper() not in netlist_refs]
+            if unmatched:
+                warnings.append(
+                    f"Component override(s) {unmatched} match no component in the "
+                    f"netlist — they will perturb nothing and the variation will be "
+                    f"understated. Check the reference designators."
+                )
+    warnings.extend(_ngspice_preflight_warnings(netlist_path, state))
+
+    text = (
         f"Monte Carlo configured\n"
         f"Config ID: {config_id}\n"
         f"Netlist: {netlist_path}\n"
@@ -727,9 +795,11 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
         f"Mismatch (Pelgrom): {mismatch_summary}\n"
         f".PARAM perturbation: {param_summary}\n"
         f"Seed: {args.seed if args.seed is not None else 'fresh entropy'}\n"
-        f"\n"
-        f"Use run_montecarlo('{config_id}') to execute"
     )
+    for warn in warnings:
+        text += f"\n⚠ {warn}\n"
+    text += f"\nUse run_montecarlo('{config_id}') to execute"
+    return text_response(text)
 
 
 # ---------------------------------------------------------------------------

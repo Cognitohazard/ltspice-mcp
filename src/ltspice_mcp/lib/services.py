@@ -131,6 +131,47 @@ def resolve_job(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
     raise ResultError(f"Job not found: {job_id}")
 
 
+def ngspice_preflight_warnings(netlist_path: Path, simulator_class: type) -> list[str]:
+    """Pre-flight check for ngspice-incompatible directives in a base netlist.
+
+    Returns warnings to surface in the response; raises ``SimulationError`` for
+    the hard ``.step`` blocker. No-op for non-ngspice simulators. Shared by the
+    single-run path (run_simulation) and the batch paths (configure_sweep /
+    configure_montecarlo) so all three surface the same ".meas skipped in batch
+    mode" warning instead of silently dropping measurements.
+    """
+    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+    if not issubclass(simulator_class, NGspiceSimulator):
+        return []
+    try:
+        content = netlist_path.read_text(errors="replace")
+    except OSError:
+        return []
+    warnings: list[str] = []
+    meas_names: list[str] = []
+    for line in content.splitlines():
+        stripped = line.strip().lower()
+        if stripped.startswith(".step"):
+            raise SimulationError(
+                "ngspice batch mode does not support .step directives. "
+                "Use configure_sweep + run_sweep for parametric sweeps, "
+                "or remove the .step line and set the parameter to a fixed value."
+            )
+        if stripped.startswith(".meas"):
+            parts = stripped.split()
+            if len(parts) >= 3:
+                meas_names.append(parts[2])
+    if meas_names:
+        names = ", ".join(meas_names)
+        warnings.append(
+            "ngspice cannot evaluate .meas in batch mode. "
+            f"The following measurements will be skipped: {names}. "
+            "Use signal_stats or query_value to compute them from the raw data."
+        )
+    return warnings
+
+
 def _resolve_result_file(job_id: str, state: SessionState, field: str, label: str) -> Path:
     """Resolve a result file (raw or log) from a simulation or batch job."""
     job = resolve_job(job_id, state)
@@ -205,6 +246,25 @@ def validate_signal(raw: RawRead, signal: str) -> str:
     for name in trace_names:
         if name.lower() == sig_lower:
             return name
+
+    # Resolve cross-simulator / shorthand aliases transparently instead of
+    # forcing a guaranteed retry on a deterministic rename:
+    #   - noise: LTspice V(onoise)/V(inoise) <-> ngspice onoise_spectrum/
+    #     inoise_spectrum, plus bare onoise/inoise shorthand
+    #   - hierarchical separator: LTspice ':' (V(X1:mid)) <-> ngspice '.'
+    by_lower = {t.lower(): t for t in trace_names}
+    candidates: list[str] = []
+    for kind in ("onoise", "inoise"):
+        if sig_lower in (kind, f"v({kind})", f"{kind}_spectrum"):
+            candidates += [f"v({kind})", f"{kind}_spectrum", kind]
+    if ":" in sig_lower:
+        candidates.append(sig_lower.replace(":", "."))
+    if "." in sig_lower:
+        candidates.append(sig_lower.replace(".", ":"))
+    for cand in candidates:
+        if cand in by_lower:
+            return by_lower[cand]
+
     available = ", ".join(trace_names[:10])
     if len(trace_names) > 10:
         available += f", ... ({len(trace_names)} total)"
@@ -405,6 +465,17 @@ def get_batch_signal_data(
             )
         paginated_run_results = {idx: batch_job.run_results[idx] for idx in paginated_indices}
         page_stats = compute_batch_stats(paginated_run_results, signal, at=at, dialect=dialect)
+        # Mirror the aggregate path's guard: if the signal could not be read
+        # from ANY run in the page, raise instead of silently returning
+        # runs:[] (which reads as "no data produced"). A typo, a .MEAS name,
+        # or a derived expression all land here.
+        if page_stats["run_count"] == 0 and paginated_indices:
+            raise ResultError(
+                f"Signal '{signal}' could not be read from any run of job "
+                f"{batch_job.job_id}. If it is a .MEAS name use measurement_stats; "
+                f"otherwise check the trace name against a run's raw signals.",
+                show_hint=False,
+            )
         out_raw: dict[str, Any] = {
             "mode": "raw",
             "job_id": batch_job.job_id,
@@ -438,6 +509,8 @@ def get_batch_signal_data(
         "stats": batch_stats["stats"],
         "worst_case_run": batch_stats["worst_case_run"],
         "best_case_run": batch_stats["best_case_run"],
+        "max_case_run": batch_stats["worst_case_run"],
+        "min_case_run": batch_stats["best_case_run"],
     }
     if convergence:
         out["convergence_warnings"] = convergence

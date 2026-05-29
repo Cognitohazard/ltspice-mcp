@@ -213,20 +213,31 @@ class LibraryManager:
                 Path("/usr/share/ngspice"),
                 Path("/usr/local/share/ngspice"),
                 Path("/opt/ngspice/share/ngspice"),
+                # Debian/Ubuntu ship the example model libraries here, with no
+                # share/ngspice/lib subdir (the old code required one and so
+                # found nothing on a stock apt install).
+                Path("/usr/share/doc/ngspice/examples"),
+                Path("/usr/local/share/doc/ngspice/examples"),
             ]
         )
 
-        lib_files = []
+        lib_files: list[Path] = []
+        seen: set[Path] = set()
         for candidate in candidates:
-            if candidate.exists() and candidate.is_dir():
-                lib_dir = candidate / "lib"
-                if not lib_dir.exists():
-                    continue
-                for pattern in ["*.lib", "*.mod"]:
-                    for lib_file in lib_dir.rglob(pattern):
-                        if lib_file.is_file():
-                            lib_files.append(lib_file)
-                            logger.debug(f"Found NGspice library: {lib_file}")
+            if not (candidate.exists() and candidate.is_dir()):
+                continue
+            # Prefer a conventional <candidate>/lib subdir, but fall back to
+            # scanning the candidate tree directly — the Debian package layout
+            # has no /lib subdir and keeps .lib/.mod files under examples/**.
+            scan_root = candidate / "lib"
+            if not scan_root.is_dir():
+                scan_root = candidate
+            for pattern in ["*.lib", "*.mod"]:
+                for lib_file in scan_root.rglob(pattern):
+                    if lib_file.is_file() and lib_file not in seen:
+                        seen.add(lib_file)
+                        lib_files.append(lib_file)
+                        logger.debug(f"Found NGspice library: {lib_file}")
 
         return lib_files
 
