@@ -504,11 +504,16 @@ def resolve_runnable_netlist(netlist_str: str, state: SessionState) -> Path:
 
     ltspice_cls = state.available_simulators.get("ltspice")
     if ltspice_cls is None:
+        # Don't recommend export_netlist here — it ALSO needs LTspice, so that
+        # advice dead-ends when only ngspice/etc. is available (NGv7-FR-5).
         raise SimulationError(
-            f"{netlist_path.name} is an .asc schematic and the active runner "
-            "needs a netlist. Run export_netlist first, or configure "
-            "LTspice as a simulator. Available: "
-            f"{list(state.available_simulators.keys())}"
+            f"{netlist_path.name} is an .asc schematic, which only LTspice can "
+            "convert to a netlist, and LTspice is not available "
+            f"(simulators: {list(state.available_simulators.keys())}). Supply a "
+            "hand-written .cir/.net to simulate with the current simulator, or "
+            "configure LTspice. (The .asc's embedded .model/.lib/analysis "
+            "directives can be reused in a .cir.)",
+            show_hint=False,
         )
     try:
         net_path = Path(ltspice_cls.create_netlist(str(netlist_path)))
