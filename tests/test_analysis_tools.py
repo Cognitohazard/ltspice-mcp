@@ -938,3 +938,28 @@ class TestFindCrossingTool:
                 ),
                 state_no_sim,
             )
+
+
+class TestParseFreqUnitTolerance:
+    """V7-FR-3: frequency parsing accepts a trailing Hz/kHz unit."""
+
+    def test_bare_number(self):
+        from ltspice_mcp.tools.analysis import _parse_freq
+
+        assert _parse_freq("1000") == pytest.approx(1000.0)
+
+    def test_hz_suffix(self):
+        from ltspice_mcp.tools.analysis import _parse_freq
+
+        assert _parse_freq("159Hz") == pytest.approx(159.0)
+
+    def test_khz_suffix(self):
+        from ltspice_mcp.tools.analysis import _parse_freq
+
+        assert _parse_freq("15.9kHz") == pytest.approx(15900.0)
+
+    def test_si_prefix_still_works(self):
+        from ltspice_mcp.tools.analysis import _parse_freq
+
+        assert _parse_freq("1k") == pytest.approx(1000.0)
+        assert _parse_freq("1meg") == pytest.approx(1e6)
