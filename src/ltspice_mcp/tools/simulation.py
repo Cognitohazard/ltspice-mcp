@@ -2,7 +2,6 @@
 
 import asyncio
 import time
-from pathlib import Path
 from typing import Literal
 
 from mcp import types
@@ -14,7 +13,12 @@ from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.log_parser import extract_error_context, parse_success_summary
 from ltspice_mcp.lib.mcp_logging import mcp_log
 from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
-from ltspice_mcp.state import NON_TERMINAL_LIVE_STATUSES, SessionState, SimulationJob
+from ltspice_mcp.state import (
+    NON_TERMINAL_LIVE_STATUSES,
+    BatchJob,
+    SessionState,
+    SimulationJob,
+)
 from ltspice_mcp.tools._base import (
     MEAS_ERRORS_SCHEMA,
     ToolInput,
@@ -98,44 +102,6 @@ class CancelJobInput(ToolInput):
     job_id: str = Field(description="Job ID of the running simulation to cancel")
 
 
-def _check_ngspice_compat(netlist_path: Path, simulator_class: type) -> list[str]:
-    """Pre-flight check for ngspice-incompatible directives.
-
-    Returns a list of warnings to surface in the response. Raises
-    ``SimulationError`` for hard blockers (.step).
-    """
-    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
-
-    if not issubclass(simulator_class, NGspiceSimulator):
-        return []
-    try:
-        content = netlist_path.read_text(errors="replace")
-    except OSError:
-        return []
-    warnings: list[str] = []
-    meas_names: list[str] = []
-    for line in content.splitlines():
-        stripped = line.strip().lower()
-        if stripped.startswith(".step"):
-            raise SimulationError(
-                "ngspice batch mode does not support .step directives. "
-                "Use configure_sweep + run_sweep for parametric sweeps, "
-                "or remove the .step line and set the parameter to a fixed value."
-            )
-        if stripped.startswith(".meas"):
-            parts = stripped.split()
-            if len(parts) >= 3:
-                meas_names.append(parts[2])
-    if meas_names:
-        names = ", ".join(meas_names)
-        warnings.append(
-            f"ngspice cannot evaluate .meas in batch mode. "
-            f"The following measurements will be skipped: {names}. "
-            f"Use signal_stats or query_value to compute them from the raw data."
-        )
-    return warnings
-
-
 def _get_or_create_runner(state: SessionState) -> SimulationRunner:
     """Get or create a SimulationRunner via the centralized RunnerManager."""
     default_simulator = state.default_simulator
@@ -195,7 +161,7 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     default_simulator = state.default_simulator
     assert default_simulator is not None  # guaranteed by require_simulator
 
-    preflight_warnings = _check_ngspice_compat(netlist_path, default_simulator)
+    preflight_warnings = services.ngspice_preflight_warnings(netlist_path, default_simulator)
 
     # Generate job ID and create job
     job_id = generate_job_id()
@@ -407,8 +373,14 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
     # Copy truthy summary fields through to the response. ``point_count``
     # is special-cased to allow 0 (truthy in the schema but falsy in
     # Python) — every other field is "omit when empty".
-    for key in ("errors", "meas_errors", "measurements", "fourier",
-                "range", "failed_measurements"):
+    for key in (
+        "errors",
+        "meas_errors",
+        "measurements",
+        "fourier",
+        "range",
+        "failed_measurements",
+    ):
         if summary.get(key):
             data[key] = summary[key]
     if summary.get("point_count") is not None:
@@ -467,7 +439,14 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
     if not job_id:
         return _list_jobs(args, state, fmt)
 
-    # Look up specific job
+    # Batch (sweep/MC) jobs live in a separate store with a richer per-run view
+    # via batch_results. Surface a concise status here instead of the old
+    # "Job not found" dead-end (several tool hints point users to check_job).
+    batch_job = state.batch_jobs.get(job_id)
+    if batch_job is not None:
+        return _check_batch_job(batch_job, fmt)
+
+    # Look up specific (single) job
     job = services.resolve_simulation_job(job_id, state)
 
     # Check status
@@ -583,19 +562,51 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
         return format_response(f"Job {job_id} has unexpected status: {job.status}", data, fmt)
 
 
+def _check_batch_job(batch_job: BatchJob, fmt: str | None = None):
+    """Concise status for a sweep/MC batch job, pointing at batch_results."""
+    data = {
+        "job_id": batch_job.job_id,
+        "job_type": batch_job.job_type,
+        "status": batch_job.status,
+        "netlist": str(batch_job.netlist),
+        "total_runs": batch_job.total_runs,
+        "completed_runs": batch_job.completed_runs,
+        "failed_runs": batch_job.failed_runs,
+        "error": batch_job.error,
+    }
+    text = (
+        f"Batch job {batch_job.job_id} ({batch_job.job_type}): {batch_job.status}\n"
+        f"Netlist: {batch_job.netlist}\n"
+        f"Runs: {batch_job.completed_runs}/{batch_job.total_runs} completed, "
+        f"{batch_job.failed_runs} failed"
+    )
+    if batch_job.error:
+        text += f"\nError: {batch_job.error}"
+    text += (
+        f"\n\nUse batch_results('{batch_job.job_id}') for per-run data, "
+        "or measurement_stats for aggregated .MEAS statistics."
+    )
+    return format_response(text, data, fmt)
+
+
 def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = None):
-    """List simulation jobs with optional status filter."""
+    """List simulation jobs (single + batch) with optional status filter."""
     status_filter = arguments.status
+
+    # Single-run and batch (sweep/MC) jobs live in separate stores; list both
+    # so check_job is a complete view of "what jobs exist".
+    all_jobs: list[SimulationJob | BatchJob] = [
+        *state.jobs.values(),
+        *state.batch_jobs.values(),
+    ]
 
     # Determine which jobs to show
     if status_filter == "all":
-        jobs_to_show = list(state.jobs.values())
+        jobs_to_show = all_jobs
     elif status_filter:
-        jobs_to_show = [job for job in state.jobs.values() if job.status == status_filter]
+        jobs_to_show = [job for job in all_jobs if job.status == status_filter]
     else:
-        jobs_to_show = [
-            job for job in state.jobs.values() if job.status in NON_TERMINAL_LIVE_STATUSES
-        ]
+        jobs_to_show = [job for job in all_jobs if job.status in NON_TERMINAL_LIVE_STATUSES]
 
     # Sort by started_at (most recent first)
     jobs_to_show.sort(key=lambda j: j.started_at, reverse=True)
@@ -637,6 +648,7 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
         jobs_data.append(
             {
                 "job_id": job.job_id,
+                "job_type": getattr(job, "job_type", "single"),
                 "status": job.status,
                 "netlist": str(job.netlist),
                 "started_at": job.started_at.isoformat(),

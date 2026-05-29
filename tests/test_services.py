@@ -245,3 +245,54 @@ class TestValidateSignal:
         raw = self._raw(["V(a)", "V(b)"])
         with pytest.raises(ResultError, match="Signal 'V\\(missing\\)' not found"):
             services.validate_signal(raw, "V(missing)")
+
+    def test_noise_alias_ltspice_form_to_ngspice(self):
+        # V7-FR-4 / NGv7-FR-3: resolve, don't just hint.
+        raw = self._raw(["frequency", "onoise_spectrum", "inoise_spectrum"])
+        assert services.validate_signal(raw, "V(onoise)") == "onoise_spectrum"
+        assert services.validate_signal(raw, "V(inoise)") == "inoise_spectrum"
+
+    def test_noise_alias_bare_shorthand(self):
+        raw = self._raw(["frequency", "onoise_spectrum", "inoise_spectrum"])
+        assert services.validate_signal(raw, "onoise") == "onoise_spectrum"
+        assert services.validate_signal(raw, "inoise") == "inoise_spectrum"
+
+    def test_noise_alias_ngspice_form_to_ltspice(self):
+        raw = self._raw(["frequency", "v(onoise)", "v(inoise)"])
+        assert services.validate_signal(raw, "onoise_spectrum") == "v(onoise)"
+
+    def test_hierarchical_colon_resolves_to_dot(self):
+        # NGv7-FR-4: LTspice V(X1:mid) <-> ngspice v(x1.mid)
+        raw = self._raw(["time", "v(x1.mid)", "v(out)"])
+        assert services.validate_signal(raw, "V(X1:mid)") == "v(x1.mid)"
+
+
+class TestNgspicePreflightWarnings:
+    """services.ngspice_preflight_warnings — shared single-run + sweep/MC check."""
+
+    @staticmethod
+    def _ngspice_cls():
+        from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+        return NGspiceSimulator
+
+    def test_non_ngspice_returns_empty(self, tmp_path: Path):
+        net = tmp_path / "x.cir"
+        net.write_text("R1 a 0 1k\n.meas tran foo FIND V(a) AT 1m\n.tran 1u 1m\n.end\n")
+
+        class LT:  # not an NGspiceSimulator subclass
+            pass
+
+        assert services.ngspice_preflight_warnings(net, LT) == []
+
+    def test_ngspice_meas_warned(self, tmp_path: Path):
+        net = tmp_path / "m.cir"
+        net.write_text("R1 a 0 1k\nV1 a 0 1\n.meas tran vfoo FIND V(a) AT 1m\n.tran 1u 1m\n.end\n")
+        warns = services.ngspice_preflight_warnings(net, self._ngspice_cls())
+        assert any("vfoo" in w and "batch mode" in w for w in warns)
+
+    def test_ngspice_step_raises(self, tmp_path: Path):
+        net = tmp_path / "s.cir"
+        net.write_text("R1 a 0 {r}\n.step param r 1k 3k 1k\n.op\n.end\n")
+        with pytest.raises(SimulationError, match=r"does not support \.step"):
+            services.ngspice_preflight_warnings(net, self._ngspice_cls())
