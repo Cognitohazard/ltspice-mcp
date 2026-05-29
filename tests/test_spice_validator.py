@@ -134,25 +134,19 @@ class TestElementArity:
     def test_e_source_keyed_with_too_few_output_nodes_flagged(self):
         # Even in keyed form, 1 node is below the 2-node output-pair floor.
         issues = self._arity("E1 out VALUE={V(in)}\n.end")
-        assert any(
-            "E1" in str(i["message"]) and "at least 2" in str(i["message"]) for i in issues
-        )
+        assert any("E1" in str(i["message"]) and "at least 2" in str(i["message"]) for i in issues)
 
     def test_rcl_keyed_primary_value_form_passes(self):
         # Codex round-2 M2: ``R1 a b R=1k`` is the keyed primary-value
         # form. InstanceLine eats "b" as the value slot, leaving
         # inst.nodes=["a"] — but the SPICE intent is two nodes (a, b).
         issues = self._arity("R1 a b R=1k\nC1 c d C=10n\nL1 e f L=1u\n.end")
-        assert all(
-            r not in str(i["message"]) for i in issues for r in ("R1", "C1", "L1")
-        )
+        assert all(r not in str(i["message"]) for i in issues for r in ("R1", "C1", "L1"))
 
     def test_rcl_keyed_form_with_only_one_node_still_flagged(self):
         # Single positional node with the keyed form is still short.
         issues = self._arity("R1 a R=1k\n.end")
-        assert any(
-            "R1" in str(i["message"]) and "at least 2" in str(i["message"]) for i in issues
-        )
+        assert any("R1" in str(i["message"]) and "at least 2" in str(i["message"]) for i in issues)
 
     def test_rcl_with_side_effect_kv_no_false_positive(self):
         # ``R1 a b 1k TC=0.001`` has positional value + TC= side-effect

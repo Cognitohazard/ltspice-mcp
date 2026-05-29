@@ -67,8 +67,12 @@ class TestParseFourierData:
             "\n"
             "Harmonic\tFrequency\t Fourier \tNormalized\t Phase  \tNormalized\n"
             " Number \t  [Hz]   \tComponent\t Component\t[degree]\tPhase [deg]\n"
-            "    1   \t 1.000e+03\t 8.464e-01\t 1.000e+00\t  122.15\xc2\xb0\t    0.00\xc2\xb0\n".encode("latin-1").decode("utf-8")
-            + "    2   \t 2.000e+03\t 7.414e-07\t 8.760e-07\t  177.22\xc2\xb0\t   55.07\xc2\xb0\n".encode("latin-1").decode("utf-8")
+            "    1   \t 1.000e+03\t 8.464e-01\t 1.000e+00\t  122.15\xc2\xb0\t    0.00\xc2\xb0\n".encode(
+                "latin-1"
+            ).decode("utf-8")
+            + "    2   \t 2.000e+03\t 7.414e-07\t 8.760e-07\t  177.22\xc2\xb0\t   55.07\xc2\xb0\n".encode(
+                "latin-1"
+            ).decode("utf-8")
             + "Partial Harmonic Distortion: 0.000251%\n"
             "Total Harmonic Distortion:   0.014047%\n"
             "\n"

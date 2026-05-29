@@ -70,23 +70,15 @@ def apply_value_to_instance(card: SpiceCard, raw_value: str) -> ApplyResult:
     if not raw_value or not raw_value.strip():
         raise NetlistError(f"Component {ref!r} value must not be empty")
     if "\n" in raw_value or "\r" in raw_value:
-        raise NetlistError(
-            f"Component {ref!r} value must be a single line; got embedded newline"
-        )
+        raise NetlistError(f"Component {ref!r} value must be a single line; got embedded newline")
 
     try:
-        user_tokens = [
-            t for t in tokenize_body(raw_value) if t.kind != TokenKind.COMMENT_TRAIL
-        ]
+        user_tokens = [t for t in tokenize_body(raw_value) if t.kind != TokenKind.COMMENT_TRAIL]
     except SpiceLexError as e:
-        raise NetlistError(
-            f"Component {ref!r} value {raw_value!r} failed to parse: {e}"
-        ) from e
+        raise NetlistError(f"Component {ref!r} value {raw_value!r} failed to parse: {e}") from e
     if not user_tokens:
         raise NetlistError(f"Component {ref!r} value parsed to no tokens")
-    if any(
-        t.kind not in (*_POSITIONAL_KINDS, TokenKind.KEY_VALUE) for t in user_tokens
-    ):
+    if any(t.kind not in (*_POSITIONAL_KINDS, TokenKind.KEY_VALUE) for t in user_tokens):
         raise NetlistError(
             f"Component {ref!r} value {raw_value!r} contains an "
             "unrecognised token (stray equals sign or unbalanced quote)."
@@ -224,9 +216,7 @@ def _apply_b_source(ctx: _ApplyCtx) -> ApplyResult:
         )
     expr_text = ctx.user_pos[0].text
     inst.set_param(prefix, expr_text)
-    return ApplyResult(
-        ctx.ref, f"{prefix}={existing_upper[prefix]}", f"{prefix}={expr_text}"
-    )
+    return ApplyResult(ctx.ref, f"{prefix}={existing_upper[prefix]}", f"{prefix}={expr_text}")
 
 
 # ---------------------------------------------------------------------------
@@ -268,8 +258,7 @@ def _apply_controlled_source(ctx: _ApplyCtx, *, allow_two_positional: bool) -> A
         pos = _positional_after_ref(ctx.body_tokens)
         if len(pos) < 3:
             raise NetlistError(
-                f"Component {ctx.ref!r}: existing card lacks the "
-                "control-source ref slot."
+                f"Component {ctx.ref!r}: existing card lacks the control-source ref slot."
             )
         n1, n2 = pos[0].text, pos[1].text
         ctrl, gain = ctx.user_pos[0].text, ctx.user_pos[1].text
@@ -322,9 +311,7 @@ def _apply_head_with_kv(ctx: _ApplyCtx, *, slot_label: str) -> ApplyResult:
         new_parts.append(new_head)
     for kv in ctx.user_kv:
         assert kv.key is not None and kv.value is not None
-        old_kv = next(
-            (v for k, v in inst.params.items() if k.lower() == kv.key.lower()), ""
-        )
+        old_kv = next((v for k, v in inst.params.items() if k.lower() == kv.key.lower()), "")
         old_parts.append(f"{kv.key}={old_kv}")
         new_parts.append(f"{kv.key}={kv.value}")
 

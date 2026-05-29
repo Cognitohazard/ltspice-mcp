@@ -154,9 +154,7 @@ class TestParseLibraryFile:
         # instantiate the part would otherwise drop pins.
         lib = tmp_path / "octal.lib"
         lib.write_text(
-            ".SUBCKT octal_amp in+ in- out vcc vee enable trim\n"
-            "R1 in+ in- 1Meg\n"
-            ".ENDS\n"
+            ".SUBCKT octal_amp in+ in- out vcc vee enable trim\nR1 in+ in- 1Meg\n.ENDS\n"
         )
         index = parse_library_file(lib)
         m = index.models[0]

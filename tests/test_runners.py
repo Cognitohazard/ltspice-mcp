@@ -1027,9 +1027,7 @@ class TestMCRunnerCardFlowIntegration:
         }
         base = model_by_name["nmos1"]
         variant = variant_model_name("NMOS1", "M1")
-        variant_text = render_variant_model_card(
-            "".join(base.raw_lines), variant, {"VTO": 0.715}
-        )
+        variant_text = render_variant_model_card("".join(base.raw_lines), variant, {"VTO": 0.715})
         new_card = inject_card_before_end(cards, variant_text)
         # The runner registers the new model in the lookup dict so a
         # subsequent Phase-2 instance referencing it could resolve.
@@ -1097,9 +1095,7 @@ class TestMCRunnerCardFlowIntegration:
         # Phase 2 — variant for M1 only
         base = model_by_name["nmos1"]
         variant = variant_model_name("NMOS1", "M1")
-        variant_text = render_variant_model_card(
-            "".join(base.raw_lines), variant, {"VTO": 0.72}
-        )
+        variant_text = render_variant_model_card("".join(base.raw_lines), variant, {"VTO": 0.72})
         new_card = inject_card_before_end(cards, variant_text)
         if new_card.name:
             model_by_name[new_card.name.lower()] = new_card

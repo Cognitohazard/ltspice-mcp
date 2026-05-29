@@ -36,9 +36,7 @@ from ltspice_mcp.lib.spice_lex_views import (
 # SPICE identifier — letter followed by letter/digit/underscore. Avoid
 # colliding with keywords.
 _ident_first = st.sampled_from(string.ascii_letters)
-_ident_rest = st.text(
-    alphabet=string.ascii_letters + string.digits + "_", min_size=0, max_size=8
-)
+_ident_rest = st.text(alphabet=string.ascii_letters + string.digits + "_", min_size=0, max_size=8)
 _ident = st.builds(lambda h, t: h + t, _ident_first, _ident_rest)
 
 # Distinct identifier for refs that must start with an element prefix.
@@ -73,35 +71,57 @@ _ws = st.sampled_from([" ", "  ", "   ", "\t", " \t"])
 def _resistor_line() -> st.SearchStrategy[str]:
     return st.builds(
         lambda r, n1, n2, v, ws1, ws2, ws3: f"{r}{ws1}{n1}{ws2}{n2}{ws3}{v}\n",
-        _resistor_ref, _node, _node, _value, _ws, _ws, _ws,
+        _resistor_ref,
+        _node,
+        _node,
+        _value,
+        _ws,
+        _ws,
+        _ws,
     )
 
 
 def _capacitor_line() -> st.SearchStrategy[str]:
     return st.builds(
         lambda r, n1, n2, v, ws1, ws2, ws3: f"{r}{ws1}{n1}{ws2}{n2}{ws3}{v}\n",
-        _capacitor_ref, _node, _node, _value, _ws, _ws, _ws,
+        _capacitor_ref,
+        _node,
+        _node,
+        _value,
+        _ws,
+        _ws,
+        _ws,
     )
 
 
 def _mosfet_line() -> st.SearchStrategy[str]:
     return st.builds(
         lambda r, d, g, s, b, m, w, ll: f"{r} {d} {g} {s} {b} {m} W={w} L={ll}\n",
-        _mosfet_ref, _node, _node, _node, _node, _ident, _value, _value,
+        _mosfet_ref,
+        _node,
+        _node,
+        _node,
+        _node,
+        _ident,
+        _value,
+        _value,
     )
 
 
 def _model_line() -> st.SearchStrategy[str]:
     return st.builds(
         lambda n, vto, kp: f".MODEL {n} NMOS(VTO={vto} KP={kp})\n",
-        _ident, _value, _value,
+        _ident,
+        _value,
+        _value,
     )
 
 
 def _param_line() -> st.SearchStrategy[str]:
     return st.builds(
         lambda n, v: f".PARAM {n}={v}\n",
-        _ident, _value,
+        _ident,
+        _value,
     )
 
 
@@ -110,7 +130,8 @@ def _comment_line() -> st.SearchStrategy[str]:
     issues; no embedded newlines."""
     safe = st.text(
         alphabet=string.ascii_letters + string.digits + " _-+/",
-        min_size=0, max_size=40,
+        min_size=0,
+        max_size=40,
     )
     return st.builds(lambda s: f"* {s}\n", safe)
 
@@ -171,9 +192,7 @@ def test_param_set_value_round_trip(name: str, old_v: str, new_v: str) -> None:
 
 @given(name=_ident, old_vto=_value, new_vto=_value, kp=_value)
 @settings(max_examples=100)
-def test_model_set_param_round_trip(
-    name: str, old_vto: str, new_vto: str, kp: str
-) -> None:
+def test_model_set_param_round_trip(name: str, old_vto: str, new_vto: str, kp: str) -> None:
     """``set_param`` on a model card survives a re-lex."""
     text = f".MODEL {name} NMOS(VTO={old_vto} KP={kp})\n"
     cards = lex(text).cards
@@ -187,9 +206,7 @@ def test_model_set_param_round_trip(
 
 @given(ref=_resistor_ref, n1=_node, n2=_node, old_v=_value, new_v=_value)
 @settings(max_examples=100)
-def test_resistor_set_value_round_trip(
-    ref: str, n1: str, n2: str, old_v: str, new_v: str
-) -> None:
+def test_resistor_set_value_round_trip(ref: str, n1: str, n2: str, old_v: str, new_v: str) -> None:
     """``InstanceLine.set_value`` round-trips for a resistor."""
     text = f"{ref} {n1} {n2} {old_v}\n"
     cards = lex(text).cards

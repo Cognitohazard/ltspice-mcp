@@ -325,8 +325,6 @@ def perturb_model_in_text(
     return emit(result.cards)
 
 
-
-
 # ---------------------------------------------------------------------------
 # Phase 2: Mismatch (Pelgrom-scaled per-instance)
 # ---------------------------------------------------------------------------
@@ -566,8 +564,7 @@ def rewrite_instance_model(
             view = InstanceLine.from_card(c)
             if view.model is None:
                 raise ValueError(
-                    f"Instance {instance_ref!r} has no model token to rewrite: "
-                    f"{c.body!r}"
+                    f"Instance {instance_ref!r} has no model token to rewrite: {c.body!r}"
                 )
             view.set_model(new_model_name)
             return emit(result.cards)

@@ -198,9 +198,7 @@ def parse_library_file(path: Path) -> LibraryIndex:
             try:
                 view = ModelCard.from_card(c)
             except Exception as e:
-                logger.warning(
-                    f"Malformed .MODEL at line {c.line_start} in {path}: {e}"
-                )
+                logger.warning(f"Malformed .MODEL at line {c.line_start} in {path}: {e}")
                 continue
             params = dict(islice(view.params.items(), 5))
             entry = ModelEntry(
@@ -220,14 +218,11 @@ def parse_library_file(path: Path) -> LibraryIndex:
             closer_idx = find_matching_ends(cards, idx)
             if closer_idx is None:
                 logger.warning(
-                    f"Malformed .SUBCKT {c.name} at line {c.line_start} in {path}: "
-                    "missing .ENDS"
+                    f"Malformed .SUBCKT {c.name} at line {c.line_start} in {path}: missing .ENDS"
                 )
                 continue
             raw_text = "".join(
-                chain.from_iterable(
-                    sc.raw_lines for sc in cards[idx : closer_idx + 1]
-                )
+                chain.from_iterable(sc.raw_lines for sc in cards[idx : closer_idx + 1])
             ).rstrip("\n")
             # Parse ports / param defaults via the typed view so
             # whitespace-around-equals (``gain = 10``) is correctly
@@ -242,14 +237,10 @@ def parse_library_file(path: Path) -> LibraryIndex:
                 ports = list(subckt_view.ports)
                 params = dict(subckt_view.param_defaults)
             except Exception as e:
-                logger.warning(
-                    f"Malformed .SUBCKT {c.name} at line {c.line_start} in {path}: {e}"
-                )
+                logger.warning(f"Malformed .SUBCKT {c.name} at line {c.line_start} in {path}: {e}")
                 continue
             line_count = (
-                cards[closer_idx].line_start
-                - c.line_start
-                + len(cards[closer_idx].raw_lines)
+                cards[closer_idx].line_start - c.line_start + len(cards[closer_idx].raw_lines)
             )
             entry = ModelEntry(
                 name=c.name,

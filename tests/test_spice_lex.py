@@ -296,13 +296,7 @@ class TestOps:
     def test_rename_subckt_atomic(self) -> None:
         from ltspice_mcp.lib.spice_lex_ops import rename_subckt
 
-        text = (
-            ".SUBCKT INV in out\n"
-            "M1 out in 0 0 NMOS\n"
-            ".ENDS INV\n"
-            "X1 a b INV\n"
-            "X2 c d INV\n"
-        )
+        text = ".SUBCKT INV in out\nM1 out in 0 0 NMOS\n.ENDS INV\nX1 a b INV\nX2 c d INV\n"
         cards = lex(text).cards
         n = rename_subckt(cards, "INV", "BUF")
         assert n >= 4  # opener + closer + 2 X-callers (and scope updates)
@@ -327,11 +321,7 @@ class TestOps:
         from ltspice_mcp.lib.spice_lex import SpiceLexError
         from ltspice_mcp.lib.spice_lex_ops import rename_subckt
 
-        text = (
-            ".SUBCKT INV in out\n"
-            ".ENDS INV\n"
-            "X1 a b INV\n"
-        )
+        text = ".SUBCKT INV in out\n.ENDS INV\nX1 a b INV\n"
         cards = lex(text).cards
         # Corrupt one X-caller body so InstanceLine.from_card raises.
         cards[2].body = ""  # empty body — instance parse will fail
@@ -346,11 +336,7 @@ class TestOps:
     def test_rename_model_top_level(self) -> None:
         from ltspice_mcp.lib.spice_lex_ops import rename_model
 
-        text = (
-            ".MODEL NMOS1 NMOS(VTO=0.7)\n"
-            "M1 d g s b NMOS1 W=10u\n"
-            "M2 d g s b NMOS1 W=20u\n"
-        )
+        text = ".MODEL NMOS1 NMOS(VTO=0.7)\nM1 d g s b NMOS1 W=10u\nM2 d g s b NMOS1 W=20u\n"
         cards = lex(text).cards
         n = rename_model(cards, "NMOS1", "NMOS_v2")
         assert n == 3  # model + 2 instances
@@ -409,13 +395,7 @@ class TestFindMatchingEnds:
     def test_nested_subckt_inner_closer(self) -> None:
         from ltspice_mcp.lib.spice_lex import find_matching_ends
 
-        text = (
-            ".SUBCKT OUTER a b\n"
-            ".SUBCKT INNER x y\n"
-            "R1 x y 1k\n"
-            ".ENDS INNER\n"
-            ".ENDS OUTER\n"
-        )
+        text = ".SUBCKT OUTER a b\n.SUBCKT INNER x y\nR1 x y 1k\n.ENDS INNER\n.ENDS OUTER\n"
         cards = lex(text).cards
         inner_idx = next(
             i for i, c in enumerate(cards) if c.kind == "subckt" and c.name == "INNER"
@@ -619,12 +599,12 @@ class TestLexAndEmit:
         result = lex(text)
         scopes = [c.scope for c in result.cards]
         assert scopes == [
-            (),                   # .SUBCKT OUTER
-            ("OUTER",),           # .SUBCKT INNER (inside OUTER)
-            ("OUTER", "INNER"),   # R1
-            ("OUTER",),           # .ENDS INNER
-            ("OUTER",),           # X1
-            (),                   # .ENDS OUTER
+            (),  # .SUBCKT OUTER
+            ("OUTER",),  # .SUBCKT INNER (inside OUTER)
+            ("OUTER", "INNER"),  # R1
+            ("OUTER",),  # .ENDS INNER
+            ("OUTER",),  # X1
+            (),  # .ENDS OUTER
         ]
 
     def test_unmatched_ends_warns_not_raises(self) -> None:
@@ -1055,21 +1035,13 @@ class TestMeasCard:
 
 class TestIterators:
     def test_iter_models(self) -> None:
-        text = (
-            ".MODEL NMOS1 NMOS(VTO=0.7)\n"
-            ".MODEL PMOS1 PMOS(VTO=-0.7)\n"
-        )
+        text = ".MODEL NMOS1 NMOS(VTO=0.7)\n.MODEL PMOS1 PMOS(VTO=-0.7)\n"
         cards = lex(text).cards
         models = list(iter_models(cards))
         assert [m.name for m in models] == ["NMOS1", "PMOS1"]
 
     def test_iter_instances_by_prefix(self) -> None:
-        text = (
-            "R1 a b 1k\n"
-            "M1 d g s b NMOS1\n"
-            "M2 d g s b NMOS1\n"
-            "C1 a 0 1n\n"
-        )
+        text = "R1 a b 1k\nM1 d g s b NMOS1\nM2 d g s b NMOS1\nC1 a 0 1n\n"
         cards = lex(text).cards
         mosfets = list(iter_instances(cards, prefix="M"))
         assert [m.ref for m in mosfets] == ["M1", "M2"]
@@ -1083,12 +1055,7 @@ class TestIterators:
 
     def test_find_model_walks_outward(self) -> None:
         # Inner scope sees outer's models.
-        text = (
-            ".MODEL NMOS1 NMOS(VTO=0.7)\n"
-            ".SUBCKT INNER x y\n"
-            "M1 x y 0 0 NMOS1\n"
-            ".ENDS INNER\n"
-        )
+        text = ".MODEL NMOS1 NMOS(VTO=0.7)\n.SUBCKT INNER x y\nM1 x y 0 0 NMOS1\n.ENDS INNER\n"
         cards = lex(text).cards
         # From within INNER, NMOS1 must resolve.
         m = find_model(cards, "NMOS1", scope=("INNER",))
