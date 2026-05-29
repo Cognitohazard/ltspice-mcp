@@ -244,6 +244,7 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     # Deferred import — ac_analysis imports raw_parser at module load so
     # the edge in the other direction has to stay late-bound.
     from ltspice_mcp.lib.ac_analysis import (
+        HALF_POWER_DB,
         compute_stability_metrics,
         detect_crossings,
         prepare_ac_arrays,
@@ -268,7 +269,7 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     try:
         mag_db = safe_magnitude_db(H)
         ref_db = float(mag_db[0])
-        crossings = detect_crossings(freqs, mag_db, ref_db - 3.0, direction="falling")
+        crossings = detect_crossings(freqs, mag_db, ref_db + HALF_POWER_DB, direction="falling")
         if crossings:
             metrics["bandwidth_3db"] = float(crossings[0]["frequency_hz"])
     except Exception:

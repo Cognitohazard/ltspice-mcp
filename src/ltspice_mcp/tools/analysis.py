@@ -233,6 +233,14 @@ class SimulationSummaryInput(ToolInput):
         default=None,
         description="Signal for AC bandwidth metrics (e.g., 'V(outp)'). Required for AC analysis.",
     )
+    step: int = Field(
+        default=0,
+        description=(
+            "Step index for ac_bandwidth_metrics on a stepped (.step) run. "
+            "Default 0 (first step). On a multi-step run the metric is computed "
+            "for this step only — a warning notes it."
+        ),
+    )
     format: Literal["json", "text"] | None = Field(
         default=None,
         description="Response format: 'json' for structured data, 'text' for human-readable",
@@ -327,7 +335,8 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
         if args.t_start is not None or args.t_end is not None:
             raise ResultError(
                 "t_start/t_end windowing is not supported for AC analysis. "
-                "Use query_value to look up a specific frequency."
+                "Use query_value to look up a specific frequency.",
+                show_hint=False,
             )
         magnitude_db = safe_magnitude_db(wave)
         phase_deg = np.angle(wave, deg=True)
@@ -374,7 +383,8 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
         raise ResultError(
             "t_start/t_end windowing is not supported for Noise analysis (axis is "
             "frequency, not time). Use query_value to look up a specific "
-            "frequency."
+            "frequency.",
+            show_hint=False,
         )
 
     ts = _parse_time(args.t_start, "t_start")
@@ -390,15 +400,15 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
         raise ResultError(str(e)) from e
 
     if is_noise:
-        # Noise spectral density (V/√Hz) over a frequency axis. Trapezoidal
-        # mean/RMS over a frequency axis is meaningless; min/max is the
-        # interesting "worst-case noise density" reading.
+        # Noise spectral density (V/√Hz) over a (usually log-spaced) frequency
+        # axis. A plain arithmetic mean is dominated by wherever the samples
+        # cluster and depends on the sweep span, not the circuit — it is not a
+        # meaningful figure of merit, so it is deliberately omitted (V7-IMP-3).
+        # min/max is the useful "worst-case noise density" reading.
         stats = {
             "analysis_type": "noise",
             "min": core["min"],
             "max": core["max"],
-            "mean": core["mean"],
-            "abs_mean": core["abs_mean"],
             "peak_to_peak": core["pk_pk"],
             "point_count": core["num_samples"],
             "freq_start_used": core["t_start"],
@@ -507,6 +517,16 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
     try:
         result_data = query_point_value(raw, signal, target_x, step)
     except Exception as e:
+        # Operating-point raws have no time/frequency axis; spicelib raises
+        # "This RAW file does not have an axis." Give a precise, actionable
+        # message instead of the generic failure + misleading check_job hint.
+        if "does not have an axis" in str(e).lower():
+            raise ResultError(
+                "This is an Operating Point result (no time/frequency axis to "
+                "query). Use operating_point to read node voltages and branch "
+                "currents.",
+                show_hint=False,
+            ) from e
         raise ResultError(f"Failed to query value: {e}") from e
 
     sim_type = detect_sim_type(raw)
@@ -649,7 +669,22 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     op_data["step"] = args.step
     op_data["step_count"] = op_step_count
 
+    # A DC sweep raw has no single "operating point": point 0 is just the
+    # sweep's starting value (e.g. V1=0). Flag it so an all-zeros / start-of-
+    # sweep result isn't mistaken for a degenerate circuit (V7-FR-6).
+    dc_sweep_note: str | None = None
+    if "transfer" in sim_lower or "dc" in sim_lower.split():
+        dc_sweep_note = (
+            "This is a DC sweep raw; the values are sweep point "
+            f"{args.step} (the sweep's starting bias), not a chosen operating "
+            "point. Use query_value at a specific sweep value, or run a .OP."
+        )
+        op_data.setdefault("warnings", []).append(dc_sweep_note)
+
     lines = ["DC Operating Point", ""]
+    if dc_sweep_note:
+        lines.append(f"⚠ {dc_sweep_note}")
+        lines.append("")
     if op_step_count > 1:
         lines.append(
             f"Step {args.step} of {op_step_count} (use step=N to read other "
@@ -775,8 +810,18 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
                     "Pass ``signal=`` to choose a different trace."
                 )
         if ac_signal_used:
+            services.validate_step(raw, args.step)
             with contextlib.suppress(Exception):
-                ac_metrics = compute_ac_bandwidth_metrics(raw, ac_signal_used, 0)
+                ac_metrics = compute_ac_bandwidth_metrics(raw, ac_signal_used, args.step)
+            # On a multi-step run the metric is for one step only; the bare
+            # number next to step_count=N otherwise reads as the whole-run
+            # answer (it isn't — it's wrong for the other N-1 steps).
+            if ac_metrics is not None and summary.get("step_count", 1) > 1:
+                ac_metrics["step"] = args.step
+                summary.setdefault("warnings", []).append(
+                    f"ac_bandwidth_metrics is for step {args.step} of "
+                    f"{summary['step_count']}; pass step=N for other steps."
+                )
 
     json_data = dict(summary)
     if ac_metrics:
@@ -1443,10 +1488,14 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
 
         measurements = meas_data.get("measurements", {})
         if not measurements:
-            errors = meas_data.get("errors") or []
+            # Surface BOTH errors and warnings — the reason measurements are
+            # missing is often a warning (e.g. ngspice "No .measure possible in
+            # batch mode"), not an error. Reporting "no diagnostics" while every
+            # other tool shows the cause is misleading.
+            diags = list(meas_data.get("errors") or []) + list(meas_data.get("warnings") or [])
             err_block = (
-                "\n".join(f"  {e}" for e in errors)
-                if errors
+                "\n".join(f"  {d}" for d in diags)
+                if diags
                 else "  (log contained no .MEAS results and no diagnostics)"
             )
             raise ResultError(f"No .MEAS results in log:\n{err_block}")
@@ -1502,11 +1551,20 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
 
 
 def _parse_freq(s: str, name: str = "frequency") -> float:
-    """Parse a SPICE-notation frequency into a finite positive float."""
+    """Parse a SPICE-notation frequency into a finite positive float.
+
+    Tolerates a trailing ``Hz`` unit — ``'159Hz'`` and ``'15.9kHz'`` are the
+    natural way to write a frequency, but the SPICE value parser only knows SI
+    prefixes (k, meg, …). Strip a trailing ``hz`` before parsing so the unit is
+    accepted rather than rejected with a confusing error.
+    """
+    cleaned = s.strip()
+    if cleaned[-2:].lower() == "hz":
+        cleaned = cleaned[:-2].strip()
     try:
-        v = parse_spice_value(s)
+        v = parse_spice_value(cleaned)
     except ValueError as e:
-        raise ResultError(f"Invalid {name} value {s!r}: {e}") from e
+        raise ResultError(f"Invalid {name} value {s!r}: {e}", show_hint=False) from e
     if not math.isfinite(v):
         raise ResultError(f"{name} must be finite, got {s!r}")
     if v <= 0:
