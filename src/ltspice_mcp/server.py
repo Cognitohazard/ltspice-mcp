@@ -76,14 +76,18 @@ def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
 def _configure_asc_editor(config: ServerConfig, available: dict) -> None:
     """Configure AscEditor library paths for .asc schematic support.
 
-    Handles four platform scenarios:
-    1. Windows native — spicelib auto-detects LTspice lib paths
-    2. WSL + LTspice on Windows — resolve via Windows %LOCALAPPDATA%
-    3. WSL + other simulator (no LTspice) — no .asc support
-    4. Linux native (no LTspice) — no .asc support
+    Schematic editing only needs the ``.asy`` symbol library — NOT a working
+    simulator binary — so symbol resolution is deliberately decoupled from
+    simulator detection. A WSL box with the symbols present but a mis-pathed
+    (or absent) LTspice executable can still edit ``.asc`` files.
 
-    Users can override auto-detection via config.symbol_paths or
-    LTSPICE_MCP_SYMBOL_PATHS env var for non-standard installs.
+    Resolution order:
+    1. Explicit config.symbol_paths / LTSPICE_MCP_SYMBOL_PATHS override (any platform)
+    2. WSL — resolve symbols via Windows %LOCALAPPDATA%, regardless of whether
+       the LTspice *executable* was detected
+    3. Windows native / Linux+Wine — spicelib's prepare_for_simulator (needs
+       the detected LTspice class)
+    4. Otherwise — no symbols available, .asc editing disabled
     """
     from spicelib.editor.asc_editor import AscEditor
 
@@ -96,29 +100,31 @@ def _configure_asc_editor(config: ServerConfig, available: dict) -> None:
             return
         logger.warning(f"Configured symbol_paths do not exist: {config.symbol_paths}")
 
-    # 2. No LTspice detected → no .asc support (Linux native, WSL + ngspice only)
-    ltspice_cls = available.get("ltspice")
-    if ltspice_cls is None:
-        logger.info("No LTspice detected — .asc schematic editing disabled")
-        return
-
-    # 3. WSL + LTspice on Windows — spicelib can't auto-detect via /mnt/c/
     from ltspice_mcp.lib.wsl import get_ltspice_lib_paths, is_wsl
 
+    # 2. WSL — symbol libs live under %LOCALAPPDATA%/LTspice/lib/sym and resolve
+    #    independently of simulator-executable detection (spicelib can't find
+    #    them via /mnt/c/ on its own). This is the key decoupling: a stale
+    #    simulator path must not also disable schematic editing.
     if is_wsl():
         lib_paths = get_ltspice_lib_paths()
         if lib_paths:
             AscEditor.custom_lib_paths = lib_paths
             logger.info(f"AscEditor WSL library paths: {lib_paths}")
             return
-        logger.warning(
-            "LTspice detected but symbol library not found on WSL. "
+        logger.info(
+            "No LTspice symbol library found on WSL — .asc schematic editing disabled. "
             "Set [schematic] symbol_paths in ltspice-mcp.toml or "
             "LTSPICE_MCP_SYMBOL_PATHS env var."
         )
         return
 
-    # 4. Windows native (or Linux with Wine) — spicelib handles it
+    # 3. Windows native (or Linux with Wine) — needs the detected LTspice class
+    ltspice_cls = available.get("ltspice")
+    if ltspice_cls is None:
+        logger.info("No LTspice symbols available — .asc schematic editing disabled")
+        return
+
     try:
         AscEditor.prepare_for_simulator(ltspice_cls)
         if AscEditor.simulator_lib_paths or AscEditor.custom_lib_paths:
@@ -199,10 +205,7 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
         ),
     ),
     _err.LibraryError: _ErrorHint(
-        full=(
-            "Use list_libraries to see loaded libraries, or "
-            "load_library to load a new one."
-        ),
+        full=("Use list_libraries to see loaded libraries, or load_library to load a new one."),
         agentic=(
             "Use find_model to fuzzy-match against loaded libraries, "
             "or add .lib directives to the netlist manually."
@@ -251,10 +254,11 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     )
     logger = logging.getLogger("ltspice_mcp.server")
 
-    available = detect_simulators(config)
+    diagnostics: list[str] = []
+    available = detect_simulators(config, diagnostics)
     _configure_asc_editor(config, available)
 
-    state = SessionState.create(config, available)
+    state = SessionState.create(config, available, diagnostics)
 
     logger.info("=== LTSpice MCP Server Starting ===")
     logger.info("Server name: ltspice-mcp")
@@ -286,6 +290,11 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     logger.info(
         f"Default simulator: {state.default_simulator.__name__ if state.default_simulator else 'None'}"
     )
+
+    if state.diagnostics:
+        logger.warning("Startup diagnostics (also surfaced via server_status):")
+        for diag in state.diagnostics:
+            logger.warning(f"  - {diag}")
 
     logger.info("Allowed paths (sandbox):")
     for allowed_path in config.allowed_paths:
@@ -362,7 +371,9 @@ async def call_tool(name: str, arguments: dict | None):
             f"Use server_status to see full sandbox configuration."
         ) from None
     except LTSpiceMCPError as e:
-        hint = _get_error_hint(type(e), state.config.tool_profile)
+        # Errors that already carry precise guidance opt out of the generic
+        # per-type hint (show_hint=False) so it doesn't misdirect (V7-FR-2).
+        hint = _get_error_hint(type(e), state.config.tool_profile) if e.show_hint else None
         text = f"{e}\n\n{hint}" if hint else str(e)
         # When the error carries structured suggestions (e.g. fuzzy model
         # matches), return them as structuredContent with isError=True so

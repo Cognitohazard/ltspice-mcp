@@ -39,6 +39,8 @@ class ServerStatusInput(ToolInput):
         "properties": {
             "simulators": {"type": "object"},
             "default_simulator": {"type": ["string", "null"]},
+            "requested_simulator": {"type": ["string", "null"]},
+            "diagnostics": {"type": "array", "items": {"type": "string"}},
             "tool_profile": {"type": "string"},
             "tool_count": {"type": "integer"},
             "configuration": {"type": "object"},
@@ -78,8 +80,17 @@ async def handle_server_status(args: ServerStatusInput, state: SessionState):
     lines.append(
         f"\nDefault simulator: {state.default_simulator.__name__ if state.default_simulator else 'None'}"
     )
+    if state.config.simulator:
+        lines.append(f"Requested simulator: {state.config.simulator}")
 
+    if state.diagnostics:
+        lines.append("\n⚠ Startup diagnostics:")
+        for diag in state.diagnostics:
+            lines.append(f"  - {diag}")
+
+    enabled_sims = state.config.enabled_simulators
     lines.append("\nConfiguration:")
+    lines.append(f"  Enabled simulators: {enabled_sims if enabled_sims else 'auto-detect all'}")
     lines.append(f"  Tool profile: {state.config.tool_profile}")
     lines.append(f"  Tools exposed: {len(state.tool_defs)}")
     lines.append(f"  Working directory: {state.working_dir}")
@@ -118,10 +129,13 @@ async def handle_server_status(args: ServerStatusInput, state: SessionState):
     data = {
         "simulators": simulators_data,
         "default_simulator": state.default_simulator.__name__ if state.default_simulator else None,
+        "requested_simulator": state.config.simulator,
+        "diagnostics": list(state.diagnostics),
         "tool_profile": state.config.tool_profile,
         "tool_count": len(state.tool_defs),
         "configuration": {
             "working_directory": str(state.working_dir),
+            "enabled_simulators": list(state.config.enabled_simulators),
             "max_parallel_sims": state.config.max_parallel_sims,
             "default_timeout": state.config.default_timeout,
             "max_points_returned": state.config.max_points_returned,

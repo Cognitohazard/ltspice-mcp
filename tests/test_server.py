@@ -41,6 +41,10 @@ class TestGetErrorHint:
 
 
 class TestConfigureAscEditor:
+    """Symbol-path resolution. Every test mocks ``is_wsl`` (the suite runs on a
+    real WSL host) and patches ``AscEditor`` so no test mutates the shared
+    class-level ``custom_lib_paths`` global."""
+
     def test_explicit_symbol_paths(self, tmp_path: Path):
         symdir = tmp_path / "syms"
         symdir.mkdir()
@@ -51,36 +55,74 @@ class TestConfigureAscEditor:
             _configure_asc_editor(cfg, available={})
             assert str(symdir) in mock_cls.custom_lib_paths
 
-    def test_explicit_symbol_paths_invalid(self, tmp_path: Path):
+    def test_explicit_symbol_paths_invalid_non_wsl(self, tmp_path: Path):
+        # Invalid override + non-WSL + no LTspice → disabled, nothing set.
         cfg = ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path])
         cfg.symbol_paths = [tmp_path / "nonexistent"]
-        # Falls through to other checks; with no LTspice → no-op
-        _configure_asc_editor(cfg, available={})
+        with (
+            patch("ltspice_mcp.lib.wsl.is_wsl", return_value=False),
+            patch("spicelib.editor.asc_editor.AscEditor") as mock_cls,
+        ):
+            mock_cls.custom_lib_paths = []
+            mock_cls.simulator_lib_paths = []
+            _configure_asc_editor(cfg, available={})
+            assert mock_cls.custom_lib_paths == []
 
-    def test_no_ltspice(self, tmp_path: Path):
+    def test_non_wsl_no_ltspice_disabled(self, tmp_path: Path):
         cfg = ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path])
         cfg.symbol_paths = []
-        _configure_asc_editor(cfg, available={})
+        with (
+            patch("ltspice_mcp.lib.wsl.is_wsl", return_value=False),
+            patch("spicelib.editor.asc_editor.AscEditor") as mock_cls,
+        ):
+            mock_cls.custom_lib_paths = []
+            _configure_asc_editor(cfg, available={})
+            assert mock_cls.custom_lib_paths == []
 
-    def test_wsl_no_lib_paths(self, tmp_path: Path):
+    def test_non_wsl_prepare_for_simulator(self, tmp_path: Path):
+        # Windows-native / Wine path: needs the detected LTspice class.
+        class FakeLT:
+            pass
+
+        cfg = ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path])
+        cfg.symbol_paths = []
+        with (
+            patch("ltspice_mcp.lib.wsl.is_wsl", return_value=False),
+            patch("spicelib.editor.asc_editor.AscEditor") as mock_cls,
+        ):
+            mock_cls.custom_lib_paths = ["/x/lib/sym"]
+            mock_cls.simulator_lib_paths = []
+            _configure_asc_editor(cfg, available={"ltspice": FakeLT})
+            mock_cls.prepare_for_simulator.assert_called_once_with(FakeLT)
+
+    def test_wsl_no_lib_paths_disabled(self, tmp_path: Path):
         cfg = ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path])
         cfg.symbol_paths = []
         with (
             patch("ltspice_mcp.lib.wsl.is_wsl", return_value=True),
             patch("ltspice_mcp.lib.wsl.get_ltspice_lib_paths", return_value=[]),
+            patch("spicelib.editor.asc_editor.AscEditor") as mock_cls,
         ):
-            _configure_asc_editor(cfg, available={"ltspice": object})
+            mock_cls.custom_lib_paths = []
+            _configure_asc_editor(cfg, available={})
+            assert mock_cls.custom_lib_paths == []
 
-    def test_wsl_with_lib_paths(self, tmp_path: Path):
-        cfg = ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path])
-        cfg.symbol_paths = []
+    def test_wsl_symbols_decoupled_from_simulator(self, tmp_path: Path):
+        # Fix D regression: on WSL the symbols resolve even when NO LTspice
+        # simulator was detected (available is empty). Schematic editing must
+        # not be gated on the simulator executable being found.
         symdir = tmp_path / "wslsyms"
         symdir.mkdir()
+        cfg = ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path])
+        cfg.symbol_paths = []
         with (
             patch("ltspice_mcp.lib.wsl.is_wsl", return_value=True),
             patch("ltspice_mcp.lib.wsl.get_ltspice_lib_paths", return_value=[str(symdir)]),
+            patch("spicelib.editor.asc_editor.AscEditor") as mock_cls,
         ):
-            _configure_asc_editor(cfg, available={"ltspice": object})
+            mock_cls.custom_lib_paths = []
+            _configure_asc_editor(cfg, available={})  # empty: no simulator at all
+            assert str(symdir) in mock_cls.custom_lib_paths
 
 
 class _FakeSession:

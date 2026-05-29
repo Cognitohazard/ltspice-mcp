@@ -86,12 +86,22 @@ def to_windows_path(linux_path: Path) -> str:
         return str(linux_path)
 
 
+# Cache for resolved Windows env-var paths (constant for the process lifetime)
+_win_env_cache: dict[str, Path | None] = {}
+
+
 def _resolve_win_env(var: str) -> Path | None:
     """Resolve a Windows environment variable to a WSL path.
 
-    Runs cmd.exe to echo the variable, then wslpath to convert.
-    Returns None if resolution fails.
+    Runs cmd.exe to echo the variable, then wslpath to convert. Results are
+    memoized for the process lifetime (these vars don't change), so repeated
+    callers — e.g. find_windows_ltspice_exe and get_ltspice_lib_paths both
+    resolving %LOCALAPPDATA% at startup — share a single pair of subprocess
+    spawns instead of re-running cmd.exe each time. Returns None if resolution
+    fails.
     """
+    if var in _win_env_cache:
+        return _win_env_cache[var]
     try:
         win_result = subprocess.run(
             ["cmd.exe", "/C", "echo", f"%{var}%"],
@@ -107,10 +117,12 @@ def _resolve_win_env(var: str) -> Path | None:
             check=True,
             stdin=subprocess.DEVNULL,
         )
-        return Path(wsl_result.stdout.strip())
+        resolved: Path | None = Path(wsl_result.stdout.strip())
     except Exception as e:
         logger.debug(f"Could not resolve Windows %{var}%: {e}")
-        return None
+        resolved = None
+    _win_env_cache[var] = resolved
+    return resolved
 
 
 # Cache for Windows temp dir
@@ -202,3 +214,48 @@ def get_ltspice_lib_paths() -> list[str]:
         logger.debug("No LTspice library paths found on WSL")
 
     return found
+
+
+def find_windows_ltspice_exe() -> Path | None:
+    """Probe standard Windows LTspice install locations from WSL.
+
+    spicelib's stock detection only searches Wine paths (``~/.wine/...``)
+    on Linux, so on WSL — where the real install lives under ``/mnt/<drive>/``
+    and there is usually no Wine — LTspice is undetectable unless an explicit
+    path is configured. This probes the common Windows install locations via
+    the resolved Windows env vars and returns the first existing executable.
+
+    Order reflects current installers first:
+      - ``%LOCALAPPDATA%\\Programs\\ADI\\LTspice\\LTspice.exe`` (current ADI)
+      - ``%ProgramFiles%\\ADI\\LTspice\\LTspice.exe`` (older ADI machine-wide)
+      - ``%ProgramFiles(x86)%\\LTC\\LTspiceXVII\\XVIIx64.exe`` and the
+        LTspiceIV ``scad3.exe`` (legacy LTC builds)
+
+    Returns:
+        Path to the first existing LTspice executable, or None (not on WSL,
+        Windows env vars unresolvable, or no install found).
+    """
+    if not is_wsl():
+        return None
+
+    candidates: list[Path] = []
+
+    local_appdata = _resolve_win_env("LOCALAPPDATA")
+    if local_appdata is not None:
+        candidates.append(local_appdata / "Programs" / "ADI" / "LTspice" / "LTspice.exe")
+
+    for var in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+        base = _resolve_win_env(var)
+        if base is None:
+            continue
+        candidates.append(base / "ADI" / "LTspice" / "LTspice.exe")
+        candidates.append(base / "LTC" / "LTspiceXVII" / "XVIIx64.exe")
+        candidates.append(base / "LTC" / "LTspiceIV" / "scad3.exe")
+
+    for candidate in candidates:
+        if candidate.is_file():
+            logger.debug(f"Found LTspice executable on WSL: {candidate}")
+            return candidate
+
+    logger.debug("No LTspice executable found in standard WSL/Windows locations")
+    return None
