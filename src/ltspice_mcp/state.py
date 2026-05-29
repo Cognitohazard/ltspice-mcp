@@ -86,6 +86,10 @@ class SessionState:
     tool_dispatch: dict[str, "RegisteredTool"] = field(default_factory=dict)
     sweep_configs: dict[str, SweepConfig] = field(default_factory=dict)
     mc_configs: dict[str, MonteCarloConfig] = field(default_factory=dict)
+    diagnostics: list[str] = field(default_factory=list)
+    """Startup diagnostics (bad simulator path, requested≠active fallback, WSL
+    auto-detection). Surfaced via ``server_status`` so silent degradation is
+    visible to the client instead of buried in the server log."""
     _touched_recent: set[Path] = field(default_factory=set, repr=False)
     """Resolved circuit paths already recorded in the recent-circuits index this session."""
 
@@ -100,12 +104,24 @@ class SessionState:
         return simulator_dialect(self.default_simulator)
 
     @classmethod
-    def create(cls, config: ServerConfig, available: dict[str, type]) -> "SessionState":
-        """Factory method to create session state at server startup."""
+    def create(
+        cls,
+        config: ServerConfig,
+        available: dict[str, type],
+        diagnostics: list[str] | None = None,
+    ) -> "SessionState":
+        """Factory method to create session state at server startup.
+
+        ``diagnostics`` carries any startup notes accumulated during simulator
+        detection (e.g. a bad configured path); ``select_default_simulator``
+        appends to it when it has to fall back, and the merged list is stored
+        on the session for ``server_status`` to surface.
+        """
         from ltspice_mcp.lib.simulator import select_default_simulator
         from ltspice_mcp.tools import get_tools_for_profile
 
-        default = select_default_simulator(available, config)
+        diagnostics = diagnostics if diagnostics is not None else []
+        default = select_default_simulator(available, config, diagnostics)
         tool_defs, tool_dispatch = get_tools_for_profile(config.tool_profile)
         registry = JobRegistry(persist_enabled=config.persist_jobs)
 
@@ -121,6 +137,7 @@ class SessionState:
             job_registry=registry,
             tool_defs=tool_defs,
             tool_dispatch=tool_dispatch,
+            diagnostics=diagnostics,
         )
 
     # ------------------------------------------------------------------
