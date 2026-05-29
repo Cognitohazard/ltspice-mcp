@@ -726,6 +726,10 @@ class AddComponentInput(ToolInput):
         default=None,
         description="Optional attributes to set (e.g., {'SpiceLine': 'W=10u L=0.5u', 'Value2': '...'})",
     )
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
 
 
 class NetLabelInput(ToolInput):
@@ -1999,7 +2003,7 @@ async def handle_add_component(
             "position": {"x": x, "y": y},
             "rotation": rotation,
         }
-        return format_response(result, fallback_data, None)
+        return format_response(result, fallback_data, args.format)
 
     geometry = compute_placed_geometry(sym_info, x, y, rotation)
     for pin in geometry["pins"]:
@@ -2035,7 +2039,7 @@ async def handle_add_component(
     if extra_lines:
         result += "\n" + "\n".join(extra_lines)
 
-    return format_response(result, data, None)
+    return format_response(result, data, args.format)
 
 
 _previous_exports: dict[Path, list[str]] = {}
@@ -2134,7 +2138,10 @@ async def handle_symbol_info(args: SymbolInfoInput, state: SessionState) -> type
     sym_info = get_symbol_info(symbol)
     if sym_info is None:
         raise NetlistError(
-            f"Symbol '{symbol}' not found. Ensure LTspice symbol libraries are configured."
+            f"Symbol '{symbol}' not found. Check the symbol name spelling (e.g. "
+            f"'nmos', 'res', 'cap', 'voltage'), or configure symbol libraries via "
+            f"[schematic] symbol_paths / LTSPICE_MCP_SYMBOL_PATHS.",
+            show_hint=False,
         )
 
     geometry = compute_placed_geometry(sym_info, args.x, args.y, args.rotation)
@@ -2253,8 +2260,7 @@ def _resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
         ]
         if not matches:
             raise NetlistError(
-                f"Net label '{net_name}' not found in schematic. "
-                "Add it with add_net_label first."
+                f"Net label '{net_name}' not found in schematic. Add it with add_net_label first."
             )
         if len(matches) > 1:
             coords = ", ".join(f"({x},{y})" for x, y in matches)
@@ -2629,6 +2635,9 @@ def _plan_connect_route(
                         f"Wire passes through {cg['ref']}.{pin['name']} at ({px},{py}): "
                         "will create unintended connection"
                     )
+                    # A pin at the shared corner of two consecutive segments
+                    # satisfies _point_on_segment for both — report it once.
+                    break
 
     # Wire-junction check: forbid overlaps with existing wires unless the
     # existing wire already terminates at one of our endpoints (intended
