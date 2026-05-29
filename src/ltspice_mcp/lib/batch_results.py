@@ -168,8 +168,14 @@ def compute_batch_stats(
         "run_count": len(per_run_summaries),
         "runs": per_run_summaries,
         "stats": stats,
+        # "worst"/"best" assume larger-peak = worse, which has no inherent
+        # meaning for an arbitrary signal (e.g. a passband magnitude). Expose
+        # neutral max/min aliases too so callers aren't misled (NGv7-FR-7);
+        # the worst/best keys are kept for backward compatibility.
         "worst_case_run": worst_case_run,
         "best_case_run": best_case_run,
+        "max_case_run": worst_case_run,
+        "min_case_run": best_case_run,
     }
 
 

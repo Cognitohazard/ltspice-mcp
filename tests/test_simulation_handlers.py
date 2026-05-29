@@ -11,7 +11,7 @@ from mcp import types
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import ResultError, SimulationError
 from ltspice_mcp.lib import now
-from ltspice_mcp.state import SessionState, SimulationJob
+from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
 from ltspice_mcp.tools.simulation import (
     CancelJobInput,
     CheckJobInput,
@@ -269,3 +269,40 @@ class TestRunSimulationStubbed:
                 state_with_sim,
             )
         assert "cancelled" in result.content[0].text.lower()
+
+
+@pytest.mark.asyncio
+class TestCheckJobBatchVisibility:
+    """V7-P1-3: check_job must resolve/list batch (sweep/MC) jobs, not just sims."""
+
+    async def test_check_job_resolves_batch_job(self, state_with_sim: SessionState):
+        bj = BatchJob(
+            job_id="mc_x",
+            job_type="montecarlo",
+            netlist=Path("/tmp/x.cir"),
+            total_runs=6,
+            completed_runs=6,
+            status="completed",
+        )
+        state_with_sim.add_batch_job(bj)
+        result = await handle_check_job(CheckJobInput(job_id="mc_x"), state_with_sim)
+        text = _text_of(result)
+        assert "mc_x" in text
+        assert "montecarlo" in text
+        assert "not found" not in text.lower()
+        assert result.structuredContent is not None
+        assert result.structuredContent["job_type"] == "montecarlo"
+
+    async def test_list_jobs_includes_batch(self, state_with_sim: SessionState):
+        bj = BatchJob(
+            job_id="sweep_y",
+            job_type="sweep",
+            netlist=Path("/tmp/y.cir"),
+            total_runs=4,
+            completed_runs=4,
+            status="completed",
+        )
+        state_with_sim.add_batch_job(bj)
+        result = await handle_check_job(CheckJobInput(status="all"), state_with_sim)
+        ids = [j["job_id"] for j in result.structuredContent["jobs"]]
+        assert "sweep_y" in ids
