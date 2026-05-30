@@ -110,16 +110,14 @@ class TestSchemaVersion:
         assert on_disk["schema"] == recent.SCHEMA
         assert on_disk["schema_version"] == recent.SCHEMA_VERSION
 
-    def test_read_accepts_legacy_versionless_file(self, recent_home: Path, tmp_path: Path) -> None:
+    def test_read_rejects_versionless_file(self, recent_home: Path, tmp_path: Path) -> None:
         recent_home.mkdir(parents=True, exist_ok=True)
         circuit = tmp_path / "rc.cir"
         circuit.write_text("")
         (recent_home / "recent.json").write_text(
             json.dumps({"circuits": [{"path": str(circuit.resolve()), "last_touched": None}]})
         )
-        entries = recent.load()
-        assert len(entries) == 1
-        assert entries[0]["path"] == str(circuit.resolve())
+        assert recent.load() == []
 
     def test_read_rejects_future_version(self, recent_home: Path) -> None:
         recent_home.mkdir(parents=True, exist_ok=True)

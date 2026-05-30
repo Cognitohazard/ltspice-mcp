@@ -16,6 +16,7 @@ from spicelib import SpiceEditor
 
 from ltspice_mcp.errors import BatchJobError
 from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.format import format_spice_value
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_types import BatchJob
 from ltspice_mcp.lib.montecarlo import (
@@ -27,7 +28,6 @@ from ltspice_mcp.lib.montecarlo import (
     extract_model_card,
     extract_mosfet_instances,
     find_mismatch_rule,
-    format_value,
     parse_model_params,
     parse_param_nominal,
     parse_value,
@@ -328,7 +328,7 @@ class MonteCarloRunner(BatchRunnerBase):
                         spec,
                         stream=f"rcl:{ref}",
                     )
-                    formatted = format_value(perturbed)
+                    formatted = format_spice_value(perturbed)
                     InstanceLine.from_card(inst_card).set_value(formatted)
                     run_params[ref] = formatted
 
@@ -354,7 +354,7 @@ class MonteCarloRunner(BatchRunnerBase):
                         model_view.set_param(p, v)
                     run_perturbations[mt.model_name] = perturbations
                     for p, v in perturbations.items():
-                        run_params[f"{mt.model_name}.{p}"] = format_value(v)
+                        run_params[f"{mt.model_name}.{p}"] = format_spice_value(v)
 
                 # ---- Phase 2: mismatch (per-instance variant models) ----
                 for instance in mosfet_instances:
@@ -390,8 +390,8 @@ class MonteCarloRunner(BatchRunnerBase):
                     inst_card = instance_by_ref.get(instance.ref.lower())
                     if inst_card is not None:
                         InstanceLine.from_card(inst_card).set_model(variant)
-                    run_params[f"{instance.ref}.dvth"] = format_value(deltas["dvth"])
-                    run_params[f"{instance.ref}.dk_over_k"] = format_value(deltas["dk_over_k"])
+                    run_params[f"{instance.ref}.dvth"] = format_spice_value(deltas["dvth"])
+                    run_params[f"{instance.ref}.dk_over_k"] = format_spice_value(deltas["dk_over_k"])
 
                 # ---- Phase 3: .PARAM perturbation ----
                 for pt in param_tolerances:
@@ -403,7 +403,7 @@ class MonteCarloRunner(BatchRunnerBase):
                     param_card = param_by_name.get(pt.name.lower())
                     if param_card is not None:
                         ParamCard.from_card(param_card).set_value(new_value)
-                    run_params[f"PARAM.{pt.name}"] = format_value(new_value)
+                    run_params[f"PARAM.{pt.name}"] = format_spice_value(new_value)
 
                 # Emit once and push the rewritten lines back into the
                 # editor. SpiceEditor expects each entry to be one line
