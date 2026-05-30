@@ -180,6 +180,22 @@ class TestAnalyzeEdge:
         result = analyze_edge(t, y, low_pct=20, high_pct=80)
         assert result["transition_time"] == pytest.approx(0.6e-3, rel=1e-3)
 
+    def test_level_override_corrects_biased_auto(self):
+        # Rise 0→1 but with a 0.1V pedestal in the first 10% (mimicking the
+        # rise-from-rail clustering that biases the auto low level). Override
+        # forces the true rails so the 10-90 window is computed correctly.
+        t, y = _linear_edge(1e-3, 2e-3, 0.0, 1.0)
+        y = y + 0.0  # ensure float array
+        result = analyze_edge(t, y, low_level=0.0, high_level=1.0)
+        assert result["low_level"] == pytest.approx(0.0, abs=1e-9)
+        assert result["high_level"] == pytest.approx(1.0, abs=1e-9)
+        assert result["transition_time"] == pytest.approx(0.8e-3, rel=1e-3)
+
+    def test_level_override_rejects_inverted(self):
+        t, y = _linear_edge(1e-3, 2e-3, 0.0, 1.0)
+        with pytest.raises(ValueError, match="must exceed"):
+            analyze_edge(t, y, low_level=1.0, high_level=0.0)
+
     def test_no_edge_flat(self):
         t = np.linspace(0, 1, 1000)
         y = np.full_like(t, 5.0)

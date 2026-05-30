@@ -262,12 +262,20 @@ def analyze_edge(
     edge_index: int = 0,
     low_pct: float = 10.0,
     high_pct: float = 90.0,
+    low_level: float | None = None,
+    high_level: float | None = None,
 ) -> EdgeMetricsOutput:
     """Compute transition time (rise or fall) and slew rate for one edge.
 
     Levels are estimated from the first/last 10% of the window (NOT global
     min/max — this keeps overshoot/undershoot out of the level estimate).
     Crossings are sub-sample-accurate via linear interpolation.
+
+    ``low_level`` / ``high_level`` override the auto-detected rail levels with
+    absolute values. Use them when the auto estimate is biased — e.g. a
+    rise-from-rail where samples cluster in the fast early ramp pull the
+    first-10% mean off zero (V7-P2-1). Direction is still inferred from the
+    signal, not the overrides.
     """
     if len(t) < 3:
         raise ValueError("Need at least 3 samples to analyze an edge")
@@ -290,8 +298,12 @@ def analyze_edge(
         )
 
     detected_direction = "rising" if end_level > start_level else "falling"
-    low_level = min(start_level, end_level)
-    high_level = max(start_level, end_level)
+    resolved_low = min(start_level, end_level) if low_level is None else float(low_level)
+    resolved_high = max(start_level, end_level) if high_level is None else float(high_level)
+    if resolved_high <= resolved_low:
+        raise ValueError(
+            f"high_level ({resolved_high:.6g}) must exceed low_level ({resolved_low:.6g})"
+        )
 
     if edge == "auto":
         direction = detected_direction
@@ -303,10 +315,10 @@ def analyze_edge(
                 f"transition (start={start_level:.6g}, end={end_level:.6g})"
             )
 
-    level_range = high_level - low_level
-    mid_level = low_level + 0.5 * level_range
-    low_thresh = low_level + (low_pct / 100.0) * level_range
-    high_thresh = low_level + (high_pct / 100.0) * level_range
+    level_range = resolved_high - resolved_low
+    mid_level = resolved_low + 0.5 * level_range
+    low_thresh = resolved_low + (low_pct / 100.0) * level_range
+    high_thresh = resolved_low + (high_pct / 100.0) * level_range
 
     mid_crossings = _interp_crossings(t, y, mid_level, direction=direction)
     if not mid_crossings:
@@ -350,8 +362,8 @@ def analyze_edge(
     return {
         "transition_time": float(transition_time),
         "slew_rate": float(slew_rate),
-        "low_level": float(low_level),
-        "high_level": float(high_level),
+        "low_level": float(resolved_low),
+        "high_level": float(resolved_high),
         "t_low_crossing": float(t_low),
         "t_high_crossing": float(t_high),
         "t_mid_crossing": float(chosen_mid_t),

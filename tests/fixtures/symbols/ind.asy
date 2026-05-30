@@ -1,0 +1,16 @@
+Version 4
+SymbolType CELL
+RECTANGLE Normal -16 -32 16 32
+LINE Normal 0 -32 0 -48
+LINE Normal 0 32 0 48
+WINDOW 0 32 -32 Left 2
+WINDOW 3 32 32 Left 2
+SYMATTR Value ind
+SYMATTR Prefix L
+SYMATTR Description Inductor
+PIN 0 -48 NONE 0
+PINATTR PinName 1
+PINATTR SpiceOrder 1
+PIN 0 48 NONE 0
+PINATTR PinName 2
+PINATTR SpiceOrder 2

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+from mcp import types
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.state import SessionState
@@ -765,11 +766,14 @@ class TestFilterMetricsTool:
             FilterMetricsInput(raw_file=raw_file.name, signal="V(out)"),
             state_no_sim,
         )
+        assert result.structuredContent is not None
         sc = result.structuredContent
         assert sc["filter_type"] == "lowpass"
         assert sc["cutoff_high_hz"] == pytest.approx(1000.0, rel=0.05)
         assert sc["estimated_order"] == 1
-        assert "Filter Metrics" in result.content[0].text
+        item = result.content[0]
+        assert isinstance(item, types.TextContent)
+        assert "Filter Metrics" in item.text
 
     async def test_rejects_transient(self, state_no_sim: SessionState, fake_raw: Path):
         with pytest.raises(ResultError, match="AC analysis"):
@@ -799,6 +803,7 @@ class TestGainAtTool:
             ),
             state_no_sim,
         )
+        assert result.structuredContent is not None
         sc = result.structuredContent
         assert len(sc["points"]) == 3
         # 1-pole LPF at fc should be -3 dB.
@@ -864,6 +869,7 @@ class TestRollOffTool:
             ),
             state_no_sim,
         )
+        assert result.structuredContent is not None
         sc = result.structuredContent
         assert sc["slope_db_per_decade"] == pytest.approx(-20.0, abs=1.0)
         assert sc["nearest_pole_order_estimate"] == 1
@@ -909,6 +915,7 @@ class TestFindCrossingTool:
             ),
             state_no_sim,
         )
+        assert result.structuredContent is not None
         sc = result.structuredContent
         assert len(sc["crossings"]) == 1
         assert sc["crossings"][0]["frequency_hz"] == pytest.approx(1000.0, rel=0.05)

@@ -39,9 +39,10 @@ from ltspice_mcp.lib.raw_parser import safe_magnitude_db as magnitude_db
 _UNWRAP_WARN_STEP_DEG = 90.0
 
 # True half-power point: 20·log10(1/√2) = -3.0103 dB. Use this (not a rounded
-# -3.0) for "−3 dB" cutoff/bandwidth so filter_metrics and the AC summary agree
-# with find_crossing/gain_at, which already use the exact half-power level
-# (V7-IMP-4). The 0.0103 dB difference shifts a 1 kHz RC corner by ~0.24%.
+# -3.0) for "−3 dB" cutoff/bandwidth so bode_metrics(mode='filter') and the AC
+# summary agree with bode_metrics(mode='crossing'/'point'), which already use the
+# exact half-power level (V7-IMP-4). The 0.0103 dB difference shifts a 1 kHz RC
+# corner by ~0.24%.
 HALF_POWER_DB = -3.010299956639812
 
 # Shared type aliases — used by both lib function signatures and the
