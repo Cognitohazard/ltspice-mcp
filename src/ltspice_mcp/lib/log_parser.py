@@ -208,7 +208,7 @@ def parse_step_iterations(
     Empty list if the log has no .step lines (i.e. unstepped run) or
     can't be read.
 
-    Used as a fallback by ``step_get`` when ``.step param NAME`` runs leave
+    Used as a fallback by ``query_value(step_axis=…)`` when ``.step param NAME`` runs leave
     spicelib's ``RawRead.get_steps()`` empty — the parameter→step mapping
     is recorded in the log even when it's absent from the .raw header.
 
@@ -521,7 +521,7 @@ def parse_success_summary(
     summary fields (``range``, ``measurements``, ``fourier``, ``meas_errors``)
     are included alongside the legacy ``sim_type``/``step_count``/``signals``
     fields. Adds ``raw_file``/``log_file`` for downstream tool chains that
-    feed these back into ``simulation_summary``, ``get_measurements``, etc.
+    feed these back into ``simulation_summary``, ``measurement_stats``, etc.
 
     Truncates ``warnings``/``errors`` to ``_MAX_DIAGNOSTICS`` entries with
     the ``*_truncated`` sibling preserved from the prior implementation.

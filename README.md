@@ -154,8 +154,8 @@ If you track the circuit project in git, add to `.gitignore`:
 .ltspice-mcp/
 ```
 
-The global recent-circuits index lives at `~/.ltspice-mcp/recent.json`
-(or `$XDG_STATE_HOME/ltspice-mcp/recent.json` / `$LTSPICE_MCP_HOME/recent.json`).
+The global recent-circuits index lives at `$XDG_STATE_HOME/ltspice-mcp/recent.json`
+(default `~/.local/state/ltspice-mcp/recent.json`), or `$LTSPICE_MCP_HOME/recent.json` if set.
 Set `[state] persist_jobs = false` in `ltspice-mcp.toml` to disable
 persistence entirely.
 
@@ -165,8 +165,8 @@ persistence entirely.
 
 | Profile | Tools | Use case |
 |-|-|-|
-| `full` (default) | All 49 tools | Backwards-compatible default for any MCP client |
-| `agentic` | 33 | **Recommended** when your client supports skill files |
+| `full` (default) | All 48 tools | Any MCP client, automation, or non-agent LLM |
+| `agentic` | 32 | **Recommended** when your client supports skill files |
 
 The **agentic** profile removes netlist-editing wrappers, sweep/MC configuration tools, niche schematic operations, and library session management — work a capable LLM agent can do through direct file editing. It keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, AscEditor-dependent ops, and library search.
 
@@ -190,9 +190,9 @@ Copy the relevant skill into whatever location your MCP client uses for persiste
 
 ## Tools
 
-All 49 tools are prefixed with `ltspice_` to avoid namespace conflicts with other MCP servers. Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) for client auto-approval decisions.
+All 48 tools are prefixed with `ltspice_` to avoid namespace conflicts with other MCP servers. Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) for client auto-approval decisions.
 
-### Circuit editing (20 tools)
+### Circuit editing (22 tools)
 
 Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispatch picks the right editor automatically. Mutating tools that affect schematic topology run a post-op validation pass and return structured warnings (floating pins, dangling net labels, duplicate wire segments) alongside the result.
 
@@ -200,6 +200,7 @@ Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispa
 |-|-|
 | `ltspice_create_netlist` | Create a new netlist from a content string |
 | `ltspice_create_schematic` | Create an empty `.asc` ready for incremental editing |
+| `ltspice_schematic_from_netlist` | Generate an `.asc` from SPICE netlist text — grid-places R/C/L/V/I/D and wires pins by net label |
 | `ltspice_read_circuit` | Read and parse a circuit file (netlist text for `.cir`, schematic layout for `.asc`) |
 | `ltspice_list_components` | List components (optionally filtered by prefix) or look up a single component by reference |
 | `ltspice_set_component_value` | Set one component value, or batch-set many via a `values` dict |
@@ -215,8 +216,9 @@ Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispa
 | `ltspice_component_info` | Get placed component pin positions, bounding box, and attributes |
 | `ltspice_export_netlist` | Export `.asc` to `.net` netlist (shows diff against previous export) |
 | `ltspice_validate_netlist` | Static checks over a netlist or schematic before simulation (rejects known-bad `.MEAS` patterns, missing models, syntax errors) |
+| `ltspice_trace_net` | Report every pin/label/wire on the net at a pin/`net:NAME`/`(x,y)`; flags accidental shorts |
+| `ltspice_reset_schematic` | Revert an `.asc` to its state before the first edit this session (in-memory recovery hatch) |
 | `ltspice_diff_circuit` | Structural diff between two circuit files (added/removed components, value changes, directive changes) |
-| `ltspice_step_get` | Look up a signal at a chosen value of a `.step`/`.DC` sweep axis |
 | `ltspice_apply_schematic_ops` | Apply many `.asc` edits in one transaction (add/move/remove components, connect, label, directive) |
 
 `.asc` schematic editing requires `.asy` symbol files. These are auto-detected on Windows and WSL; override with `[schematic] symbol_paths` in TOML or the `LTSPICE_MCP_SYMBOL_PATHS` env var.
@@ -229,14 +231,14 @@ Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispa
 | `ltspice_check_job` | Check a job's status by ID, or list all jobs |
 | `ltspice_cancel_job` | Cancel a running simulation |
 
-### Analysis (15 tools)
+### Analysis (12 tools)
 
 Scalar and overview tools work on any .raw file; waveform tools reject AC (use the AC-specific tools instead) and AC tools reject transient.
 
 | Tool | Description |
 |-|-|
 | `ltspice_signal_stats` | Signal statistics: min, max, mean, RMS, peak-to-peak (dB/phase for AC) |
-| `ltspice_query_value` | Query a signal's value at a specific time or frequency |
+| `ltspice_query_value` | Query a signal's value at a specific time or frequency; pass `step_axis`+`step_value` to pick a `.step`/`.DC` step by its sweep-axis value |
 | `ltspice_operating_point` | DC operating point: all node voltages and branch currents |
 | `ltspice_simulation_summary` | Full summary: simulation type, signals, measurements, warnings |
 | `ltspice_edge_metrics` | Transient rise/fall time and slew rate for one edge |
@@ -244,12 +246,9 @@ Scalar and overview tools work on any .raw file; waveform tools reject AC (use t
 | `ltspice_timing_between` | Propagation delay between two transient signals on a shared axis |
 | `ltspice_periodic_metrics` | Period, frequency, duty cycle, and jitter for an oscillating signal |
 | `ltspice_measurement_stats` | Aggregate `.MEAS` scalars across a sweep or Monte Carlo run |
-| `ltspice_filter_metrics` | AC filter characterization: type (LPF/HPF/BPF/BSF), cutoffs, ripple, rejection, order |
+| `ltspice_bode_metrics` | AC/Bode analysis by `mode`: `filter` (type/cutoffs/ripple/rejection/order), `slope` (dB/decade), `point` (gain+phase at N freqs), `crossing` (where magnitude/phase crosses a level). `all_steps=true` returns the metric for every `.step` step |
 | `ltspice_stability_metrics` | AC loop-gain stability: all unity-gain / -180° crossings and per-crossing margins |
-| `ltspice_gain_at` | Batch gain + phase at N frequencies with log-axis interpolation |
-| `ltspice_roll_off` | Magnitude slope between two frequencies in dB/decade + dB/octave |
 | `ltspice_resonance` | Detect AC peaks and estimate Q factor + -3 dB bandwidth per peak |
-| `ltspice_find_crossing` | Low-level: find frequencies where magnitude (dB/linear) or phase crosses a level |
 
 ### Parametric analysis (5 tools)
 
