@@ -29,7 +29,7 @@ from ltspice_mcp.lib.log_parser import (
     read_log_text,
 )
 from ltspice_mcp.lib.raw_parser import get_step_count
-from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
+from ltspice_mcp.state import BatchJob, RunRef, SessionState, SimulationJob
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +131,62 @@ def resolve_job(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
     raise ResultError(f"Job not found: {job_id}")
 
 
+def _as_path(p: object) -> Path | None:
+    """Coerce a stored raw/log path to a real Path, treating ""/"." as absent.
+
+    An empty Path coerces to "." which would silently point at the current
+    directory, so those sentinels become None.
+    """
+    if p is None or str(p) in ("", "."):
+        return None
+    return p if isinstance(p, Path) else Path(str(p))
+
+
+def runs_of(job: SimulationJob | BatchJob) -> list[RunRef]:
+    """Project any job into a uniform list of result runs (the read-model seam).
+
+    A single-run job is the degenerate batch-of-one: one ``RunRef`` at index 0.
+    A batch job yields one ``RunRef`` per ``run_results`` entry, ordered by run
+    index. This is the ONLY place that knows the two physical result layouts;
+    extraction routines consume ``RunRef`` and stay job-agnostic.
+    """
+    if isinstance(job, SimulationJob):
+        return [RunRef(0, _as_path(job.raw_file), _as_path(job.log_file), {})]
+    return [
+        RunRef(
+            index=idx,
+            raw_file=_as_path(run.get("raw_file")),
+            log_file=_as_path(run.get("log_file")),
+            params=dict(run.get("params") or {}),
+        )
+        for idx, run in sorted(job.run_results.items())
+    ]
+
+
+def resolve_run(job_id: str, state: SessionState, run_index: int = 0) -> RunRef:
+    """Resolve one run of a COMPLETED job by id + run index (default 0).
+
+    Gates on completion so every job_id-addressed read (resolve_raw_file,
+    query_value/bode_metrics via the read-model) behaves identically — you can't
+    read partial data from a running/failed job through one path while a sibling
+    tool rejects it. A single-run job has exactly one run (index 0). Raises
+    ``ResultError`` for an out-of-range index, listing the indices actually
+    present (batch run indices can be non-contiguous after a mid-batch failure).
+    """
+    job = resolve_job(job_id, state)
+    if job.status != "completed":
+        raise ResultError(f"Job {job_id!r} is not completed (status={job.status!r})")
+    runs = {r.index: r for r in runs_of(job)}
+    if not runs:
+        raise ResultError(f"Job {job_id!r} has no run results")
+    if run_index not in runs:
+        raise ResultError(
+            f"Run index {run_index} out of range for job {job_id!r}; "
+            f"valid indices: {sorted(runs)}"
+        )
+    return runs[run_index]
+
+
 def ngspice_preflight_warnings(netlist_path: Path, simulator_class: type) -> list[str]:
     """Pre-flight check for ngspice-incompatible directives in a base netlist.
 
@@ -172,40 +228,30 @@ def ngspice_preflight_warnings(netlist_path: Path, simulator_class: type) -> lis
     return warnings
 
 
-def _resolve_result_file(job_id: str, state: SessionState, field: str, label: str) -> Path:
-    """Resolve a result file (raw or log) from a simulation or batch job."""
-    job = resolve_job(job_id, state)
+def _resolve_result_file(
+    job_id: str, state: SessionState, field: str, label: str, *, run_index: int = 0
+) -> Path:
+    """Resolve a result file (raw or log) from a completed job's run.
 
-    if isinstance(job, SimulationJob):
-        file_path = getattr(job, field)
-        # Reject missing, None, or empty-string paths — an empty Path coerces
-        # to "." which would silently point at the current directory.
-        if job.status != "completed" or file_path is None or str(file_path) in ("", "."):
-            raise ResultError(
-                f"Job is not completed (status={job.status!r}) or has no {label} file"
-            )
-        return file_path
-
-    batch_job = job
-    if batch_job.status != "completed":
-        raise ResultError(f"Batch job is not completed (status={batch_job.status!r})")
-    if not batch_job.run_results:
-        raise ResultError(f"Batch job {job_id!r} has no run results")
-    first_run = batch_job.run_results[min(batch_job.run_results)]
-    result_file = first_run.get(field)
-    if result_file is None or str(result_file) in ("", "."):
-        raise ResultError(f"Batch job {job_id!r} first run has no {label} file")
-    return Path(result_file) if not isinstance(result_file, Path) else result_file
+    ``run_index`` selects which run (default 0 — the only run for single-run
+    jobs, the first run for a batch). Shares ``resolve_run``'s completion + bounds
+    gate so single and batch jobs behave identically.
+    """
+    run = resolve_run(job_id, state, run_index)
+    file_path = run.raw_file if field == "raw_file" else run.log_file
+    if file_path is None:
+        raise ResultError(f"Job {job_id!r} run {run_index} has no {label} file")
+    return file_path
 
 
-def resolve_raw_file(job_id: str, state: SessionState) -> Path:
-    """Get the raw result file for a completed simulation or batch job."""
-    return _resolve_result_file(job_id, state, "raw_file", "raw")
+def resolve_raw_file(job_id: str, state: SessionState, run_index: int = 0) -> Path:
+    """Get the raw result file for a completed simulation or batch job run."""
+    return _resolve_result_file(job_id, state, "raw_file", "raw", run_index=run_index)
 
 
-def resolve_log_file(job_id: str, state: SessionState) -> Path:
-    """Get the log file for a completed simulation or batch job."""
-    return _resolve_result_file(job_id, state, "log_file", "log")
+def resolve_log_file(job_id: str, state: SessionState, run_index: int = 0) -> Path:
+    """Get the log file for a completed simulation or batch job run."""
+    return _resolve_result_file(job_id, state, "log_file", "log", run_index=run_index)
 
 
 def load_raw(raw_path: Path, state: SessionState) -> RawRead:
@@ -507,10 +553,8 @@ def get_batch_signal_data(
         "total_matching": total_matching,
         "total_available": len(batch_job.run_results),
         "stats": batch_stats["stats"],
-        "worst_case_run": batch_stats["worst_case_run"],
-        "best_case_run": batch_stats["best_case_run"],
-        "max_case_run": batch_stats["worst_case_run"],
-        "min_case_run": batch_stats["best_case_run"],
+        "max_case_run": batch_stats["max_case_run"],
+        "min_case_run": batch_stats["min_case_run"],
     }
     if convergence:
         out["convergence_warnings"] = convergence
