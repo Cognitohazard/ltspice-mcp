@@ -283,13 +283,6 @@ class ElementSpec:
             return "params_only"
         return self.default_kind
 
-    @property
-    def value_in_params(self) -> bool:
-        # Back-compat: callers used to test this for unconditional
-        # params_only. Now true only when ``default_kind`` is
-        # ``params_only`` (no positional alternative exists).
-        return self.default_kind == "params_only"
-
 
 ELEMENT_SPECS: dict[str, ElementSpec] = {
     # Model-bearing devices.
@@ -316,9 +309,6 @@ ELEMENT_SPECS: dict[str, ElementSpec] = {
 }
 
 _DEFAULT_ELEMENT_SPEC = ElementSpec(default_kind="model", min_nodes=0)
-
-# Backward-compatible alias for callers that just want the min-node table.
-MIN_NODES: dict[str, int] = {p: s.min_nodes for p, s in ELEMENT_SPECS.items()}
 
 
 @dataclass

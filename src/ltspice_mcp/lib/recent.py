@@ -5,10 +5,8 @@ surface prior work no matter which project it was started in. Resolution
 order (first match wins):
 
 1. ``$LTSPICE_MCP_HOME/recent.json`` (tests and explicit overrides).
-2. ``~/.ltspice-mcp/recent.json`` if it already exists (legacy, pinned
-   so users don't lose history when ``XDG_STATE_HOME`` is set later).
-3. ``$XDG_STATE_HOME/ltspice-mcp/recent.json`` (XDG Base Directory).
-4. ``~/.ltspice-mcp/recent.json`` (fresh install default).
+2. ``$XDG_STATE_HOME/ltspice-mcp/recent.json`` (XDG Base Directory).
+3. ``~/.local/state/ltspice-mcp/recent.json`` (XDG default base).
 
 Writes are serialised across processes via ``file_lock`` — parallel MCP
 sessions sharing a machine won't lose entries to read-modify-write races.
@@ -30,12 +28,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CAP = 20
 INDEX_FILENAME = "recent.json"
-_LEGACY_HOME = ".ltspice-mcp"
 
 SCHEMA = "ltspice-mcp/recent"
 SCHEMA_VERSION = 1
-# Versions this build can READ. Files without a version (legacy, pre-schema)
-# are accepted as v1 since the shape has been stable.
+# Versions this build can READ. A file must carry a recognised
+# ``schema_version``; anything else is ignored.
 SUPPORTED_VERSIONS: frozenset[int] = frozenset({1})
 
 
@@ -43,20 +40,15 @@ def index_path() -> Path:
     """Resolve the global recent-circuits file path.
 
     See module docstring for the full resolution order. In short: explicit
-    ``$LTSPICE_MCP_HOME`` always wins; otherwise an existing legacy
-    ``~/.ltspice-mcp/recent.json`` is preferred over XDG so history
-    survives when ``XDG_STATE_HOME`` is set after the fact.
+    ``$LTSPICE_MCP_HOME`` always wins; otherwise the XDG state directory
+    (``$XDG_STATE_HOME`` or the ``~/.local/state`` default) is used.
     """
     override = os.getenv("LTSPICE_MCP_HOME")
     if override:
         return Path(override) / INDEX_FILENAME
-    legacy = Path.home() / _LEGACY_HOME / INDEX_FILENAME
-    if legacy.exists():
-        return legacy
     xdg = os.getenv("XDG_STATE_HOME")
-    if xdg:
-        return Path(xdg) / "ltspice-mcp" / INDEX_FILENAME
-    return legacy
+    base = Path(xdg) if xdg else Path.home() / ".local" / "state"
+    return base / "ltspice-mcp" / INDEX_FILENAME
 
 
 def is_circuit_file(path: Path) -> bool:
@@ -75,13 +67,11 @@ def _read_index(path: Path) -> list[dict]:
         return []
     if not isinstance(data, dict):
         return []
-    # Schema check: accept current version, or a versionless legacy file
-    # (shape has been stable). Reject anything from a newer build so we
-    # don't silently drop unknown fields on the next write.
+    # Schema check: require a recognised ``schema_version``. Reject
+    # versionless files and anything from a newer build so we don't
+    # silently drop unknown fields on the next write.
     raw_version = data.get("schema_version")
-    if raw_version is not None and (
-        not isinstance(raw_version, int) or raw_version not in SUPPORTED_VERSIONS
-    ):
+    if not isinstance(raw_version, int) or raw_version not in SUPPORTED_VERSIONS:
         logger.warning(
             "Ignoring recent index %s: unsupported schema_version %r",
             path,
