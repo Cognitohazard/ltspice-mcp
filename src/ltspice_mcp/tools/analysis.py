@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Literal, TypedDict
 
 import numpy as np
+from mcp import types
 from pydantic import Field
 
 from ltspice_mcp.errors import ResultError
@@ -58,6 +59,7 @@ from ltspice_mcp.lib.raw_parser import (
     compute_ac_bandwidth_metrics,
     detect_sim_type,
     extract_operating_point,
+    get_step_count,
     is_ac_analysis,
     is_noise_analysis,
     query_point_value,
@@ -86,6 +88,7 @@ from ltspice_mcp.tools._base import (
     format_response,
     registry,
     safe_path,
+    schema_from_typeddict,
 )
 
 FormatField = Literal["json", "text"] | None
@@ -190,13 +193,74 @@ class SignalStatsInput(ToolInput):
     )
 
 
+def _effective_raw_path(
+    raw_file: str | None, job_id: str | None, run_index: int, state: SessionState
+) -> Path:
+    """Resolve the .raw to analyze from EITHER a user ``raw_file`` OR a job run.
+
+    A user-supplied ``raw_file`` is untrusted input → validated via ``safe_path``.
+    A job run's ``raw_file`` is a server-generated artifact (the same trust model
+    ``batch_results`` uses for ``run_results`` paths), so it is used directly and
+    may legitimately live outside ``allowed_paths`` (e.g. a WSL temp dir). This is
+    what lets a sweep/MC run be analyzed by the same tools as a standalone raw.
+    """
+    # Truthiness, not identity: an empty/whitespace raw_file (StrictModel strips
+    # to "") must count as absent, else it slips past and safe_path("") resolves
+    # to the working dir → a confusing "not a valid .raw" error downstream.
+    if bool(raw_file) == bool(job_id):
+        raise ResultError("Pass exactly one of 'raw_file' or 'job_id'.")
+    if job_id:
+        run = services.resolve_run(job_id, state, run_index)
+        if run.raw_file is None:
+            raise ResultError(f"Run {run_index} of job {job_id!r} has no raw file yet.")
+        return run.raw_file
+    assert raw_file  # truthy per the guard above
+    return safe_path(raw_file, state)
+
+
 class QueryValueInput(ToolInput):
-    raw_file: str = Field(description="Path to .raw result file from simulation")
-    signal: str = Field(description="Signal/trace name (e.g., 'V(out)', 'I(R1)').")
-    at: str = Field(
-        description="Time or frequency to query in SPICE notation (e.g., '1m', '100u', '1G', '2.5k')"
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to .raw result file. Pass this OR ``job_id`` (a job run), not both.",
     )
-    step: int = Field(default=0, description="Step index for .step directives")
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Analyze a specific run of a completed sweep/MC (or single) job instead "
+            "of a raw_file path; pair with ``run_index``. Lets you query a sweep run "
+            "the same way you'd query a standalone raw."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to analyze when ``job_id`` is given (default 0).",
+    )
+    signal: str = Field(description="Signal/trace name (e.g., 'V(out)', 'I(R1)').")
+    at: str | None = Field(
+        default=None,
+        description=(
+            "Time or frequency to query in SPICE notation (e.g., '1m', '100u', "
+            "'1G', '2.5k'). Required unless ``step_axis`` is given (then it picks "
+            "the inner-axis point within the chosen step; optional)."
+        ),
+    )
+    step: int = Field(
+        default=0,
+        description="Step index for .step directives (ignored when ``step_axis`` is used).",
+    )
+    step_axis: str | None = Field(
+        default=None,
+        description=(
+            "Select the step by a .step/.DC sweep-axis VALUE instead of an index: "
+            "the parameter name (e.g. 'temp', 'Rval'). Pair with ``step_value``. "
+            "The nearest step is chosen and flagged with ``exact_match``."
+        ),
+    )
+    step_value: str | None = Field(
+        default=None,
+        description="Target value of ``step_axis`` in SPICE notation (e.g. '27', '1k'). "
+        "Required when ``step_axis`` is given.",
+    )
     format: Literal["json", "text"] | None = Field(
         default=None,
         description="Response format: 'json' for structured data, 'text' for human-readable",
@@ -475,7 +539,15 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
     name="query_value",
     description=(
         "Look up the value of a signal at a specific time point (transient) or "
-        "frequency (AC). Returns the nearest data point without interpolation."
+        "frequency (AC). Returns the nearest data point without interpolation.\n\n"
+        "To pick a step of a .step/.DC sweep by its axis VALUE (rather than a "
+        "raw step index), pass ``step_axis`` + ``step_value`` (e.g. "
+        "step_axis='temp', step_value='27'); ``at`` then selects the inner-axis "
+        "point within that step (optional). AC samples also return "
+        "``magnitude_linear`` alongside ``magnitude_db``/``phase_deg``.\n\n"
+        "To query a run of a completed sweep/MC job, pass ``job_id`` + "
+        "``run_index`` instead of ``raw_file`` — the run is analyzed like any "
+        "standalone raw."
     ),
     input_model=QueryValueInput,
     annotations=RO_ANNOTATIONS,
@@ -484,18 +556,59 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
         "type": "object",
         "properties": {
             "signal": {"type": "string"},
+            # direct (at) path
             "requested_x": {"type": "number"},
             "actual_x": {"type": "number"},
             "value": {"type": "number"},
             "magnitude_db": {"type": "number"},
+            "magnitude_linear": {"type": "number"},
             "phase_deg": {"type": "number"},
+            # step_axis path (delegated to the step lookup); keys are optional
+            "axis": {"type": "string"},
+            "requested_value": {"type": "number"},
+            "actual_value": {"type": "number"},
+            "exact_match": {"type": "boolean"},
+            "step_index": {"type": "integer"},
+            "requested_at": {"type": "number"},
+            "actual_at": {"type": "number"},
+            "warnings": {"type": "array", "items": {"type": "string"}},
         },
     },
 )
 async def handle_query_value(args: QueryValueInput, state: SessionState):
-    """Query signal value at a specific time or frequency."""
-    raw_path = safe_path(args.raw_file, state)
+    """Query signal value at a specific time/frequency, or at a chosen sweep step."""
+    # Step-by-axis-value mode folds in the former step_get tool. It selects a
+    # step WITHIN a single .step raw, so it is raw_file-only — ``job_id`` already
+    # selects the run, so the two selection mechanisms are mutually exclusive.
+    if args.step_axis is not None:
+        if args.job_id is not None:
+            raise ResultError(
+                "query_value: 'step_axis' selects a step of a .step raw and can't be "
+                "combined with 'job_id' (the run is already selected — pass 'at')."
+            )
+        step_raw = args.raw_file
+        if step_raw is None:
+            raise ResultError("query_value: 'step_axis' requires 'raw_file'.")
+        if args.step_value is None:
+            raise ResultError("query_value: 'step_value' is required when 'step_axis' is given.")
+        from ltspice_mcp.tools.circuit import StepGetInput, handle_step_get
+
+        return await handle_step_get(
+            StepGetInput(
+                raw_file=step_raw,
+                axis=args.step_axis,
+                value=args.step_value,
+                signal=args.signal,
+                at=args.at,
+                format=args.format,
+            ),
+            state,
+        )
+
+    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     signal = args.signal
+    if args.at is None:
+        raise ResultError("query_value: 'at' is required (or use step_axis + step_value).")
     at_str = args.at
     step = args.step
     fmt = args.format
@@ -537,7 +650,8 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
             f"Signal: {signal} at {x_unit}={result_data['requested_x']:.6g}",
             f"Requested: {result_data['requested_x']:.6g}",
             f"Nearest point: {result_data['actual_x']:.6g}",
-            f"Magnitude: {result_data['magnitude_db']:.2f} dB",
+            f"Magnitude: {result_data['magnitude_db']:.2f} dB "
+            f"({result_data['magnitude_linear']:.6g})",
             f"Phase: {result_data['phase_deg']:.2f} deg",
         ]
     else:
@@ -781,9 +895,13 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
             log_path = derived
 
     raw = services.load_raw(raw_path, state)
+    # Honor ``step`` for the summary itself (range/point_count), not just for
+    # ac_bandwidth_metrics. Validate up front so an out-of-range step errors
+    # clearly instead of being silently ignored.
+    services.validate_step(raw, args.step)
 
     try:
-        summary = build_simulation_summary(raw, log_path, None)
+        summary = build_simulation_summary(raw, log_path, None, step=args.step)
     except Exception as e:
         raise ResultError(f"Failed to build summary: {e}") from e
 
@@ -810,7 +928,6 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
                     "Pass ``signal=`` to choose a different trace."
                 )
         if ac_signal_used:
-            services.validate_step(raw, args.step)
             with contextlib.suppress(Exception):
                 ac_metrics = compute_ac_bandwidth_metrics(raw, ac_signal_used, args.step)
             # On a multi-step run the metric is for one step only; the bare
@@ -944,6 +1061,18 @@ class EdgeMetricsInput(ToolInput):
     )
     low_pct: float = Field(default=10.0, description="Low threshold percent (default 10%)")
     high_pct: float = Field(default=90.0, description="High threshold percent (default 90%)")
+    low_level: float | None = Field(
+        default=None,
+        description=(
+            "Absolute low rail level, overriding auto-detection. Use when the "
+            "auto estimate (mean of first/last 10%) is biased — e.g. a "
+            "rise-from-rail where early samples cluster in the fast ramp."
+        ),
+    )
+    high_level: float | None = Field(
+        default=None,
+        description="Absolute high rail level, overriding auto-detection.",
+    )
     format: FormatField = Field(default=None, description="'json' or 'text'")
 
 
@@ -1127,6 +1256,8 @@ async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
         edge_index=args.edge_index,
         low_pct=args.low_pct,
         high_pct=args.high_pct,
+        low_level=args.low_level,
+        high_level=args.high_level,
     )
     data["signal"] = args.signal
 
@@ -1573,10 +1704,15 @@ def _parse_freq(s: str, name: str = "frequency") -> float:
 
 
 def _load_ac_signal(
-    raw_file: str, signal: str, step: int, state: SessionState
+    raw_file: str | Path, signal: str, step: int, state: SessionState
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Load (freqs, H) for an AC signal. Rejects transient data."""
-    raw_path = safe_path(raw_file, state)
+    """Load (freqs, H) for an AC signal. Rejects transient data.
+
+    A ``Path`` is treated as an already-resolved, trusted artifact (a job run's
+    raw, resolved via the read-model) and loaded directly; a ``str`` is untrusted
+    user input and validated via ``safe_path``.
+    """
+    raw_path = raw_file if isinstance(raw_file, Path) else safe_path(raw_file, state)
     raw = services.load_raw(raw_path, state)
     sim_type = detect_sim_type(raw)
     if not is_ac_analysis(sim_type):
@@ -1598,7 +1734,7 @@ def _load_ac_signal(
 
 
 class FindCrossingInput(ToolInput):
-    raw_file: str = Field(description="Path to AC analysis .raw result file")
+    raw_file: str | Path = Field(description="Path to AC analysis .raw result file")
     signal: str = Field(description="Signal name (e.g. 'V(out)')")
     quantity: Quantity = Field(
         description=(
@@ -1628,7 +1764,7 @@ class FindCrossingInput(ToolInput):
 
 
 class GainAtInput(ToolInput):
-    raw_file: str = Field(description="Path to AC analysis .raw result file")
+    raw_file: str | Path = Field(description="Path to AC analysis .raw result file")
     signal: str = Field(description="Signal name (e.g. 'V(out)')")
     frequencies: list[str] = Field(
         description=(
@@ -1646,7 +1782,7 @@ class GainAtInput(ToolInput):
 
 
 class FilterMetricsInput(ToolInput):
-    raw_file: str = Field(description="Path to AC analysis .raw result file")
+    raw_file: str | Path = Field(description="Path to AC analysis .raw result file")
     signal: str = Field(description="Signal name (e.g. 'V(out)')")
     ref_db: float = Field(
         default=-3.0,
@@ -1690,7 +1826,7 @@ class StabilityMetricsInput(ToolInput):
 
 
 class RollOffInput(ToolInput):
-    raw_file: str = Field(description="Path to AC analysis .raw result file")
+    raw_file: str | Path = Field(description="Path to AC analysis .raw result file")
     signal: str = Field(description="Signal name (e.g. 'V(out)')")
     f_low: str = Field(description="Low frequency bound (SPICE notation)")
     f_high: str = Field(description="High frequency bound (SPICE notation)")
@@ -1766,32 +1902,7 @@ class ResonancesResponse(ResonancesOutput):
 # ---- Handlers -------------------------------------------------------------
 
 
-@registry.tool(
-    name="find_crossing",
-    description=(
-        "Low-level primitive: find all frequencies where a signal's magnitude "
-        "(dB or linear) or phase crosses a given level. This is the escape "
-        "hatch when the opinionated tools (filter_metrics, stability_metrics) "
-        "don't match your question.\n\n"
-        "Examples:\n"
-        "  - 0 dB crossing of V(out) → unity-gain frequency\n"
-        "  - -180° phase crossing → gain margin frequency\n"
-        "  - -20 dB crossing → custom stopband edge\n"
-        "  - -135° phase crossing → 45° phase-margin frequency\n\n"
-        "Log-axis interpolation between sample points. Returns crossings in "
-        "increasing frequency. For phase queries, phase is UNWRAPPED first "
-        "(continuous, no ±180° jumps) — so 'level=-180' really means -180° "
-        "in absolute phase even on systems whose true phase goes past -360°.\n\n"
-        "Use the bundled tools for common questions: filter_metrics "
-        "for -3 dB cutoffs, stability_metrics for all unity-gain and "
-        "-180° crossings with margins, gain_at for point queries "
-        "without a crossing search."
-    ),
-    input_model=FindCrossingInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=FindCrossingResponse,
-)
+# Internal compute adapter — exposed publicly via bode_metrics(mode="crossing").
 async def handle_find_crossing(args: FindCrossingInput, state: SessionState):
     freqs, H = _load_ac_signal(args.raw_file, args.signal, args.step, state)
     f_start = _parse_freq(args.f_start, "f_start") if args.f_start else None
@@ -1837,27 +1948,7 @@ async def handle_find_crossing(args: FindCrossingInput, state: SessionState):
     return format_response("\n".join(lines), data, args.format)
 
 
-@registry.tool(
-    name="gain_at",
-    description=(
-        "Query magnitude (dB + linear) and phase at a list of frequencies. "
-        "Use this instead of calling query_value N times — one "
-        "simulation load, log-axis interpolation, consistent phase handling.\n\n"
-        "Phase is reported wrapped to (-180°, 180°] by default (what you'd "
-        "read off a Bode plot). Set include_unwrapped_phase=true to also "
-        "get the continuous unwrapped phase — useful for phase-margin prep "
-        "or group-delay estimation.\n\n"
-        "Frequencies outside the sweep range are clamped to the nearest "
-        "endpoint and a warning is emitted — don't silently extrapolate.\n\n"
-        "For filter characterization use filter_metrics; for "
-        "stability margins use stability_metrics; for custom "
-        "crossing searches use find_crossing."
-    ),
-    input_model=GainAtInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=GainAtResponse,
-)
+# Internal compute adapter — exposed publicly via bode_metrics(mode="point").
 async def handle_gain_at(args: GainAtInput, state: SessionState):
     if not args.frequencies:
         raise ResultError("frequencies list is empty")
@@ -1898,38 +1989,7 @@ def _parse_freq_pair(pair: list[str] | None, name: str) -> tuple[float, float] |
     return lo, hi
 
 
-@registry.tool(
-    name="filter_metrics",
-    description=(
-        "Characterize a filter response: LPF / HPF / BPF / BSF type, cutoffs, "
-        "passband gain & ripple, stopband rejection, transition bandwidth, "
-        "rough pole-order estimate.\n\n"
-        "Cutoffs are reported at `ref_db` BELOW the passband (not an "
-        "absolute -3 dB gain) — so for a BPF with 20 dB passband gain, "
-        "`ref_db=-3` gives cutoffs at 17 dB absolute, matching datasheet "
-        "conventions. Passband is auto-detected from the flat region near "
-        "the peak (within `flatness_db` of max); override with "
-        "`passband_range`.\n\n"
-        "Classification heuristic: endpoint gain vs peak location. The "
-        "classifier is deliberately conservative — ambiguous sweeps (shallow "
-        "roll-off, lopsided endpoints, sharp under-sampled notches) return "
-        "`filter_type='unknown'` rather than a best guess, and a warning "
-        "spells out what was ambiguous. Notch (BSF) detection requires "
-        "dense sampling near the null; if the minimum sample is flanked by "
-        "points more than a few dB higher, stopband_rejection_db is a "
-        "lower bound only and the tool warns accordingly.\n\n"
-        "Order estimate: measures slope in the ASYMPTOTIC region (1-2 "
-        "decades past cutoff). Returned only when slope is within ±2 dB/dec "
-        "of an integer multiple of 20 dB/dec, else null — reports raw "
-        "slope regardless.\n\n"
-        "For stability / loop-gain questions use stability_metrics; "
-        "for resonant peaks & Q use resonance."
-    ),
-    input_model=FilterMetricsInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=FilterMetricsResponse,
-)
+# Internal compute adapter — exposed publicly via bode_metrics(mode="filter").
 async def handle_filter_metrics(args: FilterMetricsInput, state: SessionState):
     freqs, H = _load_ac_signal(args.raw_file, args.signal, args.step, state)
     pb = _parse_freq_pair(args.passband_range, "passband_range")
@@ -1989,7 +2049,9 @@ async def handle_filter_metrics(args: FilterMetricsInput, state: SessionState):
         "margins on conditionally-stable systems.\n\n"
         "Run this on a LOOP-GAIN signal (typically a dedicated middlebrook "
         "probe or .AC of the open loop). Running on a closed-loop output "
-        "gives meaningless margins.\n\n"
+        "gives meaningless margins — if the DC phase starts near ±180° (a "
+        "closed-loop / inverting output rather than a loop probe, which "
+        "starts near 0°), a warning says so in ``warnings``.\n\n"
         "Returns: dc_gain_db, high_freq_gain_db, stability classification "
         "(stable / unstable / conditional / unconditional / "
         "always_below_unity), all crossings, per-crossing margins, and the "
@@ -2005,8 +2067,8 @@ async def handle_filter_metrics(args: FilterMetricsInput, state: SessionState):
         "(returned as null with stability='always_below_unity').\n"
         "  - Multiple crossovers trigger stability='conditional' and a "
         "warning — each one needs its own review.\n\n"
-        "For -3 dB filter cutoffs use filter_metrics; for custom "
-        "crossings use find_crossing."
+        "For -3 dB filter cutoffs use bode_metrics(mode='filter'); for custom "
+        "crossings use bode_metrics(mode='crossing')."
     ),
     input_model=StabilityMetricsInput,
     annotations=RO_ANNOTATIONS,
@@ -2053,25 +2115,7 @@ async def handle_stability_metrics(args: StabilityMetricsInput, state: SessionSt
     return format_response("\n".join(lines), data, args.format)
 
 
-@registry.tool(
-    name="roll_off",
-    description=(
-        "Magnitude slope between two frequencies, reported in dB/decade and "
-        "dB/octave. Useful for sanity-checking the asymptotic slope of a "
-        "filter's stopband or an amplifier's high-frequency roll-off.\n\n"
-        "Pick the endpoints in the ASYMPTOTIC region (≥1 decade past any "
-        "knee) — measuring across the knee understates the slope. "
-        "A rounded pole-order estimate is returned only when the slope is "
-        "within ±2 dB/dec of an integer multiple of 20 dB/dec; noisy or "
-        "non-asymptotic slopes get a null order and raw slope.\n\n"
-        "For a full filter characterization use filter_metrics; for "
-        "resonance peaks use resonance."
-    ),
-    input_model=RollOffInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=RollOffResponse,
-)
+# Internal compute adapter — exposed publicly via bode_metrics(mode="slope").
 async def handle_roll_off(args: RollOffInput, state: SessionState):
     f_lo = _parse_freq(args.f_low, "f_low")
     f_hi = _parse_freq(args.f_high, "f_high")
@@ -2099,6 +2143,306 @@ async def handle_roll_off(args: RollOffInput, state: SessionState):
     return format_response("\n".join(lines), data, args.format)
 
 
+BodeMode = Literal["filter", "slope", "point", "crossing"]
+
+
+def _bode_output_schema() -> dict:
+    """Union object schema across the four mode shapes for client introspection.
+
+    Merges the per-mode response TypedDicts so the published ``outputSchema``
+    accurately documents every key a mode can return (each is optional — the
+    actual key set depends on ``mode``). Reusing the TypedDicts keeps the
+    mode shapes single-sourced with the internal compute adapters.
+    """
+    merged: dict = {}
+    for td in (FilterMetricsResponse, RollOffResponse, GainAtResponse, FindCrossingResponse):
+        merged.update(schema_from_typeddict(td).get("properties", {}))
+    # all_steps mode wraps per-step results under ``steps``; a step entry is a
+    # mode result plus its ``step`` index (or an ``error`` if that step failed).
+    step_item = {
+        "type": "object",
+        "properties": {
+            **merged,
+            "step": {"type": "integer"},
+            "error": {"type": "string"},
+        },
+    }
+    return {
+        "type": "object",
+        "properties": {
+            **merged,
+            "mode": {"type": "string"},
+            "signal": {"type": "string"},
+            "all_steps": {"type": "boolean"},
+            "step_count": {"type": "integer"},
+            "steps": {"type": "array", "items": step_item},
+            "warnings": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+
+
+class BodeMetricsInput(ToolInput):
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to AC analysis .raw result file. Pass this OR ``job_id``, not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Analyze a specific run of a completed sweep/MC (or single) job instead "
+            "of a raw_file path; pair with ``run_index``. Combine with ``all_steps`` "
+            "to sweep the .step axis WITHIN that run."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to analyze when ``job_id`` is given (default 0).",
+    )
+    signal: str = Field(description="Signal name (e.g. 'V(out)')")
+    mode: BodeMode = Field(
+        description=(
+            "Which view of the AC response to compute:\n"
+            "  'filter'   — LPF/HPF/BPF/BSF type, cutoffs, ripple, rejection "
+            "(args: ref_db, flatness_db, passband_range, stopband_range)\n"
+            "  'slope'    — magnitude slope between two frequencies "
+            "(args: f_low, f_high — both required)\n"
+            "  'point'    — magnitude (dB + linear) and phase at specific "
+            "frequencies (args: frequencies — required; include_unwrapped_phase)\n"
+            "  'crossing' — every frequency where magnitude/phase crosses a "
+            "level (args: quantity + level — required; direction, f_start, "
+            "f_end, max_results, min_separation_decades)"
+        )
+    )
+    step: int = Field(default=0, description="Step index for .step sweeps")
+    all_steps: bool = Field(
+        default=False,
+        description=(
+            "Compute the metric for EVERY step of a stepped (.step) sweep in one "
+            "call, instead of the single `step`. Returns `steps`: a list of "
+            "per-step results (each tagged with its `step` index). A step whose "
+            "computation fails is returned with an `error` field rather than "
+            "aborting the whole call. On a non-stepped raw this returns a single "
+            "entry. Use this for 'give me the cutoff/slope/gain at every step'."
+        ),
+    )
+    # mode="crossing"
+    quantity: Quantity | None = Field(
+        default=None,
+        description="crossing: 'magnitude_db' | 'magnitude_linear' | 'phase_deg'.",
+    )
+    level: float | None = Field(
+        default=None, description="crossing: level to cross, in the units of `quantity`."
+    )
+    direction: SearchDirection = Field(default="any", description="crossing: edge direction.")
+    f_start: str | None = Field(default=None, description="crossing: lower frequency bound.")
+    f_end: str | None = Field(default=None, description="crossing: upper frequency bound.")
+    max_results: int = Field(default=10, description="crossing: cap on returned crossings.")
+    min_separation_decades: float = Field(
+        default=0.0, description="crossing: merge crossings within this many decades."
+    )
+    # mode="point"
+    frequencies: list[str] | None = Field(
+        default=None, description="point: frequencies to query (SPICE notation)."
+    )
+    include_unwrapped_phase: bool = Field(
+        default=False, description="point: also return cumulative unwrapped phase."
+    )
+    # mode="filter"
+    ref_db: float = Field(
+        default=-3.0, description="filter: cutoff reference below passband (dB)."
+    )
+    flatness_db: float = Field(
+        default=1.0, description="filter: passband flatness tolerance (dB)."
+    )
+    passband_range: list[str] | None = Field(
+        default=None, description="filter: optional [f_lo, f_hi] passband override."
+    )
+    stopband_range: list[str] | None = Field(
+        default=None, description="filter: optional [f_lo, f_hi] stopband region."
+    )
+    # mode="slope"
+    f_low: str | None = Field(default=None, description="slope: low frequency bound (required).")
+    f_high: str | None = Field(default=None, description="slope: high frequency bound (required).")
+    format: FormatField = Field(default=None)
+
+
+@registry.tool(
+    name="bode_metrics",
+    description=(
+        "AC / Bode-plot analysis in one tool, selected by `mode`. The response "
+        "shape depends on the mode:\n"
+        "  mode='filter'   — filter type, cutoffs (at `ref_db` below passband), "
+        "passband gain/ripple, stopband rejection, transition BW, pole-order.\n"
+        "  mode='slope'    — magnitude slope (dB/decade + dB/octave) between "
+        "`f_low` and `f_high`; pick endpoints ≥1 decade past any knee.\n"
+        "  mode='point'    — magnitude (dB + linear) and phase at each of "
+        "`frequencies` (log-axis interpolation; out-of-range clamps + warns).\n"
+        "  mode='crossing' — every frequency where `quantity` crosses `level` "
+        "(phase is UNWRAPPED first); the escape hatch for custom queries like "
+        "unity-gain (0 dB) or phase-margin (-180°) frequencies.\n\n"
+        "Pass `all_steps=true` to compute the chosen mode for every step of a "
+        ".step sweep in one call (returns a `steps` list instead of a single "
+        "result) — e.g. the -3 dB cutoff at every value of a stepped component.\n\n"
+        "To analyze a run of a completed sweep/MC job, pass `job_id` + "
+        "`run_index` instead of `raw_file` (combine with `all_steps` to also "
+        "sweep the .step axis within that run).\n\n"
+        "For loop-gain stability margins use stability_metrics; for resonant "
+        "peaks & Q use resonance."
+    ),
+    input_model=BodeMetricsInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_schema=_bode_output_schema(),
+)
+async def handle_bode_metrics(args: BodeMetricsInput, state: SessionState):
+    """Dispatch to the per-mode AC compute adapters (one shared AC load each)."""
+    _validate_bode_mode_args(args)
+    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
+    if not args.all_steps:
+        return await _bode_dispatch(args, args.step, state, raw_path)
+
+    # all_steps: compute the metric for every step of the sweep.
+    raw = services.load_raw(raw_path, state)
+    step_count = get_step_count(raw)
+
+    steps_out: list[dict] = []
+    step_texts: list[str] = []
+    first_error: ResultError | None = None
+    for i in range(step_count):
+        try:
+            res = await _bode_dispatch(args, i, state, raw_path)
+            steps_out.append({"step": i, **_structured(res)})
+            step_texts.append(f"── step {i} ──\n{_result_text(res)}")
+        except ResultError as e:
+            if first_error is None:
+                first_error = e
+            steps_out.append({"step": i, "error": str(e)})
+            step_texts.append(f"── step {i} ── error: {e}")
+
+    errored = [s for s in steps_out if "error" in s]
+    if step_count and len(errored) == step_count and first_error is not None:
+        # Every step failed (e.g. a non-AC raw fed to all_steps) — re-raise the
+        # ORIGINAL error so its show_hint/suggestions survive, instead of a
+        # "success" full of buried per-step errors.
+        raise first_error
+
+    data: dict = {
+        "mode": args.mode,
+        "signal": args.signal,
+        "all_steps": True,
+        "step_count": step_count,
+        "steps": steps_out,
+    }
+    warnings: list[str] = []
+    if step_count == 1:
+        warnings.append("Raw is not stepped (step_count=1); 'steps' has a single entry.")
+    if errored:
+        warnings.append(f"{len(errored)} of {step_count} steps failed (see per-step 'error').")
+    if warnings:
+        data["warnings"] = warnings
+
+    header = [
+        f"bode_metrics(mode={args.mode!r}, all_steps) — {args.signal}",
+        f"Steps: {step_count}",
+        *(f"⚠ {w}" for w in warnings),
+        "",
+    ]
+    return format_response("\n".join(header) + "\n".join(step_texts), data, args.format)
+
+
+def _validate_bode_mode_args(args: BodeMetricsInput) -> None:
+    """Raise for missing per-mode required args. Called once up front so a
+    caller mistake surfaces immediately instead of being swallowed per-step in
+    ``all_steps`` mode."""
+    if args.mode == "crossing" and (args.quantity is None or args.level is None):
+        raise ResultError("bode_metrics mode='crossing' requires 'quantity' and 'level'.")
+    if args.mode == "point" and not args.frequencies:
+        raise ResultError("bode_metrics mode='point' requires 'frequencies'.")
+    if args.mode == "slope" and (args.f_low is None or args.f_high is None):
+        raise ResultError("bode_metrics mode='slope' requires 'f_low' and 'f_high'.")
+
+
+async def _bode_dispatch(
+    args: BodeMetricsInput, step: int, state: SessionState, raw_path: Path
+) -> types.CallToolResult:
+    """Build the per-mode input for ``step`` and dispatch to its compute adapter.
+
+    ``raw_path`` is the already-resolved .raw (from raw_file or a job run) — the
+    adapters load it directly (trusted Path), so a sweep run is analyzed by the
+    same AC machinery as a standalone raw. Assumes ``_validate_bode_mode_args``
+    has already validated required args.
+    """
+    if args.mode == "crossing":
+        assert args.quantity is not None and args.level is not None
+        return await handle_find_crossing(
+            FindCrossingInput(
+                raw_file=raw_path,
+                signal=args.signal,
+                quantity=args.quantity,
+                level=args.level,
+                direction=args.direction,
+                f_start=args.f_start,
+                f_end=args.f_end,
+                max_results=args.max_results,
+                min_separation_decades=args.min_separation_decades,
+                step=step,
+                format=args.format,
+            ),
+            state,
+        )
+    if args.mode == "point":
+        assert args.frequencies
+        return await handle_gain_at(
+            GainAtInput(
+                raw_file=raw_path,
+                signal=args.signal,
+                frequencies=args.frequencies,
+                include_unwrapped_phase=args.include_unwrapped_phase,
+                step=step,
+                format=args.format,
+            ),
+            state,
+        )
+    if args.mode == "filter":
+        return await handle_filter_metrics(
+            FilterMetricsInput(
+                raw_file=raw_path,
+                signal=args.signal,
+                ref_db=args.ref_db,
+                flatness_db=args.flatness_db,
+                passband_range=args.passband_range,
+                stopband_range=args.stopband_range,
+                step=step,
+                format=args.format,
+            ),
+            state,
+        )
+    if args.mode == "slope":
+        assert args.f_low is not None and args.f_high is not None
+        return await handle_roll_off(
+            RollOffInput(
+                raw_file=raw_path,
+                signal=args.signal,
+                f_low=args.f_low,
+                f_high=args.f_high,
+                step=step,
+                format=args.format,
+            ),
+            state,
+        )
+    raise ResultError(f"Unknown bode_metrics mode {args.mode!r}")
+
+
+def _structured(result: types.CallToolResult) -> dict:
+    """structuredContent of an adapter result as a dict (``{}`` if absent)."""
+    return dict(result.structuredContent) if result.structuredContent else {}
+
+
+def _result_text(result: types.CallToolResult) -> str:
+    block = result.content[0] if result.content else None
+    return block.text if isinstance(block, types.TextContent) else ""
+
+
 @registry.tool(
     name="resonance",
     description=(
@@ -2113,7 +2457,7 @@ async def handle_roll_off(args: RollOffInput, state: SessionState):
         "passband (which isn't a resonance). Tight resonances (Q > 30) "
         "need dense sampling near f_peak — log sweeps with <50 pts/decade "
         "will under-sample the peak and give inflated Q/bandwidth.\n\n"
-        "For overall filter characterization use filter_metrics; "
+        "For overall filter characterization use bode_metrics(mode='filter'); "
         "for stability margins use stability_metrics."
     ),
     input_model=ResonanceInput,
