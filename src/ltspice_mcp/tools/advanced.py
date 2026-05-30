@@ -922,8 +922,8 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
                     "median_across_runs": {"type": ["number", "null"]},
                 },
             },
-            "worst_case_run": {"type": ["integer", "null"]},
-            "best_case_run": {"type": ["integer", "null"]},
+            "max_case_run": {"type": ["integer", "null"]},
+            "min_case_run": {"type": ["integer", "null"]},
             "runs": {"type": "array", "items": {"type": "object"}},
             "pagination": PAGINATION_SCHEMA,
             "convergence_warnings": {
@@ -1087,21 +1087,21 @@ def _format_batch_aggregate_text(data: dict, batch_job: BatchJob) -> str:
         f"  Median: {_fmt(stats['median_across_runs'])}",
     ]
 
-    worst_run = data["worst_case_run"]
-    if worst_run is not None:
-        worst_params = batch_job.run_results[worst_run].get("params", {})
+    max_run = data["max_case_run"]
+    if max_run is not None:
+        max_params = batch_job.run_results[max_run].get("params", {})
         params_str = (
-            ", ".join(f"{k}={v}" for k, v in worst_params.items()) if worst_params else "no params"
+            ", ".join(f"{k}={v}" for k, v in max_params.items()) if max_params else "no params"
         )
-        lines.append(f"\nWorst-case run: #{worst_run} ({params_str})")
+        lines.append(f"\nHighest-peak run: #{max_run} ({params_str})")
 
-    best_run = data["best_case_run"]
-    if best_run is not None:
-        best_params = batch_job.run_results[best_run].get("params", {})
+    min_run = data["min_case_run"]
+    if min_run is not None:
+        min_params = batch_job.run_results[min_run].get("params", {})
         params_str = (
-            ", ".join(f"{k}={v}" for k, v in best_params.items()) if best_params else "no params"
+            ", ".join(f"{k}={v}" for k, v in min_params.items()) if min_params else "no params"
         )
-        lines.append(f"Best-case run:  #{best_run} ({params_str})")
+        lines.append(f"Lowest-peak run:  #{min_run} ({params_str})")
 
     return "\n".join(lines)
 

@@ -122,7 +122,7 @@ class TestResolveResultFile:
 
     def test_batch_first_run_missing_field(self, state_no_sim: SessionState):
         _make_batch(state_no_sim, run_results={0: {"params": {}}})
-        with pytest.raises(ResultError, match="first run"):
+        with pytest.raises(ResultError, match="no raw file"):
             services.resolve_raw_file("b1", state_no_sim)
 
     def test_batch_first_run_present(self, state_no_sim: SessionState, tmp_path: Path):

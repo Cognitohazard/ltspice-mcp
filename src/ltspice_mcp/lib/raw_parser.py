@@ -142,12 +142,16 @@ def nearest_index(axis: np.ndarray, target: float) -> int:
 def sample_to_dict(sample: complex | float | np.generic) -> dict[str, float]:
     """Convert a wave sample to a JSON-friendly dict.
 
-    Complex AC samples emit ``magnitude_db`` + ``phase_deg`` (with the same
-    zero-floor as :func:`safe_magnitude_db`); real samples emit ``value``.
+    Complex AC samples emit ``magnitude_db`` + ``magnitude_linear`` +
+    ``phase_deg`` (dB uses the same zero-floor as :func:`safe_magnitude_db`;
+    ``magnitude_linear`` is the absolute |value| for currents/ratios where dB
+    is awkward, matching ``bode_metrics(mode='point'/'crossing')``). Real
+    samples emit ``value``.
     """
     if np.iscomplexobj(sample):
         return {
             "magnitude_db": float(safe_magnitude_db(np.asarray([sample]))[0]),
+            "magnitude_linear": float(np.abs(complex(sample))),  # type: ignore[arg-type]
             "phase_deg": float(np.angle(complex(sample), deg=True)),  # type: ignore[arg-type]
         }
     return {"value": float(np.real(sample))}
@@ -291,7 +295,7 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
 
 
 def build_simulation_summary(
-    raw: RawRead, log_path: Path | None, duration: float | None = None
+    raw: RawRead, log_path: Path | None, duration: float | None = None, *, step: int = 0
 ) -> dict:
     """Build comprehensive, type-aware simulation summary.
 
@@ -299,6 +303,9 @@ def build_simulation_summary(
         raw: Loaded RawRead instance
         log_path: Optional path to .log file for measurements/warnings
         duration: Optional simulation duration in seconds
+        step: Which .step iteration to summarize (axis/range/point_count).
+            Defaults to 0. Callers exposing a step (simulation_summary) thread
+            it through so the range reflects the chosen step, not always step 0.
 
     Returns:
         Dictionary with sim_type, range info, signals, point_count, step_count,
@@ -314,7 +321,7 @@ def build_simulation_summary(
     # case (no range, no point_count beyond step_count) instead of aborting
     # the whole summary.
     try:
-        axis = raw.get_axis(step=0)
+        axis = raw.get_axis(step=step)
         point_count = len(axis)
         has_axis = True
     except Exception:

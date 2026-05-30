@@ -22,6 +22,7 @@ from ltspice_mcp.lib.job_types import (
     TERMINAL_STATUSES,
     BatchJob,
     MonteCarloConfig,
+    RunRef,
     SimulationJob,
     SweepConfig,
     SweepDimension,
@@ -42,6 +43,7 @@ __all__ = [
     "TERMINAL_STATUSES",
     "BatchJob",
     "MonteCarloConfig",
+    "RunRef",
     "SessionState",
     "SimulationJob",
     "SweepConfig",
@@ -92,6 +94,10 @@ class SessionState:
     visible to the client instead of buried in the server log."""
     _touched_recent: set[Path] = field(default_factory=set, repr=False)
     """Resolved circuit paths already recorded in the recent-circuits index this session."""
+    asc_snapshots: dict[str, bytes] = field(default_factory=dict, repr=False)
+    """Pre-first-edit byte snapshots of .asc schematics touched this session,
+    keyed by resolved path string. Captured before the first in-session
+    mutation; backs ``reset_schematic`` (revert to last good state)."""
 
     @property
     def raw_dialect(self) -> str | None:
@@ -198,5 +204,6 @@ class SessionState:
         """Clean up session resources at server shutdown."""
         self.editors.clear()
         self.results.clear()
+        self.asc_snapshots.clear()
         await self.job_registry.cancel_running(self.runners, self)
         await self.job_registry.drain_pending()

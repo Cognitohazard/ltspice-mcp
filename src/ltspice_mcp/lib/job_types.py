@@ -116,6 +116,28 @@ class MonteCarloConfig:
     param_tolerances: list = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class RunRef:
+    """One result run, the unit of the unified single-run/batch result model.
+
+    A ``SimulationJob`` projects to exactly one ``RunRef`` (index 0 — the
+    "batch of one"); a ``BatchJob`` projects to one per ``run_results`` entry.
+    Result-extraction routines consume ``RunRef`` so they stay job-agnostic
+    instead of branching on the job type. Built by ``services.runs_of``.
+
+    Attributes:
+        index: 0-based run index (always 0 for a single run).
+        raw_file: Path to this run's .raw, or None if not produced.
+        log_file: Path to this run's .log, or None if not produced.
+        params: Per-run parameter values (empty for a single run).
+    """
+
+    index: int
+    raw_file: Path | None
+    log_file: Path | None
+    params: dict[str, str] = field(default_factory=dict)
+
+
 @dataclass
 class BatchJob:
     """Track state of a running or completed batch simulation job.
