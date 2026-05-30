@@ -98,7 +98,7 @@ class TestComputeBatchStats:
         result = compute_batch_stats({}, "V(out)")
         assert result["run_count"] == 0
         assert result["stats"]["max_across_runs"] is None
-        assert result["worst_case_run"] is None
+        assert result["max_case_run"] is None
 
     def test_stats_missing_raw_files(self):
         runs = {

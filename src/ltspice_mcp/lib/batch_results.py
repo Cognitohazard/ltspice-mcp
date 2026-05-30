@@ -58,8 +58,8 @@ def compute_batch_stats(
             run_count: int — number of runs with results
             runs: list[dict] — per-run summary with run_index, params, and scalars
             stats: dict — aggregate min/max/mean/std/median across runs
-            worst_case_run: int | None — run with highest peak absolute value
-            best_case_run: int | None — run with lowest peak absolute value
+            max_case_run: int | None — run with highest peak absolute value
+            min_case_run: int | None — run with lowest peak absolute value
             at: float | None — echo of the slicing point (for downstream display)
     """
     per_run_summaries = []
@@ -149,8 +149,8 @@ def compute_batch_stats(
             "std_across_runs": float(np.std(peaks_arr)),
             "median_across_runs": float(np.median(peaks_arr)),
         }
-        worst_case_run = per_run_summaries[int(np.argmax(peaks_arr))]["run_index"]
-        best_case_run = per_run_summaries[int(np.argmin(peaks_arr))]["run_index"]
+        max_case_run = per_run_summaries[int(np.argmax(peaks_arr))]["run_index"]
+        min_case_run = per_run_summaries[int(np.argmin(peaks_arr))]["run_index"]
     else:
         stats = {
             "max_across_runs": None,
@@ -159,8 +159,8 @@ def compute_batch_stats(
             "std_across_runs": None,
             "median_across_runs": None,
         }
-        worst_case_run = None
-        best_case_run = None
+        max_case_run = None
+        min_case_run = None
 
     return {
         "signal": signal,
@@ -168,14 +168,11 @@ def compute_batch_stats(
         "run_count": len(per_run_summaries),
         "runs": per_run_summaries,
         "stats": stats,
-        # "worst"/"best" assume larger-peak = worse, which has no inherent
-        # meaning for an arbitrary signal (e.g. a passband magnitude). Expose
-        # neutral max/min aliases too so callers aren't misled (NGv7-FR-7);
-        # the worst/best keys are kept for backward compatibility.
-        "worst_case_run": worst_case_run,
-        "best_case_run": best_case_run,
-        "max_case_run": worst_case_run,
-        "min_case_run": best_case_run,
+        # Neutral naming: "worst"/"best" would assume larger-peak = worse,
+        # which has no inherent meaning for an arbitrary signal (e.g. a
+        # passband magnitude) (NGv7-FR-7).
+        "max_case_run": max_case_run,
+        "min_case_run": min_case_run,
     }
 
 

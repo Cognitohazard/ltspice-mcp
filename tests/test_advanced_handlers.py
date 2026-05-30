@@ -378,13 +378,13 @@ class TestFormatBatchTextHelpers:
                 "std_across_runs": 1.0,
                 "median_across_runs": 3.0,
             },
-            "worst_case_run": 0,
-            "best_case_run": 1,
+            "max_case_run": 0,
+            "min_case_run": 1,
         }
         text = _format_batch_aggregate_text(data, bj)
         assert "V(out)" in text
-        assert "Worst-case" in text
-        assert "Best-case" in text
+        assert "Highest-peak" in text
+        assert "Lowest-peak" in text
 
     def test_raw_text(self):
         from ltspice_mcp.tools.advanced import _format_batch_raw_text
