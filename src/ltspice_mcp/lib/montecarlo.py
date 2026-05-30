@@ -39,7 +39,7 @@ import random
 from dataclasses import dataclass
 from typing import Literal
 
-from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
+from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
     TokenKind,
     emit,
@@ -103,8 +103,8 @@ class MCSampler:
     seed and a string key (sha256-based, stable across Python versions).
 
     Pass ``stream`` to ``sample`` / ``sample_offset`` to draw from a
-    specific stream; omit it to use the default ``"_default"`` stream
-    (preserves legacy single-stream behaviour for code that doesn't care).
+    specific stream; omit it to use the shared ``"_default"`` stream
+    (the single-stream path for callers that don't need isolation).
 
     Truncation
     ----------
@@ -117,10 +117,8 @@ class MCSampler:
 
     def __init__(self, seed: int | None = None):
         self._seed = seed
-        # Default stream — used when callers don't pass an explicit key.
-        # Backward-compatible with the previous single-RNG behaviour
-        # (sample(..., stream="_default") matches sample(...) of the old code
-        # for a given seed and call ordering).
+        # Per-key sub-streams, created lazily by ``stream()``. Callers that
+        # don't pass an explicit key share the ``"_default"`` stream.
         self._streams: dict[str, random.Random] = {}
 
     def stream(self, key: str = "_default") -> random.Random:
@@ -694,12 +692,3 @@ def parse_value(value: str | float) -> float | None:
         return parse_spice_value(s)
     except ValueError:
         return None
-
-
-def format_value(value: float) -> str:
-    """Format a perturbed float back to a SPICE-compatible literal.
-
-    Thin wrapper around ``format_spice_value`` kept as a public alias —
-    several callers import ``format_value`` from this module by name.
-    """
-    return format_spice_value(value)
