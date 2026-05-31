@@ -391,7 +391,9 @@ class MonteCarloRunner(BatchRunnerBase):
                     if inst_card is not None:
                         InstanceLine.from_card(inst_card).set_model(variant)
                     run_params[f"{instance.ref}.dvth"] = format_spice_value(deltas["dvth"])
-                    run_params[f"{instance.ref}.dk_over_k"] = format_spice_value(deltas["dk_over_k"])
+                    run_params[f"{instance.ref}.dk_over_k"] = format_spice_value(
+                        deltas["dk_over_k"]
+                    )
 
                 # ---- Phase 3: .PARAM perturbation ----
                 for pt in param_tolerances:

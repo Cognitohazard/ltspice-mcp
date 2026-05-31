@@ -175,9 +175,7 @@ def _stepped_tran_raw() -> MagicMock:
 
 @pytest.mark.asyncio
 class TestSimulationSummaryStepAware:
-    async def test_summary_reflects_chosen_step(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
+    async def test_summary_reflects_chosen_step(self, state_no_sim: SessionState, work_dir: Path):
         # Seam 3: build_simulation_summary used to hardcode step 0, so the range
         # was always step 0's. It must now reflect args.step.
         path = work_dir / "stepped.raw"
@@ -255,9 +253,7 @@ class TestQueryValueJobRun:
 
     async def test_neither_raw_nor_job(self, state_no_sim: SessionState):
         with pytest.raises(ResultError, match="exactly one"):
-            await handle_query_value(
-                QueryValueInput(signal="V(out)", at="1"), state_no_sim
-            )
+            await handle_query_value(QueryValueInput(signal="V(out)", at="1"), state_no_sim)
 
     async def test_step_axis_with_job_id_rejected(self, state_no_sim: SessionState):
         with pytest.raises(ResultError, match="can't be combined with 'job_id'"):
@@ -321,9 +317,7 @@ class TestResolveRunStatusGate:
         with pytest.raises(ResultError, match="not completed"):
             services.resolve_run("b1", state_no_sim, 0)
 
-    def test_noncontiguous_range_message_lists_actual_indices(
-        self, state_no_sim: SessionState
-    ):
+    def test_noncontiguous_range_message_lists_actual_indices(self, state_no_sim: SessionState):
         # After a mid-batch failure run_results can be non-contiguous (gap at 2).
         # The error must list the indices actually present, not "0..3".
         _batch(
@@ -359,9 +353,7 @@ class TestEmptyRawFileGuard:
                 BodeMetricsInput(raw_file="", signal="V(out)", mode="filter"), state_no_sim
             )
 
-    async def test_query_value_job_id_on_running_batch_rejected(
-        self, state_no_sim: SessionState
-    ):
+    async def test_query_value_job_id_on_running_batch_rejected(self, state_no_sim: SessionState):
         _batch(state_no_sim, {0: {"raw_file": "/tmp/r0.raw", "params": {}}}, status="running")
         with pytest.raises(ResultError, match="not completed"):
             await handle_query_value(

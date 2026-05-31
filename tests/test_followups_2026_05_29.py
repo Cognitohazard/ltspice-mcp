@@ -802,9 +802,7 @@ class TestResetSchematic:
             SchematicFromNetlistInput(name="synth_reset", content=RC_NETLIST, overwrite=True),
             asc_state,
         )
-        res = await handle_reset_schematic(
-            ResetSchematicInput(path="synth_reset.asc"), asc_state
-        )
+        res = await handle_reset_schematic(ResetSchematicInput(path="synth_reset.asc"), asc_state)
         assert res.structuredContent is not None
         assert res.structuredContent["reverted"] is False
 
