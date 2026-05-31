@@ -25,6 +25,7 @@ dependencies = [
     "mcp[cli]>=1.27.0,<2.0",
     "rapidfuzz>=3.0,<4.0",
     "spicelib>=1.4.9,<2.0",
+    "starlette>=1.0.1,<2.0",
     "tomlkit>=0.14.0,<1.0",
 ]
 
@@ -99,4 +100,4 @@ known-first-party = ["ltspice_mcp"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--strict-markers --tb=short --cov=ltspice_mcp --cov-fail-under=80 -n auto"
+addopts = "--strict-markers --tb=short --cov=ltspice_mcp --cov-fail-under=80"

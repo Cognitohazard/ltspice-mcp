@@ -181,8 +181,7 @@ def resolve_run(job_id: str, state: SessionState, run_index: int = 0) -> RunRef:
         raise ResultError(f"Job {job_id!r} has no run results")
     if run_index not in runs:
         raise ResultError(
-            f"Run index {run_index} out of range for job {job_id!r}; "
-            f"valid indices: {sorted(runs)}"
+            f"Run index {run_index} out of range for job {job_id!r}; valid indices: {sorted(runs)}"
         )
     return runs[run_index]
 
