@@ -2,7 +2,7 @@
 
 The shared tokenizer + typed-card library underneath every netlist-touching
 helper in the codebase. Replaces hand-rolled regex passes with a single
-parser that handles SPICE corner cases (quoted model names, balanced
+parser that handles SPICE corner cases (quoted tokens, balanced
 brace expressions, scoped `.SUBCKT` blocks, inline `;`/`$` comments) once.
 
 This document describes the architecture as built. For the migration
@@ -180,10 +180,10 @@ raw strings — so Layer 2 views never re-parse character classes.
 ```python
 class TokenKind(Enum):
     BARE          # identifier or numeric literal (R1, NMOS_lvt, 10u, 0.7)
-    QUOTED        # "NMOS lvt" — single token, quotes preserved in raw
+    QUOTED        # "NMOS_lvt" — single token, quotes preserved in raw
     BRACED        # {2*max(kp_n, kp_min)} — single token, balanced
     PARENED       # (VTO=0.7 KP=100u) — single token, balanced
-    KEY_VALUE     # W=10u, KP={2*kp_n}, MODEL="NMOS lvt" — split on first =
+    KEY_VALUE     # W=10u, KP={2*kp_n}, MODEL="NMOS_lvt" — split on first =
     EQUALS        # standalone = (whitespace-around-equals form)
     COMMENT_TRAIL # ;... or $... to end of body, preserved verbatim
 

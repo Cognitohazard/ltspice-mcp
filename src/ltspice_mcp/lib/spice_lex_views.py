@@ -24,6 +24,7 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceLexErrorCategory,
     Token,
     TokenKind,
+    _strip_matching_quotes,
     tokenize_body,
 )
 
@@ -77,8 +78,8 @@ class ModelCard:
         if len(tokens) < 3:
             raise _malformed(card, "malformed .MODEL card")
         # tokens[0] is ".MODEL" (BARE), tokens[1] is name, tokens[2] is type.
-        name = tokens[1].text.strip('"')
-        type_ = tokens[2].text.strip('"')
+        name = _strip_matching_quotes(tokens[1].text)
+        type_ = _strip_matching_quotes(tokens[2].text)
         params: dict[str, str] = {}
         param_tokens: dict[str, Token] = {}
         # Params can come as a single PARENED group or as a sequence of
@@ -340,6 +341,7 @@ class InstanceLine:
     params: dict[str, str] = field(default_factory=dict)
     _model_token: Token | None = None
     _param_tokens: dict[str, Token] = field(default_factory=dict)
+    _value_param_key: str | None = None
 
     @classmethod
     def from_card(cls, card: SpiceCard) -> InstanceLine:
@@ -401,6 +403,19 @@ class InstanceLine:
                 elif tok.kind == TokenKind.COMMENT_TRAIL:
                     break
 
+        value_param_key: str | None = None
+        if kind == "value" and prefix in ("R", "C", "L"):
+            value_param_key = next(
+                (key for key in params if key.upper() == prefix),
+                None,
+            )
+            if value_param_key is not None:
+                # Keyed primary-value form: ``R1 a b R=1k``. All
+                # positionals are nodes; the value lives in the matching
+                # KEY_VALUE token and must be edited through set_param.
+                nodes = [t.text for t in positional]
+                value = params[value_param_key]
+
         return cls(
             card=card,
             ref=ref,
@@ -410,6 +425,7 @@ class InstanceLine:
             params=params,
             _model_token=model_token,
             _param_tokens=param_tokens,
+            _value_param_key=value_param_key,
         )
 
     def set_model(self, name: str) -> None:
@@ -421,6 +437,9 @@ class InstanceLine:
         """Replace the value token (for R/C/L/V/I)."""
         new = _format_value(value)
         self.value = new
+        if self._value_param_key is not None:
+            self.set_param(self._value_param_key, new)
+            return
         self._update_slot_in_place(new)
 
     def set_param(self, key: str, value: float | str) -> None:
@@ -507,7 +526,7 @@ class InstanceLine:
         parts = [self.ref, *self.nodes]
         if self.model is not None:
             parts.append(self.model)
-        elif self.value is not None:
+        elif self.value is not None and self._value_param_key is None:
             parts.append(self.value)
         for k, v in self.params.items():
             parts.append(f"{k}={v}")
@@ -535,10 +554,8 @@ class InstanceLine:
 
 def body_has_stray_kv_remnant(body: str) -> bool:
     """True iff the body's KV parser left orphan tokens after the first
-    KEY=VALUE — typically a function-call expression where whitespace
-    around ``=`` made the lexer split mid-value (e.g. ``B1 amp 0 V = if(...)``
-    keeps ``V=if`` and dangles the ``(...)``). Callers surface ``<unparseable>``
-    rather than render the truncated form."""
+    KEY=VALUE. Callers surface ``<unparseable>`` rather than render a
+    truncated value."""
     try:
         toks = tokenize_body(body)
     except Exception:

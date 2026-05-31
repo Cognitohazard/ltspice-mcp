@@ -83,6 +83,17 @@ def apply_value_to_instance(card: SpiceCard, raw_value: str) -> ApplyResult:
             f"Component {ref!r} value {raw_value!r} contains an "
             "unrecognised token (stray equals sign or unbalanced quote)."
         )
+    seen_kv = False
+    for tok in user_tokens:
+        if tok.kind == TokenKind.KEY_VALUE:
+            seen_kv = True
+        elif seen_kv and tok.kind in _POSITIONAL_KINDS:
+            raise NetlistError(
+                f"Component {ref!r} value {raw_value!r} contains trailing tokens "
+                "after a KEY=VALUE assignment. Wrap expressions in braces or "
+                "write function-call values without separating the function name "
+                "from its parentheses."
+            )
 
     handler = _DISPATCH.get(prefix)
     if handler is None:

@@ -148,8 +148,8 @@ class TestListComponents:
     async def test_b_source_does_not_crash(self, state_no_sim: SessionState, work_dir: Path):
         """Bug K: a behavioural source whose value has commas inside ``if(...)``
         defeats spicelib's component-line regex. ``list_components`` used to
-        return ``Internal error in ltspice_list_components``; we now degrade
-        the offending component to ``"<unparseable>"`` and finish the listing."""
+        return ``Internal error in ltspice_list_components``; the shared lexer
+        now preserves the full function-call value."""
         cir = work_dir / "with_b.cir"
         cir.write_text(
             "* B-source torture test\n"
@@ -161,12 +161,13 @@ class TestListComponents:
         )
         result = await handle_list_components({"path": cir.name}, state_no_sim)
         text = result.content[0].text
-        # All three components should appear; the B-source's value gets
-        # the unparseable placeholder rather than aborting the whole call.
+        # All three components should appear; the B-source's value is
+        # parsed as a full KEY=VALUE function call rather than truncated.
         assert "R1" in text
         assert "B1" in text
         assert "C1" in text
-        assert "<unparseable>" in text
+        assert "V=if(3.5*V(vp)>10" in text
+        assert "<unparseable>" not in text
 
 
 @pytest.mark.asyncio
@@ -476,7 +477,7 @@ class TestValidateNetlist:
         assert data["issue_count"] >= 1
         assert any("vdb" in iss["directive"] for iss in data["issues"])
 
-    async def test_flags_bsource_with_commas(self, state_no_sim: SessionState, work_dir: Path):
+    async def test_accepts_bsource_with_commas(self, state_no_sim: SessionState, work_dir: Path):
         cir = work_dir / "b.cir"
         cir.write_text(
             "* b-source\n"
@@ -487,7 +488,7 @@ class TestValidateNetlist:
         result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
         data = result.structuredContent
         assert data is not None
-        assert any("Behavioural" in iss["message"] for iss in data["issues"])
+        assert data["issue_count"] == 0
 
     async def test_flags_meas_op_in_tran(self, state_no_sim: SessionState, work_dir: Path):
         """``.meas op`` in a transient run is silently dropped by
