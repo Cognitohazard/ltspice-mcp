@@ -136,12 +136,18 @@ class TestElementArity:
         issues = self._arity("E1 out VALUE={V(in)}\n.end")
         assert any("E1" in str(i["message"]) and "at least 2" in str(i["message"]) for i in issues)
 
-    def test_rcl_keyed_primary_value_form_passes(self):
-        # Codex round-2 M2: ``R1 a b R=1k`` is the keyed primary-value
-        # form. InstanceLine eats "b" as the value slot, leaving
-        # inst.nodes=["a"] — but the SPICE intent is two nodes (a, b).
-        issues = self._arity("R1 a b R=1k\nC1 c d C=10n\nL1 e f L=1u\n.end")
-        assert all(r not in str(i["message"]) for i in issues for r in ("R1", "C1", "L1"))
+    def test_r_keyed_primary_value_form_passes(self):
+        # Real LTspice accepts ``R1 a b R=1k``. InstanceLine treats this
+        # keyed primary value as a value slot, not as a third node.
+        issues = self._arity("R1 a b R=1k\n.end")
+        assert all("R1" not in str(i["message"]) for i in issues)
+
+    def test_c_l_keyed_primary_value_forms_are_ltspice_errors(self):
+        # Real LTspice 26 rejects C=<value> / L=<value> as unknown
+        # parameters even though ngspice accepts them.
+        issues = self._arity("C1 c d C=10n\nL1 e f L=1u\n.end")
+        assert any("C1" in str(i["message"]) and "LTspice" in str(i["message"]) for i in issues)
+        assert any("L1" in str(i["message"]) and "LTspice" in str(i["message"]) for i in issues)
 
     def test_rcl_keyed_form_with_only_one_node_still_flagged(self):
         # Single positional node with the keyed form is still short.

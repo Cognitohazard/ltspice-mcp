@@ -552,7 +552,7 @@ def rewrite_instance_model(
     The instance line is matched by reference (case-insensitive).
     Routes through ``InstanceLine.set_model``, which uses the
     classified-token rule to identify the model position correctly
-    even with quoted model names and trailing params. Raises
+    even with quoted model tokens and trailing params. Raises
     ``ValueError`` if the instance isn't found.
     """
     target = instance_ref.lower()

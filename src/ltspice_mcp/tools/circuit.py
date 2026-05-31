@@ -251,7 +251,7 @@ def _apply_component_value(editor, reference: str, value: str) -> None:
     ``BARE`` / ``QUOTED`` / ``BRACED`` token before any ``KEY_VALUE``
     token; params are the ``KEY_VALUE`` tokens. The classified-token
     layer knows model-name vs param-name by construction, so adversarial
-    cases like ``M1 d g s b "NMOS lvt" W=10u`` and
+    cases like ``M1 d g s b "NMOS_lvt" W=10u`` and
     ``R1 n1 n2 {1/(2*pi*RC)}`` route correctly.
     """
     _validate_component_value(reference, value)
@@ -3608,28 +3608,6 @@ def _analysis_kind(line_lower: str) -> str | None:
     return None
 
 
-def _b_source_unparseable_issue(lineno: int, line: str) -> dict:
-    """Issue dict for a B-source whose ``if(...)`` body breaks spicelib's
-    component regex (Bug K). The simulator parses the line fine — only
-    spicelib introspection (read_circuit, list_components) is affected.
-    """
-    return {
-        "severity": "warning",
-        "line": lineno,
-        "directive": line,
-        "message": (
-            "Behavioural source uses an ``if(...)`` expression with commas — "
-            "spicelib's component-line regex rejects this shape, so "
-            "``read_circuit`` and ``list_components`` will report "
-            "``<unparseable>`` for this ref. The LTspice simulator parses it fine."
-        ),
-        "suggestion": (
-            "If you need spicelib to introspect the value, rewrite as "
-            "``limit(...)`` or split into multiple B-sources without commas."
-        ),
-    }
-
-
 def _multiple_analyses_issue(
     analysis_lines: dict[str, list[tuple[int, str]]],
     duplicate_kinds: list[str],
@@ -3709,8 +3687,8 @@ class ValidateNetlistInput(ToolInput):
         "E/G/F/H/B value), duplicate/multiple analysis directives ('More than "
         "one analysis specified'), .MEAS whose analysis kind isn't present, "
         "known-bad .MEAS patterns (vdb()/phase()/group_delay()), "
-        "spicelib-unparseable B-source lines, and directives the LTspice "
-        "runner is known to reject. On .asc, also surfaces named-net shorts, "
+        "and directives the LTspice runner is known to reject. On .asc, "
+        "also surfaces named-net shorts, "
         "floating pins, and dangling labels. Returns a structured issue list; "
         "an empty list means the file passes the static gate. Note: value "
         "tokens (e.g. a typo'd '1kk') and undefined model references are NOT "
@@ -3757,18 +3735,11 @@ async def handle_validate_netlist(
 
     issues: list[dict] = []
     # Single pass: validate directives, collect each analysis directive,
-    # bookmark every ``.meas <kind>`` line, and (on netlists) sniff
-    # B-sources whose ``if(...)`` body breaks spicelib's component regex.
-    sniff_b_source = not _is_asc(file_path)
+    # and bookmark every ``.meas <kind>`` line.
     analysis_lines: dict[str, list[tuple[int, str]]] = {}
     meas_lines: list[tuple[int, str, str]] = []
     for lineno, raw_line in enumerate(content.splitlines(), 1):
         line = raw_line.strip()
-        if sniff_b_source and line[:1].upper() == "B":
-            lower_b = line.lower()
-            if "if(" in lower_b and "," in line:
-                issues.append(_b_source_unparseable_issue(lineno, line))
-            continue
         if not line.startswith("."):
             continue
         lower = line.lower()
@@ -3861,8 +3832,8 @@ def _component_signature(comp: dict) -> str:
 def _components_and_directives(path: Path) -> tuple[dict[str, str], set[str]]:
     """Return (components, directive_lines) for a circuit file in one read.
 
-    Reuses ``services.extract_{asc,netlist}_info`` so unparseable B-sources,
-    AscEditor dispatch, and directive collection all flow through the
+    Reuses ``services.extract_{asc,netlist}_info`` so unparseable component
+    values, AscEditor dispatch, and directive collection all flow through the
     canonical path. No second disk read.
     """
     if _is_asc(path):

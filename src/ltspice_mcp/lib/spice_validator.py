@@ -186,21 +186,40 @@ def validate_netlist_arity(cards: list[SpiceCard]) -> list[dict[str, object]]:
         has_kv = bool(inst.params)
         required = 2 if spec.kind_for(has_kv=has_kv) == "params_only" else spec.min_nodes
 
-        # R/C/L with the keyed primary-value form (``R1 a b R=1k`` /
-        # ``C1 a b C=1n`` / ``L1 a b L=1u``) supplies the value via KV,
-        # so all positional tokens after the ref are nodes — but
-        # ``InstanceLine.from_card`` still eats the last positional as
-        # the value slot for value-kind elements, leaving ``inst.nodes``
-        # one short. Re-count from the raw token stream when the
-        # primary-value KV is present (Codex round-2 M2).
+        # Some SPICE dialects accept keyed primary-value forms
+        # (``R1 a b R=1k`` / ``C1 a b C=1n`` / ``L1 a b L=1u``), where all
+        # positional tokens after the ref are nodes. Re-count from the raw
+        # token stream when such a primary-value KV is present so arity checks
+        # do not confuse the last node with a positional value.
         node_count = len(inst.nodes)
-        if prefix in ("R", "C", "L") and prefix in {k.upper() for k in inst.params}:
+        primary_value_key = next(
+            (key for key in inst.params if key.upper() == prefix),
+            None,
+        )
+        if prefix in ("R", "C", "L") and primary_value_key is not None:
             positionals_after_ref = sum(
                 1
                 for tok in tokenize_body(card.body)[1:]
                 if tok.kind not in (TokenKind.KEY_VALUE, TokenKind.COMMENT_TRAIL)
             )
             node_count = positionals_after_ref
+            # Real LTspice 26 accepts R=<value>, but rejects C=<value> and
+            # L=<value> as unknown parameters. ngspice accepts all three; this
+            # validator is the LTspice pre-flight path.
+            if prefix in ("C", "L"):
+                rewrite = " ".join([inst.ref, *inst.nodes, inst.value or ""])
+                issues.append(
+                    {
+                        "line": card.line_start,
+                        "directive": directive,
+                        "message": (
+                            f"{inst.ref}: LTspice does not accept {prefix}= as "
+                            f"the primary value for a {prefix}-element; use the "
+                            "positional value form instead."
+                        ),
+                        "suggestion": f"Rewrite as `{rewrite}`.",
+                    }
+                )
 
         if node_count < required:
             issues.append(
