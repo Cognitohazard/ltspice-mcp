@@ -115,9 +115,7 @@ class TestTokenizeBody:
 
     def test_key_value_function_call_with_whitespace_around_eq(self) -> None:
         toks = tokenize_body("V = if(V(in)>1, 5, 0)")
-        assert [(t.kind, t.text) for t in toks] == [
-            (TokenKind.KEY_VALUE, "V=if(V(in)>1, 5, 0)")
-        ]
+        assert [(t.kind, t.text) for t in toks] == [(TokenKind.KEY_VALUE, "V=if(V(in)>1, 5, 0)")]
         assert toks[0].key == "V"
         assert toks[0].value == "if(V(in)>1, 5, 0)"
 
