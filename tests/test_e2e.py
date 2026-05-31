@@ -17,9 +17,15 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
 
+import pytest
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from pydantic import AnyUrl
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("LTSPICE_MCP_RUN_E2E") != "1",
+    reason="MCP subprocess e2e tests are opt-in; set LTSPICE_MCP_RUN_E2E=1",
+)
 
 # ---------------------------------------------------------------------------
 # Helpers

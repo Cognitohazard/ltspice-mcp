@@ -42,7 +42,7 @@ python -m ltspice_mcp
 
 No Makefile. CI: `.github/workflows/publish.yml` (test + publish to PyPI on version tags).
 
-The suite runs in parallel by default via `pytest-xdist` (`-n auto` in `pyproject.toml`). Pass `-n0` to serialize when you need deterministic output order or to attach a debugger.
+`pytest-xdist` is available, but the suite runs serially by default. Pass `-n auto` to parallelize locally when you do not need deterministic output order or debugger attachment.
 
 ## Architecture
 

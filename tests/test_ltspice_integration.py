@@ -1,10 +1,12 @@
 """Integration tests requiring a real LTspice binary.
 
-These tests are skipped if LTspice is not available on the system.
+These tests are skipped unless LTspice integration is explicitly enabled and
+LTspice is available on the system.
 They exercise the full simulation pipeline: create netlist → run sim → parse results.
 """
 
 import asyncio
+import os
 import shutil
 from pathlib import Path
 
@@ -55,7 +57,6 @@ def _make_ltspice_state(work_dir: Path) -> SessionState | None:
     return SessionState.create(config, available)
 
 
-# Skip entire module if LTspice is not available
 def _ltspice_available() -> bool:
     import tempfile
 
@@ -63,10 +64,17 @@ def _ltspice_available() -> bool:
         return _make_ltspice_state(Path(td)) is not None
 
 
-pytestmark = pytest.mark.skipif(
-    not _ltspice_available(),
-    reason="LTspice not available on this system",
-)
+def _ltspice_integration_skip_reason() -> str | None:
+    if os.environ.get("LTSPICE_MCP_RUN_LTSPICE_INTEGRATION") != "1":
+        return "LTspice integration tests are opt-in; set LTSPICE_MCP_RUN_LTSPICE_INTEGRATION=1"
+    if not _ltspice_available():
+        return "LTspice not available on this system"
+    return None
+
+
+# Skip entire module unless real LTspice tests are explicitly requested.
+_skip_reason = _ltspice_integration_skip_reason()
+pytestmark = pytest.mark.skipif(_skip_reason is not None, reason=_skip_reason or "")
 
 
 @pytest.fixture
