@@ -11,6 +11,7 @@ from ltspice_mcp.tools.circuit import (
     CircuitReadInput,
     ComponentInfoInput,
     ConnectInput,
+    DiffCircuitInput,
     EditDirectiveInput,
     MoveComponentInput,
     NetLabelInput,
@@ -21,6 +22,7 @@ from ltspice_mcp.tools.circuit import (
     handle_add_net_label,
     handle_component_info,
     handle_connect,
+    handle_diff_circuit,
     handle_edit_directive,
     handle_list_components,
     handle_move_component,
@@ -29,6 +31,11 @@ from ltspice_mcp.tools.circuit import (
     handle_set_component_attribute,
     handle_symbol_info,
 )
+
+
+def _copy_file(src: Path, dst: Path) -> None:
+    """Sync byte-copy — keeps blocking pathlib I/O out of async test bodies."""
+    dst.write_bytes(src.read_bytes())
 
 
 @pytest.mark.asyncio
@@ -145,6 +152,35 @@ class TestSetComponentAttribute:
             asc_state,
         )
         assert "SpiceLine" in result.content[0].text
+
+
+@pytest.mark.asyncio
+class TestDiffCircuitAttributes:
+    async def test_attribute_change_detected(
+        self, asc_state: SessionState, asc_file: Path, work_dir: Path
+    ) -> None:
+        # F6: diff_circuit compared only the Value field, so a
+        # set_component_attribute edit (SpiceLine/Value2/SpiceModel) — which
+        # lands in the exported netlist — falsely showed "no differences".
+        a = work_dir / "diff_a.asc"
+        b = work_dir / "diff_b.asc"
+        _copy_file(asc_file, a)
+        _copy_file(asc_file, b)
+        await handle_set_component_attribute(
+            SetComponentAttributeInput(
+                path="diff_b.asc", reference="R1", attribute="SpiceLine", value="tol=1"
+            ),
+            asc_state,
+        )
+        result = await handle_diff_circuit(
+            DiffCircuitInput(path_a="diff_a.asc", path_b="diff_b.asc"), asc_state
+        )
+        data = result.structuredContent
+        assert data is not None
+        changed = {c["reference"]: c for c in data["components_changed"]}
+        assert "R1" in changed
+        assert "tol=1" in changed["R1"]["after"]
+        assert changed["R1"]["before"] != changed["R1"]["after"]
 
 
 @pytest.mark.asyncio

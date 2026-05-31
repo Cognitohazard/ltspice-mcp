@@ -14,7 +14,6 @@ from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_types import BatchJob
 from ltspice_mcp.lib.runner_base import BatchRunnerBase, wrap_runner_for_runno_callbacks
-from ltspice_mcp.lib.sweep_utils import generate_sweep_range
 from ltspice_mcp.state import SessionState
 
 if TYPE_CHECKING:
@@ -87,7 +86,7 @@ class SweepRunner(BatchRunnerBase):
             stepper = _create_stepper(editor, runner)
 
             for dim in batch_job.sweep_config.dimensions:
-                values = generate_sweep_range(dim.start, dim.stop, dim.step, dim.points, dim.scale)
+                values = dim.resolved_values()
                 if dim.type == "component":
                     stepper.add_value_sweep(dim.name, values)
                 elif dim.type == "parameter":

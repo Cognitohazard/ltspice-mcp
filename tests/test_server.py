@@ -13,12 +13,14 @@ from ltspice_mcp.errors import (
     PathSecurityError,
 )
 from ltspice_mcp.server import (
+    SERVER_INSTRUCTIONS,
     _configure_asc_editor,
     _get_error_hint,
     call_tool,
     list_resources,
     list_tools,
     read_resource,
+    server,
 )
 from ltspice_mcp.state import SessionState
 
@@ -38,6 +40,25 @@ class TestGetErrorHint:
             pass
 
         assert _get_error_hint(FakeErr, "full") is None
+
+
+class TestServerInstructions:
+    def test_instructions_forwarded_to_init_options(self):
+        # The block must reach the client at the MCP initialize handshake.
+        opts = server.create_initialization_options()
+        assert opts.instructions == SERVER_INSTRUCTIONS
+        assert opts.instructions  # non-empty
+
+    def test_instructions_cover_key_workflow_guidance(self):
+        text = SERVER_INSTRUCTIONS
+        # netlist-first default + the asc-conversion bridge
+        assert "netlist" in text.lower()
+        assert "schematic_from_netlist" in text
+        # analysis-tool/run-type pairing + the result-trust guardrail
+        assert "operating_point" in text and "bode_metrics" in text
+        assert "completed" in text
+        # must name only tools present in BOTH profiles (create_netlist is full-only)
+        assert "create_netlist" not in text
 
 
 class TestConfigureAscEditor:

@@ -34,11 +34,15 @@ logger = logging.getLogger(__name__)
 SIDECAR_DIRNAME = ".ltspice-mcp"
 JOBS_SUBDIR = "jobs"
 SCHEMA = "ltspice-mcp/job"
-SCHEMA_VERSION = 1
+# v2 (2026-05-30): SweepDimension gained an optional ``values`` list and nullable
+# ``start``/``stop`` for explicit discrete-value sweeps. The shape change is why
+# the version bumped — so a v1-only reader rejects v2 records via _accept_schema
+# instead of crashing on ``float(None)`` for a null ``start`` (see v9-NG review).
+SCHEMA_VERSION = 2
 # Versions this build can READ after applying ``_MIGRATIONS``. Always
 # includes the current version; older versions are added once their
 # migration function lands in ``_MIGRATIONS``.
-SUPPORTED_VERSIONS: frozenset[int] = frozenset({1})
+SUPPORTED_VERSIONS: frozenset[int] = frozenset({1, 2})
 INTERRUPTED_STATUS = "interrupted"
 
 
@@ -64,9 +68,18 @@ def _migrate(data: dict, from_version: int) -> dict:
     return data
 
 
+def _migrate_v1_to_v2(data: dict) -> dict:
+    """v1 -> v2: ``SweepDimension`` gained an optional ``values`` list and nullable
+    ``start``/``stop`` (explicit discrete-value sweeps). No data transform is
+    needed — the v2 reader treats a missing ``values`` as ``None`` and reads v1's
+    always-present ``start``/``stop`` unchanged — so this only re-stamps the
+    version (done by ``_migrate``). Idempotent-safe: returns ``data`` unchanged."""
+    return data
+
+
 # Registered migration functions. Key N transforms v(N) into v(N+1).
 # Keep each function focused and reversible where possible.
-_MIGRATIONS: dict[int, Any] = {}
+_MIGRATIONS: dict[int, Any] = {1: _migrate_v1_to_v2}
 
 
 def sidecar_dir(circuit_path: Path) -> Path:
@@ -254,11 +267,12 @@ def _deserialize_sweep_config(data: dict | None) -> SweepConfig | None:
         SweepDimension(
             type=d.get("type", "component"),
             name=str(d.get("name", "")),
-            start=float(d.get("start", 0.0)),
-            stop=float(d.get("stop", 0.0)),
+            start=None if d.get("start") is None else float(d["start"]),
+            stop=None if d.get("stop") is None else float(d["stop"]),
             step=d.get("step"),
             points=d.get("points"),
             scale=str(d.get("scale", "linear")),
+            values=([float(v) for v in d["values"]] if d.get("values") is not None else None),
         )
         for d in data.get("dimensions", [])
     ]

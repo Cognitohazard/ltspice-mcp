@@ -117,6 +117,20 @@ _RE_WARNING = re.compile(r"^(?:Warning|WARNING)\s*(?:--|:)", re.IGNORECASE)
 # more specific rules win. Without this rule a hard ERROR line falls through and
 # a failed-physics run (e.g. a 1e9 V floating node) reports as a clean success.
 _RE_ERROR = re.compile(r"^(?:Error|ERROR)\s*:", re.IGNORECASE)
+# ngspice reports convergence FAILURES under a "Warning:" / "Warning --" prefix,
+# so without special handling _RE_WARNING would downgrade a run that produced no
+# usable data (a floating node prints "gmin stepping failed" + "source stepping
+# failed", the raw is numerical noise, and ngspice still exits 0). These phrases
+# are terminal, so classify them as errors regardless of any Warning prefix
+# (v9-NG F1). A transient "singular matrix" note is deliberately NOT listed —
+# ngspice may still recover from it via gmin/source stepping. Matched as a
+# case-insensitive substring, so any "Warning:" prefix is ignored without a
+# separate strip.
+_CONVERGENCE_FAILURE_PHRASES = (
+    "gmin stepping failed",
+    "source stepping failed",
+    "iteration limit reached",
+)
 # Bare convergence / runtime messages with no prefix.
 # These are matched anchored to the start of a (stripped) line so we don't
 # false-positive on phrases that merely *contain* one of these substrings
@@ -125,7 +139,6 @@ _BARE_ERROR_PHRASES = [
     "singular matrix",
     "time step too small",
     "no convergence",
-    "gmin/source stepping failed",
     "questionable use of curly braces",
 ]
 # ngspice-specific diagnostic patterns (not matched by the LTspice rules above).
@@ -401,6 +414,16 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
             i += 1
             continue
 
+        # ngspice convergence FAILURES arrive "Warning:"-prefixed; classify the
+        # terminal ones as errors (substring match, so the prefix is ignored)
+        # before the generic warning rule below would downgrade a no-data run
+        # (v9-NG F1).
+        stripped_lower = stripped.lower()
+        if any(phrase in stripped_lower for phrase in _CONVERGENCE_FAILURE_PHRASES):
+            errors.append(stripped)
+            i += 1
+            continue
+
         # Warning: / WARNING: / Warning --
         if _RE_WARNING.match(stripped):
             warnings.append(stripped)
@@ -410,7 +433,6 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
         # Bare convergence / runtime phrases — anchored at start of line to
         # avoid false positives on lines that merely contain the phrase as a
         # substring (e.g., "the singular matrix decomposition succeeded").
-        stripped_lower = stripped.lower()
         if any(stripped_lower.startswith(phrase) for phrase in _BARE_ERROR_PHRASES):
             errors.append(stripped)
             i += 1

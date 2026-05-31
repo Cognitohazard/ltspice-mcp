@@ -31,6 +31,13 @@ from ltspice_mcp.lib.spice_lex_views import ELEMENT_SPECS, InstanceLine, MeasCar
 # the meas-side set is intentionally narrower.
 ANALYSIS_KINDS: frozenset[str] = frozenset({"tran", "ac", "dc", "op", "noise"})
 MEAS_KINDS: frozenset[str] = frozenset({"tran", "ac", "dc", "op"})
+# ``.op`` is a bias-point request, not a mutually-exclusive analysis: LTspice
+# runs it alongside exactly one real analysis (verified live: ``.op``+``.tran``
+# and ``.op``+``.ac`` run; ``.ac``+``.tran`` is rejected). The "more than one
+# analysis" gate counts only these, so it doesn't false-positive on the common
+# ``.op`` + analysis idiom (v9-LT). ``.op`` stays in ANALYSIS_KINDS/MEAS_KINDS
+# for ``.meas op`` matching.
+EXCLUSIVE_ANALYSIS_KINDS: frozenset[str] = ANALYSIS_KINDS - frozenset({"op"})
 
 AnalysisKind = Literal["tran", "ac", "dc", "op", "noise"]
 
