@@ -21,7 +21,6 @@ from ltspice_mcp.lib.spice_lex import lex
 from ltspice_mcp.lib.sweep_utils import (
     generate_batch_job_id,
     generate_config_id,
-    generate_sweep_range,
 )
 from ltspice_mcp.state import (
     BatchJob,
@@ -47,14 +46,26 @@ logger = logging.getLogger(__name__)
 
 
 class SweepParameter(StrictModel):
-    """Nested sweep parameter definition."""
+    """Nested sweep parameter definition.
+
+    Provide EITHER an explicit ``values`` list (e.g. E-series resistors) OR a
+    ``start``/``stop`` range with ``step`` or ``points``. The two forms are
+    mutually exclusive.
+    """
 
     name: str = Field(description="Component reference (e.g., 'R1') or parameter name")
     type: Literal["component", "parameter"] = Field(
         description="'component' for ref values, 'parameter' for .PARAM"
     )
-    start: float = Field(description="Start value of sweep range")
-    stop: float = Field(description="End value of sweep range")
+    values: list[float] | None = Field(
+        default=None,
+        description=(
+            "Explicit discrete sweep values, e.g. [1000, 2200, 4700] for E-series "
+            "resistors. Mutually exclusive with start/stop/step/points."
+        ),
+    )
+    start: float | None = Field(default=None, description="Start value of sweep range")
+    stop: float | None = Field(default=None, description="End value of sweep range")
     step: float | None = Field(
         default=None, description="Step size (mutually exclusive with points)"
     )
@@ -436,6 +447,25 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
                 f"Parameter '{name}': type must be 'component' or 'parameter', got '{param_type}'"
             )
 
+        # Explicit discrete value list (e.g. E-series) — mutually exclusive
+        # with the start/stop/step/points range form (F5).
+        if param.values is not None:
+            if any(v is not None for v in (param.start, param.stop, param.step, param.points)):
+                raise BatchJobError(
+                    f"Parameter '{name}': 'values' is mutually exclusive with "
+                    "start/stop/step/points — provide one form, not both"
+                )
+            if len(param.values) == 0:
+                raise BatchJobError(f"Parameter '{name}': 'values' must be a non-empty list")
+            dimensions.append(
+                SweepDimension(type=param_type, name=name, values=[float(v) for v in param.values])
+            )
+            continue
+
+        if param.start is None or param.stop is None:
+            raise BatchJobError(
+                f"Parameter '{name}': start and stop are required (or provide 'values')"
+            )
         start = float(param.start)
         stop = float(param.stop)
         step = param.step
@@ -482,7 +512,7 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
     dim_sizes: list[int] = []
     dim_values: list[tuple[str, list[float]]] = []
     for dim in dimensions:
-        values = generate_sweep_range(dim.start, dim.stop, dim.step, dim.points, dim.scale)
+        values = dim.resolved_values()
         dim_sizes.append(len(values))
         dim_values.append((dim.name, values))
 
@@ -567,7 +597,7 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
     # Compute total runs
     dim_sizes = []
     for dim in config.dimensions:
-        values = generate_sweep_range(dim.start, dim.stop, dim.step, dim.points, dim.scale)
+        values = dim.resolved_values()
         dim_sizes.append(len(values))
     total_runs = prod(dim_sizes) if dim_sizes else 0
 

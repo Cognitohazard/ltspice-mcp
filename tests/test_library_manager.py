@@ -209,6 +209,39 @@ class TestFindSimilarModels:
         assert results
         assert all(".include" in r["include_directive"] for r in results)
 
+    def test_short_substring_names_not_inflated(
+        self, empty_manager: LibraryManager, tmp_path: Path
+    ):
+        # F4: 'ni'/'mp' are substrings of the query 'universalopamp'. WRatio's
+        # partial-ratio path scored such short substrings ~0.90, flooding the
+        # results and burying the real match. The length-aware ratio scores
+        # them low so they fall below the default cutoff.
+        p = tmp_path / "junk.lib"
+        p.write_text(
+            ".MODEL NI NMOS(VTO=1)\n"
+            ".MODEL MP PMOS(VTO=-1)\n"
+            ".SUBCKT LTC3406 a b c\nR1 a b 1\n.ENDS\n"
+        )
+        empty_manager.load_library(p)
+        scored = {
+            r["name"]: r["score"]
+            for r in empty_manager.find_similar_models("universalopamp", cutoff=0.0, limit=10)
+        }
+        assert scored["NI"] < 0.6
+        assert scored["MP"] < 0.6
+
+    def test_dedup_by_name(self, empty_manager: LibraryManager, tmp_path: Path):
+        # F4: the same model name across two libraries should appear once, not
+        # fill the limited result list with duplicates.
+        a = tmp_path / "a.lib"
+        a.write_text(".MODEL DUP NPN(BF=100)\n")
+        b = tmp_path / "b.lib"
+        b.write_text(".MODEL DUP NPN(BF=200)\n")
+        empty_manager.load_library(a)
+        empty_manager.load_library(b)
+        results = empty_manager.find_similar_models("DUP", cutoff=0.0)
+        assert [r["name"] for r in results].count("DUP") == 1
+
     def test_part_family_prefers_siblings_over_cross_family(
         self, empty_manager: LibraryManager, tmp_path: Path
     ):

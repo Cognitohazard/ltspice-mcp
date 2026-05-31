@@ -111,6 +111,24 @@ class TestParseNetlistForSynth:
         assert {i.ref for i in instances} == {"C1"}
         assert any(s["ref"] == "R1" and "tokenize" in s["reason"] for s in skipped)
 
+    def test_no_title_keeps_first_instance(self):
+        # F2: a bare netlist fragment (no '*' title) must NOT silently drop its
+        # first card — that used to delete the source (V1) and leave a dead
+        # circuit with no feedback.
+        instances, _directives, skipped, warnings = _parse_netlist_for_synth(
+            "V1 in 0 AC 1\nR1 in out 1k\nC1 out 0 1u\n.ac dec 10 1 100k\n.end\n"
+        )
+        assert {i.ref for i in instances} == {"V1", "R1", "C1"}
+        assert not skipped
+        assert any("title" in w.lower() for w in warnings)
+
+    def test_title_comment_dropped_without_warning(self):
+        # RC_NETLIST has a leading '* RC low-pass filter' comment: it is the
+        # conventional deck title, dropped silently, all instances kept.
+        instances, _directives, _skipped, warnings = _parse_netlist_for_synth(RC_NETLIST)
+        assert {i.ref for i in instances} == {"V1", "R1", "C1"}
+        assert not any("title" in w.lower() for w in warnings)
+
 
 # ---------------------------------------------------------------------------
 # schematic_from_netlist (§3a)

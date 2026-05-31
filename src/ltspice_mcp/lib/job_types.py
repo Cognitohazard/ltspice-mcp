@@ -51,6 +51,10 @@ NON_TERMINAL_LIVE_STATUSES: frozenset[str] = frozenset({"queued", "running"})
 class SweepDimension:
     """One axis of a parameter sweep.
 
+    Either ``values`` (an explicit discrete list) is set, or the
+    ``start``/``stop``/``step``|``points``/``scale`` range fields are. Use
+    ``resolved_values()`` to get the concrete sweep values regardless of form.
+
     Attributes:
         type: "component" (add_value_sweep) or "parameter" (add_param_sweep)
         name: Component reference (e.g. "R1") or parameter name (e.g. "TEMP")
@@ -59,15 +63,34 @@ class SweepDimension:
         step: Step size — mutually exclusive with points
         points: Number of points — mutually exclusive with step
         scale: "linear" or "log"
+        values: Explicit discrete values — mutually exclusive with the range fields
     """
 
     type: Literal["component", "parameter"]
     name: str
-    start: float
-    stop: float
+    start: float | None = None
+    stop: float | None = None
     step: float | None = None
     points: int | None = None
     scale: str = "linear"
+    values: list[float] | None = None
+
+    def resolved_values(self) -> list[float]:
+        """Concrete sweep values for this dimension.
+
+        Returns the explicit ``values`` list when set; otherwise generates the
+        range from start/stop/step|points/scale.
+        """
+        from ltspice_mcp.lib.sweep_utils import generate_sweep_range
+
+        if self.values is not None:
+            return [float(v) for v in self.values]
+        if self.start is None or self.stop is None:
+            raise ValueError(
+                f"Sweep dimension '{self.name}' has neither explicit values nor a "
+                "start/stop range."
+            )
+        return generate_sweep_range(self.start, self.stop, self.step, self.points, self.scale)
 
 
 @dataclass

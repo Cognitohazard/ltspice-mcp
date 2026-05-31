@@ -57,6 +57,62 @@ class TestConfigureSweep:
         assert "Total simulations:" in text
         assert len(state_no_sim.sweep_configs) == 1
 
+    async def test_values_list(self, state_no_sim: SessionState, sample_netlist: Path):
+        # F5: an explicit discrete value list (e.g. E-series) — previously
+        # impossible through configure_sweep, which only generated linear/log
+        # grids even though the backend's add_value_sweep accepts a list.
+        await handle_configure_sweep(
+            ConfigureSweepInput(
+                netlist=sample_netlist.name,
+                parameters=[
+                    SweepParameter(name="R1", type="component", values=[1000, 2200, 4700])
+                ],
+            ),
+            state_no_sim,
+        )
+        assert len(state_no_sim.sweep_configs) == 1
+        dim = next(iter(state_no_sim.sweep_configs.values())).dimensions[0]
+        assert dim.resolved_values() == [1000.0, 2200.0, 4700.0]
+
+    async def test_values_mutually_exclusive_with_range(
+        self, state_no_sim: SessionState, sample_netlist: Path
+    ):
+        with pytest.raises(BatchJobError, match="mutually exclusive"):
+            await handle_configure_sweep(
+                ConfigureSweepInput(
+                    netlist=sample_netlist.name,
+                    parameters=[
+                        SweepParameter(
+                            name="R1", type="component", values=[1, 2], start=1, stop=2, step=1
+                        )
+                    ],
+                ),
+                state_no_sim,
+            )
+
+    async def test_values_empty_rejected(self, state_no_sim: SessionState, sample_netlist: Path):
+        with pytest.raises(BatchJobError, match="non-empty"):
+            await handle_configure_sweep(
+                ConfigureSweepInput(
+                    netlist=sample_netlist.name,
+                    parameters=[SweepParameter(name="R1", type="component", values=[])],
+                ),
+                state_no_sim,
+            )
+
+    async def test_range_form_still_requires_start_stop(
+        self, state_no_sim: SessionState, sample_netlist: Path
+    ):
+        # With neither values nor start/stop, the range form must error clearly.
+        with pytest.raises(BatchJobError, match="start and stop are required"):
+            await handle_configure_sweep(
+                ConfigureSweepInput(
+                    netlist=sample_netlist.name,
+                    parameters=[SweepParameter(name="R1", type="component", step=1)],
+                ),
+                state_no_sim,
+            )
+
     async def test_basic_points(self, state_no_sim: SessionState, sample_netlist: Path):
         await handle_configure_sweep(
             ConfigureSweepInput(

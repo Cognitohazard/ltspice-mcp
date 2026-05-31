@@ -169,6 +169,33 @@ class TestSaveLoad:
         assert set(restored.run_results.keys()) == {0, 1}
         assert restored.run_results[0]["params"] == {"R1": 1.0}
 
+    def test_roundtrip_values_sweep(self, tmp_path: Path) -> None:
+        # v2 shape: an explicit discrete-value sweep persists start/stop as null
+        # and a populated ``values`` list, and round-trips intact.
+        circuit = tmp_path / "esweep.cir"
+        circuit.write_text("")
+        sweep_cfg = SweepConfig(
+            netlist=circuit,
+            dimensions=[
+                SweepDimension(type="component", name="R1", values=[1000.0, 2200.0, 4700.0])
+            ],
+        )
+        job_store.save_job(_batch_job(circuit, sweep_config=sweep_cfg))
+
+        record = json.loads(next(job_store.sidecar_dir(circuit).glob("*.json")).read_text())
+        assert record["schema_version"] == 2
+        dim0 = record["sweep_config"]["dimensions"][0]
+        assert dim0["start"] is None
+        assert dim0["values"] == [1000.0, 2200.0, 4700.0]
+
+        _, batch_jobs = job_store.load_jobs_for_circuit(circuit)
+        assert len(batch_jobs) == 1
+        assert batch_jobs[0].sweep_config is not None
+        rdim = batch_jobs[0].sweep_config.dimensions[0]
+        assert rdim.values == [1000.0, 2200.0, 4700.0]
+        assert rdim.start is None and rdim.stop is None
+        assert rdim.resolved_values() == [1000.0, 2200.0, 4700.0]
+
     def test_roundtrip_mc_job(self, tmp_path: Path) -> None:
         circuit = tmp_path / "mc.cir"
         circuit.write_text("")
@@ -500,3 +527,31 @@ class TestSchemaMigration:
         assert len(sim_jobs) == 1
         assert sim_jobs[0].job_id == "sim_legacy"
         assert str(sim_jobs[0].netlist) == str(circuit)
+
+    def test_v1_sweep_record_still_loads(self, tmp_path: Path) -> None:
+        # A genuine pre-v2 (v1) sweep record has no ``values`` and real
+        # start/stop. After the v2 bump it must still load (migrated 1->2),
+        # proving old persisted jobs survive the upgrade.
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        sweep_cfg = SweepConfig(
+            netlist=circuit,
+            dimensions=[
+                SweepDimension(type="component", name="R1", start=1.0, stop=10.0, points=3)
+            ],
+        )
+        job_store.save_job(_batch_job(circuit, sweep_config=sweep_cfg))
+        # Rewrite the file as a real v1 record: drop ``values``, set version 1.
+        f = next(job_store.sidecar_dir(circuit).glob("*.json"))
+        record = json.loads(f.read_text())
+        record["schema_version"] = 1
+        for dim in record["sweep_config"]["dimensions"]:
+            dim.pop("values", None)
+        f.write_text(json.dumps(record))
+
+        _, batch_jobs = job_store.load_jobs_for_circuit(circuit)
+        assert len(batch_jobs) == 1
+        assert batch_jobs[0].sweep_config is not None
+        rdim = batch_jobs[0].sweep_config.dimensions[0]
+        assert rdim.start == 1.0 and rdim.stop == 10.0
+        assert rdim.values is None
