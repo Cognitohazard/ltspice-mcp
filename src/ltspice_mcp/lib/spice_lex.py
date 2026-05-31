@@ -203,8 +203,9 @@ def _iter_atoms(body: str) -> Iterator[_Atom]:
             yield _Atom(TokenKind.COMMENT_TRAIL.value, body[i:], i)
             return
 
-        if c == '"':
-            end = body.find('"', i + 1)
+        if c in ('"', "'"):
+            quote = c
+            end = body.find(quote, i + 1)
             if end < 0:
                 raise SpiceLexError(
                     SpiceLexErrorCategory.UNTERMINATED_QUOTE,
@@ -340,19 +341,35 @@ def _merge_key_values(atoms: Sequence[_Atom]) -> Iterator[Token]:
             }
         ):
             v = atoms[i + 2]
+            value_text = v.text
+            value_end = v.offset + len(v.text)
+            consumed = 3
+            # Function-call values can be written with whitespace around
+            # ``=`` (``V = if(...)``). Keep the function name and its
+            # parenthesized arguments in one KEY_VALUE token instead of
+            # leaving the PARENED token as a stray remnant.
+            if (
+                v.kind == TokenKind.BARE.value
+                and i + 3 < n
+                and atoms[i + 3].kind == TokenKind.PARENED.value
+            ):
+                suffix = atoms[i + 3]
+                value_text += suffix.text
+                value_end = suffix.offset + len(suffix.text)
+                consumed = 4
             # The body span runs from the start of the key to the end
             # of the value, so any whitespace around ``=`` (``KP = 100u``)
             # is included. ``text`` is the canonical no-whitespace form.
-            body_length = (v.offset + len(v.text)) - a.offset
+            body_length = value_end - a.offset
             yield Token(
                 kind=TokenKind.KEY_VALUE,
-                text=f"{a.text}={v.text}",
+                text=f"{a.text}={value_text}",
                 key=a.text,
-                value=v.text,
+                value=value_text,
                 body_offset=a.offset,
                 body_length=body_length,
             )
-            i += 3
+            i += consumed
             continue
         # Plain atom passes through (EQUALS included — see docstring).
         yield Token(
@@ -701,16 +718,16 @@ def _strip_inline_comment(merged: str) -> str:
     marker inside an expression isn't mistaken for the start of a
     comment. Returns ``merged`` unchanged if no comment is present.
     """
-    in_quote = False
+    quote: str | None = None
     brace = 0
     paren = 0
     for i, c in enumerate(merged):
-        if in_quote:
-            if c == '"':
-                in_quote = False
+        if quote is not None:
+            if c == quote:
+                quote = None
             continue
-        if c == '"':
-            in_quote = True
+        if c in ('"', "'"):
+            quote = c
             continue
         if c == "{":
             brace += 1
@@ -752,6 +769,9 @@ def _classify_line(line: str) -> CardKind:
 
 def _extract_subckt_name(body: str) -> str | None:
     """Pull the subcircuit name from a ``.SUBCKT NAME ...`` body."""
+    token = _extract_token_text(body, 1)
+    if token is not None:
+        return token
     parts = body.split(None, 2)
     if len(parts) < 2:
         return None
@@ -760,6 +780,9 @@ def _extract_subckt_name(body: str) -> str | None:
 
 def _extract_ends_name(body: str) -> str | None:
     """Pull the optional name from a ``.ENDS [NAME]`` body."""
+    token = _extract_token_text(body, 1)
+    if token is not None:
+        return token
     parts = body.split(None, 2)
     if len(parts) < 2:
         return None
@@ -768,6 +791,9 @@ def _extract_ends_name(body: str) -> str | None:
 
 def _extract_model_name(body: str) -> str | None:
     """Pull the model name from a ``.MODEL NAME TYPE(...)`` body."""
+    token = _extract_token_text(body, 1)
+    if token is not None:
+        return token
     parts = body.split(None, 3)
     if len(parts) < 2:
         return None
@@ -810,6 +836,28 @@ def _extract_meas_name(body: str) -> str | None:
     if second in ("tran", "ac", "dc", "op", "noise") and len(parts) >= 3:
         return parts[2]
     return parts[1]
+
+
+def _strip_matching_quotes(text: str) -> str:
+    """Strip one matching quote pair from ``text`` if present."""
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ('"', "'"):
+        return text[1:-1]
+    return text
+
+
+def _extract_token_text(body: str, index: int) -> str | None:
+    """Return token ``index`` from ``body`` using the body tokenizer.
+
+    Falls back to caller-specific split logic when tokenization fails so
+    ``lex`` preserves its round-trip-on-malformed-input contract.
+    """
+    try:
+        tokens = [t for t in tokenize_body(body) if t.kind != TokenKind.COMMENT_TRAIL]
+    except SpiceLexError:
+        return None
+    if len(tokens) <= index:
+        return None
+    return _strip_matching_quotes(tokens[index].text)
 
 
 _NAME_EXTRACTORS = {

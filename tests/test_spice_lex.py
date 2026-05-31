@@ -55,10 +55,10 @@ class TestTokenizeBody:
         assert [t.text for t in toks] == ["R1", "n1", "n2", "1k"]
 
     def test_quoted_string(self) -> None:
-        toks = tokenize_body('M1 d g s b "NMOS lvt" W=10u')
+        toks = tokenize_body('M1 d g s b "NMOS_lvt" W=10u')
         # M1, d, g, s, b → 5 BARE; then QUOTED, then KEY_VALUE.
         assert toks[5].kind == TokenKind.QUOTED
-        assert toks[5].text == '"NMOS lvt"'
+        assert toks[5].text == '"NMOS_lvt"'
 
     def test_standalone_equals_in_meas_when_clause(self) -> None:
         # `.MEAS WHEN mag(V(out))=0.7` — `=` is a comparison, not a
@@ -102,7 +102,7 @@ class TestTokenizeBody:
         assert kv.value == "{2*W0}"
 
     def test_key_value_with_quoted_value(self) -> None:
-        toks = tokenize_body('M1 d g s b "NMOS lvt" W=10u L="100n"')
+        toks = tokenize_body('M1 d g s b "NMOS_lvt" W=10u L="100n"')
         # find the L= KEY_VALUE
         kv = next(t for t in toks if t.kind == TokenKind.KEY_VALUE and t.key == "L")
         assert kv.value == '"100n"'
@@ -112,6 +112,14 @@ class TestTokenizeBody:
         kv = next(t for t in toks if t.kind == TokenKind.KEY_VALUE)
         assert kv.key == "TC"
         assert kv.value == "0.001"
+
+    def test_key_value_function_call_with_whitespace_around_eq(self) -> None:
+        toks = tokenize_body("V = if(V(in)>1, 5, 0)")
+        assert [(t.kind, t.text) for t in toks] == [
+            (TokenKind.KEY_VALUE, "V=if(V(in)>1, 5, 0)")
+        ]
+        assert toks[0].key == "V"
+        assert toks[0].value == "if(V(in)>1, 5, 0)"
 
     def test_comment_trail_semicolon(self) -> None:
         toks = tokenize_body("R1 n1 n2 1k ; this is a comment")
@@ -423,10 +431,23 @@ class TestSpiceCardTypedAccessors:
         assert cards[0].instance_ref is None
         assert cards[0].param_name is None
 
+    def test_quoted_model_name(self) -> None:
+        cards = lex('.MODEL "NMOS_lvt" NMOS(VTO=0.7)\n').cards
+        assert cards[0].model_name == "NMOS_lvt"
+        assert ModelCard.from_card(cards[0]).name == "NMOS_lvt"
+        assert find_model(cards, "NMOS_lvt") is not None
+
     def test_param_name(self) -> None:
         cards = lex(".PARAM Vdd=5\n").cards
         assert cards[0].param_name == "Vdd"
         assert cards[0].model_name is None
+
+    def test_single_quoted_semicolon_is_not_comment(self) -> None:
+        cards = lex(".PARAM x='a;b'\n").cards
+        assert cards[0].body == ".PARAM x='a;b'"
+        view = ParamCard.from_card(cards[0])
+        assert view.name == "x"
+        assert view.value == "'a;b'"
 
     def test_instance_ref(self) -> None:
         cards = lex("R1 a b 1k\n").cards
@@ -852,6 +873,22 @@ class TestInstanceLine:
         assert view.value == "1k"
         assert view.model is None
         assert view.params == {"TC": "0.001"}
+
+    def test_resistor_keyed_primary_value(self) -> None:
+        cards = lex("R1 n1 n2 R=1k\n").cards
+        view = InstanceLine.from_card(cards[0])
+        assert view.nodes == ["n1", "n2"]
+        assert view.value == "1k"
+        assert view.params == {"R": "1k"}
+        view.set_value("2k")
+        assert emit(cards) == "R1 n1 n2 R=2k\n"
+
+    def test_b_source_function_value_with_spaced_equals(self) -> None:
+        from ltspice_mcp.lib.component_value import apply_value_to_instance
+
+        cards = lex("B1 out 0 V=0\n").cards
+        apply_value_to_instance(cards[0], "V = if(V(in)>1, 5, 0)")
+        assert emit(cards) == "B1 out 0 V=if(V(in)>1, 5, 0)\n"
 
     def test_mosfet_basic(self) -> None:
         card = lex("M1 d g s b NMOS1 W=10u L=1u\n").cards[0]
