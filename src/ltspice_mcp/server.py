@@ -317,7 +317,27 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
         logger.info("Server shutdown complete")
 
 
-server = Server("ltspice-mcp")
+# Server-level guidance surfaced to the consuming LLM at the MCP initialize
+# handshake (forwarded by ``create_initialization_options`` ->
+# ``InitializationOptions.instructions``). Cross-cutting workflow guidance only —
+# per-tool detail stays in the individual tool descriptions, which remain the
+# contract (client injection of this string is not guaranteed). Kept terse
+# (~200 words) since every token is re-read on each LLM turn. The
+# "completed can be degenerate" line is the interim guardrail for the
+# result-trust gap tracked as `.claude/plans/open_followups.md` item 2.
+SERVER_INSTRUCTIONS = """\
+LTspice-MCP simulates SPICE circuits (LTspice and ngspice) and edits LTspice .asc schematics.
+
+Prefer the netlist path by default — fewer steps, more reliable: author a .cir/.net netlist, validate_netlist, then run_simulation and the analysis tools. Build or edit .asc schematics only when the task is about schematic graphics/layout, or the user asks. If a schematic is wanted only as a final artifact, recommend designing and verifying the circuit as a netlist first, then converting in one step with schematic_from_netlist (covers R/C/L/V/I/D; active/multi-terminal parts return in `skipped`). Reserve the full manual .asc pipeline (create_schematic/add_component/connect/add_net_label) for interactive co-design.
+
+Match the analysis tool to the run type or it errors: bode_metrics/resonance/stability_metrics need a .AC run; signal_stats/edge_metrics/timing_between/periodic_metrics/pulse_response need .tran; operating_point needs .op. Scalar results come from .meas directives (failures in failed_measurements); read sweep/Monte-Carlo runs via batch_results or job_id+run_index, aggregates via measurement_stats.
+
+A run can report "completed" yet be degenerate (floating node, coerced value, skipped .meas) — check the returned warnings/errors, don't assume success means correct. validate_netlist is the pre-flight gate but won't catch value typos or undefined models (resolved at run time).
+
+When editing .asc, pin names are symbol-specific (a resistor's are A/B, not 1/2) — get them and their coordinates from add_component/symbol_info, and reuse those coordinates as connect waypoints.
+"""
+
+server = Server("ltspice-mcp", instructions=SERVER_INSTRUCTIONS)
 server.lifespan = server_lifespan
 
 

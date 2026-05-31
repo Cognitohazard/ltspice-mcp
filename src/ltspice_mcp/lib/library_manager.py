@@ -23,13 +23,17 @@ _WORD_TOK = re.compile(r"[A-Za-z]+|[0-9]+")
 def _part_aware_score(query_lower: str, candidate_lower: str) -> float:
     """Similarity in [0.0, 1.0] biased for part-number-style names.
 
-    Base is ``rapidfuzz.fuzz.WRatio`` (handles typos, substring containment,
-    and token reorderings). A small bonus applies when the first word token
-    of both strings matches — e.g. 'LTC3406' / 'LTC3406A' share 'ltc',
-    '2N3904' / '2N3906' share '2n'. The bonus keeps near-neighbour siblings
+    Base is ``rapidfuzz.fuzz.ratio`` — a length-aware (Levenshtein) whole-string
+    similarity. ``WRatio`` was used previously, but its partial-ratio path scores
+    any short candidate that is a *substring* of the query at ~0.90, so 1-2 char
+    model names ('NI', 'MP', '1') flooded the results and buried the genuine
+    match (F4). ``ratio`` keeps typo tolerance ('LTC3406'/'LTC3406A' ~0.93) while
+    scoring those short substrings low (<0.3). A small bonus applies when the
+    first word token of both strings matches — e.g. 'LTC3406' / 'LTC3406A' share
+    'ltc', '2N3904' / '2N3906' share '2n' — to keep near-neighbour siblings
     ranked above cross-family matches with similar edit distance.
     """
-    base = fuzz.WRatio(query_lower, candidate_lower) / 100.0
+    base = fuzz.ratio(query_lower, candidate_lower) / 100.0
     q_toks = _WORD_TOK.findall(query_lower)
     c_toks = _WORD_TOK.findall(candidate_lower)
     if q_toks and c_toks and q_toks[0] == c_toks[0]:
@@ -402,7 +406,7 @@ class LibraryManager:
 
         With ``exact=True`` returns at most one entry (score 1.0) when the
         name matches case-insensitively. Otherwise fuzzy-ranks via
-        ``_part_aware_score`` (rapidfuzz WRatio + first-word-token bonus).
+        ``_part_aware_score`` (rapidfuzz ratio + first-word-token bonus).
 
         ``include_builtin=True`` lazy-parses every built-in .lib on first
         call — hundreds of ms on a full LTspice install.
@@ -435,11 +439,20 @@ class LibraryManager:
 
         candidates.sort(key=lambda pair: (-pair[0], pair[1].name_lower))
 
+        # Dedup by model name — the same part can appear in several libraries
+        # (and vendor libs repeat short helper subckts), which would otherwise
+        # fill the limited result list with duplicates of one name (F4).
         results = []
-        for s, entry in candidates[:limit]:
+        seen: set[str] = set()
+        for s, entry in candidates:
+            if entry.name_lower in seen:
+                continue
+            seen.add(entry.name_lower)
             info = self._format_model_info(entry, full=False)
             info["score"] = round(s, 3)
             results.append(info)
+            if len(results) >= limit:
+                break
         return results
 
     def get_model_info(

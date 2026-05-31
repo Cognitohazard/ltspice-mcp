@@ -362,6 +362,21 @@ class TestEditDirective:
                 state_no_sim,
             )
 
+    async def test_rejects_param_directive(self, state_no_sim: SessionState, sample_netlist: Path):
+        # F3: spicelib refuses .param via add_instruction (it surfaced as an
+        # opaque "Internal error"); the handler now pre-empts it with a clean
+        # message pointing to the 'parameter' tool. Reproduces on .cir too.
+        with pytest.raises(NetlistError, match="parameter"):
+            await handle_edit_directive(
+                {"path": sample_netlist.name, "action": "add", "instruction": ".param foo=1"},
+                state_no_sim,
+            )
+        with pytest.raises(NetlistError, match="parameter"):
+            await handle_edit_directive(
+                {"path": sample_netlist.name, "action": "add", "instruction": ".PARAM bar=2"},
+                state_no_sim,
+            )
+
     async def test_remove_directive(self, state_no_sim: SessionState, sample_netlist: Path):
         result = await handle_edit_directive(
             {"path": sample_netlist.name, "action": "remove", "instruction": ".ac dec 100 1 1Meg"},
@@ -542,6 +557,33 @@ class TestValidateNetlist:
         data = result.structuredContent
         assert data is not None
         assert any("Multiple distinct" in iss["message"] for iss in data["issues"])
+
+    async def test_op_coexists_with_one_analysis(self, state_no_sim: SessionState, work_dir: Path):
+        """``.op`` is a bias-point request, not a competing analysis — LTspice
+        runs ``.op`` + one analysis fine (verified live), so the gate must NOT
+        flag it (v9-LT). Two real analyses are still flagged (tests above)."""
+        op_tran = work_dir / "op_tran.cir"
+        op_tran.write_text(
+            "* op+tran\nV1 a 0 PULSE(0 1 0 1u 1u 1m 2m)\nR1 a 0 1k\n.op\n.tran 1u 1m\n.end\n"
+        )
+        d1 = (
+            await handle_validate_netlist({"path": op_tran.name}, state_no_sim)
+        ).structuredContent
+        assert d1 is not None
+        assert not any(
+            "Multiple distinct" in iss["message"] or "Duplicate analysis" in iss["message"]
+            for iss in d1["issues"]
+        )
+        op_ac = work_dir / "op_ac.cir"
+        op_ac.write_text(
+            "* op+ac\nV1 a 0 AC 1\nR1 a 0 1k\nC1 a 0 1u\n.op\n.ac dec 10 1 1k\n.end\n"
+        )
+        d2 = (await handle_validate_netlist({"path": op_ac.name}, state_no_sim)).structuredContent
+        assert d2 is not None
+        assert not any(
+            "Multiple distinct" in iss["message"] or "Duplicate analysis" in iss["message"]
+            for iss in d2["issues"]
+        )
 
 
 @pytest.mark.asyncio

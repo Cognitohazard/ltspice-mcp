@@ -41,6 +41,7 @@ from ltspice_mcp.lib.raw_parser import nearest_index, real_axis, sample_to_dict
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, lex, tokenize_body
 from ltspice_mcp.lib.spice_validator import (
     ANALYSIS_KINDS,
+    EXCLUSIVE_ANALYSIS_KINDS,
     MEAS_KINDS,
     validate_directive,
     validate_netlist_arity,
@@ -1705,6 +1706,15 @@ async def handle_edit_directive(
                         ".ac, .param). For free-text annotations on .asc "
                         "schematics, set kind='comment'."
                     )
+                # spicelib refuses .param via add_instruction (RuntimeError,
+                # surfaced to the user as an opaque "Internal error"); route
+                # them to the dedicated tool instead (F3).
+                if stripped.lower().startswith(".param"):
+                    raise NetlistError(
+                        "edit_directive cannot add a '.param' — SPICE parameters "
+                        "are managed separately. Use the 'parameter' tool to set "
+                        "a .PARAM value (e.g. parameter(name='foo', value='1'))."
+                    )
                 # Pre-flight validation: catch known-bad patterns (e.g. vdb()
                 # in .MEAS) before they reach the simulator and fail post-hoc
                 # inside the .log.
@@ -2805,9 +2815,14 @@ def _plan_connect_route(
                 return True
         return False
 
+    # Pin-collision exemption is by exact endpoint *coordinate* (the
+    # ``(px, py) in endpoints`` check below), NOT by whole component: the
+    # OTHER pin of an endpoint component still lies on the route and must be
+    # flagged — otherwise a waypoint landing on it silently shorts the
+    # component while connect reports success (F1). ``skip_refs`` stays in the
+    # bbox-crossing *warning* loop, where exempting an endpoint component is
+    # reasonable.
     for cg in component_geo:
-        if cg["ref"] in skip_refs:
-            continue
         for pin in cg["pins"]:
             px, py = pin["x"], pin["y"]
             if (px, py) in endpoints:
@@ -3035,9 +3050,20 @@ def _parse_netlist_for_synth(
         if card.kind == "blank":
             continue
         if not title_consumed:
-            # First non-blank line is the SPICE title — ignored.
             title_consumed = True
-            continue
+            if card.kind == "comment":
+                # A leading ``*`` comment is the conventional SPICE deck
+                # title — drop it.
+                continue
+            # No title comment present (a bare netlist fragment). Dropping the
+            # first card here would silently delete a real element — e.g. the
+            # source on a typical ``V1 ... / R1 ...`` fragment (F2). Keep it as
+            # circuit content and warn instead of losing it.
+            warnings.append(
+                "No title line found (first line is not a '*' comment); kept it "
+                "as circuit content. Prepend a '* title' line to suppress."
+            )
+            # fall through to classify this card below
         if card.kind == "instance":
             ref = card.instance_ref or ""
             prefix = ref[:1].upper()
@@ -3767,9 +3793,14 @@ async def handle_validate_netlist(
 
     # LTspice rejects more than one analysis directive with "More than one
     # analysis specified."
-    duplicate_kinds = sorted(k for k, entries in analysis_lines.items() if len(entries) > 1)
-    if duplicate_kinds or len(analysis_lines) > 1:
-        issues.append(_multiple_analyses_issue(analysis_lines, duplicate_kinds))
+    # ``.op`` coexists with one real analysis in LTspice, so count only the
+    # mutually-exclusive kinds — counting ``.op`` false-positived the common
+    # ``.op`` + ``.tran``/``.ac`` idiom (v9-LT). ``analysis_lines`` is left intact
+    # so the ``.meas`` matching below still recognises ``.op``.
+    exclusive = {k: v for k, v in analysis_lines.items() if k in EXCLUSIVE_ANALYSIS_KINDS}
+    duplicate_kinds = sorted(k for k, entries in exclusive.items() if len(entries) > 1)
+    if duplicate_kinds or len(exclusive) > 1:
+        issues.append(_multiple_analyses_issue(exclusive, duplicate_kinds))
 
     # ``.meas <kind>`` runs only when the matching analysis is present.
     # LTspice silently drops mismatched .meas lines from the log.
@@ -3813,6 +3844,20 @@ class DiffCircuitInput(ToolInput):
     )
 
 
+def _component_signature(comp: dict) -> str:
+    """Comparable string for a component: its Value plus any extra SYMATTR
+    attributes (Value2/SpiceLine/SpiceModel). ``set_component_attribute`` edits
+    land in these attributes and change the exported netlist, so diff_circuit
+    must compare them too — otherwise such an edit reads as 'no differences'
+    (F6)."""
+    value = str(comp["value"])
+    attrs = comp.get("attributes") or {}
+    if not attrs:
+        return value
+    attr_str = "; ".join(f"{k}={attrs[k]}" for k in sorted(attrs))
+    return f"{value} | {attr_str}"
+
+
 def _components_and_directives(path: Path) -> tuple[dict[str, str], set[str]]:
     """Return (components, directive_lines) for a circuit file in one read.
 
@@ -3827,14 +3872,14 @@ def _components_and_directives(path: Path) -> tuple[dict[str, str], set[str]]:
             return {}, set()
         assert isinstance(ed, AscEditor)
         info = services.extract_asc_info(ed, path)
-        components = {comp["reference"]: str(comp["value"]) for comp in info["components"]}
+        components = {comp["reference"]: _component_signature(comp) for comp in info["components"]}
         directives = {d.strip() for d in info.get("directives", []) if d.strip().startswith(".")}
         return components, directives
     try:
         info = services.extract_netlist_info(path)
     except Exception:
         return {}, set()
-    components = {comp["reference"]: str(comp["value"]) for comp in info["components"]}
+    components = {comp["reference"]: _component_signature(comp) for comp in info["components"]}
     directives = {
         line.strip()
         for line in info.get("content", "").splitlines()
@@ -3847,10 +3892,11 @@ def _components_and_directives(path: Path) -> tuple[dict[str, str], set[str]]:
     name="diff_circuit",
     description=(
         "Structural diff between two circuit files: reports added/removed "
-        "components, components whose value changed, and added/removed "
-        ".PARAM/.MEAS/.MODEL directives. Use after ``set_component_value`` "
-        "or ``edit_directive`` to confirm that the intended change "
-        "actually landed."
+        "components, components whose value or attributes "
+        "(Value2/SpiceLine/SpiceModel) changed, and added/removed "
+        ".PARAM/.MEAS/.MODEL directives. Use after ``set_component_value``, "
+        "``set_component_attribute`` or ``edit_directive`` to confirm that the "
+        "intended change actually landed."
     ),
     input_model=DiffCircuitInput,
     annotations=RO_ANNOTATIONS,

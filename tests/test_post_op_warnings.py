@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.circuit import (
     AddComponentInput,
@@ -21,6 +22,7 @@ from ltspice_mcp.tools.circuit import (
     CreateSchematicInput,
     MoveComponentInput,
     RemoveComponentInput,
+    WaypointInput,
     handle_add_component,
     handle_apply_schematic_ops,
     handle_connect,
@@ -324,6 +326,35 @@ class TestConnectValidation:
         assert "validation_warnings" in data
         floating = [w for w in data["validation_warnings"] if w["kind"] == "floating_pin"]
         assert floating, "expected at least one floating pin after partial wire"
+
+    async def test_connect_through_endpoint_pin_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        # F1: a waypoint routing a wire through the OTHER pin of an endpoint
+        # component used to be silently allowed (skip_refs exempted the whole
+        # component), shorting it while connect reported success.
+        await handle_create_schematic(CreateSchematicInput(name="short_check"), asc_state)
+        # res fixture: placed at (x, y) -> pins at (x, y-48) and (x, y+48).
+        await handle_add_component(
+            AddComponentInput(path="short_check.asc", reference="R1", symbol="res", x=100, y=100),
+            asc_state,
+        )
+        await handle_add_component(
+            AddComponentInput(path="short_check.asc", reference="R2", symbol="res", x=300, y=100),
+            asc_state,
+        )
+        # Route R1.1 (100,52) -> R2.2 (300,148); the corner (100,148) lands
+        # exactly on R1.2, shorting R1 across its own terminals.
+        with pytest.raises(NetlistError, match=r"R1\.2"):
+            await handle_connect(
+                ConnectInput(
+                    path="short_check.asc",
+                    from_pin="R1.1",
+                    to_pin="R2.2",
+                    waypoints=[WaypointInput(x=100, y=148)],
+                ),
+                asc_state,
+            )
 
 
 # ---------------------------------------------------------------------------

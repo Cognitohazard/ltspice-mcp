@@ -66,6 +66,28 @@ class TestExtractLogDiagnostics:
         result = extract_log_diagnostics(tmp_path / "nope.log")
         assert result == {"warnings": [], "errors": [], "meas_errors": []}
 
+    def test_ngspice_convergence_failure_classified_as_error(self, tmp_path: Path):
+        # v9-NG F1: ngspice prints convergence FAILURES under a "Warning:" prefix.
+        # They must surface as ERRORS (the run produced no usable data), not be
+        # downgraded to warnings. A transient "singular matrix" note (recoverable
+        # via stepping) must stay a warning.
+        log = tmp_path / "ng_conv.log"
+        log.write_text(
+            "Warning: singular matrix:  check nodes out and 0\n"
+            "Warning: gmin stepping failed\n"
+            "source stepping failed\n"
+            "doAnalyses: iteration limit reached\n"
+            "Total elapsed time: 0.01 seconds.\n"
+        )
+        result = extract_log_diagnostics(log)
+        errs = " | ".join(result["errors"]).lower()
+        assert "gmin stepping failed" in errs
+        assert "source stepping failed" in errs
+        assert "iteration limit reached" in errs
+        # transient singular-matrix note is not terminal -> stays a warning
+        assert any("singular matrix" in w.lower() for w in result["warnings"])
+        assert not any("singular matrix" in e.lower() for e in result["errors"])
+
     def test_empty_file(self, tmp_path: Path):
         log = tmp_path / "empty.log"
         log.write_text("")
