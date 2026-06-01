@@ -231,11 +231,16 @@ async def _wait_for_completion(
         await asyncio.wait_for(job.done_event.wait(), timeout=timeout)
     except TimeoutError:
         # Timeout - this is NOT a simulator error, it's a tool-level kill.
-        # Kill the spice process first, then record status=timeout (NOT
-        # cancelled) so the user sees the real cause.
-        await runner.kill(job.job_id)
-        if job.status == "running":
+        # Record status=timeout BEFORE killing so that when the killed sim's
+        # completion callback fires, _handle_completion sees a terminal status
+        # and discards the partial raw instead of recording a false success.
+        # NON_TERMINAL_LIVE_STATUSES covers a job still "queued" on the
+        # concurrency gate as well as a "running" one: both must be marked
+        # terminal so the pending start_simulation task self-heals (releases its
+        # slot, doesn't launch) when a slot frees, instead of running orphaned.
+        if job.status in NON_TERMINAL_LIVE_STATUSES:
             transition(job, "timeout", state=state)
+        await runner.kill(job.job_id)
         # Use the post-kill elapsed (same source as check_job) so a
         # downstream consumer reading both endpoints sees a consistent
         # number rather than the user-set timeout limit.

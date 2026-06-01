@@ -248,6 +248,14 @@ class BatchRunnerBase(RunnerBase):
         runner = self._active_runners.get(batch_job.job_id)
         if runner is not None:
             try:
+                # NOTE (WSL limitation): kill_all_spice matches the Windows
+                # executable name against the *Linux* psutil table, so on WSL it
+                # is a no-op — the batch's per-run Windows LTspice processes keep
+                # running as orphans (the same J-KILL defect fixed for single
+                # jobs via kill_windows_ltspice_by_token). NOT fixed here because
+                # batch sub-runs are named by spicelib from the netlist stem, not
+                # the batch job_id, so there is no per-job token to target
+                # safely. Tracked in open_followups (item 6).
                 await asyncio.to_thread(runner.kill_all_spice)
             except Exception as e:
                 logger.warning("Error killing %s job %s: %s", kind, batch_job.job_id, e)
