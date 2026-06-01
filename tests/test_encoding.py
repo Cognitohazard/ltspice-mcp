@@ -115,3 +115,50 @@ class TestReadSpiceText:
         p = tmp_path / "standard.bjt"
         p.write_bytes(text.encode("utf-16-le"))
         assert read_spice_text(p) == text
+
+
+# Relocated from tests/test_v6_fixes.py (regression).
+class TestJN1ReadCircuitEncodingZoo:
+    """J-N1: ``read_circuit`` used to crash on UTF-8-BOM, UTF-16-BE-no-BOM,
+    and unclosed-``.SUBCKT`` files because spicelib's ``SpiceEditor`` was
+    in the read path. The fix routes ``.cir/.net`` reads through
+    ``services.extract_netlist_info`` which uses ``read_spice_text`` +
+    ``cards_from_path``.
+    """
+
+    def _write_extra(self, path: Path, prefix: bytes, encoding: str) -> None:
+        body = "* probe\nR1 in out 1k\n.tran 1u\n.end\n"
+        path.write_bytes(prefix + body.encode(encoding))
+
+    def test_utf8_bom_does_not_crash(self, tmp_path: Path) -> None:
+        from ltspice_mcp.lib.services import extract_netlist_info
+
+        cir = tmp_path / "utf8bom.cir"
+        self._write_extra(cir, b"\xef\xbb\xbf", "utf-8")
+        info = extract_netlist_info(cir)
+        assert info["type"] == "netlist"
+        refs = [c["reference"] for c in info["components"]]
+        assert "R1" in refs
+
+    def test_utf16le_no_bom(self, tmp_path: Path) -> None:
+        from ltspice_mcp.lib.services import extract_netlist_info
+
+        cir = tmp_path / "utf16le.cir"
+        body = "* probe\nR1 in out 1k\n.tran 1u\n.end\n"
+        cir.write_bytes(body.encode("utf-16-le"))
+        info = extract_netlist_info(cir)
+        # content must be properly decoded — no NUL interleavings
+        assert "\x00" not in info["content"]
+        refs = [c["reference"] for c in info["components"]]
+        assert "R1" in refs
+
+    def test_unclosed_subckt_warns_not_crashes(self, tmp_path: Path) -> None:
+        from ltspice_mcp.lib.services import extract_netlist_info
+
+        cir = tmp_path / "trunc.cir"
+        cir.write_text(
+            ".subckt amp in out\nR1 in mid 1k\nR2 mid out 1k\n* missing .ENDS\nV1 vdd 0 5\n.end\n"
+        )
+        info = extract_netlist_info(cir)
+        assert "warnings" in info
+        assert any("unclosed .subckt" in w.lower() for w in info["warnings"])

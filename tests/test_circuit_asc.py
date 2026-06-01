@@ -8,6 +8,7 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.circuit import (
     AddComponentInput,
+    ApplySchematicOpsInput,
     CircuitReadInput,
     ComponentInfoInput,
     ConnectInput,
@@ -16,10 +17,18 @@ from ltspice_mcp.tools.circuit import (
     MoveComponentInput,
     NetLabelInput,
     RemoveComponentInput,
+    ResetSchematicInput,
+    SchematicFromNetlistInput,
     SetComponentAttributeInput,
     SymbolInfoInput,
+    TraceNetInput,
+    ValidateNetlistInput,
+    _build_on_wire_predicate,
+    _parse_netlist_for_synth,
+    _point_on_segment,
     handle_add_component,
     handle_add_net_label,
+    handle_apply_schematic_ops,
     handle_component_info,
     handle_connect,
     handle_diff_circuit,
@@ -28,14 +37,66 @@ from ltspice_mcp.tools.circuit import (
     handle_move_component,
     handle_read_circuit,
     handle_remove_component,
+    handle_reset_schematic,
+    handle_schematic_from_netlist,
     handle_set_component_attribute,
     handle_symbol_info,
+    handle_trace_net,
+    handle_validate_netlist,
 )
 
 
 def _copy_file(src: Path, dst: Path) -> None:
     """Sync byte-copy — keeps blocking pathlib I/O out of async test bodies."""
     dst.write_bytes(src.read_bytes())
+
+
+# Relocated from tests/test_followups_2026_05_29.py (regression).
+RC_NETLIST = (
+    "* RC low-pass filter\nV1 in 0 AC 1\nR1 in out 1k\nC1 out 0 1u\n.ac dec 10 1 100k\n.end\n"
+)
+
+
+# Relocated from tests/test_followups_2026_05_29.py (regression).
+def _read_bytes(p: Path) -> bytes:
+    """Sync file read (keeps blocking pathlib I/O out of async test bodies)."""
+    return p.read_bytes()
+
+
+# Relocated from tests/test_v10_fixes.py (regression).
+# Two FLAGs (aaa, bbb) on one physical wire -> named-net short; R1 placed away
+# from any wire/label -> both pins float.
+SHORTED_ASC = """Version 4
+SHEET 1 880 680
+WIRE 0 0 100 0
+FLAG 0 0 aaa
+FLAG 100 0 bbb
+SYMBOL res 200 200 R0
+SYMATTR InstName R1
+SYMATTR Value 1k
+"""
+
+# Relocated from tests/test_v10_fixes.py (regression).
+# R1 (pins at y=100-48 and y=100+48) fully wired to a named net and ground.
+CLEAN_ASC = """Version 4
+SHEET 1 880 680
+WIRE 100 52 100 0
+WIRE 100 148 100 200
+FLAG 100 0 vin
+FLAG 100 200 0
+SYMBOL res 100 100 R0
+SYMATTR InstName R1
+SYMATTR Value 1k
+"""
+
+# Relocated from tests/test_v10_fixes.py (regression).
+# A net carrying a single name plus ground ('0') is NOT a short.
+GROUND_ASC = """Version 4
+SHEET 1 880 680
+WIRE 0 0 100 0
+FLAG 0 0 vout
+FLAG 100 0 0
+"""
 
 
 @pytest.mark.asyncio
@@ -612,3 +673,708 @@ class TestAtomicAscSave:
         # read from disk shows the pre-failure state.
         result = await handle_list_components({"path": asc_file.name}, asc_state)
         assert "R_uncommitted" not in result.content[0].text
+
+
+# Relocated from tests/test_v5_fixes.py (regression).
+@pytest.mark.asyncio
+class TestN9SetAttributeAllowlist:
+    """N9: set_component_attribute rejects unknown attribute names."""
+
+    async def test_rejects_typo(self, asc_state: SessionState, asc_file: Path):
+        with pytest.raises(NetlistError, match="Unknown attribute"):
+            await handle_set_component_attribute(
+                SetComponentAttributeInput(
+                    path=asc_file.name,
+                    reference="R1",
+                    attribute="NotARealAttr",
+                    value="x",
+                ),
+                asc_state,
+            )
+
+    async def test_suggests_canonical_for_case_typo(self, asc_state: SessionState, asc_file: Path):
+        with pytest.raises(NetlistError, match="Did you mean 'SpiceLine'"):
+            await handle_set_component_attribute(
+                SetComponentAttributeInput(
+                    path=asc_file.name, reference="R1", attribute="spiceline", value="x"
+                ),
+                asc_state,
+            )
+
+    async def test_accepts_spiceline(self, asc_state: SessionState, asc_file: Path):
+        # Sanity: the canonical name still works.
+        result = await handle_set_component_attribute(
+            SetComponentAttributeInput(
+                path=asc_file.name, reference="R1", attribute="SpiceLine", value="tc=10ppm"
+            ),
+            asc_state,
+        )
+        assert "SpiceLine" in result.content[0].text
+
+
+# Relocated from tests/test_v5_fixes.py (regression).
+@pytest.mark.asyncio
+class TestN12FloatingLabelWarning:
+    """N12: add_net_label warns on labels placed away from any wire/pin."""
+
+    async def test_warns_on_floating(self, asc_state: SessionState, asc_file: Path):
+        result = await handle_add_net_label(
+            NetLabelInput(path=asc_file.name, net="VCC_floating", x=10, y=10),
+            asc_state,
+        )
+        assert "floating" in result.content[0].text.lower()
+
+
+# Relocated from tests/test_v5_fixes.py (regression).
+@pytest.mark.asyncio
+class TestN8NetConflictInConnect:
+    """N8: connect detects shorts between two named nets."""
+
+    async def test_refuses_named_net_short(self, asc_state: SessionState):
+        # Build a clean schematic with two resistors on disjoint named nets,
+        # then try to connect them.
+        from ltspice_mcp.tools.circuit import (
+            CreateSchematicInput,
+            handle_create_schematic,
+        )
+
+        await handle_create_schematic(CreateSchematicInput(name="net_conflict_test"), asc_state)
+        await handle_add_component(
+            AddComponentInput(
+                path="net_conflict_test.asc",
+                reference="R1",
+                symbol="res",
+                x=100,
+                y=100,
+            ),
+            asc_state,
+        )
+        await handle_add_component(
+            AddComponentInput(
+                path="net_conflict_test.asc",
+                reference="R2",
+                symbol="res",
+                x=300,
+                y=100,
+            ),
+            asc_state,
+        )
+        # The test fixture's stripped 'res' symbol uses numeric pin names.
+        await handle_add_net_label(
+            NetLabelInput(path="net_conflict_test.asc", net="LEFT", pin="R1.1"),
+            asc_state,
+        )
+        await handle_add_net_label(
+            NetLabelInput(path="net_conflict_test.asc", net="RIGHT", pin="R2.1"),
+            asc_state,
+        )
+        with pytest.raises(NetlistError, match="Net-label conflict"):
+            await handle_connect(
+                ConnectInput(
+                    path="net_conflict_test.asc",
+                    from_pin="R1.1",
+                    to_pin="R2.1",
+                ),
+                asc_state,
+            )
+
+
+# Relocated from tests/test_v5_fixes.py (regression).
+@pytest.mark.asyncio
+class TestN11RemoveComponentNoFalseOrphans:
+    """N11: remove_component doesn't flag wires belonging to other components."""
+
+    async def test_other_component_pin_not_flagged(self, asc_state: SessionState, asc_file: Path):
+        # Add a second resistor whose pin coincides with R1's existing wire.
+        # When we remove R2, the wire connecting R1 stays — and our orphan
+        # detector should NOT flag it.
+        await handle_add_component(
+            AddComponentInput(
+                path=asc_file.name,
+                reference="R2",
+                symbol="res",
+                x=128,
+                y=112,  # same coords as R1 — pins overlap
+                value="2k",
+                rotation="R90",
+            ),
+            asc_state,
+        )
+        result = await handle_remove_component(
+            RemoveComponentInput(path=asc_file.name, reference="R2"),
+            asc_state,
+        )
+        # The remaining R1's wires shouldn't be flagged as orphans.
+        assert "orphaned" not in result.content[0].text
+
+
+# Relocated from tests/test_v5_fixes.py (regression).
+@pytest.mark.asyncio
+class TestFr1ApplySchematicOps:
+    """Fr1: apply_schematic_ops batches add/connect/label/directive."""
+
+    async def test_basic_transaction(self, asc_state: SessionState, work_dir: Path):
+        from ltspice_mcp.tools.circuit import (
+            CreateSchematicInput,
+            handle_create_schematic,
+        )
+
+        await handle_create_schematic(CreateSchematicInput(name="batch_demo"), asc_state)
+
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="batch_demo.asc",
+                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
+                    {
+                        "op": "add_component",
+                        "reference": "R1",
+                        "symbol": "res",
+                        "x": 100,
+                        "y": 100,
+                        "value": "1k",
+                    },
+                    {
+                        "op": "add_component",
+                        "reference": "C1",
+                        "symbol": "cap",
+                        "x": 200,
+                        "y": 100,
+                        "value": "1u",
+                    },
+                    {
+                        "op": "add_directive",
+                        "instruction": ".tran 1m",
+                    },
+                ],
+            ),
+            asc_state,
+        )
+        text = result.content[0].text
+        data = result.structuredContent
+        assert data["applied_count"] == 3
+        assert data["failed_count"] == 0
+        assert data["saved"] is True
+        assert "All changes saved." in text
+
+    async def test_stop_on_error_aborts(self, asc_state: SessionState, work_dir: Path):
+        from ltspice_mcp.tools.circuit import (
+            CreateSchematicInput,
+            handle_create_schematic,
+        )
+
+        await handle_create_schematic(CreateSchematicInput(name="batch_abort"), asc_state)
+        # Op #1 succeeds, op #2 fails (unknown symbol). The R1 add must NOT
+        # be persisted because stop_on_error defaults to True.
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="batch_abort.asc",
+                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
+                    {
+                        "op": "add_component",
+                        "reference": "R1",
+                        "symbol": "res",
+                        "x": 100,
+                        "y": 100,
+                    },
+                    {
+                        "op": "add_component",
+                        "reference": "X1",
+                        "symbol": "definitely_not_a_symbol",
+                        "x": 200,
+                        "y": 100,
+                    },
+                ],
+            ),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data["saved"] is False
+        assert data["failed_count"] == 1
+        assert "Transaction aborted" in result.content[0].text
+
+        # Verify the file actually doesn't have R1 — load and check.
+        from ltspice_mcp.tools.circuit import (
+            CircuitReadInput,
+            handle_read_circuit,
+        )
+
+        read = await handle_read_circuit(CircuitReadInput(path="batch_abort.asc"), asc_state)
+        refs = {c["reference"] for c in read.structuredContent.get("components", [])}
+        assert "R1" not in refs
+
+    async def test_continue_on_error_persists_partial(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        from ltspice_mcp.tools.circuit import (
+            CreateSchematicInput,
+            handle_create_schematic,
+        )
+
+        await handle_create_schematic(CreateSchematicInput(name="batch_partial"), asc_state)
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="batch_partial.asc",
+                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
+                    {
+                        "op": "add_component",
+                        "reference": "R1",
+                        "symbol": "res",
+                        "x": 100,
+                        "y": 100,
+                    },
+                    {
+                        "op": "add_component",
+                        "reference": "X1",
+                        "symbol": "definitely_not_a_symbol",
+                        "x": 200,
+                        "y": 100,
+                    },
+                    {
+                        "op": "add_component",
+                        "reference": "C1",
+                        "symbol": "cap",
+                        "x": 300,
+                        "y": 100,
+                    },
+                ],
+                stop_on_error=False,
+            ),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data["applied_count"] == 2
+        assert data["failed_count"] == 1
+        assert data["saved"] is True
+
+
+# Relocated from tests/test_v6_fixes.py (regression).
+class TestEN1MidSegmentLabelDetected:
+    """E-N1: a label sitting mid-segment on a wire used to be invisible
+    to ``connect``'s endpoint-only label compare. The fix is segment-
+    aware: the trace dragon-swallows interest points that lie on a wire
+    even if they're not at an endpoint.
+    """
+
+    def test_point_on_segment_horizontal(self) -> None:
+        from ltspice_mcp.tools.circuit import _point_on_segment
+
+        # Mid-x point on a horizontal wire.
+        assert _point_on_segment((150, 100), (100, 100), (200, 100))
+        # Same y but outside x-range.
+        assert not _point_on_segment((300, 100), (100, 100), (200, 100))
+        # Different y.
+        assert not _point_on_segment((150, 101), (100, 100), (200, 100))
+
+    def test_point_on_segment_vertical(self) -> None:
+        from ltspice_mcp.tools.circuit import _point_on_segment
+
+        assert _point_on_segment((100, 150), (100, 100), (100, 200))
+        assert not _point_on_segment((100, 250), (100, 100), (100, 200))
+        assert not _point_on_segment((101, 150), (100, 100), (100, 200))
+
+    def test_named_labels_strips_ground(self) -> None:
+        from ltspice_mcp.tools.circuit import _named_labels
+
+        assert _named_labels(frozenset({"OUTP", "0"})) == {"OUTP"}
+        assert _named_labels(frozenset({"0"})) == set()
+        assert _named_labels(frozenset()) == set()
+
+
+# Relocated from tests/test_followups_2026_05_29.py (regression).
+class TestParseNetlistForSynth:
+    def test_basic_rc(self):
+        instances, directives, skipped, _warnings = _parse_netlist_for_synth(RC_NETLIST)
+        refs = {i.ref for i in instances}
+        assert refs == {"V1", "R1", "C1"}
+        assert not skipped
+        assert any(d.lower().startswith(".ac") for d in directives)
+        # Title line dropped, .end dropped.
+        assert all(not d.lower().startswith(".end") for d in directives)
+
+    def test_symbol_and_nodes_mapping(self):
+        instances, *_ = _parse_netlist_for_synth(RC_NETLIST)
+        by_ref = {i.ref: i for i in instances}
+        assert by_ref["R1"].symbol == "res"
+        assert by_ref["C1"].symbol == "cap"
+        assert by_ref["V1"].symbol == "voltage"
+        assert by_ref["R1"].nodes == ("in", "out")
+        assert by_ref["R1"].value == "1k"
+
+    def test_multi_token_source_value_preserved(self):
+        instances, *_ = _parse_netlist_for_synth(
+            "* t\nV1 in 0 SINE(0 1 1k) AC 1\nR1 in 0 1k\n.end\n"
+        )
+        v1 = next(i for i in instances if i.ref == "V1")
+        assert v1.nodes == ("in", "0")
+        assert v1.value == "SINE(0 1 1k) AC 1"
+
+    def test_unsupported_element_skipped(self):
+        instances, _, skipped, _ = _parse_netlist_for_synth(
+            "* t\nM1 d g s b NMOS\nR1 a b 1k\n.end\n"
+        )
+        assert {i.ref for i in instances} == {"R1"}
+        assert any(s["ref"] == "M1" for s in skipped)
+
+    def test_subckt_def_warns(self):
+        _, _, _, warnings = _parse_netlist_for_synth(
+            "* t\nR1 a b 1k\n.subckt amp in out\nR2 in out 1k\n.ends\n.end\n"
+        )
+        assert any("ubcircuit" in w for w in warnings)
+
+    def test_malformed_body_skipped_not_raised(self):
+        # "R1 net(a b 1k" lexes as an instance (R prefix) but tokenize_body
+        # raises on the unbalanced paren — it must be skipped, not crash.
+        instances, _, skipped, _ = _parse_netlist_for_synth(
+            "* t\nR1 net(a b 1k\nC1 a 0 1u\n.end\n"
+        )
+        assert {i.ref for i in instances} == {"C1"}
+        assert any(s["ref"] == "R1" and "tokenize" in s["reason"] for s in skipped)
+
+    def test_no_title_keeps_first_instance(self):
+        # F2: a bare netlist fragment (no '*' title) must NOT silently drop its
+        # first card — that used to delete the source (V1) and leave a dead
+        # circuit with no feedback.
+        instances, _directives, skipped, warnings = _parse_netlist_for_synth(
+            "V1 in 0 AC 1\nR1 in out 1k\nC1 out 0 1u\n.ac dec 10 1 100k\n.end\n"
+        )
+        assert {i.ref for i in instances} == {"V1", "R1", "C1"}
+        assert not skipped
+        assert any("title" in w.lower() for w in warnings)
+
+    def test_title_comment_dropped_without_warning(self):
+        # RC_NETLIST has a leading '* RC low-pass filter' comment: it is the
+        # conventional deck title, dropped silently, all instances kept.
+        instances, _directives, _skipped, warnings = _parse_netlist_for_synth(RC_NETLIST)
+        assert {i.ref for i in instances} == {"V1", "R1", "C1"}
+        assert not any("title" in w.lower() for w in warnings)
+
+
+# Relocated from tests/test_followups_2026_05_29.py (regression).
+@pytest.mark.asyncio
+class TestSchematicFromNetlist:
+    async def test_roundtrip_through_read_circuit(self, asc_state: SessionState, work_dir: Path):
+        res = await handle_schematic_from_netlist(
+            SchematicFromNetlistInput(name="synth_rc", content=RC_NETLIST, overwrite=True),
+            asc_state,
+        )
+        assert res.structuredContent is not None
+        sc = res.structuredContent
+        assert sc["placed"] == 3
+        assert set(sc["nets"]) == {"in", "out", "0"}
+        assert sc["directive_count"] == 1
+        assert not sc["skipped"]
+
+        read = await handle_read_circuit(CircuitReadInput(path="synth_rc.asc"), asc_state)
+        rsc = read.structuredContent
+        assert rsc["type"] == "asc"
+        refs = {c["reference"] for c in rsc["components"]}
+        assert refs == {"R1", "C1", "V1"}
+        values = {c["reference"]: c["value"] for c in rsc["components"]}
+        assert values["R1"] == "1k"
+        assert values["C1"] == "1u"
+        assert values["V1"] == "AC 1"
+        label_texts = {lbl["text"] for lbl in rsc["labels"]}
+        assert {"in", "out", "0"} <= label_texts
+        assert any(d.lower().startswith(".ac") for d in rsc["directives"])
+
+    async def test_overwrite_after_read_uses_fresh_stub(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # Regression (Codex review): the overwrite path must populate the fresh
+        # blank stub, not an editor cached from a prior read of the old content.
+        await handle_schematic_from_netlist(
+            SchematicFromNetlistInput(name="ow_read", content=RC_NETLIST, overwrite=True),
+            asc_state,
+        )
+        await handle_read_circuit(CircuitReadInput(path="ow_read.asc"), asc_state)  # caches editor
+        await handle_schematic_from_netlist(
+            SchematicFromNetlistInput(
+                name="ow_read", content="* t\nR9 a b 2k\nC9 b 0 2u\n.end\n", overwrite=True
+            ),
+            asc_state,
+        )
+        read = await handle_read_circuit(CircuitReadInput(path="ow_read.asc"), asc_state)
+        assert read.structuredContent is not None
+        refs = {c["reference"] for c in read.structuredContent["components"]}
+        assert refs == {"R9", "C9"}  # only the new content, not R1/C1 from the first synth
+
+    async def test_reports_skipped_unsupported(self, asc_state: SessionState):
+        content = "* t\nM1 d g s NMOS\nR1 in out 1k\nC1 out 0 1u\n.end\n"
+        res = await handle_schematic_from_netlist(
+            SchematicFromNetlistInput(name="synth_skip", content=content, overwrite=True),
+            asc_state,
+        )
+        assert res.structuredContent is not None
+        sc = res.structuredContent
+        assert sc["placed"] == 2  # R1, C1
+        assert any(s["ref"] == "M1" for s in sc["skipped"])
+
+    async def test_refuses_overwrite_by_default(self, asc_state: SessionState, work_dir: Path):
+        await handle_schematic_from_netlist(
+            SchematicFromNetlistInput(name="synth_dup", content=RC_NETLIST, overwrite=True),
+            asc_state,
+        )
+        with pytest.raises(NetlistError, match="already exists"):
+            await handle_schematic_from_netlist(
+                SchematicFromNetlistInput(name="synth_dup", content=RC_NETLIST),
+                asc_state,
+            )
+
+    async def test_nothing_to_place_raises(self, asc_state: SessionState):
+        with pytest.raises(NetlistError, match="Nothing to place"):
+            await handle_schematic_from_netlist(
+                SchematicFromNetlistInput(name="synth_empty", content="* just a title\n"),
+                asc_state,
+            )
+
+
+# Relocated from tests/test_followups_2026_05_29.py (regression).
+@pytest.mark.asyncio
+class TestTraceNet:
+    async def test_name_based_net_on_synth_output(self, asc_state: SessionState):
+        await handle_schematic_from_netlist(
+            SchematicFromNetlistInput(name="trace_rc", content=RC_NETLIST, overwrite=True),
+            asc_state,
+        )
+        # R1.1 is on node "in" (SpiceOrder 1). V1.+ is also on "in" — they are
+        # at different coordinates connected only by the shared label name.
+        res = await handle_trace_net(TraceNetInput(path="trace_rc.asc", pin="R1.1"), asc_state)
+        assert res.structuredContent is not None
+        sc = res.structuredContent
+        assert sc["labels"] == ["in"]
+        refs = {p["reference"] for p in sc["pins"]}
+        assert refs == {"R1", "V1"}
+        assert sc["is_shorted"] is False
+
+    async def test_trace_by_net_name(self, asc_state: SessionState):
+        # net:in matches one FLAG per pin (V1.+ and R1.1) — _resolve_pin would
+        # refuse the ambiguity, but trace_net seeds from a match and name-merges.
+        await handle_schematic_from_netlist(
+            SchematicFromNetlistInput(name="trace_byname", content=RC_NETLIST, overwrite=True),
+            asc_state,
+        )
+        res = await handle_trace_net(
+            TraceNetInput(path="trace_byname.asc", pin="net:in"), asc_state
+        )
+        assert res.structuredContent is not None
+        sc = res.structuredContent
+        assert sc["labels"] == ["in"]
+        assert {p["reference"] for p in sc["pins"]} == {"R1", "V1"}
+
+    async def test_trace_by_missing_net_name_raises(self, asc_state: SessionState):
+        await handle_schematic_from_netlist(
+            SchematicFromNetlistInput(name="trace_miss", content=RC_NETLIST, overwrite=True),
+            asc_state,
+        )
+        with pytest.raises(NetlistError, match="not found"):
+            await handle_trace_net(
+                TraceNetInput(path="trace_miss.asc", pin="net:nonexistent"), asc_state
+            )
+
+    async def test_short_detection(self, asc_state: SessionState, work_dir: Path):
+        asc = work_dir / "short.asc"
+        asc.write_text("Version 4\nSHEET 1 880 680\nWIRE 0 0 100 0\nFLAG 0 0 a\nFLAG 100 0 b\n")
+        res = await handle_trace_net(TraceNetInput(path="short.asc", x=0, y=0), asc_state)
+        assert res.structuredContent is not None
+        sc = res.structuredContent
+        assert sc["is_shorted"] is True
+        assert set(sc["labels"]) == {"a", "b"}
+
+    async def test_empty_coordinate_raises(self, asc_state: SessionState, work_dir: Path):
+        asc = work_dir / "empty.asc"
+        asc.write_text("Version 4\nSHEET 1 880 680\nFLAG 0 0 a\n")
+        with pytest.raises(NetlistError, match="Nothing found"):
+            await handle_trace_net(TraceNetInput(path="empty.asc", x=500, y=500), asc_state)
+
+
+# Relocated from tests/test_followups_2026_05_29.py (regression).
+class TestOnWirePredicate:
+    def test_matches_point_on_segment(self):
+        segments = [((0, 0), (100, 0)), ((100, 0), (100, 80)), ((50, 50), (50, 50))]
+        on_wire = _build_on_wire_predicate(segments)
+        probes = [(0, 0), (50, 0), (100, 0), (100, 40), (100, 80), (50, 50), (10, 10), (200, 0)]
+        for p in probes:
+            expected = any(_point_on_segment(p, v1, v2) for v1, v2 in segments)
+            assert on_wire(p) == expected, p
+
+    def test_endpoints_and_spans(self):
+        on_wire = _build_on_wire_predicate([((0, 0), (0, 100))])
+        assert on_wire((0, 0))
+        assert on_wire((0, 50))
+        assert on_wire((0, 100))
+        assert not on_wire((10, 50))
+
+
+# Relocated from tests/test_followups_2026_05_29.py (regression).
+@pytest.mark.asyncio
+class TestAddComponentFloatingFilter:
+    async def test_only_new_component_floating_pins(self, asc_state: SessionState, work_dir: Path):
+        asc = work_dir / "build.asc"
+        asc.write_text("Version 4\nSHEET 1 880 680\n")
+        # First component: both pins float.
+        await handle_add_component(
+            AddComponentInput(path="build.asc", reference="R1", symbol="res", x=100, y=100),
+            asc_state,
+        )
+        # Second component placed far away: its warnings must NOT re-list R1's
+        # floating pins (the O(n^2) spam this fix removes).
+        res = await handle_add_component(
+            AddComponentInput(path="build.asc", reference="R2", symbol="res", x=400, y=100),
+            asc_state,
+        )
+        vw = res.structuredContent.get("validation_warnings", [])
+        refs = {w["ref"] for w in vw}
+        assert refs <= {"R2"}
+        assert "R1" not in refs
+
+
+# Relocated from tests/test_followups_2026_05_29.py (regression).
+@pytest.mark.asyncio
+class TestResetSchematic:
+    async def test_revert_after_edit(self, asc_state: SessionState, asc_file: Path):
+        original = _read_bytes(asc_file)
+        await handle_move_component(
+            MoveComponentInput(path=asc_file.name, reference="R1", x=300, y=200),
+            asc_state,
+        )
+        assert _read_bytes(asc_file) != original  # edit landed
+        res = await handle_reset_schematic(ResetSchematicInput(path=asc_file.name), asc_state)
+        assert res.structuredContent is not None
+        assert res.structuredContent["reverted"] is True
+        assert _read_bytes(asc_file) == original  # byte-exact restore
+
+    async def test_nothing_to_revert(self, asc_state: SessionState, asc_file: Path):
+        # No in-session edit captured → reverted=False, not an error.
+        res = await handle_reset_schematic(ResetSchematicInput(path=asc_file.name), asc_state)
+        assert res.structuredContent is not None
+        assert res.structuredContent["reverted"] is False
+        assert res.structuredContent["bytes"] is None
+
+    async def test_snapshot_is_pre_first_edit(self, asc_state: SessionState, asc_file: Path):
+        # Two edits, then reset → restores the state before the FIRST edit.
+        original = _read_bytes(asc_file)
+        await handle_move_component(
+            MoveComponentInput(path=asc_file.name, reference="R1", x=300, y=200), asc_state
+        )
+        await handle_move_component(
+            MoveComponentInput(path=asc_file.name, reference="R1", x=400, y=400), asc_state
+        )
+        await handle_reset_schematic(ResetSchematicInput(path=asc_file.name), asc_state)
+        assert _read_bytes(asc_file) == original
+
+    async def test_reset_then_reedit_resnapshots(self, asc_state: SessionState, asc_file: Path):
+        # After a reset the snapshot is dropped; a new edit establishes a fresh
+        # restore point, and a reset with no new edit finds nothing.
+        await handle_move_component(
+            MoveComponentInput(path=asc_file.name, reference="R1", x=300, y=200), asc_state
+        )
+        await handle_reset_schematic(ResetSchematicInput(path=asc_file.name), asc_state)
+        res = await handle_reset_schematic(ResetSchematicInput(path=asc_file.name), asc_state)
+        assert res.structuredContent is not None
+        assert res.structuredContent["reverted"] is False
+        after_reset = _read_bytes(asc_file)
+        await handle_move_component(
+            MoveComponentInput(path=asc_file.name, reference="R1", x=500, y=500), asc_state
+        )
+        await handle_reset_schematic(ResetSchematicInput(path=asc_file.name), asc_state)
+        assert _read_bytes(asc_file) == after_reset
+
+    async def test_requires_asc(self, state_no_sim: SessionState, work_dir: Path):
+        cir = work_dir / "x.cir"
+        cir.write_text("* t\nR1 a b 1k\n.end\n")
+        with pytest.raises(NetlistError, match=r"requires an \.asc"):
+            await handle_reset_schematic(ResetSchematicInput(path="x.cir"), state_no_sim)
+
+    async def test_synth_new_file_not_revertible_to_stub(self, asc_state: SessionState):
+        # Regression: schematic_from_netlist writes a blank stub then edits it.
+        # reset_schematic must NOT restore that 30-byte stub for a NEW file —
+        # there's no pre-session state, so it reports reverted=False.
+        await handle_schematic_from_netlist(
+            SchematicFromNetlistInput(name="synth_reset", content=RC_NETLIST, overwrite=True),
+            asc_state,
+        )
+        res = await handle_reset_schematic(ResetSchematicInput(path="synth_reset.asc"), asc_state)
+        assert res.structuredContent is not None
+        assert res.structuredContent["reverted"] is False
+
+    async def test_synth_overwrite_reverts_to_original(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # overwrite=true synth over an existing file → reset restores the
+        # ORIGINAL bytes (captured before the overwrite), not the blank stub.
+        await handle_schematic_from_netlist(
+            SchematicFromNetlistInput(name="synth_ow", content=RC_NETLIST, overwrite=True),
+            asc_state,
+        )
+        original = _read_bytes(work_dir / "synth_ow.asc")
+        await handle_schematic_from_netlist(
+            SchematicFromNetlistInput(
+                name="synth_ow", content="* t\nR9 a b 2k\nC9 b 0 2u\n.end\n", overwrite=True
+            ),
+            asc_state,
+        )
+        assert _read_bytes(work_dir / "synth_ow.asc") != original
+        res = await handle_reset_schematic(ResetSchematicInput(path="synth_ow.asc"), asc_state)
+        assert res.structuredContent is not None
+        assert res.structuredContent["reverted"] is True
+        assert _read_bytes(work_dir / "synth_ow.asc") == original
+
+
+# Relocated from tests/test_v10_fixes.py (regression).
+class TestValidateNetlistAscTopology:
+    """P1-ASC-VAL — validate_netlist surfaces .asc shorts/floating/dangling."""
+
+    async def test_named_net_short_and_floating_pins_flagged(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        (work_dir / "shorted.asc").write_text(SHORTED_ASC)
+        result = await handle_validate_netlist(
+            ValidateNetlistInput(path="shorted.asc"), asc_state
+        )
+        data = result.structuredContent
+        assert data is not None
+        issues = data["issues"]
+        # 1 short (error) + 2 floating pins (warning).
+        assert data["issue_count"] >= 3, issues
+
+        shorts = [
+            i
+            for i in issues
+            if i["severity"] == "error" and "short" in i["message"].lower()
+        ]
+        assert len(shorts) == 1, issues
+        assert "aaa" in shorts[0]["message"] and "bbb" in shorts[0]["message"]
+
+        floating = [
+            i
+            for i in issues
+            if i["severity"] == "warning" and "floating pin" in i["message"].lower()
+        ]
+        assert len(floating) == 2, issues
+
+    async def test_clean_schematic_has_no_topology_issues(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        (work_dir / "clean.asc").write_text(CLEAN_ASC)
+        result = await handle_validate_netlist(
+            ValidateNetlistInput(path="clean.asc"), asc_state
+        )
+        data = result.structuredContent
+        assert data is not None
+        assert data["issue_count"] == 0, data["issues"]
+
+    async def test_ground_label_not_treated_as_short(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        (work_dir / "gnd.asc").write_text(GROUND_ASC)
+        result = await handle_validate_netlist(
+            ValidateNetlistInput(path="gnd.asc"), asc_state
+        )
+        data = result.structuredContent
+        assert data is not None
+        shorts = [
+            i
+            for i in data["issues"]
+            if i["severity"] == "error" and "short" in i["message"].lower()
+        ]
+        assert shorts == [], data["issues"]

@@ -497,3 +497,66 @@ class TestMagnitudeDb:
         H = np.array([0.0 + 0j, 1 + 0j])
         db = magnitude_db(H)
         assert np.isfinite(db).all()
+
+
+# Relocated from tests/test_v5_fixes.py (regression).
+class TestN5StabilityPhaseWarning:
+    """N5: stability_metrics warns when DC phase is near ±180°."""
+
+    def test_warns_on_inverting_output(self):
+        # Synthesize a CS-amp-style transfer: gain 1000 at DC, single pole at
+        # 1 kHz, BUT with a sign inversion (phase starts at 180°).
+        freqs = np.logspace(0, 7, 200)
+        omega = 2 * np.pi * freqs
+        H_lp = 1000 / (1 + 1j * omega / (2 * np.pi * 1e3))
+        H = -H_lp  # inversion → phase starts at +180°
+        out = compute_stability_metrics(freqs, H)
+        assert any("doesn't look like a loop-gain probe" in w for w in out["warnings"])
+
+    def test_silent_on_loop_probe(self):
+        # Standard loop probe: phase starts at 0°.
+        freqs = np.logspace(0, 7, 200)
+        omega = 2 * np.pi * freqs
+        H = 1000 / (1 + 1j * omega / (2 * np.pi * 1e3))
+        out = compute_stability_metrics(freqs, H)
+        assert not any("doesn't look like a loop-gain probe" in w for w in out["warnings"])
+
+
+# Relocated from tests/test_v5_fixes.py (regression).
+class TestFr5PoleOrderTolerance:
+    """Fr5: pole-order estimate accepts ±3 dB/dec around an integer."""
+
+    def test_accepts_minus_18(self):
+        # A real-world miller_ota slope was -17.97 dB/dec; the v4 ±2 cutoff
+        # rejected it. ±3 should accept "1" as the order.
+        from ltspice_mcp.lib.ac_analysis import _estimate_order_from_slope
+
+        assert _estimate_order_from_slope(-17.97) == 1
+
+    def test_rejects_far_from_integer(self):
+        from ltspice_mcp.lib.ac_analysis import _estimate_order_from_slope
+
+        # -10 dB/dec is half-way between order 0 and 1 — neither is a
+        # confident answer, so return None.
+        assert _estimate_order_from_slope(-10.0) is None
+
+
+# Relocated from tests/test_v5_fixes.py (regression).
+class TestFr6GainAtPhaseUnwrappedOmitted:
+    """Fr6: phase_deg_unwrapped is absent when not requested."""
+
+    def test_omitted_by_default(self):
+        freqs = np.logspace(0, 6, 100)
+        omega = 2 * np.pi * freqs
+        H = 1.0 / (1 + 1j * omega / (2 * np.pi * 1e3))
+        points, _ = gain_at_frequencies(freqs, H, [100.0, 1e4])
+        for p in points:
+            assert "phase_deg_unwrapped" not in p
+
+    def test_present_when_requested(self):
+        freqs = np.logspace(0, 6, 100)
+        omega = 2 * np.pi * freqs
+        H = 1.0 / (1 + 1j * omega / (2 * np.pi * 1e3))
+        points, _ = gain_at_frequencies(freqs, H, [100.0, 1e4], include_unwrapped_phase=True)
+        for p in points:
+            assert "phase_deg_unwrapped" in p

@@ -6,6 +6,8 @@ import pytest
 from pydantic import ValidationError
 
 from ltspice_mcp.errors import NetlistError, PathSecurityError
+from ltspice_mcp.lib.component_value import apply_value_to_instance
+from ltspice_mcp.lib.spice_lex import emit, lex
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.circuit import (
     handle_create_netlist,
@@ -620,3 +622,105 @@ class TestDiffCircuit:
         assert data is not None
         assert any(".ac" in d for d in data["directives_added"])
         assert any(".tran" in d for d in data["directives_removed"])
+
+
+# Relocated from tests/test_v6_fixes.py (regression).
+class TestCN1PulseAcceptedOnVI:
+    """C-N1: ``set_component_value(V1, "PULSE(...)")`` was rejected as
+    whitespace-bearing despite being a legal source spec."""
+
+    def _run(self, body: str, ref: str, value: str) -> str:
+        cards = lex(body).cards
+        instance = next(c for c in cards if c.kind == "instance" and c.name == ref)
+        apply_value_to_instance(instance, value)
+        return emit(cards)
+
+    def test_pulse_replaces_value_field(self) -> None:
+        out = self._run(
+            "V1 in 0 1\n",
+            "V1",
+            "PULSE(0 1 0 2n 2n 100n 200n)",
+        )
+        assert out.strip() == "V1 in 0 PULSE(0 1 0 2n 2n 100n 200n)"
+
+    def test_sin_replaces_existing_pulse(self) -> None:
+        out = self._run(
+            "V1 in 0 PULSE(0 1 0 1n 1n 50n 100n)\n",
+            "V1",
+            "SIN(0 1 1k) AC 1",
+        )
+        assert out.strip() == "V1 in 0 SIN(0 1 1k) AC 1"
+
+    def test_ac_magnitude_only(self) -> None:
+        out = self._run("V1 in 0 1\n", "V1", "AC 1")
+        assert out.strip() == "V1 in 0 AC 1"
+
+    def test_pwl_with_internal_whitespace(self) -> None:
+        out = self._run("I1 a 0 0\n", "I1", "PWL(0 0 1m 1 2m 0)")
+        assert out.strip() == "I1 a 0 PWL(0 0 1m 1 2m 0)"
+
+
+# Relocated from tests/test_v6_fixes.py (regression).
+class TestCN2BSourcePrefixPreserved:
+    """C-N2: a brace-only value used to drop ``V=``/``I=``."""
+
+    def _run(self, body: str, ref: str, value: str) -> str:
+        cards = lex(body).cards
+        instance = next(c for c in cards if c.kind == "instance" and c.name == ref)
+        apply_value_to_instance(instance, value)
+        return emit(cards)
+
+    def test_brace_keeps_v_prefix(self) -> None:
+        out = self._run(
+            "B1 fb 0 V={V(out)*0.5+1}\n",
+            "B1",
+            "{V(in)*0.5+1}",
+        )
+        assert out.strip() == "B1 fb 0 V={V(in)*0.5+1}"
+
+    def test_explicit_kv_overrides_existing_type(self) -> None:
+        # Switching from V= to I= drops the old V= rather than leaving
+        # a stale slot behind.
+        out = self._run(
+            "B1 fb 0 V={V(out)*0.5+1}\n",
+            "B1",
+            "I=1m",
+        )
+        assert "V=" not in out
+        assert "I=1m" in out
+
+    def test_bare_value_with_no_existing_prefix_refuses(self) -> None:
+        cards = lex("B1 fb 0 V=0\n").cards
+        b1 = next(c for c in cards if c.kind == "instance" and c.name == "B1")
+        # Strip V= manually so the body has no prefix to preserve.
+        b1.replace_body("B1 fb 0")
+        with pytest.raises(NetlistError, match="V=expr"):
+            apply_value_to_instance(b1, "10")
+
+
+# Relocated from tests/test_v6_fixes.py (regression).
+class TestCN3EgPositionalGain:
+    """C-N3: ``set_component_value(E1, "20")`` used to overwrite the
+    controlling-node pair AND the gain. Should replace only the gain."""
+
+    def _run(self, body: str, ref: str, value: str) -> str:
+        cards = lex(body).cards
+        instance = next(c for c in cards if c.kind == "instance" and c.name == ref)
+        apply_value_to_instance(instance, value)
+        return emit(cards)
+
+    def test_e_source_gain_only(self) -> None:
+        out = self._run("E1 buf 0 in 0 10\n", "E1", "20")
+        assert out.strip() == "E1 buf 0 in 0 20"
+
+    def test_g_source_gain_only(self) -> None:
+        out = self._run("G1 out 0 in 0 5\n", "G1", "12")
+        assert out.strip() == "G1 out 0 in 0 12"
+
+    def test_f_source_gain_only(self) -> None:
+        out = self._run("F1 out 0 V_sense 2\n", "F1", "5")
+        assert out.strip() == "F1 out 0 V_sense 5"
+
+    def test_f_source_with_control_ref_change(self) -> None:
+        out = self._run("F1 out 0 V_sense 2\n", "F1", "V_new 5")
+        assert out.strip() == "F1 out 0 V_new 5"

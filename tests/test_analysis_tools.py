@@ -10,6 +10,7 @@ from mcp import types
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import (
+    BodeMetricsInput,
     EdgeMetricsInput,
     FilterMetricsInput,
     FindCrossingInput,
@@ -25,6 +26,7 @@ from ltspice_mcp.tools.analysis import (
     SimulationSummaryInput,
     StabilityMetricsInput,
     TimingBetweenInput,
+    handle_bode_metrics,
     handle_edge_metrics,
     handle_filter_metrics,
     handle_find_crossing,
@@ -40,6 +42,10 @@ from ltspice_mcp.tools.analysis import (
     handle_simulation_summary,
     handle_stability_metrics,
     handle_timing_between,
+)
+from ltspice_mcp.tools.circuit import (
+    StepGetInput,
+    handle_step_get,
 )
 
 
@@ -970,3 +976,406 @@ class TestParseFreqUnitTolerance:
 
         assert _parse_freq("1k") == pytest.approx(1000.0)
         assert _parse_freq("1meg") == pytest.approx(1e6)
+
+
+# ---------------------------------------------------------------------------
+# Helpers relocated from tests/test_followups_2026_05_29.py (regression).
+# ---------------------------------------------------------------------------
+
+
+def _inject_raw(state: SessionState, path: Path, raw: MagicMock) -> None:
+    path.write_bytes(b"placeholder")
+    state.results.set(path, raw)
+
+
+def _ac_raw_mock() -> MagicMock:
+    """An AC raw mock: real frequency axis + complex first-order-LPF response."""
+    raw = MagicMock()
+    raw.get_raw_property.return_value = "AC Analysis"
+    raw.get_trace_names.return_value = ["frequency", "V(out)"]
+    freq = np.logspace(0, 5, 200)  # 1 Hz .. 100 kHz
+    fc = 1591.5
+    H = 1.0 / (1.0 + 1j * (freq / fc))
+    raw.get_axis.return_value = freq
+    raw.get_steps.return_value = [0]
+    raw.get_wave = lambda name, step=0: H
+    return raw
+
+
+def _stepped_ac_raw(fcs: list[float]) -> MagicMock:
+    """A stepped AC raw: one first-order-LPF response per cutoff in ``fcs``."""
+    raw = MagicMock()
+    raw.get_raw_property.return_value = "AC Analysis"
+    raw.get_trace_names.return_value = ["frequency", "V(out)"]
+    freq = np.logspace(0, 5, 200)
+    responses = [1.0 / (1.0 + 1j * (freq / fc)) for fc in fcs]
+    raw.get_axis.return_value = freq
+    raw.get_steps.return_value = [{"fc": fc} for fc in fcs]
+    raw.get_wave = lambda name, step=0: responses[step]
+    return raw
+
+
+# Relocated from tests/test_followups_2026_05_29.py (regression).
+@pytest.mark.asyncio
+class TestQueryValueMagnitudeLinear:
+    async def test_ac_returns_magnitude_linear(self, state_no_sim: SessionState, work_dir: Path):
+        raw = MagicMock()
+        raw.get_raw_property.return_value = "AC Analysis"
+        raw.get_trace_names.return_value = ["frequency", "V(out)"]
+        freq = np.array([10.0, 100.0, 1000.0])
+        volt = np.array([1 + 0j, 0.7 + 0.7j, 0.1 + 0j])
+        raw.get_axis.return_value = freq
+        raw.get_steps.return_value = [0]
+        raw.get_wave = lambda name, step=0: volt
+        path = work_dir / "ac.raw"
+        _inject_raw(state_no_sim, path, raw)
+
+        res = await handle_query_value(
+            QueryValueInput(raw_file="ac.raw", signal="V(out)", at="100"), state_no_sim
+        )
+        assert res.structuredContent is not None
+        sc = res.structuredContent
+        assert sc["magnitude_linear"] == pytest.approx(abs(0.7 + 0.7j))
+        assert "magnitude_db" in sc
+
+
+# Relocated from tests/test_followups_2026_05_29.py (regression).
+@pytest.mark.asyncio
+class TestStepGet:
+    async def test_raw_axis_snap_warning(self, state_no_sim: SessionState, work_dir: Path):
+        raw = MagicMock()
+        raw.get_raw_property.return_value = "DC transfer characteristic"
+        raw.get_trace_names.return_value = ["Rval", "V(out)"]
+        raw.get_axis.return_value = np.array([500.0, 1000.0, 2000.0])
+        raw.get_steps.return_value = [0]
+        raw.get_wave = lambda name, step=0: np.array([1.0, 2.0, 3.0])
+        path = work_dir / "dc.raw"
+        _inject_raw(state_no_sim, path, raw)
+
+        res = await handle_step_get(
+            StepGetInput(raw_file="dc.raw", axis="Rval", value="99999", signal="V(out)"),
+            state_no_sim,
+        )
+        assert res.structuredContent is not None
+        sc = res.structuredContent
+        assert sc["exact_match"] is False
+        assert sc["actual_value"] == 2000.0
+        assert sc.get("warnings")
+
+    async def test_raw_axis_exact_match_no_warning(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = MagicMock()
+        raw.get_raw_property.return_value = "DC transfer characteristic"
+        raw.get_trace_names.return_value = ["Rval", "V(out)"]
+        raw.get_axis.return_value = np.array([500.0, 1000.0, 2000.0])
+        raw.get_steps.return_value = [0]
+        raw.get_wave = lambda name, step=0: np.array([1.0, 2.0, 3.0])
+        path = work_dir / "dc2.raw"
+        _inject_raw(state_no_sim, path, raw)
+
+        res = await handle_step_get(
+            StepGetInput(raw_file="dc2.raw", axis="Rval", value="1k", signal="V(out)"),
+            state_no_sim,
+        )
+        assert res.structuredContent is not None
+        sc = res.structuredContent
+        assert sc["exact_match"] is True
+        assert sc["actual_value"] == 1000.0
+        assert not sc.get("warnings")
+
+    async def test_raw_axis_complex_ac_keeps_magnitude(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # axis name "frequency" == trace 0 → raw-axis branch on an AC raw.
+        # The complex sample must survive as magnitude/phase, not float()'d.
+        raw = MagicMock()
+        raw.get_raw_property.return_value = "AC Analysis"
+        raw.get_trace_names.return_value = ["frequency", "V(out)"]
+        raw.get_axis.return_value = np.array([10.0, 100.0, 1000.0])
+        raw.get_steps.return_value = [0]
+        raw.get_wave = lambda name, step=0: np.array([1 + 0j, 0.7 + 0.7j, 0.1 + 0j])
+        path = work_dir / "acaxis.raw"
+        _inject_raw(state_no_sim, path, raw)
+
+        res = await handle_step_get(
+            StepGetInput(raw_file="acaxis.raw", axis="frequency", value="100", signal="V(out)"),
+            state_no_sim,
+        )
+        assert res.structuredContent is not None
+        sc = res.structuredContent
+        assert "magnitude_linear" in sc
+        assert "magnitude_db" in sc
+        assert "value" not in sc  # complex sample, not a real scalar
+        assert sc["magnitude_linear"] == pytest.approx(abs(0.7 + 0.7j))
+        assert not sc.get("warnings")
+
+    async def test_raw_axis_interior_offgrid_no_clamp_warning(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # Dense continuous axis: an interior off-grid request is a normal
+        # nearest-neighbour lookup, NOT an out-of-range clamp — no warning.
+        raw = MagicMock()
+        raw.get_raw_property.return_value = "DC transfer characteristic"
+        raw.get_trace_names.return_value = ["v1", "V(out)"]
+        raw.get_axis.return_value = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
+        raw.get_steps.return_value = [0]
+        raw.get_wave = lambda name, step=0: np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
+        path = work_dir / "dense.raw"
+        _inject_raw(state_no_sim, path, raw)
+
+        res = await handle_step_get(
+            StepGetInput(raw_file="dense.raw", axis="v1", value="1.01", signal="V(out)"),
+            state_no_sim,
+        )
+        assert res.structuredContent is not None
+        sc = res.structuredContent
+        assert sc["actual_value"] == 1.0
+        assert sc["exact_match"] is False  # off-grid, honest
+        assert not sc.get("warnings")  # but interior → not "clamped"
+
+    async def test_step_lookup_inside_range_snap_warning(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # temp=50 sits between discrete steps {27, 85}: nearest-step used, not
+        # "clamped" (it is inside the swept range).
+        raw = MagicMock()
+        raw.get_raw_property.return_value = "Transient Analysis"
+        raw.get_trace_names.return_value = ["time", "V(out)"]
+        raw.get_steps.return_value = [{"temp": 27.0}, {"temp": 85.0}]
+        raw.get_axis.return_value = np.array([0.0, 1.0])
+        raw.get_wave = lambda name, step=0: np.array([1.0, 2.0])
+        path = work_dir / "tempstep.raw"
+        _inject_raw(state_no_sim, path, raw)
+
+        res = await handle_step_get(
+            StepGetInput(raw_file="tempstep.raw", axis="temp", value="50", signal="V(out)"),
+            state_no_sim,
+        )
+        assert res.structuredContent is not None
+        sc = res.structuredContent
+        assert sc["actual_value"] == 27.0
+        assert sc["exact_match"] is False
+        assert any("nearest step" in w for w in sc.get("warnings", []))
+        assert all("clamped" not in w for w in sc.get("warnings", []))
+
+    async def test_step_lookup_default_at_label(self, state_no_sim: SessionState, work_dir: Path):
+        raw = MagicMock()
+        raw.get_raw_property.return_value = "AC Analysis"
+        # Axis name != requested axis → falls to the .step parameter lookup.
+        raw.get_trace_names.return_value = ["frequency", "V(out)"]
+        raw.get_steps.return_value = [{"Rval": 500.0}, {"Rval": 1000.0}, {"Rval": 2000.0}]
+        raw.get_axis.return_value = np.array([10.0, 100.0, 1000.0])
+        raw.get_wave = lambda name, step=0: np.array([0.5, 0.6, 0.7])
+        path = work_dir / "step.raw"
+        _inject_raw(state_no_sim, path, raw)
+
+        res = await handle_step_get(
+            StepGetInput(raw_file="step.raw", axis="Rval", value="1000", signal="V(out)"),
+            state_no_sim,
+        )
+        assert res.structuredContent is not None
+        sc = res.structuredContent
+        assert sc["step_index"] == 1
+        assert sc["exact_match"] is True
+        assert sc["actual_at"] == 10.0
+        assert any("No 'at' given" in w for w in sc.get("warnings", []))
+
+
+# Relocated from tests/test_followups_2026_05_29.py (regression).
+@pytest.mark.asyncio
+class TestBodeMetrics:
+    async def test_point_mode_dispatch(self, state_no_sim: SessionState, work_dir: Path):
+        path = work_dir / "bode.raw"
+        _inject_raw(state_no_sim, path, _ac_raw_mock())
+        res = await handle_bode_metrics(
+            BodeMetricsInput(
+                raw_file="bode.raw", signal="V(out)", mode="point", frequencies=["1k"]
+            ),
+            state_no_sim,
+        )
+        assert res.structuredContent is not None
+        assert "points" in res.structuredContent
+
+    async def test_crossing_mode_dispatch(self, state_no_sim: SessionState, work_dir: Path):
+        path = work_dir / "bode2.raw"
+        _inject_raw(state_no_sim, path, _ac_raw_mock())
+        res = await handle_bode_metrics(
+            BodeMetricsInput(
+                raw_file="bode2.raw",
+                signal="V(out)",
+                mode="crossing",
+                quantity="magnitude_db",
+                level=-3.0103,
+            ),
+            state_no_sim,
+        )
+        assert res.structuredContent is not None
+        cs = res.structuredContent["crossings"]
+        assert cs and abs(cs[0]["frequency_hz"] - 1591.5) / 1591.5 < 0.05
+
+    async def test_slope_mode_dispatch(self, state_no_sim: SessionState, work_dir: Path):
+        path = work_dir / "bode3.raw"
+        _inject_raw(state_no_sim, path, _ac_raw_mock())
+        res = await handle_bode_metrics(
+            BodeMetricsInput(
+                raw_file="bode3.raw", signal="V(out)", mode="slope", f_low="10k", f_high="100k"
+            ),
+            state_no_sim,
+        )
+        assert res.structuredContent is not None
+        # First-order LPF stopband ≈ -20 dB/decade.
+        assert res.structuredContent["slope_db_per_decade"] < -15
+
+    async def test_filter_mode_dispatch(self, state_no_sim: SessionState, work_dir: Path):
+        path = work_dir / "bode4.raw"
+        _inject_raw(state_no_sim, path, _ac_raw_mock())
+        res = await handle_bode_metrics(
+            BodeMetricsInput(raw_file="bode4.raw", signal="V(out)", mode="filter"),
+            state_no_sim,
+        )
+        assert res.structuredContent is not None
+        assert "filter_type" in res.structuredContent
+
+    async def test_crossing_requires_quantity_and_level(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        path = work_dir / "bode5.raw"
+        _inject_raw(state_no_sim, path, _ac_raw_mock())
+        with pytest.raises(ResultError, match="requires 'quantity' and 'level'"):
+            await handle_bode_metrics(
+                BodeMetricsInput(raw_file="bode5.raw", signal="V(out)", mode="crossing"),
+                state_no_sim,
+            )
+
+    async def test_slope_requires_bounds(self, state_no_sim: SessionState, work_dir: Path):
+        path = work_dir / "bode6.raw"
+        _inject_raw(state_no_sim, path, _ac_raw_mock())
+        with pytest.raises(ResultError, match="requires 'f_low' and 'f_high'"):
+            await handle_bode_metrics(
+                BodeMetricsInput(raw_file="bode6.raw", signal="V(out)", mode="slope"),
+                state_no_sim,
+            )
+
+
+# Relocated from tests/test_followups_2026_05_29.py (regression).
+@pytest.mark.asyncio
+class TestQueryValueStepAbsorb:
+    async def test_step_axis_dispatches_to_step_lookup(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = MagicMock()
+        raw.get_raw_property.return_value = "Transient Analysis"
+        raw.get_trace_names.return_value = ["time", "V(out)"]
+        raw.get_steps.return_value = [{"Rval": 500.0}, {"Rval": 1000.0}, {"Rval": 2000.0}]
+        raw.get_axis.return_value = np.array([0.0, 1.0])
+        raw.get_wave = lambda name, step=0: np.array([1.0, 2.0])
+        path = work_dir / "qstep.raw"
+        _inject_raw(state_no_sim, path, raw)
+
+        res = await handle_query_value(
+            QueryValueInput(
+                raw_file="qstep.raw", signal="V(out)", step_axis="Rval", step_value="1000"
+            ),
+            state_no_sim,
+        )
+        assert res.structuredContent is not None
+        assert res.structuredContent["step_index"] == 1
+        assert res.structuredContent["exact_match"] is True
+
+    async def test_step_axis_requires_step_value(self, state_no_sim: SessionState, work_dir: Path):
+        path = work_dir / "qstep2.raw"
+        _inject_raw(state_no_sim, path, _ac_raw_mock())
+        with pytest.raises(ResultError, match="step_value"):
+            await handle_query_value(
+                QueryValueInput(raw_file="qstep2.raw", signal="V(out)", step_axis="Rval"),
+                state_no_sim,
+            )
+
+    async def test_requires_at_without_step_axis(self, state_no_sim: SessionState, work_dir: Path):
+        path = work_dir / "qstep3.raw"
+        _inject_raw(state_no_sim, path, _ac_raw_mock())
+        with pytest.raises(ResultError, match="'at' is required"):
+            await handle_query_value(
+                QueryValueInput(raw_file="qstep3.raw", signal="V(out)"), state_no_sim
+            )
+
+
+# Relocated from tests/test_followups_2026_05_29.py (regression).
+@pytest.mark.asyncio
+class TestBodeMetricsAllSteps:
+    async def test_crossing_per_step(self, state_no_sim: SessionState, work_dir: Path):
+        fcs = [500.0, 5000.0]
+        path = work_dir / "stepped.raw"
+        _inject_raw(state_no_sim, path, _stepped_ac_raw(fcs))
+        res = await handle_bode_metrics(
+            BodeMetricsInput(
+                raw_file="stepped.raw",
+                signal="V(out)",
+                mode="crossing",
+                quantity="magnitude_db",
+                level=-3.0103,
+                all_steps=True,
+            ),
+            state_no_sim,
+        )
+        assert res.structuredContent is not None
+        sc = res.structuredContent
+        assert sc["all_steps"] is True
+        assert sc["step_count"] == 2
+        steps = sc["steps"]
+        assert [s["step"] for s in steps] == [0, 1]
+        # The -3 dB crossing of each step tracks that step's cutoff.
+        for i, fc in enumerate(fcs):
+            cs = steps[i]["crossings"]
+            assert cs and abs(cs[0]["frequency_hz"] - fc) / fc < 0.05
+
+    async def test_single_step_warns(self, state_no_sim: SessionState, work_dir: Path):
+        path = work_dir / "onestep.raw"
+        _inject_raw(state_no_sim, path, _ac_raw_mock())  # get_steps == [0]
+        res = await handle_bode_metrics(
+            BodeMetricsInput(
+                raw_file="onestep.raw", signal="V(out)", mode="filter", all_steps=True
+            ),
+            state_no_sim,
+        )
+        assert res.structuredContent is not None
+        sc = res.structuredContent
+        assert sc["step_count"] == 1
+        assert len(sc["steps"]) == 1
+        assert any("not stepped" in w for w in sc.get("warnings", []))
+
+    async def test_all_steps_still_validates_mode_args(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # all_steps must enforce the same per-mode required args as single-step.
+        path = work_dir / "stepped2.raw"
+        _inject_raw(state_no_sim, path, _stepped_ac_raw([500.0, 5000.0]))
+        with pytest.raises(ResultError, match="requires 'f_low' and 'f_high'"):
+            await handle_bode_metrics(
+                BodeMetricsInput(
+                    raw_file="stepped2.raw", signal="V(out)", mode="slope", all_steps=True
+                ),
+                state_no_sim,
+            )
+
+    async def test_all_steps_total_failure_raises(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # Regression: a non-AC raw makes every step fail. all_steps must surface
+        # a real error, not a "success" full of buried per-step errors.
+        raw = MagicMock()
+        raw.get_raw_property.return_value = "Transient Analysis"
+        raw.get_trace_names.return_value = ["time", "V(out)"]
+        raw.get_steps.return_value = [0]
+        raw.get_axis.return_value = np.array([0.0, 1.0])
+        raw.get_wave = lambda name, step=0: np.array([1.0, 2.0])
+        path = work_dir / "tran.raw"
+        _inject_raw(state_no_sim, path, raw)
+        with pytest.raises(ResultError, match="AC analysis"):
+            await handle_bode_metrics(
+                BodeMetricsInput(
+                    raw_file="tran.raw", signal="V(out)", mode="filter", all_steps=True
+                ),
+                state_no_sim,
+            )
