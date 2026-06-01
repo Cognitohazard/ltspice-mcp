@@ -696,3 +696,29 @@ class TestComputeSignalStats:
     def test_empty_raises(self):
         with pytest.raises(ValueError, match="no samples"):
             compute_signal_stats(np.array([]), np.array([]))
+
+
+# Relocated from tests/test_v5_fixes.py (regression).
+class TestFr4PulseResponseDoubleTransition:
+    """Fr4: pulse_response refuses windows with both rising AND falling edges."""
+
+    def test_refuses_full_pulse_window(self):
+        # Window contains a 0→1→0 pulse: peak-to-peak is 1, but start and
+        # end levels are within rounding of each other. Mimics the v5
+        # finding where steady_state ≈ 2e-4 vs peak ≈ 1. abs_delta is
+        # above _LEVEL_EPSILON but tiny relative to the swing.
+        t = np.linspace(0, 1, 200)
+        # Start at exactly 0; pulse to 1.0 from t=0.2..0.6; return to 1e-3
+        # so |final - initial| = 1e-3 (above EPSILON) but pk_pk = 1.0.
+        y = np.where(t < 0.2, 0.0, np.where(t < 0.6, 1.0, 1e-3))
+        with pytest.raises(ValueError, match="full pulse"):
+            analyze_pulse_response(t, y)
+
+    def test_accepts_clean_step(self):
+        # Single rising edge with stable start AND stable end — no double-
+        # transition, should compute successfully.
+        t = np.linspace(0, 1, 200)
+        y = np.where(t < 0.3, 0.0, 1.0)
+        out = analyze_pulse_response(t, y)
+        assert out["direction"] == "rising"
+        assert out["overshoot_pct"] == 0

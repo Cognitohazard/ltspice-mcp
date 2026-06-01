@@ -550,3 +550,19 @@ class TestCountOpIterations:
 
     def test_missing_log_returns_zero(self, tmp_path: Path):
         assert count_op_iterations(tmp_path / "nope.log") == 0
+
+
+# Relocated from tests/test_v5_fixes.py (regression).
+class TestN2StepTempDegreeStripping:
+    """N2: log step parser strips trailing degree symbol."""
+
+    def test_temp_axis_strips_degree(self, tmp_path: Path):
+        log = tmp_path / "step_temp.log"
+        log.write_text("Circuit: foo\n.step temp=-40°\n.step temp=27°\n.step temp=125°\n")
+        steps = parse_step_iterations(log)
+        # Without the ° fix, the value capture would include '°' and
+        # parse_value would fail downstream — the row would be dropped.
+        assert len(steps) == 3
+        assert steps[0]["temp"] == -40.0
+        assert steps[1]["temp"] == 27.0
+        assert steps[2]["temp"] == 125.0
