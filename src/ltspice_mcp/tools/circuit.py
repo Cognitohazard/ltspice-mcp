@@ -3671,6 +3671,70 @@ def _meas_mismatch_issue(
     }
 
 
+def _asc_topology_issues(editor: AscEditor) -> list[dict]:
+    """Static schematic-graph checks for ``validate_netlist`` on ``.asc`` files.
+
+    Surfaces the three problems the tool description promises but the directive
+    lint cannot see: named-net shorts (one physical net carrying >1 distinct
+    non-ground label — the same union-find model ``trace_net`` reports), plus
+    floating pins, dangling labels, and duplicate wires (reused from the
+    ``_post_op_warnings`` advisory pass). Read-only; deterministic ordering.
+    """
+    issues: list[dict] = []
+
+    # Named-net short: a single connected net carrying more than one distinct
+    # non-ground label. Mirror ``handle_trace_net``'s ``len(named) > 1`` test.
+    part = _net_partition(editor)
+    labels_by_root: dict[tuple[int, int], set[str]] = {}
+    for coord, texts in part.label_texts.items():
+        labels_by_root.setdefault(part.root(coord), set()).update(texts)
+    shorts: list[str] = []
+    for names in labels_by_root.values():
+        named = sorted(_named_labels(frozenset(names)))
+        if len(named) > 1:
+            shorts.append(", ".join(named))
+    for joined in sorted(shorts):  # deterministic ordering
+        issues.append(
+            {
+                "severity": "error",
+                "line": None,
+                "directive": f"net labels: {joined}",
+                "message": (
+                    f"Named-net short: labels {joined} sit on the same physical "
+                    "net — LTspice merges them into one node."
+                ),
+                "suggestion": (
+                    "Separate the wires/labels, or use a single net name for "
+                    "this node."
+                ),
+            }
+        )
+
+    # Floating pins / dangling labels / duplicate wires (all warning-level) reuse
+    # the post-op advisory pass; the map both filters to the kinds we surface and
+    # supplies each one's fix hint.
+    fixes = {
+        "floating_pin": "Wire this pin or place a net label on it.",
+        "dangling_label": "Move the label onto a wire or a component pin.",
+        "duplicate_wire": "Remove the redundant wire segment.",
+    }
+    for w in _post_op_warnings(editor):
+        fix = fixes.get(w.get("kind") or "")
+        if fix is None:
+            continue
+        issues.append(
+            {
+                "severity": "warning",
+                "line": None,
+                "directive": "",
+                "message": w["message"],
+                "suggestion": fix,
+            }
+        )
+
+    return issues
+
+
 class ValidateNetlistInput(ToolInput):
     path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
     format: Literal["json", "text"] | None = Field(
@@ -3725,9 +3789,11 @@ async def handle_validate_netlist(
     file_path = safe_path(args.path, state)
     fmt = args.format
 
+    asc_editor: AscEditor | None = None
     if _is_asc(file_path):
         try:
-            content = "\n".join(_asc_directive_lines(_get_asc_editor(file_path, state)))
+            asc_editor = _get_asc_editor(file_path, state)
+            content = "\n".join(_asc_directive_lines(asc_editor))
         except Exception as e:
             raise NetlistError(f"Failed to open .asc: {e}") from e
     else:
@@ -3792,13 +3858,19 @@ async def handle_validate_netlist(
     for arity_issue in validate_netlist_arity(arity_cards):
         issues.append({"severity": "error", **arity_issue})
 
+    # .asc schematic-graph checks (named-net shorts, floating pins, dangling
+    # labels) — the directive lint above only sees embedded SPICE text, so the
+    # topology problems the description promises are added here.
+    if asc_editor is not None:
+        issues.extend(_asc_topology_issues(asc_editor))
+
     summary = {"file": str(file_path), "issue_count": len(issues), "issues": issues}
     if not issues:
         return format_response(f"OK: no issues in {file_path.name}", summary, fmt)
     lines = [f"{file_path.name}: {len(issues)} issue(s)"]
     for issue in issues:
-        loc = f":{issue['line']}" if issue.get("line") else ""
-        lines.append(f"  [{issue['severity']}] line{loc}: {issue['message']}")
+        loc = f" line:{issue['line']}" if issue.get("line") else ""
+        lines.append(f"  [{issue['severity']}]{loc}: {issue['message']}")
         if issue.get("directive"):
             lines.append(f"    {issue['directive']}")
         if issue.get("suggestion"):
