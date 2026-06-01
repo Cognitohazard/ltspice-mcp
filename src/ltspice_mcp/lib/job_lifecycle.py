@@ -32,12 +32,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Sim job: created with status="running" at registration in the tool
-# layer (see ``tools/simulation.py``), so there's no queued → running
-# transition in practice. The runner emits a 'started' discovery event
-# without a status change — kept outside this table.
+# Sim job: created "queued" in the tool layer (``tools/simulation.py``); the
+# runner transitions queued → running once it acquires a max_parallel slot.
+# A job can therefore sit "queued" for a while under load, so cancel/timeout
+# must be able to terminate it directly from "queued" (not only "running").
 VALID_SIM_TRANSITIONS: dict[str, frozenset[str]] = {
-    "queued": frozenset({"running", "failed", "cancelled"}),
+    "queued": frozenset({"running", "failed", "cancelled", "timeout"}),
     "running": frozenset({"completed", "failed", "cancelled", "timeout"}),
     "interrupted": frozenset({"completed"}),  # recovery promotion
     # Terminal: completed / failed / cancelled / timeout — no outgoing.

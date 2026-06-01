@@ -47,9 +47,14 @@ def mc_runner(loop, work_dir: Path) -> MonteCarloRunner:
     )
 
 
-def _make_job(state: SessionState, work_dir: Path, status: str = "running") -> SimulationJob:
+def _make_job(
+    state: SessionState,
+    work_dir: Path,
+    status: str = "running",
+    job_id: str = "sim_test_1",
+) -> SimulationJob:
     job = SimulationJob(
-        job_id="sim_test_1",
+        job_id=job_id,
         netlist=work_dir / "n.cir",
         simulator="FakeSim",
         status=status,  # type: ignore[arg-type]
@@ -135,6 +140,281 @@ class TestSimulationRunnerCancel:
         job = _make_job(state_no_sim, work_dir)
         # Runner not registered for this job
         await sim_runner.cancel(job)
+
+
+class TestSimulationRunnerKillWsl:
+    """J-KILL regression: kill()/cancel() must terminate the real (Windows) sim.
+
+    On WSL spicelib's ``kill_all_spice`` can't see the Windows process, so the
+    runner additionally taskkills it by job_id. cancel() must also mark the job
+    terminal BEFORE killing, so the killed sim's late completion callback can't
+    record a partial raw as success.
+    """
+
+    @pytest.mark.asyncio
+    async def test_kill_invokes_windows_taskkill_and_native(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        runner = SimulationRunner(
+            loop=asyncio.get_running_loop(),
+            simulator_class=FakeSim,
+            output_folder=work_dir,
+            max_parallel=2,
+        )
+        job = _make_job(state_no_sim, work_dir)
+        fake_spice = MagicMock()
+        runner._runners[job.job_id] = fake_spice
+        tokens: list[str] = []
+        monkeypatch.setattr(
+            "ltspice_mcp.lib.sim_runner.kill_windows_ltspice_by_token",
+            lambda tok: tokens.append(tok) or 1,
+        )
+        await runner.kill(job.job_id)
+        assert tokens == [job.job_id]  # Windows kill targeted this specific job
+        fake_spice.kill_all_spice.assert_called_once()  # native/Wine path still runs
+        assert job.job_id not in runner._runners  # tracked runner dropped
+
+    @pytest.mark.asyncio
+    async def test_cancel_marks_terminal_before_kill(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        runner = SimulationRunner(
+            loop=asyncio.get_running_loop(),
+            simulator_class=FakeSim,
+            output_folder=work_dir,
+            max_parallel=2,
+        )
+        job = _make_job(state_no_sim, work_dir)  # status="running"
+        status_at_kill: dict[str, str] = {}
+        monkeypatch.setattr(
+            "ltspice_mcp.lib.sim_runner.kill_windows_ltspice_by_token",
+            lambda tok: status_at_kill.setdefault("status", job.status) or 0,
+        )
+        await runner.cancel(job, state_no_sim)
+        assert status_at_kill["status"] == "cancelled"  # terminal set before the kill ran
+        assert job.status == "cancelled"
+
+
+class TestSimulationRunnerConcurrencyGate:
+    """J-MAXPAR regression: independent run_simulation jobs honor max_parallel.
+
+    Each job builds its own spicelib SimRunner (one task), so the session-level
+    semaphore is the only thing bounding concurrency across jobs.
+    """
+
+    @pytest.mark.asyncio
+    async def test_caps_concurrent_jobs_and_admits_queued_on_completion(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        loop = asyncio.get_running_loop()
+        runner = SimulationRunner(
+            loop=loop, simulator_class=FakeSim, output_folder=work_dir, max_parallel=2
+        )
+        # submit_sim must return quickly WITHOUT firing the completion callback,
+        # so each launched job holds its slot until we release it explicitly.
+        monkeypatch.setattr(runner, "_build_sim_runner", lambda: MagicMock())
+
+        jobs = [
+            _make_job(state_no_sim, work_dir, status="queued", job_id=f"sim_gate_{i}")
+            for i in range(3)
+        ]
+
+        tasks = [
+            loop.create_task(runner.start_simulation(j.netlist, j, state_no_sim)) for j in jobs
+        ]
+        await asyncio.sleep(0.05)
+        # max_parallel=2 -> exactly two launched, the third still queued.
+        assert sum(j.status == "running" for j in jobs) == 2, [j.status for j in jobs]
+        assert sum(j.status == "queued" for j in jobs) == 1
+
+        # Complete one running job -> frees a slot -> the queued job launches.
+        running = next(j for j in jobs if j.status == "running")
+        raw = work_dir / "g.raw"
+        raw.write_text("data")
+        log = work_dir / "g.log"
+        log.write_text("ok")
+        runner._handle_completion(running.job_id, str(raw), str(log), state_no_sim)
+        await asyncio.sleep(0.05)
+
+        assert running.status == "completed"
+        assert sum(j.status == "queued" for j in jobs) == 0  # the waiter got admitted
+        assert sum(j.status == "running" for j in jobs) == 2
+
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+
+    @staticmethod
+    def _gate_runner(work_dir: Path, launched: list, monkeypatch) -> SimulationRunner:
+        """A max_parallel=1 runner whose submit records each launched run_filename
+        (so a test can assert a job did / did NOT actually launch)."""
+        runner = SimulationRunner(
+            loop=asyncio.get_running_loop(),
+            simulator_class=FakeSim,
+            output_folder=work_dir,
+            max_parallel=1,
+        )
+
+        def build():
+            m = MagicMock()
+            m.run.side_effect = lambda *a, **k: launched.append(k.get("run_filename"))
+            return m
+
+        monkeypatch.setattr(runner, "_build_sim_runner", build)
+        return runner
+
+    @pytest.mark.asyncio
+    async def test_timeout_while_queued_does_not_launch_orphan(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        """Review J-MAXPAR finding: a job timed out while still QUEUED on the gate
+        must end terminal and must NOT launch when a slot later frees."""
+        from ltspice_mcp.lib.job_lifecycle import transition
+
+        launched: list = []
+        runner = self._gate_runner(work_dir, launched, monkeypatch)
+        loop = asyncio.get_running_loop()
+        a = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_to_a")
+        b = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_to_b")
+        ta = loop.create_task(runner.start_simulation(a.netlist, a, state_no_sim))
+        tb = loop.create_task(runner.start_simulation(b.netlist, b, state_no_sim))
+        await asyncio.sleep(0.05)
+        assert a.status == "running" and b.status == "queued"
+        launched_before = list(launched)
+
+        # The timeout handler marks the still-queued job terminal (queued->timeout).
+        transition(b, "timeout", state=state_no_sim)
+        # Free the only slot; b's task wakes and must self-heal, not launch.
+        raw = work_dir / "to.raw"
+        raw.write_text("data")
+        log = work_dir / "to.log"
+        log.write_text("ok")
+        runner._handle_completion(a.job_id, str(raw), str(log), state_no_sim)
+        await asyncio.sleep(0.05)
+
+        assert b.status == "timeout"  # stayed terminal
+        assert b.job_id not in runner._runners  # never registered as running
+        assert launched == launched_before  # b's sim was never submitted (no orphan)
+        for t in (ta, tb):
+            if not t.done():
+                t.cancel()
+
+    @pytest.mark.asyncio
+    async def test_cancel_while_queued_self_heals_and_frees_slot(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        """Review finding: cancelling a queued job must not launch it nor raise an
+        illegal transition; the freed slot must admit the next job."""
+        launched: list = []
+        runner = self._gate_runner(work_dir, launched, monkeypatch)
+        loop = asyncio.get_running_loop()
+        a = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_cq_a")
+        b = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_cq_b")
+        ta = loop.create_task(runner.start_simulation(a.netlist, a, state_no_sim))
+        tb = loop.create_task(runner.start_simulation(b.netlist, b, state_no_sim))
+        await asyncio.sleep(0.05)
+        assert a.status == "running" and b.status == "queued"
+
+        await runner.cancel(b, state_no_sim)
+        assert b.status == "cancelled"
+        launched_before = list(launched)
+
+        raw = work_dir / "cq.raw"
+        raw.write_text("data")
+        log = work_dir / "cq.log"
+        log.write_text("ok")
+        runner._handle_completion(a.job_id, str(raw), str(log), state_no_sim)
+        await asyncio.sleep(0.05)
+        assert b.status == "cancelled"  # woken task did not flip it to running
+        assert launched == launched_before  # no orphan launch
+
+        # The slot freed by completing 'a' (and not re-taken by cancelled 'b')
+        # admits a fresh job.
+        c = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_cq_c")
+        tc = loop.create_task(runner.start_simulation(c.netlist, c, state_no_sim))
+        await asyncio.sleep(0.05)
+        assert c.status == "running"
+        for t in (ta, tb, tc):
+            if not t.done():
+                t.cancel()
+
+    @pytest.mark.asyncio
+    async def test_submission_failure_releases_slot(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        """A submit that raises must free the slot so later jobs aren't wedged."""
+        runner = SimulationRunner(
+            loop=asyncio.get_running_loop(),
+            simulator_class=FakeSim,
+            output_folder=work_dir,
+            max_parallel=1,
+        )
+
+        def boom():
+            raise RuntimeError("submit boom")
+
+        monkeypatch.setattr(runner, "_build_sim_runner", boom)
+        a = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_sf_a")
+        await runner.start_simulation(a.netlist, a, state_no_sim)
+        assert a.status == "failed"
+
+        # Slot released despite the failure: a working job runs.
+        monkeypatch.setattr(runner, "_build_sim_runner", lambda: MagicMock())
+        b = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_sf_b")
+        tb = asyncio.get_running_loop().create_task(
+            runner.start_simulation(b.netlist, b, state_no_sim)
+        )
+        await asyncio.sleep(0.05)
+        assert b.status == "running"
+        if not tb.done():
+            tb.cancel()
+
+    @pytest.mark.asyncio
+    async def test_unverified_kill_keeps_slot_reserved_until_finalized(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        """Codex review (high): a cancel whose process termination cannot be
+        verified (WSL taskkill finds nothing / native kill_all_spice raises) must
+        NOT free the concurrency slot — otherwise a queued job launches alongside
+        a still-running orphan and exceeds max_parallel. The slot stays reserved
+        until the process is actually finalized (completion callback fires)."""
+        launched: list = []
+        runner = self._gate_runner(work_dir, launched, monkeypatch)  # max_parallel=1
+        loop = asyncio.get_running_loop()
+        # Both best-effort termination paths "fail": WSL taskkill confirms nothing,
+        # and kill_all_spice raises (and is swallowed).
+        monkeypatch.setattr(
+            "ltspice_mcp.lib.sim_runner.kill_windows_ltspice_by_token", lambda tok: 0
+        )
+        a = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_fk_a")
+        b = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_fk_b")
+        ta = loop.create_task(runner.start_simulation(a.netlist, a, state_no_sim))
+        tb = loop.create_task(runner.start_simulation(b.netlist, b, state_no_sim))
+        await asyncio.sleep(0.05)
+        assert a.status == "running" and b.status == "queued"
+        mock_runner = runner._runners[a.job_id]
+        assert isinstance(mock_runner, MagicMock)  # _gate_runner builds MagicMock runners
+        mock_runner.kill_all_spice.side_effect = RuntimeError("kill boom")
+        launched_before = list(launched)
+
+        await runner.cancel(a, state_no_sim)
+        await asyncio.sleep(0.05)
+        assert a.status == "cancelled"
+        # Unverified kill -> slot stays reserved -> b must NOT have started.
+        assert b.status == "queued", "queued job must not start while a possibly-live orphan holds the slot"
+        assert launched == launched_before
+
+        # The orphan finally ends -> completion callback finalizes a -> slot freed -> b runs.
+        raw = work_dir / "fk.raw"
+        raw.write_text("data")
+        log = work_dir / "fk.log"
+        log.write_text("ok")
+        runner._handle_completion(a.job_id, str(raw), str(log), state_no_sim)
+        await asyncio.sleep(0.05)
+        assert b.status == "running"
+        for t in (ta, tb):
+            if not t.done():
+                t.cancel()
 
 
 def _make_batch(state: SessionState, work_dir: Path, *, job_type: str = "sweep") -> BatchJob:
@@ -1114,3 +1394,47 @@ class TestMCRunnerCardFlowIntegration:
         models = [c.name for c in re_cards if c.kind == "model"]
         assert "NMOS1" in models
         assert variant in models
+
+
+# Relocated from tests/test_v6_fixes.py (regression).
+class TestAN1HierarchicalMcDoesNotJoinSpiceCircuits:
+    """A-N1: the MC runner used to do ``"".join(editor.netlist)`` which
+    crashed on hierarchical netlists where ``editor.netlist`` contains
+    ``SpiceCircuit`` objects for ``.subckt`` blocks. The fix reads the
+    netlist via ``read_spice_text`` and lexes once instead.
+    """
+
+    def test_hierarchical_netlist_lexes_via_read_spice_text(self, tmp_path: Path) -> None:
+        from ltspice_mcp.lib.encoding import read_spice_text
+        from ltspice_mcp.lib.spice_lex import lex
+        from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard
+
+        cir = tmp_path / "hier.cir"
+        cir.write_text(
+            "* hierarchical\n"
+            ".subckt stage in out vss\n"
+            "M1 out in vss vss NM W=10u L=0.5u\n"
+            ".model NM NMOS(VTO=0.4 KP=200u)\n"
+            ".ends stage\n"
+            "X1 in1 out1 0 stage\n"
+            "V1 in1 0 1\n"
+            ".tran 1u\n"
+            ".end\n"
+        )
+
+        baseline_text = read_spice_text(cir)
+        cards = lex(baseline_text).cards
+
+        # The model inside the subckt is reachable.
+        model_cards = [c for c in cards if c.kind == "model"]
+        assert any(c.name == "NM" for c in model_cards)
+        nm = next(c for c in model_cards if c.name == "NM")
+        view = ModelCard.from_card(nm)
+        view.set_param("VTO", 0.5)
+        assert view.params["VTO"] == "0.5"
+
+        # The X-instance is also reachable as an instance card with model "stage".
+        x_cards = [c for c in cards if c.kind == "instance" and c.name == "X1"]
+        assert len(x_cards) == 1
+        x_view = InstanceLine.from_card(x_cards[0])
+        assert x_view.model == "stage"
