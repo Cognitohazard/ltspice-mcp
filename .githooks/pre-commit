@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Pre-commit hook: auto-format staged Python before it is committed so the
+# `ruff format --check` / `ruff check` steps in .github/workflows/ci.yml can't
+# fail — including on direct pushes to master, which the PR-only
+# format-autofix.yml workflow never touches.
+#
+# Enable once per clone:
+#   git config core.hooksPath .githooks
+set -euo pipefail
+
+# Staged, added/copied/modified Python files under the linted trees only.
+mapfile -t files < <(
+  git diff --cached --name-only --diff-filter=ACM -- src tests | grep -E '\.py$' || true
+)
+[ ${#files[@]} -eq 0 ] && exit 0
+
+uv run ruff format "${files[@]}"
+uv run ruff check --fix "${files[@]}"
+
+# Re-stage whatever the formatter/fixer rewrote.
+git add "${files[@]}"
