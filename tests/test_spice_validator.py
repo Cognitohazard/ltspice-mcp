@@ -1,5 +1,9 @@
 """Pre-flight validation of SPICE directives — Layer A blocklist."""
 
+import pytest
+
+from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.lib.component_value import apply_value_to_instance
 from ltspice_mcp.lib.spice_lex import lex
 from ltspice_mcp.lib.spice_validator import (
     list_rules,
@@ -159,3 +163,27 @@ class TestElementArity:
         # KV (not the primary-value KV). The R= rule shouldn't trigger.
         issues = self._arity("R1 a b 1k TC=0.001\n.end")
         assert all("R1" not in str(i["message"]) for i in issues)
+
+
+# Relocated from tests/test_v6_fixes.py (regression).
+class TestCN4ValidatorCatchesCorruption:
+    """C-N4: ``validate_netlist`` should flag the malformed bodies that
+    used to slip through C-N2/N3 before the typed dispatch landed.
+
+    These cases now raise ``NetlistError`` at the input layer (rather
+    than producing a corrupt write that ``validate_netlist`` would
+    later catch), so the regression here is that the typed dispatcher
+    refuses each shape *before* the file is touched.
+    """
+
+    def test_b_source_brace_with_no_existing_prefix_refused(self) -> None:
+        cards = lex("B1 fb 0\n").cards
+        b1 = next(c for c in cards if c.kind == "instance" and c.name == "B1")
+        with pytest.raises(NetlistError):
+            apply_value_to_instance(b1, "{V(in)}")
+
+    def test_e_source_multi_positional_refused(self) -> None:
+        cards = lex("E1 buf 0 in 0 10\n").cards
+        e1 = next(c for c in cards if c.kind == "instance" and c.name == "E1")
+        with pytest.raises(NetlistError):
+            apply_value_to_instance(e1, "in 0 20")  # would clobber control nodes

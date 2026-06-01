@@ -19,6 +19,7 @@ from ltspice_mcp.lib.raw_parser import (
     get_step_count,
     is_ac_analysis,
     query_point_value,
+    sample_to_dict,
 )
 
 # --- Helpers to build mock RawRead objects ---
@@ -284,3 +285,17 @@ class TestExtractLogDiagnostics:
         errors = result["errors"]
         assert errors is not None
         assert len(errors) == 1
+
+
+# Relocated from tests/test_followups_2026_05_29.py (regression).
+class TestSampleToDict:
+    def test_complex_sample_has_magnitude_linear(self):
+        d = sample_to_dict(complex(0.0, 1.0))
+        assert d["magnitude_linear"] == pytest.approx(1.0)
+        assert d["magnitude_db"] == pytest.approx(0.0, abs=1e-9)
+        assert d["phase_deg"] == pytest.approx(90.0)
+
+    def test_real_sample_unchanged(self):
+        d = sample_to_dict(3.5)
+        assert d == {"value": 3.5}
+        assert "magnitude_linear" not in d
