@@ -11,6 +11,7 @@ from ltspice_mcp.lib.wsl import (
     get_windows_output_dir,
     is_windows_native_path,
     is_wsl,
+    kill_windows_ltspice_by_token,
     to_windows_path,
 )
 
@@ -214,3 +215,63 @@ class TestFindWindowsLtspiceExe:
         with patch("ltspice_mcp.lib.wsl._resolve_win_env", return_value=None):
             assert find_windows_ltspice_exe() is None
         wsl_mod._is_wsl_cached = None
+
+
+class TestKillWindowsLtspiceByToken:
+    """J-KILL regression: cancel/timeout must actually terminate the Windows sim.
+
+    On WSL the simulator is a Windows process invisible to spicelib's
+    ``kill_all_spice`` (Linux psutil name-match), so the kill works by
+    taskkilling the specific Windows process matched by job_id in its command
+    line via PowerShell.
+    """
+
+    def test_noop_off_wsl(self):
+        with (
+            patch("ltspice_mcp.lib.wsl.is_wsl", return_value=False),
+            patch("ltspice_mcp.lib.wsl.subprocess.run") as run,
+        ):
+            assert kill_windows_ltspice_by_token("sim_123_abc") == 0
+            run.assert_not_called()
+
+    def test_rejects_unsafe_token(self):
+        # An injection-y token must be refused BEFORE any subprocess is spawned.
+        with (
+            patch("ltspice_mcp.lib.wsl.is_wsl", return_value=True),
+            patch("ltspice_mcp.lib.wsl.subprocess.run") as run,
+        ):
+            assert kill_windows_ltspice_by_token("'; Remove-Item C:\\ -Recurse") == 0
+            run.assert_not_called()
+
+    def test_taskkills_matched_pids(self):
+        ps_result = MagicMock(stdout="4321\n8765\n", stderr="", returncode=0)
+        kill_result = MagicMock(stdout="SUCCESS", stderr="", returncode=0)
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return ps_result if cmd[0].endswith("powershell.exe") else kill_result
+
+        with (
+            patch("ltspice_mcp.lib.wsl.is_wsl", return_value=True),
+            patch("ltspice_mcp.lib.wsl.subprocess.run", side_effect=fake_run),
+        ):
+            killed = kill_windows_ltspice_by_token("sim_1780260079_ad700460")
+
+        assert killed == 2
+        # The job_id is spliced into the PowerShell command-line filter.
+        assert any(
+            "sim_1780260079_ad700460" in " ".join(c)
+            for c in calls
+            if c[0].endswith("powershell.exe")
+        )
+        # taskkill /F /PID invoked once per matched PID, in order.
+        taskkills = [c for c in calls if c[0] == "taskkill.exe"]
+        assert [c[-1] for c in taskkills] == ["4321", "8765"]
+
+    def test_query_failure_returns_zero(self):
+        with (
+            patch("ltspice_mcp.lib.wsl.is_wsl", return_value=True),
+            patch("ltspice_mcp.lib.wsl.subprocess.run", side_effect=OSError("boom")),
+        ):
+            assert kill_windows_ltspice_by_token("sim_x_y") == 0

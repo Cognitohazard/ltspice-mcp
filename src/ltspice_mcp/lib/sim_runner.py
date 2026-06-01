@@ -16,6 +16,7 @@ from ltspice_mcp.lib.job_types import (
 from ltspice_mcp.lib.log_parser import extract_error_context
 from ltspice_mcp.lib.runner_base import RunnerBase
 from ltspice_mcp.lib.sweep_utils import generate_id
+from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
@@ -43,12 +44,34 @@ class SimulationRunner(RunnerBase):
     ):
         super().__init__(loop, simulator_class, output_folder, max_parallel)
         self._runners: dict[str, SimRunner] = {}
+        # Session-level concurrency gate: each run_simulation job builds its own
+        # spicelib SimRunner (one task each), so spicelib's per-runner
+        # ``parallel_sims`` never bounds the number of *independent* jobs. This
+        # semaphore caps concurrent jobs at ``max_parallel`` (a job holds a slot
+        # while queued→running until the process is confirmed gone). Slot release
+        # is idempotent via ``_slots_held``. Scope/limitations (per-instance gate;
+        # not cross-runner) are tracked in open_followups item 6.
+        self._sema = asyncio.Semaphore(max_parallel)
+        self._slots_held: set[str] = set()
         logger.debug(
             "SimulationRunner initialized: simulator=%s, output=%s, max_parallel=%d",
             simulator_class.__name__,
             output_folder,
             max_parallel,
         )
+
+    def _release_slot(self, job_id: str) -> None:
+        """Release the concurrency slot held by ``job_id`` (idempotent).
+
+        Safe to call from any completion / cancel / timeout / failure path and
+        from either the loop thread or a bridged callback — the ``_slots_held``
+        guard ensures exactly one ``Semaphore.release()`` per acquired slot.
+        Must run on the event-loop thread (asyncio.Semaphore is not
+        thread-safe); all callers do.
+        """
+        if job_id in self._slots_held:
+            self._slots_held.discard(job_id)
+            self._sema.release()
 
     async def start_simulation(
         self, netlist_path: Path, job: SimulationJob, state: SessionState
@@ -88,6 +111,19 @@ class SimulationRunner(RunnerBase):
             )
             return runner
 
+        # Acquire a concurrency slot before launching. If ``max_parallel`` sims
+        # are already running, this awaits and the job stays "queued" until a
+        # slot frees — the missing global gate that let N>max_parallel run.
+        await self._sema.acquire()
+        self._slots_held.add(job_id)
+        # The job may have been cancelled / timed out while waiting here for a
+        # slot. Don't launch it: release the slot and bail. Without this the
+        # woken task would attempt an illegal <terminal>→running transition
+        # (logged as a spurious error) or — for a timed-out job — start an
+        # orphan sim the user was already told had ended.
+        if job.status in TERMINAL_STATUSES:
+            self._release_slot(job_id)
+            return
         try:
             # Transition BEFORE submitting: ngspice can complete in <100ms,
             # racing the callback against asyncio.to_thread's resumption.
@@ -98,7 +134,13 @@ class SimulationRunner(RunnerBase):
             if job.status not in TERMINAL_STATUSES:
                 self._runners[job_id] = runner
                 job.task = runner
+            # If terminal already (cancel raced the submit), the submitted sim's
+            # completion callback still fires _handle_completion, which releases
+            # the slot — no release here to avoid a double-free.
         except Exception as e:
+            # Submission failed: no completion callback will fire, so release the
+            # slot here (idempotent).
+            self._release_slot(job_id)
             logger.error("Failed to submit simulation %s: %s", job_id, e, exc_info=True)
             if job.status not in TERMINAL_STATUSES:
                 job.error = f"Submission failed: {e}"
@@ -108,6 +150,10 @@ class SimulationRunner(RunnerBase):
         self, job_id: str, raw_file: str, log_file: str, state: SessionState
     ) -> None:
         """Finalize a simulation's state once spicelib reports it's done."""
+        # Free the concurrency slot first, regardless of outcome — covers normal
+        # completion AND the case where the sim's callback fires after a cancel /
+        # timeout already marked the job terminal (idempotent via _slots_held).
+        self._release_slot(job_id)
         job = state.jobs.get(job_id)
         if not job:
             logger.warning("Completed job %s not found in state", job_id)
@@ -169,24 +215,60 @@ class SimulationRunner(RunnerBase):
         Used by both cancel() and the tool-layer timeout path — the
         latter wants to record status='timeout' rather than 'cancelled',
         so it manages job state itself and only delegates the SIGKILL.
+
+        On WSL the actual simulator is a Windows process invisible to spicelib's
+        ``kill_all_spice`` (which name-matches the Linux psutil table), so this
+        also taskkills the specific Windows process by job_id — see
+        ``kill_windows_ltspice_by_token``.
+
+        It deliberately does NOT release the concurrency slot. Termination here
+        is best-effort (the WSL taskkill can fail/return 0; ``kill_all_spice``
+        exceptions are swallowed), so freeing the slot now would let a queued job
+        launch alongside a still-running orphan, violating ``max_parallel`` in the
+        exact failure mode the cap exists for. The slot is released only when the
+        process is confirmed gone — i.e. when the completion callback fires
+        ``_handle_completion`` (spicelib invokes it with ``callback_on_error=True``
+        whenever the worker's subprocess returns, including after a kill or the
+        spicelib-level timeout). A successful kill makes that fire almost
+        immediately; a failed kill keeps the slot reserved until the orphan
+        actually ends.
         """
         runner = self._runners.get(job_id)
-        if runner is None:
-            logger.warning("Cannot kill job %s: runner not found", job_id)
-            return
         try:
-            await asyncio.to_thread(runner.kill_all_spice)
-            logger.info("Killed spice process for %s", job_id)
-        except Exception as e:
-            logger.warning("Error killing spice for %s: %s", job_id, e)
+            await asyncio.to_thread(self._terminate_processes, job_id, runner)
         finally:
             self._runners.pop(job_id, None)
 
-    async def cancel(self, job: SimulationJob, state: SessionState | None = None) -> None:
-        """Cancel a running simulation and record the cancelled state."""
-        await self.kill(job.job_id)
-        if job.status not in NON_TERMINAL_LIVE_STATUSES:
-            # Already terminal (completion raced with cancel). Nothing to do.
+    def _terminate_processes(self, job_id: str, runner: SimRunner | None) -> None:
+        """Blocking process termination (runs in a worker thread).
+
+        WSL: taskkill the Windows LTspice process matching this job_id.
+        Native/Wine: spicelib's ``kill_all_spice`` (a harmless no-op on WSL,
+        where no Linux process carries the simulator's name).
+        """
+        try:
+            killed = kill_windows_ltspice_by_token(job_id)
+            if killed:
+                logger.info("Killed %d Windows sim process(es) for %s", killed, job_id)
+        except Exception as e:
+            logger.warning("WSL process kill for %s failed: %s", job_id, e)
+        if runner is None:
+            logger.debug("No spicelib runner tracked for %s (already finalized?)", job_id)
             return
-        job.error = "Cancelled by user"
-        transition(job, "cancelled", state=state)
+        try:
+            runner.kill_all_spice()
+        except Exception as e:
+            logger.warning("kill_all_spice for %s failed: %s", job_id, e)
+
+    async def cancel(self, job: SimulationJob, state: SessionState | None = None) -> None:
+        """Cancel a running simulation and record the cancelled state.
+
+        Marks the job ``cancelled`` BEFORE killing the process: when the killed
+        sim's completion callback later fires, ``_handle_completion`` sees a
+        terminal status and discards the (now partial/truncated) raw instead of
+        storing it as a success.
+        """
+        if job.status in NON_TERMINAL_LIVE_STATUSES:
+            job.error = "Cancelled by user"
+            transition(job, "cancelled", state=state)
+        await self.kill(job.job_id)

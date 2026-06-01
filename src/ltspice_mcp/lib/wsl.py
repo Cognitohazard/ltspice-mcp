@@ -2,10 +2,18 @@
 
 import logging
 import os
+import re
 import subprocess
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Process names the Windows LTspice binary may run as (current ADI vs legacy LTC).
+_LTSPICE_PROCESS_NAMES = ("LTspice.exe", "XVIIx64.exe", "scad3.exe")
+
+# A job_id / run_filename token is server-generated and safe, but validate it
+# before splicing into a PowerShell command so a future caller can't inject.
+_SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 # Cache WSL detection result at module level (won't change during process lifetime)
 _is_wsl_cached: bool | None = None
@@ -259,3 +267,71 @@ def find_windows_ltspice_exe() -> Path | None:
 
     logger.debug("No LTspice executable found in standard WSL/Windows locations")
     return None
+
+
+def kill_windows_ltspice_by_token(token: str) -> int:
+    """Terminate Windows LTspice processes whose command line contains ``token``.
+
+    On WSL the simulator runs as a *Windows* process launched via interop; the
+    Linux process table only shows the ``/init`` relay (named ``init``), and
+    killing that relay does NOT terminate the Windows process (verified). So
+    spicelib's ``kill_all_spice`` — which matches the Windows executable name
+    against the *Linux* ``psutil`` table — finds nothing and is a no-op here.
+
+    This locates the specific job's Windows process by the unique ``token`` (the
+    job_id, which appears in the ``-Run -b ...\\<job_id>.cir`` command line) via
+    PowerShell ``Get-CimInstance`` and terminates it with ``taskkill /F``.
+
+    Returns the number of processes killed. No-op (returns 0) off WSL, on an
+    unsafe/empty token, or if the Windows queries fail — degrading to the prior
+    behaviour rather than raising.
+    """
+    if not is_wsl():
+        return 0
+    if not token or not _SAFE_TOKEN_RE.match(token):
+        logger.warning("kill_windows_ltspice_by_token: refusing unsafe token %r", token)
+        return 0
+
+    name_filter = " or ".join(f"Name='{name}'" for name in _LTSPICE_PROCESS_NAMES)
+    ps_script = (
+        f'Get-CimInstance Win32_Process -Filter "{name_filter}" '
+        f"| Where-Object {{ $_.CommandLine -like '*{token}*' }} "
+        "| ForEach-Object { $_.ProcessId }"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        logger.warning("kill_windows_ltspice_by_token: process query failed: %s", e)
+        return 0
+
+    pids = [line.strip() for line in result.stdout.splitlines() if line.strip().isdigit()]
+    killed = 0
+    for pid in pids:
+        try:
+            kill = subprocess.run(
+                ["taskkill.exe", "/F", "/PID", pid],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                stdin=subprocess.DEVNULL,
+            )
+        except (subprocess.SubprocessError, OSError) as e:
+            logger.warning("kill_windows_ltspice_by_token: taskkill PID %s raised: %s", pid, e)
+            continue
+        if kill.returncode == 0:
+            killed += 1
+        else:
+            logger.warning(
+                "kill_windows_ltspice_by_token: taskkill PID %s failed: %s",
+                pid,
+                (kill.stdout or kill.stderr).strip(),
+            )
+    if killed:
+        logger.info("Killed %d Windows LTspice process(es) for token %s", killed, token)
+    return killed
