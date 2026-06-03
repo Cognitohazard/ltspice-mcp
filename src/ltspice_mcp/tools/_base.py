@@ -157,6 +157,29 @@ MEAS_ERRORS_SCHEMA: dict[str, Any] = {
     },
 }
 
+# Surfaced result observations — see lib/result_observations.py and the
+# "Result-trust: surface, don't judge" in CLAUDE.md. A "surfacer"
+# layer: facts lifted into view for the consuming agent to judge, never a trust
+# verdict. ``severity`` is present only on ``relay`` items (the simulator's own
+# classification); ``value``/``reconciliation``/``coverage`` items omit it.
+OBSERVATIONS_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "code": {"type": "string"},
+            "kind": {
+                "type": "string",
+                "enum": ["relay", "reconciliation", "value", "coverage"],
+            },
+            "detail": {"type": "string"},
+            "severity": {"type": "string"},
+            "evidence": {"type": "object"},
+        },
+        "required": ["code", "kind", "detail"],
+    },
+}
+
 
 def format_meas_errors(meas_errors: list[dict[str, Any]]) -> list[str]:
     """Render structured .MEAS errors for the text-format response.
@@ -172,6 +195,22 @@ def format_meas_errors(meas_errors: list[dict[str, Any]]) -> list[str]:
         lines.append(f"  Directive: {me['directive']}")
         if me.get("suggestion"):
             lines.append(f"    Suggestion: {me['suggestion']}")
+    return lines
+
+
+def format_observations(observations: list[dict[str, Any]]) -> list[str]:
+    """Render surfaced result observations for a text-format response.
+
+    Relay observations are omitted — they already print in the Errors section —
+    so this shows the new facts (reconciliation/value/coverage). Returns the
+    lines (no trailing blank); empty / all-relay input returns ``[]``. The full
+    list (including relay) always rides in structuredContent.
+    """
+    surfaced = [o for o in observations if o.get("kind") != "relay"]
+    if not surfaced:
+        return []
+    lines = ["Observations (facts to weigh, not a verdict):"]
+    lines.extend(f"  [{o.get('kind')}] {o.get('detail')}" for o in surfaced)
     return lines
 
 

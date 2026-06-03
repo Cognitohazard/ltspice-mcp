@@ -332,7 +332,7 @@ Prefer the netlist path by default — fewer steps, more reliable: author a .cir
 
 Match the analysis tool to the run type or it errors: bode_metrics/resonance/stability_metrics need a .AC run; signal_stats/edge_metrics/timing_between/periodic_metrics/pulse_response need .tran; operating_point needs .op. Scalar results come from .meas directives (failures in failed_measurements); read sweep/Monte-Carlo runs via batch_results or job_id+run_index, aggregates via measurement_stats.
 
-A run can report "completed" yet be degenerate (floating node, coerced value, skipped .meas) — check the returned warnings/errors, don't assume success means correct. validate_netlist is the pre-flight gate but won't catch value typos or undefined models (resolved at run time).
+A run can report "completed" yet be degenerate (floating node, coerced value, skipped .meas) — check the returned warnings/errors and the `observations` list, don't assume success means correct. `observations` surfaces facts worth weighing (the simulator's own error lines, requested .meas/.four that weren't produced, extreme/non-finite node values, and scans that were skipped) — they are facts for you to judge, not a verdict; an empty list means nothing tripped a check, NOT that the result is verified. validate_netlist is the pre-flight gate but won't catch value typos or undefined models (resolved at run time).
 
 When editing .asc, pin names are symbol-specific (a resistor's are A/B, not 1/2) — get them and their coordinates from add_component/symbol_info, and reuse those coordinates as connect waypoints.
 """

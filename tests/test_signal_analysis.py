@@ -339,7 +339,7 @@ class TestAnalyzePulseResponse:
         y_fall = 1.0 - y
         result = analyze_pulse_response(t, y_fall)
         assert result["direction"] == "falling"
-        assert result["overshoot_pct"] > 0
+        assert result["overshoot_pct"] is not None and result["overshoot_pct"] > 0
 
     def test_no_step(self):
         t = np.linspace(0, 1, 1000)
@@ -393,7 +393,7 @@ class TestAnalyzePulseResponse:
         # User accepts the responsibility by passing initial_value explicitly.
         result = analyze_pulse_response(t, y, initial_value=0.0)
         assert result["initial_value"] == 0.0
-        assert result["overshoot_pct"] > 0
+        assert result["overshoot_pct"] is not None and result["overshoot_pct"] > 0
         assert not any("initial_value" in w for w in result["warnings"])
 
     def test_unsettled_signal_falls_back_to_last_sample(self):
@@ -404,15 +404,23 @@ class TestAnalyzePulseResponse:
         assert result["steady_state_value"] == pytest.approx(float(y[-1]), abs=1e-9)
         assert any("final_value" in w for w in result["warnings"])
 
-    def test_both_ends_noisy_still_raises(self):
-        """When BOTH ends are inside transient, neither fallback can rescue
-        the run — preserve the hard-fail in that case."""
+    def test_both_ends_noisy_surfaces_warnings_not_raises(self):
+        """When BOTH ends are inside the transient, the surfacer no longer
+        hard-fails: it falls back to the boundary samples on both sides and
+        surfaces a warning for each, returning a best-effort result the caller
+        can judge."""
         # Tiny window placed entirely inside the ringing region.
         t = np.linspace(0.5e-3, 1.5e-3, 5001)
         wn = 2 * math.pi * 5000
         y = 1.0 - np.exp(-0.05 * wn * t) * np.cos(wn * t)
-        with pytest.raises(ValueError, match="unreliable on both ends"):
-            analyze_pulse_response(t, y)
+        result = analyze_pulse_response(t, y)
+        # Both boundary-sample fallbacks fire and are surfaced.
+        assert any("initial_value" in w for w in result["warnings"])
+        assert any("final_value" in w for w in result["warnings"])
+        # Machine-readable: the bootstrap is flagged, but metrics stay finite
+        # (boundary-sample delta is real, not the full-pulse ~0 baseline).
+        assert "levels_bootstrapped_from_boundary" in result["quality"]
+        assert result["overshoot_pct"] is not None
 
     def test_invalid_tolerance(self):
         t, y = _linear_edge(1e-3, 2e-3, 0.0, 1.0)
@@ -740,27 +748,37 @@ class TestComputeSignalStats:
             compute_signal_stats(np.array([]), np.array([]))
 
 
-# Relocated from tests/test_v5_fixes.py (regression).
-class TestFr4PulseResponseDoubleTransition:
-    """Fr4: pulse_response refuses windows with both rising AND falling edges."""
+class TestPulseResponseDoubleTransition:
+    """pulse_response surfaces (no longer refuses) windows with both rising AND
+    falling edges — the overshoot baseline is tiny, so it warns and returns the
+    number rather than hard-failing, letting the caller judge the absurd value."""
 
-    def test_refuses_full_pulse_window(self):
+    def test_full_pulse_window_nulls_metrics_with_quality_flag(self):
         # Window contains a 0→1→0 pulse: peak-to-peak is 1, but start and
-        # end levels are within rounding of each other. Mimics the v5
-        # finding where steady_state ≈ 2e-4 vs peak ≈ 1. abs_delta is
-        # above _LEVEL_EPSILON but tiny relative to the swing.
+        # end levels are within rounding of each other. abs_delta is above
+        # _LEVEL_EPSILON but tiny relative to the swing — so overshoot/
+        # undershoot/settling divide by a ~0 baseline and are undefined.
         t = np.linspace(0, 1, 200)
         # Start at exactly 0; pulse to 1.0 from t=0.2..0.6; return to 1e-3
         # so |final - initial| = 1e-3 (above EPSILON) but pk_pk = 1.0.
         y = np.where(t < 0.2, 0.0, np.where(t < 0.6, 1.0, 1e-3))
-        with pytest.raises(ValueError, match="full pulse"):
-            analyze_pulse_response(t, y)
+        result = analyze_pulse_response(t, y)
+        # Machine-readable: undefined metrics are null, not a huge number.
+        assert result["overshoot_pct"] is None
+        assert result["undershoot_pct"] is None
+        assert result["settling_time"] is None
+        assert "net_step_small_vs_swing" in result["quality"]
+        assert any("full pulse" in w for w in result["warnings"])
+        # Real samples stay valid.
+        assert result["peak_value"] == pytest.approx(1.0)
 
     def test_accepts_clean_step(self):
         # Single rising edge with stable start AND stable end — no double-
-        # transition, should compute successfully.
+        # transition, no full-pulse flag, real metrics.
         t = np.linspace(0, 1, 200)
         y = np.where(t < 0.3, 0.0, 1.0)
         out = analyze_pulse_response(t, y)
         assert out["direction"] == "rising"
         assert out["overshoot_pct"] == 0
+        assert out["quality"] == []
+        assert not any("full pulse" in w for w in out["warnings"])

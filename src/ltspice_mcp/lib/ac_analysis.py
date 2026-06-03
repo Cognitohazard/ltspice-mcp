@@ -68,6 +68,14 @@ _PASSBAND_SIDE_TOL = 2.0
 # bound only — emit a warning so users know to re-sweep with denser spacing.
 _NOTCH_UNDERSAMPLED_GAP_DB = 3.0
 
+# "Interior" guard band for band-pass/band-stop classification: the peak/notch
+# must sit in the middle (1 - 2·_INTERIOR_FRAC) of the swept span — i.e. between
+# _INTERIOR_FRAC and 1 - _INTERIOR_FRAC of the index range. A peak hugging the
+# first/last bin is far more likely a monotonic roll-off caught mid-slope
+# (LPF/HPF) than a true BPF resonance, so the 10% edge guards keep BPF/BSF off
+# the sweep boundaries.
+_INTERIOR_FRAC = 0.1
+
 
 # ---------------------------------------------------------------------------
 # Loading / sanitization
@@ -490,12 +498,16 @@ def classify_filter(
     passband_tol = flatness_db * _PASSBAND_SIDE_TOL
 
     # BPF: peak interior, both endpoints well below peak.
-    if 0.1 < frac_peak < 0.9 and drop_lo >= _CLEAR_DROP_DB and drop_hi >= _CLEAR_DROP_DB:
+    if (
+        _INTERIOR_FRAC < frac_peak < 1 - _INTERIOR_FRAC
+        and drop_lo >= _CLEAR_DROP_DB
+        and drop_hi >= _CLEAR_DROP_DB
+    ):
         return "bandpass"
 
     # BSF: notch interior, both endpoints near the peak (not just above min).
     if (
-        0.1 < frac_notch < 0.9
+        _INTERIOR_FRAC < frac_notch < 1 - _INTERIOR_FRAC
         and rise_lo >= _CLEAR_DROP_DB
         and rise_hi >= _CLEAR_DROP_DB
         and (g_max - g_lo) <= passband_tol

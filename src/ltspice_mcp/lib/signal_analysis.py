@@ -42,17 +42,31 @@ class EdgeMetricsOutput(TypedDict):
 
 
 class PulseResponseOutput(TypedDict):
-    """Return shape of :func:`analyze_pulse_response`."""
+    """Return shape of :func:`analyze_pulse_response`.
+
+    ``overshoot_pct``/``undershoot_pct``/``settling_time`` are ``None`` when the
+    window is degenerate enough that they are *undefined* (when the net step is
+    tiny next to the window's swing, they divide by a near-zero baseline) — a
+    machine-readable "not available" rather than an authoritative-looking nonsense
+    number.
+
+    ``quality`` carries machine-readable codes a consumer can gate on without
+    parsing the free-text ``warnings`` (e.g. ``net_step_small_vs_swing``,
+    ``levels_bootstrapped_from_boundary``). Each code names an *input condition or
+    computation-provenance fact*, never a result verdict — see the repo-wide
+    "Result-trust: surface, don't judge" in CLAUDE.md.
+    """
 
     direction: CrossingDirection
     initial_value: float
     steady_state_value: float
     peak_value: float
     peak_time: float
-    overshoot_pct: float
-    undershoot_pct: float
+    overshoot_pct: float | None
+    undershoot_pct: float | None
     settling_time: float | None
     settling_tolerance_pct: float
+    quality: list[str]
     warnings: list[str]
 
 
@@ -248,10 +262,24 @@ def _level_stability(y: np.ndarray) -> tuple[float, float]:
     return float(np.std(head)), float(np.std(tail))
 
 
-# Auto-level estimate is rejected when leading/trailing 10% stddev exceeds
-# this fraction of |final - initial|. 0.10 = 10% — generous enough to allow
-# small ripple, tight enough to catch a window straddling the edge.
+# Level-stability gate: a leading/trailing-window stddev above this fraction
+# of |final - initial| means the window straddles the transition, so the auto
+# rail it bootstraps is unreliable. 0.10 = 10% — generous enough to allow small
+# ripple, tight enough to catch a window straddling the edge. Shared by the edge
+# bias advisory (analyze_edge) and the pulse-response bootstrap gate
+# (analyze_pulse_response); both feed it the same _level_stability() stddev.
+# This is the STDDEV-vs-step gate — kept distinct from _FULL_PULSE_DELTA_FRACTION
+# below (step-vs-swing), so tuning one can't silently move the other even though
+# they currently share the 10% value.
 _AUTO_LEVEL_VARIANCE_THRESHOLD = 0.10
+
+# Full-pulse reject: on the auto-level path, if the net |final - initial| step
+# is smaller than this fraction of the window's peak-to-peak swing, the window
+# almost certainly captured a full pulse (rise AND fall) rather than one
+# monotonic edge — overshoot_pct would explode against the tiny net delta.
+# Same 10% magnitude as the stddev gate above but a SEPARATE meaning; named
+# separately so the two gates stay independently tunable.
+_FULL_PULSE_DELTA_FRACTION = 0.10
 
 
 def analyze_edge(
@@ -316,6 +344,12 @@ def analyze_edge(
     # rising edge the start window sets the low rail and the end window the
     # high rail; on a falling edge it's reversed. A combined "both auto" gate
     # would silently skip one-sided overrides.
+    #
+    # Severity is intentionally asymmetric vs analyze_pulse_response, which
+    # hard-fails on the same gate: a biased rail only shifts transition_time/slew
+    # slightly here (still a usable number), whereas a biased pulse baseline makes
+    # overshoot_pct explode against a tiny net delta — garbage, not a caveat. So
+    # the edge path warns-and-continues; the pulse path raises.
     abs_delta = abs(end_level - start_level)
     start_std, end_std = _level_stability(y)
     threshold = _AUTO_LEVEL_VARIANCE_THRESHOLD * abs_delta
@@ -429,6 +463,7 @@ def analyze_pulse_response(
         raise ValueError(f"settling_tolerance_pct must be positive, got {settling_tolerance_pct}")
 
     warnings: list[str] = []
+    quality: list[str] = []
     start_level, end_level = _estimate_levels(y)
     iv = float(initial_value) if initial_value is not None else start_level
     fv = float(final_value) if final_value is not None else end_level
@@ -441,24 +476,19 @@ def analyze_pulse_response(
             "explicit initial_value/final_value."
         )
 
-    # Auto-level estimate gating (Fr4): only HARD-fail when both ends are
-    # noisy — that means the user picked a window with no quiet region and
-    # we genuinely can't bootstrap. When only ONE end is noisy, fall back
-    # to the boundary sample on that side (y[0] or y[-1]) and surface a
-    # warning. The other end's stable mean is still trusted.
+    # Auto-level estimate gating: when a leading/trailing window is too noisy to
+    # bootstrap a rail, fall back to the boundary sample (y[0] / y[-1]) on that
+    # side and surface a warning rather than refusing. Surfacer, not judger — we
+    # return a usable best-effort number plus the caveat and let the caller judge,
+    # rather than hard-failing when both ends are noisy (the old behaviour). When
+    # both are noisy both fall-backs fire and both warnings are emitted; the
+    # genuine "no step exists" guards below still raise, because that's a fact,
+    # not a judgement.
     abs_delta = abs(delta)
     start_std, end_std = _level_stability(y)
     threshold = _AUTO_LEVEL_VARIANCE_THRESHOLD * abs_delta
     start_noisy = initial_value is None and start_std > threshold
     end_noisy = final_value is None and end_std > threshold
-    if start_noisy and end_noisy:
-        raise ValueError(
-            f"Auto-detected levels are unreliable on both ends of the window "
-            f"(leading stddev {start_std:.3g}, trailing stddev {end_std:.3g}; "
-            f"|final - initial| {abs_delta:.3g}). Pass explicit "
-            f"initial_value AND final_value, or pick a window that includes "
-            f"a quiet region on either the pre-step or post-step side."
-        )
     if start_noisy:
         iv = float(y[0])
         delta = fv - iv
@@ -477,28 +507,40 @@ def analyze_pulse_response(
             f"({abs_delta:.3g}); using y[-1]={fv:.6g} as final_value. "
             "Response may not be fully settled."
         )
+    if start_noisy or end_noisy:
+        # A rail was bootstrapped from a boundary sample rather than a stable
+        # mean — finite and usable, but rougher. Machine-readable so a consumer
+        # can weight it without parsing the warning text.
+        quality.append("levels_bootstrapped_from_boundary")
     if abs_delta < _LEVEL_EPSILON:
         raise ValueError(
             f"After fallback, |final - initial| collapsed to {abs_delta:.3e}; "
             "widen the window or pass explicit initial_value/final_value."
         )
 
-    # Fr4: after the auto-level logic settles, refuse windows that contain
-    # a full transition + return (e.g. a PULSE with rising AND falling
-    # edges inside the window). The y peak-to-peak swing dwarfs the
-    # initial→final delta, so overshoot_pct would explode (peak / |tiny
-    # delta| → millions of percent). Skip on explicit-level path so the
-    # caller can deliberately work near zero.
+    # After the auto-level logic settles, a window that captures a full pulse
+    # (rise AND fall) has a peak-to-peak swing that dwarfs the net initial→final
+    # delta, so overshoot_pct is computed against a tiny baseline and balloons
+    # (peak / |tiny delta| → millions of percent). Surfacer, not judger: surface
+    # the condition with its evidence and still return the number, rather than
+    # refusing — the caller (often an LLM that recognises an absurd overshoot)
+    # judges. Only on the auto-level path; explicit levels mean the caller
+    # deliberately chose the baseline.
     if initial_value is None and final_value is None:
         y_pk_pk = float(np.max(y) - np.min(y))
-        if y_pk_pk > _LEVEL_EPSILON and abs_delta < 0.1 * y_pk_pk:
-            raise ValueError(
-                f"Window contains a peak-to-peak swing of {y_pk_pk:.3g} but "
-                f"|final - initial| is only {abs_delta:.3g} — the window "
-                f"appears to capture a full pulse (rise AND fall) rather "
-                f"than a single monotonic step. Narrow t_start/t_end to one "
-                f"transition, or pass explicit initial_value/final_value if "
-                f"this is intentional."
+        if y_pk_pk > _LEVEL_EPSILON and abs_delta < _FULL_PULSE_DELTA_FRACTION * y_pk_pk:
+            # The net step is a near-zero baseline, so overshoot/undershoot/
+            # settling divide by ~0 and are *undefined*, not merely suspect. The
+            # code names the observable condition (net step small vs the window's
+            # swing — typically a full pulse), NOT a verdict; the return nulls
+            # those metrics rather than emitting an authoritative-looking number.
+            quality.append("net_step_small_vs_swing")
+            warnings.append(
+                f"Window peak-to-peak swing ({y_pk_pk:.3g}) dwarfs the net "
+                f"|final - initial| ({abs_delta:.3g}) — the window appears to capture "
+                f"a full pulse (rise AND fall), so overshoot/undershoot/settling are "
+                f"undefined (returned as null). Narrow t_start/t_end to one transition, "
+                f"or pass explicit initial_value/final_value, if this isn't intended."
             )
 
     direction = "rising" if delta > 0 else "falling"
@@ -546,16 +588,23 @@ def analyze_pulse_response(
         last_outside = int(outside_idx[-1])
         settling_time = float(t[last_outside + 1] - t[0])
 
+    # A full-pulse window makes overshoot/undershoot/settling undefined (computed
+    # against a ~0 baseline) — return null, not a nonsense magnitude. peak_value /
+    # peak_time / levels stay valid (they're real samples). The escape hatch is
+    # intact: the flag only fires on the auto-level path, so explicit
+    # initial_value/final_value bypasses it and returns real metrics.
+    metrics_undefined = "net_step_small_vs_swing" in quality
     return {
         "direction": direction,
         "initial_value": iv,
         "steady_state_value": fv,
         "peak_value": peak_value,
         "peak_time": peak_time,
-        "overshoot_pct": float(overshoot_pct),
-        "undershoot_pct": float(undershoot_pct),
-        "settling_time": settling_time,
+        "overshoot_pct": None if metrics_undefined else float(overshoot_pct),
+        "undershoot_pct": None if metrics_undefined else float(undershoot_pct),
+        "settling_time": None if metrics_undefined else settling_time,
         "settling_tolerance_pct": float(settling_tolerance_pct),
+        "quality": quality,
         "warnings": warnings,
     }
 
