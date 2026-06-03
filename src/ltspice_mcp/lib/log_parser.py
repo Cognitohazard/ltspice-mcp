@@ -535,7 +535,12 @@ def extract_error_context(log_file: Path, max_lines: int = 20) -> str:
 
 
 def parse_success_summary(
-    raw_file: Path, log_file: Path, duration: float, *, dialect: str | None = None
+    raw_file: Path,
+    log_file: Path,
+    duration: float,
+    *,
+    dialect: str | None = None,
+    netlist: Path | None = None,
 ) -> dict:
     """Build the success-path summary that ``run_simulation`` returns.
 
@@ -545,6 +550,14 @@ def parse_success_summary(
     fields. Adds ``raw_file``/``log_file`` for downstream tool chains that
     feed these back into ``simulation_summary``, ``measurement_stats``, etc.
 
+    ``netlist`` (when supplied and readable) enables the requested-vs-produced
+    reconciliation in the observation surfacer.
+
+    Value surfacing respects the bounded-load contract: single-point results
+    (operating points) load full traces and are scanned for NaN/extremes;
+    multi-point results stay axis-only and record the skipped scan as a coverage
+    observation rather than materialising every trace on every completion.
+
     Truncates ``warnings``/``errors`` to ``_MAX_DIAGNOSTICS`` entries with
     the ``*_truncated`` sibling preserved from the prior implementation.
 
@@ -552,6 +565,14 @@ def parse_success_summary(
     unparseable raw still yields a dict carrying the paths and duration.
     """
     from ltspice_mcp.lib.raw_parser import build_simulation_summary
+    from ltspice_mcp.lib.result_observations import parse_requested_outputs
+
+    requested: dict[str, list[str]] | None = None
+    if netlist is not None:
+        try:
+            requested = parse_requested_outputs(netlist.read_text(errors="replace"))
+        except OSError:
+            requested = None
 
     result: dict = {
         "sim_type": "Unknown",
@@ -573,8 +594,23 @@ def parse_success_summary(
         # short .op, unbounded for a long .tran (Codex M3).
         header = RawRead(str(raw_file), traces_to_read=None, dialect=dialect)
         trace_names = header.get_trace_names()
-        axis_only = [trace_names[0]] if trace_names else None
-        raw_read = RawRead(str(raw_file), traces_to_read=axis_only, dialect=dialect)
+        # Decide value-scan coverage by point count, read from the header (no
+        # trace load). A single-point result (an operating point) is cheap to
+        # load in full and is exactly the floating-node / 1e30 case worth
+        # scanning; multi-point .tran/.ac stays axis-only (the Codex M3 bound)
+        # and the surfacer records the skipped scan. Reading nPoints off the
+        # header avoids a throwaway axis-only open just to count points.
+        try:
+            point_count = header.nPoints
+        except Exception:
+            point_count = 1
+        if point_count <= 1:
+            raw_read = RawRead(str(raw_file), traces_to_read="*", dialect=dialect)
+            value_scan = "scan"
+        else:
+            axis_only = [trace_names[0]] if trace_names else None
+            raw_read = RawRead(str(raw_file), traces_to_read=axis_only, dialect=dialect)
+            value_scan = "skipped_large"
     except Exception as e:
         logger.warning(f"Could not parse raw file {raw_file}: {e}")
         # No raw — surface what diagnostics we can from the log alone.
@@ -589,7 +625,9 @@ def parse_success_summary(
         return result
 
     log_path = log_file if log_file.exists() else None
-    summary = build_simulation_summary(raw_read, log_path, duration)
+    summary = build_simulation_summary(
+        raw_read, log_path, duration, requested=requested, value_scan=value_scan
+    )
     # ``summary`` doesn't carry ``raw_file``/``log_file``; they're already
     # set in ``result`` above and survive ``update``.
     result.update(summary)

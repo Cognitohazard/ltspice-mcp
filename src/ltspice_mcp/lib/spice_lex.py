@@ -822,7 +822,7 @@ def _extract_instance_ref(body: str) -> str | None:
     return parts[0] if parts else None
 
 
-def _extract_meas_name(body: str) -> str | None:
+def extract_meas_name(body: str) -> str | None:
     """Pull the measurement label from ``.MEAS [analysis] NAME ...``.
 
     LTspice accepts ``.MEAS NAME ...`` (analysis kind omitted, defaults
@@ -866,7 +866,7 @@ _NAME_EXTRACTORS = {
     "instance": _extract_instance_ref,
     "subckt": _extract_subckt_name,
     "ends": _extract_ends_name,
-    "meas": _extract_meas_name,
+    "meas": extract_meas_name,
 }
 
 

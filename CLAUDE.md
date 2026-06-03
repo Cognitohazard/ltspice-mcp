@@ -146,6 +146,15 @@ Users can override via `[schematic] symbol_paths` in TOML or `LTSPICE_MCP_SYMBOL
 - **Log diagnostics**: `log_parser.py:extract_log_diagnostics()` extracts structured warnings and errors from LTspice log files (parse errors with caret pointers, Fatal Error, convergence messages, etc.). Used by `run_simulation`, `check_job`, `get_measurements`, and `get_simulation_summary` to surface errors instead of silently returning empty results.
 - **Runner lifecycle**: `RunnerManager` (`lib/runner_manager.py`) owns all runner instances (sim, sweep, MC). Accessed via `state.runners.get_sim_runner(loop, simulator_class, output_folder)` etc. The manager auto-invalidates cached runners when the event loop, simulator class, or output folder changes. Never create runners directly.
 
+### Result-trust: surface, don't judge
+
+Rules for any field that rates/flags/classifies a result (consumer is an LLM; rationale + canonical impl in `lib/result_observations.py`):
+
+- **No trust verdicts** (`confidence`/`unreliable`/`suspect`/`degraded`): surface facts, let the model judge. Observation/`quality` codes name an input condition or provenance fact (window shape, which rail-samples were used, a value past a salience cutoff).
+- **Severity is only relayed** — attach one only when the simulator already assigned it.
+- **`status` ≠ trust:** lifecycle `status` (set early from raw size) stays separate from the diagnostics-derived trust signal.
+- **Thresholds prefer** relay > topology > signature > relative > bare magnitude; magnitude stays advisory; emit a null/flag over a meaningless number; one constant, one meaning.
+
 ### WSL Support
 
 On WSL, LTspice.exe runs via Windows interop (not Wine). Key adaptations:
