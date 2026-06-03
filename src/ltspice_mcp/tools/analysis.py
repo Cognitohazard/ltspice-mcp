@@ -82,9 +82,11 @@ from ltspice_mcp.lib.signal_analysis import (
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     MEAS_ERRORS_SCHEMA,
+    OBSERVATIONS_SCHEMA,
     RO_ANNOTATIONS,
     ToolInput,
     format_meas_errors,
+    format_observations,
     format_response,
     registry,
     safe_path,
@@ -877,6 +879,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
             "errors": {"type": "array", "items": {"type": "string"}},
             "meas_errors": MEAS_ERRORS_SCHEMA,
             "failed_measurements": {"type": "array", "items": {"type": "string"}},
+            "observations": OBSERVATIONS_SCHEMA,
         },
     },
 )
@@ -901,7 +904,9 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
     services.validate_step(raw, args.step)
 
     try:
-        summary = build_simulation_summary(raw, log_path, None, step=args.step)
+        # ``raw`` here is fully loaded (services.load_raw reads all traces), so
+        # the value scan is affordable and surfaces NaN/extreme-value facts.
+        summary = build_simulation_summary(raw, log_path, None, step=args.step, value_scan="scan")
     except Exception as e:
         raise ResultError(f"Failed to build summary: {e}") from e
 
@@ -1032,6 +1037,11 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
     meas_lines = format_meas_errors(summary.get("meas_errors", []))
     if meas_lines:
         lines.extend(meas_lines)
+        lines.append("")
+
+    obs_lines = format_observations(summary.get("observations", []))
+    if obs_lines:
+        lines.extend(obs_lines)
         lines.append("")
 
     return format_response("\n".join(lines), json_data, fmt)
@@ -1317,21 +1327,32 @@ async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
     )
     data["signal"] = args.signal
 
-    settle = (
-        "never (within window)"
-        if data["settling_time"] is None
-        else f"{data['settling_time']:.6g} s"
-    )
+    # overshoot/undershoot/settling are None when the window is a full pulse
+    # (metrics undefined, not authoritative). Disambiguate that from a genuine
+    # "never settled within the window" (settling_time None on a valid window).
+    undefined = "net_step_small_vs_swing" in data.get("quality", [])
+
+    def _pct(value: float | None) -> str:
+        return "undefined (full-pulse window)" if value is None else f"{value:.3f} %"
+
+    if data["settling_time"] is not None:
+        settle = f"{data['settling_time']:.6g} s"
+    elif undefined:
+        settle = "undefined (full-pulse window)"
+    else:
+        settle = "never (within window)"
     lines = [
         f"Pulse Response: {args.signal} ({data['direction']} step)",
         "",
         f"Initial: {data['initial_value']:.6g}",
         f"Final:   {data['steady_state_value']:.6g}",
         f"Peak:    {data['peak_value']:.6g} at t={data['peak_time']:.6g} s",
-        f"Overshoot:  {data['overshoot_pct']:.3f} %",
-        f"Undershoot: {data['undershoot_pct']:.3f} %",
+        f"Overshoot:  {_pct(data['overshoot_pct'])}",
+        f"Undershoot: {_pct(data['undershoot_pct'])}",
         f"Settling time (±{data['settling_tolerance_pct']:.2f}%): {settle}",
     ]
+    if data.get("quality"):
+        lines.append(f"Quality flags: {', '.join(data['quality'])}")
     lines += _warning_lines(data["warnings"])
     return format_response("\n".join(lines), data, args.format)
 

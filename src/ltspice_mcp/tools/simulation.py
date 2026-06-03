@@ -21,8 +21,10 @@ from ltspice_mcp.state import (
 )
 from ltspice_mcp.tools._base import (
     MEAS_ERRORS_SCHEMA,
+    OBSERVATIONS_SCHEMA,
     ToolInput,
     format_meas_errors,
+    format_observations,
     format_response,
     registry,
     require_simulator,
@@ -31,8 +33,14 @@ from ltspice_mcp.tools._base import (
     text_response,
 )
 
-# Constants for timeout behavior
-SYNC_TIMEOUT_THRESHOLD = 30.0  # Simulations <= 30s run synchronously by default
+# Constants for timeout behavior.
+# 30s is a UX boundary, not a correctness one: short enough that a synchronous
+# (blocking) call stays within a typical MCP client's tool-call patience, long
+# enough that most .op/.ac/small-.tran runs finish inline without forcing the
+# caller into the async check_job dance. Runs expected to exceed it return a
+# job_id immediately; callers can override per-call with wait=true (bounded by
+# HARD_MAX_TIMEOUT).
+SYNC_TIMEOUT_THRESHOLD = 30.0
 HARD_MAX_TIMEOUT = 600.0  # 10 minutes - max for wait=true mode
 
 
@@ -54,6 +62,7 @@ _SIM_RESULT_FIELDS_SCHEMA: dict[str, dict] = {
     "range": {"type": "object"},
     "point_count": {"type": "integer"},
     "failed_measurements": {"type": "array", "items": {"type": "string"}},
+    "observations": OBSERVATIONS_SCHEMA,
 }
 
 
@@ -283,7 +292,7 @@ async def _wait_for_completion(
                 f"raw_file: {job.raw_file}, log_file: {job.log_file}"
             )
         summary = parse_success_summary(
-            job.raw_file, job.log_file, duration, dialect=state.raw_dialect
+            job.raw_file, job.log_file, duration, dialect=state.raw_dialect, netlist=job.netlist
         )
         if preflight_warnings:
             existing = summary.get("warnings") or []
@@ -355,6 +364,14 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
     if fourier:
         diagnostics_text += f"\n\nFourier: {len(fourier)} signal(s)"
 
+    # Surfaced observations. Relay observations already print above as Errors, so
+    # the shared renderer shows only the new facts (unmet requests, extreme
+    # values, skipped scans); the full list rides in structuredContent.
+    observations = summary.get("observations", [])
+    obs_lines = format_observations(observations)
+    if obs_lines:
+        diagnostics_text += "\n\n" + "\n".join(obs_lines)
+
     text = (
         f"Simulation completed successfully\n"
         f"Job ID: {job_id}\n"
@@ -376,6 +393,7 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
         "log_file": str(summary["log_file"]),
         "signals": signals,
         "warnings": warnings,
+        "observations": observations,
     }
     # Copy truthy summary fields through to the response. ``point_count``
     # is special-cased to allow 0 (truthy in the schema but falsy in
@@ -501,7 +519,7 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
                 f"raw: {job.raw_file.exists()}, log: {job.log_file.exists()}"
             )
         summary = parse_success_summary(
-            job.raw_file, job.log_file, duration, dialect=state.raw_dialect
+            job.raw_file, job.log_file, duration, dialect=state.raw_dialect, netlist=job.netlist
         )
         suggestions = services.suggestions_from_errors(summary.get("errors"), state.libraries)
         if suggestions:

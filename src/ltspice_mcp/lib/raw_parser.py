@@ -25,6 +25,7 @@ from ltspice_mcp.lib.log_parser import (
     parse_fourier_data,
     parse_measurements,
 )
+from ltspice_mcp.lib.result_observations import surface_observations
 
 
 class _OperatingPointStepMeta(TypedDict, total=False):
@@ -295,7 +296,13 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
 
 
 def build_simulation_summary(
-    raw: RawRead, log_path: Path | None, duration: float | None = None, *, step: int = 0
+    raw: RawRead,
+    log_path: Path | None,
+    duration: float | None = None,
+    *,
+    step: int = 0,
+    requested: dict[str, list[str]] | None = None,
+    value_scan: str = "off",
 ) -> dict:
     """Build comprehensive, type-aware simulation summary.
 
@@ -306,10 +313,17 @@ def build_simulation_summary(
         step: Which .step iteration to summarize (axis/range/point_count).
             Defaults to 0. Callers exposing a step (simulation_summary) thread
             it through so the range reflects the chosen step, not always step 0.
+        requested: Parsed ``.meas``/``.four`` names from the deck, for the
+            requested-vs-produced reconciliation in the observation surfacer.
+            None when the caller has no netlist (skips reconciliation).
+        value_scan: Coverage decision for value surfacing — ``"scan"`` (this
+            ``raw`` has traces loaded; scan them), ``"skipped_large"`` (traces
+            not loaded; surface the coverage gap), or ``"off"``.
 
     Returns:
         Dictionary with sim_type, range info, signals, point_count, step_count,
-        optional measurements, warnings, Fourier data, and duration.
+        optional measurements, warnings, Fourier data, duration, and an
+        always-present ``observations`` list (see ``result_observations``).
         All numpy types converted to Python float.
     """
     sim_type = detect_sim_type(raw)
@@ -434,5 +448,24 @@ def build_simulation_summary(
 
     if duration is not None:
         summary["duration"] = float(duration)
+
+    # Surface observations (a "surfacer", not a "judger" — see
+    # ``result_observations``). Always present, possibly empty. Value traces are
+    # extracted here only when the caller signalled they're loaded; on the
+    # bounded success path they are not, and the surfacer records that gap.
+    value_traces: dict | None = None
+    if value_scan == "scan":
+        axis_name = trace_names[0] if trace_names else None
+        value_traces = {}
+        for name in trace_names:
+            if name == axis_name:
+                continue
+            try:
+                value_traces[name] = np.asarray(raw.get_wave(name, step=step))
+            except Exception:
+                continue
+    summary["observations"] = surface_observations(
+        summary, requested=requested, value_traces=value_traces, value_scan=value_scan
+    )
 
     return summary
