@@ -305,6 +305,37 @@ def analyze_edge(
             f"high_level ({resolved_high:.6g}) must exceed low_level ({resolved_low:.6g})"
         )
 
+    # Auto-level bias advisory (mirrors analyze_pulse_response's per-rail
+    # stability gate). A leading/trailing 10% window that straddles the
+    # transition — e.g. an edge sitting at a window edge — biases the auto
+    # rail estimate it feeds; that shifts low_thresh/high_thresh and so
+    # propagates into transition_time/slew_rate, not just the reported levels.
+    # Each rail is overridable independently, so the advisory is gated
+    # per-rail: warn only when the rail a noisy window feeds is still
+    # auto-detected. The window→rail mapping flips with direction — on a
+    # rising edge the start window sets the low rail and the end window the
+    # high rail; on a falling edge it's reversed. A combined "both auto" gate
+    # would silently skip one-sided overrides.
+    abs_delta = abs(end_level - start_level)
+    start_std, end_std = _level_stability(y)
+    threshold = _AUTO_LEVEL_VARIANCE_THRESHOLD * abs_delta
+    start_rail_auto = (low_level if detected_direction == "rising" else high_level) is None
+    end_rail_auto = (high_level if detected_direction == "rising" else low_level) is None
+    if start_std > threshold and start_rail_auto:
+        warnings.append(
+            f"Leading-10% stddev ({start_std:.3g}) high vs |end-start| "
+            f"({abs_delta:.3g}); the auto rail it sets may be biased (edge near "
+            "window start?) — transition_time/slew inherit it. Pass an explicit "
+            "level for that rail to suppress."
+        )
+    if end_std > threshold and end_rail_auto:
+        warnings.append(
+            f"Trailing-10% stddev ({end_std:.3g}) high vs |end-start| "
+            f"({abs_delta:.3g}); the auto rail it sets may be biased (edge near "
+            "window end?) — transition_time/slew inherit it. Pass an explicit "
+            "level for that rail to suppress."
+        )
+
     if edge == "auto":
         direction = detected_direction
     else:

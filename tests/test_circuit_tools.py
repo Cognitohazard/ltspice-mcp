@@ -62,6 +62,20 @@ class TestCreateNetlist:
                 state_no_sim,
             )
 
+    async def test_rejects_empty_content(self, state_no_sim: SessionState, work_dir: Path):
+        # Regression: empty content used to reach spicelib, which surfaced a
+        # cryptic 'Expected pattern "^\\*" not found'. Reject it up front with a
+        # clear message and leave no file behind.
+        with pytest.raises(NetlistError, match="empty"):
+            await handle_create_netlist({"name": "empty", "content": ""}, state_no_sim)
+        assert not (work_dir / "empty.cir").exists()
+
+    async def test_rejects_whitespace_only_content(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        with pytest.raises(NetlistError, match="empty"):
+            await handle_create_netlist({"name": "ws", "content": "  \n\t\n"}, state_no_sim)
+
     async def test_overwrite_replaces_existing(self, state_no_sim: SessionState, work_dir: Path):
         """``overwrite=True`` skips the FileExistsError path so iterating on
         a design doesn't force read+edit roundtrips. The earlier behaviour
@@ -201,6 +215,18 @@ class TestParameter:
         result = await handle_parameter({"path": sample_netlist.name}, state_no_sim)
         text = result.content[0].text
         assert "RVAL" in text or "Rval" in text
+
+    async def test_read_all_preserves_source_casing(
+        self, state_no_sim: SessionState, sample_netlist: Path
+    ):
+        # Regression: spicelib's get_all_parameter_names() uppercases
+        # ('Rval'->'RVAL'), but the read-all projection should echo the verbatim
+        # on-disk casing recovered from the file text.
+        result = await handle_parameter({"path": sample_netlist.name}, state_no_sim)
+        text = result.content[0].text
+        assert "Rval" in text
+        assert "RVAL" not in text
+        assert "Rval" in result.structuredContent["parameters"]
 
     async def test_no_params(self, state_no_sim: SessionState, work_dir: Path):
         p = work_dir / "noparam.cir"

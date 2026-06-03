@@ -196,6 +196,48 @@ class TestAnalyzeEdge:
         with pytest.raises(ValueError, match="must exceed"):
             analyze_edge(t, y, low_level=1.0, high_level=0.0)
 
+    def test_edge_at_window_start_warns_biased_levels(self):
+        # Regression: an edge ramping from the very first sample makes the
+        # leading-10% window straddle the transition, biasing the auto rail
+        # estimate. analyze_edge must surface an advisory (it previously stayed
+        # silent, unlike analyze_pulse_response). transition_time stays usable.
+        t, y = _linear_edge(0.0, 1e-3, 0.0, 1.0, pre_pad=0.0, post_pad=5e-3)
+        result = analyze_edge(t, y)
+        assert any("biased" in w.lower() for w in result["warnings"])
+
+    def test_clean_edge_has_no_bias_warning(self):
+        t, y = _linear_edge(1e-3, 2e-3, 0.0, 1.0)
+        result = analyze_edge(t, y)
+        assert not any("biased" in w.lower() for w in result["warnings"])
+
+    def test_level_override_suppresses_bias_warning(self):
+        # Explicit rails mean the user took control — no auto-bias advisory.
+        t, y = _linear_edge(0.0, 1e-3, 0.0, 1.0, pre_pad=0.0, post_pad=5e-3)
+        result = analyze_edge(t, y, low_level=0.0, high_level=1.0)
+        assert not any("biased" in w.lower() for w in result["warnings"])
+
+    def test_high_level_only_still_warns_biased_low_rail(self):
+        # Partial-override case: a rising edge biased at the START feeds the LOW
+        # rail. Pinning only high_level leaves the low rail auto, so the advisory
+        # must still fire (a combined "both auto" gate would skip it).
+        t, y = _linear_edge(0.0, 1e-3, 0.0, 1.0, pre_pad=0.0, post_pad=5e-3)
+        result = analyze_edge(t, y, high_level=1.0)
+        assert any("biased" in w.lower() for w in result["warnings"])
+
+    def test_low_level_only_still_warns_biased_high_rail(self):
+        # Mirror case: a rising edge biased at the END feeds the HIGH rail.
+        # Pinning only low_level leaves the high rail auto → advisory must fire.
+        t, y = _linear_edge(5e-3, 6e-3, 0.0, 1.0, pre_pad=5e-3, post_pad=0.0)
+        result = analyze_edge(t, y, low_level=0.0)
+        assert any("biased" in w.lower() for w in result["warnings"])
+
+    def test_pinned_rail_suppresses_only_its_own_side(self):
+        # Biased START + pinned low_level (the rail the start window feeds on a
+        # rising edge) → that side is suppressed and, with a clean end, no warning.
+        t, y = _linear_edge(0.0, 1e-3, 0.0, 1.0, pre_pad=0.0, post_pad=5e-3)
+        result = analyze_edge(t, y, low_level=0.0)
+        assert not any("biased" in w.lower() for w in result["warnings"])
+
     def test_no_edge_flat(self):
         t = np.linspace(0, 1, 1000)
         y = np.full_like(t, 5.0)

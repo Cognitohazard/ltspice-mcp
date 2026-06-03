@@ -20,6 +20,7 @@ wheels/
 # Runtime artifacts
 workspace/
 ltspice-mcp.toml
+.ltspice-mcp/
 *.raw
 *.log
 *.op.raw
