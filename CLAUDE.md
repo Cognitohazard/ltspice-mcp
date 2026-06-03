@@ -60,17 +60,23 @@ Config/State          config.py, state.py, errors.py
 
 Key `lib/` modules:
 - `services.py` — application-level service layer shared by tools and resources. Owns job resolution, cached result loading, and reusable extraction logic. Sits between MCP adapters and pure parsers. **Unified result read-model:** `runs_of(job)` projects either a `SimulationJob` or a `BatchJob` into a uniform `list[RunRef]` (a single run = batch-of-one); `resolve_run(job_id, run_index)` + `resolve_raw_file`/`resolve_log_file` address any run through it (gated on `completed`). This is the one place that knows the two physical result layouts (one multi-step raw vs N single-point raws), so extraction stays job-agnostic. `query_value`/`bode_metrics` accept `job_id`+`run_index` to analyze a sweep/MC run like a standalone raw (job-run raws bypass `safe_path` — trusted server artifacts, like `batch_results`).
-- `sim_runner.py`, `sweep_runner.py`, `montecarlo_runner.py` — spicelib runner wrappers
+- **SPICE lexer/validator** — `spice_lex.py` (foundation netlist lexer → `list[SpiceCard]` tokens), `spice_lex_ops.py` (cross-card transform passes), `spice_lex_views.py` (typed views over cards), `spice_validator.py` (pre-flight directive + arity validation). The `.cir`/`.net` read / list / value-edit paths and `validate_netlist` arity checks run on this pipeline, not spicelib's `SpiceEditor` (which is still used for some other `.cir`/`.net` editor ops).
+- **Job subsystem** — `job_types.py` (domain dataclasses `SimulationJob`/`BatchJob`/`RunRef`/configs, re-exported from `state` to break import cycles), `job_registry.py` (in-memory registry + disk persistence + interrupted-job recovery + `preload_recent`), `job_store.py` (per-circuit JSON sidecar at `{circuit_dir}/.ltspice-mcp/jobs/{job_id}.json`), `job_lifecycle.py` (declarative status state machine, `transition()`).
+- `sim_runner.py`, `sweep_runner.py`, `montecarlo_runner.py`, `runner_base.py` — spicelib runner wrappers (`runner_base` = shared scaffolding); `montecarlo.py` is the pure perturbation engine behind `montecarlo_runner`
 - `runner_manager.py` — centralized runner lifecycle (see Key Patterns)
 - `simulator.py` — simulator detection, WSL/Wine selection
 - `ltspice_wsl.py`, `wsl.py` — WSL path conversion and interop
-- `raw_parser.py`, `log_parser.py` — simulation result parsing
-- `library_manager.py`, `library_parser.py` — component library handling
+- `ac_analysis.py`, `signal_analysis.py` — pure-function analysis primitives for frequency-domain (.AC) and transient (.tran) `.raw` data; back the structured analysis tools (`bode_metrics`, `signal_stats`, etc.)
+- `raw_parser.py`, `log_parser.py` — simulation `.raw` / `.log` result parsing
+- `library_manager.py`, `library_parser.py`, `encoding.py` — component library handling + library/netlist encoding detection
 - `batch_results.py` — sweep/MC batch result extraction
+- `component_value.py` — element-class-typed dispatcher behind `set_component_value`
 - `cache.py` — `FileCache` for editor and result instances
-- `pathutil.py` — path security (`safe_path()`, `resolve_safe_path()`)
-- `format.py`, `plotting.py`, `sweep_utils.py` — formatting and plot helpers
-- `symbol_geometry.py` — .asy symbol parsing, pin positions, rotation transforms, bounding boxes
+- `pathutil.py` — path security (`safe_path()`, `resolve_safe_path()`); `filelock.py` — cross-process advisory file locks
+- `recent.py` — global recently-touched-circuit index (`recent.json`); backs the `recent` tool + job preload
+- `format.py`, `sweep_utils.py` — formatting + sweep helpers
+- `symbol_geometry.py`, `geometry.py` — .asy symbol parsing (pin positions, rotation transforms, bounding boxes) + shared 2D / bbox helpers
+- `mcp_logging.py`, `observability.py` — MCP protocol log notifications + structured job-lifecycle events
 
 ### Tool Module Convention
 
@@ -106,7 +112,7 @@ Direct editing of LTspice `.asc` schematics is a first-class feature. All circui
 - **`set_component_value`** handles both single (`reference`+`value`) and batch (`values` dict) modes.
 - **`parameter`** reads all .PARAM values (no args) or sets one (`name`+`value`).
 - **`edit_directive`** adds or removes SPICE directives via `action: "add"|"remove"`.
-- **Schematic-only tools** (`remove_component`, `move_component`, `set_component_attribute`, `export_netlist`, `connect`, `add_net_label`, `add_text`, `symbol_info`, `component_info`, `reset_schematic`) validate `.asc` extension and use `_get_asc_editor()`.
+- **Schematic-only tools** (`remove_component`, `move_component`, `set_component_attribute`, `export_netlist`, `connect`, `add_net_label`, `symbol_info`, `component_info`, `reset_schematic`) validate `.asc` extension and use `_get_asc_editor()`.
 - **`reset_schematic`** reverts an `.asc` to the byte snapshot taken before its first in-session mutation (recovery hatch). `_snapshot_asc()` captures it at the `_editing` choke point and in `apply_schematic_ops`; the snapshot lives on `state.asc_snapshots` (per-session only).
 - **`connect`** wires two pins by reference (e.g., `M1.D` → `M4a.D`) with waypoint routing. Validates before writing: refuses diagonal wires, pin collisions, and wire junction overlaps. Warns on long runs and bbox crossings.
 - **`add_component`** returns pin positions (with direction), bounding box, and overlap warnings.
@@ -134,7 +140,8 @@ Users can override via `[schematic] symbol_paths` in TOML or `LTSPICE_MCP_SYMBOL
 
 - **Blocking calls use `run_sync()`**: `tools/_base.py:run_sync()` wraps synchronous spicelib calls. Currently executes inline (not threaded) because threaded filesystem access deadlocks in this environment. Simulation runners still use their own background threads for long-lived simulator work.
 - **Path security**: All user-provided paths go through `safe_path()` → `resolve_safe_path()`, which validates against `config.allowed_paths`. Raises `PathSecurityError` on violation.
-- **Lifespan context**: `server_lifespan()` creates `SessionState` (config + detected simulators + batch job tracking + profile-filtered tool dispatch). Handlers receive state via `server.request_context.lifespan_context["state"]`.
+- **Lifespan context**: `server_lifespan()` creates `SessionState` (config + detected simulators + `JobRegistry` + profile-filtered tool dispatch). Handlers receive state via `server.request_context.lifespan_context["state"]`.
+- **Job lifecycle & persistence**: `SessionState` delegates all job state to `JobRegistry` (`lib/job_registry.py`); `state.jobs`/`state.add_job`/etc. are thin delegators. When `state.persist_jobs` is on, jobs round-trip through per-circuit JSON sidecars (`{dir}/.ltspice-mcp/jobs/`) via `job_store.py`, and `preload_recent()` reloads jobs for recently-touched circuits at startup. Status transitions go through the `job_lifecycle.transition()` state machine; `run_simulation` enforces `config.max_parallel_sims`. On shutdown, `cancel_running()` kills live simulators and `drain_pending()` flushes persistence.
 - **Structured errors**: Use the hierarchy in `errors.py` (PathSecurityError, NetlistError, SimulationError variants). Handlers catch `LTSpiceMCPError` subtypes and return error text; unknown exceptions propagate to MCP SDK.
 - **Log diagnostics**: `log_parser.py:extract_log_diagnostics()` extracts structured warnings and errors from LTspice log files (parse errors with caret pointers, Fatal Error, convergence messages, etc.). Used by `run_simulation`, `check_job`, `get_measurements`, and `get_simulation_summary` to surface errors instead of silently returning empty results.
 - **Runner lifecycle**: `RunnerManager` (`lib/runner_manager.py`) owns all runner instances (sim, sweep, MC). Accessed via `state.runners.get_sim_runner(loop, simulator_class, output_folder)` etc. The manager auto-invalidates cached runners when the event loop, simulator class, or output folder changes. Never create runners directly.
@@ -151,7 +158,7 @@ On WSL, LTspice.exe runs via Windows interop (not Wine). Key adaptations:
 
 `ltspice-mcp.toml` in working directory (auto-generated if missing). Environment variables with `LTSPICE_MCP_` prefix override TOML values. See `config.py:ServerConfig` for all options. On WSL, set `simulator.path` to the LTspice Windows executable path.
 
-TOML sections: `[simulator]`, `[security]`, `[simulation]`, `[analysis]`, `[plotting]`, `[logging]`, `[schematic]`, `[tools]`.
+TOML sections: `[simulator]`, `[security]`, `[simulation]`, `[analysis]`, `[plotting]`, `[logging]`, `[schematic]`, `[tools]`, `[state]` (`persist_jobs`).
 
 ### Tool Profiles
 
