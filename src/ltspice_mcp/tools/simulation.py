@@ -224,7 +224,9 @@ async def _wait_for_completion(
     preflight_warnings: list[str] | None = None,
 ):
     """Wait for simulation to complete (sync mode)."""
-    start_time = time.time()
+    # Monotonic clock for elapsed time: time.time() can run backwards under
+    # WSL2 clock skew, producing a negative reported duration.
+    start_time = time.monotonic()
 
     try:
         # Wait for completion with timeout
@@ -248,7 +250,7 @@ async def _wait_for_completion(
             services.job_duration_seconds(
                 job.started_at, job.completed_at, label=f"sim job {job.job_id}"
             )
-            or time.time() - start_time
+            or time.monotonic() - start_time
         )
 
         # Extract log context if available
@@ -271,7 +273,7 @@ async def _wait_for_completion(
         )
 
     # Simulation completed (success or failure)
-    duration = time.time() - start_time
+    duration = time.monotonic() - start_time
 
     if job.status == "completed":
         # Parse success summary

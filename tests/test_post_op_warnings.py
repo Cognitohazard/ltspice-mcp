@@ -327,6 +327,32 @@ class TestConnectValidation:
         floating = [w for w in data["validation_warnings"] if w["kind"] == "floating_pin"]
         assert floating, "expected at least one floating pin after partial wire"
 
+    async def test_connect_scopes_floating_pins_to_touched_components(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        # Regression: connect used to re-echo floating-pin warnings for EVERY
+        # not-yet-wired component on each call. It must now report only pins of
+        # the components it touched, so an untouched R3 placed earlier doesn't
+        # add noise to an unrelated connect.
+        await handle_create_schematic(CreateSchematicInput(name="scope"), asc_state)
+        for ref, x in (("R1", 100), ("R2", 200), ("R3", 400)):
+            await handle_add_component(
+                AddComponentInput(path="scope.asc", reference=ref, symbol="res", x=x, y=100),
+                asc_state,
+            )
+        result = await handle_connect(
+            ConnectInput(path="scope.asc", from_pin="R1.1", to_pin="R2.1"),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        floating_refs = {
+            w["ref"] for w in data.get("validation_warnings", []) if w["kind"] == "floating_pin"
+        }
+        assert "R3" not in floating_refs
+        # Only the touched components' still-floating pins are reported.
+        assert floating_refs and floating_refs <= {"R1", "R2"}
+
     async def test_connect_through_endpoint_pin_refused(
         self, asc_state: SessionState, work_dir: Path
     ) -> None:

@@ -110,6 +110,26 @@ class TestFindModel:
         )
         return p
 
+    @pytest.fixture
+    def tiebreak_lib(self, work_dir: Path) -> Path:
+        # '2N3905' (typo) is LCS-equidistant from both names, so fuzz scores
+        # tie; the tiebreak must prefer the longer shared prefix ('2n390' with
+        # 2N3904 vs only '2n3' with 2N3055), not the alphabetical accident.
+        p = work_dir / "tiebreak.lib"
+        p.write_text(".MODEL 2N3055 NPN(BF=50)\n.MODEL 2N3904 NPN(BF=200)\n")
+        return p
+
+    async def test_fuzzy_tiebreak_prefers_shared_prefix(
+        self, state_no_sim: SessionState, tiebreak_lib: Path
+    ):
+        await handle_load_library(LoadLibraryInput(path=tiebreak_lib.name), state_no_sim)
+        result = await handle_find_model(FindModelInput(name="2N3905"), state_no_sim)
+        names = [r["name"] for r in result.structuredContent["results"]]
+        assert "2N3904" in names and "2N3055" in names
+        # Equal fuzzy score → shared-prefix tiebreak puts the real neighbour
+        # first, not the alphabetically-earlier 2N3055.
+        assert names.index("2N3904") < names.index("2N3055")
+
     async def test_typo_finds_candidates(self, state_no_sim: SessionState, fuzzy_lib: Path):
         await handle_load_library(LoadLibraryInput(path=fuzzy_lib.name), state_no_sim)
         result = await handle_find_model(FindModelInput(name="2N3905"), state_no_sim)
