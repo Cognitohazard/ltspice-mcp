@@ -402,6 +402,30 @@ class TestStabilityMetrics:
         r = compute_stability_metrics(f, H)
         assert r["dc_gain_db"] == pytest.approx(20 * np.log10(A), abs=0.01)
 
+    def test_2pole_low_phase_margin_warns_marginal(self):
+        # Regression: two coincident poles at 100 Hz with modest
+        # DC gain push the unity crossover well above both poles → ~20° phase
+        # margin, yet the phase never crosses -180° so the loop classifies
+        # "unconditional". That label must carry a marginal-ringing advisory.
+        f = _log_freqs(0, 7, 4000)
+        H = _two_pole_loop(f, 32.0, 100.0, 100.0)
+        r = compute_stability_metrics(f, H)
+        assert r["stability"] == "unconditional"
+        pm = r["phase_margin_worst_deg"]
+        assert pm is not None and pm < 45.0
+        assert any("marginal" in w.lower() for w in r["warnings"])
+
+    def test_2pole_high_phase_margin_no_marginal_warning(self):
+        # Dominant-pole design: crossover sits just past the dominant pole, so
+        # phase margin is comfortable and no marginal advisory fires.
+        f = _log_freqs(0, 7, 4000)
+        H = _two_pole_loop(f, 10.0, 10.0, 1_000_000.0)
+        r = compute_stability_metrics(f, H)
+        assert r["stability"] == "unconditional"
+        pm = r["phase_margin_worst_deg"]
+        assert pm is not None and pm > 45.0
+        assert not any("marginal" in w.lower() for w in r["warnings"])
+
 
 # ---------------------------------------------------------------------------
 # compute_roll_off

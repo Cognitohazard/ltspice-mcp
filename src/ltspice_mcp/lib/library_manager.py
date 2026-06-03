@@ -41,6 +41,22 @@ def _part_aware_score(query_lower: str, candidate_lower: str) -> float:
     return base
 
 
+def _shared_prefix_len(a: str, b: str) -> int:
+    """Length of the common leading-character run of two strings.
+
+    Tiebreaks equal fuzzy scores toward the nearest part-number neighbour:
+    '2n3905' shares '2n390' (5) with '2n3904' but only '2n3' (3) with '2n3055',
+    so the electrically-adjacent sibling outranks the alphabetical accident the
+    tool description advertises ('2N3905' → '2N3904').
+    """
+    n = 0
+    for ca, cb in zip(a, b, strict=False):
+        if ca != cb:
+            break
+        n += 1
+    return n
+
+
 class LibraryManager:
     """Manage loaded SPICE libraries for the session.
 
@@ -437,7 +453,16 @@ class LibraryManager:
             for index in self._iter_builtin_indexes():
                 collect(index)
 
-        candidates.sort(key=lambda pair: (-pair[0], pair[1].name_lower))
+        # Tiebreak equal scores by shared-prefix length (nearest part-number
+        # sibling) before falling back to alphabetical, so an unrelated name
+        # that merely sorts earlier can't bury the advertised neighbour.
+        candidates.sort(
+            key=lambda pair: (
+                -pair[0],
+                -_shared_prefix_len(query_lower, pair[1].name_lower),
+                pair[1].name_lower,
+            )
+        )
 
         # Dedup by model name — the same part can appear in several libraries
         # (and vendor libs repeat short helper subckts), which would otherwise

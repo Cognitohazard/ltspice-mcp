@@ -638,6 +638,31 @@ def _post_op_warnings(editor: AscEditor) -> list[dict]:
     return warnings
 
 
+def _scope_floating_pin_warnings(
+    warnings: list[dict], refs: set[str] | str, *, keep_other_kinds: bool
+) -> list[dict]:
+    """Scope ``_post_op_warnings`` floating-pin advisories to ``refs``.
+
+    ``_post_op_warnings`` returns the whole schematic's floating pins on every
+    call, so during an incremental build it re-emits every not-yet-wired pin —
+    O(n²) noise that buries the one actionable warning. Each mutating handler
+    keeps only the floating pins of the component(s) it touched: ``add_component``
+    passes its new ref with ``keep_other_kinds=False`` (a bare placement raises
+    no other advisory); ``connect`` passes its two touched refs with
+    ``keep_other_kinds=True`` so the shorts / junction-overlap warnings it *can*
+    create still pass through.
+    """
+    ref_set = {refs} if isinstance(refs, str) else refs
+    result = []
+    for w in warnings:
+        if w.get("kind") == "floating_pin":
+            if w.get("ref") in ref_set:
+                result.append(w)
+        elif keep_other_kinds:
+            result.append(w)
+    return result
+
+
 def _validation_warnings_lines(warnings: list[dict]) -> list[str]:
     """Format ``_post_op_warnings`` output as message lines for a text response.
 
@@ -1031,6 +1056,15 @@ async def handle_create_netlist(
     name = args.name
     content = args.content
     target_path = safe_path(f"{name}.cir", state)
+
+    # Reject empty / whitespace-only content up front. Otherwise spicelib's
+    # parser surfaces a cryptic ``Expected pattern "^\*" not found`` when it
+    # fails to find a title line.
+    if not content.strip():
+        raise NetlistError(
+            "Netlist content is empty. Provide at least a title line and one "
+            "element or analysis directive (e.g. 'V1 in 0 1\\n.op')."
+        )
 
     # Pre-flight every directive line through the same validator that
     # ``edit_directive`` uses, so known-bad patterns (vdb()/phase()/
@@ -1622,11 +1656,25 @@ async def handle_parameter(args: ParameterInput, state: SessionState):
     param_names = editor.get_all_parameter_names()
     params = {}
     if param_names:
+        # get_all_parameter_names() uppercases (spicelib), but on-disk names
+        # keep their source casing. SPICE params are case-insensitive, so this
+        # is cosmetic — recover the verbatim casing from the file text so the
+        # read-all projection matches what the user wrote.
+        from ltspice_mcp.lib.encoding import read_spice_text
+
+        source_text = ""
+        with contextlib.suppress(Exception):
+            source_text = read_spice_text(file_path)
+
         param_lines = []
         for name in param_names:
+            display_name = name
+            match = re.search(rf"\b{re.escape(name)}\b", source_text, re.IGNORECASE)
+            if match:
+                display_name = match.group(0)
             value = editor.get_parameter(name)
-            param_lines.append(f".PARAM {name} = {value}")
-            params[name] = value
+            param_lines.append(f".PARAM {display_name} = {value}")
+            params[display_name] = value
         result = "\n".join(param_lines)
     else:
         result = "No .PARAM directives found"
@@ -2117,16 +2165,11 @@ async def handle_add_component(
             value=value,
             attributes=args.attributes,
         )
-        # add_component adds no wires or labels, so the only *new* advisory
-        # it can raise is a floating pin on the component it just placed.
-        # Reporting the whole-schematic cumulative list re-emits every
-        # earlier component's floating pins on every call — O(n²) noise that
-        # buries the one actionable warning during a build (V7-FR-9).
-        validation_warnings = [
-            w
-            for w in _post_op_warnings(editor)
-            if w.get("kind") == "floating_pin" and w.get("ref") == reference
-        ]
+        # add_component adds no wires or labels, so the only *new* advisory it
+        # can raise is a floating pin on the component it just placed.
+        validation_warnings = _scope_floating_pin_warnings(
+            _post_op_warnings(editor), reference, keep_other_kinds=False
+        )
 
     result = f"Added {reference} ({symbol}) at ({x},{y})"
     if value is not None:
@@ -2245,9 +2288,12 @@ async def handle_export_netlist(
         "Revert an .asc schematic to the state it had BEFORE the first edit this "
         "session — a recovery escape hatch for when a sequence of edits went wrong. "
         "The server snapshots each .asc file's bytes just before its first in-session "
-        "mutation (set_component_value, move_component, connect, apply_schematic_ops, "
-        "etc.); this restores that snapshot exactly and drops it (so a later edit "
-        "establishes a fresh restore point). Returns reverted=false (not an error) "
+        "mutation (add_component, set_component_value, move_component, connect, "
+        "apply_schematic_ops, etc.); this restores that snapshot exactly and drops it "
+        "(so a later edit establishes a fresh restore point). Because add_component is a "
+        "trigger, the first add_component on a freshly created schematic snapshots the "
+        "empty file — so reset can revert all the way back to the empty post-create "
+        "state, dropping every component added this session. Returns reverted=false (not an error) "
         "when the file has no recorded in-session edits. Note: the snapshot lives only "
         "for the current server session — it does not persist across restarts, and it "
         "is not a substitute for version control."
@@ -2661,7 +2707,15 @@ async def handle_connect(args: ConnectInput, state: SessionState) -> types.CallT
     async with _editing_asc(asc_path, state) as ed:
         for sx1, sy1, sx2, sy2 in plan.segments:
             ed.wires.append(Line(Point(sx1, sy1), Point(sx2, sy2)))
-        validation_warnings = _post_op_warnings(ed)
+        # Scope floating-pin advisories to the components this connect touched;
+        # keep_other_kinds keeps the shorts / junction-overlap warnings connect
+        # can create. rsplit matches _resolve_pin's ref/pin split convention.
+        touched_refs = {
+            pin.rsplit(".", 1)[0] for pin in (args.from_pin, args.to_pin) if "." in pin
+        }
+        validation_warnings = _scope_floating_pin_warnings(
+            _post_op_warnings(ed), touched_refs, keep_other_kinds=True
+        )
 
     x1, y1, x2, y2, segments, warnings = (
         plan.x1,
@@ -3704,8 +3758,7 @@ def _asc_topology_issues(editor: AscEditor) -> list[dict]:
                     "net — LTspice merges them into one node."
                 ),
                 "suggestion": (
-                    "Separate the wires/labels, or use a single net name for "
-                    "this node."
+                    "Separate the wires/labels, or use a single net name for this node."
                 ),
             }
         )

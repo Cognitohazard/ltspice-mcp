@@ -990,8 +990,19 @@ def compute_stability_metrics(
             "sweep covers the actual crossover frequency."
         )
     elif not phase_crossings:
-        # Phase never touches -180° in the sweep.
+        # Phase never touches -180° in the sweep → no gain-margin limit, hence
+        # "unconditional". But that label says nothing about phase margin: a
+        # 2-pole loop asymptotes toward -180° without crossing it, so a low
+        # (e.g. ~20°) phase margin still classifies as "unconditional". Flag the
+        # ringing risk so the label isn't read as "comfortably stable".
         stability = "unconditional"
+        if phase_margin_worst is not None and phase_margin_worst < 45.0:
+            warnings.append(
+                f"Unconditionally stable (loop-gain phase never reaches -180°), "
+                f"but the worst phase margin is only {phase_margin_worst:.1f}° — "
+                "the loop is marginal and will ring/peak. 'unconditional' means "
+                "'no gain-margin limit', not 'comfortable phase margin'."
+            )
     elif len(unity_crossings) > 1 or len(phase_crossings) > 1:
         stability = "conditional"
         warnings.append(
