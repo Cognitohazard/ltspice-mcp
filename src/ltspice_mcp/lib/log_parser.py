@@ -355,6 +355,26 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
     except Exception:
         return {"warnings": warnings, "errors": errors, "meas_errors": meas_errors}
 
+    # Some simulators (notably ngspice) print analysis diagnostics — e.g.
+    # "doAnalyses: ..." / "analysis not run" — to stdout while exiting 0 and
+    # writing only results to the ``-o`` log. When the runner captured that
+    # stream (``exe_log=True``) into a sibling ``.exe.log``, fold its lines in
+    # so the classifiers below surface them too. Quiet runs (LTspice batch)
+    # leave it empty/absent, so this is a no-op there.
+    try:
+        exe_content = log_path.with_suffix(".exe.log").read_text(errors="replace")
+    except OSError:
+        exe_content = ""
+    if exe_content.strip():
+        # Fold in only lines not already in the -o log (some builds mirror a
+        # diagnostic to both streams; avoid double-reporting), separated by a
+        # blank line so the parse-error block lookahead below can't stitch a
+        # caret/source block across the two-file boundary.
+        seen = set(content.splitlines())
+        extra = [ln for ln in exe_content.splitlines() if ln not in seen]
+        if extra:
+            content = content + "\n\n" + "\n".join(extra)
+
     lines = content.splitlines()
     i = 0
     while i < len(lines):

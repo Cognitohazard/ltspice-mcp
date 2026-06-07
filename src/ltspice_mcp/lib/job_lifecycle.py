@@ -155,7 +155,15 @@ def recover(
         raise InvalidTransitionError(
             f"recover() requires current status 'interrupted', got {job.status!r}"
         )
+    # ``_apply`` stamps ``completed_at = now()`` on terminal transitions, but a
+    # job recovered after a restart has no knowable true completion time — the
+    # producing process is gone and ``time.monotonic`` reset at process start.
+    # Preserve the prior value (``None`` for a freshly loaded interrupted job)
+    # so callers report a null duration instead of a bogus start-to-reload
+    # wall-clock figure.
+    prior_completed_at = job.completed_at
     _apply(job, new_status, _transitions_for(job))
+    job.completed_at = prior_completed_at
     if state is not None:
         state.persist_job(job)
     emit_job_event(

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import job_registry as job_registry_module
-from ltspice_mcp.lib import job_store, now
+from ltspice_mcp.lib import job_store, now, services
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
 
 
@@ -124,6 +125,37 @@ class TestEnsureJobsLoadedFor:
         # Raw header matches → promoted to completed.
         assert loaded.status == "completed"
         assert loaded.error is None
+
+    def test_recovered_job_reports_no_fabricated_duration(
+        self, state: SessionState, tmp_path: Path
+    ) -> None:
+        # A job interrupted by a crash and recovered on reload has no knowable
+        # completion time. recover() must NOT stamp completed_at=now() — that
+        # reports start-to-reload (~1800s here) as runtime. It leaves
+        # completed_at None so the duration is reported as null.
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        raw = tmp_path / "sim_recover.raw"
+        raw.write_bytes(b"Title: * /tmp/rc.cir\nDate: ...\n")
+        log = tmp_path / "sim_recover.log"
+        log.write_text("...")
+
+        running = SimulationJob(
+            job_id="sim_recover",
+            netlist=circuit,
+            simulator="LTspice",
+            status="running",
+            started_at=now() - timedelta(seconds=1800),
+            raw_file=raw,
+            log_file=log,
+        )
+        job_store.save_job(running)
+
+        state.ensure_jobs_loaded_for(circuit)
+        loaded = state.jobs["sim_recover"]
+        assert loaded.status == "completed"  # valid raw → recovered
+        assert loaded.completed_at is None  # not fabricated
+        assert services.job_duration_seconds(loaded.started_at, loaded.completed_at) is None
 
     def test_interrupted_with_garbage_raw_stays_interrupted(
         self, state: SessionState, tmp_path: Path
@@ -243,10 +275,15 @@ class TestBatchProgressThrottle:
         state.persist_batch_progress(bj)
         assert sidecar.stat().st_mtime_ns == first_mtime
 
-        # Run 5 (100 // 20 == 5) triggers a checkpoint.
+        # Run 5 (100 // 20 == 5) triggers a checkpoint. Assert on CONTENT, not
+        # mtime: the checkpoint write can land in the same mtime tick as the
+        # initial persist (the same-tick phenomenon the FileCache fix defends
+        # against), so a strict `st_mtime_ns >` is environmentally flaky under
+        # parallel load. The persisted completed_runs proves the checkpoint
+        # actually wrote the new state — a stronger, timing-independent check.
         bj.completed_runs = 5
         state.persist_batch_progress(bj)
-        assert sidecar.stat().st_mtime_ns > first_mtime
+        assert json.loads(sidecar.read_text())["completed_runs"] == 5
 
     def test_persist_batch_progress_always_persists_final_run(
         self, state: SessionState, tmp_path: Path
