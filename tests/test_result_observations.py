@@ -6,6 +6,9 @@ the right facts appear with the right ``kind``/``severity`` — and that benign
 results surface nothing.
 """
 
+# The tests below index Observation TypedDict keys they construct (a missing key
+# fails the test loudly), so the not-required-access check adds no value here.
+# pyright: reportTypedDictNotRequiredAccess=false
 from unittest.mock import MagicMock
 
 import numpy as np
