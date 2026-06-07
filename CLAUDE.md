@@ -44,6 +44,10 @@ No Makefile. CI: `.github/workflows/publish.yml` (test + publish to PyPI on vers
 
 `pytest-xdist` is available, but the suite runs serially by default. Pass `-n auto` to parallelize locally when you do not need deterministic output order or debugger attachment.
 
+## Comments, docstrings, and commit messages
+
+These are read by people outside this repo's internal process — keep internal jargon out of them. Do **not** use, in code comments, docstrings, or commit messages: severity codes (P0–P3), internal codenames for stress-test findings (e.g. J-KILL, J-MAXPAR), backlog item numbers (`open_followups` item N), or stress-test version numbers (v9/v10). Describe the actual behavior, condition, or bug in plain technical terms instead. Internal planning docs under `.claude/plans/` and the backlog may use that shorthand; shipped code and git history may not.
+
 ## Architecture
 
 All source lives under `src/ltspice_mcp/`.

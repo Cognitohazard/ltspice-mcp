@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -13,7 +14,11 @@ from ltspice_mcp.errors import BatchJobError
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_types import BatchJob
-from ltspice_mcp.lib.runner_base import BatchRunnerBase, wrap_runner_for_runno_callbacks
+from ltspice_mcp.lib.runner_base import (
+    BatchRunnerBase,
+    batch_run_filename,
+    wrap_runner_for_runno_callbacks,
+)
 from ltspice_mcp.state import SessionState
 
 if TYPE_CHECKING:
@@ -106,7 +111,21 @@ class SweepRunner(BatchRunnerBase):
 
             # The wrapped runner injects runno as a third arg; spicelib's
             # CallbackType is the unwrapped (raw_file, log_file) shape.
-            stepper.run_all(callback=run_completion_callback, wait_completion=True)  # type: ignore[arg-type]
+            #
+            # ``filenamer`` names each sub-run with the job_id token (see
+            # batch_run_filename) so the per-run Windows processes carry it and
+            # cancel() can taskkill them on WSL; the counter supplies the unique
+            # run index. ``exe_log`` captures ngspice's stdout-only diagnostics.
+            # spicelib calls ``filenamer(**current_values)``, so it takes **kwargs.
+            run_counter = itertools.count(1)
+            stepper.run_all(
+                callback=run_completion_callback,  # type: ignore[arg-type]
+                wait_completion=True,
+                filenamer=lambda **_v: batch_run_filename(
+                    batch_job.job_id, next(run_counter), batch_job.netlist
+                ),  # type: ignore[arg-type]
+                exe_log=True,
+            )
 
             if not cancel_event.is_set():
                 self._bridge(

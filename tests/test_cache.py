@@ -1,4 +1,4 @@
-"""Tests for FileCache mtime-based invalidation."""
+"""Tests for FileCache (mtime, size)-based invalidation."""
 
 import os
 from pathlib import Path
@@ -38,6 +38,36 @@ class TestFileCache:
 
         result = cache.get(p, lambda path: path.read_text())
         assert result == "v2"
+
+    def test_same_mtime_size_change_invalidates(self, tmp_path: Path):
+        # An in-place rewrite can land within the same mtime tick (observed on
+        # ext4/tmpfs and the /mnt/c Windows mount under WSL — exactly where a
+        # re-run sim or the shared .ltspice-mcp store gets overwritten). Size
+        # is part of the stamp, so a same-tick content change still invalidates.
+        cache: FileCache[str] = FileCache()
+        p = tmp_path / "same_tick.txt"
+        p.write_text("v1")
+
+        call_count = 0
+
+        def factory(path: Path) -> str:
+            nonlocal call_count
+            call_count += 1
+            return path.read_text()
+
+        first = cache.get(p, factory)
+        original_mtime_ns = p.stat().st_mtime_ns
+
+        # Rewrite with longer, different content, then restore the EXACT mtime
+        # (nanoseconds) so ONLY the size differs — isolating the size component.
+        p.write_text("v2-different-and-longer")
+        os.utime(p, ns=(original_mtime_ns, original_mtime_ns))
+        assert p.stat().st_mtime_ns == original_mtime_ns
+
+        second = cache.get(p, factory)
+        assert first == "v1"
+        assert second == "v2-different-and-longer"
+        assert call_count == 2
 
     def test_nonexistent_file_bypasses_cache(self, tmp_path: Path):
         cache: FileCache[str] = FileCache()

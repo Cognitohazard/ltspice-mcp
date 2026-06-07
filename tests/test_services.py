@@ -144,6 +144,40 @@ class TestLoadRaw:
         with pytest.raises(ResultError):
             services.load_raw(tmp_path / "x.raw", state_no_sim)
 
+    def test_truncated_binary_raw_raises_not_silently_short(
+        self, state_no_sim: SessionState, tmp_path: Path
+    ):
+        # A killed/interrupted sim can leave a .raw with a valid header but a
+        # data section cut short. spicelib reads trace data EXACTLY and raises
+        # on a short read; load_raw must surface that as ResultError, never
+        # serve silently-short arrays that masquerade as a complete result.
+        # Locks this safety property against a future spicelib regression to
+        # a count-limited (silently-truncating) read.
+        import numpy as np
+        from spicelib.raw.raw_write import RawWrite, Trace
+
+        n = 2000
+        rw = RawWrite(plot_name="Transient Analysis")
+        rw.add_trace(Trace("time", np.linspace(0.0, 1e-3, n), whattype="time"))
+        rw.add_trace(Trace("V(out)", np.linspace(0.0, 5.0, n), whattype="voltage"))
+        good = tmp_path / "good.raw"
+        rw.save(good)
+
+        # Sanity: the intact fixture parses (valid header). This proves the
+        # truncated case below fails on the truncation, not a malformed header.
+        raw = services.load_raw(good, state_no_sim)
+        names = [t.lower() for t in raw.get_trace_names()]
+        assert "time" in names and "v(out)" in names
+
+        # Cut the data section short (header is a few hundred bytes; 60% of a
+        # 2000-point file lands well inside the binary data).
+        data = good.read_bytes()
+        truncated = tmp_path / "truncated.raw"
+        truncated.write_bytes(data[: int(len(data) * 0.6)])
+
+        with pytest.raises(ResultError):
+            services.load_raw(truncated, state_no_sim)
+
 
 class TestGetBatchStatus:
     def test_running(self, state_no_sim: SessionState):

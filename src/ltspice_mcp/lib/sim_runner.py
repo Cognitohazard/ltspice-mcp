@@ -50,7 +50,7 @@ class SimulationRunner(RunnerBase):
         # semaphore caps concurrent jobs at ``max_parallel`` (a job holds a slot
         # while queued→running until the process is confirmed gone). Slot release
         # is idempotent via ``_slots_held``. Scope/limitations (per-instance gate;
-        # not cross-runner) are tracked in open_followups item 6.
+        # not cross-runner) are known and deferred.
         self._sema = asyncio.Semaphore(max_parallel)
         self._slots_held: set[str] = set()
         logger.debug(
@@ -102,6 +102,10 @@ class SimulationRunner(RunnerBase):
                 run_filename=f"{job_id}{ext}",
                 callback=completion_callback,
                 callback_on_error=True,
+                # Capture the simulator's stdout/stderr into a sibling
+                # ``.exe.log`` so ngspice's stdout-only diagnostics (which
+                # bypass the ``-o`` log) are visible to extract_log_diagnostics.
+                exe_log=True,
             )
             logger.info(
                 "Submitted simulation job %s: netlist=%s, simulator=%s",

@@ -37,7 +37,11 @@ from ltspice_mcp.lib.montecarlo import (
     variant_model_name,
 )
 from ltspice_mcp.lib.observability import emit_job_event
-from ltspice_mcp.lib.runner_base import BatchRunnerBase, wrap_runner_for_runno_callbacks
+from ltspice_mcp.lib.runner_base import (
+    BatchRunnerBase,
+    batch_run_filename,
+    wrap_runner_for_runno_callbacks,
+)
 from ltspice_mcp.lib.spice_lex import SpiceCard, emit, lex
 from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end as _ops_inject_card
 from ltspice_mcp.lib.spice_lex_views import (
@@ -417,9 +421,17 @@ class MonteCarloRunner(BatchRunnerBase):
                 editor.netlist = new_lines
 
                 per_run_params[runno] = run_params
-                # Wrapped runner injects runno; spicelib's CallbackType is
-                # the unwrapped (raw_file, log_file) shape.
-                runner.run(editor, callback=run_completion_callback)  # type: ignore[arg-type]
+                # Wrapped runner injects runno; spicelib's CallbackType is the
+                # unwrapped (raw_file, log_file) shape. ``run_filename`` carries
+                # the job_id token (see batch_run_filename) so this sub-run's
+                # Windows process is targetable by cancel()'s WSL taskkill;
+                # ``exe_log`` captures ngspice's stdout diagnostics.
+                runner.run(
+                    editor,
+                    callback=run_completion_callback,  # type: ignore[arg-type]
+                    run_filename=batch_run_filename(batch_job.job_id, runno, batch_job.netlist),
+                    exe_log=True,
+                )
 
             runner.wait_completion()
 
