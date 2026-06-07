@@ -24,6 +24,7 @@ from spicelib.sim.sim_runner import SimRunner
 
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_types import BatchJob
+from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
 from ltspice_mcp.state import SessionState
 
 # Trailing `_<digits>` in spicelib-generated raw/log filenames. spicelib's
@@ -43,6 +44,18 @@ def _parse_runno(raw_file: Path) -> int | None:
     if not match:
         return None
     return int(match.group(1))
+
+
+def batch_run_filename(job_id: str, runno: int, netlist: Path) -> str:
+    """Per-run filename for a batch sub-run: ``"{job_id}_{runno}{ext}"``.
+
+    The ``job_id`` prefix is the token ``BatchRunnerBase.cancel`` taskkills by on
+    WSL (substring match), and the trailing ``_{runno}`` is what ``_parse_runno``
+    reads back — this is the single producer of that naming contract, so a new
+    batch runner can't silently break cancel/runno-parsing. ``ext`` falls back to
+    ``.net`` (LTspice/ngspice reject extensionless netlists).
+    """
+    return f"{job_id}_{runno}{netlist.suffix or '.net'}"
 
 
 def wrap_runner_for_runno_callbacks(runner: SimRunner) -> SimRunner:
@@ -245,17 +258,24 @@ class BatchRunnerBase(RunnerBase):
         if cancel_event is not None:
             cancel_event.set()
 
+        # WSL: taskkill the Windows simulator processes whose per-run filenames
+        # carry this job's token. Batch sub-runs are named with the job id plus a
+        # per-run index (see batch_run_filename), so the substring token match in
+        # kill_windows_ltspice_by_token hits every run of this batch, the same way
+        # the single-run cancel path terminates its process.
+        try:
+            killed = await asyncio.to_thread(kill_windows_ltspice_by_token, batch_job.job_id)
+            if killed:
+                logger.info(
+                    "Killed %d Windows %s process(es) for %s", killed, kind, batch_job.job_id
+                )
+        except Exception as e:
+            logger.warning("WSL process kill for %s job %s failed: %s", kind, batch_job.job_id, e)
+
+        # Native/Wine: spicelib's kill_all_spice (a harmless no-op on WSL).
         runner = self._active_runners.get(batch_job.job_id)
         if runner is not None:
             try:
-                # NOTE (WSL limitation): kill_all_spice matches the Windows
-                # executable name against the *Linux* psutil table, so on WSL it
-                # is a no-op — the batch's per-run Windows LTspice processes keep
-                # running as orphans (the same J-KILL defect fixed for single
-                # jobs via kill_windows_ltspice_by_token). NOT fixed here because
-                # batch sub-runs are named by spicelib from the netlist stem, not
-                # the batch job_id, so there is no per-job token to target
-                # safely. Tracked in open_followups (item 6).
                 await asyncio.to_thread(runner.kill_all_spice)
             except Exception as e:
                 logger.warning("Error killing %s job %s: %s", kind, batch_job.job_id, e)

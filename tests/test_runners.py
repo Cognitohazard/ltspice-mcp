@@ -143,7 +143,7 @@ class TestSimulationRunnerCancel:
 
 
 class TestSimulationRunnerKillWsl:
-    """J-KILL regression: kill()/cancel() must terminate the real (Windows) sim.
+    """Regression: kill()/cancel() must terminate the real (Windows) sim.
 
     On WSL spicelib's ``kill_all_spice`` can't see the Windows process, so the
     runner additionally taskkills it by job_id. cancel() must also mark the job
@@ -175,6 +175,37 @@ class TestSimulationRunnerKillWsl:
         assert job.job_id not in runner._runners  # tracked runner dropped
 
     @pytest.mark.asyncio
+    async def test_submit_passes_exe_log_and_job_token(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        # run_simulation must hand spicelib exe_log=True (ngspice stdout capture)
+        # and a job_id-named run_filename (the cancel/kill token) at submit time. A
+        # silent revert of either line would regress the feature with no other
+        # test catching it.
+        runner = SimulationRunner(
+            loop=asyncio.get_running_loop(),
+            simulator_class=FakeSim,
+            output_folder=work_dir,
+            max_parallel=2,
+        )
+        captured: list[dict] = []
+        monkeypatch.setattr(
+            runner,
+            "_build_sim_runner",
+            lambda: MagicMock(run=MagicMock(side_effect=lambda *a, **k: captured.append(k))),
+        )
+        job = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_xlog")
+        task = asyncio.get_running_loop().create_task(
+            runner.start_simulation(job.netlist, job, state_no_sim)
+        )
+        await asyncio.sleep(0.05)
+        assert len(captured) == 1
+        assert captured[0].get("exe_log") is True
+        assert str(captured[0].get("run_filename", "")).startswith("sim_xlog")
+        if not task.done():
+            task.cancel()
+
+    @pytest.mark.asyncio
     async def test_cancel_marks_terminal_before_kill(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch
     ):
@@ -196,7 +227,7 @@ class TestSimulationRunnerKillWsl:
 
 
 class TestSimulationRunnerConcurrencyGate:
-    """J-MAXPAR regression: independent run_simulation jobs honor max_parallel.
+    """Regression: independent run_simulation jobs honor max_parallel.
 
     Each job builds its own spicelib SimRunner (one task), so the session-level
     semaphore is the only thing bounding concurrency across jobs.
@@ -267,8 +298,8 @@ class TestSimulationRunnerConcurrencyGate:
     async def test_timeout_while_queued_does_not_launch_orphan(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch
     ):
-        """Review J-MAXPAR finding: a job timed out while still QUEUED on the gate
-        must end terminal and must NOT launch when a slot later frees."""
+        """A job timed out while still QUEUED on the gate must end terminal and
+        must NOT launch when a slot later frees."""
         from ltspice_mcp.lib.job_lifecycle import transition
 
         launched: list = []
@@ -401,7 +432,9 @@ class TestSimulationRunnerConcurrencyGate:
         await asyncio.sleep(0.05)
         assert a.status == "cancelled"
         # Unverified kill -> slot stays reserved -> b must NOT have started.
-        assert b.status == "queued", "queued job must not start while a possibly-live orphan holds the slot"
+        assert b.status == "queued", (
+            "queued job must not start while a possibly-live orphan holds the slot"
+        )
         assert launched == launched_before
 
         # The orphan finally ends -> completion callback finalizes a -> slot freed -> b runs.
@@ -540,6 +573,80 @@ class TestSweepRunnerHandlers:
         assert bj.status == "cancelled"
         assert bj.done_event.is_set()
 
+    @pytest.mark.asyncio
+    async def test_cancel_taskkills_windows_by_job_token(
+        self,
+        sweep_runner: SweepRunner,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch,
+    ):
+        # Batch process-kill: sub-runs are named "{job_id}_<index>", so cancel()
+        # must taskkill the Windows processes by job_id token on WSL (where
+        # kill_all_spice is a no-op), in addition to the native kill_all_spice.
+        bj = _make_batch(state_no_sim, work_dir)
+        fake_runner = MagicMock()
+        sweep_runner._register_runner(bj.job_id, fake_runner)
+        tokens: list[str] = []
+        monkeypatch.setattr(
+            "ltspice_mcp.lib.runner_base.kill_windows_ltspice_by_token",
+            lambda tok: tokens.append(tok) or 1,
+        )
+        await sweep_runner.cancel(bj, state_no_sim)
+        assert tokens == [bj.job_id]  # Windows kill targeted this batch's token
+        fake_runner.kill_all_spice.assert_called_once()  # native/Wine path still runs
+        assert bj.status == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_sweep_passes_job_token_filenamer_and_exe_log(
+        self,
+        sweep_runner: SweepRunner,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch,
+    ):
+        # execute_sweep must hand run_all a filenamer that embeds the job_id (so
+        # cancel's WSL taskkill can target the batch) and exe_log=True (so
+        # ngspice's stdout-only diagnostics are captured). spicelib's SimStepper
+        # / SimRunner are mocked — we assert OUR wiring, not spicelib iteration.
+        # SpiceEditor requires a leading "*" title line for encoding detection.
+        (work_dir / "n.cir").write_text("* sweep test\nV1 in 0 1\nR1 in 0 1k\n.tran 1m\n.end\n")
+        bj = _make_batch(state_no_sim, work_dir)
+
+        captured: dict = {}
+
+        class FakeStepper:
+            def add_value_sweep(self, *a, **k):
+                pass
+
+            def add_param_sweep(self, *a, **k):
+                pass
+
+            def total_number_of_simulations(self):
+                return 0
+
+            def run_all(self, **kwargs):
+                captured.update(kwargs)
+
+        monkeypatch.setattr(
+            "ltspice_mcp.lib.sweep_runner._create_stepper",
+            lambda editor, runner: FakeStepper(),
+        )
+        monkeypatch.setattr(sweep_runner, "_build_sim_runner", lambda: MagicMock(_runno=0))
+        monkeypatch.setattr(sweep_runner, "_handle_sweep_completion", lambda *a, **k: None)
+
+        await sweep_runner.start_sweep(bj, state_no_sim)
+
+        assert captured.get("exe_log") is True
+        namer = captured.get("filenamer")
+        assert callable(namer)
+        # spicelib calls filenamer(**current_values); here current_values is {}.
+        n1 = namer()
+        n2 = namer()
+        assert isinstance(n1, str) and isinstance(n2, str)
+        assert n1.startswith(f"{bj.job_id}_") and n2.startswith(f"{bj.job_id}_")
+        assert n1 != n2  # unique per run
+
 
 class TestMonteCarloRunnerHandlers:
     def test_handle_run_completion(
@@ -589,6 +696,48 @@ class TestMonteCarloRunnerHandlers:
         bj = _make_batch(state_no_sim, work_dir, job_type="montecarlo")
         await mc_runner.cancel(bj)
         assert bj.status == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_mc_runs_named_by_job_token_and_capture_stdout(
+        self,
+        mc_runner: MonteCarloRunner,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch,
+    ):
+        # Process-kill token + ngspice capture for the MC path. MC uses a
+        # per-call run_filename STRING (distinct from sweep's run_all filenamer),
+        # so it needs its own coverage: each sub-run must embed the job_id
+        # (cancel's WSL taskkill token) and pass exe_log=True (ngspice stdout capture).
+        (work_dir / "n.cir").write_text("* mc test\nV1 in 0 1\nR1 in 0 1k\n.tran 1m\n.end\n")
+        bj = _make_batch(state_no_sim, work_dir, job_type="montecarlo")
+        bj.total_runs = 2
+        bj.mc_config = MonteCarloConfig(
+            netlist=work_dir / "n.cir",
+            type_tolerances={"R": (0.05, "uniform")},
+            num_runs=2,
+            seed=1,
+        )
+
+        runs: list = []
+
+        def build():
+            m = MagicMock(_runno=0)
+            m.run.side_effect = lambda *a, **k: runs.append(
+                (k.get("run_filename"), k.get("exe_log"))
+            )
+            return m
+
+        monkeypatch.setattr(mc_runner, "_build_sim_runner", build)
+        monkeypatch.setattr(mc_runner, "_handle_mc_completion", lambda *a, **k: None)
+
+        await mc_runner.start_montecarlo(bj, state_no_sim)
+
+        assert len(runs) == 2
+        names = [n for n, _ in runs]
+        assert all(isinstance(n, str) and n.startswith(f"{bj.job_id}_") for n in names)
+        assert len(set(names)) == 2  # unique per run
+        assert all(exe is True for _, exe in runs)  # ngspice stdout capture on
 
 
 class TestParseRunno:
