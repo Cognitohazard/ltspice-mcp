@@ -1,0 +1,28 @@
+
+Note: Compatibility modes selected: ps lt ki a
+
+
+Circuit: * rc low-pass filter (.ac) — expect fc=1591.55 hz, dc gain 0 db, -20 db/dec
+
+binary raw file "/tmp/ltspice-mcp/sim_x.raw"
+Doing analysis at TEMP = 27.000000 and TNOM = 27.000000
+
+Using SPARSE 1.3 as Direct Linear Solver
+Note: v1: has no value, DC 0 assumed
+No. of Data Columns : 4
+
+No. of Data Rows : 601
+
+Total analysis time (seconds) = 0.001
+
+Total elapsed time (seconds) = 0.002
+
+Total DRAM available = 11776.016 MB.
+DRAM currently available = 10089.188 MB.
+Maximum ngspice program size =   21.406 MB.
+Current ngspice program size =   12.832 MB.
+
+Shared ngspice pages =   10.766 MB.
+Text (code) pages =    6.156 MB.
+Stack = 0 bytes.
+Library pages =    2.172 MB.

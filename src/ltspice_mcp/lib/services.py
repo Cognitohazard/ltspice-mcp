@@ -29,7 +29,13 @@ from ltspice_mcp.lib.log_parser import (
     read_log_text,
 )
 from ltspice_mcp.lib.raw_parser import get_step_count
-from ltspice_mcp.state import BatchJob, RunRef, SessionState, SimulationJob
+from ltspice_mcp.state import (
+    TERMINAL_STATUSES,
+    BatchJob,
+    RunRef,
+    SessionState,
+    SimulationJob,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -418,7 +424,11 @@ def scan_batch_convergence(batch_job: BatchJob) -> list[dict[str, Any]]:
     ``BatchJob`` so the (status, signal-data) round-trip a typical poll
     issues doesn't pay for two full walks.
     """
-    if batch_job.status not in ("completed", "failed", "cancelled"):
+    # Scan once the job is terminal (incl. ``interrupted`` — its completed
+    # sub-runs are real results worth surfacing). A hardcoded tuple here used to
+    # omit ``interrupted``, silently skipping the convergence scan for recovered
+    # batches; use the canonical terminal set so the class can't recur.
+    if batch_job.status not in TERMINAL_STATUSES:
         return []
     cached = batch_job.convergence_warnings
     if cached is not None:
