@@ -330,3 +330,35 @@ class TestNgspicePreflightWarnings:
         net.write_text("R1 a 0 {r}\n.step param r 1k 3k 1k\n.op\n.end\n")
         with pytest.raises(SimulationError, match=r"does not support \.step"):
             services.ngspice_preflight_warnings(net, self._ngspice_cls())
+
+
+class TestScanBatchConvergence:
+    """scan_batch_convergence must scan EVERY terminal batch — including an
+    ``interrupted`` job recovered after restart, whose completed sub-runs are
+    real results. Regression: a hardcoded ('completed','failed','cancelled')
+    gate omitted 'interrupted', silently skipping the scan.
+    """
+
+    def test_interrupted_job_is_scanned(self, state_no_sim: SessionState, tmp_path: Path):
+        log = tmp_path / "run0.log"
+        log.write_text("Doing analysis at TEMP=27\nWarning: gmin stepping needed\n")
+        bj = _make_batch(
+            state_no_sim,
+            status="interrupted",
+            run_results={0: {"raw_file": str(log), "log_file": str(log), "params": {}}},
+        )
+        flagged = services.scan_batch_convergence(bj)
+        assert len(flagged) == 1
+        assert flagged[0]["run_index"] == 0
+        assert "gmin stepping" in flagged[0]["markers"]
+
+    def test_running_job_not_scanned(self, state_no_sim: SessionState, tmp_path: Path):
+        # Still skipped while non-terminal (logs mid-write).
+        log = tmp_path / "run0.log"
+        log.write_text("gmin stepping\n")
+        bj = _make_batch(
+            state_no_sim,
+            status="running",
+            run_results={0: {"raw_file": str(log), "log_file": str(log), "params": {}}},
+        )
+        assert services.scan_batch_convergence(bj) == []

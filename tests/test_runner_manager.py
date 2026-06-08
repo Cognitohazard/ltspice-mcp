@@ -16,6 +16,7 @@ class _StubRunner:
         self.loop = loop
         self.simulator_class = simulator_class
         self.output_folder = output_folder
+        self.max_parallel = max_parallel
 
 
 @pytest.fixture(autouse=True)
@@ -99,6 +100,21 @@ class TestRunnerManager:
         mgr.reset()
         assert len(mgr._runners) == 0
         assert mgr._loop is None
+
+    def test_max_parallel_change_updates_cached_runner(self, loop):
+        # A later run_sweep/run_montecarlo with a different max_parallel must
+        # re-cap the cached runner IN PLACE (same instance, so an in-flight
+        # batch's cancel-event / live-process tracking survives). Regression:
+        # the cap was honored only at creation, so a second sweep silently ran
+        # at the first sweep's cap (observed: 4 processes under a requested 2).
+        mgr = RunnerManager()
+        sim_cls = type("FakeSim", (), {})
+        out = Path("/tmp/out")
+
+        r1 = mgr.get_sweep_runner(loop, sim_cls, out, max_parallel=4)
+        r2 = mgr.get_sweep_runner(loop, sim_cls, out, max_parallel=2)
+        assert r1 is r2
+        assert r2.max_parallel == 2
 
     def test_different_runner_types_coexist(self, loop):
         mgr = RunnerManager()

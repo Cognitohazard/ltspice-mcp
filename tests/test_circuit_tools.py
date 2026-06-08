@@ -649,6 +649,22 @@ class TestDiffCircuit:
         assert any(".ac" in d for d in data["directives_added"])
         assert any(".tran" in d for d in data["directives_removed"])
 
+    async def test_deck_end_not_a_spurious_directive(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # ``.END`` is the deck terminator, not a meaningful directive: a .cir
+        # carries one and an exported .asc netlist does not. It must not surface
+        # as a removed directive (regression — it did when diffing .cir vs .asc).
+        a = work_dir / "a.cir"
+        b = work_dir / "b.cir"
+        a.write_text("* a\nR1 in out 1k\n.op\n.end\n")
+        b.write_text("* b\nR1 in out 1k\n.op\n")  # no .END terminator
+        result = await handle_diff_circuit({"path_a": a.name, "path_b": b.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert not any(d.strip().lower() == ".end" for d in data["directives_removed"])
+        assert data["directives_removed"] == []
+
 
 # Relocated from tests/test_v6_fixes.py (regression).
 class TestCN1PulseAcceptedOnVI:

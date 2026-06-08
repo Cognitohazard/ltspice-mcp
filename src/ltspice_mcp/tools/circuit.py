@@ -4014,13 +4014,20 @@ async def handle_diff_circuit(args: DiffCircuitInput, state: SessionState) -> ty
             changed.append({"reference": ref, "before": a[ref], "after": b[ref]})
 
     # Case-insensitive directive comparison — SPICE directives are
-    # case-insensitive, so .end vs .END shouldn't appear as a diff.
-    da_by_lower: dict[str, list[str]] = {}
-    for d in da:
-        da_by_lower.setdefault(d.lower(), []).append(d)
-    db_by_lower: dict[str, list[str]] = {}
-    for d in db:
-        db_by_lower.setdefault(d.lower(), []).append(d)
+    # case-insensitive, so .end vs .END shouldn't appear as a diff. ``.END`` (the
+    # deck terminator) is dropped: a .cir carries one and an exported .asc netlist
+    # doesn't, so it would show as a spurious "removed directive". NOT ``.ends``
+    # (the subcircuit terminator), which IS meaningful.
+    def _by_lower(directives: set[str]) -> dict[str, list[str]]:
+        by_lower: dict[str, list[str]] = {}
+        for d in directives:
+            if d.strip().lower() == ".end":
+                continue
+            by_lower.setdefault(d.lower(), []).append(d)
+        return by_lower
+
+    da_by_lower = _by_lower(da)
+    db_by_lower = _by_lower(db)
     directive_added = sorted(
         d for k in db_by_lower.keys() - da_by_lower.keys() for d in db_by_lower[k]
     )

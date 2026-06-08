@@ -455,7 +455,12 @@ def build_simulation_summary(
     # bounded success path they are not, and the surfacer records that gap.
     value_traces: dict | None = None
     if value_scan == "scan":
-        axis_name = trace_names[0] if trace_names else None
+        # The sweep axis (time / frequency / DC source) is trace 0 and isn't a
+        # signal worth scanning. Skip it only when the raw actually HAS an axis:
+        # an operating-point raw has none, so ITS trace 0 is a real node, and
+        # skipping it there hid a degenerate first-sorted value (e.g. a floating
+        # node at ~1e30) — exactly the case this scan exists to catch.
+        axis_name = trace_names[0] if (has_axis and trace_names) else None
         value_traces = {}
         for name in trace_names:
             if name == axis_name:

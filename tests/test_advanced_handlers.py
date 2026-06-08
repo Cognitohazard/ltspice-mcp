@@ -343,6 +343,16 @@ class TestGetBatchResults:
         result = await handle_batch_results(GetBatchResultsInput(job_id="b1"), state_no_sim)
         assert "cancelled" in result.content[0].text.lower()
 
+    async def test_status_interrupted_returns_partial(self, state_no_sim: SessionState):
+        # 'interrupted' is a terminal status assigned on restart recovery when
+        # the owning server stopped mid-batch. The formatter must surface the
+        # partial results, not raise "unexpected status: interrupted".
+        _make_batch(state_no_sim, status="interrupted", completed_runs=3, total_runs=8)
+        result = await handle_batch_results(GetBatchResultsInput(job_id="b1"), state_no_sim)
+        text = result.content[0].text
+        assert "interrupted" in text.lower()
+        assert "3 of 8" in text
+
 
 class TestFormatBatchTextHelpers:
     def test_status_running_with_eta(self):

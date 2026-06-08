@@ -87,6 +87,15 @@ class RunnerManager:
                 max_parallel=max_parallel,
             )
             logger.debug(f"Created {class_name}: output={output_folder}")
+        else:
+            # A cached runner keeps the max_parallel it was created with, but a
+            # later run_sweep/run_montecarlo may request a different cap. Update
+            # it in place: each batch rebuilds its spicelib SimRunner from
+            # ``self.max_parallel`` at launch, so the new cap takes effect on the
+            # next batch this runner starts. Updating the attribute (vs. recreating
+            # the instance) preserves the per-job cancel-event / live-process map
+            # that an in-flight batch — and cancel_job — depend on.
+            self._runners[key].max_parallel = max_parallel
 
         return self._runners[key]
 
