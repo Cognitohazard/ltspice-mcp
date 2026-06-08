@@ -33,6 +33,9 @@ jobs:
       - name: Type check
         run: uv run pyright
 
+      - name: Install ngspice (enables the real-ngspice e2e tier)
+        run: sudo apt-get update && sudo apt-get install -y ngspice
+
       - name: Test
         run: uv run pytest tests/ -v
 
