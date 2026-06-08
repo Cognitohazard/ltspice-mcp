@@ -23,7 +23,7 @@ from typing import Any
 from spicelib.sim.sim_runner import SimRunner
 
 from ltspice_mcp.lib.job_lifecycle import transition
-from ltspice_mcp.lib.job_types import BatchJob
+from ltspice_mcp.lib.job_types import TERMINAL_STATUSES, BatchJob
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
 from ltspice_mcp.state import SessionState
 
@@ -213,7 +213,7 @@ class BatchRunnerBase(RunnerBase):
         ``stepper.sim_info`` after run_all returns; Monte Carlo leaves
         them empty (deviations are statistical).
         """
-        if batch_job.status in ("cancelled", "completed", "failed"):
+        if batch_job.status in TERMINAL_STATUSES:
             logger.debug(
                 "%s job %s already in terminal state '%s', ignoring run completion",
                 kind,

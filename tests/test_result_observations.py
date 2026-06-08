@@ -9,6 +9,7 @@ results surface nothing.
 # The tests below index Observation TypedDict keys they construct (a missing key
 # fails the test loudly), so the not-required-access check adds no value here.
 # pyright: reportTypedDictNotRequiredAccess=false
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -22,6 +23,8 @@ from ltspice_mcp.lib.result_observations import (
     value_observations,
 )
 from ltspice_mcp.tools._base import format_observations
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def _make_raw_mock(trace_names, axis, waves, plotname="Transient Analysis"):
@@ -99,6 +102,20 @@ class TestReconciliationObservations:
         obs = reconciliation_observations(
             {"measurements": {}, "failed_measurements": ["vpp"]}, {"meas": ["vpp"]}
         )
+        assert obs[0]["evidence"]["reason"] == "failed"
+
+    def test_failed_meas_present_as_null_key_still_classified_failed(self):
+        # Real run shape: a FAILED .meas appears BOTH as a null-valued key in
+        # ``measurements`` AND in ``failed_measurements`` — the empty-measurements
+        # shape the test above uses never actually occurs. The null key must not
+        # shadow the "failed" classification (regression: it did, so a failed
+        # measurement surfaced nowhere in ``observations``).
+        obs = reconciliation_observations(
+            {"measurements": {"vpp": {"values": [None]}}, "failed_measurements": ["vpp"]},
+            {"meas": ["vpp"]},
+        )
+        assert len(obs) == 1
+        assert obs[0]["code"] == "unmet_request"
         assert obs[0]["evidence"]["reason"] == "failed"
 
     def test_ngspice_batch_skip_classified(self):
@@ -205,3 +222,25 @@ class TestBuildSummaryWiring:
         )
         summary = build_simulation_summary(raw, None, value_scan="skipped_large")
         assert any(o["code"] == "value_scan_skipped" for o in summary["observations"])
+
+
+class TestOperatingPointValueScan:
+    """An operating-point raw has no sweep axis, so its FIRST trace is a real
+    node and must be scanned.
+
+    Regression: the value scan unconditionally treated ``trace_names[0]`` as the
+    sweep axis and skipped it — correct for .tran/.ac/.dc, but an .op has no axis,
+    so a degenerate node that sorts first was silently never scanned. Uses a
+    recorded real LTspice .op raw whose extreme node (V(hot)=1e9) is trace 0 —
+    the no-axis shape ``_make_raw_mock`` (always axis-first) never constructs.
+    """
+
+    def test_extreme_first_trace_is_surfaced(self):
+        from spicelib import RawRead
+
+        raw = RawRead(str(FIXTURES / "op_extreme_node.raw"))
+        # Sanity: the extreme node really is the first trace (a non-axis signal).
+        assert raw.get_trace_names()[0].lower() == "v(hot)"
+        summary = build_simulation_summary(raw, None, value_scan="scan")
+        codes = {o["code"] for o in summary["observations"]}
+        assert "extreme_value" in codes

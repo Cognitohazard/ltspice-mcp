@@ -17,6 +17,16 @@ from ltspice_mcp.lib.wsl import is_wsl
 logger = logging.getLogger(__name__)
 
 
+# Suffixes treated as SPICE library files. ``.lib`` / ``.mod`` cover third-party
+# packs; ``standard.bjt`` / ``.mos`` / ``.dio`` / ``.jft`` (and the device-default
+# ``.cap`` / ``.ind`` / ``.res`` / ``.bead``) are LTspice's bundled stock decks
+# under ``lib/cmp``. Shared by the builtin detection walk AND the explicit
+# ``load_library`` directory scan so the two agree on what a "library file" is.
+_SPICE_LIB_SUFFIXES = frozenset(
+    {".lib", ".mod", ".bjt", ".mos", ".dio", ".cap", ".ind", ".res", ".jft", ".bead"}
+)
+
+
 _WORD_TOK = re.compile(r"[A-Za-z]+|[0-9]+")
 
 
@@ -165,22 +175,8 @@ class LibraryManager:
             ]
             candidates.extend(wine_prefixes)
 
-        # Suffixes we treat as SPICE library files. ``standard.bjt`` /
-        # ``standard.mos`` are bundled stock parts; the ``.lib`` / ``.mod``
-        # extensions cover third-party packs that LTspice users drop into
-        # the same ``sub`` / ``cmp`` directories.
-        accepted_suffixes = {
-            ".lib",
-            ".mod",
-            ".bjt",
-            ".mos",
-            ".dio",
-            ".cap",
-            ".ind",
-            ".res",
-            ".jft",
-            ".bead",
-        }
+        # Suffixes treated as SPICE library files — see _SPICE_LIB_SUFFIXES.
+        accepted_suffixes = _SPICE_LIB_SUFFIXES
         lib_files: list[Path] = []
         seen: set[Path] = set()
         for candidate in candidates:
@@ -281,9 +277,15 @@ class LibraryManager:
         if path.is_file():
             files_to_load.append(path)
         elif path.is_dir():
-            # Scan recursively for .lib and .mod files
-            for pattern in ["*.lib", "*.mod"]:
-                files_to_load.extend(path.rglob(pattern))
+            # Scan recursively for any SPICE library file, using the SAME suffix
+            # set as the builtin LTspice walk (_SPICE_LIB_SUFFIXES). Previously
+            # only *.lib/*.mod were globbed, so pointing this at LTspice's
+            # lib/cmp (standard.bjt/.mos/.dio/.jft) found nothing and raised.
+            files_to_load.extend(
+                f
+                for f in path.rglob("*")
+                if f.is_file() and f.suffix.lower() in _SPICE_LIB_SUFFIXES
+            )
         else:
             raise LibraryError(f"Library path is not a file or directory: {path}")
 
