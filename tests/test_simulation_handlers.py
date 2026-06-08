@@ -193,6 +193,78 @@ class TestCancelJob:
 
 
 @pytest.mark.asyncio
+class TestCancelJobBatch:
+    """A sweep/Monte-Carlo job must be cancellable through cancel_job.
+
+    Regression: handle_cancel_job resolved only the single-sim store, so every
+    sweep/MC id returned "not found" and the batch runner's cancel (with its WSL
+    process-kill) was unreachable from the tool surface. These tests drive the
+    real handler — not the runner's cancel() directly — so the tool->runner
+    routing is exercised, which is the seam the runner-level tests don't cover.
+    """
+
+    async def test_cancel_running_sweep_routes_to_sweep_runner(self, state_with_sim: SessionState):
+        bj = BatchJob(
+            job_id="sweep_live",
+            job_type="sweep",
+            netlist=Path("/tmp/s.cir"),
+            total_runs=4,
+            completed_runs=1,
+            status="running",
+        )
+        state_with_sim.add_batch_job(bj)
+        fake_runner = MagicMock()
+        fake_runner.cancel = AsyncMock()
+        with patch.object(
+            state_with_sim.runners, "get_existing_sweep_runner", return_value=fake_runner
+        ):
+            result = await handle_cancel_job(CancelJobInput(job_id="sweep_live"), state_with_sim)
+        assert "cancelled" in result.content[0].text.lower()
+        fake_runner.cancel.assert_awaited_once()
+        # The batch job itself (resolved from batch_jobs) was handed to the runner.
+        assert fake_runner.cancel.await_args.args[0] is bj
+
+    async def test_cancel_running_montecarlo_routes_to_mc_runner(
+        self, state_with_sim: SessionState
+    ):
+        bj = BatchJob(
+            job_id="mc_live",
+            job_type="montecarlo",
+            netlist=Path("/tmp/m.cir"),
+            total_runs=10,
+            completed_runs=2,
+            status="running",
+        )
+        state_with_sim.add_batch_job(bj)
+        fake_runner = MagicMock()
+        fake_runner.cancel = AsyncMock()
+        with patch.object(
+            state_with_sim.runners, "get_existing_mc_runner", return_value=fake_runner
+        ):
+            result = await handle_cancel_job(CancelJobInput(job_id="mc_live"), state_with_sim)
+        assert "cancelled" in result.content[0].text.lower()
+        fake_runner.cancel.assert_awaited_once()
+
+    async def test_cancel_batch_runner_gone_raises(self, state_with_sim: SessionState):
+        # Job marked running but its runner is no longer live (e.g. after a
+        # restart): surface a clear error instead of crashing on a None runner.
+        bj = BatchJob(
+            job_id="sweep_orphan",
+            job_type="sweep",
+            netlist=Path("/tmp/o.cir"),
+            total_runs=4,
+            completed_runs=0,
+            status="running",
+        )
+        state_with_sim.add_batch_job(bj)
+        with (
+            patch.object(state_with_sim.runners, "get_existing_sweep_runner", return_value=None),
+            pytest.raises(SimulationError, match="no longer live"),
+        ):
+            await handle_cancel_job(CancelJobInput(job_id="sweep_orphan"), state_with_sim)
+
+
+@pytest.mark.asyncio
 class TestRunSimulationStubbed:
     """Test handle_run_simulation by stubbing the runner."""
 

@@ -1087,6 +1087,17 @@ def _format_batch_status_text(data: dict) -> str:
             f"Completed {data['completed_runs']} of {data['total_runs']} before cancellation. "
             f"Partial results available via get_batch_results."
         )
+    if status == "interrupted":
+        # Terminal status assigned on restart recovery when the owning server
+        # stopped mid-batch (job_registry). Treat like cancelled — surface the
+        # partial results instead of raising "unexpected status".
+        return (
+            f"Batch job {data['job_id']} was interrupted\n"
+            f"Type: {data['job_type']}\n"
+            f"The server stopped while this batch was running; "
+            f"{data['completed_runs']} of {data['total_runs']} run(s) completed before the "
+            f"interruption. Partial results available via get_batch_results."
+        )
     raise BatchJobError(f"Batch job {data['job_id']} has unexpected status: {status}")
 
 

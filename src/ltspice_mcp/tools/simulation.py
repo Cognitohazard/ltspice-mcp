@@ -570,21 +570,40 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
             fmt,
         )
     elif job.status == "cancelled":
-        duration = services.job_duration_seconds(
-            job.started_at, job.completed_at, label=f"sim job {job.job_id}"
-        )
-        data: dict = {"job_id": job_id, "status": "cancelled", "netlist": str(job.netlist)}
-        if duration is not None:
-            data["duration"] = duration
-        suffix = f" after {duration:.2f}s" if duration is not None else ""
+        data = _terminal_job_data(job, "cancelled")
+        dur = data.get("duration")
+        suffix = f" after {dur:.2f}s" if isinstance(dur, float) else ""
         return format_response(
-            f"Job {job_id} was cancelled{suffix}\nNetlist: {job.netlist}",
-            data,
+            f"Job {job_id} was cancelled{suffix}\nNetlist: {job.netlist}", data, fmt
+        )
+    elif job.status == "interrupted":
+        # Assigned on restart recovery when the server stopped mid-run and no
+        # valid raw survived to promote the job to 'completed'. Surface that
+        # plainly instead of falling through to "unexpected status" (the
+        # single-sim analogue of the batch interrupted-formatter gap).
+        return format_response(
+            f"Job {job_id} was interrupted — the server stopped while it was running, "
+            f"so results are incomplete; re-run if you need them.\nNetlist: {job.netlist}",
+            _terminal_job_data(job, "interrupted"),
             fmt,
         )
     else:
         data = {"job_id": job_id, "status": job.status}
         return format_response(f"Job {job_id} has unexpected status: {job.status}", data, fmt)
+
+
+def _terminal_job_data(job: SimulationJob, status: str) -> dict:
+    """Response ``data`` for a file-less terminal single-sim job (cancelled /
+    interrupted): job id, status, netlist, plus best-effort ``duration`` when it
+    can be computed. Factors out the build the two branches shared verbatim.
+    """
+    data: dict = {"job_id": job.job_id, "status": status, "netlist": str(job.netlist)}
+    duration = services.job_duration_seconds(
+        job.started_at, job.completed_at, label=f"sim job {job.job_id}"
+    )
+    if duration is not None:
+        data["duration"] = duration
+    return data
 
 
 def _check_batch_job(batch_job: BatchJob, fmt: str | None = None):
@@ -686,7 +705,7 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
 
 @registry.tool(
     name="cancel_job",
-    description="Cancel a running simulation job. Kills the simulator process and marks the job as cancelled.",
+    description="Cancel a running simulation job (single run, or a sweep/Monte-Carlo batch). Kills the simulator process(es) and marks the job as cancelled.",
     input_model=CancelJobInput,
     annotations=types.ToolAnnotations(
         readOnlyHint=False,
@@ -708,16 +727,34 @@ async def handle_cancel_job(args: CancelJobInput, state: SessionState) -> types.
     """
     job_id = args.job_id
 
-    # Look up job
-    job = services.resolve_simulation_job(job_id, state)
+    # Look up the job in EITHER store — single-sim jobs live in ``state.jobs``,
+    # batch (sweep/MC) jobs in ``state.batch_jobs``. Resolving only the former
+    # made ``cancel_job`` reject every sweep/MC id as "not found".
+    job: SimulationJob | BatchJob | None = state.jobs.get(job_id) or state.batch_jobs.get(job_id)
+    if job is None:
+        raise SimulationError(f"Job not found: {job_id}")
 
     # Check if job is running
     if job.status not in NON_TERMINAL_LIVE_STATUSES:
         raise SimulationError(f"Job {job_id} is not running (status: {job.status})")
 
-    # Cancel the job
+    # Cancel via the runner that owns the job. A batch job's cancel event and
+    # live-process map live on the SweepRunner/MonteCarloRunner instance that
+    # launched it, so route by job type rather than assuming a single-sim runner.
     require_simulator(state)
-    runner = _get_or_create_runner(state)
-    await runner.cancel(job, state)
+    if isinstance(job, BatchJob):
+        batch_runner = (
+            state.runners.get_existing_mc_runner()
+            if job.job_type == "montecarlo"
+            else state.runners.get_existing_sweep_runner()
+        )
+        if batch_runner is None:
+            raise SimulationError(
+                f"Job {job_id} is marked running but its {job.job_type} runner is no "
+                "longer live (server restarted?), so there is no process to cancel."
+            )
+        await batch_runner.cancel(job, state)
+    else:
+        await _get_or_create_runner(state).cancel(job, state)
 
     return text_response(f"Job {job_id} cancelled")

@@ -139,6 +139,11 @@ def reconciliation_observations(
 
     produced_meas = {m.lower() for m in (summary.get("measurements") or {})}
     failed = {f.lower() for f in (summary.get("failed_measurements") or [])}
+    # A FAILED .meas still appears as a null-valued key in ``measurements`` (and
+    # in ``failed_measurements``). Without removing it here, the produced-check
+    # below would treat it as produced and skip it — shadowing the "failed"
+    # classification, so a failed measurement never surfaced as an observation.
+    produced_meas -= failed
     warns = " ".join(summary.get("warnings") or []).lower()
     meas_batch_skipped = "batch mode" in warns and "meas" in warns
     four_batch_skipped = ".fourier line ignored" in warns or "skips .four" in warns

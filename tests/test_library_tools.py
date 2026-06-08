@@ -51,6 +51,20 @@ class TestLoadLibrary:
         result = await handle_load_library(LoadLibraryInput(path=lib_dir.name), state_no_sim)
         assert "2 file" in result.content[0].text
 
+    async def test_load_dir_picks_up_ltspice_component_files(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # load_library(dir) must discover LTspice stock component decks
+        # (.bjt/.mos/.dio/.jft) — as in LTspice's lib/cmp — not just .lib/.mod.
+        # Regression: the dir scan globbed only *.lib/*.mod, so a cmp/ directory
+        # of standard.bjt/.mos found 0 files and raised "No library files found".
+        d = work_dir / "cmp"
+        d.mkdir()
+        (d / "standard.bjt").write_text(".MODEL QSTD NPN(BF=100)\n")
+        (d / "standard.mos").write_text(".MODEL MSTD NMOS(KP=2e-5)\n")
+        result = await handle_load_library(LoadLibraryInput(path=d.name), state_no_sim)
+        assert "2 file" in result.content[0].text
+
     async def test_path_escape(self, state_no_sim: SessionState):
         with pytest.raises(PathSecurityError):
             await handle_load_library(LoadLibraryInput(path="/etc/passwd"), state_no_sim)

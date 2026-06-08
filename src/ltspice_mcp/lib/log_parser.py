@@ -153,6 +153,12 @@ _RE_NGSPICE_FOUR_BLOCKED = re.compile(r"\.fourier line ignored", re.IGNORECASE)
 # note which is just informational noise.
 _RE_NGSPICE_NOTE = re.compile(r"^Note:\s+(.+)", re.IGNORECASE)
 _NGSPICE_NOTE_SKIP = {"compatibility modes selected"}
+# ngspice echoes the deck title on a ``Circuit: <title>`` line. spicelib's
+# LTspice-shaped log reader misparses that as a measurement named "circuit",
+# scraping the first number out of the title text as its "value" — a fabricated
+# .meas result on every ngspice run. It is never a real measurement name, so it
+# is dropped before it can pollute measurement_stats / the observation surfacer.
+_NGSPICE_TITLE_PSEUDO_MEAS = "circuit"
 
 # LTspice writes one ``.step <name>=<value>[, ...]`` line per iteration of a
 # .step parametric run — useful when the .raw lacks an axis (e.g. .step param
@@ -812,7 +818,10 @@ def parse_measurements(
     except OSError:
         pass
 
-    measure_names = reader.get_measure_names()
+    # Drop ngspice's title-echo pseudo-measurement (see _NGSPICE_TITLE_PSEUDO_MEAS).
+    measure_names = [
+        n for n in reader.get_measure_names() if n.lower() != _NGSPICE_TITLE_PSEUDO_MEAS
+    ]
     if not measure_names:
         # Surface any errors AND warnings from the log that explain why
         # measurements are missing. ngspice's "No .measure possible in batch
