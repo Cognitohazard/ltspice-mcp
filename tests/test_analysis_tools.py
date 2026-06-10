@@ -1,5 +1,11 @@
-"""Tests for analysis tool handlers using mocked RawRead instances."""
+"""Tests for analysis tool handlers using mocked RawRead instances.
 
+The classes at the bottom (``TestRecordedAcRaw`` / ``TestRecordedSteppedAcRaw``)
+instead drive the handlers against real recorded LTspice binary raws from
+``tests/fixtures/`` — see those classes for what the mocks cannot cover.
+"""
+
+import shutil
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -1379,3 +1385,167 @@ class TestBodeMetricsAllSteps:
                 ),
                 state_no_sim,
             )
+
+
+# ---------------------------------------------------------------------------
+# Recorded real LTspice binary raws (tests/fixtures/).
+#
+# The mocks above hand the handlers a real-valued frequency axis and ignore
+# the ``step=`` argument of ``get_wave``, so two things only these fixtures
+# can prove: (1) LTspice stores the AC frequency axis as complex values, and
+# the analysis path must take its real part; (2) per-step extraction must
+# return DIFFERENT data for different steps, not the same array repeated.
+# ---------------------------------------------------------------------------
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _stage_recorded(work_dir: Path, name: str) -> Path:
+    """Copy a recorded fixture's .raw (and .log) into work_dir; return the raw."""
+    raw = work_dir / f"{name}.raw"
+    shutil.copy(FIXTURES / f"{name}.raw", raw)
+    log = FIXTURES / f"{name}.log"
+    if log.exists():
+        shutil.copy(log, work_dir / f"{name}.log")
+    return raw
+
+
+@pytest.mark.asyncio
+class TestRecordedAcRaw:
+    """Single-run AC raw: ltspice_ac_rc (RC LPF, R=1k C=159.15n, fc=1kHz,
+    ``.ac dec 20 10 100k``). The complex frequency axis must parse through
+    the real entry path and yield the analytic filter numbers."""
+
+    async def test_filter_mode_finds_rc_pole(self, state_no_sim: SessionState, work_dir: Path):
+        raw = _stage_recorded(work_dir, "ltspice_ac_rc")
+        res = await handle_bode_metrics(
+            BodeMetricsInput(raw_file=str(raw), signal="V(out)", mode="filter"),
+            state_no_sim,
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        assert sc["filter_type"] == "lowpass"
+        assert sc["cutoff_high_hz"] == pytest.approx(1000.0, rel=0.02)
+        assert sc["estimated_order"] == 1
+
+    async def test_crossing_mode_minus_3db_at_cutoff(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = _stage_recorded(work_dir, "ltspice_ac_rc")
+        res = await handle_bode_metrics(
+            BodeMetricsInput(
+                raw_file=str(raw),
+                signal="V(out)",
+                mode="crossing",
+                quantity="magnitude_db",
+                level=-3.0103,
+            ),
+            state_no_sim,
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        assert len(sc["crossings"]) == 1
+        assert sc["crossings"][0]["frequency_hz"] == pytest.approx(1000.0, rel=0.02)
+
+    async def test_signal_stats_ac_magnitude_range(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = _stage_recorded(work_dir, "ltspice_ac_rc")
+        res = await handle_signal_stats(
+            SignalStatsInput(raw_file=str(raw), signal="V(out)"),
+            state_no_sim,
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        assert sc["analysis_type"] == "ac"
+        assert sc["point_count"] == 81  # dec 20 over 4 decades
+        # Passband (10 Hz, two decades below the pole): |H| ~ 1, ~0 dB.
+        assert sc["max_db"] == pytest.approx(0.0, abs=0.01)
+        # Stopband end (100 kHz = 100*fc): |H| ~ 1/100, ~ -40 dB.
+        assert sc["min_db"] == pytest.approx(-40.0, abs=0.1)
+
+    async def test_query_value_passband_and_pole(self, state_no_sim: SessionState, work_dir: Path):
+        raw = _stage_recorded(work_dir, "ltspice_ac_rc")
+        passband = await handle_query_value(
+            QueryValueInput(raw_file=str(raw), signal="V(out)", at="10"),
+            state_no_sim,
+        )
+        sc = passband.structuredContent
+        assert sc is not None
+        assert sc["magnitude_linear"] == pytest.approx(1.0, abs=1e-3)
+        assert sc["magnitude_db"] == pytest.approx(0.0, abs=0.01)
+
+        pole = await handle_query_value(
+            QueryValueInput(raw_file=str(raw), signal="V(out)", at="1k"),
+            state_no_sim,
+        )
+        sc = pole.structuredContent
+        assert sc is not None
+        assert sc["magnitude_db"] == pytest.approx(-3.0103, abs=0.02)
+        assert sc["phase_deg"] == pytest.approx(-45.0, abs=0.5)
+
+
+@pytest.mark.asyncio
+class TestRecordedSteppedAcRaw:
+    """Stepped AC raw: ltspice_step_ac (RC LPF, C=100n,
+    ``.step param R LIST 1k 2k 4k`` + ``.ac dec 20 10 100k``).
+    fc = 1/(2*pi*R*C) gives three DISTINCT analytic cutoffs — matching each
+    proves step-indexed trace extraction reads real per-step data."""
+
+    # R = 1k / 2k / 4k with C = 100n.
+    CUTOFFS = (1591.55, 795.77, 397.89)
+
+    async def test_all_steps_filter_cutoffs_distinct(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = _stage_recorded(work_dir, "ltspice_step_ac")
+        res = await handle_bode_metrics(
+            BodeMetricsInput(raw_file=str(raw), signal="V(out)", mode="filter", all_steps=True),
+            state_no_sim,
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        assert sc["all_steps"] is True
+        assert sc["step_count"] == 3
+        steps = sc["steps"]
+        assert [s["step"] for s in steps] == [0, 1, 2]
+        for entry, fc in zip(steps, self.CUTOFFS, strict=True):
+            assert entry["filter_type"] == "lowpass"
+            assert entry["cutoff_high_hz"] == pytest.approx(fc, rel=0.01)
+
+    async def test_single_step_filter_uses_requested_step(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = _stage_recorded(work_dir, "ltspice_step_ac")
+        for step, fc in enumerate(self.CUTOFFS):
+            res = await handle_bode_metrics(
+                BodeMetricsInput(raw_file=str(raw), signal="V(out)", mode="filter", step=step),
+                state_no_sim,
+            )
+            sc = res.structuredContent
+            assert sc is not None
+            assert sc["cutoff_high_hz"] == pytest.approx(fc, rel=0.01)
+
+    async def test_query_value_pins_step_by_axis_value(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = _stage_recorded(work_dir, "ltspice_step_ac")
+        # Select the R=2k step by parameter value; query its own cutoff
+        # frequency, where a first-order LPF reads -3.01 dB / -45 degrees.
+        res = await handle_query_value(
+            QueryValueInput(
+                raw_file=str(raw),
+                signal="V(out)",
+                step_axis="R",
+                step_value="2k",
+                at="795.77",
+            ),
+            state_no_sim,
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        assert sc["step_index"] == 1
+        assert sc["actual_value"] == pytest.approx(2000.0)
+        assert sc["exact_match"] is True
+        assert sc["magnitude_db"] == pytest.approx(-3.0103, abs=0.05)
+        assert sc["phase_deg"] == pytest.approx(-45.0, abs=1.0)
