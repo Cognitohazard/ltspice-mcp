@@ -39,13 +39,14 @@ def _make_batch(
     job_id: str = "b1",
     status: str = "completed",
     completed: int = 1,
+    total: int = 1,
     run_results: dict | None = None,
 ) -> BatchJob:
     bj = BatchJob(
         job_id=job_id,
         job_type="sweep",
         netlist=Path("/tmp/x.cir"),
-        total_runs=1,
+        total_runs=total,
         completed_runs=completed,
         failed_runs=0,
         status=status,  # type: ignore[arg-type]
@@ -362,3 +363,102 @@ class TestScanBatchConvergence:
             run_results={0: {"raw_file": str(log), "log_file": str(log), "params": {}}},
         )
         assert services.scan_batch_convergence(bj) == []
+
+
+# Real ngspice log shapes for the per-run convergence walk. The clean preamble
+# is verbatim ngspice-42 batch output; the failure lines are the exact formats
+# ngspice prints for a non-converging bias point (a "Warning:"-prefixed gmin
+# line followed by a bare source-stepping line) and for a singular matrix.
+_NGSPICE_CLEAN_LOG = (
+    "Note: Compatibility modes selected: ps lt ki a\n"
+    "\n"
+    "Circuit: * dc divider\n"
+    "\n"
+    'binary raw file "out.raw"\n'
+    "Doing analysis at TEMP = 27.000000 and TNOM = 27.000000\n"
+    "\n"
+    "No. of Data Columns : 4\n"
+    "No. of Data Rows : 3\n"
+    "\n"
+    "Total elapsed time (seconds) = 0.017\n"
+)
+_NGSPICE_GMIN_FAIL_LINES = "Warning: gmin stepping failed\nsource stepping failed\n"
+_NGSPICE_SINGULAR_LINE = "Warning: singular matrix:  check nodes out and 0\n"
+
+
+def _run_entry(raw: Path, log: Path) -> dict:
+    """One ``run_results`` entry, mirroring the exact shape the batch runner
+    records on run completion: string paths plus an (initially empty) params
+    dict — see ``runner_base.BatchRunnerBase._record_run_completion``."""
+    return {"raw_file": str(raw), "log_file": str(log), "params": {}}
+
+
+class TestBatchConvergenceSurfacing:
+    """The per-run log walk behind ``get_batch_status`` — driven with logs
+    that really exist on disk, in real ngspice formats, through the public
+    service entry rather than by poking the scanner's internals."""
+
+    def test_flagged_runs_associated_with_their_run_index(
+        self, state_no_sim: SessionState, tmp_path: Path
+    ):
+        # Three completed runs: run 0 clean, run 1 hit gmin + source stepping,
+        # run 2 hit a singular matrix. The status payload must name exactly
+        # runs 1 and 2, each with the markers found in ITS OWN log.
+        logs = {
+            0: _NGSPICE_CLEAN_LOG,
+            1: _NGSPICE_CLEAN_LOG + _NGSPICE_GMIN_FAIL_LINES,
+            2: _NGSPICE_CLEAN_LOG + _NGSPICE_SINGULAR_LINE,
+        }
+        run_results = {}
+        for idx, text in logs.items():
+            log = tmp_path / f"job_{idx + 1}.log"
+            log.write_text(text)
+            run_results[idx] = _run_entry(tmp_path / f"job_{idx + 1}.raw", log)
+        bj = _make_batch(state_no_sim, completed=3, total=3, run_results=run_results)
+
+        data = services.get_batch_status(bj)
+
+        assert data["status"] == "completed"
+        assert data["convergence_warnings"] == [
+            {"run_index": 1, "markers": ["gmin stepping", "source stepping"]},
+            {"run_index": 2, "markers": ["singular matrix"]},
+        ]
+
+    def test_missing_log_file_is_skipped_silently(
+        self, state_no_sim: SessionState, tmp_path: Path
+    ):
+        # A run whose log file no longer exists on disk is skipped without
+        # error (read_log_text returns "" on I/O failure); the surviving
+        # flagged run still surfaces with its own index.
+        flagged_log = tmp_path / "job_2.log"
+        flagged_log.write_text(_NGSPICE_CLEAN_LOG + _NGSPICE_GMIN_FAIL_LINES)
+        run_results = {
+            0: _run_entry(tmp_path / "job_1.raw", tmp_path / "job_1.log"),  # never written
+            1: _run_entry(tmp_path / "job_2.raw", flagged_log),
+        }
+        bj = _make_batch(state_no_sim, completed=2, total=2, run_results=run_results)
+
+        data = services.get_batch_status(bj)
+
+        assert data["convergence_warnings"] == [
+            {"run_index": 1, "markers": ["gmin stepping", "source stepping"]}
+        ]
+
+    def test_clean_job_omits_key_but_caches_completed_scan(
+        self, state_no_sim: SessionState, tmp_path: Path
+    ):
+        # All-clean logs: the status payload omits convergence_warnings
+        # entirely, and the job caches the empty scan result (the cache going
+        # from None to [] is what proves the walk actually ran over the logs).
+        run_results = {}
+        for idx in range(2):
+            log = tmp_path / f"job_{idx + 1}.log"
+            log.write_text(_NGSPICE_CLEAN_LOG)
+            run_results[idx] = _run_entry(tmp_path / f"job_{idx + 1}.raw", log)
+        bj = _make_batch(state_no_sim, completed=2, total=2, run_results=run_results)
+        assert bj.convergence_warnings is None
+
+        data = services.get_batch_status(bj)
+
+        assert "convergence_warnings" not in data
+        assert bj.convergence_warnings == []
