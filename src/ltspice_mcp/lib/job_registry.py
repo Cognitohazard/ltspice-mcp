@@ -1,12 +1,15 @@
 """In-memory registry for simulation and batch jobs.
 
-Owns the ``sim_jobs`` / ``batch_jobs`` dicts plus all disk-persistence
-coordination (sidecar writes, eviction, interrupted-job recovery). Split
-out of ``SessionState`` so the per-session container stays focused on
-simulator catalog, caches, and configuration.
+Owns the single union ``jobs`` dict (job_id -> SimulationJob | BatchJob)
+plus all disk-persistence coordination (sidecar writes, eviction,
+interrupted-job recovery). Split out of ``SessionState`` so the
+per-session container stays focused on simulator catalog, caches, and
+configuration.
 
 ``SessionState`` delegates its job-facing API to this class; call sites
-continue to use ``state.jobs``, ``state.add_job``, etc.
+continue to use ``state.jobs``, ``state.add_job``, etc. The ``sim_jobs``
+and ``batch_jobs`` attributes are type-filtered writable views over the
+union store, so per-type call sites keep their old dict semantics.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Iterator, MutableMapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -28,7 +32,7 @@ from ltspice_mcp.lib.observability import emit_job_event
 
 logger = logging.getLogger(__name__)
 
-# Maximum finished jobs to retain per dict (sim_jobs, batch_jobs).
+# Maximum finished jobs to retain per job type (single-sim, batch).
 _MAX_FINISHED_JOBS = 200
 
 # LTspice .raw header magic. Classic files start with ASCII ``Title:``;
@@ -53,6 +57,49 @@ def _has_valid_raw(path: Path | None) -> bool:
     return header.startswith(_RAW_HEADER_ASCII) or header.startswith(_RAW_HEADER_UTF16)
 
 
+class _TypedJobView[J: SimulationJob | BatchJob](MutableMapping[str, J]):
+    """Type-filtered writable view over the union job store.
+
+    Lookups (``[]``, ``get``, ``in``), iteration, and ``len`` surface only
+    entries of the view's job type — a batch id accessed through the sim
+    view behaves as absent, and vice versa, preserving the semantics of the
+    former per-type dicts. Writes (``view[key] = job``) go straight through
+    to the union dict but reject values of the wrong job type, and ``del``
+    removes only entries of the view's type.
+    """
+
+    def __init__(self, store: dict[str, SimulationJob | BatchJob], job_type: type[J]) -> None:
+        self._store = store
+        self._job_type = job_type
+
+    def __getitem__(self, key: str) -> J:
+        job = self._store[key]
+        if not isinstance(job, self._job_type):
+            raise KeyError(key)
+        return job
+
+    def __setitem__(self, key: str, value: J) -> None:
+        # Guard at runtime: a wrong-type job written through this view would
+        # land in the union store but be invisible through the view that
+        # stored it — a silent misroute that static typing alone can't stop.
+        if not isinstance(value, self._job_type):
+            raise TypeError(
+                f"{self._job_type.__name__} view cannot store {type(value).__name__} (key {key!r})"
+            )
+        self._store[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        if not isinstance(self._store[key], self._job_type):
+            raise KeyError(key)
+        del self._store[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return (k for k, v in self._store.items() if isinstance(v, self._job_type))
+
+    def __len__(self) -> int:
+        return sum(1 for v in self._store.values() if isinstance(v, self._job_type))
+
+
 @dataclass
 class JobRegistry:
     """Tracks simulation and batch jobs with optional disk persistence.
@@ -60,14 +107,14 @@ class JobRegistry:
     Attributes:
         persist_enabled: When True, sidecar files are written alongside
             circuits and evictions delete them. When False, the registry
-            behaves as pure in-memory dicts.
-        sim_jobs: job_id -> SimulationJob
-        batch_jobs: job_id -> BatchJob
+            behaves as a pure in-memory store.
+        jobs: job_id -> SimulationJob | BatchJob — the single source of
+            truth for every job regardless of run type. ``sim_jobs`` /
+            ``batch_jobs`` are type-filtered views over it.
     """
 
     persist_enabled: bool
-    sim_jobs: dict[str, SimulationJob] = field(default_factory=dict)
-    batch_jobs: dict[str, BatchJob] = field(default_factory=dict)
+    jobs: dict[str, SimulationJob | BatchJob] = field(default_factory=dict)
     _loaded_circuits: set[Path] = field(default_factory=set, repr=False)
     """Resolved circuit paths whose persisted jobs have been loaded this session."""
     _pending_persist: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
@@ -82,38 +129,54 @@ class JobRegistry:
     """
 
     # ------------------------------------------------------------------
+    # Typed views
+    # ------------------------------------------------------------------
+
+    @property
+    def sim_jobs(self) -> _TypedJobView[SimulationJob]:
+        """Writable view of the single-simulation jobs in the union store."""
+        return _TypedJobView(self.jobs, SimulationJob)
+
+    @property
+    def batch_jobs(self) -> _TypedJobView[BatchJob]:
+        """Writable view of the batch (sweep/MC) jobs in the union store."""
+        return _TypedJobView(self.jobs, BatchJob)
+
+    # ------------------------------------------------------------------
     # Registration
     # ------------------------------------------------------------------
 
     def add_sim_job(self, job: SimulationJob) -> None:
         """Register a simulation job; evict old finished jobs if needed."""
-        self.sim_jobs[job.job_id] = job
+        self.jobs[job.job_id] = job
         self._evict_from(self.sim_jobs)
         self.persist_job(job)
         emit_job_event("submitted", job, simulator=job.simulator)
 
     def add_batch_job(self, job: BatchJob) -> None:
         """Register a batch job; evict old finished batch jobs if needed."""
-        self.batch_jobs[job.job_id] = job
+        self.jobs[job.job_id] = job
         self._evict_from(self.batch_jobs)
         self.persist_job(job)
         emit_job_event("submitted", job, total_runs=job.total_runs)
 
-    def _evict_from(self, jobs_dict: dict) -> None:
-        """Evict oldest terminal jobs from a single dict when over the limit.
+    def _evict_from[J: SimulationJob | BatchJob](self, jobs_view: MutableMapping[str, J]) -> None:
+        """Evict oldest terminal jobs of one job type when over the limit.
 
-        When persistence is enabled, the on-disk record is deleted alongside
-        the in-memory entry so the two never drift. Any per-job persistence
-        lock is dropped here — safe once the job is out of the dict because
-        no new ``persist_job`` calls can target it.
+        ``jobs_view`` is a typed view over the union store, so the cap is
+        enforced per job type (200 finished single-sim jobs AND 200 finished
+        batch jobs). When persistence is enabled, the on-disk record is
+        deleted alongside the in-memory entry so the two never drift. Any
+        per-job persistence lock is dropped here — safe once the job is out
+        of the store because no new ``persist_job`` calls can target it.
         """
-        finished = [(jid, j) for jid, j in jobs_dict.items() if j.status in TERMINAL_STATUSES]
+        finished = [(jid, j) for jid, j in jobs_view.items() if j.status in TERMINAL_STATUSES]
         overflow = len(finished) - _MAX_FINISHED_JOBS
         if overflow <= 0:
             return
         finished.sort(key=lambda pair: pair[1].started_at)
         for jid, j in finished[:overflow]:
-            del jobs_dict[jid]
+            del jobs_view[jid]
             self._delete_persisted(j)
             self._persist_locks.pop(jid, None)
 
@@ -218,9 +281,9 @@ class JobRegistry:
             return
 
         for sj in sim_jobs:
-            if sj.job_id in self.sim_jobs:
+            if sj.job_id in self.jobs:
                 continue
-            self.sim_jobs[sj.job_id] = sj
+            self.jobs[sj.job_id] = sj
             # If the sim outputs exist on disk, the job may have finished
             # just before the crash — promote interrupted → completed via
             # the recovery path so the emitted event is
@@ -233,9 +296,9 @@ class JobRegistry:
             elif sj.status == "interrupted":
                 emit_job_event("interrupted_recovered", sj, recovered_as="interrupted")
         for bj in batch_jobs:
-            if bj.job_id in self.batch_jobs:
+            if bj.job_id in self.jobs:
                 continue
-            self.batch_jobs[bj.job_id] = bj
+            self.jobs[bj.job_id] = bj
             if bj.status == "interrupted":
                 emit_job_event("interrupted_recovered", bj, recovered_as="interrupted")
 
@@ -292,7 +355,11 @@ class JobRegistry:
         for a circular reference.
         """
         sim_runner = runners.get_existing_sim_runner()
-        for job in self.sim_jobs.values():
+        # Snapshot both views before iterating: the typed views iterate the
+        # live union dict lazily, and the awaits below suspend this coroutine
+        # — a concurrent job registration during a cancel would otherwise
+        # raise "dictionary changed size during iteration".
+        for job in list(self.sim_jobs.values()):
             if job.status in NON_TERMINAL_LIVE_STATUSES:
                 if sim_runner is not None:
                     await sim_runner.cancel(job, session_state)
@@ -302,7 +369,7 @@ class JobRegistry:
 
         sweep_runner = runners.get_existing_sweep_runner()
         mc_runner = runners.get_existing_mc_runner()
-        for batch_job in self.batch_jobs.values():
+        for batch_job in list(self.batch_jobs.values()):
             if batch_job.status == "running":
                 if batch_job.job_type == "sweep" and sweep_runner is not None:
                     await sweep_runner.cancel(batch_job, session_state)

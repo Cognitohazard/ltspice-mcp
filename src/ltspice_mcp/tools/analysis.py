@@ -79,7 +79,7 @@ from ltspice_mcp.lib.signal_analysis import (
     compute_signal_stats,
     window_and_clean,
 )
-from ltspice_mcp.state import SessionState
+from ltspice_mcp.state import BatchJob, SessionState
 from ltspice_mcp.tools._base import (
     MEAS_ERRORS_SCHEMA,
     OBSERVATIONS_SCHEMA,
@@ -1167,10 +1167,11 @@ class MeasurementStatsInput(ToolInput):
     job_id: str | None = Field(
         default=None,
         description=(
-            "Batch job ID from ``run_montecarlo`` / ``run_sweep``. The tool "
-            "loads each completed run's log, concatenates the .MEAS results "
-            "(one row per run), and aggregates. Mutually exclusive with "
-            "``log_file``."
+            "Job ID. For a batch job (``run_montecarlo`` / ``run_sweep``) the "
+            "tool loads each completed run's log, concatenates the .MEAS "
+            "results (one row per run), and aggregates. For a completed "
+            "single-simulation job it aggregates that run's log (per-step "
+            "values for a .step run). Mutually exclusive with ``log_file``."
         ),
     )
     measurement: str | None = Field(
@@ -1590,6 +1591,45 @@ def _aggregate_job_measurements(
     return flat_values, runs_processed, axis_map
 
 
+def _aggregate_log_measurements(
+    log_path: Path,
+) -> tuple[dict[str, list[float | None]], dict[str, AggregatedField], str]:
+    """Aggregate the .MEAS results of ONE log file.
+
+    The interesting case is a ``.step`` log, where each .MEAS name carries
+    one value per step; a plain single-run log yields one value per name
+    (honest n=1 stats). Shared by the ``log_file`` input branch and the
+    single-simulation ``job_id`` branch, which read the same physical shape.
+
+    Returns ``(flat_values, axis_map, steps_label)``.
+    """
+    try:
+        meas_data = parse_measurements(log_path)
+    except ResultError:
+        raise
+    except Exception as e:
+        raise ResultError(f"Failed to parse log file: {e}") from e
+
+    measurements = meas_data.get("measurements", {})
+    if not measurements:
+        # Surface BOTH errors and warnings — the reason measurements are
+        # missing is often a warning (e.g. ngspice "No .measure possible in
+        # batch mode"), not an error. Reporting "no diagnostics" while every
+        # other tool shows the cause is misleading.
+        diags = list(meas_data.get("errors") or []) + list(meas_data.get("warnings") or [])
+        err_block = (
+            "\n".join(f"  {d}" for d in diags)
+            if diags
+            else "  (log contained no .MEAS results and no diagnostics)"
+        )
+        raise ResultError(f"No .MEAS results in log:\n{err_block}")
+
+    flat_values = {name: list(entry.get("values", [])) for name, entry in measurements.items()}
+    axis_map: dict[str, AggregatedField] = dict.fromkeys(flat_values, "value")
+    steps_label = f"{meas_data.get('step_count', 1)} step(s)"
+    return flat_values, axis_map, steps_label
+
+
 @registry.tool(
     name="measurement_stats",
     description=(
@@ -1600,9 +1640,10 @@ def _aggregate_job_measurements(
         "Returns per-measurement: min, max, mean, median, std, p10, p90, "
         "best_step_index (argmin) and worst_step_index (argmax), failure "
         "count, and an optional histogram (set histogram_bins=0 to skip).\n\n"
-        "Requires either a parametric sweep (.step) or Monte Carlo. On a "
-        "single-run simulation there's only one value per measurement, so "
-        "stats collapse to trivial values — use simulation_summary "
+        "Accepts any job id: a sweep/MC batch aggregates across its runs; a "
+        "single-simulation job aggregates its own log (one value per step "
+        "for a .step run). On a plain single run there's only one value per "
+        "measurement, so stats collapse to n=1 — use simulation_summary "
         "instead to just read the scalars.\n\n"
         "Works with .MEAS from any analysis type (.tran/.ac/.dc/.op) — the "
         "measurement directives themselves embed the analysis context. Pass "
@@ -1625,36 +1666,26 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
 
     axis_map: dict[str, AggregatedField] = {}
     if args.job_id is not None:
-        flat_values, run_count, axis_map = _aggregate_job_measurements(args.job_id, state)
-        if not flat_values:
-            raise ResultError(f"No .MEAS results found across the runs of job {args.job_id!r}.")
-        steps_label = f"{run_count} run(s)"
+        job = services.resolve_job(args.job_id, state)
+        if isinstance(job, BatchJob):
+            flat_values, run_count, axis_map = _aggregate_job_measurements(args.job_id, state)
+            if not flat_values:
+                raise ResultError(
+                    f"No .MEAS results found across the runs of job {args.job_id!r}."
+                )
+            steps_label = f"{run_count} run(s)"
+        else:
+            # Single-simulation job: aggregate its one log, which is the same
+            # physical shape as the ``log_file`` input (a .step run carries one
+            # value per step; a plain run collapses to n=1 stats).
+            # ``resolve_log_file`` gates on completed status like every other
+            # job-id-addressed read; the path is a trusted server artifact.
+            log_path = services.resolve_log_file(args.job_id, state)
+            flat_values, axis_map, steps_label = _aggregate_log_measurements(log_path)
     elif args.log_file is not None:
-        log_path = safe_path(args.log_file, state)
-        try:
-            meas_data = parse_measurements(log_path)
-        except ResultError:
-            raise
-        except Exception as e:
-            raise ResultError(f"Failed to parse log file: {e}") from e
-
-        measurements = meas_data.get("measurements", {})
-        if not measurements:
-            # Surface BOTH errors and warnings — the reason measurements are
-            # missing is often a warning (e.g. ngspice "No .measure possible in
-            # batch mode"), not an error. Reporting "no diagnostics" while every
-            # other tool shows the cause is misleading.
-            diags = list(meas_data.get("errors") or []) + list(meas_data.get("warnings") or [])
-            err_block = (
-                "\n".join(f"  {d}" for d in diags)
-                if diags
-                else "  (log contained no .MEAS results and no diagnostics)"
-            )
-            raise ResultError(f"No .MEAS results in log:\n{err_block}")
-
-        flat_values = {name: list(entry.get("values", [])) for name, entry in measurements.items()}
-        axis_map = dict.fromkeys(flat_values, "value")
-        steps_label = f"{meas_data.get('step_count', 1)} step(s)"
+        flat_values, axis_map, steps_label = _aggregate_log_measurements(
+            safe_path(args.log_file, state)
+        )
     else:  # unreachable — earlier guard rejects this combination
         raise ResultError("Provide either ``log_file`` or ``job_id``.")
 
