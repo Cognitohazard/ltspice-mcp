@@ -35,6 +35,7 @@ import pytest
 from mcp import types
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.errors import BatchJobError, ResultError
 from ltspice_mcp.lib import now
 from ltspice_mcp.state import (
     NON_TERMINAL_LIVE_STATUSES,
@@ -44,6 +45,7 @@ from ltspice_mcp.state import (
     SimulationJob,
 )
 from ltspice_mcp.tools.advanced import GetBatchResultsInput, handle_batch_results
+from ltspice_mcp.tools.analysis import MeasurementStatsInput, handle_measurement_stats
 from ltspice_mcp.tools.circuit import (
     CircuitReadInput,
     ListComponentsInput,
@@ -61,7 +63,13 @@ from ltspice_mcp.tools.simulation import (
 
 pytestmark = pytest.mark.asyncio
 
-_FIXTURE_DRAFT = Path(__file__).parent / "fixtures" / "Draft1.asc"
+_FIXTURES = Path(__file__).parent / "fixtures"
+_FIXTURE_DRAFT = _FIXTURES / "Draft1.asc"
+# Real LTspice logs: 3-run sweep (one log per run, .MEAS vfinal + tcross) and
+# a single transient run (.MEAS vfinal = 0.999876166042).
+_SWEEP_RUN_LOGS = [_FIXTURES / f"ltspice_sweep_meas_run{i}.log" for i in range(3)]
+_TRAN_LOG = _FIXTURES / "ltspice_tran_rc.log"
+_TRAN_VFINAL = 0.999876166042
 
 # Terminal statuses a BatchJob can actually hold: TERMINAL_STATUSES minus
 # 'timeout' (single-sim only, not in BatchJob.status' Literal). Derived so a new
@@ -111,13 +119,21 @@ def _make_batch(state: SessionState, *, status: str, job_id: str = "b1") -> Batc
     return bj
 
 
-def _make_sim(state: SessionState, *, status: str, job_id: str = "j1") -> SimulationJob:
+def _make_sim(
+    state: SessionState,
+    *,
+    status: str,
+    job_id: str = "j1",
+    log_file: Path | None = None,
+) -> SimulationJob:
     job = SimulationJob(
         job_id=job_id,
         netlist=Path("/tmp/x.cir"),
         simulator="Sim",
         status=status,  # type: ignore[arg-type]
         started_at=now(),
+        completed_at=now() + timedelta(seconds=1) if status == "completed" else None,
+        log_file=log_file,
     )
     state.jobs[job_id] = job
     return job
@@ -185,6 +201,50 @@ class TestJobHandlerDualStore:
         ):
             result = await handle_cancel_job(CancelJobInput(job_id="b1"), state_with_sim)
         assert "not found" not in _text(result).lower()
+
+    async def test_measurement_stats_aggregates_batch_job(self, state_no_sim: SessionState):
+        bj = _make_batch(state_no_sim, status="completed")
+        for i, log in enumerate(_SWEEP_RUN_LOGS):
+            bj.run_results[i] = {"log_file": str(log), "params": {"R1": float(i)}}
+        result = await handle_measurement_stats(MeasurementStatsInput(job_id="b1"), state_no_sim)
+        assert result.structuredContent is not None
+        entry = result.structuredContent["stats"]["vfinal"]
+        assert entry["total_count"] == 3
+        assert entry["valid_count"] == 3
+
+    async def test_measurement_stats_aggregates_single_sim_job(self, state_no_sim: SessionState):
+        _make_sim(state_no_sim, status="completed", log_file=_TRAN_LOG)
+        result = await handle_measurement_stats(MeasurementStatsInput(job_id="j1"), state_no_sim)
+        assert result.structuredContent is not None
+        entry = result.structuredContent["stats"]["vfinal"]
+        assert entry["total_count"] == 1
+        assert entry["valid_count"] == 1
+        assert entry["mean"] == pytest.approx(_TRAN_VFINAL)
+
+    async def test_measurement_stats_unknown_id_errors_not_found(self, state_no_sim: SessionState):
+        with pytest.raises(ResultError, match="Job not found: ghost"):
+            await handle_measurement_stats(MeasurementStatsInput(job_id="ghost"), state_no_sim)
+
+    async def test_measurement_stats_running_single_sim_errors_not_completed(
+        self, state_no_sim: SessionState
+    ):
+        _make_sim(state_no_sim, status="running")
+        with pytest.raises(ResultError, match="is not completed"):
+            await handle_measurement_stats(MeasurementStatsInput(job_id="j1"), state_no_sim)
+
+
+class TestCrossTypeRedirects:
+    """A job id of the OTHER run type must get an honest redirect naming the
+    right tool — never "not found" for a job that exists in the store."""
+
+    async def test_batch_results_single_sim_id_redirects(self, state_no_sim: SessionState):
+        _make_sim(state_no_sim, status="completed", log_file=_TRAN_LOG)
+        with pytest.raises(BatchJobError) as exc:
+            await handle_batch_results(GetBatchResultsInput(job_id="j1"), state_no_sim)
+        assert str(exc.value) == (
+            "Job 'j1' is a single simulation job — its results are "
+            "available via check_job / simulation_summary."
+        )
 
 
 class TestCancelJobRoutingFork:

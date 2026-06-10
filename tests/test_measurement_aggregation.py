@@ -1,8 +1,9 @@
 """measurement_stats job-id aggregation over real per-run LTspice logs.
 
-The ``job_id`` branch of measurement_stats resolves a batch job, walks its
-``run_results`` (one .log per run, as recorded by the sweep/MC runners), and
-aggregates the per-run .MEAS scalars. The fixture logs were recorded from a
+The ``job_id`` branch of measurement_stats resolves any job: a batch job's
+``run_results`` are walked (one .log per run, as recorded by the sweep/MC
+runners) and the per-run .MEAS scalars aggregated; a completed single-sim
+job aggregates its one log. The fixture logs were recorded from a
 real 3-run LTspice parameter sweep of an RC low-pass (R1 = 1k / 2.2k / 4.7k,
 C = 100n, 1 V step input) with two measurements in the deck:
 
@@ -19,12 +20,17 @@ from pathlib import Path
 
 import pytest
 
-from ltspice_mcp.errors import BatchJobError, ResultError
+from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import now
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
 from ltspice_mcp.tools.analysis import MeasurementStatsInput, handle_measurement_stats
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+# Single-run transient log with one real .MEAS result:
+#   vfinal: V(out) =0.999876166042 at 0.0009
+SINGLE_RUN_LOG = FIXTURES / "ltspice_tran_rc.log"
+SINGLE_RUN_VFINAL = 0.999876166042
 
 RUN_LOGS = [
     FIXTURES / "ltspice_sweep_meas_run0.log",  # R1 = 1k
@@ -176,27 +182,66 @@ class TestJobAggregation:
             await handle_measurement_stats(MeasurementStatsInput(job_id="sweep1"), state_no_sim)
 
 
+def _make_single_sim(
+    state: SessionState,
+    *,
+    job_id: str = "single1",
+    status: str = "completed",
+    log_file: Path | None = SINGLE_RUN_LOG,
+) -> SimulationJob:
+    job = SimulationJob(
+        job_id=job_id,
+        netlist=Path("/tmp/test.cir"),
+        simulator="FakeSim",
+        status=status,  # type: ignore[arg-type]
+        started_at=now(),
+        completed_at=now() + timedelta(seconds=1) if status == "completed" else None,
+        log_file=log_file,
+    )
+    state.jobs[job_id] = job
+    return job
+
+
+@pytest.mark.asyncio
+class TestSingleSimJobAggregation:
+    """A completed single-simulation job id aggregates its own log — the same
+    physical shape as the ``log_file`` input. A plain (non-.step) run yields
+    honest n=1 stats."""
+
+    async def test_completed_single_sim_yields_n1_stats(self, state_no_sim: SessionState):
+        _make_single_sim(state_no_sim)
+        result = await handle_measurement_stats(
+            MeasurementStatsInput(job_id="single1"), state_no_sim
+        )
+        assert result.structuredContent is not None
+        entry = result.structuredContent["stats"]["vfinal"]
+        assert entry["aggregated_field"] == "value"
+        assert entry["total_count"] == 1
+        assert entry["valid_count"] == 1
+        assert entry["failure_count"] == 0
+        assert entry["min"] == pytest.approx(SINGLE_RUN_VFINAL)
+        assert entry["max"] == pytest.approx(SINGLE_RUN_VFINAL)
+        assert entry["mean"] == pytest.approx(SINGLE_RUN_VFINAL)
+        # The single log reads as one step, matching the log_file branch.
+        text = "".join(getattr(c, "text", "") for c in (result.content or []))
+        assert "1 step(s)" in text
+
+    async def test_running_single_sim_is_gated_on_completion(self, state_no_sim: SessionState):
+        _make_single_sim(state_no_sim, status="running")
+        with pytest.raises(ResultError, match=r"Job 'single1' is not completed"):
+            await handle_measurement_stats(MeasurementStatsInput(job_id="single1"), state_no_sim)
+
+    async def test_completed_single_sim_without_log_errors(self, state_no_sim: SessionState):
+        _make_single_sim(state_no_sim, log_file=None)
+        with pytest.raises(ResultError, match="has no log file"):
+            await handle_measurement_stats(MeasurementStatsInput(job_id="single1"), state_no_sim)
+
+
 @pytest.mark.asyncio
 class TestJobResolutionErrors:
     async def test_unknown_job_id(self, state_no_sim: SessionState):
-        with pytest.raises(BatchJobError, match="Batch job not found"):
+        with pytest.raises(ResultError, match="Job not found: nope"):
             await handle_measurement_stats(MeasurementStatsInput(job_id="nope"), state_no_sim)
-
-    async def test_simulation_job_id_rejected(self, state_no_sim: SessionState):
-        # A single-run SimulationJob id is not a batch job: the job-id branch
-        # only looks in the batch store, so it reports "not found".
-        job = SimulationJob(
-            job_id="single1",
-            netlist=Path("/tmp/test.cir"),
-            simulator="FakeSim",
-            status="completed",
-            started_at=now(),
-            completed_at=now() + timedelta(seconds=1),
-            log_file=RUN_LOGS[0],
-        )
-        state_no_sim.jobs["single1"] = job
-        with pytest.raises(BatchJobError, match="Batch job not found"):
-            await handle_measurement_stats(MeasurementStatsInput(job_id="single1"), state_no_sim)
 
     async def test_log_file_and_job_id_mutually_exclusive(self, state_no_sim: SessionState):
         _make_sweep_batch(state_no_sim)
