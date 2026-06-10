@@ -97,6 +97,55 @@ class TestEnsureJobsLoadedFor:
         state.ensure_jobs_loaded_for(circuit)
         assert len(state.jobs) == 1
 
+    def test_reload_dedupes_against_union_store(self, state: SessionState, tmp_path: Path) -> None:
+        """A job id already present in the union store is skipped on load —
+        the in-memory object (e.g. a job resubmitted this session) is never
+        replaced by its persisted copy."""
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        job_store.save_job(
+            SimulationJob(
+                job_id="sim_dupe",
+                netlist=circuit,
+                simulator="LTspice",
+                status="completed",
+                started_at=now(),
+                completed_at=now(),
+            )
+        )
+        job_store.save_job(
+            BatchJob(
+                job_id="sweep_dupe",
+                job_type="sweep",
+                netlist=circuit,
+                total_runs=2,
+                status="completed",
+            )
+        )
+
+        live_sim = SimulationJob(
+            job_id="sim_dupe",
+            netlist=circuit,
+            simulator="LTspice",
+            status="running",
+            started_at=now(),
+        )
+        live_batch = BatchJob(
+            job_id="sweep_dupe",
+            job_type="sweep",
+            netlist=circuit,
+            total_runs=2,
+            status="running",
+        )
+        state.jobs["sim_dupe"] = live_sim
+        state.batch_jobs["sweep_dupe"] = live_batch
+
+        state.ensure_jobs_loaded_for(circuit)
+
+        assert state.all_jobs["sim_dupe"] is live_sim
+        assert state.all_jobs["sweep_dupe"] is live_batch
+        assert len(state.all_jobs) == 2
+
     def test_interrupted_with_valid_raw_promoted_to_completed(
         self, state: SessionState, tmp_path: Path
     ) -> None:

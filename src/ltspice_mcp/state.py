@@ -8,6 +8,7 @@ cluster of import cycles — see ``lib/job_types.py`` for the full story.
 """
 
 import logging
+from collections.abc import MutableMapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -72,7 +73,7 @@ class SessionState:
         working_dir: Base directory for relative paths
         tool_defs / tool_dispatch: Profile-filtered MCP tool exposure
         sweep_configs / mc_configs: Saved configs keyed by config_id
-        job_registry: Owns sim_jobs / batch_jobs + disk persistence
+        job_registry: Owns the union job store + disk persistence
     """
 
     config: ServerConfig
@@ -151,12 +152,19 @@ class SessionState:
     # ------------------------------------------------------------------
 
     @property
-    def jobs(self) -> dict[str, SimulationJob]:
+    def jobs(self) -> MutableMapping[str, SimulationJob]:
+        """Type-filtered view of the single-simulation jobs."""
         return self.job_registry.sim_jobs
 
     @property
-    def batch_jobs(self) -> dict[str, BatchJob]:
+    def batch_jobs(self) -> MutableMapping[str, BatchJob]:
+        """Type-filtered view of the batch (sweep/MC) jobs."""
         return self.job_registry.batch_jobs
+
+    @property
+    def all_jobs(self) -> dict[str, "SimulationJob | BatchJob"]:
+        """The union job store — every job regardless of run type."""
+        return self.job_registry.jobs
 
     def add_job(self, job: SimulationJob) -> None:
         self.job_registry.add_sim_job(job)
