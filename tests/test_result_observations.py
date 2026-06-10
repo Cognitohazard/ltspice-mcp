@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
 from ltspice_mcp.lib.raw_parser import build_simulation_summary
 from ltspice_mcp.lib.result_observations import (
@@ -244,3 +245,92 @@ class TestOperatingPointValueScan:
         summary = build_simulation_summary(raw, None, value_scan="scan")
         codes = {o["code"] for o in summary["observations"]}
         assert "extreme_value" in codes
+
+
+# An observation is a surfaced FACT: only these keys may appear, and
+# ``severity`` only when relayed from the simulator itself (kind == "relay").
+# No verdict fields (confidence/unreliable/...) — the consumer judges.
+_OBSERVATION_FACT_KEYS = {"code", "kind", "detail", "severity", "evidence"}
+
+
+def _assert_observations_are_facts(observations: list) -> None:
+    assert isinstance(observations, list)
+    for obs in observations:
+        assert set(obs) <= _OBSERVATION_FACT_KEYS, obs
+        if obs["kind"] != "relay":
+            assert "severity" not in obs, obs
+
+
+class TestBuildSummaryRealLogPairs:
+    """build_simulation_summary against recorded LTspice .raw/.log pairs.
+
+    Everything above drives the surfacer with hand-built summary dicts and
+    mocked RawRead instances; these tests run the REAL log-reading branch
+    (measurement parsing, diagnostics extraction, requested-vs-produced
+    reconciliation) on logs LTspice actually wrote, so the summary shapes the
+    observations see are the ones the parser genuinely produces.
+    """
+
+    @staticmethod
+    def _summarize(name: str, requested: dict[str, list[str]]) -> dict:
+        from spicelib import RawRead
+
+        raw = RawRead(str(FIXTURES / f"{name}.raw"))
+        return build_simulation_summary(
+            raw, FIXTURES / f"{name}.log", requested=requested, value_scan="scan"
+        )
+
+    def test_tran_meas_parsed_from_real_log_and_reconciled_clean(self):
+        # The recorded deck carried ``.meas tran vfinal FIND V(out) AT=0.9m``;
+        # the log holds ``vfinal: V(out) =0.999876166042 at 0.0009``.
+        requested = parse_requested_outputs(
+            ".tran 0 1m 0 5u\n.meas tran vfinal FIND V(out) AT=0.9m"
+        )
+        assert requested["meas"] == ["vfinal"]
+
+        summary = self._summarize("ltspice_tran_rc", requested)
+
+        vfinal = summary["measurements"]["vfinal"]
+        assert vfinal["values"] == [pytest.approx(0.999876166042, rel=1e-9)]
+        assert vfinal["at"] == pytest.approx(0.9e-3, rel=1e-6)
+        assert "failed_measurements" not in summary
+        assert "errors" not in summary
+        # Requested .meas was produced, values are healthy, nothing relayed:
+        # a clean run surfaces NO observations (empty list != verified, but
+        # nothing tripped a check here).
+        assert summary["observations"] == []
+
+    def test_ac_log_without_meas_surfaces_nothing(self):
+        # The AC deck requested no .meas/.four, and its real log carries none:
+        # the log branch must not invent measurements or observations.
+        requested = parse_requested_outputs(
+            "V1 in 0 AC 1\nR1 in out 1k\nC1 out 0 159.15n\n.ac dec 20 10 100k"
+        )
+        assert requested == {"meas": [], "four": []}
+
+        summary = self._summarize("ltspice_ac_rc", requested)
+
+        assert "measurements" not in summary
+        assert "failed_measurements" not in summary
+        assert "errors" not in summary
+        assert summary["observations"] == []
+
+    def test_requested_meas_absent_from_real_log_reconciled_as_missing(self):
+        # Deck asks for a .meas, but the recorded DC log carries no
+        # measurement at all — the real parse-then-reconcile chain must
+        # surface exactly one unmet_request fact naming it.
+        requested = parse_requested_outputs(".dc V1 0 5 0.5\n.meas dc vhalf FIND V(out) AT 2.5")
+        assert requested["meas"] == ["vhalf"]
+
+        summary = self._summarize("ltspice_dc_div", requested)
+
+        assert "measurements" not in summary
+        unmet = [o for o in summary["observations"] if o["code"] == "unmet_request"]
+        assert len(unmet) == 1
+        assert unmet[0]["kind"] == "reconciliation"
+        assert unmet[0]["evidence"] == {
+            "name": "vhalf",
+            "request_kind": "meas",
+            "reason": "missing",
+        }
+        _assert_observations_are_facts(summary["observations"])

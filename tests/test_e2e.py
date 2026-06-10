@@ -2,9 +2,9 @@
 as a client would.
 
 These tests launch the server as a subprocess via the MCP SDK's stdio_client,
-then use ClientSession to send real MCP protocol messages.  No simulator is
-expected to be available — circuit editing, status, resources, and
-error-path tests all work without one.
+then use ClientSession to send real MCP protocol messages.  Simulator
+detection is disabled, so no simulator is needed — circuit editing, status,
+resources, and error-path tests all exercise the degraded-mode behaviour.
 """
 
 import json
@@ -17,15 +17,9 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
 
-import pytest
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from pydantic import AnyUrl
-
-pytestmark = pytest.mark.skipif(
-    os.environ.get("LTSPICE_MCP_RUN_E2E") != "1",
-    reason="MCP subprocess e2e tests are opt-in; set LTSPICE_MCP_RUN_E2E=1",
-)
 
 # ---------------------------------------------------------------------------
 # Helpers
