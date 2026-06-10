@@ -15,7 +15,7 @@ from typing import Any
 from spicelib import AscEditor, SpiceEditor
 from spicelib.raw.raw_read import RawRead
 
-from ltspice_mcp.errors import BatchJobError, ResultError, SimulationError
+from ltspice_mcp.errors import BatchJobError, JobNotFoundError, ResultError, SimulationError
 from ltspice_mcp.lib.batch_results import (
     compute_batch_stats,
     filter_runs_by_params,
@@ -111,23 +111,25 @@ def attach_suggestions_to_failure(
 
 
 def resolve_job(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
-    """Look up any job by id in the union job store."""
+    """Look up any job by id in the union job store.
+
+    Raises ``JobNotFoundError`` for an unknown id — the one place that
+    translation happens, so callers up the stack don't re-wrap it.
+    """
     job = state.all_jobs.get(job_id)
     if job is None:
-        raise ResultError(f"Job not found: {job_id}")
+        raise JobNotFoundError(f"Job not found: {job_id}")
     return job
 
 
 def resolve_simulation_job(job_id: str, state: SessionState) -> SimulationJob:
     """Look up a single-simulation job by id.
 
-    A batch (sweep/MC) id gets an honest redirect instead of "not found" —
+    An unknown id propagates ``JobNotFoundError`` from ``resolve_job``. A
+    batch (sweep/MC) id gets an honest redirect instead of "not found" —
     the job exists, it just isn't readable through the single-sim surface.
     """
-    try:
-        job = resolve_job(job_id, state)
-    except ResultError:
-        raise SimulationError(f"Job not found: {job_id}") from None
+    job = resolve_job(job_id, state)
     if isinstance(job, BatchJob):
         raise SimulationError(
             f"Job '{job_id}' is a {job.job_type} batch job — "
@@ -144,7 +146,9 @@ def resolve_batch_job(job_id: str, state: SessionState) -> BatchJob:
     """
     try:
         job = resolve_job(job_id, state)
-    except ResultError:
+    except JobNotFoundError:
+        # Batch tools historically say "Batch job not found"; keep that
+        # surface text — this is the one remaining not-found translation.
         raise BatchJobError(f"Batch job not found: {job_id}") from None
     if isinstance(job, SimulationJob):
         raise BatchJobError(

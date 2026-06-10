@@ -54,6 +54,10 @@ class ResultError(LTSpiceMCPError):
     """Error reading simulation results."""
 
 
+class JobNotFoundError(ResultError):
+    """No job with the requested id exists in the job store."""
+
+
 class LibraryError(LTSpiceMCPError):
     """Component library error (load, parse, or lookup failure)."""
 

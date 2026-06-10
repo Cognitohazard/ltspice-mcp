@@ -194,6 +194,16 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
             "list_components to verify component references."
         ),
     ),
+    _err.JobNotFoundError: _ErrorHint(
+        full=(
+            "Use check_job with no job_id to list known jobs — the id may be "
+            "mistyped, evicted, or from a previous server session."
+        ),
+        agentic=(
+            "Use check_job with no job_id to list known jobs — the id may be "
+            "mistyped, evicted, or from a previous server session."
+        ),
+    ),
     _err.ResultError: _ErrorHint(
         full=(
             "Verify the simulation completed successfully with check_job, "
