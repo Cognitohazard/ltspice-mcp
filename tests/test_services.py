@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ltspice_mcp.errors import BatchJobError, ResultError, SimulationError
+from ltspice_mcp.errors import BatchJobError, JobNotFoundError, ResultError, SimulationError
 from ltspice_mcp.lib import now, services
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
 
@@ -66,7 +66,7 @@ class TestResolveJob:
         assert job.job_id == "j1"
 
     def test_resolve_simulation_job_not_found(self, state_no_sim: SessionState):
-        with pytest.raises(SimulationError, match="Job not found: missing"):
+        with pytest.raises(JobNotFoundError, match="Job not found: missing"):
             services.resolve_simulation_job("missing", state_no_sim)
 
     def test_resolve_simulation_job_batch_id_redirects(self, state_no_sim: SessionState):
@@ -106,7 +106,7 @@ class TestResolveJob:
         assert services.resolve_job("b1", state_no_sim).job_id == "b1"
 
     def test_resolve_job_not_found(self, state_no_sim: SessionState):
-        with pytest.raises(ResultError):
+        with pytest.raises(JobNotFoundError):
             services.resolve_job("missing", state_no_sim)
 
 
