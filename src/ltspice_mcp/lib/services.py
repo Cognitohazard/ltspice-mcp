@@ -110,31 +110,48 @@ def attach_suggestions_to_failure(
     return f"{error_msg}\n{format_suggestion_block(suggestions)}"
 
 
-def resolve_simulation_job(job_id: str, state: SessionState) -> SimulationJob:
-    """Look up a simulation job by id."""
-    job = state.jobs.get(job_id)
+def resolve_job(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
+    """Look up any job by id in the union job store."""
+    job = state.all_jobs.get(job_id)
     if job is None:
-        raise SimulationError(f"Job not found: {job_id}")
+        raise ResultError(f"Job not found: {job_id}")
+    return job
+
+
+def resolve_simulation_job(job_id: str, state: SessionState) -> SimulationJob:
+    """Look up a single-simulation job by id.
+
+    A batch (sweep/MC) id gets an honest redirect instead of "not found" —
+    the job exists, it just isn't readable through the single-sim surface.
+    """
+    try:
+        job = resolve_job(job_id, state)
+    except ResultError:
+        raise SimulationError(f"Job not found: {job_id}") from None
+    if isinstance(job, BatchJob):
+        raise SimulationError(
+            f"Job '{job_id}' is a {job.job_type} batch job — "
+            "use batch_results for its per-run results."
+        )
     return job
 
 
 def resolve_batch_job(job_id: str, state: SessionState) -> BatchJob:
-    """Look up a batch job by id."""
-    batch_job = state.batch_jobs.get(job_id)
-    if batch_job is None:
-        raise BatchJobError(f"Batch job not found: {job_id}")
-    return batch_job
+    """Look up a batch (sweep/MC) job by id.
 
-
-def resolve_job(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
-    """Look up any job by id."""
-    job = state.jobs.get(job_id)
-    if job is not None:
-        return job
-    batch_job = state.batch_jobs.get(job_id)
-    if batch_job is not None:
-        return batch_job
-    raise ResultError(f"Job not found: {job_id}")
+    A single-simulation id gets an honest redirect instead of "not found" —
+    the job exists, it just has no per-run batch surface.
+    """
+    try:
+        job = resolve_job(job_id, state)
+    except ResultError:
+        raise BatchJobError(f"Batch job not found: {job_id}") from None
+    if isinstance(job, SimulationJob):
+        raise BatchJobError(
+            f"Job '{job_id}' is a single simulation job — its results are "
+            "available via check_job / simulation_summary."
+        )
+    return job
 
 
 def _as_path(p: object) -> Path | None:

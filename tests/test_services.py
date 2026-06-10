@@ -66,8 +66,18 @@ class TestResolveJob:
         assert job.job_id == "j1"
 
     def test_resolve_simulation_job_not_found(self, state_no_sim: SessionState):
-        with pytest.raises(SimulationError):
+        with pytest.raises(SimulationError, match="Job not found: missing"):
             services.resolve_simulation_job("missing", state_no_sim)
+
+    def test_resolve_simulation_job_batch_id_redirects(self, state_no_sim: SessionState):
+        """A batch id through the single-sim resolver is an honest redirect,
+        never "not found" — the job exists."""
+        _make_batch(state_no_sim)
+        with pytest.raises(SimulationError) as exc:
+            services.resolve_simulation_job("b1", state_no_sim)
+        assert str(exc.value) == (
+            "Job 'b1' is a sweep batch job — use batch_results for its per-run results."
+        )
 
     def test_resolve_batch_job_found(self, state_no_sim: SessionState):
         _make_batch(state_no_sim)
@@ -75,8 +85,17 @@ class TestResolveJob:
         assert bj.job_id == "b1"
 
     def test_resolve_batch_job_not_found(self, state_no_sim: SessionState):
-        with pytest.raises(BatchJobError):
+        with pytest.raises(BatchJobError, match="Batch job not found: missing"):
             services.resolve_batch_job("missing", state_no_sim)
+
+    def test_resolve_batch_job_sim_id_redirects(self, state_no_sim: SessionState):
+        _make_job(state_no_sim)
+        with pytest.raises(BatchJobError) as exc:
+            services.resolve_batch_job("j1", state_no_sim)
+        assert str(exc.value) == (
+            "Job 'j1' is a single simulation job — its results are "
+            "available via check_job / simulation_summary."
+        )
 
     def test_resolve_job_finds_sim(self, state_no_sim: SessionState):
         _make_job(state_no_sim)

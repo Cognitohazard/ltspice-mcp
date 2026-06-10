@@ -413,6 +413,19 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
     return format_response(text, data, fmt)
 
 
+def _resolve_any_job(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
+    """Union-store job lookup for check_job / cancel_job.
+
+    These handlers predate ``resolve_job`` and raise ``SimulationError`` for
+    unknown ids; preserve that error type (and its server-side hint) while
+    sharing the union lookup.
+    """
+    try:
+        return services.resolve_job(job_id, state)
+    except ResultError:
+        raise SimulationError(f"Job not found: {job_id}") from None
+
+
 @registry.tool(
     name="check_job",
     description=(
@@ -464,15 +477,13 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
     if not job_id:
         return _list_jobs(args, state, fmt)
 
-    # Batch (sweep/MC) jobs live in a separate store with a richer per-run view
-    # via batch_results. Surface a concise status here instead of the old
-    # "Job not found" dead-end (several tool hints point users to check_job).
-    batch_job = state.batch_jobs.get(job_id)
-    if batch_job is not None:
-        return _check_batch_job(batch_job, fmt)
-
-    # Look up specific (single) job
-    job = services.resolve_simulation_job(job_id, state)
+    # Single-sim and batch jobs share one store; route by type. Batch
+    # (sweep/MC) jobs get a concise status here pointing at the richer
+    # per-run view in batch_results.
+    resolved = _resolve_any_job(job_id, state)
+    if isinstance(resolved, BatchJob):
+        return _check_batch_job(resolved, fmt)
+    job = resolved
 
     # Check status
     if job.status in NON_TERMINAL_LIVE_STATUSES:
@@ -637,12 +648,9 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
     """List simulation jobs (single + batch) with optional status filter."""
     status_filter = arguments.status
 
-    # Single-run and batch (sweep/MC) jobs live in separate stores; list both
-    # so check_job is a complete view of "what jobs exist".
-    all_jobs: list[SimulationJob | BatchJob] = [
-        *state.jobs.values(),
-        *state.batch_jobs.values(),
-    ]
+    # The union store holds every job (single-run and sweep/MC batch), so
+    # check_job is a complete view of "what jobs exist".
+    all_jobs: list[SimulationJob | BatchJob] = list(state.all_jobs.values())
 
     # Determine which jobs to show
     if status_filter == "all":
@@ -727,12 +735,7 @@ async def handle_cancel_job(args: CancelJobInput, state: SessionState) -> types.
     """
     job_id = args.job_id
 
-    # Look up the job in EITHER store — single-sim jobs live in ``state.jobs``,
-    # batch (sweep/MC) jobs in ``state.batch_jobs``. Resolving only the former
-    # made ``cancel_job`` reject every sweep/MC id as "not found".
-    job: SimulationJob | BatchJob | None = state.jobs.get(job_id) or state.batch_jobs.get(job_id)
-    if job is None:
-        raise SimulationError(f"Job not found: {job_id}")
+    job = _resolve_any_job(job_id, state)
 
     # Check if job is running
     if job.status not in NON_TERMINAL_LIVE_STATUSES:
