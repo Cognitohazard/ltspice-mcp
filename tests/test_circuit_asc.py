@@ -23,6 +23,7 @@ from ltspice_mcp.tools.circuit import (
     SymbolInfoInput,
     TraceNetInput,
     ValidateNetlistInput,
+    WaypointInput,
     _build_on_wire_predicate,
     _parse_netlist_for_synth,
     _point_on_segment,
@@ -51,19 +52,19 @@ def _copy_file(src: Path, dst: Path) -> None:
     dst.write_bytes(src.read_bytes())
 
 
-# Relocated from tests/test_followups_2026_05_29.py (regression).
+# Relocated regression coverage from a retired test module.
 RC_NETLIST = (
     "* RC low-pass filter\nV1 in 0 AC 1\nR1 in out 1k\nC1 out 0 1u\n.ac dec 10 1 100k\n.end\n"
 )
 
 
-# Relocated from tests/test_followups_2026_05_29.py (regression).
+# Relocated regression coverage from a retired test module.
 def _read_bytes(p: Path) -> bytes:
     """Sync file read (keeps blocking pathlib I/O out of async test bodies)."""
     return p.read_bytes()
 
 
-# Relocated from tests/test_v10_fixes.py (regression).
+# Relocated regression coverage from a retired test module.
 # Two FLAGs (aaa, bbb) on one physical wire -> named-net short; R1 placed away
 # from any wire/label -> both pins float.
 SHORTED_ASC = """Version 4
@@ -76,7 +77,7 @@ SYMATTR InstName R1
 SYMATTR Value 1k
 """
 
-# Relocated from tests/test_v10_fixes.py (regression).
+# Relocated regression coverage from a retired test module.
 # R1 (pins at y=100-48 and y=100+48) fully wired to a named net and ground.
 CLEAN_ASC = """Version 4
 SHEET 1 880 680
@@ -89,7 +90,7 @@ SYMATTR InstName R1
 SYMATTR Value 1k
 """
 
-# Relocated from tests/test_v10_fixes.py (regression).
+# Relocated regression coverage from a retired test module.
 # A net carrying a single name plus ground ('0') is NOT a short.
 GROUND_ASC = """Version 4
 SHEET 1 880 680
@@ -220,7 +221,7 @@ class TestDiffCircuitAttributes:
     async def test_attribute_change_detected(
         self, asc_state: SessionState, asc_file: Path, work_dir: Path
     ) -> None:
-        # F6: diff_circuit compared only the Value field, so a
+        # Regression: diff_circuit compared only the Value field, so a
         # set_component_attribute edit (SpiceLine/Value2/SpiceModel) — which
         # lands in the exported netlist — falsely showed "no differences".
         a = work_dir / "diff_a.asc"
@@ -335,7 +336,7 @@ class TestEditDirectiveCommentKind:
         assert "Test note" in result.content[0].text
 
     async def test_comment_rejects_directive_prefix(self, asc_state: SessionState, asc_file: Path):
-        """Fr5: ``kind='comment'`` with an instruction that starts with
+        """``kind='comment'`` with an instruction that starts with
         ``!`` or ``.`` is almost always a mis-typed kind — refuse and
         steer the caller to ``kind='directive'``."""
         from ltspice_mcp.errors import NetlistError
@@ -456,9 +457,143 @@ class TestConnect:
             )
 
 
+def _wire_segments(asc_path: Path) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    """Parse WIRE records from an .asc on disk (sync read, keeps blocking
+    pathlib I/O out of async test bodies)."""
+    text = asc_path.read_bytes().decode("utf-8", errors="replace")
+    segments: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    for line in text.splitlines():
+        if line.startswith("WIRE"):
+            _, x1, y1, x2, y2 = line.split()
+            segments.append(((int(x1), int(y1)), (int(x2), int(y2))))
+    return segments
+
+
+def _has_segment(
+    segments: list[tuple[tuple[int, int], tuple[int, int]]],
+    a: tuple[int, int],
+    b: tuple[int, int],
+) -> bool:
+    """True if a wire segment with endpoints a and b exists in either order."""
+    return (a, b) in segments or (b, a) in segments
+
+
+# Absolute pin positions expected for the fixture nmos symbol (pin offsets
+# D=(0,-96), G=(-48,0), S=(0,96)) placed at (400, 200), hand-computed from the
+# LTspice orientation transforms (y axis points down; R90 maps (x, y) to
+# (-y, x); M0 negates x before rotating). The G pin sits off the symbol's
+# vertical axis, so each mirror produces a pin map distinct from its rotation
+# counterpart — a sign error in any transform entry changes at least one pin.
+NMOS_PIN_POSITIONS: dict[str, dict[str, tuple[int, int]]] = {
+    "R0": {"D": (400, 104), "G": (352, 200), "S": (400, 296)},
+    "R90": {"D": (496, 200), "G": (400, 152), "S": (304, 200)},
+    "R180": {"D": (400, 296), "G": (448, 200), "S": (400, 104)},
+    "R270": {"D": (304, 200), "G": (400, 248), "S": (496, 200)},
+    "M0": {"D": (400, 104), "G": (448, 200), "S": (400, 296)},
+    "M90": {"D": (496, 200), "G": (400, 248), "S": (304, 200)},
+    "M180": {"D": (400, 296), "G": (352, 200), "S": (400, 104)},
+    "M270": {"D": (304, 200), "G": (400, 152), "S": (496, 200)},
+}
+
+
+@pytest.mark.asyncio
+class TestOrientationPlacementAndRouting:
+    """add_component(rotation=...) -> cached editor -> _resolve_pin -> connect
+    must agree on absolute pin coordinates for every rotation AND mirror.
+    Wire endpoints on disk are checked against hand-computed positions, so a
+    sign error in any orientation transform fails here — not just an
+    inconsistency between add_component and connect."""
+
+    @pytest.mark.parametrize("rotation", sorted(NMOS_PIN_POSITIONS))
+    async def test_pin_map_and_wire_endpoint(
+        self, asc_state: SessionState, work_dir: Path, rotation: str
+    ):
+        asc = work_dir / "orient.asc"
+        asc.write_text("Version 4\nSHEET 1 880 680\n")
+
+        added = await handle_add_component(
+            AddComponentInput(
+                path="orient.asc",
+                reference="M1",
+                symbol="nmos",
+                x=400,
+                y=200,
+                rotation=rotation,  # type: ignore[arg-type]  # parametrized literal
+            ),
+            asc_state,
+        )
+        assert added.structuredContent is not None
+        reported = {p["name"]: (p["x"], p["y"]) for p in added.structuredContent["pins"]}
+        assert reported == NMOS_PIN_POSITIONS[rotation]
+
+        # Fixed second component, far enough from M1 that no route below can
+        # collide with its pins. Fixture res pins: 1=(0,-48) -> R9.1=(700,452).
+        await handle_add_component(
+            AddComponentInput(path="orient.asc", reference="R9", symbol="res", x=700, y=500),
+            asc_state,
+        )
+
+        # connect re-resolves M1.G from the cached editor's stored placement,
+        # so the wire endpoint proves the rotation survived the round trip.
+        gx, gy = NMOS_PIN_POSITIONS[rotation]["G"]
+        connected = await handle_connect(
+            ConnectInput(
+                path="orient.asc",
+                from_pin="M1.G",
+                to_pin="R9.1",
+                waypoints=[WaypointInput(x=gx, y=452)],
+            ),
+            asc_state,
+        )
+        sc = connected.structuredContent
+        assert sc is not None
+        assert sc["from"] == {"ref": "M1.G", "x": gx, "y": gy}
+        assert sc["to"] == {"ref": "R9.1", "x": 700, "y": 452}
+
+        # Re-read the file from disk: the persisted wire must start at the
+        # hand-computed absolute G coordinate and land on R9.1.
+        segments = _wire_segments(asc)
+        assert _has_segment(segments, (gx, gy), (gx, 452)), segments
+        assert _has_segment(segments, (gx, 452), (700, 452)), segments
+
+
+@pytest.mark.asyncio
+class TestConnectPersistsWires:
+    """connect's success path must actually write WIRE records to disk —
+    the rejection-path tests above only prove it validates."""
+
+    async def test_wire_written_and_persisted(self, asc_state: SessionState, work_dir: Path):
+        asc = work_dir / "wire_persist.asc"
+        asc.write_text("Version 4\nSHEET 1 880 680\n")
+        await handle_add_component(
+            AddComponentInput(path="wire_persist.asc", reference="R1", symbol="res", x=200, y=200),
+            asc_state,
+        )
+        await handle_add_component(
+            AddComponentInput(path="wire_persist.asc", reference="R2", symbol="res", x=200, y=400),
+            asc_state,
+        )
+        before = _wire_segments(asc)
+        assert before == []  # add_component places no wires
+
+        result = await handle_connect(
+            ConnectInput(path="wire_persist.asc", from_pin="R1.2", to_pin="R2.1"),
+            asc_state,
+        )
+        assert "Connected R1.2 to R2.1" in result.content[0].text
+        sc = result.structuredContent
+        assert sc is not None
+        assert sc["wire_count"] == 1
+
+        # Fixture res pins: 1=(0,-48), 2=(0,48) -> R1.2=(200,248), R2.1=(200,352).
+        after = _wire_segments(asc)
+        assert len(after) == len(before) + sc["wire_count"]
+        assert _has_segment(after, (200, 248), (200, 352)), after
+
+
 @pytest.mark.asyncio
 class TestAscValueExcludesValue2:
-    """Fr3: read_circuit / list_components on .asc used to concatenate
+    """Regression: read_circuit / list_components on .asc used to concatenate
     Value+Value2 into the displayed value AND duplicate Value2 under
     attributes. Read Value alone; let Value2 stay only in attributes."""
 
@@ -522,7 +657,7 @@ class TestAscValueExcludesValue2:
 
 @pytest.mark.asyncio
 class TestEmptyAttributeRejected:
-    """P-N1: add_component with empty SYMATTR value used to write a partial
+    """Regression: add_component with an empty SYMATTR value used to write a partial
     SYMATTR line and crash mid-write, leaving the .asc permanently
     unreadable. Reject up front."""
 
@@ -545,7 +680,7 @@ class TestEmptyAttributeRejected:
 
 @pytest.mark.asyncio
 class TestEditingAscRollback:
-    """Item 1: uncaught exceptions inside _editing_asc must invalidate the
+    """Uncaught exceptions inside _editing_asc must invalidate the
     cached editor so a later read doesn't see dirty in-memory mutations,
     and the file on disk must remain intact."""
 
@@ -592,7 +727,7 @@ class TestEditingAscRollback:
 
 @pytest.mark.asyncio
 class TestAtomicAscSave:
-    """Item 2: a failure while spicelib is rendering the .asc must not
+    """A failure while spicelib is rendering the .asc must not
     leave a partially-written file on disk."""
 
     async def test_save_failure_preserves_original(
@@ -644,7 +779,7 @@ class TestAtomicAscSave:
     async def test_save_failure_evicts_cache(
         self, asc_state: SessionState, asc_file: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        """Codex H1: a save that mutates the in-memory editor then crashes
+        """A save that mutates the in-memory editor then crashes
         must still invalidate the cache. Otherwise a follow-up read sees
         the unsaved component."""
         from spicelib import AscEditor
@@ -675,10 +810,10 @@ class TestAtomicAscSave:
         assert "R_uncommitted" not in result.content[0].text
 
 
-# Relocated from tests/test_v5_fixes.py (regression).
+# Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
-class TestN9SetAttributeAllowlist:
-    """N9: set_component_attribute rejects unknown attribute names."""
+class TestSetAttributeAllowlist:
+    """set_component_attribute rejects unknown attribute names."""
 
     async def test_rejects_typo(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="Unknown attribute"):
@@ -712,10 +847,10 @@ class TestN9SetAttributeAllowlist:
         assert "SpiceLine" in result.content[0].text
 
 
-# Relocated from tests/test_v5_fixes.py (regression).
+# Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
-class TestN12FloatingLabelWarning:
-    """N12: add_net_label warns on labels placed away from any wire/pin."""
+class TestFloatingLabelWarning:
+    """add_net_label warns on labels placed away from any wire/pin."""
 
     async def test_warns_on_floating(self, asc_state: SessionState, asc_file: Path):
         result = await handle_add_net_label(
@@ -725,10 +860,10 @@ class TestN12FloatingLabelWarning:
         assert "floating" in result.content[0].text.lower()
 
 
-# Relocated from tests/test_v5_fixes.py (regression).
+# Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
-class TestN8NetConflictInConnect:
-    """N8: connect detects shorts between two named nets."""
+class TestNetConflictInConnect:
+    """connect detects shorts between two named nets."""
 
     async def test_refuses_named_net_short(self, asc_state: SessionState):
         # Build a clean schematic with two resistors on disjoint named nets,
@@ -779,10 +914,10 @@ class TestN8NetConflictInConnect:
             )
 
 
-# Relocated from tests/test_v5_fixes.py (regression).
+# Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
-class TestN11RemoveComponentNoFalseOrphans:
-    """N11: remove_component doesn't flag wires belonging to other components."""
+class TestRemoveComponentNoFalseOrphans:
+    """remove_component doesn't flag wires belonging to other components."""
 
     async def test_other_component_pin_not_flagged(self, asc_state: SessionState, asc_file: Path):
         # Add a second resistor whose pin coincides with R1's existing wire.
@@ -808,10 +943,10 @@ class TestN11RemoveComponentNoFalseOrphans:
         assert "orphaned" not in result.content[0].text
 
 
-# Relocated from tests/test_v5_fixes.py (regression).
+# Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
-class TestFr1ApplySchematicOps:
-    """Fr1: apply_schematic_ops batches add/connect/label/directive."""
+class TestApplySchematicOps:
+    """apply_schematic_ops batches add/connect/label/directive."""
 
     async def test_basic_transaction(self, asc_state: SessionState, work_dir: Path):
         from ltspice_mcp.tools.circuit import (
@@ -947,9 +1082,9 @@ class TestFr1ApplySchematicOps:
         assert data["saved"] is True
 
 
-# Relocated from tests/test_v6_fixes.py (regression).
-class TestEN1MidSegmentLabelDetected:
-    """E-N1: a label sitting mid-segment on a wire used to be invisible
+# Relocated regression coverage from a retired test module.
+class TestMidSegmentLabelDetected:
+    """A label sitting mid-segment on a wire used to be invisible
     to ``connect``'s endpoint-only label compare. The fix is segment-
     aware: the trace dragon-swallows interest points that lie on a wire
     even if they're not at an endpoint.
@@ -980,7 +1115,7 @@ class TestEN1MidSegmentLabelDetected:
         assert _named_labels(frozenset()) == set()
 
 
-# Relocated from tests/test_followups_2026_05_29.py (regression).
+# Relocated regression coverage from a retired test module.
 class TestParseNetlistForSynth:
     def test_basic_rc(self):
         instances, directives, skipped, _warnings = _parse_netlist_for_synth(RC_NETLIST)
@@ -1031,7 +1166,7 @@ class TestParseNetlistForSynth:
         assert any(s["ref"] == "R1" and "tokenize" in s["reason"] for s in skipped)
 
     def test_no_title_keeps_first_instance(self):
-        # F2: a bare netlist fragment (no '*' title) must NOT silently drop its
+        # Regression: a bare netlist fragment (no '*' title) must NOT silently drop its
         # first card — that used to delete the source (V1) and leave a dead
         # circuit with no feedback.
         instances, _directives, skipped, warnings = _parse_netlist_for_synth(
@@ -1049,7 +1184,7 @@ class TestParseNetlistForSynth:
         assert not any("title" in w.lower() for w in warnings)
 
 
-# Relocated from tests/test_followups_2026_05_29.py (regression).
+# Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
 class TestSchematicFromNetlist:
     async def test_roundtrip_through_read_circuit(self, asc_state: SessionState, work_dir: Path):
@@ -1128,7 +1263,7 @@ class TestSchematicFromNetlist:
             )
 
 
-# Relocated from tests/test_followups_2026_05_29.py (regression).
+# Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
 class TestTraceNet:
     async def test_name_based_net_on_synth_output(self, asc_state: SessionState):
@@ -1187,7 +1322,7 @@ class TestTraceNet:
             await handle_trace_net(TraceNetInput(path="empty.asc", x=500, y=500), asc_state)
 
 
-# Relocated from tests/test_followups_2026_05_29.py (regression).
+# Relocated regression coverage from a retired test module.
 class TestOnWirePredicate:
     def test_matches_point_on_segment(self):
         segments = [((0, 0), (100, 0)), ((100, 0), (100, 80)), ((50, 50), (50, 50))]
@@ -1205,7 +1340,7 @@ class TestOnWirePredicate:
         assert not on_wire((10, 50))
 
 
-# Relocated from tests/test_followups_2026_05_29.py (regression).
+# Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
 class TestAddComponentFloatingFilter:
     async def test_only_new_component_floating_pins(self, asc_state: SessionState, work_dir: Path):
@@ -1228,7 +1363,7 @@ class TestAddComponentFloatingFilter:
         assert "R1" not in refs
 
 
-# Relocated from tests/test_followups_2026_05_29.py (regression).
+# Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
 class TestResetSchematic:
     async def test_revert_after_edit(self, asc_state: SessionState, asc_file: Path):
@@ -1320,17 +1455,15 @@ class TestResetSchematic:
         assert _read_bytes(work_dir / "synth_ow.asc") == original
 
 
-# Relocated from tests/test_v10_fixes.py (regression).
+# Relocated regression coverage from a retired test module.
 class TestValidateNetlistAscTopology:
-    """P1-ASC-VAL — validate_netlist surfaces .asc shorts/floating/dangling."""
+    """validate_netlist surfaces .asc shorts/floating/dangling."""
 
     async def test_named_net_short_and_floating_pins_flagged(
         self, asc_state: SessionState, work_dir: Path
     ):
         (work_dir / "shorted.asc").write_text(SHORTED_ASC)
-        result = await handle_validate_netlist(
-            ValidateNetlistInput(path="shorted.asc"), asc_state
-        )
+        result = await handle_validate_netlist(ValidateNetlistInput(path="shorted.asc"), asc_state)
         data = result.structuredContent
         assert data is not None
         issues = data["issues"]
@@ -1338,9 +1471,7 @@ class TestValidateNetlistAscTopology:
         assert data["issue_count"] >= 3, issues
 
         shorts = [
-            i
-            for i in issues
-            if i["severity"] == "error" and "short" in i["message"].lower()
+            i for i in issues if i["severity"] == "error" and "short" in i["message"].lower()
         ]
         assert len(shorts) == 1, issues
         assert "aaa" in shorts[0]["message"] and "bbb" in shorts[0]["message"]
@@ -1356,9 +1487,7 @@ class TestValidateNetlistAscTopology:
         self, asc_state: SessionState, work_dir: Path
     ):
         (work_dir / "clean.asc").write_text(CLEAN_ASC)
-        result = await handle_validate_netlist(
-            ValidateNetlistInput(path="clean.asc"), asc_state
-        )
+        result = await handle_validate_netlist(ValidateNetlistInput(path="clean.asc"), asc_state)
         data = result.structuredContent
         assert data is not None
         assert data["issue_count"] == 0, data["issues"]
@@ -1367,9 +1496,7 @@ class TestValidateNetlistAscTopology:
         self, asc_state: SessionState, work_dir: Path
     ):
         (work_dir / "gnd.asc").write_text(GROUND_ASC)
-        result = await handle_validate_netlist(
-            ValidateNetlistInput(path="gnd.asc"), asc_state
-        )
+        result = await handle_validate_netlist(ValidateNetlistInput(path="gnd.asc"), asc_state)
         data = result.structuredContent
         assert data is not None
         shorts = [

@@ -6,9 +6,28 @@ from pathlib import Path
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.cache import FileCache
+from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.state import BatchJob, MonteCarloConfig, SessionState, SimulationJob
 from ltspice_mcp.tools import get_tools_for_profile
+
+
+class _RecordingRunner:
+    """Stub for a cached sim/sweep/MC runner.
+
+    Records each ``cancel()`` call and honours the runner cancel contract:
+    a still-live job is transitioned to terminal ``cancelled``.
+    """
+
+    def __init__(self) -> None:
+        self.cancel_calls: list[tuple[SimulationJob | BatchJob, SessionState | None]] = []
+
+    async def cancel(
+        self, job: SimulationJob | BatchJob, state: SessionState | None = None
+    ) -> None:
+        self.cancel_calls.append((job, state))
+        if job.status in ("queued", "running"):
+            transition(job, "cancelled", state=state)
 
 
 class TestSessionStateCreate:
@@ -87,6 +106,90 @@ class TestSessionStateShutdown:
         state.batch_jobs["batch1"] = batch
 
         await state.shutdown()
+        assert batch.status == "cancelled"
+        assert batch.done_event.is_set()
+
+    async def test_shutdown_routes_sim_cancel_through_cached_runner(
+        self, config: ServerConfig, tmp_path: Path
+    ):
+        """With a cached SimulationRunner, shutdown must delegate to its
+        cancel() (the path that kills live simulator processes) rather than
+        only flipping the job status."""
+        state = SessionState.create(config, {})
+        sim_runner = _RecordingRunner()
+        state.runners._runners["sim"] = sim_runner
+
+        job = SimulationJob(
+            job_id="sim-live",
+            netlist=tmp_path / "test.cir",
+            simulator="ltspice",
+            status="running",
+            started_at=now(),
+        )
+        state.add_job(job)
+
+        await state.shutdown()
+
+        assert len(sim_runner.cancel_calls) == 1
+        called_job, called_state = sim_runner.cancel_calls[0]
+        assert called_job is job
+        assert called_state is state
+        assert job.status == "cancelled"
+        assert job.done_event.is_set()
+
+    async def test_shutdown_routes_sweep_batch_cancel_through_sweep_runner(
+        self, config: ServerConfig, tmp_path: Path
+    ):
+        state = SessionState.create(config, {})
+        sweep_runner = _RecordingRunner()
+        mc_runner = _RecordingRunner()
+        state.runners._runners["sweep"] = sweep_runner
+        state.runners._runners["mc"] = mc_runner
+
+        batch = BatchJob(
+            job_id="sweep-live",
+            job_type="sweep",
+            netlist=tmp_path / "test.cir",
+            total_runs=3,
+            status="running",
+        )
+        state.add_batch_job(batch)
+
+        await state.shutdown()
+
+        assert len(sweep_runner.cancel_calls) == 1
+        called_job, called_state = sweep_runner.cancel_calls[0]
+        assert called_job is batch
+        assert called_state is state
+        assert mc_runner.cancel_calls == []
+        assert batch.status == "cancelled"
+        assert batch.done_event.is_set()
+
+    async def test_shutdown_routes_montecarlo_batch_cancel_through_mc_runner(
+        self, config: ServerConfig, tmp_path: Path
+    ):
+        state = SessionState.create(config, {})
+        sweep_runner = _RecordingRunner()
+        mc_runner = _RecordingRunner()
+        state.runners._runners["sweep"] = sweep_runner
+        state.runners._runners["mc"] = mc_runner
+
+        batch = BatchJob(
+            job_id="mc-live",
+            job_type="montecarlo",
+            netlist=tmp_path / "test.cir",
+            total_runs=5,
+            status="running",
+        )
+        state.add_batch_job(batch)
+
+        await state.shutdown()
+
+        assert len(mc_runner.cancel_calls) == 1
+        called_job, called_state = mc_runner.cancel_calls[0]
+        assert called_job is batch
+        assert called_state is state
+        assert sweep_runner.cancel_calls == []
         assert batch.status == "cancelled"
         assert batch.done_event.is_set()
 

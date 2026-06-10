@@ -345,7 +345,7 @@ class TestRunSimulationStubbed:
 
 @pytest.mark.asyncio
 class TestCheckJobBatchVisibility:
-    """V7-P1-3: check_job must resolve/list batch (sweep/MC) jobs, not just sims."""
+    """check_job must resolve/list batch (sweep/MC) jobs, not just sims."""
 
     async def test_check_job_resolves_batch_job(self, state_with_sim: SessionState):
         bj = BatchJob(

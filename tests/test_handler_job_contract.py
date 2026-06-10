@@ -1,34 +1,67 @@
-"""Cross-handler job CONTRACT tests — the parametrized variant matrix that
-closes the ``single_variant`` / ``bypass_wiring`` class the seam audit flagged.
+"""Cross-handler CONTRACT tests — a parametrized variant matrix that closes
+the bug class where a fix lands for one variant (one status, one job store,
+one dispatch fork, one file extension) while sibling variants stay broken.
 
-Two invariants every job-aware tool handler must satisfy, asserted through the
-REAL handlers (not internals), so a fix that lands in a leaf without wiring the
-entry path fails here:
+Invariants asserted through the REAL handlers (not internals), so a fix that
+lands in a leaf without wiring the entry path fails here:
 
 1. STATUS COMPLETENESS — a terminal batch status (incl. ``interrupted``, assigned
    on restart recovery) must format without raising "unexpected status". This is
-   the exact shape of the B1 bug (a hardcoded status allowlist that omitted
-   ``interrupted``); parametrizing over every terminal status catches the whole
-   class, not the one instance.
+   the exact shape of the interrupted-status formatter bug (a hardcoded status
+   allowlist that omitted ``interrupted``); parametrizing over every terminal
+   status catches the whole class, not the one instance.
 
 2. DUAL-STORE RESOLUTION — a handler that takes a ``job_id`` must resolve BOTH a
    single-sim job (``state.jobs``) and a batch job (``state.batch_jobs``), never
    reject one store's ids as "not found". This is the shape of the cancel_job
    bug (it resolved only the single-sim store).
+
+3. ROUTING-FORK COVERAGE — a handler that forks on job type must reach EVERY
+   fork: cancel_job's batch fork has runner-routing tests elsewhere, but the
+   single-sim fork was reachable only past guards no unit test crossed.
+
+4. DUAL-DISPATCH (.cir vs .asc) — a circuit tool that accepts both extensions
+   must work through BOTH dispatch branches (spice_lex pipeline vs AscEditor),
+   and a write must persist to disk, not just to a cached editor.
 """
 
+import shutil
+import typing
 from datetime import timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from mcp import types
 
+from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import now
-from ltspice_mcp.state import TERMINAL_STATUSES, BatchJob, SessionState, SimulationJob
+from ltspice_mcp.state import (
+    NON_TERMINAL_LIVE_STATUSES,
+    TERMINAL_STATUSES,
+    BatchJob,
+    SessionState,
+    SimulationJob,
+)
 from ltspice_mcp.tools.advanced import GetBatchResultsInput, handle_batch_results
-from ltspice_mcp.tools.simulation import CheckJobInput, handle_check_job
+from ltspice_mcp.tools.circuit import (
+    CircuitReadInput,
+    ListComponentsInput,
+    SetComponentValueInput,
+    handle_list_components,
+    handle_read_circuit,
+    handle_set_component_value,
+)
+from ltspice_mcp.tools.simulation import (
+    CancelJobInput,
+    CheckJobInput,
+    handle_cancel_job,
+    handle_check_job,
+)
 
 pytestmark = pytest.mark.asyncio
+
+_FIXTURE_DRAFT = Path(__file__).parent / "fixtures" / "Draft1.asc"
 
 # Terminal statuses a BatchJob can actually hold: TERMINAL_STATUSES minus
 # 'timeout' (single-sim only, not in BatchJob.status' Literal). Derived so a new
@@ -45,6 +78,21 @@ def _text(result) -> str:
     item = result.content[0]
     assert isinstance(item, types.TextContent)
     return item.text
+
+
+def _read_bytes(p: Path) -> bytes:
+    return p.read_bytes()
+
+
+class FakeSim:
+    spice_exe: typing.ClassVar[list[str]] = ["/fake/path/sim.exe"]
+
+
+@pytest.fixture
+def state_with_sim(config: ServerConfig) -> SessionState:
+    """SessionState with a (fake) simulator so cancel_job passes its
+    require_simulator guard and reaches the runner-routing fork."""
+    return SessionState.create(config, available={"fake": FakeSim})
 
 
 def _make_batch(state: SessionState, *, status: str, job_id: str = "b1") -> BatchJob:
@@ -77,8 +125,8 @@ def _make_sim(state: SessionState, *, status: str, job_id: str = "j1") -> Simula
 
 class TestBatchStatusCompleteness:
     """batch_results must format EVERY terminal batch status without raising
-    'unexpected status'. Regression class: B1 (interrupted) — the formatter's
-    status allowlist omitted a real terminal status."""
+    'unexpected status'. Regression class: the interrupted-status formatter
+    bug — a hardcoded status allowlist omitted a real terminal status."""
 
     @pytest.mark.parametrize("status", BATCH_TERMINAL_STATUSES)
     async def test_batch_results_handles_terminal_status(
@@ -94,9 +142,10 @@ class TestBatchStatusCompleteness:
 
 class TestSingleSimStatusCompleteness:
     """check_job must format EVERY terminal single-sim status without falling
-    through to 'unexpected status'. Same class as the batch B1 bug, one store
-    over: the single-sim formatter omitted 'interrupted' (assigned on restart
-    recovery, e.g. a job whose raw didn't survive to be promoted to completed)."""
+    through to 'unexpected status'. Same class as the batch interrupted-status
+    formatter bug, one store over: the single-sim formatter omitted
+    'interrupted' (assigned on restart recovery, e.g. a job whose raw didn't
+    survive to be promoted to completed)."""
 
     @pytest.mark.parametrize("status", SINGLE_TERMINAL_STATUSES_NO_FILES)
     async def test_check_job_handles_terminal_status(
@@ -120,3 +169,140 @@ class TestJobHandlerDualStore:
         _make_batch(state_no_sim, status="running")
         result = await handle_check_job(CheckJobInput(job_id="b1"), state_no_sim)
         assert "not found" not in _text(result).lower()
+
+    async def test_cancel_job_resolves_single_sim_job(self, state_with_sim: SessionState):
+        _make_sim(state_with_sim, status="running")
+        fake_runner = MagicMock(cancel=AsyncMock())
+        with patch("ltspice_mcp.tools.simulation._get_or_create_runner", return_value=fake_runner):
+            result = await handle_cancel_job(CancelJobInput(job_id="j1"), state_with_sim)
+        assert "not found" not in _text(result).lower()
+
+    async def test_cancel_job_resolves_batch_job(self, state_with_sim: SessionState):
+        _make_batch(state_with_sim, status="running")
+        fake_runner = MagicMock(cancel=AsyncMock())
+        with patch.object(
+            state_with_sim.runners, "get_existing_sweep_runner", return_value=fake_runner
+        ):
+            result = await handle_cancel_job(CancelJobInput(job_id="b1"), state_with_sim)
+        assert "not found" not in _text(result).lower()
+
+
+class TestCancelJobRoutingFork:
+    """cancel_job forks on job type (BatchJob → batch runner, SimulationJob →
+    single-sim runner). The batch fork has runner-routing tests elsewhere; the
+    single-sim fork sat behind guards (unknown id, not running, no simulator)
+    that every prior unit test stopped at, so it was never exercised. These
+    tests cross the guards and pin the routing: the live job object itself must
+    be handed to the single-sim runner's cancel."""
+
+    @pytest.mark.parametrize("status", sorted(NON_TERMINAL_LIVE_STATUSES))
+    async def test_live_single_sim_routes_to_sim_runner(
+        self, status: str, state_with_sim: SessionState
+    ):
+        job = _make_sim(state_with_sim, status=status)
+        fake_runner = MagicMock(cancel=AsyncMock())
+        with patch(
+            "ltspice_mcp.tools.simulation._get_or_create_runner", return_value=fake_runner
+        ) as get_runner:
+            result = await handle_cancel_job(CancelJobInput(job_id="j1"), state_with_sim)
+        assert "cancelled" in _text(result).lower()
+        get_runner.assert_called_once_with(state_with_sim)
+        fake_runner.cancel.assert_awaited_once()
+        # The exact job resolved from state.jobs reaches the runner —
+        # not a re-looked-up copy, not a batch-runner detour.
+        assert fake_runner.cancel.await_args is not None
+        assert fake_runner.cancel.await_args.args[0] is job
+
+    async def test_single_sim_fork_does_not_touch_batch_runners(
+        self, state_with_sim: SessionState
+    ):
+        _make_sim(state_with_sim, status="running")
+        fake_runner = MagicMock(cancel=AsyncMock())
+        with (
+            patch(
+                "ltspice_mcp.tools.simulation._get_or_create_runner",
+                return_value=fake_runner,
+            ),
+            patch.object(state_with_sim.runners, "get_existing_sweep_runner") as sweep,
+            patch.object(state_with_sim.runners, "get_existing_mc_runner") as mc,
+        ):
+            await handle_cancel_job(CancelJobInput(job_id="j1"), state_with_sim)
+        sweep.assert_not_called()
+        mc.assert_not_called()
+        fake_runner.cancel.assert_awaited_once()
+
+
+# --- DUAL-DISPATCH (.cir vs .asc) -----------------------------------------
+
+# Both files contain a resistor R1 with value 1k, so the same assertions run
+# against both dispatch branches (spice_lex pipeline vs AscEditor).
+_CIR_NETLIST = "* RC filter\nR1 in out 1k\nC1 out 0 100n\nV1 in 0 1\n.op\n.end\n"
+
+
+@pytest.fixture
+def circuit_file(request: pytest.FixtureRequest, work_dir: Path) -> Path:
+    """Circuit file of the parametrized extension inside the allowed dir.
+
+    ``.asc`` copies the Draft1 fixture (R1=1k) and pulls in the session-scoped
+    symbol cache so AscEditor can resolve its symbols; ``.cir`` writes an
+    equivalent netlist with the same R1=1k.
+    """
+    ext = request.param
+    if ext == "asc":
+        request.getfixturevalue("asc_symbols")
+        dest = work_dir / "Draft1.asc"
+        shutil.copy(_FIXTURE_DRAFT, dest)
+        return dest
+    path = work_dir / "rc_filter.cir"
+    path.write_text(_CIR_NETLIST)
+    return path
+
+
+@pytest.mark.parametrize("circuit_file", ["cir", "asc"], indirect=True)
+class TestCircuitToolDualDispatch:
+    """Circuit tools that accept both .cir and .asc must work through BOTH
+    extension-dispatch branches. The .cir branch (spice_lex pipeline) had unit
+    coverage; the .asc branch (AscEditor) was only reachable through separate
+    .asc-specific tests, so a regression in the shared dispatch seam — or an
+    .asc write that mutates only the cached editor — would escape. Writes are
+    verified against raw disk bytes AND re-read through a fresh SessionState
+    (fresh editor cache) so the value provably comes from disk."""
+
+    async def test_read_circuit_surfaces_known_component(
+        self, circuit_file: Path, state_no_sim: SessionState
+    ):
+        result = await handle_read_circuit(CircuitReadInput(path=str(circuit_file)), state_no_sim)
+        text = _text(result)
+        assert "R1" in text
+        assert "1k" in text
+
+    async def test_list_components_finds_reference(
+        self, circuit_file: Path, state_no_sim: SessionState
+    ):
+        result = await handle_list_components(
+            ListComponentsInput(path=str(circuit_file), reference="R1"), state_no_sim
+        )
+        assert _text(result) == "R1 = 1k"
+        assert result.structuredContent == {"reference": "R1", "value": "1k"}
+
+    async def test_set_component_value_persists_to_disk(
+        self, circuit_file: Path, state_no_sim: SessionState, config: ServerConfig
+    ):
+        result = await handle_set_component_value(
+            SetComponentValueInput(path=str(circuit_file), reference="R1", value="4.7k"),
+            state_no_sim,
+        )
+        assert "4.7k" in _text(result)
+
+        # The new value reached the file itself, not just an in-memory editor.
+        # (bytes, not text: Draft1.asc carries a non-UTF-8 µ byte)
+        assert b"4.7k" in _read_bytes(circuit_file)
+
+        # Re-read through the real read path with a FRESH SessionState so a
+        # warm editor cache can't fake persistence.
+        fresh_state = SessionState.create(config, available={})
+        reread = await handle_list_components(
+            ListComponentsInput(path=str(circuit_file), reference="R1"), fresh_state
+        )
+        assert _text(reread) == "R1 = 4.7k"
+        assert reread.structuredContent == {"reference": "R1", "value": "4.7k"}
