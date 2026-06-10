@@ -26,8 +26,6 @@ lands in a leaf without wiring the entry path fails here:
 """
 
 import shutil
-import typing
-from datetime import timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -36,7 +34,6 @@ from mcp import types
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import BatchJobError, ResultError
-from ltspice_mcp.lib import now
 from ltspice_mcp.state import (
     NON_TERMINAL_LIVE_STATUSES,
     TERMINAL_STATUSES,
@@ -60,16 +57,18 @@ from ltspice_mcp.tools.simulation import (
     handle_cancel_job,
     handle_check_job,
 )
+from tests.conftest import (
+    FIXTURES_DIR,
+    LTSPICE_SWEEP_RUN_LOGS,
+    LTSPICE_TRAN_RC_LOG,
+    LTSPICE_TRAN_RC_VFINAL,
+    make_batch_job,
+    make_sim_job,
+)
 
 pytestmark = pytest.mark.asyncio
 
-_FIXTURES = Path(__file__).parent / "fixtures"
-_FIXTURE_DRAFT = _FIXTURES / "Draft1.asc"
-# Real LTspice logs: 3-run sweep (one log per run, .MEAS vfinal + tcross) and
-# a single transient run (.MEAS vfinal = 0.999876166042).
-_SWEEP_RUN_LOGS = [_FIXTURES / f"ltspice_sweep_meas_run{i}.log" for i in range(3)]
-_TRAN_LOG = _FIXTURES / "ltspice_tran_rc.log"
-_TRAN_VFINAL = 0.999876166042
+_FIXTURE_DRAFT = FIXTURES_DIR / "Draft1.asc"
 
 # Terminal statuses a BatchJob can actually hold: TERMINAL_STATUSES minus
 # 'timeout' (single-sim only, not in BatchJob.status' Literal). Derived so a new
@@ -92,29 +91,8 @@ def _read_bytes(p: Path) -> bytes:
     return p.read_bytes()
 
 
-class FakeSim:
-    spice_exe: typing.ClassVar[list[str]] = ["/fake/path/sim.exe"]
-
-
-@pytest.fixture
-def state_with_sim(config: ServerConfig) -> SessionState:
-    """SessionState with a (fake) simulator so cancel_job passes its
-    require_simulator guard and reaches the runner-routing fork."""
-    return SessionState.create(config, available={"fake": FakeSim})
-
-
 def _make_batch(state: SessionState, *, status: str, job_id: str = "b1") -> BatchJob:
-    bj = BatchJob(
-        job_id=job_id,
-        job_type="sweep",
-        netlist=Path("/tmp/x.cir"),
-        total_runs=4,
-        completed_runs=2,
-        failed_runs=0,
-        status=status,  # type: ignore[arg-type]
-    )
-    if status == "completed":
-        bj.completed_at = bj.started_at + timedelta(seconds=3)
+    bj = make_batch_job(job_id, status=status, total_runs=4, completed_runs=2)
     state.add_batch_job(bj)
     return bj
 
@@ -126,15 +104,7 @@ def _make_sim(
     job_id: str = "j1",
     log_file: Path | None = None,
 ) -> SimulationJob:
-    job = SimulationJob(
-        job_id=job_id,
-        netlist=Path("/tmp/x.cir"),
-        simulator="Sim",
-        status=status,  # type: ignore[arg-type]
-        started_at=now(),
-        completed_at=now() + timedelta(seconds=1) if status == "completed" else None,
-        log_file=log_file,
-    )
+    job = make_sim_job(job_id, status=status, log_file=log_file)
     state.jobs[job_id] = job
     return job
 
@@ -204,7 +174,7 @@ class TestJobHandlerDualStore:
 
     async def test_measurement_stats_aggregates_batch_job(self, state_no_sim: SessionState):
         bj = _make_batch(state_no_sim, status="completed")
-        for i, log in enumerate(_SWEEP_RUN_LOGS):
+        for i, log in enumerate(LTSPICE_SWEEP_RUN_LOGS):
             bj.run_results[i] = {"log_file": str(log), "params": {"R1": float(i)}}
         result = await handle_measurement_stats(MeasurementStatsInput(job_id="b1"), state_no_sim)
         assert result.structuredContent is not None
@@ -213,13 +183,13 @@ class TestJobHandlerDualStore:
         assert entry["valid_count"] == 3
 
     async def test_measurement_stats_aggregates_single_sim_job(self, state_no_sim: SessionState):
-        _make_sim(state_no_sim, status="completed", log_file=_TRAN_LOG)
+        _make_sim(state_no_sim, status="completed", log_file=LTSPICE_TRAN_RC_LOG)
         result = await handle_measurement_stats(MeasurementStatsInput(job_id="j1"), state_no_sim)
         assert result.structuredContent is not None
         entry = result.structuredContent["stats"]["vfinal"]
         assert entry["total_count"] == 1
         assert entry["valid_count"] == 1
-        assert entry["mean"] == pytest.approx(_TRAN_VFINAL)
+        assert entry["mean"] == pytest.approx(LTSPICE_TRAN_RC_VFINAL)
 
     async def test_measurement_stats_unknown_id_errors_not_found(self, state_no_sim: SessionState):
         with pytest.raises(ResultError, match="Job not found: ghost"):
@@ -238,7 +208,7 @@ class TestCrossTypeRedirects:
     right tool — never "not found" for a job that exists in the store."""
 
     async def test_batch_results_single_sim_id_redirects(self, state_no_sim: SessionState):
-        _make_sim(state_no_sim, status="completed", log_file=_TRAN_LOG)
+        _make_sim(state_no_sim, status="completed", log_file=LTSPICE_TRAN_RC_LOG)
         with pytest.raises(BatchJobError) as exc:
             await handle_batch_results(GetBatchResultsInput(job_id="j1"), state_no_sim)
         assert str(exc.value) == (

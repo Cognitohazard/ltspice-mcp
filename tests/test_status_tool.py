@@ -9,17 +9,6 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.status import ServerStatusInput, handle_server_status
 
 
-class FakeSim:
-    """Stub simulator class for tests that need a default simulator."""
-
-    spice_exe: typing.ClassVar[list[str]] = ["/fake/path/sim.exe"]
-
-
-@pytest.fixture
-def state_with_sim(config: ServerConfig) -> SessionState:
-    return SessionState.create(config, available={"fake": FakeSim})
-
-
 @pytest.mark.asyncio
 class TestGetServerStatus:
     async def test_no_simulator_text(self, state_no_sim: SessionState):

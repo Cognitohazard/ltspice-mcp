@@ -413,19 +413,6 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
     return format_response(text, data, fmt)
 
 
-def _resolve_any_job(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
-    """Union-store job lookup for check_job / cancel_job.
-
-    These handlers predate ``resolve_job`` and raise ``SimulationError`` for
-    unknown ids; preserve that error type (and its server-side hint) while
-    sharing the union lookup.
-    """
-    try:
-        return services.resolve_job(job_id, state)
-    except ResultError:
-        raise SimulationError(f"Job not found: {job_id}") from None
-
-
 @registry.tool(
     name="check_job",
     description=(
@@ -480,7 +467,7 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
     # Single-sim and batch jobs share one store; route by type. Batch
     # (sweep/MC) jobs get a concise status here pointing at the richer
     # per-run view in batch_results.
-    resolved = _resolve_any_job(job_id, state)
+    resolved = services.resolve_job(job_id, state)
     if isinstance(resolved, BatchJob):
         return _check_batch_job(resolved, fmt)
     job = resolved
@@ -735,7 +722,7 @@ async def handle_cancel_job(args: CancelJobInput, state: SessionState) -> types.
     """
     job_id = args.job_id
 
-    job = _resolve_any_job(job_id, state)
+    job = services.resolve_job(job_id, state)
 
     # Check if job is running
     if job.status not in NON_TERMINAL_LIVE_STATUSES:

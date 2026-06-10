@@ -24,6 +24,7 @@ from ltspice_mcp.lib.result_observations import (
     value_observations,
 )
 from ltspice_mcp.tools._base import format_observations
+from tests.conftest import LTSPICE_TRAN_RC_VFINAL
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -291,7 +292,7 @@ class TestBuildSummaryRealLogPairs:
         summary = self._summarize("ltspice_tran_rc", requested)
 
         vfinal = summary["measurements"]["vfinal"]
-        assert vfinal["values"] == [pytest.approx(0.999876166042, rel=1e-9)]
+        assert vfinal["values"] == [pytest.approx(LTSPICE_TRAN_RC_VFINAL, rel=1e-9)]
         assert vfinal["at"] == pytest.approx(0.9e-3, rel=1e-6)
         assert "failed_measurements" not in summary
         assert "errors" not in summary

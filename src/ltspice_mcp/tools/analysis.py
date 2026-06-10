@@ -1508,12 +1508,13 @@ class _MeasSamples(TypedDict):
 
 
 def _aggregate_job_measurements(
-    job_id: str, state: SessionState
+    batch_job: BatchJob,
 ) -> tuple[dict[str, list[float | None]], int, dict[str, AggregatedField]]:
     """Walk every completed run's .log and concatenate ``.MEAS`` results.
 
     The MC engine emits one log per run; this reconciles by collecting
-    per-run scalar values keyed by .MEAS name.
+    per-run scalar values keyed by .MEAS name. The caller has already
+    resolved ``batch_job`` from the job store.
 
     For ``WHEN``-style .MEAS, the per-run scalar in ``values`` is the
     trigger level (constant across runs by definition) — the interesting
@@ -1524,11 +1525,9 @@ def _aggregate_job_measurements(
     Returns ``(flat_values, run_count, axis_map)`` where ``axis_map[name]``
     is ``"value"`` or ``"at"`` describing which field was aggregated.
     """
-    batch_job = services.resolve_batch_job(job_id, state)
-
     if not batch_job.run_results:
         raise ResultError(
-            f"Batch job {job_id!r} has no completed runs yet — wait for it "
+            f"Batch job {batch_job.job_id!r} has no completed runs yet — wait for it "
             "to finish (use check_job to monitor)."
         )
 
@@ -1642,7 +1641,11 @@ def _aggregate_log_measurements(
         "count, and an optional histogram (set histogram_bins=0 to skip).\n\n"
         "Accepts any job id: a sweep/MC batch aggregates across its runs; a "
         "single-simulation job aggregates its own log (one value per step "
-        "for a .step run). On a plain single run there's only one value per "
+        "for a .step run). Axis choice differs by shape: a batch detects "
+        "WHEN-style .MEAS (constant level, varying crossing) and swaps to "
+        "aggregating the 'at' field; a stepped single-run log always "
+        "aggregates the 'value' field. The aggregated_field output says "
+        "which was used. On a plain single run there's only one value per "
         "measurement, so stats collapse to n=1 — use simulation_summary "
         "instead to just read the scalars.\n\n"
         "Works with .MEAS from any analysis type (.tran/.ac/.dc/.op) — the "
@@ -1668,7 +1671,7 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
     if args.job_id is not None:
         job = services.resolve_job(args.job_id, state)
         if isinstance(job, BatchJob):
-            flat_values, run_count, axis_map = _aggregate_job_measurements(args.job_id, state)
+            flat_values, run_count, axis_map = _aggregate_job_measurements(job)
             if not flat_values:
                 raise ResultError(
                     f"No .MEAS results found across the runs of job {args.job_id!r}."

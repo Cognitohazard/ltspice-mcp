@@ -5,7 +5,6 @@ instead drive the handlers against real recorded LTspice binary raws from
 ``tests/fixtures/`` — see those classes for what the mocks cannot cover.
 """
 
-import shutil
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -53,6 +52,7 @@ from ltspice_mcp.tools.circuit import (
     StepGetInput,
     handle_step_get,
 )
+from tests.conftest import stage_recorded_fixture as _stage_recorded
 
 
 def _inject_raw_mock(state: SessionState, path: Path, raw: MagicMock) -> None:
@@ -1396,18 +1396,6 @@ class TestBodeMetricsAllSteps:
 # the analysis path must take its real part; (2) per-step extraction must
 # return DIFFERENT data for different steps, not the same array repeated.
 # ---------------------------------------------------------------------------
-
-FIXTURES = Path(__file__).parent / "fixtures"
-
-
-def _stage_recorded(work_dir: Path, name: str) -> Path:
-    """Copy a recorded fixture's .raw (and .log) into work_dir; return the raw."""
-    raw = work_dir / f"{name}.raw"
-    shutil.copy(FIXTURES / f"{name}.raw", raw)
-    log = FIXTURES / f"{name}.log"
-    if log.exists():
-        shutil.copy(log, work_dir / f"{name}.log")
-    return raw
 
 
 @pytest.mark.asyncio

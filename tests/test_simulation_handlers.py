@@ -9,7 +9,7 @@ import pytest
 from mcp import types
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.errors import ResultError, SimulationError
+from ltspice_mcp.errors import JobNotFoundError, ResultError, SimulationError
 from ltspice_mcp.lib import now
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
 from ltspice_mcp.tools.simulation import (
@@ -105,7 +105,7 @@ class TestCheckJob:
             await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
 
     async def test_unknown_id(self, state_no_sim: SessionState):
-        with pytest.raises(SimulationError):
+        with pytest.raises(JobNotFoundError):
             await handle_check_job(CheckJobInput(job_id="missing"), state_no_sim)
 
     async def test_list_empty_no_filter(self, state_no_sim: SessionState):
@@ -178,7 +178,7 @@ class TestFormatSuccessResponse:
 @pytest.mark.asyncio
 class TestCancelJob:
     async def test_unknown_job(self, state_no_sim: SessionState):
-        with pytest.raises(SimulationError):
+        with pytest.raises(JobNotFoundError):
             await handle_cancel_job(CancelJobInput(job_id="missing"), state_no_sim)
 
     async def test_already_completed(self, state_no_sim: SessionState):

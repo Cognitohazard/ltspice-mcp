@@ -19,7 +19,6 @@ LTspice binary-raw dialect flowing through ``handle_simulation_summary``
 (everything else in the suite drives it with mocked RawRead instances).
 """
 
-import shutil
 from pathlib import Path
 
 import pytest
@@ -31,22 +30,8 @@ from ltspice_mcp.tools.analysis import (
     handle_query_value,
     handle_simulation_summary,
 )
-
-FIXTURES = Path(__file__).parent / "fixtures"
-
-
-def _stage(work_dir: Path, name: str) -> Path:
-    """Copy a recorded fixture's .raw (and .log when recorded) into work_dir.
-
-    Returns the staged .raw path. The .log lands next to it so the handler's
-    automatic ``raw_file`` -> ``.log`` derivation is exercised for real.
-    """
-    raw = work_dir / f"{name}.raw"
-    shutil.copy(FIXTURES / f"{name}.raw", raw)
-    log = FIXTURES / f"{name}.log"
-    if log.exists():
-        shutil.copy(log, work_dir / f"{name}.log")
-    return raw
+from tests.conftest import LTSPICE_TRAN_RC_VFINAL
+from tests.conftest import stage_recorded_fixture as _stage
 
 
 async def _summary(state: SessionState, raw: Path, signal: str | None = None) -> dict:
@@ -109,7 +94,7 @@ class TestTransientSummary:
         # The .meas result is parsed out of the recorded LTspice log
         # (auto-derived from the raw path) — exact value as printed there.
         vfinal = summary["measurements"]["vfinal"]
-        assert vfinal["values"] == [pytest.approx(0.999876166042, rel=1e-9)]
+        assert vfinal["values"] == [pytest.approx(LTSPICE_TRAN_RC_VFINAL, rel=1e-9)]
         assert vfinal["at"] == pytest.approx(0.9e-3, rel=1e-6)
 
     async def test_final_value_settles_to_source_amplitude(
