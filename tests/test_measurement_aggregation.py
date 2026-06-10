@@ -15,28 +15,23 @@ constant trigger level 0.5, so the aggregator must switch to the folded ``at``
 field (the crossing time) instead.
 """
 
-from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib import now
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
 from ltspice_mcp.tools.analysis import MeasurementStatsInput, handle_measurement_stats
+from tests.conftest import (
+    FIXTURES_DIR,
+    LTSPICE_SWEEP_RUN_LOGS,
+    LTSPICE_TRAN_RC_LOG,
+    LTSPICE_TRAN_RC_VFINAL,
+    make_batch_job,
+    make_sim_job,
+)
 
-FIXTURES = Path(__file__).parent / "fixtures"
-
-# Single-run transient log with one real .MEAS result:
-#   vfinal: V(out) =0.999876166042 at 0.0009
-SINGLE_RUN_LOG = FIXTURES / "ltspice_tran_rc.log"
-SINGLE_RUN_VFINAL = 0.999876166042
-
-RUN_LOGS = [
-    FIXTURES / "ltspice_sweep_meas_run0.log",  # R1 = 1k
-    FIXTURES / "ltspice_sweep_meas_run1.log",  # R1 = 2.2k
-    FIXTURES / "ltspice_sweep_meas_run2.log",  # R1 = 4.7k
-]
+# R1 of sweep runs 0 / 1 / 2 (one LTSPICE_SWEEP_RUN_LOGS entry per run).
 RUN_PARAMS = [1000.0, 2200.0, 4700.0]
 
 # Values printed by LTspice in each per-run log (vfinal: FIND V(out) AT=0.9m).
@@ -56,20 +51,16 @@ def _make_sweep_batch(
     Each entry carries ``raw_file``/``log_file``/``params`` exactly as
     ``_record_run_completion`` stores them (string paths, 0-based int keys).
     """
-    logs = RUN_LOGS if log_files is None else log_files
-    bj = BatchJob(
-        job_id=job_id,
-        job_type="sweep",
+    logs = LTSPICE_SWEEP_RUN_LOGS if log_files is None else log_files
+    bj = make_batch_job(
+        job_id,
         netlist=Path("/tmp/sweep_meas_rc.cir"),
         total_runs=len(logs),
         completed_runs=len(logs),
-        failed_runs=0,
-        status="completed",
     )
-    bj.completed_at = bj.started_at + timedelta(seconds=5)
     for i, log in enumerate(logs):
         entry: dict = {
-            "raw_file": str(FIXTURES / f"unused_run{i}.raw"),
+            "raw_file": str(FIXTURES_DIR / f"unused_run{i}.raw"),
             "params": {"R1": RUN_PARAMS[i]},
         }
         if log is not None:
@@ -83,6 +74,11 @@ async def _stats(state: SessionState, job_id: str = "sweep1") -> dict:
     result = await handle_measurement_stats(MeasurementStatsInput(job_id=job_id), state)
     assert result.structuredContent is not None
     return result.structuredContent["stats"]
+
+
+def _text(result) -> str:
+    """Concatenated text of every content item in a CallToolResult."""
+    return "".join(getattr(c, "text", "") for c in (result.content or []))
 
 
 @pytest.mark.asyncio
@@ -129,15 +125,18 @@ class TestJobAggregation:
         result = await handle_measurement_stats(
             MeasurementStatsInput(job_id="sweep1"), state_no_sim
         )
-        text = "".join(getattr(c, "text", "") for c in (result.content or []))
-        assert "3 run(s)" in text
+        assert "3 run(s)" in _text(result)
 
     async def test_missing_run_log_is_skipped(self, state_no_sim: SessionState):
         # Run 1's log file does not exist on disk: the aggregator skips that
         # run silently and computes stats over the remaining two.
         _make_sweep_batch(
             state_no_sim,
-            log_files=[RUN_LOGS[0], Path("/nonexistent/run1.log"), RUN_LOGS[2]],
+            log_files=[
+                LTSPICE_SWEEP_RUN_LOGS[0],
+                Path("/nonexistent/run1.log"),
+                LTSPICE_SWEEP_RUN_LOGS[2],
+            ],
         )
         result = await handle_measurement_stats(
             MeasurementStatsInput(job_id="sweep1"), state_no_sim
@@ -158,11 +157,13 @@ class TestJobAggregation:
         assert tcross["min"] == pytest.approx(TCROSS_AT[0])
         assert tcross["max"] == pytest.approx(TCROSS_AT[2])
 
-        text = "".join(getattr(c, "text", "") for c in (result.content or []))
-        assert "2 run(s)" in text
+        assert "2 run(s)" in _text(result)
 
     async def test_entry_without_log_file_key_is_skipped(self, state_no_sim: SessionState):
-        _make_sweep_batch(state_no_sim, log_files=[RUN_LOGS[0], None, RUN_LOGS[2]])
+        _make_sweep_batch(
+            state_no_sim,
+            log_files=[LTSPICE_SWEEP_RUN_LOGS[0], None, LTSPICE_SWEEP_RUN_LOGS[2]],
+        )
         stats = await _stats(state_no_sim)
         assert stats["vfinal"]["valid_count"] == 2
         assert stats["vfinal"]["mean"] == pytest.approx((VFINAL[0] + VFINAL[2]) / 2)
@@ -187,17 +188,9 @@ def _make_single_sim(
     *,
     job_id: str = "single1",
     status: str = "completed",
-    log_file: Path | None = SINGLE_RUN_LOG,
+    log_file: Path | None = LTSPICE_TRAN_RC_LOG,
 ) -> SimulationJob:
-    job = SimulationJob(
-        job_id=job_id,
-        netlist=Path("/tmp/test.cir"),
-        simulator="FakeSim",
-        status=status,  # type: ignore[arg-type]
-        started_at=now(),
-        completed_at=now() + timedelta(seconds=1) if status == "completed" else None,
-        log_file=log_file,
-    )
+    job = make_sim_job(job_id, status=status, log_file=log_file)
     state.jobs[job_id] = job
     return job
 
@@ -219,12 +212,11 @@ class TestSingleSimJobAggregation:
         assert entry["total_count"] == 1
         assert entry["valid_count"] == 1
         assert entry["failure_count"] == 0
-        assert entry["min"] == pytest.approx(SINGLE_RUN_VFINAL)
-        assert entry["max"] == pytest.approx(SINGLE_RUN_VFINAL)
-        assert entry["mean"] == pytest.approx(SINGLE_RUN_VFINAL)
+        assert entry["min"] == pytest.approx(LTSPICE_TRAN_RC_VFINAL)
+        assert entry["max"] == pytest.approx(LTSPICE_TRAN_RC_VFINAL)
+        assert entry["mean"] == pytest.approx(LTSPICE_TRAN_RC_VFINAL)
         # The single log reads as one step, matching the log_file branch.
-        text = "".join(getattr(c, "text", "") for c in (result.content or []))
-        assert "1 step(s)" in text
+        assert "1 step(s)" in _text(result)
 
     async def test_running_single_sim_is_gated_on_completion(self, state_no_sim: SessionState):
         _make_single_sim(state_no_sim, status="running")
@@ -247,6 +239,6 @@ class TestJobResolutionErrors:
         _make_sweep_batch(state_no_sim)
         with pytest.raises(ResultError, match="not both"):
             await handle_measurement_stats(
-                MeasurementStatsInput(job_id="sweep1", log_file=str(RUN_LOGS[0])),
+                MeasurementStatsInput(job_id="sweep1", log_file=str(LTSPICE_SWEEP_RUN_LOGS[0])),
                 state_no_sim,
             )

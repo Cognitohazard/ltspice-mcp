@@ -5,6 +5,7 @@ import pytest
 from ltspice_mcp.errors import (
     BatchJobError,
     ConvergenceError,
+    JobNotFoundError,
     LibraryError,
     LTSpiceMCPError,
     MissingModelError,
@@ -47,6 +48,7 @@ class TestErrorHierarchy:
             SingularMatrixError,
             MissingModelError,
             ResultError,
+            JobNotFoundError,
             LibraryError,
             BatchJobError,
         ):
@@ -56,8 +58,19 @@ class TestErrorHierarchy:
         for cls in (ConvergenceError, SingularMatrixError, MissingModelError):
             assert issubclass(cls, SimulationError), f"{cls.__name__} not SimulationError"
 
+    def test_job_not_found_is_result_error(self):
+        """except ResultError must keep catching unknown-job-id errors."""
+        assert issubclass(JobNotFoundError, ResultError)
+
     def test_non_simulation_subtypes(self):
-        for cls in (PathSecurityError, NetlistError, ResultError, LibraryError, BatchJobError):
+        for cls in (
+            PathSecurityError,
+            NetlistError,
+            ResultError,
+            JobNotFoundError,
+            LibraryError,
+            BatchJobError,
+        ):
             assert not issubclass(cls, SimulationError), (
                 f"{cls.__name__} should not be SimulationError"
             )

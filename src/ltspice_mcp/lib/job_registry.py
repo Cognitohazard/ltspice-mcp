@@ -58,14 +58,21 @@ def _has_valid_raw(path: Path | None) -> bool:
 
 
 class _TypedJobView[J: SimulationJob | BatchJob](MutableMapping[str, J]):
-    """Type-filtered writable view over the union job store.
+    """Permanent typed access layer over the union job store.
 
-    Lookups (``[]``, ``get``, ``in``), iteration, and ``len`` surface only
-    entries of the view's job type — a batch id accessed through the sim
-    view behaves as absent, and vice versa, preserving the semantics of the
-    former per-type dicts. Writes (``view[key] = job``) go straight through
-    to the union dict but reject values of the wrong job type, and ``del``
-    removes only entries of the view's type.
+    This is the type-scoped surface of the registry: per-type eviction caps,
+    type-scoped iteration for resources and status reporting, and
+    write-through with a runtime type guard. Lookups (``[]``, ``get``,
+    ``in``), iteration, and ``len`` surface only entries of the view's job
+    type — a batch id accessed through the sim view behaves as absent, and
+    vice versa. Writes (``view[key] = job``) go straight through to the
+    union dict but reject values of the wrong job type, and ``del`` removes
+    only entries of the view's type.
+
+    Rule for new code: use the typed view (``registry.sim_jobs`` /
+    ``registry.batch_jobs``) when the code is scoped to one job type; use
+    ``registry.jobs`` / ``state.all_jobs`` plus ``isinstance`` when handling
+    either type.
     """
 
     def __init__(self, store: dict[str, SimulationJob | BatchJob], job_type: type[J]) -> None:
@@ -82,7 +89,11 @@ class _TypedJobView[J: SimulationJob | BatchJob](MutableMapping[str, J]):
         # Guard at runtime: a wrong-type job written through this view would
         # land in the union store but be invisible through the view that
         # stored it — a silent misroute that static typing alone can't stop.
-        if not isinstance(value, self._job_type):
+        # Widen to ``object`` so the type checker keeps the failure branch
+        # live: with the parameter typed ``J`` it narrows the negative
+        # isinstance branch to Never, but untyped callers reach it at runtime.
+        candidate: object = value
+        if not isinstance(candidate, self._job_type):
             raise TypeError(
                 f"{self._job_type.__name__} view cannot store {type(value).__name__} (key {key!r})"
             )
