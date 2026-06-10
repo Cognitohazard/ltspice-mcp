@@ -67,7 +67,7 @@ class TestExtractLogDiagnostics:
         assert result == {"warnings": [], "errors": [], "meas_errors": []}
 
     def test_ngspice_convergence_failure_classified_as_error(self, tmp_path: Path):
-        # v9-NG F1: ngspice prints convergence FAILURES under a "Warning:" prefix.
+        # ngspice prints convergence FAILURES under a "Warning:" prefix.
         # They must surface as ERRORS (the run produced no usable data), not be
         # downgraded to warnings. A transient "singular matrix" note (recoverable
         # via stepping) must stay a warning.
@@ -161,7 +161,7 @@ class TestExtractLogDiagnostics:
         assert any("Version not specified" in w for w in result["warnings"])
 
     def test_ngspice_fourier_ignored_surfaced(self, tmp_path: Path):
-        """NGv7-P1-1: the .fourier-skipped note must become a visible warning."""
+        """The ngspice .fourier-skipped note must become a visible warning."""
         log = tmp_path / "four.log"
         log.write_text(".fourier line ignored since rawfile was produced.\n")
         result = extract_log_diagnostics(log)
