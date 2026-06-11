@@ -40,8 +40,6 @@ from ltspice_mcp.lib.observability import emit_job_event
 from ltspice_mcp.lib.runner_base import (
     BatchRunnerBase,
     batch_run_filename,
-    gate_runner_on_cancel,
-    wrap_runner_for_runno_callbacks,
 )
 from ltspice_mcp.lib.spice_lex import SpiceCard, emit, lex
 from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end as _ops_inject_card
@@ -153,16 +151,7 @@ class MonteCarloRunner(BatchRunnerBase):
                 )
 
             mc_config = batch_job.mc_config
-            # The cancel gate stops the per-run loop's next ``runner.run`` from
-            # launching once cancel() has fired — the loop's own is_set() check
-            # races the kill (a submission blocked on a simulator slot resumes
-            # when the kill frees one).
-            runner = gate_runner_on_cancel(
-                wrap_runner_for_runno_callbacks(self._build_sim_runner()),
-                cancel_event,
-                batch_job.job_id,
-            )
-            self._register_runner(batch_job.job_id, runner)
+            runner = self._gated_runner_for(batch_job.job_id, cancel_event)
 
             # Read baseline text directly via the encoding-aware pipeline.
             # The spicelib editor is kept around only as the runner-submission

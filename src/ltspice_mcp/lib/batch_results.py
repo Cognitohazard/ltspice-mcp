@@ -201,14 +201,19 @@ def filter_runs_by_params(
     for run_index in sorted(run_results.keys()):
         run = run_results[run_index]
         params = run.get("params", {})
+        # Case-insensitive name match: run params carry the netlist's casing
+        # ("R1"), user filters often arrive lowercase ("r1") — an exact-key
+        # lookup silently matched zero runs (same failure shape as the
+        # case-sensitive W/L lookup fixed in the Monte Carlo engine).
+        params_ci = {str(k).lower(): v for k, v in params.items()}
         all_match = True
 
         for param_name, filter_expr in filters.items():
-            if param_name not in params:
+            if param_name.lower() not in params_ci:
                 all_match = False
                 break
 
-            run_value = params[param_name]
+            run_value = params_ci[param_name.lower()]
 
             if ".." in filter_expr:
                 # Range filter

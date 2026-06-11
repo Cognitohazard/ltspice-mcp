@@ -442,6 +442,15 @@ class InstanceLine:
             return
         self._update_slot_in_place(new)
 
+    def get_param(self, key: str) -> str | None:
+        """Case-insensitive parameter read, matching the CI semantics of
+        ``set_param``/``remove_param``. ``params`` preserves source casing
+        (ngspice decks conventionally write lowercase ``w=``/``l=``), so a
+        plain dict lookup silently misses — readers must come through here.
+        """
+        key_lower = key.lower()
+        return next((v for k, v in self.params.items() if k.lower() == key_lower), None)
+
     def set_param(self, key: str, value: float | str) -> None:
         """Set or add a parameter, flipping the card dirty.
 

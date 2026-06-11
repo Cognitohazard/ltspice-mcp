@@ -1068,6 +1068,29 @@ class TestStepGet:
         assert sc["actual_value"] == 2000.0
         assert sc.get("warnings")
 
+    async def test_raw_axis_rejects_at(self, state_no_sim: SessionState, work_dir: Path):
+        # 'at' selects the inner-axis point of a .step lookup; on the
+        # native-axis branch the queried axis IS the inner axis, so the
+        # param used to be silently ignored — it must refuse loudly.
+        from ltspice_mcp.errors import NetlistError
+
+        raw = MagicMock()
+        raw.get_raw_property.return_value = "DC transfer characteristic"
+        raw.get_trace_names.return_value = ["Rval", "V(out)"]
+        raw.get_axis.return_value = np.array([500.0, 1000.0, 2000.0])
+        raw.get_steps.return_value = [0]
+        raw.get_wave = lambda name, step=0: np.array([1.0, 2.0, 3.0])
+        path = work_dir / "dc_at.raw"
+        _inject_raw(state_no_sim, path, raw)
+
+        with pytest.raises(NetlistError, match="native axis"):
+            await handle_step_get(
+                StepGetInput(
+                    raw_file="dc_at.raw", axis="Rval", value="1k", signal="V(out)", at="1m"
+                ),
+                state_no_sim,
+            )
+
     async def test_raw_axis_exact_match_no_warning(
         self, state_no_sim: SessionState, work_dir: Path
     ):

@@ -441,6 +441,23 @@ def analyze_edge(
     }
 
 
+def _largest_positive_peak(signal: np.ndarray) -> int | None:
+    """Index of the largest positive local peak of ``signal``, or None.
+
+    The LARGEST positive peak, not the first one find_peaks returns: with
+    pre-edge ripple inside the window, the first local peak is the ripple
+    (usually non-positive in over/undershoot coordinates), which silently
+    reported 0% on a genuinely overshooting edge. find_peaks is still the
+    gate — it excludes window endpoints, so a still-rising signal cut
+    mid-transition doesn't count as overshoot.
+    """
+    peaks, _ = find_peaks(signal)
+    positive = [int(p) for p in peaks if signal[p] > 0]
+    if not positive:
+        return None
+    return max(positive, key=lambda p: float(signal[p]))
+
+
 def analyze_pulse_response(
     t: np.ndarray,
     y: np.ndarray,
@@ -552,9 +569,9 @@ def analyze_pulse_response(
         overshoot_signal = fv - y
         undershoot_signal = y - iv
 
-    over_peaks, _ = find_peaks(overshoot_signal)
-    if len(over_peaks) > 0 and overshoot_signal[over_peaks[0]] > 0:
-        peak_idx = int(over_peaks[0])
+    over_idx = _largest_positive_peak(overshoot_signal)
+    if over_idx is not None:
+        peak_idx = over_idx
         overshoot_pct = float(overshoot_signal[peak_idx] / abs_delta * 100.0)
     else:
         peak_idx = int(np.argmax(y) if direction == "rising" else np.argmin(y))
@@ -563,11 +580,10 @@ def analyze_pulse_response(
     peak_value = float(y[peak_idx])
     peak_time = float(t[peak_idx])
 
-    under_peaks, _ = find_peaks(undershoot_signal)
-    if len(under_peaks) > 0 and undershoot_signal[under_peaks[0]] > 0:
-        undershoot_pct = float(undershoot_signal[under_peaks[0]] / abs_delta * 100.0)
-    else:
-        undershoot_pct = 0.0
+    under_idx = _largest_positive_peak(undershoot_signal)
+    undershoot_pct = (
+        float(undershoot_signal[under_idx] / abs_delta * 100.0) if under_idx is not None else 0.0
+    )
 
     tol = (settling_tolerance_pct / 100.0) * abs_delta
     outside = np.abs(y - fv) > tol
