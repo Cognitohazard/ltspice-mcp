@@ -1078,7 +1078,7 @@ def _format_batch_status_text(data: dict) -> str:
             f"Batch job {data['job_id']} failed\n"
             f"Type: {data['job_type']}\n"
             f"Netlist: {data['netlist']}\n"
-            f"Error: {data['error'] or 'Unknown error'}"
+            f"Error: {data.get('error') or 'Unknown error'}"
         )
     if status == "cancelled":
         return (

@@ -17,6 +17,7 @@ from ltspice_mcp.lib.job_types import BatchJob
 from ltspice_mcp.lib.runner_base import (
     BatchRunnerBase,
     batch_run_filename,
+    gate_runner_on_cancel,
     wrap_runner_for_runno_callbacks,
 )
 from ltspice_mcp.state import SessionState
@@ -86,7 +87,14 @@ class SweepRunner(BatchRunnerBase):
                 raise BatchJobError(f"Sweep job {batch_job.job_id} has no sweep configuration")
 
             editor = SpiceEditor(str(batch_job.netlist))
-            runner = wrap_runner_for_runno_callbacks(self._build_sim_runner())
+            # The cancel gate stops spicelib's run_all from launching the
+            # remaining queued runs after cancel() kills the in-flight ones
+            # (the kill frees slots, which would otherwise resume submission).
+            runner = gate_runner_on_cancel(
+                wrap_runner_for_runno_callbacks(self._build_sim_runner()),
+                cancel_event,
+                batch_job.job_id,
+            )
             self._register_runner(batch_job.job_id, runner)
             stepper = _create_stepper(editor, runner)
 

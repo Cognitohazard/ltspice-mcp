@@ -58,6 +58,39 @@ def batch_run_filename(job_id: str, runno: int, netlist: Path) -> str:
     return f"{job_id}_{runno}{netlist.suffix or '.net'}"
 
 
+class BatchCancelledError(Exception):
+    """Raised inside a batch worker thread when its job has been cancelled.
+
+    Aborts the submission loop (spicelib's ``run_all`` for sweeps, the
+    per-run loop for Monte Carlo) so a cancelled batch stops launching its
+    remaining queued runs. ``_mark_batch_failed`` recognizes it and leaves
+    the job's status to the cancel path rather than marking it failed.
+    """
+
+
+def gate_runner_on_cancel(
+    runner: SimRunner, cancel_event: threading.Event, job_id: str
+) -> SimRunner:
+    """Make ``runner.run`` refuse new submissions once ``cancel_event`` is set.
+
+    Killing a batch's processes frees simulator slots, which lets the
+    submission loop blocked inside ``runner.run`` resume and launch the
+    *next* queued run of a job the user just cancelled. This gate aborts
+    those later submissions at the entry point. (The one submission already
+    inside ``runner.run`` when the event is set can still spawn — the
+    re-scan loop in ``BatchRunnerBase.cancel`` catches that process.)
+    """
+    original_run = runner.run
+
+    def cancel_gated_run(*args: Any, **kwargs: Any) -> Any:
+        if cancel_event.is_set():
+            raise BatchCancelledError(f"batch job {job_id} cancelled; not launching further runs")
+        return original_run(*args, **kwargs)
+
+    runner.run = cancel_gated_run  # type: ignore[method-assign]
+    return runner
+
+
 def wrap_runner_for_runno_callbacks(runner: SimRunner) -> SimRunner:
     """Make ``runner.run`` inject ``task.runno`` into the user's callback.
 
@@ -110,6 +143,13 @@ logger = logging.getLogger(__name__)
 _SIMRUNNER_TIMEOUT = 600
 """Generous spicelib-level fallback timeout; real timeout is enforced at
 the tool layer via ``asyncio.wait_for``."""
+
+_CANCEL_KILL_MAX_PASSES = 5
+"""Upper bound on cancel's kill/re-scan passes (see ``BatchRunnerBase.cancel``)."""
+
+_CANCEL_KILL_RESCAN_DELAY = 0.5
+"""Seconds between cancel kill passes — long enough for a resumed submission's
+process to become visible to the next scan."""
 
 
 class RunnerBase:
@@ -263,11 +303,27 @@ class BatchRunnerBase(RunnerBase):
         # per-run index (see batch_run_filename), so the substring token match in
         # kill_windows_ltspice_by_token hits every run of this batch, the same way
         # the single-run cancel path terminates its process.
+        #
+        # One pass is not enough: killing the in-flight runs frees simulator
+        # slots, which can resume a submission already blocked inside
+        # ``runner.run`` — its process appears a beat *after* the first pass
+        # (observed live: a Monte-Carlo child created the same second as the
+        # cancel survived it and kept simulating). Re-scan until a pass at
+        # attempt >= 2 (~1 s in, interop latency included) finds nothing.
+        # When the first pass kills nothing, no slot was freed by us and a
+        # single clean re-scan suffices; off WSL every pass is a cheap no-op
+        # returning 0, so the loop exits on the first iteration with no sleep.
         try:
-            killed = await asyncio.to_thread(kill_windows_ltspice_by_token, batch_job.job_id)
-            if killed:
+            killed_total = 0
+            for attempt in range(_CANCEL_KILL_MAX_PASSES):
+                killed = await asyncio.to_thread(kill_windows_ltspice_by_token, batch_job.job_id)
+                killed_total += killed
+                if killed == 0 and (killed_total == 0 or attempt >= 2):
+                    break
+                await asyncio.sleep(_CANCEL_KILL_RESCAN_DELAY)
+            if killed_total:
                 logger.info(
-                    "Killed %d Windows %s process(es) for %s", killed, kind, batch_job.job_id
+                    "Killed %d Windows %s process(es) for %s", killed_total, kind, batch_job.job_id
                 )
         except Exception as e:
             logger.warning("WSL process kill for %s job %s failed: %s", kind, batch_job.job_id, e)
@@ -300,6 +356,13 @@ class BatchRunnerBase(RunnerBase):
         self, batch_job: BatchJob, state: SessionState, exc: Exception, kind: str
     ) -> None:
         """Shared handling of a batch-level exception during execution."""
+        if isinstance(exc, BatchCancelledError):
+            # The run-gate aborted the submission loop of a cancelled job.
+            # cancel() owns the terminal transition (it may not have made it
+            # yet — the gate can fire while cancel() is still mid-kill), so
+            # don't mark the job failed over it.
+            logger.debug("%s job %s submission loop aborted by cancel", kind, batch_job.job_id)
+            return
         if batch_job.status != "running":
             logger.info(
                 "%s job %s already terminal (%s); ignoring exception %s",
