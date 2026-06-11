@@ -1,5 +1,6 @@
 """Tests for simulation tool handlers using direct job state injection."""
 
+import asyncio
 import typing
 from datetime import timedelta
 from pathlib import Path
@@ -282,6 +283,72 @@ class TestRunSimulationStubbed:
         text = result.content[0].text
         assert "Job ID:" in text
         assert len(state_with_sim.jobs) == 1
+        # Unblock the deadline watchdog the async path arms, so no task is
+        # left pending at loop teardown.
+        next(iter(state_with_sim.jobs.values())).done_event.set()
+        await asyncio.sleep(0)
+
+    async def test_async_timeout_watchdog_kills_overdue_job(
+        self, state_with_sim: SessionState, sample_netlist: Path, monkeypatch
+    ):
+        # An async job (timeout above the sync threshold) must have its
+        # deadline enforced by the background watchdog. Without it the
+        # timeout was accepted and silently never enforced — observed live
+        # as a 35s-timeout job still running at 119s elapsed.
+        monkeypatch.setattr("ltspice_mcp.tools.simulation.SYNC_TIMEOUT_THRESHOLD", 0.0)
+
+        async def hang_until_killed(netlist_path, job, state):
+            job.status = "running"
+            await job.done_event.wait()
+
+        fake_runner = MagicMock()
+        fake_runner.start_simulation = AsyncMock(side_effect=hang_until_killed)
+        fake_runner.kill = AsyncMock()
+        with patch(
+            "ltspice_mcp.tools.simulation._get_or_create_runner",
+            return_value=fake_runner,
+        ):
+            result = await handle_run_simulation(
+                RunSimulationInput(netlist=sample_netlist.name, timeout=0.1),
+                state_with_sim,
+            )
+            # Returned immediately (async path), reporting the live status.
+            assert "Job ID:" in result.content[0].text
+            job = next(iter(state_with_sim.jobs.values()))
+            assert result.structuredContent is not None
+            assert result.structuredContent["status"] == "running"
+            assert job.status == "running"
+            await asyncio.sleep(0.5)
+        assert job.status == "timeout"
+        fake_runner.kill.assert_awaited_once_with(job.job_id)
+
+    async def test_async_watchdog_leaves_completed_job_alone(
+        self, state_with_sim: SessionState, sample_netlist: Path, monkeypatch
+    ):
+        # A job that finishes inside its deadline must not be touched when
+        # the watchdog's timer would have fired.
+        monkeypatch.setattr("ltspice_mcp.tools.simulation.SYNC_TIMEOUT_THRESHOLD", 0.0)
+
+        async def complete_fast(netlist_path, job, state):
+            job.status = "completed"
+            job.completed_at = now()
+            job.done_event.set()
+
+        fake_runner = MagicMock()
+        fake_runner.start_simulation = AsyncMock(side_effect=complete_fast)
+        fake_runner.kill = AsyncMock()
+        with patch(
+            "ltspice_mcp.tools.simulation._get_or_create_runner",
+            return_value=fake_runner,
+        ):
+            await handle_run_simulation(
+                RunSimulationInput(netlist=sample_netlist.name, timeout=0.1),
+                state_with_sim,
+            )
+            job = next(iter(state_with_sim.jobs.values()))
+            await asyncio.sleep(0.3)
+        assert job.status == "completed"
+        fake_runner.kill.assert_not_awaited()
 
     async def test_sync_timeout(self, state_with_sim: SessionState, sample_netlist: Path):
         fake_runner = MagicMock()

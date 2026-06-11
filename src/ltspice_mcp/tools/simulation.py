@@ -1,6 +1,7 @@
 """Simulation execution tools. (Phase 3)"""
 
 import asyncio
+import logging
 import time
 from typing import Literal
 
@@ -42,6 +43,8 @@ from ltspice_mcp.tools._base import (
 # HARD_MAX_TIMEOUT).
 SYNC_TIMEOUT_THRESHOLD = 30.0
 HARD_MAX_TIMEOUT = 600.0  # 10 minutes - max for wait=true mode
+
+logger = logging.getLogger(__name__)
 
 
 # Output-schema fragment shared by ``run_simulation`` and ``check_job`` —
@@ -204,10 +207,18 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     elif timeout <= SYNC_TIMEOUT_THRESHOLD:
         return await _wait_for_completion(job, timeout, runner, state, fmt, preflight_warnings)
     else:
-        # Async path - return job ID immediately
+        # Async path — return the job ID immediately, but arm a deadline
+        # watchdog first: the sync branches enforce their deadline via
+        # wait_for below, and without a watchdog an async job's timeout
+        # (including the config default) was accepted and never enforced.
+        _arm_timeout_watchdog(job, timeout, runner, state)
+        # Let the submission task advance to its first suspension point so
+        # the reported status reflects reality: "running" when a slot was
+        # free, "queued" when the job is waiting on the concurrency cap.
+        await asyncio.sleep(0)
         data = {
             "job_id": job_id,
-            "status": "running",
+            "status": job.status,
             "netlist": str(netlist_path),
             "simulator": default_simulator.__name__,
         }
@@ -222,6 +233,45 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
             data,
             fmt,
         )
+
+
+_timeout_watchdogs: set[asyncio.Task[None]] = set()
+"""Strong refs to per-job deadline watchdogs — ``create_task`` results are
+garbage-collectable while pending; each task discards itself when done."""
+
+
+def _arm_timeout_watchdog(
+    job: SimulationJob, timeout: float, runner: SimulationRunner, state: SessionState
+) -> None:
+    """Enforce ``timeout`` on an async job that no request is awaiting."""
+    task = asyncio.create_task(_enforce_async_deadline(job, timeout, runner, state))
+    _timeout_watchdogs.add(task)
+    task.add_done_callback(_timeout_watchdogs.discard)
+
+
+async def _enforce_async_deadline(
+    job: SimulationJob,
+    timeout: float,  # noqa: ASYNC109
+    runner: SimulationRunner,
+    state: SessionState,
+) -> None:
+    try:
+        await asyncio.wait_for(job.done_event.wait(), timeout=timeout)
+    except TimeoutError:
+        # Same ordering as the sync timeout path: mark the job terminal
+        # FIRST so the killed sim's completion callback discards the partial
+        # raw instead of recording a false success, then kill the process.
+        # NON_TERMINAL_LIVE_STATUSES also covers a job still queued on the
+        # concurrency gate — marking it terminal makes the pending
+        # start_simulation task release its slot without launching.
+        if job.status in NON_TERMINAL_LIVE_STATUSES:
+            transition(job, "timeout", state=state)
+            await runner.kill(job.job_id)
+            logger.warning(
+                "Async simulation %s exceeded its %.0fs timeout and was killed",
+                job.job_id,
+                timeout,
+            )
 
 
 async def _wait_for_completion(
@@ -305,7 +355,9 @@ async def _wait_for_completion(
     elif job.status == "failed":
         error_msg = job.error or "Unknown error"
         await mcp_log("error", f"Simulation failed: {job.netlist.name} — {job.error or 'unknown'}")
-        data = {"job_id": job.job_id, "status": "failed", "duration": duration, "error": job.error}
+        # error_msg, not job.error: the schema types error as a string, so a
+        # None here would break schema-validating clients.
+        data = {"job_id": job.job_id, "status": "failed", "duration": duration, "error": error_msg}
         if job.log_file and job.log_file.exists():
             log_excerpt = extract_error_context(job.log_file, max_lines=20)
             error_msg = f"{error_msg}\n\nLog excerpt:\n{log_excerpt}"
@@ -438,6 +490,11 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
             "elapsed": {"type": "number"},
             **_SIM_RESULT_FIELDS_SCHEMA,
             "error": {"type": "string"},
+            # Batch (sweep / Monte Carlo) status fields.
+            "job_type": {"type": "string"},
+            "total_runs": {"type": "integer"},
+            "completed_runs": {"type": "integer"},
+            "failed_runs": {"type": "integer"},
             "jobs": {
                 "type": "array",
                 "items": {
@@ -531,7 +588,7 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
             or 0
         )
         error_msg = job.error or "Unknown error"
-        data = {"job_id": job_id, "status": "failed", "duration": duration, "error": job.error}
+        data = {"job_id": job_id, "status": "failed", "duration": duration, "error": error_msg}
         if job.log_file and job.log_file.exists():
             log_excerpt = extract_error_context(job.log_file, max_lines=20)
             error_msg = f"{error_msg}\n\nLog excerpt:\n{log_excerpt}"
@@ -614,8 +671,12 @@ def _check_batch_job(batch_job: BatchJob, fmt: str | None = None):
         "total_runs": batch_job.total_runs,
         "completed_runs": batch_job.completed_runs,
         "failed_runs": batch_job.failed_runs,
-        "error": batch_job.error,
     }
+    # Omit-when-empty, like every other optional field: emitting "error":
+    # null here violated the declared output schema (error is typed string),
+    # which made schema-validating MCP clients reject every batch-job poll.
+    if batch_job.error is not None:
+        data["error"] = batch_job.error
     text = (
         f"Batch job {batch_job.job_id} ({batch_job.job_type}): {batch_job.status}\n"
         f"Netlist: {batch_job.netlist}\n"

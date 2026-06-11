@@ -584,16 +584,21 @@ class TestSweepRunnerHandlers:
         # Batch process-kill: sub-runs are named "{job_id}_<index>", so cancel()
         # must taskkill the Windows processes by job_id token on WSL (where
         # kill_all_spice is a no-op), in addition to the native kill_all_spice.
+        # After a pass that killed something, cancel re-scans until a clean
+        # pass confirms nothing matched (see TestBatchCancelSpawnRace).
         bj = _make_batch(state_no_sim, work_dir)
         fake_runner = MagicMock()
         sweep_runner._register_runner(bj.job_id, fake_runner)
+        monkeypatch.setattr("ltspice_mcp.lib.runner_base._CANCEL_KILL_RESCAN_DELAY", 0.001)
         tokens: list[str] = []
+        kill_returns = iter([1, 0, 0])
         monkeypatch.setattr(
             "ltspice_mcp.lib.runner_base.kill_windows_ltspice_by_token",
-            lambda tok: tokens.append(tok) or 1,
+            lambda tok: tokens.append(tok) or next(kill_returns),
         )
         await sweep_runner.cancel(bj, state_no_sim)
-        assert tokens == [bj.job_id]  # Windows kill targeted this batch's token
+        # Windows kill targeted this batch's token, then re-scanned to clean.
+        assert tokens == [bj.job_id] * 3
         fake_runner.kill_all_spice.assert_called_once()  # native/Wine path still runs
         assert bj.status == "cancelled"
 
@@ -1587,3 +1592,165 @@ class TestAN1HierarchicalMcDoesNotJoinSpiceCircuits:
         assert len(x_cards) == 1
         x_view = InstanceLine.from_card(x_cards[0])
         assert x_view.model == "stage"
+
+
+class TestBatchCancelSpawnRace:
+    """Cancelling a batch races spicelib's submission loop: killing the
+    in-flight runs frees simulator slots, which resumes a submission blocked
+    inside ``runner.run`` — observed live as a Monte-Carlo child created the
+    same second as the cancel that survived it and kept simulating. Two
+    defenses, both tested here: cancel() re-scans until a clean kill pass,
+    and the gated runner refuses submissions once the cancel event is set.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cancel_rescans_until_late_spawn_killed(
+        self,
+        sweep_runner: SweepRunner,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch,
+    ):
+        bj = _make_batch(state_no_sim, work_dir)
+        monkeypatch.setattr("ltspice_mcp.lib.runner_base._CANCEL_KILL_RESCAN_DELAY", 0.001)
+        calls: list[str] = []
+        # A late spawn becomes visible only on the third scan; the loop must
+        # keep scanning past the first clean pass to catch it.
+        kill_returns = iter([2, 0, 1, 0])
+        monkeypatch.setattr(
+            "ltspice_mcp.lib.runner_base.kill_windows_ltspice_by_token",
+            lambda tok: calls.append(tok) or next(kill_returns),
+        )
+        await sweep_runner.cancel(bj, state_no_sim)
+        assert calls == [bj.job_id] * 4
+        assert bj.status == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_cancel_single_pass_when_nothing_matched(
+        self,
+        mc_runner: MonteCarloRunner,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch,
+    ):
+        # No process matched (non-WSL no-op, or the batch already drained):
+        # one pass, no re-scan delay.
+        bj = _make_batch(state_no_sim, work_dir, job_type="montecarlo")
+        calls: list[str] = []
+        monkeypatch.setattr(
+            "ltspice_mcp.lib.runner_base.kill_windows_ltspice_by_token",
+            lambda tok: calls.append(tok) or 0,
+        )
+        await mc_runner.cancel(bj, state_no_sim)
+        assert calls == [bj.job_id]
+        assert bj.status == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_cancel_kill_passes_are_bounded(
+        self,
+        sweep_runner: SweepRunner,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch,
+    ):
+        # A process that taskkill never manages to remove must not loop
+        # cancel() forever.
+        from ltspice_mcp.lib import runner_base
+
+        bj = _make_batch(state_no_sim, work_dir)
+        monkeypatch.setattr("ltspice_mcp.lib.runner_base._CANCEL_KILL_RESCAN_DELAY", 0.001)
+        calls: list[str] = []
+        monkeypatch.setattr(
+            "ltspice_mcp.lib.runner_base.kill_windows_ltspice_by_token",
+            lambda tok: calls.append(tok) or 1,
+        )
+        await sweep_runner.cancel(bj, state_no_sim)
+        assert len(calls) == runner_base._CANCEL_KILL_MAX_PASSES
+        assert bj.status == "cancelled"
+
+
+class TestGateRunnerOnCancel:
+    def test_gate_blocks_submissions_once_cancelled(self):
+        import threading
+
+        from ltspice_mcp.lib.runner_base import BatchCancelledError, gate_runner_on_cancel
+
+        ev = threading.Event()
+        inner = MagicMock()
+        launched: list[tuple] = []
+        inner.run = lambda *a, **k: launched.append(a)
+        gated = gate_runner_on_cancel(inner, ev, "sweep_x")
+
+        gated.run("first")
+        assert launched == [("first",)]
+
+        ev.set()
+        with pytest.raises(BatchCancelledError):
+            gated.run("second")
+        assert launched == [("first",)]  # nothing launched after cancel
+
+    def test_mark_batch_failed_ignores_cancel_abort(
+        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        # The gate can fire while cancel() is still mid-kill (job not yet
+        # transitioned). The abort exception must not mark the job failed —
+        # cancel() owns the terminal transition.
+        from ltspice_mcp.lib.runner_base import BatchCancelledError
+
+        bj = _make_batch(state_no_sim, work_dir)
+        bj.status = "running"
+        sweep_runner._mark_batch_failed(
+            bj, state_no_sim, BatchCancelledError("cancelled"), kind="sweep"
+        )
+        assert bj.status == "running"  # untouched, not "failed"
+        assert bj.error is None
+
+    @pytest.mark.asyncio
+    async def test_cancelled_sweep_stops_launching_queued_runs(
+        self,
+        sweep_runner: SweepRunner,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch,
+    ):
+        # End-to-end through start_sweep: once the cancel event fires
+        # mid-batch, the submission loop must stop launching the remaining
+        # queued runs instead of working through the rest of the queue.
+        (work_dir / "n.cir").write_text("* t\nV1 in 0 1\nR1 in 0 1k\n.tran 1m\n.end\n")
+        bj = _make_batch(state_no_sim, work_dir)
+        bj.status = "running"
+        inner = MagicMock(_runno=0)
+        launched: list[int] = []
+
+        class FakeStepper:
+            def __init__(self, runner):
+                self.runner = runner
+
+            def add_value_sweep(self, *a, **k):
+                pass
+
+            def add_param_sweep(self, *a, **k):
+                pass
+
+            def total_number_of_simulations(self):
+                return 5
+
+            def run_all(self, **kwargs):
+                for i in range(5):
+                    self.runner.run(f"run{i}")
+                    launched.append(i)
+                    if i == 1:
+                        # Cancel lands while the batch is mid-queue.
+                        sweep_runner._cancel_events[bj.job_id].set()
+
+        monkeypatch.setattr(
+            "ltspice_mcp.lib.sweep_runner._create_stepper",
+            lambda editor, runner: FakeStepper(runner),
+        )
+        monkeypatch.setattr(sweep_runner, "_build_sim_runner", lambda: inner)
+        await sweep_runner.start_sweep(bj, state_no_sim)
+
+        assert launched == [0, 1]  # run 2..4 never submitted
+        # The abort is not a batch failure: cancel() owns the status.
+        assert bj.status == "running"
+        assert bj.error is None

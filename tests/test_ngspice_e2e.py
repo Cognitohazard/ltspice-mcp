@@ -259,7 +259,9 @@ async def test_sweep_full_stack_analytic_values(ngspice_state: SessionState, wor
     assert status["completed_runs"] == 3
     assert status["failed_runs"] == 0
     assert status["successful"] == 3
-    assert status["error"] is None
+    # Clean job: error is omitted, not emitted as null (null broke
+    # schema-validating clients on the check_job batch branch).
+    assert "error" not in status
 
     # Convergence contract: the per-run log walk ran over the real ngspice logs
     # and found nothing — get_batch_status omits the key entirely for a clean
