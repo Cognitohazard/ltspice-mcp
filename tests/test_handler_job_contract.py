@@ -336,3 +336,61 @@ class TestCircuitToolDualDispatch:
         )
         assert _text(reread) == "R1 = 4.7k"
         assert reread.structuredContent == {"reference": "R1", "value": "4.7k"}
+
+
+@pytest.mark.asyncio
+class TestCheckJobOutputSchemaContract:
+    """5. SCHEMA HONESTY — ``check_job``'s structuredContent must validate
+    against its own declared output_schema for every job shape. Emitting
+    ``"error": null`` (schema types it as non-nullable string) made every
+    schema-validating MCP client — including the official python SDK —
+    raise on every batch-job poll, running or completed.
+    """
+
+    @staticmethod
+    def _check_job_schema() -> dict:
+        from ltspice_mcp.tools import get_tools_for_profile
+
+        tool_defs, _ = get_tools_for_profile("full")
+        tool = next(t for t in tool_defs if t.name == "check_job")
+        assert tool.outputSchema is not None
+        return tool.outputSchema
+
+    async def _validated(self, job_id: str, state: SessionState) -> dict:
+        import jsonschema
+
+        result = await handle_check_job(CheckJobInput(job_id=job_id, format="json"), state)
+        assert result.structuredContent is not None
+        jsonschema.validate(instance=result.structuredContent, schema=self._check_job_schema())
+        return result.structuredContent
+
+    async def test_running_batch_job_validates(self, state_no_sim: SessionState):
+        bj = make_batch_job("b1", status="running")
+        state_no_sim.batch_jobs[bj.job_id] = bj
+        data = await self._validated("b1", state_no_sim)
+        # No error yet -> the key is omitted, not emitted as null.
+        assert "error" not in data
+        assert data["job_type"] == "sweep"
+
+    async def test_completed_batch_job_validates(self, state_no_sim: SessionState):
+        bj = make_batch_job("b2", status="completed", completed_runs=2)
+        state_no_sim.batch_jobs[bj.job_id] = bj
+        data = await self._validated("b2", state_no_sim)
+        assert "error" not in data
+        assert data["completed_runs"] == 2
+
+    async def test_failed_batch_job_validates_with_error(self, state_no_sim: SessionState):
+        bj = make_batch_job("b3", status="failed", error="sweep execution failed")
+        state_no_sim.batch_jobs[bj.job_id] = bj
+        data = await self._validated("b3", state_no_sim)
+        assert data["error"] == "sweep execution failed"
+
+    async def test_failed_single_job_without_error_text_validates(
+        self, state_no_sim: SessionState
+    ):
+        # A failed job whose error was never populated must still emit a
+        # string (the schema forbids null).
+        job = make_sim_job("s1", status="failed", error=None)
+        state_no_sim.jobs[job.job_id] = job
+        data = await self._validated("s1", state_no_sim)
+        assert data["error"] == "Unknown error"

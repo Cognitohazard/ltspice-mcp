@@ -414,8 +414,12 @@ def get_batch_status(batch_job: BatchJob) -> dict[str, Any]:
         **base,
         "duration": duration,
         "successful": batch_job.completed_runs - batch_job.failed_runs,
-        "error": batch_job.error,
     }
+    # Omit-when-empty: "error": null breaks clients that validate against
+    # an output schema typing error as string (same class as check_job's
+    # batch branch).
+    if batch_job.error is not None:
+        out["error"] = batch_job.error
     convergence = scan_batch_convergence(batch_job)
     if convergence:
         out["convergence_warnings"] = convergence
