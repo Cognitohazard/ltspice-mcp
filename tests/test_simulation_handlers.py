@@ -318,7 +318,12 @@ class TestRunSimulationStubbed:
             assert result.structuredContent is not None
             assert result.structuredContent["status"] == "running"
             assert job.status == "running"
-            await asyncio.sleep(0.5)
+            # Await the watchdog itself instead of sleeping past the
+            # deadline — it returns the moment it has timed the job out.
+            from ltspice_mcp.tools import simulation as simulation_module
+
+            (watchdog,) = simulation_module._timeout_watchdogs
+            await asyncio.wait_for(watchdog, timeout=2)
         assert job.status == "timeout"
         fake_runner.kill.assert_awaited_once_with(job.job_id)
 
@@ -346,7 +351,14 @@ class TestRunSimulationStubbed:
                 state_with_sim,
             )
             job = next(iter(state_with_sim.jobs.values()))
-            await asyncio.sleep(0.3)
+            # The watchdog is event-driven: once done_event is set inside
+            # the deadline, it exits and discards itself — no timer remains
+            # that could fire later, so there is nothing to sleep for.
+            from ltspice_mcp.tools import simulation as simulation_module
+
+            for _ in range(3):
+                await asyncio.sleep(0)
+            assert not simulation_module._timeout_watchdogs
         assert job.status == "completed"
         fake_runner.kill.assert_not_awaited()
 

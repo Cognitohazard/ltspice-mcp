@@ -182,12 +182,12 @@ class SignalStatsInput(ToolInput):
         description=(
             "Window start in SPICE notation (e.g. '1m', '100u'). Transient only. "
             "Strongly recommended when computing RMS or average — the startup "
-            "transient otherwise biases the result. Ignored for AC analysis."
+            "transient otherwise biases the result. Rejected for AC analysis (time-windowing a frequency sweep is an error)."
         ),
     )
     t_end: str | None = Field(
         default=None,
-        description="Window end in SPICE notation. Transient only; ignored for AC.",
+        description="Window end in SPICE notation. Transient only; rejected for AC.",
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
@@ -330,7 +330,7 @@ class SimulationSummaryInput(ToolInput):
         "RMS and std are deliberately omitted — they're meaningless on a "
         "non-time axis. Use t_start/t_end to restrict the sweep range.\n\n"
         "AC: returns magnitude (dB) min/max/mean and phase (deg) min/max. "
-        "t_start/t_end are ignored for AC — use query_value for a "
+        "t_start/t_end are rejected for AC — use query_value for a "
         "point at a specific frequency.\n\n"
         "Noise: returns min/max/pk-pk and the simple/abs mean of the noise "
         "spectral density over the frequency axis, plus ``freq_start_used``/"
@@ -1903,7 +1903,7 @@ class ResonanceInput(ToolInput):
         default=0.2,
         description="Merge peaks closer than this many decades (find_peaks can emit duplicates on shoulders).",
     )
-    max_peaks: int = Field(default=20, description="Maximum peaks returned (1..100)")
+    max_peaks: int = Field(default=20, description="Maximum peaks returned (1..1000)")
     step: int = Field(default=0, description="Step index for .step sweeps")
     format: FormatField = Field(default=None)
 

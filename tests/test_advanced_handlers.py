@@ -476,3 +476,23 @@ class TestFormatBatchTextHelpers:
         assert "V(out)" in text
         assert "Run" in text
         assert "Next page" in text
+
+    def test_raw_text_renders_collapsed_value_rows(self):
+        # A run sliced to a single sample (at=/.op-style, or an exactly
+        # constant waveform) collapses to a lone "value" key; the table
+        # used to render N/A in all three columns, hiding the very number
+        # the at= slice computed.
+        from ltspice_mcp.tools.advanced import _format_batch_raw_text
+
+        data = {
+            "signal": "V(out)",
+            "job_id": "b1",
+            "offset": 0,
+            "limit": 50,
+            "total_matching": 1,
+            "runs": [{"run_index": 0, "value": 6.6667, "params": {"R2": 2000.0}}],
+            "pagination": {"has_more": False, "next_offset": None},
+        }
+        text = _format_batch_raw_text(data)
+        assert "6.6667" in text
+        assert "N/A" not in text

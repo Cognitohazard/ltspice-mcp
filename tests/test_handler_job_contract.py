@@ -347,21 +347,30 @@ class TestCheckJobOutputSchemaContract:
     raise on every batch-job poll, running or completed.
     """
 
-    @staticmethod
-    def _check_job_schema() -> dict:
-        from ltspice_mcp.tools import get_tools_for_profile
-
-        tool_defs, _ = get_tools_for_profile("full")
-        tool = next(t for t in tool_defs if t.name == "check_job")
-        assert tool.outputSchema is not None
-        return tool.outputSchema
-
-    async def _validated(self, job_id: str, state: SessionState) -> dict:
+    @classmethod
+    def _validator(cls):
+        # Compiled once per class — jsonschema re-checks the metaschema on
+        # every plain validate() call otherwise.
         import jsonschema
 
+        from ltspice_mcp.tools import get_tools_for_profile
+
+        cached = getattr(cls, "_cached_validator", None)
+        if cached is None:
+            tool_defs, _ = get_tools_for_profile("full")
+            tool = next(t for t in tool_defs if t.name == "check_job")
+            assert tool.outputSchema is not None
+            cached = jsonschema.Draft202012Validator(tool.outputSchema)
+            cls._cached_validator = cached
+        return cached
+
+    async def _validated(self, job_id: str, state: SessionState) -> dict:
+        # The conformance hook in conftest also validates this emission;
+        # the explicit check here is the named, hook-independent contract.
         result = await handle_check_job(CheckJobInput(job_id=job_id, format="json"), state)
         assert result.structuredContent is not None
-        jsonschema.validate(instance=result.structuredContent, schema=self._check_job_schema())
+        errors = list(self._validator().iter_errors(result.structuredContent))
+        assert not errors, [e.message for e in errors]
         return result.structuredContent
 
     async def test_running_batch_job_validates(self, state_no_sim: SessionState):

@@ -286,7 +286,10 @@ def sample_model_perturbation(
     """
     perturbed: dict[str, float] = {}
     for param, spec in tolerances.items():
-        nominal = nominals.get(param)
+        # parse_model_params upper-cases nominal keys; accept any casing in
+        # the user's tolerance spec (set_param is case-insensitive on the
+        # write side, so the round trip stays consistent).
+        nominal = nominals.get(param.upper())
         if nominal is None:
             logger.debug(
                 "MC: model %s param %s has no nominal in card; skipping perturbation",
@@ -589,8 +592,11 @@ def extract_mosfet_instances(netlist_text: str) -> list[InstanceGeometry]:
         view = InstanceLine.from_card(c)
         if view.model is None:
             continue
-        w = parse_value(view.params.get("W", ""))
-        l_val = parse_value(view.params.get("L", ""))
+        # get_param (not a raw dict read): ngspice decks write lowercase
+        # "w="/"l=", and a case-sensitive lookup silently skipped every
+        # instance — a zero-mismatch Monte Carlo that looked like a clean run.
+        w = parse_value(view.get_param("W") or "")
+        l_val = parse_value(view.get_param("L") or "")
         if w is None or l_val is None:
             logger.debug(
                 "MC: instance %s has no W/L parameter, skipping mismatch (params=%r)",

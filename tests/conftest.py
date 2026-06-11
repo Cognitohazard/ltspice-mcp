@@ -178,3 +178,107 @@ def sample_netlist(work_dir: Path) -> Path:
         ".END\n"
     )
     return p
+
+
+# ---------------------------------------------------------------------------
+# Output-schema conformance hook
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _enforce_output_schema_conformance():
+    """Validate every structuredContent emitted during the suite against the
+    emitting tool's declared output_schema.
+
+    Motivating bug: check_job's batch branch emitted ``"error": null``
+    against a schema typing error as a non-nullable string — every
+    schema-validating MCP client (including the official python SDK) raised
+    on every batch-job poll, and no test caught it because handler tests
+    read structuredContent as a plain dict. This hook turns every existing
+    handler test into a conformance test: the emitting tool is identified
+    by walking the call stack for a registered handler's frame, and its
+    declared schema is enforced at the moment of emission.
+    """
+    import sys
+
+    import jsonschema
+
+    import ltspice_mcp.tools as tools_pkg
+    from ltspice_mcp.tools import _base as base_mod
+    from ltspice_mcp.tools import get_tools_for_profile
+
+    _, dispatch = get_tools_for_profile("full")
+    code_to_tool: dict = {}
+    validators: dict = {}
+    for name, reg in dispatch.items():
+        if reg.definition.outputSchema is None:
+            continue
+        # reg.handler is the registry's validation wrapper — a closure whose
+        # code object is SHARED by every tool, so it can't identify the
+        # emitter. @wraps preserves the original under __wrapped__; its code
+        # object is unique per handler and is the frame that actually calls
+        # format_response.
+        target = getattr(reg.handler, "__wrapped__", reg.handler)
+        code_to_tool[target.__code__] = name
+        validators[name] = jsonschema.Draft202012Validator(reg.definition.outputSchema)
+
+    def _validate(result) -> None:
+        sc = result.structuredContent
+        if sc is None:
+            return
+        # 0=_validate, 1=checked_* wrapper, 2=the wrapper's caller.
+        frame = sys._getframe(2)
+        for _ in range(25):
+            if frame is None:
+                return
+            tool = code_to_tool.get(frame.f_code)
+            if tool is not None:
+                errors = list(validators[tool].iter_errors(sc))
+                if errors:
+                    raise AssertionError(
+                        f"{tool}: structuredContent violates its declared output_schema: "
+                        + "; ".join(e.message for e in errors[:3])
+                    )
+                return
+            frame = frame.f_back
+
+    original_format = base_mod.format_response
+    original_json = base_mod.json_response
+
+    def checked_format_response(text, data, fmt=None):
+        result = original_format(text, data, fmt)
+        # fmt="json" delegates to the (also patched) json_response, which
+        # already validated this result — don't pay the stack walk and
+        # schema validation twice per emission.
+        if fmt != "json":
+            _validate(result)
+        return result
+
+    def checked_json_response(data):
+        result = original_json(data)
+        _validate(result)
+        return result
+
+    # Handlers bind these helpers at import time (``from _base import
+    # format_response``), so patch the binding in every tool module, not
+    # just the defining module. The module set is derived from the
+    # registered handlers themselves so a new tool module can't silently
+    # escape conformance checking.
+    import sys as _sys
+
+    saved = []
+    handler_modules = {
+        _sys.modules[getattr(reg.handler, "__wrapped__", reg.handler).__module__]
+        for reg in dispatch.values()
+    }
+    for mod in handler_modules | {base_mod, tools_pkg}:
+        for attr, checked, orig in (
+            ("format_response", checked_format_response, original_format),
+            ("json_response", checked_json_response, original_json),
+        ):
+            if getattr(mod, attr, None) is orig:
+                saved.append((mod, attr, orig))
+                setattr(mod, attr, checked)
+    yield
+    for mod, attr, orig in saved:
+        setattr(mod, attr, orig)

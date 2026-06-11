@@ -76,7 +76,8 @@ class RunSimulationInput(ToolInput):
     timeout: float | None = Field(
         default=None,
         description=(
-            "Timeout in seconds. Simulations exceeding 30s run asynchronously unless wait=true."
+            "Timeout in seconds. Simulations exceeding 30s run asynchronously unless "
+            "wait=true (which enforces a 600s hard cap — the run is killed at the cap)."
         ),
     )
     wait: bool = Field(
@@ -97,7 +98,17 @@ class CheckJobInput(ToolInput):
         description="Job ID returned by run_simulation. Omit to list jobs.",
     )
     status: (
-        Literal["running", "queued", "completed", "failed", "timeout", "cancelled", "all"] | None
+        Literal[
+            "running",
+            "queued",
+            "completed",
+            "failed",
+            "timeout",
+            "cancelled",
+            "interrupted",
+            "all",
+        ]
+        | None
     ) = Field(
         default=None,
         description="Filter by status when listing jobs.",
@@ -249,6 +260,21 @@ def _arm_timeout_watchdog(
     task.add_done_callback(_timeout_watchdogs.discard)
 
 
+async def _timeout_job(job: SimulationJob, runner: SimulationRunner, state: SessionState) -> None:
+    """Mark an overdue job timed out, then kill its simulator process.
+
+    Shared by the sync wait and the async watchdog. Ordering matters: the
+    job goes terminal FIRST so the killed sim's completion callback discards
+    the partial raw instead of recording a false success.
+    NON_TERMINAL_LIVE_STATUSES also covers a job still queued on the
+    concurrency gate — marking it terminal makes the pending
+    start_simulation task release its slot without launching.
+    """
+    if job.status in NON_TERMINAL_LIVE_STATUSES:
+        transition(job, "timeout", state=state)
+    await runner.kill(job.job_id)
+
+
 async def _enforce_async_deadline(
     job: SimulationJob,
     timeout: float,  # noqa: ASYNC109
@@ -258,20 +284,12 @@ async def _enforce_async_deadline(
     try:
         await asyncio.wait_for(job.done_event.wait(), timeout=timeout)
     except TimeoutError:
-        # Same ordering as the sync timeout path: mark the job terminal
-        # FIRST so the killed sim's completion callback discards the partial
-        # raw instead of recording a false success, then kill the process.
-        # NON_TERMINAL_LIVE_STATUSES also covers a job still queued on the
-        # concurrency gate — marking it terminal makes the pending
-        # start_simulation task release its slot without launching.
-        if job.status in NON_TERMINAL_LIVE_STATUSES:
-            transition(job, "timeout", state=state)
-            await runner.kill(job.job_id)
-            logger.warning(
-                "Async simulation %s exceeded its %.0fs timeout and was killed",
-                job.job_id,
-                timeout,
-            )
+        await _timeout_job(job, runner, state)
+        logger.warning(
+            "Async simulation %s exceeded its %.0fs timeout and was killed",
+            job.job_id,
+            timeout,
+        )
 
 
 async def _wait_for_completion(
@@ -291,17 +309,9 @@ async def _wait_for_completion(
         # Wait for completion with timeout
         await asyncio.wait_for(job.done_event.wait(), timeout=timeout)
     except TimeoutError:
-        # Timeout - this is NOT a simulator error, it's a tool-level kill.
-        # Record status=timeout BEFORE killing so that when the killed sim's
-        # completion callback fires, _handle_completion sees a terminal status
-        # and discards the partial raw instead of recording a false success.
-        # NON_TERMINAL_LIVE_STATUSES covers a job still "queued" on the
-        # concurrency gate as well as a "running" one: both must be marked
-        # terminal so the pending start_simulation task self-heals (releases its
-        # slot, doesn't launch) when a slot frees, instead of running orphaned.
-        if job.status in NON_TERMINAL_LIVE_STATUSES:
-            transition(job, "timeout", state=state)
-        await runner.kill(job.job_id)
+        # Timeout - this is NOT a simulator error, it's a tool-level kill
+        # (see _timeout_job for the transition-before-kill ordering).
+        await _timeout_job(job, runner, state)
         # Use the post-kill elapsed (same source as check_job) so a
         # downstream consumer reading both endpoints sees a consistent
         # number rather than the user-set timeout limit.
