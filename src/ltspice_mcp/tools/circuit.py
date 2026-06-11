@@ -705,7 +705,9 @@ class ListComponentsInput(ToolInput):
         default=None, description="Look up a single component by reference (e.g., 'R1')"
     )
     offset: int = Field(default=0, description="Pagination offset")
-    limit: int = Field(default=50, description="Max results to return")
+    limit: int = Field(
+        default=50, description="Max results to return (server caps at 50; page with offset)"
+    )
     format: Literal["json", "text"] | None = Field(
         default=None,
         description="Response format: 'json' for structured data, 'text' for human-readable",
@@ -767,16 +769,17 @@ class EditDirectiveInput(ToolInput):
         default=None,
         description=(
             "Optional X coordinate when adding to an .asc schematic. "
-            "Default places the directive in the lower-left corner."
+            "Default: directives are auto-placed in free space near the "
+            "schematic's lower-left; comments default to the sheet origin (0,0)."
         ),
     )
     y: int | None = Field(
         default=None,
         description="Optional Y coordinate (see ``x``).",
     )
-    size: int = Field(
-        default=2,
-        description="Font size (.asc only). 1=small, 2=normal, 3=large.",
+    size: int | None = Field(
+        default=None,
+        description="Font size (.asc only). 1=small, 2=normal (default), 3=large.",
     )
 
 
@@ -1332,11 +1335,7 @@ async def handle_list_components(args: ListComponentsInput, state: SessionState)
         # .asc components so callers don't need a per-component
         # component_info round-trip to spot W=10u/L=0.5u-style overrides.
         if is_asc and comp_ref in editor.components:
-            attrs = {
-                k: v
-                for k, v in (editor.components[comp_ref].attributes or {}).items()
-                if k not in ("Value", "InstName") and v
-            }
+            attrs = services.asc_component_attributes(editor.components[comp_ref])
             if attrs:
                 entry["attributes"] = attrs
         line = f"{comp_ref}  {value}"
@@ -1682,6 +1681,42 @@ async def handle_parameter(args: ParameterInput, state: SessionState):
     return format_response(result, {"parameters": params}, fmt)
 
 
+_ASC_TEXT_DEFAULT_SIZE = 2
+"""LTspice's normal font size — the fallback when a caller doesn't pick one."""
+
+
+def _append_asc_text(
+    editor: AscEditor,
+    text: str,
+    text_type: TextTypeEnum,
+    x: int | None,
+    y: int | None,
+    size: int | None,
+    *,
+    default_x: int,
+    default_y: int,
+) -> None:
+    """Append one TEXT record (directive or comment) to an ``.asc``.
+
+    The single producer of placed schematic text — ``edit_directive``'s two
+    kinds and ``apply_schematic_ops``' ``add_directive`` op all come through
+    here, so placement defaulting can't drift between them. The per-site
+    ``default_x``/``default_y`` differ deliberately (comments default to the
+    sheet origin; directives to (16,16)).
+    """
+    editor.directives.append(
+        Text(
+            coord=Point(
+                x if x is not None else default_x,
+                y if y is not None else default_y,
+            ),
+            text=text,
+            type=text_type,
+            size=size if size is not None else _ASC_TEXT_DEFAULT_SIZE,
+        )
+    )
+
+
 @registry.tool(
     name="edit_directive",
     description=(
@@ -1733,16 +1768,16 @@ async def handle_edit_directive(
                         "comment so it doesn't begin with '!' or '.'."
                     )
                 # ``_is_asc`` above guarantees AscEditor; cast for the type checker.
-                asc_editor = cast(AscEditor, editor)
-                comment = Text(
-                    coord=Point(
-                        args.x if args.x is not None else 0, args.y if args.y is not None else 0
-                    ),
-                    text=instruction,
-                    type=TextTypeEnum.COMMENT,
-                    size=args.size,
+                _append_asc_text(
+                    cast(AscEditor, editor),
+                    instruction,
+                    TextTypeEnum.COMMENT,
+                    args.x,
+                    args.y,
+                    args.size,
+                    default_x=0,
+                    default_y=0,
                 )
-                asc_editor.directives.append(comment)
                 result = f"Added comment: {instruction}"
             else:
                 stripped = instruction.strip()
@@ -1769,7 +1804,26 @@ async def handle_edit_directive(
                 err = validate_directive(instruction, simulator="LTspice")
                 if err is not None:
                     raise NetlistError(f"{err.message}\n  Suggestion: {err.suggestion}")
-                editor.add_instruction(instruction)
+                if _is_asc(file_path) and (
+                    args.x is not None or args.y is not None or args.size is not None
+                ):
+                    # Honor the documented placement params on the .asc
+                    # directive branch (previously only the comment branch
+                    # read them — spicelib's add_instruction picks its own
+                    # spot and hardcodes size, so x/y/size were silently
+                    # ignored).
+                    _append_asc_text(
+                        cast(AscEditor, editor),
+                        instruction,
+                        TextTypeEnum.DIRECTIVE,
+                        args.x,
+                        args.y,
+                        args.size,
+                        default_x=16,
+                        default_y=16,
+                    )
+                else:
+                    editor.add_instruction(instruction)
                 result = f"Added directive: {instruction}"
 
         elif action == "remove":
@@ -2229,9 +2283,12 @@ _previous_exports: dict[Path, list[str]] = {}
     name="export_netlist",
     description="Export an .asc schematic to a SPICE netlist (.net) using LTspice.",
     input_model=ExportNetlistInput,
+    # Writes (and overwrites) the sibling .net file — not read-only, and
+    # destructive toward a hand-edited netlist at that path, matching the
+    # annotation convention of the other overwrite-capable file writers.
     annotations=types.ToolAnnotations(
-        readOnlyHint=True,
-        destructiveHint=False,
+        readOnlyHint=False,
+        destructiveHint=True,
         idempotentHint=True,
         openWorldHint=False,
     ),
@@ -2480,10 +2537,9 @@ async def handle_component_info(
         lines.append(f"Bounding box: ({bb['x']},{bb['y']}) {bb['width']}x{bb['height']}")
 
     # Include non-trivial attributes
-    for attr_name, attr_val in comp.attributes.items():
-        if attr_name not in ("Value", "InstName") and attr_val:
-            data.setdefault("attributes", {})[attr_name] = attr_val
-            lines.append(f"{attr_name}: {attr_val}")
+    for attr_name, attr_val in services.asc_component_attributes(comp).items():
+        data.setdefault("attributes", {})[attr_name] = attr_val
+        lines.append(f"{attr_name}: {attr_val}")
 
     return format_response("\n".join(lines), data, args.format)
 
@@ -4142,6 +4198,17 @@ async def handle_step_get(args: StepGetInput, state: SessionState) -> types.Call
 
     axis_lower = args.axis.lower()
     if raw_axis_name and axis_lower == raw_axis_name.lower():
+        # On the native-axis branch the queried axis IS the inner axis, so
+        # there is no second position for ``at`` to select. Silently
+        # ignoring it would return a value at ``value`` while the caller
+        # believes the ``at`` slice was applied — refuse loudly instead.
+        if args.at is not None:
+            raise NetlistError(
+                f"'at' does not apply here: {args.axis!r} is the raw file's "
+                "native axis, so the query position is 'value' itself. "
+                "'at' selects the inner-axis point only when 'axis' names a "
+                ".step parameter."
+            )
         try:
             axis_vals = real_axis(np.asarray(raw.get_axis(step=0))).tolist()
         except Exception as e:
@@ -4535,10 +4602,9 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
                 raise NetlistError(
                     f"Refusing directive {op.instruction!r}: {err.message} ({err.suggestion})"
                 )
-        coord = Point(op.x if op.x is not None else 16, op.y if op.y is not None else 16)
         text_type = TextTypeEnum.DIRECTIVE if op.kind == "directive" else TextTypeEnum.COMMENT
-        editor.directives.append(
-            Text(coord=coord, text=op.instruction, type=text_type, size=op.size)
+        _append_asc_text(
+            editor, op.instruction, text_type, op.x, op.y, op.size, default_x=16, default_y=16
         )
         return {"op": "add_directive", "instruction": op.instruction}
 

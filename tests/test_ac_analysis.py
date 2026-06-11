@@ -256,6 +256,22 @@ class TestGainAt:
         assert any("outside sweep range" in w for w in warn)
         assert len(points) == 2
 
+    def test_phase_interpolated_across_wrap_seam(self):
+        # Three coincident poles at 1 kHz: phase = -3*atan(f/f0), crossing
+        # -180° at f0*tan(60°) ≈ 1732 Hz. On a coarse 5-points/decade grid
+        # the samples straddling the seam sit at -173.1° and -204.9°
+        # (wrapped: +155.1°). Interpolating the WRAPPED phase averages
+        # straight through ≈ -9° — ~180° of silent error exactly where
+        # phase matters most. Interpolation must run on unwrapped phase.
+        f = np.logspace(2, 4.4, 13)  # exact 0.2-decade steps
+        f0 = 1000.0
+        H = (1.0 / (1.0 + 1j * f / f0)) ** 3
+        points, _warn = gain_at_frequencies(f, H, [10**3.3], include_unwrapped_phase=True)
+        # Log-midpoint of the unwrapped neighbors (-173.06°, -204.88°).
+        assert points[0].get("phase_deg_unwrapped") == pytest.approx(-188.97, abs=0.3)
+        # Reported wrapped phase: -188.97 + 360 = +171.03, NOT ≈ -9.
+        assert points[0]["phase_deg"] == pytest.approx(171.03, abs=0.3)
+
     def test_unwrapped_phase_included_on_request(self):
         f = _log_freqs(0, 6, 300)
         H = _lpf_1pole(f, 1000.0)

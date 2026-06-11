@@ -23,6 +23,26 @@ class FakeSim:
     """Minimal simulator stub."""
 
 
+class FakeStepper:
+    """Minimal SimStepper stand-in; ``run_all`` behavior injected per test."""
+
+    def __init__(self, run_all=None):
+        self._run_all = run_all
+
+    def add_value_sweep(self, *a, **k):
+        pass
+
+    def add_param_sweep(self, *a, **k):
+        pass
+
+    def total_number_of_simulations(self):
+        return 0
+
+    def run_all(self, **kwargs):
+        if self._run_all is not None:
+            self._run_all(**kwargs)
+
+
 @pytest.fixture
 def loop():
     return asyncio.new_event_loop()
@@ -620,22 +640,9 @@ class TestSweepRunnerHandlers:
 
         captured: dict = {}
 
-        class FakeStepper:
-            def add_value_sweep(self, *a, **k):
-                pass
-
-            def add_param_sweep(self, *a, **k):
-                pass
-
-            def total_number_of_simulations(self):
-                return 0
-
-            def run_all(self, **kwargs):
-                captured.update(kwargs)
-
         monkeypatch.setattr(
             "ltspice_mcp.lib.sweep_runner._create_stepper",
-            lambda editor, runner: FakeStepper(),
+            lambda editor, runner: FakeStepper(run_all=captured.update),
         )
         monkeypatch.setattr(sweep_runner, "_build_sim_runner", lambda: MagicMock(_runno=0))
         monkeypatch.setattr(sweep_runner, "_handle_sweep_completion", lambda *a, **k: None)
@@ -1036,6 +1043,27 @@ class TestModelPerturbationMath:
         assert "VTO" in out
         assert "KP" not in out
 
+    def test_sample_model_perturbation_accepts_lowercase_spec(self):
+        from ltspice_mcp.lib.montecarlo import (
+            MCSampler,
+            ToleranceSpec,
+            sample_model_perturbation,
+        )
+
+        # parse_model_params upper-cases nominal keys; a user spelling the
+        # parameter lowercase must still get a perturbation (set_param is
+        # case-insensitive on the write side, so the round trip holds).
+        sampler = MCSampler(seed=0)
+        out = sample_model_perturbation(
+            sampler,
+            "NMOS1",
+            nominals={"VTO": 0.7},
+            tolerances={"vto": ToleranceSpec(tolerance=0.05, kind="relative")},
+        )
+        # Presence is the regression (a case-sensitive lookup skipped it);
+        # the value stays a plausible perturbation of the 0.7 nominal.
+        assert out["vto"] == pytest.approx(0.7, abs=0.7 * 0.05 * 2)
+
     def test_sample_model_perturbation_adds_delta(self):
         from ltspice_mcp.lib.montecarlo import (
             MCSampler,
@@ -1223,6 +1251,19 @@ class TestExtractMosfetInstances:
         text = "M1 d g 0 0 NMOS1\n"
         instances = extract_mosfet_instances(text)
         assert instances == []
+
+    def test_finds_lowercase_w_l_geometry(self):
+        from ltspice_mcp.lib.montecarlo import extract_mosfet_instances
+
+        # ngspice decks conventionally write lowercase "w="/"l="; a
+        # case-sensitive lookup silently skipped every instance, yielding a
+        # zero-mismatch Monte Carlo that looked like a clean run.
+        text = "* test\n.model nmos1 nmos(vto=0.7)\nm1 d g 0 0 nmos1 w=10u l=180n\n.end\n"
+        instances = extract_mosfet_instances(text)
+        assert len(instances) == 1
+        assert instances[0].width_m == pytest.approx(10e-6)
+        assert instances[0].length_m == pytest.approx(180e-9)
+        assert instances[0].model_name == "nmos1"
 
 
 class TestParamPerturbation:
@@ -1722,30 +1763,20 @@ class TestGateRunnerOnCancel:
         inner = MagicMock(_runno=0)
         launched: list[int] = []
 
-        class FakeStepper:
-            def __init__(self, runner):
-                self.runner = runner
-
-            def add_value_sweep(self, *a, **k):
-                pass
-
-            def add_param_sweep(self, *a, **k):
-                pass
-
-            def total_number_of_simulations(self):
-                return 5
-
-            def run_all(self, **kwargs):
+        def submit_five(runner):
+            def run_all(**kwargs):
                 for i in range(5):
-                    self.runner.run(f"run{i}")
+                    runner.run(f"run{i}")
                     launched.append(i)
                     if i == 1:
                         # Cancel lands while the batch is mid-queue.
                         sweep_runner._cancel_events[bj.job_id].set()
 
+            return run_all
+
         monkeypatch.setattr(
             "ltspice_mcp.lib.sweep_runner._create_stepper",
-            lambda editor, runner: FakeStepper(runner),
+            lambda editor, runner: FakeStepper(run_all=submit_five(runner)),
         )
         monkeypatch.setattr(sweep_runner, "_build_sim_runner", lambda: inner)
         await sweep_runner.start_sweep(bj, state_no_sim)

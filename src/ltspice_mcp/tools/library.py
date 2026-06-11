@@ -65,7 +65,9 @@ class ListLibrariesInput(ToolInput):
     detail: bool = Field(default=False, description="Include model names from each library")
     path: str | None = Field(default=None, description="Filter to a specific library path")
     offset: int = Field(default=0, description="Pagination offset")
-    limit: int = Field(default=50, description="Max results to return")
+    limit: int = Field(
+        default=50, description="Max results to return (server caps at 50; page with offset)"
+    )
     format: Literal["json", "text"] | None = Field(
         default=None,
         description="Response format: 'json' for structured data, 'text' for human-readable",
