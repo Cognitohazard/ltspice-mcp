@@ -1,418 +1,246 @@
 # ltspice-mcp
 
-> **Work in progress.** Core functionality is usable but expect rough edges, missing features, and breaking changes.
+> **Work in progress.** Core functionality is usable but expect rough edges and breaking changes.
 
-MCP server that exposes LTspice circuit simulation to LLMs via the [Model Context Protocol](https://modelcontextprotocol.io/). Create netlists, edit schematics, run simulations, and analyze results through MCP tool calls.
+An MCP server that connects LLM assistants (Claude, and any other MCP client) to real circuit simulation: LTspice and ngspice, plus direct editing of LTspice `.asc` schematics. Simulation results come back as structured numbers — cutoff frequencies, overshoot, phase margin, rise times — so the assistant can design, verify, and iterate on circuits in the same files you open in LTspice. Built on [spicelib](https://github.com/nunobrum/spicelib).
 
-Built on the low-level `mcp.server.lowlevel.Server` API with [spicelib](https://github.com/nunobrum/spicelib) for simulator interfacing and result parsing.
+## Quick start
 
-## Requirements
-
-- Python 3.13+
-- LTspice (for simulation — circuit editing works without it)
-- An MCP-capable client (see [MCP clients](#mcp-clients) below)
-
-### Platform support
-
-| Platform | How LTspice runs |
-|-|-|
-| Windows | Native |
-| WSL2 | Windows LTspice.exe via interop (not Wine) |
-| Linux | Via Wine (spicelib handles this) |
-
-## Install
-
-Any Python package installer works — pick whichever you already use.
+1. Install the server:
 
 ```bash
-# uv (recommended — fast, installs in an isolated tool env and puts `ltspice-mcp` on PATH)
-uv tool install ltspice-mcp
-
-# or plain pip (inside a venv or with --user)
-pip install ltspice-mcp
-
-# or pipx (same isolated-tool model as `uv tool`, if you prefer PyPA tooling)
-pipx install ltspice-mcp
+uv tool install ltspice-mcp     # or: pip install ltspice-mcp / pipx install ltspice-mcp
 ```
 
-After install, the `ltspice-mcp` command should be on your PATH. Verify with:
+2. Add it to your MCP client:
 
 ```bash
-ltspice-mcp --help
+# Claude Code
+claude mcp add -s project ltspice -- ltspice-mcp
 ```
-
-### Install from source
-
-```bash
-git clone https://github.com/Cognitohazard/ltspice-mcp.git
-cd ltspice-mcp
-uv sync   # or: pip install -e .
-```
-
-### Configure
-
-```bash
-cp ltspice-mcp.example.toml ltspice-mcp.toml
-# Set simulator.path if LTspice isn't auto-detected (required on WSL)
-```
-
-## MCP clients
-
-MCP is an [open standard](https://modelcontextprotocol.io/), so this server works with any client that speaks it. Below are setup snippets for the major ones. All examples assume you've already installed `ltspice-mcp` so the executable is on your `PATH`.
-
-> **Transport:** `ltspice-mcp` speaks stdio. Local desktop clients (Claude Desktop, Claude Code, Cursor, Windsurf, Gemini CLI, etc.) connect to stdio servers directly. Web clients that only accept remote MCP (claude.ai, ChatGPT) need a stdio→HTTP bridge — see [Remote / web clients](#remote--web-clients).
-
-### Generic stdio config
-
-Every client below uses the same JSON snippet — only the config file path differs. Paste this into the client's MCP config file:
 
 ```json
+// Claude Desktop (claude_desktop_config.json) and most other clients
 {
   "mcpServers": {
-    "ltspice": {
-      "command": "ltspice-mcp",
-      "args": []
-    }
+    "ltspice": { "command": "ltspice-mcp", "args": [] }
   }
 }
 ```
 
-If `ltspice-mcp` isn't on the client's `PATH` (common on macOS GUI apps), use the absolute path — find it with `which ltspice-mcp` (Linux/macOS) or `where ltspice-mcp` (Windows).
+3. Have LTspice or ngspice installed. Both are auto-detected on Windows, Linux, and macOS; on WSL the LTspice path must be set explicitly ([WSL notes](#configuration)). Circuit editing works with no simulator at all.
 
-### Claude Code (Anthropic CLI)
+That's the setup. Python 3.13+ required. Verify with `ltspice-mcp --help`.
 
-```bash
-claude mcp add -s project ltspice -- ltspice-mcp
+Claude Desktop config lives at `~/Library/Application Support/Claude/` (macOS), `%APPDATA%\Claude\` (Windows), or `~/.config/Claude/` (Linux). Cursor, Windsurf, Gemini CLI, Continue, Cline, Zed and others take the same JSON snippet in their respective config files. Web clients (claude.ai, ChatGPT) need a stdio→HTTP bridge such as [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy) — only expose this server on a network you fully control, since it writes files and spawns processes inside `allowed_paths`.
+
+## Using it
+
+Once connected, you ask for circuit work in plain language. The assistant chooses the tools; the server runs the simulator and measures the results.
+
+> **"Design a 1 kHz RC low-pass filter and verify its cutoff."**
+
+The assistant writes the netlist, validates it, runs an AC simulation, and reads the measurements back: cutoff 1000.4 Hz, −19.9 dB/decade roll-off, first-order response. If the cutoff is off-target, it changes a component value and re-runs — each iteration is a couple of seconds.
+
+Other requests that work the same way:
+
+- *"What's the overshoot and settling time of this regulator's step response?"* — runs a transient analysis and measures both from the waveform, plus rise time, ringing frequency, and the final value.
+- *"Run a 200-run Monte Carlo with 5% resistors and tell me the output spread."* — perturbs components per run, simulates the batch, and reports mean, sigma, and worst-case values per measurement.
+- *"Sweep the load from 100 Ω to 10 kΩ and find where efficiency drops."* — parameter sweep with per-run results.
+- *"Turn this netlist into a schematic I can open in LTspice."* — generates a wired `.asc` file that produces the same circuit.
+- *"Is this loop stable?"* — AC analysis of the loop gain; reports phase and gain margin at every crossover, not just the first.
+
+### Co-design on the same files
+
+Everything operates on ordinary LTspice and SPICE files, so the work passes back and forth between you and the assistant instead of living inside a chat:
+
+- Sketch a schematic in LTspice, then hand it over: *"what's the bias point?"*, *"why doesn't the output move?"*, *"add compensation and check the phase margin."*
+- Or the reverse: the assistant designs and verifies the circuit and writes the `.asc`; you open it in LTspice, inspect it, and tweak by hand. Your manual edits are simply the file's new state — the assistant picks up from there on the next request.
+- Changes can flow either direction mid-design: adjust a value in the GUI and ask for re-verification, or have the assistant sweep a change you're considering before you commit to it.
+
+## What it does
+
+**Simulation and measurement.** Runs LTspice or ngspice and parses the binary output directly. Measurements are computed server-side and returned as numbers: time-domain (rise/fall, overshoot, settling, delay, period/duty/jitter, RMS), frequency-domain (filter cutoffs and roll-off, gain and phase at any frequency, stability margins, resonance peaks with Q), DC operating points, and `.MEAS` directive results including the ones that failed.
+
+**Schematic and netlist editing.** Creates and edits real LTspice `.asc` files — place components, wire pins, label nets — with validation before anything is written: wiring that would collide with a pin, overlap a junction, or run diagonally is refused, and every edit returns warnings about floating pins or dangling labels. A netlist converts to a working schematic in one step; a session's edits can be reverted. Plain netlists (`.cir`/`.net`) get the same operations at text level, plus a static validation pass that catches malformed cards before a simulation is spent.
+
+**Sweeps and Monte Carlo.** Multi-dimensional parameter sweeps and Monte Carlo with per-component tolerances, `.MODEL` process variation, and Pelgrom W·L device mismatch. Per-measurement statistics are aggregated across runs, and any single run can be pulled out and analyzed like a standalone simulation.
+
+**Jobs and trust.** Simulations run as cancellable jobs with timeouts and a concurrency cap; long runs return a job ID immediately and job state survives a server restart. Results report facts, not verdicts: a completed run carries the simulator's own warnings, measurements that produced nothing, and extreme node values as structured observations. Judging whether a result is trustworthy is left to the model reading it.
+
+## Supported simulators
+
+| Simulator | Status |
+|-|-|
+| LTspice | Primary. Windows native, WSL2 (Windows LTspice.exe via interop), Linux via Wine. Required for `.asc` schematic editing (needs `.asy` symbol libraries). |
+| ngspice | First-class: simulate, parse, diagnose, analyze. Open-source path with no LTspice install. |
+| QSPICE, Xyce | Supported but secondary. |
+
+## Configuration
+
+Works with defaults out of the box. To customize, copy `ltspice-mcp.example.toml` to `ltspice-mcp.toml`; any setting can be overridden with an `LTSPICE_MCP_`-prefixed environment variable, and `--config PATH` or `LTSPICE_MCP_CONFIG` picks the file. Key options:
+
+```toml
+[simulator]
+default = "ltspice"      # ltspice, ngspice, qspice, xyce (null = auto-detect)
+path = ""                # explicit executable path (required on WSL)
+
+[security]
+allowed_paths = ["."]    # sandbox: only these directories are accessible
+
+[simulation]
+max_parallel = 4
+timeout = 300.0          # seconds
+
+[tools]
+profile = "full"         # or "agentic"
+
+[state]
+persist_jobs = true
 ```
 
-This writes a `.mcp.json` in the project root. Use `-s user` to install globally for your user instead.
+See [`src/ltspice_mcp/config.py`](src/ltspice_mcp/config.py) for the full option list (`[analysis]`, `[schematic]`, `[logging]`, ...).
 
-### Claude Desktop
+<details>
+<summary><strong>WSL specifics</strong></summary>
 
-Paste the [generic stdio config](#generic-stdio-config) into:
-
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-- **Linux**: `~/.config/Claude/claude_desktop_config.json`
-
-Restart Claude Desktop. The LTspice tools appear under the MCP icon in the input box.
-
-### Cursor
-
-Paste the [generic stdio config](#generic-stdio-config) into `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` in a project.
-
-### Windsurf (Codeium)
-
-Paste the [generic stdio config](#generic-stdio-config) into `~/.codeium/windsurf/mcp_config.json`.
-
-### Gemini CLI
-
-Merge the [generic stdio config](#generic-stdio-config) into the `mcpServers` object in `~/.gemini/settings.json`.
-
-### Continue, Cline, Zed, and other clients
-
-Any client that supports MCP stdio servers takes the same [generic stdio config](#generic-stdio-config) — check the client's docs for where its config file lives.
-
-### Remote / web clients
-
-**claude.ai** (Pro/Max "Connectors") and **ChatGPT** (Developer Mode connectors) only accept remote MCP servers over HTTPS, not local stdio processes. To use `ltspice-mcp` with them you need to bridge stdio to HTTP/SSE and expose it at a public URL. Common approaches:
-
-- [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy) — wraps a stdio server as an SSE endpoint
-- Run behind a reverse tunnel (Cloudflare Tunnel, ngrok, Tailscale Funnel)
-
-Because this server can write files, spawn simulators, and read arbitrary paths under `allowed_paths`, **only expose it on a network you fully control**. For remote use cases, tighten `[security] allowed_paths` and keep the tunnel private.
-
-## WSL configuration
-
-On WSL, LTspice.exe runs via Windows interop (not Wine), so spicelib can't auto-detect it across the WSL boundary. Set the Windows-side path explicitly in `ltspice-mcp.toml`:
+On WSL, LTspice.exe runs via Windows interop (not Wine), and spicelib can't auto-detect it across the WSL boundary. Set the Windows-side path explicitly:
 
 ```toml
 [simulator]
 path = "/mnt/c/Program Files/ADI/LTspice/LTspice.exe"
 ```
 
-Simulation output is automatically redirected to a Windows temp directory. LTspice writes SQLite `.db` files alongside results, and these fail on UNC paths (`\\wsl.localhost\...`), which causes `.MEAS` data to be lost.
+Simulation output is automatically redirected to a Windows temp directory: LTspice's `.MEAS` results go through SQLite `.db` files that fail on UNC paths (`\\wsl.localhost\...`), and without the redirect measurement data silently disappears from the logs.
 
-## Persisted job state
+`.asy` symbol paths for `.asc` editing are auto-detected on Windows and WSL; override with `[schematic] symbol_paths` or `LTSPICE_MCP_SYMBOL_PATHS`.
 
-The server stores simulation, sweep, and Monte Carlo job metadata in a
-per-circuit sidecar directory so a restarted server can surface prior
-runs. Expect to see these alongside your circuits:
+</details>
 
-```
-your-project/
-├── amp.cir
-└── .ltspice-mcp/
-    └── jobs/
-        ├── sim_a3f1.json
-        └── sweep_b82c.json
-```
-
-If you track the circuit project in git, add to `.gitignore`:
-
-```
-.ltspice-mcp/
-```
-
-The global recent-circuits index lives at `$XDG_STATE_HOME/ltspice-mcp/recent.json`
-(default `~/.local/state/ltspice-mcp/recent.json`), or `$LTSPICE_MCP_HOME/recent.json` if set.
-Set `[state] persist_jobs = false` in `ltspice-mcp.toml` to disable
-persistence entirely.
-
-## Tool Profiles
-
-`tool_profile` controls which tools the server exposes. Set via `[tools] profile` in TOML or `LTSPICE_MCP_TOOL_PROFILE` env var.
+### Tool profiles
 
 | Profile | Tools | Use case |
 |-|-|-|
-| `full` (default) | All 48 tools | Any MCP client, automation, or non-agent LLM |
-| `agentic` | 32 | **Recommended** when your client supports skill files |
+| `full` (default) | 48 | Any MCP client, automation, non-agent LLMs |
+| `agentic` | 32 | LLM agents with native file access (Read/Edit/Write) |
 
-The **agentic** profile removes netlist-editing wrappers, sweep/MC configuration tools, niche schematic operations, and library session management — work a capable LLM agent can do through direct file editing. It keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, AscEditor-dependent ops, and library search.
+The `agentic` profile drops netlist-editing wrappers and library session management — work a capable agent does through direct file edits — and keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, and the `.asc` geometry tools. The `skills/` directory (`skills/ltspice/SKILL.md`, `skills/ngspice/SKILL.md`) contains the domain knowledge that pairs with it: copy the relevant skill into your client's persistent-instructions location.
 
-```toml
-[tools]
-profile = "agentic"
+## Under the hood: the tool-level loop
+
+What the assistant actually does for "design a 1 kHz RC low-pass and verify it". It writes the netlist (R=1k, C=159.155n → fc = 1 kHz):
+
+```spice
+* rc.cir — RC low-pass
+V1 in 0 AC 1
+R1 in out 1k
+C1 out 0 159.155n
+.ac dec 50 1 1Meg
+.end
 ```
 
-## Skills
-
-The tools give LLMs *access* to simulation. The skills give them the *expertise* to use it well.
-
-The `skills/` directory contains structured domain knowledge that teaches LLMs how to work with SPICE circuit simulators. Each skill is a self-contained reference covering SPICE fundamentals, simulator-specific gotchas, and MCP tool workflows — the kind of knowledge that takes years to build and that LLMs don't reliably have.
-
-| Skill | Description |
-|-|-|
-| `skills/ltspice/SKILL.md` | LTspice: `.asc` schematic editing, Windows/WSL paths, LTspice-specific directives |
-| `skills/ngspice/SKILL.md` | ngspice: open-source workflow, control scripts, ngspice model compatibility |
-
-Copy the relevant skill into whatever location your MCP client uses for persistent instructions, then set the `agentic` profile. The skill provides the domain knowledge that replaces the removed wrapper tools.
-
-## Tools
-
-All 48 tools are prefixed with `ltspice_` to avoid namespace conflicts with other MCP servers. Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) for client auto-approval decisions.
-
-### Circuit editing (22 tools)
-
-Work on both `.cir`/`.net` netlists and `.asc` schematics. Extension-based dispatch picks the right editor automatically. Mutating tools that affect schematic topology run a post-op validation pass and return structured warnings (floating pins, dangling net labels, duplicate wire segments) alongside the result.
-
-| Tool | Description |
-|-|-|
-| `ltspice_create_netlist` | Create a new netlist from a content string |
-| `ltspice_create_schematic` | Create an empty `.asc` ready for incremental editing |
-| `ltspice_schematic_from_netlist` | Generate an `.asc` from SPICE netlist text — grid-places R/C/L/V/I/D and wires pins by net label |
-| `ltspice_read_circuit` | Read and parse a circuit file (netlist text for `.cir`, schematic layout for `.asc`) |
-| `ltspice_list_components` | List components (optionally filtered by prefix) or look up a single component by reference |
-| `ltspice_set_component_value` | Set one component value, or batch-set many via a `values` dict |
-| `ltspice_parameter` | Get all `.PARAM` values (no args) or set one (`name` + `value`) |
-| `ltspice_edit_directive` | Add or remove SPICE directives (`.tran`, `.ac`, `.lib`, etc.) |
-| `ltspice_remove_component` | Remove a component (warns about orphaned wires) |
-| `ltspice_move_component` | Move or rotate a component in an `.asc` schematic |
-| `ltspice_set_component_attribute` | Set a component attribute (SpiceLine, Value2, etc.) |
-| `ltspice_add_component` | Add a component with value, attributes, returns pin positions and bounding box |
-| `ltspice_connect` | Connect two pins by reference with waypoint routing; validates for pin collisions, wire junctions, and diagonal wires before adding |
-| `ltspice_add_net_label` | Add/remove net labels and ground flags (supports pin reference for placement) |
-| `ltspice_symbol_info` | Get symbol pin positions, bounding box, pin directions, and description |
-| `ltspice_component_info` | Get placed component pin positions, bounding box, and attributes |
-| `ltspice_export_netlist` | Export `.asc` to `.net` netlist (shows diff against previous export) |
-| `ltspice_validate_netlist` | Static checks over a netlist or schematic before simulation (rejects known-bad `.MEAS` patterns, missing models, syntax errors) |
-| `ltspice_trace_net` | Report every pin/label/wire on the net at a pin/`net:NAME`/`(x,y)`; flags accidental shorts |
-| `ltspice_reset_schematic` | Revert an `.asc` to its state before the first edit this session (in-memory recovery hatch) |
-| `ltspice_diff_circuit` | Structural diff between two circuit files (added/removed components, value changes, directive changes) |
-| `ltspice_apply_schematic_ops` | Apply many `.asc` edits in one transaction (add/move/remove components, connect, label, directive) |
-
-`.asc` schematic editing requires `.asy` symbol files. These are auto-detected on Windows and WSL; override with `[schematic] symbol_paths` in TOML or the `LTSPICE_MCP_SYMBOL_PATHS` env var.
-
-### Simulation (3 tools)
-
-| Tool | Description |
-|-|-|
-| `ltspice_run_simulation` | Run a simulation — sync for short runs, async (returns job ID) for long ones |
-| `ltspice_check_job` | Check a job's status by ID, or list all jobs |
-| `ltspice_cancel_job` | Cancel a running simulation |
-
-### Analysis (12 tools)
-
-Scalar and overview tools work on any .raw file; waveform tools reject AC (use the AC-specific tools instead) and AC tools reject transient.
-
-| Tool | Description |
-|-|-|
-| `ltspice_signal_stats` | Signal statistics: min, max, mean, RMS, peak-to-peak (dB/phase for AC) |
-| `ltspice_query_value` | Query a signal's value at a specific time or frequency; pass `step_axis`+`step_value` to pick a `.step`/`.DC` step by its sweep-axis value |
-| `ltspice_operating_point` | DC operating point: all node voltages and branch currents |
-| `ltspice_simulation_summary` | Full summary: simulation type, signals, measurements, warnings |
-| `ltspice_edge_metrics` | Transient rise/fall time and slew rate for one edge |
-| `ltspice_pulse_response` | Transient overshoot, undershoot, and settling time for a step |
-| `ltspice_timing_between` | Propagation delay between two transient signals on a shared axis |
-| `ltspice_periodic_metrics` | Period, frequency, duty cycle, and jitter for an oscillating signal |
-| `ltspice_measurement_stats` | Aggregate `.MEAS` scalars across a sweep or Monte Carlo run |
-| `ltspice_bode_metrics` | AC/Bode analysis by `mode`: `filter` (type/cutoffs/ripple/rejection/order), `slope` (dB/decade), `point` (gain+phase at N freqs), `crossing` (where magnitude/phase crosses a level). `all_steps=true` returns the metric for every `.step` step |
-| `ltspice_stability_metrics` | AC loop-gain stability: all unity-gain / -180° crossings and per-crossing margins |
-| `ltspice_resonance` | Detect AC peaks and estimate Q factor + -3 dB bandwidth per peak |
-
-### Parametric analysis (5 tools)
-
-| Tool | Description |
-|-|-|
-| `ltspice_configure_sweep` | Configure a multi-parameter sweep (linear or log, by step size or point count) |
-| `ltspice_run_sweep` | Execute a configured sweep (async, returns job ID) |
-| `ltspice_configure_montecarlo` | Configure Monte Carlo analysis with per-type component tolerances |
-| `ltspice_run_montecarlo` | Execute a configured Monte Carlo analysis (async, returns job ID) |
-| `ltspice_batch_results` | Query sweep/MC job progress, per-signal statistics, or per-run data |
-
-### Library management (4 tools)
-
-| Tool | Description |
-|-|-|
-| `ltspice_find_model` | Find model candidates by name (fuzzy by default; `exact=true` for exact case-insensitive match) |
-| `ltspice_load_library` | Load a `.lib`/`.mod` file or a directory of library files |
-| `ltspice_unload_library` | Unload a previously loaded library |
-| `ltspice_list_libraries` | List loaded libraries, optionally with their model names |
-
-### Status (2 tools)
-
-| Tool | Description |
-|-|-|
-| `ltspice_server_status` | Server status: detected simulators, config, sandbox paths, runtime state |
-| `ltspice_recent` | Recently-used circuits and jobs from the persistent sidecar index |
-
-## Resources
-
-Static resources and URI templates for browsing circuit files and simulation results.
-
-| URI | Description |
-|-|-|
-| `ltspice://netlists/` | List netlist files in the working directory |
-| `ltspice://netlists/{filename}` | Read the full text of a specific netlist |
-| `ltspice://results/` | List all simulation and batch jobs with their status |
-| `ltspice://results/{job_id}/signals` | Signal/trace names from a completed job's `.raw` file |
-| `ltspice://results/{job_id}/measurements` | `.MEAS` results from a completed job's log |
-| `ltspice://models/` | List loaded model libraries and their models |
-| `ltspice://config` | Current server configuration and detected simulators |
-
-## Configuration
-
-Copy `ltspice-mcp.example.toml` to `ltspice-mcp.toml` and edit. All settings can be overridden with `LTSPICE_MCP_` prefixed environment variables (highest precedence). The config file path itself can be set with `--config PATH` or the `LTSPICE_MCP_CONFIG` env var.
-
-```toml
-[simulator]
-default = "ltspice"            # ltspice, ngspice, qspice, xyce (null = auto-detect)
-path = ""                      # Explicit executable path (required on WSL)
-
-[security]
-allowed_paths = ["."]          # Sandbox: only these directories are accessible
-
-[simulation]
-max_parallel = 4               # Concurrent simulation limit
-timeout = 300.0                # Default timeout in seconds
-
-[analysis]
-max_points = 10000             # Max waveform data points per trace
-
-[plotting]
-dpi = 150                      # Plot resolution
-style = "seaborn-v0_8-darkgrid"  # Matplotlib style
-
-[schematic]
-symbol_paths = []              # Custom .asy symbol paths (auto-detected on Windows/WSL)
-
-[logging]
-level = "INFO"                 # DEBUG, INFO, WARNING, ERROR, CRITICAL
-```
-
-## Architecture
+then drives three tools:
 
 ```
-MCP Protocol    server.py         — lifespan, dispatch, request routing
-                resources.py      — MCP resources and URI templates
+validate_netlist(path="rc.cir")
+  → OK: directives valid, element arities check out — safe to simulate
 
-Tools           tools/circuit.py     — netlist and schematic editing
-                tools/simulation.py  — simulation execution and job management
-                tools/analysis.py    — waveform analysis and measurements
-                tools/advanced.py    — parametric sweep and Monte Carlo
-                tools/library.py     — component library management
-                tools/status.py      — server diagnostics
+run_simulation(netlist="rc.cir")
+  → {"job_id": "sim_a3f1", "status": "completed", "raw_file": ".../rc.raw", ...}
 
-Core            lib/spice_lex.py         — shared SPICE tokenizer (see docs/spice_lex.md)
-                lib/spice_lex_views.py   — typed card views (model, instance, param, subckt, meas)
-                lib/spice_lex_ops.py     — cross-card transformations (rename_subckt, rename_model)
-                lib/spice_validator.py   — static netlist checks (`.MEAS` linting, missing models)
-                lib/sim_runner.py        — spicelib SimRunner async integration
-                lib/sweep_runner.py      — parametric sweep execution
-                lib/montecarlo_runner.py — Monte Carlo execution
-                lib/montecarlo.py        — MC engine perturbing models and `.PARAM` values
-                lib/runner_manager.py    — centralized runner lifecycle and caching
-                lib/runner_base.py       — shared runner base class
-                lib/raw_parser.py        — .raw file parsing and statistics
-                lib/log_parser.py        — .log parsing (errors, measurements, Fourier)
-                lib/signal_analysis.py   — transient signal metrics (edges, periodicity, timing)
-                lib/ac_analysis.py       — AC analysis metrics (filter, stability, resonance)
-                lib/batch_results.py     — sweep/MC batch result extraction
-                lib/services.py          — service layer shared by tools and resources
-                lib/job_lifecycle.py     — job-state transitions
-                lib/job_registry.py      — in-memory job index
-                lib/job_store.py         — persistent sidecar job state
-                lib/job_types.py         — job dataclasses
-                lib/recent.py            — recent-circuits index
-                lib/ltspice_wsl.py       — WSL-aware LTspice subclass
-                lib/wsl.py               — WSL detection and path conversion
-                lib/simulator.py         — simulator detection and selection
-                lib/library_manager.py   — SPICE model library management
-                lib/library_parser.py    — .lib/.mod file parsing
-                lib/geometry.py          — typed BBox and `.asy` shape parsing
-                lib/symbol_geometry.py   — `.asy` symbol parsing, pin positions, rotation
-                lib/component_value.py   — component value parsing and validation
-                lib/encoding.py          — SPICE text decoding (UTF-16/Latin-1/mixed EOL)
-                lib/cache.py             — FileCache for editor and result instances
-                lib/filelock.py          — cross-process file locking
-                lib/pathutil.py          — path security (safe_path, resolve_safe_path)
-                lib/format.py            — output formatting helpers
-                lib/plotting.py          — matplotlib plot generation
-                lib/sweep_utils.py       — sweep parameter utilities
-                lib/mcp_logging.py       — structured logging helpers
-                lib/observability.py     — tool-call observability hooks
-
-Config          config.py  — TOML + env var configuration
-                state.py   — session state (jobs, editors, caches)
-                errors.py  — structured error hierarchy
+bode_metrics(raw_file=".../rc.raw", signal="V(out)", mode="filter")
 ```
 
-### Design notes
+and gets back scalars, not a plot:
 
-- **Shared SPICE parser**: `lib/spice_lex` (see [docs/spice_lex.md](docs/spice_lex.md)) provides a single tokenizer + typed-card library used by the Monte Carlo engine, library parser, netlist validator, and circuit tools. Hand-rolled per-site regex passes have been migrated to it.
-- **Post-op validation pass**: schematic-mutating tools surface structured warnings (floating pins, dangling labels, duplicate wire segments) alongside the result, computed in the same editor session.
-- **Async wrapping**: spicelib is synchronous. Short-lived parser/editor calls run inline on the event loop (the MCP stdio transport processes one request at a time). Long-lived simulator work uses `asyncio.to_thread()` inside the runner layer (`sim_runner`, `sweep_runner`, `montecarlo_runner`).
-- **Path sandbox**: User-provided paths are validated against `config.allowed_paths`. Paths outside the sandbox raise `PathSecurityError`.
-- **Runner lifecycle**: `RunnerManager` owns all runner instances (sim, sweep, MC). It auto-invalidates cached runners when the event loop, simulator class, or output folder changes. Runners are never created directly.
-- **stdin protection**: `main.py` redirects fd 0 to `/dev/null` before starting the server, passing the real stdin only to the MCP transport. This prevents subprocesses from consuming MCP protocol bytes — a workaround for [python-sdk#671](https://github.com/modelcontextprotocol/python-sdk/issues/671).
-- **Tool annotations**: Every tool declares `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` for client auto-approval decisions.
-- **Output schemas**: All 19 data-returning tools declare `outputSchema` for client introspection of `structuredContent`. The remaining 16 text-only confirmation tools don't set `structuredContent` and omit `outputSchema`.
-- **Structured errors**: Typed error hierarchy (`PathSecurityError`, `NetlistError`, `SimulationError` variants) in `errors.py`. Handlers catch `LTSpiceMCPError` subtypes and return error text; unknown exceptions propagate to the MCP SDK.
+```json
+{
+  "signal": "V(out)",
+  "filter_type": "lowpass",
+  "passband_gain_db": 0.0,
+  "passband_ripple_db": 0.02,
+  "cutoff_low_hz": null,
+  "cutoff_high_hz": 1000.4,
+  "stopband_rejection_db": 59.97,
+  "rolloff_slope_db_per_decade": -19.9,
+  "estimated_order": 1,
+  "warnings": []
+}
+```
 
-## Documentation
+(abridged — the full response also includes passband bounds and transition bandwidth)
 
-- [docs/DESIGN.md](docs/DESIGN.md) — scope, architecture, design principles, non-goals, roadmap
-- [docs/spice_lex.md](docs/spice_lex.md) — SPICE parser architecture and public API
+Off-target → `set_component_value`, re-run, re-measure. Long simulations return a job ID instead of blocking; `check_job`/`cancel_job` manage them. Job metadata persists in per-circuit sidecars (`{dir}/.ltspice-mcp/jobs/` — add `.ltspice-mcp/` to your `.gitignore`), and MCP resources (`ltspice://results/...`, `ltspice://netlists/...`, `ltspice://config`) expose jobs, signals, measurements, and config for browsing.
+
+<details>
+<summary><strong>All 48 tools</strong></summary>
+
+Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`); data-returning tools declare an `outputSchema` for `structuredContent` introspection.
+
+| Tool | Description |
+|-|-|
+| `create_netlist` | Create a new netlist from a content string |
+| `create_schematic` | Create an empty `.asc` ready for incremental editing |
+| `schematic_from_netlist` | Generate an `.asc` from SPICE netlist text — grid-places R/C/L/V/I/D and wires pins by net label |
+| `read_circuit` | Read a circuit file (netlist text for `.cir`, schematic layout for `.asc`) |
+| `list_components` | List components (optional prefix filter) or look up one by reference |
+| `set_component_value` | Set one component value, or batch-set many via a `values` dict |
+| `parameter` | Read all `.PARAM` values or set one |
+| `edit_directive` | Add or remove SPICE directives (`.tran`, `.ac`, `.lib`, ...) |
+| `remove_component` | Remove a component (warns about orphaned wires) |
+| `move_component` | Move or rotate a component in an `.asc` schematic |
+| `set_component_attribute` | Set a component attribute (SpiceLine, Value2, ...) |
+| `add_component` | Add a component; returns pin positions, bounding box, overlap warnings |
+| `connect` | Wire two pins by reference with waypoint routing; validates pin collisions, junctions, diagonals |
+| `add_net_label` | Add/remove net labels and ground flags (supports pin-reference placement) |
+| `symbol_info` | Symbol pin positions, directions, bounding box, description |
+| `component_info` | Placed component pin positions, bounding box, attributes |
+| `export_netlist` | Export `.asc` to `.net` via LTspice (with diff against previous export) |
+| `validate_netlist` | Static pre-flight checks on a netlist or schematic before simulation |
+| `trace_net` | Every pin/label/wire on a net at a pin / `net:NAME` / `(x,y)`; flags accidental shorts |
+| `reset_schematic` | Revert an `.asc` to its pre-edit snapshot from this session |
+| `diff_circuit` | Structural diff between two circuit files |
+| `apply_schematic_ops` | Apply many `.asc` edits in one transaction |
+| `run_simulation` | Run a simulation — sync for short runs, async (job ID) for long ones |
+| `check_job` | Check a job's status by ID, or list all jobs |
+| `cancel_job` | Cancel a running simulation or batch; kills the simulator process(es) |
+| `signal_stats` | Min, max, mean, RMS, peak-to-peak (dB/phase for AC) |
+| `query_value` | Signal value at a specific time/frequency; `step_axis`+`step_value` picks a `.step` run |
+| `operating_point` | DC operating point: all node voltages and branch currents |
+| `simulation_summary` | Full summary: simulation type, signals, measurements, warnings |
+| `edge_metrics` | Rise/fall time and slew rate for one transient edge |
+| `pulse_response` | Overshoot, undershoot, settling time for a step response |
+| `timing_between` | Propagation delay between two transient signals |
+| `periodic_metrics` | Period, frequency, duty cycle, jitter of an oscillating signal |
+| `measurement_stats` | Aggregate `.MEAS` scalars across a sweep or Monte Carlo run |
+| `bode_metrics` | AC/Bode analysis by `mode`: `filter`, `slope`, `point`, `crossing`; `all_steps=true` for per-step results |
+| `stability_metrics` | Loop-gain stability: all unity-gain / -180° crossings with per-crossing margins |
+| `resonance` | AC peaks with Q factor and -3 dB bandwidth per peak |
+| `configure_sweep` | Configure a multi-parameter sweep (linear or log) |
+| `run_sweep` | Execute a configured sweep (async, returns job ID) |
+| `configure_montecarlo` | Configure Monte Carlo: tolerances, `.MODEL` variation, Pelgrom mismatch |
+| `run_montecarlo` | Execute a configured Monte Carlo analysis (async, returns job ID) |
+| `batch_results` | Sweep/MC job progress, per-signal statistics, or per-run data |
+| `find_model` | Find model candidates by name (fuzzy by default, `exact=true` for exact) |
+| `load_library` | Load a `.lib`/`.mod` file or a directory of libraries |
+| `unload_library` | Unload a previously loaded library |
+| `list_libraries` | List loaded libraries, optionally with model names |
+| `server_status` | Detected simulators, config, sandbox paths, runtime state |
+| `recent` | Recently-used circuits and jobs from the persistent index |
+
+</details>
 
 ## Development
 
-The project uses [uv](https://docs.astral.sh/uv/) for dev dependency management because it resolves the PEP 735 `dependency-groups` in `pyproject.toml` natively. Plain `pip` (25.1+) also supports this via `--group`.
-
 ```bash
-# With uv (recommended for development)
-uv sync                        # Install runtime + dev dependencies
-uv run pytest tests/ -v        # Run tests
-uv run pyright                 # Type checking
-uv run ruff check src/ tests/  # Lint
-uv run ltspice-mcp             # Run server (stdio)
-uv run ltspice-mcp --config /path/to/config.toml  # Custom config
-
-# With pip 25.1+
-pip install -e . --group dev
-pytest tests/ -v
-pyright
-ltspice-mcp
+uv sync                        # install runtime + dev dependencies
+uv run pytest tests/ -v        # tests
+uv run pyright                 # type checking
+uv run ruff check src/ tests/  # lint
+uv run ltspice-mcp             # run the server (stdio)
 ```
+
+More: [docs/DESIGN.md](docs/DESIGN.md) (scope, architecture, non-goals) and [docs/spice_lex.md](docs/spice_lex.md) (SPICE parser internals).
 
 ## License
 
