@@ -22,10 +22,13 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "anyio>=4.0,<5.0",
     "mcp[cli]>=1.27.0,<2.0",
+    "numpy>=1.26,<3.0",
+    "pydantic>=2.7,<3.0",
     "rapidfuzz>=3.0,<4.0",
+    "scipy>=1.12,<2.0",
     "spicelib>=1.4.9,<2.0",
-    "starlette>=1.0.1,<2.0",
     "tomlkit>=0.14.0,<1.0",
 ]
 

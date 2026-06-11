@@ -527,10 +527,13 @@ wheels = [
 name = "ltspice-mcp"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "mcp", extra = ["cli"] },
+    { name = "numpy" },
+    { name = "pydantic" },
     { name = "rapidfuzz" },
+    { name = "scipy" },
     { name = "spicelib" },
-    { name = "starlette" },
     { name = "tomlkit" },
 ]
 
@@ -547,10 +550,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.0,<5.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.27.0,<2.0" },
+    { name = "numpy", specifier = ">=1.26,<3.0" },
+    { name = "pydantic", specifier = ">=2.7,<3.0" },
     { name = "rapidfuzz", specifier = ">=3.0,<4.0" },
+    { name = "scipy", specifier = ">=1.12,<2.0" },
     { name = "spicelib", specifier = ">=1.4.9,<2.0" },
-    { name = "starlette", specifier = ">=1.0.1,<2.0" },
     { name = "tomlkit", specifier = ">=0.14.0,<1.0" },
 ]
 
