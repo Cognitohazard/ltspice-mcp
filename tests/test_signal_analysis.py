@@ -333,6 +333,20 @@ class TestAnalyzePulseResponse:
         assert result["overshoot_pct"] == 0.0
         assert result["direction"] == "rising"
 
+    def test_overshoot_with_pre_edge_ripple(self):
+        # A tiny ripple on the pre-edge baseline used to make find_peaks'
+        # FIRST local peak the ripple (non-positive in overshoot
+        # coordinates), silently reporting 0.0% on a real ~52.7% overshoot.
+        # The largest positive local peak must win, not the first one.
+        zeta = 0.2
+        wn = 2 * math.pi * 1000
+        expected = math.exp(-math.pi * zeta / math.sqrt(1 - zeta**2)) * 100
+        t, y = _second_order_step(zeta, wn, t_end=20e-3, n=20001)
+        y = y + np.where(t < 0, 0.002 * np.sin(2 * math.pi * 20e3 * t), 0.0)
+        result = analyze_pulse_response(t, y)
+        assert result["overshoot_pct"] == pytest.approx(expected, rel=0.05)
+        assert result["peak_value"] == pytest.approx(1 + expected / 100, rel=0.02)
+
     def test_falling_step(self):
         # Invert a rising step to get a falling one
         t, y = _second_order_step(zeta=0.2, wn=2 * math.pi * 1000, t_end=20e-3)

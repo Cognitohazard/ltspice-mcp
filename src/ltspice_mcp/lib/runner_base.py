@@ -228,6 +228,21 @@ class BatchRunnerBase(RunnerBase):
     def _register_runner(self, job_id: str, runner: SimRunner) -> None:
         self._active_runners[job_id] = runner
 
+    def _gated_runner_for(self, job_id: str, cancel_event: threading.Event) -> SimRunner:
+        """Build, wrap, cancel-gate, and register this batch's spicelib runner.
+
+        The gate stops the submission loop (spicelib's ``run_all`` for
+        sweeps, the per-run loop for Monte Carlo) from launching the
+        remaining queued runs after ``cancel()`` kills the in-flight ones —
+        the kill frees simulator slots, which would otherwise resume
+        submission of a job the user just cancelled.
+        """
+        runner = gate_runner_on_cancel(
+            wrap_runner_for_runno_callbacks(self._build_sim_runner()), cancel_event, job_id
+        )
+        self._register_runner(job_id, runner)
+        return runner
+
     def _record_run_completion(
         self,
         batch_job: BatchJob,
@@ -308,17 +323,19 @@ class BatchRunnerBase(RunnerBase):
         # slots, which can resume a submission already blocked inside
         # ``runner.run`` — its process appears a beat *after* the first pass
         # (observed live: a Monte-Carlo child created the same second as the
-        # cancel survived it and kept simulating). Re-scan until a pass at
-        # attempt >= 2 (~1 s in, interop latency included) finds nothing.
-        # When the first pass kills nothing, no slot was freed by us and a
-        # single clean re-scan suffices; off WSL every pass is a cheap no-op
-        # returning 0, so the loop exits on the first iteration with no sleep.
+        # cancel survived it and kept simulating). Break on a clean pass,
+        # EXCEPT at attempt 1: a clean scan only ~0.5s after a kill can still
+        # miss the resumed submission's process (it showed up ~1s in live),
+        # so the window stays open through the attempt-2 scan. A clean FIRST
+        # pass means no slot was freed by us — no resume race — and breaks
+        # immediately; off WSL every pass is a cheap no-op returning 0, so
+        # the loop exits there with no sleep.
         try:
             killed_total = 0
             for attempt in range(_CANCEL_KILL_MAX_PASSES):
                 killed = await asyncio.to_thread(kill_windows_ltspice_by_token, batch_job.job_id)
                 killed_total += killed
-                if killed == 0 and (killed_total == 0 or attempt >= 2):
+                if killed == 0 and attempt != 1:
                     break
                 await asyncio.sleep(_CANCEL_KILL_RESCAN_DELAY)
             if killed_total:

@@ -403,7 +403,6 @@ def gain_at_frequencies(
             raise ValueError(f"Query frequency must be positive and finite, got {f}")
 
     mag_db = magnitude_db(H)
-    phase_deg_wrapped = np.angle(H, deg=True)
     phase_deg_unwrapped, phase_warn = unwrap_phase_safe(H)
     warnings: list[str] = list(phase_warn)
 
@@ -415,7 +414,11 @@ def gain_at_frequencies(
                 f"[{freqs[0]:g}, {freqs[-1]:g}] Hz; clamped to nearest endpoint"
             )
         m_db = log_interp(freqs, mag_db, f)
-        p_deg = log_interp(freqs, phase_deg_wrapped, f)
+        # Interpolate on the UNWRAPPED phase: interpolating wrapped phase
+        # across the ±180° seam (e.g. samples at +179° and -179°) averages
+        # straight through 0° — up to ~180° of silent error at the exact
+        # frequencies where phase matters most (stability margins).
+        p_deg = log_interp(freqs, phase_deg_unwrapped, f)
         # Wrap to (-180, 180] for the reported phase (matches what a user
         # reads off a Bode plot); unwrapped phase is available as an opt-in.
         p_deg_wrapped = ((p_deg + 180.0) % 360.0) - 180.0
@@ -428,7 +431,7 @@ def gain_at_frequencies(
             "phase_deg": float(p_deg_wrapped),
         }
         if include_unwrapped_phase:
-            entry["phase_deg_unwrapped"] = float(log_interp(freqs, phase_deg_unwrapped, f))
+            entry["phase_deg_unwrapped"] = float(p_deg)
         points.append(entry)
 
     return points, warnings

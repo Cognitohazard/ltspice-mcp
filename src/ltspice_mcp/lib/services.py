@@ -613,6 +613,21 @@ def asc_component_value(editor: AscEditor, ref: str) -> str:
     return str(val) if val is not None else ""
 
 
+def asc_component_attributes(comp: Any) -> dict[str, str]:
+    """Non-default SYMATTRs of an .asc component as a plain string dict.
+
+    Filters ``Value``/``InstName`` (surfaced separately) and empty values.
+    spicelib stores some attribute values as ``Text`` records rather than
+    strings — those are not JSON-serializable and violate the string-typed
+    output schemas, so coerce every value to its payload string.
+    """
+    return {
+        k: str(getattr(v, "text", v))
+        for k, v in (comp.attributes or {}).items()
+        if k not in ("Value", "InstName") and v
+    }
+
+
 def extract_asc_info(editor: AscEditor, file_path: Path) -> dict[str, Any]:
     """Extract structured schematic data from an ``AscEditor``."""
     components = editor.get_components()
@@ -623,12 +638,7 @@ def extract_asc_info(editor: AscEditor, file_path: Path) -> dict[str, Any]:
         rot_str = f"R{rot.value}" if rot.value < 360 else f"M{rot.value - 360}"
         # Surface non-default SYMATTRs (e.g., SpiceLine, SpiceModel) so
         # callers don't need a per-component component_info round-trip.
-        comp = editor.components[ref]
-        attrs = {
-            k: v
-            for k, v in (comp.attributes or {}).items()
-            if k not in ("Value", "InstName") and v
-        }
+        attrs = asc_component_attributes(editor.components[ref])
         entry = {"reference": ref, "value": value, "x": pos.X, "y": pos.Y, "rotation": rot_str}
         if attrs:
             entry["attributes"] = attrs

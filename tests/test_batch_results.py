@@ -21,6 +21,13 @@ class TestFilterRunsByParams:
         result = filter_runs_by_params(runs, {"R": "1k"})
         assert result == [0]
 
+    def test_filter_param_name_case_insensitive(self):
+        # Run params carry the netlist's casing ("R1"); user filters often
+        # arrive lowercase. An exact-key match silently returned zero runs.
+        runs = {0: _make_run({"R1": 1000.0}), 1: _make_run({"R1": 2000.0})}
+        assert filter_runs_by_params(runs, {"r1": "1k"}) == [0]
+        assert filter_runs_by_params(runs, {"R1": "2k"}) == [1]
+
     def test_filter_range(self):
         runs = {
             0: _make_run({"R": 1000.0}),

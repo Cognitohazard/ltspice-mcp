@@ -368,22 +368,27 @@ def _schema_for_type(tp: Any) -> dict[str, Any]:
 def schema_from_typeddict(td: type) -> dict[str, Any]:
     """Generate a JSON Schema (``{"type": "object", ...}``) from a TypedDict.
 
-    Every field is emitted under ``properties``. ``required`` lists fields
-    that don't accept None — optional-by-convention is expressed as
-    ``X | None`` on the TypedDict, not via ``NotRequired``, so the repo
-    has a single way to spell "may be missing" and the schema reflects it.
+    Every field is emitted under ``properties``. ``required`` reflects the
+    two DISTINCT ways a field can be optional, both of which exist in the
+    wire format: a ``NotRequired``/``total=False`` field may be ABSENT
+    (omit-when-empty convention; e.g. ``GainAtPoint.phase_deg_unwrapped``),
+    while an ``X | None`` field is always present but may be null. Marking
+    an omitted key as required makes schema-validating MCP clients reject
+    responses that follow the documented omit-when-empty behavior.
     """
     if not _is_typeddict(td):
         raise TypeError(f"Expected TypedDict, got {td!r}")
 
     hints = get_type_hints(td)
+    structurally_required = getattr(td, "__required_keys__", frozenset(hints))
     properties: dict[str, Any] = {}
     required: list[str] = []
     for field_name, field_type in hints.items():
         properties[field_name] = _schema_for_type(field_type)
-        # A field is required unless its type admits None.
+        # A field is required unless the key may be absent entirely
+        # (NotRequired / total=False) or its type admits None.
         admits_none = _is_union(field_type) and type(None) in get_args(field_type)
-        if not admits_none:
+        if field_name in structurally_required and not admits_none:
             required.append(field_name)
 
     schema: dict[str, Any] = {"type": "object", "properties": properties}
@@ -478,7 +483,14 @@ registry = ToolRegistry()
 # ---------------------------------------------------------------------------
 
 
-def paginate(items: list, arguments: Any, cap: int = 50) -> tuple[list, int, int, int]:
+DEFAULT_PAGE_CAP = 50
+"""Server-side ceiling on list-endpoint page size — the "caps at 50" the
+``limit`` field descriptions document."""
+
+
+def paginate(
+    items: list, arguments: Any, cap: int = DEFAULT_PAGE_CAP
+) -> tuple[list, int, int, int]:
     """Slice a list according to offset/limit from tool arguments.
 
     Returns:

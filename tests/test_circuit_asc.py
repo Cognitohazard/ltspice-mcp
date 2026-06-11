@@ -335,6 +335,30 @@ class TestEditDirectiveCommentKind:
         )
         assert "Test note" in result.content[0].text
 
+    async def test_add_directive_honors_placement(self, asc_state: SessionState, asc_file: Path):
+        """x/y/size on the .asc DIRECTIVE branch must place the directive at
+        the given coordinates — previously only the comment branch read
+        them, and spicelib's add_instruction silently picked its own spot
+        and font size."""
+        result = await handle_edit_directive(
+            EditDirectiveInput(
+                path=asc_file.name,
+                action="add",
+                instruction=".tran 5m",
+                x=320,
+                y=240,
+                size=3,
+            ),
+            asc_state,
+        )
+        assert "Added directive" in result.content[0].text
+        content = _read_bytes(asc_file)
+        # LTspice TEXT record: "TEXT <x> <y> <align> <size> !<directive>"
+        assert b"!.tran 5m" in content
+        line = next(ln for ln in content.splitlines() if b"!.tran 5m" in ln)
+        assert b"320 240" in line
+        assert b" 3 " in line
+
     async def test_comment_rejects_directive_prefix(self, asc_state: SessionState, asc_file: Path):
         """``kind='comment'`` with an instruction that starts with
         ``!`` or ``.`` is almost always a mis-typed kind — refuse and

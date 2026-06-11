@@ -30,6 +30,7 @@ from ltspice_mcp.state import (
     SweepDimension,
 )
 from ltspice_mcp.tools._base import (
+    DEFAULT_PAGE_CAP,
     PAGINATION_SCHEMA,
     StrictModel,
     ToolInput,
@@ -263,7 +264,7 @@ class GetBatchResultsInput(ToolInput):
     )
     filters: dict[str, str] | None = Field(
         default=None,
-        description="Filter runs by parameter values (e.g., {'R1': '10k'}). Only with signal + raw.",
+        description="Filter runs by parameter values (e.g., {'R1': '10k'}). Applies in both aggregate and raw mode (requires signal).",
     )
     at: str | None = Field(
         default=None,
@@ -275,7 +276,9 @@ class GetBatchResultsInput(ToolInput):
         ),
     )
     offset: int = Field(default=0, description="Pagination offset for raw data")
-    limit: int = Field(default=50, description="Max raw data rows to return")
+    limit: int = Field(
+        default=50, description="Max raw data rows to return (server caps at 50; page with offset)"
+    )
     raw: bool = Field(
         default=False, description="Return per-run raw data instead of aggregate stats"
     )
@@ -1004,7 +1007,7 @@ async def handle_batch_results(args: GetBatchResultsInput, state: SessionState):
 
     filters = args.filters
     offset = args.offset
-    limit = min(args.limit, 50)
+    limit = min(args.limit, DEFAULT_PAGE_CAP)
     raw_mode = args.raw
     at_value: float | None = None
     if args.at is not None:
@@ -1165,9 +1168,16 @@ def _format_batch_raw_text(data: dict) -> str:
         run_idx = run_summary["run_index"]
         params = run_summary.get("params", {})
         params_str = " ".join(f"{k}={v}" for k, v in params.items()) if params else "-"
+        # Runs sliced to a single sample (``at=``/.op-style or an exactly
+        # constant waveform) collapse to one ``value`` key; render it in all
+        # three columns rather than a row of N/A that hides the data the
+        # ``at`` slice just computed.
+        value = run_summary.get("value")
+        peak = run_summary.get("peak", value)
+        mean = run_summary.get("mean", value)
+        low = run_summary.get("min", value)
         lines.append(
-            f"{run_idx:<6} {_fmt_col(run_summary.get('peak'))} {_fmt_col(run_summary.get('mean'))} "
-            f"{_fmt_col(run_summary.get('min'))}  {params_str}"
+            f"{run_idx:<6} {_fmt_col(peak)} {_fmt_col(mean)} {_fmt_col(low)}  {params_str}"
         )
 
     pagination = data["pagination"]
