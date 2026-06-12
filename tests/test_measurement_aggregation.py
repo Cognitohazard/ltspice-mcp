@@ -61,7 +61,7 @@ def _make_sweep_batch(
     for i, log in enumerate(logs):
         entry: dict = {
             "raw_file": str(FIXTURES_DIR / f"unused_run{i}.raw"),
-            "params": {"R1": RUN_PARAMS[i]},
+            "params": {"R1": RUN_PARAMS[i % len(RUN_PARAMS)]},
         }
         if log is not None:
             entry["log_file"] = str(log)
@@ -180,6 +180,109 @@ class TestJobAggregation:
         bj = _make_sweep_batch(state_no_sim, log_files=[])
         bj.run_results = {}
         with pytest.raises(ResultError, match="no completed runs"):
+            await handle_measurement_stats(MeasurementStatsInput(job_id="sweep1"), state_no_sim)
+
+
+# Verbatim ngspice-42 batch-mode log (captured from `ngspice -b -r out.raw
+# -o out.log` on a .tran deck with a .meas directive): batch mode with a
+# rawfile evaluates NO .meas at all, and the log itself carries the reason.
+_NGSPICE_BATCH_MEAS_BLOCKED_LOG = (
+    "\n"
+    "Note: No compatibility mode selected!\n"
+    "\n"
+    "\n"
+    "Circuit: * rc meas\n"
+    "\n"
+    'binary raw file "meas.raw"\n'
+    "Doing analysis at TEMP = 27.000000 and TNOM = 27.000000\n"
+    "\n"
+    "Using SPARSE 1.3 as Direct Linear Solver\n"
+    "No. of Data Columns : 4  \n"
+    "\n"
+    "No. of Data Rows : 526\n"
+    "\n"
+    "No .measure possible in batch mode (-b) with -r rawfile set!\n"
+    "Remove rawfile and use .print or .plot or\n"
+    "select interactive mode (optionally with .control section) instead.\n"
+    "\n"
+    "\n"
+    "Total analysis time (seconds) = 0.001\n"
+    "\n"
+    "Total elapsed time (seconds) = 0.009 \n"
+)
+
+
+@pytest.mark.asyncio
+class TestBatchNoMeasReasonRelayed:
+    """When a batch yields no .MEAS at all, the error must relay WHY from the
+    per-run logs (e.g. ngspice's batch-mode skip) instead of a bare 'No .MEAS
+    results found' that hides a cause the log states verbatim."""
+
+    def _batch_with_logs(
+        self, state: SessionState, tmp_path: Path, texts: list[str]
+    ) -> list[Path]:
+        logs = []
+        for i, text in enumerate(texts):
+            log = tmp_path / f"run{i}.log"
+            log.write_text(text)
+            logs.append(log)
+        _make_sweep_batch(state, log_files=logs)
+        return logs
+
+    async def test_ngspice_batch_mode_skip_is_relayed(
+        self, state_no_sim: SessionState, tmp_path: Path
+    ):
+        self._batch_with_logs(state_no_sim, tmp_path, [_NGSPICE_BATCH_MEAS_BLOCKED_LOG] * 2)
+        with pytest.raises(ResultError) as exc_info:
+            await handle_measurement_stats(MeasurementStatsInput(job_id="sweep1"), state_no_sim)
+        msg = str(exc_info.value)
+        assert "No .MEAS results found across the runs of job 'sweep1'" in msg
+        # The ngspice line is relayed, indented like the single-log branch.
+        assert "\n  " in msg
+        assert "No .measure possible in batch mode (-b) with -r rawfile set!" in msg
+        # Identical per-run diagnostics are deduplicated, not repeated per run.
+        assert msg.count("No .measure possible in batch mode") == 1
+
+    async def test_per_run_unique_diagnostics_are_capped(
+        self, state_no_sim: SessionState, tmp_path: Path
+    ):
+        # Each run's log carries a run-unique warning line (think
+        # timestamps or values), so deduplication keeps them all distinct.
+        # The relay must cap the list instead of growing one line per run
+        # on a large batch.
+        texts = [
+            f"Circuit: * mc\n\nWarning: seed {1000 + i} produced no .meas output\n"
+            for i in range(12)
+        ]
+        self._batch_with_logs(state_no_sim, tmp_path, texts)
+        with pytest.raises(ResultError) as exc_info:
+            await handle_measurement_stats(MeasurementStatsInput(job_id="sweep1"), state_no_sim)
+        msg = str(exc_info.value)
+        shown = [ln for ln in msg.splitlines() if "Warning: seed" in ln]
+        assert len(shown) == 8, msg
+        assert "seed 1007" in msg
+        assert "seed 1008" not in msg
+        assert "... and 4 more distinct diagnostic lines" in msg
+
+    async def test_readable_logs_without_diagnostics_say_so(
+        self, state_no_sim: SessionState, tmp_path: Path
+    ):
+        # Logs readable but carrying neither .MEAS results nor any diagnostic
+        # line: the error must say that honestly rather than implying a cause.
+        self._batch_with_logs(
+            state_no_sim, tmp_path, ["Circuit: * bare\n\nNo. of Data Rows : 3\n"] * 2
+        )
+        with pytest.raises(ResultError, match=r"no \.MEAS results and no diagnostics"):
+            await handle_measurement_stats(MeasurementStatsInput(job_id="sweep1"), state_no_sim)
+
+    async def test_no_readable_logs_message_stays_honest(self, state_no_sim: SessionState):
+        # When NO per-run log could be read there are no diagnostics to relay;
+        # the error must say the logs were unreadable, not fabricate a cause.
+        _make_sweep_batch(
+            state_no_sim,
+            log_files=[Path("/nonexistent/a.log"), Path("/nonexistent/b.log")],
+        )
+        with pytest.raises(ResultError, match=r"none of the per-run log files could be read"):
             await handle_measurement_stats(MeasurementStatsInput(job_id="sweep1"), state_no_sim)
 
 

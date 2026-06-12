@@ -6,6 +6,36 @@ project will adopt [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once it reaches `1.0.0`. Until then, minor versions may contain breaking
 tool-surface changes.
 
+## [Unreleased]
+
+### Added
+
+- `validate_netlist` rejects empty / whitespace-only netlists (error) and
+  warns on single-connection (dangling) nodes in `.cir`/`.net` decks. The
+  dangling-node pass is scope-aware (`.subckt` bodies counted separately,
+  header ports count as a connection), excludes ground and `.global` nodes,
+  and counts terminals conservatively — nodes referenced only by expressions
+  (`V(...)`/`I(...)`), unrecognized elements, or non-terminal tokens are never
+  warned about. `.asc` schematics are exempt (their connectivity lives in
+  wires and flags, which this pass cannot see).
+
+### Changed
+
+- CI: the push/PR gate (`ci.yml`) and the release gate (`publish.yml`) now
+  call one shared reusable workflow (`checks.yml`), so the two gates cannot
+  drift. GitHub status-check contexts are renamed to `checks / check` and
+  `checks / audit`.
+
+### Fixed
+
+- `measurement_stats` on a batch job with no `.MEAS` results now relays the
+  per-run log diagnostics that explain why (e.g. ngspice's "No .measure
+  possible in batch mode"), capped at 8 distinct lines, instead of a bare
+  "No .MEAS results found".
+- A truncated or corrupt `.raw` file that parses as having zero variables is
+  now diagnosed as corrupt when loaded, instead of surfacing downstream as
+  "Signal not found" with an empty available-signals list.
+
 ## [0.2.0] - 2026-06-10
 
 The largest release to date: every tool renamed, the AC-analysis surface
