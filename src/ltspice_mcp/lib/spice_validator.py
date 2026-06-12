@@ -151,6 +151,11 @@ def validate_directive(directive: str, simulator: str = "LTspice") -> Validation
     return None
 
 
+def _card_directive(card: SpiceCard) -> str:
+    """Source-form display text of a card for issue payloads."""
+    return card.raw_lines[0].rstrip() if card.raw_lines else card.body.strip()
+
+
 def validate_netlist_arity(cards: list[SpiceCard]) -> list[dict[str, object]]:
     """Flag instance cards whose positional-node count is below the per-
     element minimum, and B-sources missing the ``V=``/``I=`` prefix.
@@ -173,7 +178,7 @@ def validate_netlist_arity(cards: list[SpiceCard]) -> list[dict[str, object]]:
         if spec is None:
             continue
 
-        directive = card.raw_lines[0].rstrip() if card.raw_lines else card.body.strip()
+        directive = _card_directive(card)
 
         # E/G/F/H carry two body shapes:
         #   - positional gain (``E1 out 0 in 0 10``) — needs spec.min_nodes
@@ -297,51 +302,79 @@ _TRAILING_MODEL_PREFIXES = frozenset({"D", "J", "M", "O", "Q", "S", "U", "W", "Z
 _PROBE_REF_RE = re.compile(r"\b[VI]\s*\(([^()]*)\)", re.IGNORECASE)
 
 
-def _split_instance_positionals(card: SpiceCard) -> tuple[str, list[str], list[str]] | None:
-    """Split an instance card into ``(ref, terminal tokens, other positionals)``.
+def _instance_terminals(inst: InstanceLine) -> tuple[list[str], list[str]]:
+    """Split an instance view into ``(terminal tokens, other positionals)``.
 
     Terminals are the leading token positions known to carry circuit nodes
     for the element's prefix. Every other positional — model names, area
     factors, controlling-source refs, POLY tails, the X subckt name, all
-    tokens of an unknown prefix (XSPICE A-cards) — lands in the third slot:
+    tokens of an unknown prefix (XSPICE A-cards) — lands in the second slot:
     those feed the suppressor set, so a card shape this table mis-models
     can only ever hide a warning, never invent one.
     """
-    try:
-        tokens = tokenize_body(card.body)
-    except SpiceLexError:
-        return None
-    if not tokens or tokens[0].kind != TokenKind.BARE:
-        return None
-    ref = tokens[0].text
-    first_kv = next(
-        (idx for idx, tok in enumerate(tokens) if tok.kind == TokenKind.KEY_VALUE),
-        None,
-    )
-    positionals = [
-        tok.text
-        for tok in (tokens[1:first_kv] if first_kv is not None else tokens[1:])
-        if tok.kind != TokenKind.COMMENT_TRAIL
-    ]
-    prefix = ref[:1].upper()
+    prefix = inst.ref[:1].upper()
 
     if prefix == "X":
         # Every positional up to the subckt name is a node.
-        return ref, positionals[:-1], positionals[-1:]
+        return list(inst.nodes), [inst.model] if inst.model else []
+
+    candidates = list(inst.nodes)
+    tail: list[str] = []
+    if inst.model is not None:
+        if prefix in _TRAILING_MODEL_PREFIXES:
+            tail.append(inst.model)
+        else:
+            # Prefixes outside ELEMENT_SPECS parse with the default spec,
+            # which reads the last positional as a model name even when it
+            # is really a node (the T-line's 4th port) — keep it positional
+            # so the terminal slice can count it.
+            candidates.append(inst.model)
+    elif inst.value is not None:
+        # The keyed primary-value form (``R1 a b R=1k``) reads its value
+        # from the KEY=VALUE token, not a positional slot — only a
+        # positional value rejoins the candidates.
+        keyed = prefix in ("R", "C", "L") and any(k.upper() == prefix for k in inst.params)
+        if not keyed:
+            candidates.append(inst.value)
+
     if prefix in ("E", "G"):
         # The plain gain form (out+ out- in+ in- gain) carries 4 node
         # slots; POLY / VALUE= / truncated shapes guarantee only the two
-        # output nodes.
-        count = 4 if first_kv is None and len(positionals) == 5 else 2
-        return ref, positionals[:count], positionals[count:]
+        # output nodes. ``value`` is set only on the KV-free positional
+        # form, so it discriminates without re-reading raw tokens.
+        count = 4 if inst.value is not None and len(inst.nodes) == 4 else 2
+        return candidates[:count], candidates[count:]
     count = _TERMINAL_COUNTS.get(prefix)
     if count is None:
-        return ref, [], positionals
-    tail: list[str] = []
-    if prefix in _TRAILING_MODEL_PREFIXES and positionals:
-        tail = [positionals[-1]]
-        positionals = positionals[:-1]
-    return ref, positionals[:count], positionals[count:] + tail
+        return [], candidates + tail
+    return candidates[:count], candidates[count:] + tail
+
+
+@dataclass
+class _NodeUse:
+    """First reference to a node within one scope, plus total reference count.
+
+    Only the first occurrence's details are ever reported, so later
+    references just bump ``count``.
+    """
+
+    display: str
+    referrer: str
+    line: int
+    directive: str
+    is_port: bool
+    count: int = 1
+
+
+def drop_title_card(cards: list[SpiceCard]) -> list[SpiceCard]:
+    """Drop the line-1 instance card produced by a SPICE deck's title.
+
+    Line 1 of a netlist is a free-text title by SPICE convention. The
+    lexer has no title concept, so a title starting with an element
+    letter parses as an instance card — its words would otherwise be
+    counted as circuit nodes by instance-level lints.
+    """
+    return [card for card in cards if not (card.kind == "instance" and card.line_start == 1)]
 
 
 def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, object]]:
@@ -368,6 +401,8 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
     for card in cards:
         if card.kind != "directive":
             continue
+        if not card.body.lstrip().lower().startswith(".global"):
+            continue
         try:
             tokens = tokenize_body(card.body)
         except SpiceLexError:
@@ -380,8 +415,8 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
             if tok.kind == TokenKind.BARE:
                 global_nodes.add(tok.text.lower())
 
-    # scope → lowercased node → [(display, referrer, line, directive, is_port)].
-    occurrences: dict[tuple[str, ...], dict[str, list[tuple[str, str, int, str, bool]]]] = {}
+    # scope → lowercased node → first reference + total reference count.
+    occurrences: dict[tuple[str, ...], dict[str, _NodeUse]] = {}
     suppressed: set[str] = set()
 
     def record(
@@ -390,10 +425,18 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
         key = node.lower()
         if key in _GROUND_NODES or key in global_nodes:
             return
-        directive = card.raw_lines[0].rstrip() if card.raw_lines else card.body.strip()
-        occurrences.setdefault(scope, {}).setdefault(key, []).append(
-            (node, referrer, card.line_start, directive, is_port)
-        )
+        nodes = occurrences.setdefault(scope, {})
+        use = nodes.get(key)
+        if use is None:
+            nodes[key] = _NodeUse(
+                display=node,
+                referrer=referrer,
+                line=card.line_start,
+                directive=_card_directive(card),
+                is_port=is_port,
+            )
+        else:
+            use.count += 1
 
     for card in cards:
         if card.kind == "subckt":
@@ -405,14 +448,15 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
             for port in sub.ports:
                 record(body_scope, port, f".SUBCKT {sub.name}", card, is_port=True)
         elif card.kind == "instance":
-            split = _split_instance_positionals(card)
-            if split is None:
+            try:
+                inst = InstanceLine.from_card(card)
+            except SpiceLexError:
                 continue
-            ref, terminals, rest = split
+            terminals, rest = _instance_terminals(inst)
             for node in terminals:
                 if set(node) & _NON_NODE_CHARS:
                     continue
-                record(card.scope, node, ref, card)
+                record(card.scope, node, inst.ref, card)
             suppressed.update(tok.lower() for tok in rest)
             for probe in _PROBE_REF_RE.finditer(card.body):
                 for part in probe.group(1).split(","):
@@ -423,13 +467,12 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
     issues: list[dict[str, object]] = []
     for scope, nodes in occurrences.items():
         where = f" inside .SUBCKT {scope[-1]}" if scope else ""
-        for key, refs in nodes.items():
-            if len(refs) != 1 or key in suppressed:
+        for key, use in nodes.items():
+            if use.count != 1 or key in suppressed:
                 continue
-            display, referrer, line, directive, is_port = refs[0]
-            if is_port:
+            if use.is_port:
                 message = (
-                    f"Node '{display}' is declared as a port of .SUBCKT "
+                    f"Node '{use.display}' is declared as a port of .SUBCKT "
                     f"{scope[-1]} but connected to no element terminal in its body."
                 )
                 suggestion = (
@@ -438,8 +481,8 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
                 )
             else:
                 message = (
-                    f"Node '{display}' is connected to only one element "
-                    f"terminal ({referrer}){where}."
+                    f"Node '{use.display}' is connected to only one element "
+                    f"terminal ({use.referrer}){where}."
                 )
                 suggestion = (
                     "Wire the node to a second terminal — or ignore this "
@@ -447,8 +490,8 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
                 )
             issues.append(
                 {
-                    "line": line,
-                    "directive": directive,
+                    "line": use.line,
+                    "directive": use.directive,
                     "message": message,
                     "suggestion": suggestion,
                 }
