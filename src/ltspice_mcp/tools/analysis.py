@@ -1512,6 +1512,14 @@ class _MeasSamples(TypedDict):
 _MAX_RELAYED_RUN_DIAGNOSTICS = 8
 
 
+def _diagnostics_block(diags: list[str], empty_note: str) -> str:
+    """Indent diagnostic lines for an error payload, or fall back to
+    ``empty_note`` when there is nothing to relay."""
+    if not diags:
+        return f"  {empty_note}"
+    return "\n".join(f"  {d}" for d in diags)
+
+
 def _aggregate_job_measurements(
     batch_job: BatchJob,
 ) -> tuple[dict[str, list[float | None]], int, dict[str, AggregatedField], list[str]]:
@@ -1541,6 +1549,7 @@ def _aggregate_job_measurements(
 
     samples: dict[str, _MeasSamples] = {}
     diagnostics: list[str] = []
+    seen_diagnostics: set[str] = set()
     runs_processed = 0
     for run_index in sorted(batch_job.run_results.keys()):
         run = batch_job.run_results[run_index]
@@ -1559,7 +1568,8 @@ def _aggregate_job_measurements(
         # explain an absence. Deduplicated: every run of a batch typically
         # repeats the same simulator diagnostic verbatim.
         for diag in list(data.get("errors") or []) + list(data.get("warnings") or []):
-            if diag not in diagnostics:
+            if diag not in seen_diagnostics:
+                seen_diagnostics.add(diag)
                 diagnostics.append(diag)
         for name, entry in data.get("measurements", {}).items():
             row = entry.get("values", [])
@@ -1632,10 +1642,8 @@ def _aggregate_log_measurements(
         # batch mode"), not an error. Reporting "no diagnostics" while every
         # other tool shows the cause is misleading.
         diags = list(meas_data.get("errors") or []) + list(meas_data.get("warnings") or [])
-        err_block = (
-            "\n".join(f"  {d}" for d in diags)
-            if diags
-            else "  (log contained no .MEAS results and no diagnostics)"
+        err_block = _diagnostics_block(
+            diags, "(log contained no .MEAS results and no diagnostics)"
         )
         raise ResultError(f"No .MEAS results in log:\n{err_block}")
 
@@ -1700,14 +1708,13 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
                 # run-unique lines (timestamps, values) survive deduplication,
                 # which would otherwise grow the message one line per run on
                 # a large Monte Carlo batch.
-                if run_diags:
-                    shown = run_diags[:_MAX_RELAYED_RUN_DIAGNOSTICS]
-                    hidden = len(run_diags) - len(shown)
-                    if hidden:
-                        shown.append(f"... and {hidden} more distinct diagnostic lines")
-                    err_block = "\n".join(f"  {d}" for d in shown)
-                else:
-                    err_block = "  (run logs contained no .MEAS results and no diagnostics)"
+                shown = run_diags[:_MAX_RELAYED_RUN_DIAGNOSTICS]
+                hidden = len(run_diags) - len(shown)
+                if hidden:
+                    shown.append(f"... and {hidden} more distinct diagnostic lines")
+                err_block = _diagnostics_block(
+                    shown, "(run logs contained no .MEAS results and no diagnostics)"
+                )
                 raise ResultError(
                     f"No .MEAS results found across the runs of job {args.job_id!r}:\n{err_block}"
                 )

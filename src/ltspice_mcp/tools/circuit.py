@@ -43,6 +43,7 @@ from ltspice_mcp.lib.spice_validator import (
     ANALYSIS_KINDS,
     EXCLUSIVE_ANALYSIS_KINDS,
     MEAS_KINDS,
+    drop_title_card,
     validate_directive,
     validate_netlist_arity,
     validate_netlist_dangling_nodes,
@@ -3993,14 +3994,9 @@ async def handle_validate_netlist(
     # deliberate fragments. Non-.asc only: a schematic's connectivity lives
     # in wires and flags this pass cannot see, so element lines legally
     # embedded in .asc SPICE-directive text would all false-positive
-    # (floating pins are the schematic topology pass's job below). Line 1
-    # of a netlist is the free-text title, which the lexer reads as an
-    # instance card — excluded so title words don't become phantom nodes.
+    # (floating pins are the schematic topology pass's job below).
     if asc_editor is None:
-        dangling_cards = [
-            card for card in arity_cards if not (card.kind == "instance" and card.line_start == 1)
-        ]
-        for dangling_issue in validate_netlist_dangling_nodes(dangling_cards):
+        for dangling_issue in validate_netlist_dangling_nodes(drop_title_card(arity_cards)):
             issues.append({"severity": "warning", **dangling_issue})
 
     # .asc schematic-graph checks (named-net shorts, floating pins, dangling

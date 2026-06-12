@@ -218,16 +218,13 @@ class TestBatchNoMeasReasonRelayed:
     per-run logs (e.g. ngspice's batch-mode skip) instead of a bare 'No .MEAS
     results found' that hides a cause the log states verbatim."""
 
-    def _batch_with_logs(
-        self, state: SessionState, tmp_path: Path, texts: list[str]
-    ) -> list[Path]:
+    def _batch_with_logs(self, state: SessionState, tmp_path: Path, texts: list[str]) -> None:
         logs = []
         for i, text in enumerate(texts):
             log = tmp_path / f"run{i}.log"
             log.write_text(text)
             logs.append(log)
         _make_sweep_batch(state, log_files=logs)
-        return logs
 
     async def test_ngspice_batch_mode_skip_is_relayed(
         self, state_no_sim: SessionState, tmp_path: Path
