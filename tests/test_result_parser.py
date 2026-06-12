@@ -287,7 +287,6 @@ class TestExtractLogDiagnostics:
         assert len(errors) == 1
 
 
-# Relocated from tests/test_followups_2026_05_29.py (regression).
 class TestSampleToDict:
     def test_complex_sample_has_magnitude_linear(self):
         d = sample_to_dict(complex(0.0, 1.0))

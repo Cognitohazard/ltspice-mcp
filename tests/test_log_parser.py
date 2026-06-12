@@ -129,7 +129,7 @@ class TestExtractLogDiagnostics:
         assert len(result["warnings"]) == 2
 
     def test_bare_error_prefix_collected(self, tmp_path: Path):
-        """V7-P0-1: a bare ``ERROR:`` line (e.g. LTspice floating node) must
+        """A bare ``ERROR:`` line (e.g. LTspice floating node) must
         land in errors[] — without this a failed-physics run reads as success."""
         log = tmp_path / "floating.log"
         log.write_text(
@@ -360,7 +360,7 @@ class TestParseMeasurementsValid:
 
 class TestParseMeasurementsFourierNan:
     def test_nan_thd_does_not_crash(self, tmp_path: Path):
-        """Bug A: ``Total Harmonic Distortion: -nan%`` used to crash the
+        """``Total Harmonic Distortion: -nan%`` used to crash the
         spicelib reader with ``'NoneType' object has no attribute 'group'``,
         wiping out any .MEAS results in the same log."""
         log = tmp_path / "nan_four.log"
@@ -390,7 +390,7 @@ class TestParseMeasurementsFourierNan:
 
 
 class TestParseMeasurementsFailed:
-    """D-N2: FAIL'ed .MEAS entries used to be silently absent. Spicelib's
+    """FAIL'ed .MEAS entries used to be silently absent. Spicelib's
     get_measure_names() filters them out, so without text-log extraction
     the user can't tell "did not trigger" from "did not parse"."""
 
@@ -552,9 +552,8 @@ class TestCountOpIterations:
         assert count_op_iterations(tmp_path / "nope.log") == 0
 
 
-# Relocated from tests/test_v5_fixes.py (regression).
-class TestN2StepTempDegreeStripping:
-    """N2: log step parser strips trailing degree symbol."""
+class TestStepTempDegreeStripping:
+    """Log step parser strips trailing degree symbol."""
 
     def test_temp_axis_strips_degree(self, tmp_path: Path):
         log = tmp_path / "step_temp.log"

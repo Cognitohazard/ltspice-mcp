@@ -111,7 +111,7 @@ class TestSignalStats:
         assert result.structuredContent["analysis_type"] == "transient"
 
     async def test_dc_sweep_classification(self, state_no_sim: SessionState, work_dir: Path):
-        """Bug E: a .DC raw used to report ``analysis_type='transient'`` and
+        """A .DC raw used to report ``analysis_type='transient'`` and
         ``t_start_used`` / ``duration`` whose units were temperature, not
         seconds. The handler now branches on ``Plotname`` and surfaces
         ``sweep_start_used`` / ``sweep_end_used`` instead."""
@@ -960,7 +960,7 @@ class TestFindCrossingTool:
 
 
 class TestParseFreqUnitTolerance:
-    """V7-FR-3: frequency parsing accepts a trailing Hz/kHz unit."""
+    """Frequency parsing accepts a trailing Hz/kHz unit."""
 
     def test_bare_number(self):
         from ltspice_mcp.tools.analysis import _parse_freq
@@ -985,7 +985,7 @@ class TestParseFreqUnitTolerance:
 
 
 # ---------------------------------------------------------------------------
-# Helpers relocated from tests/test_followups_2026_05_29.py (regression).
+# Shared raw-mock helpers for the query_value / bode_metrics tests below.
 # ---------------------------------------------------------------------------
 
 
@@ -1021,7 +1021,6 @@ def _stepped_ac_raw(fcs: list[float]) -> MagicMock:
     return raw
 
 
-# Relocated from tests/test_followups_2026_05_29.py (regression).
 @pytest.mark.asyncio
 class TestQueryValueMagnitudeLinear:
     async def test_ac_returns_magnitude_linear(self, state_no_sim: SessionState, work_dir: Path):
@@ -1045,7 +1044,6 @@ class TestQueryValueMagnitudeLinear:
         assert "magnitude_db" in sc
 
 
-# Relocated from tests/test_followups_2026_05_29.py (regression).
 @pytest.mark.asyncio
 class TestStepGet:
     async def test_raw_axis_snap_warning(self, state_no_sim: SessionState, work_dir: Path):
@@ -1211,7 +1209,6 @@ class TestStepGet:
         assert any("No 'at' given" in w for w in sc.get("warnings", []))
 
 
-# Relocated from tests/test_followups_2026_05_29.py (regression).
 @pytest.mark.asyncio
 class TestBodeMetrics:
     async def test_point_mode_dispatch(self, state_no_sim: SessionState, work_dir: Path):
@@ -1287,7 +1284,6 @@ class TestBodeMetrics:
             )
 
 
-# Relocated from tests/test_followups_2026_05_29.py (regression).
 @pytest.mark.asyncio
 class TestQueryValueStepAbsorb:
     async def test_step_axis_dispatches_to_step_lookup(
@@ -1330,7 +1326,6 @@ class TestQueryValueStepAbsorb:
             )
 
 
-# Relocated from tests/test_followups_2026_05_29.py (regression).
 @pytest.mark.asyncio
 class TestBodeMetricsAllSteps:
     async def test_crossing_per_step(self, state_no_sim: SessionState, work_dir: Path):

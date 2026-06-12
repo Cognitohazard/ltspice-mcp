@@ -41,7 +41,7 @@ _UNWRAP_WARN_STEP_DEG = 90.0
 # True half-power point: 20·log10(1/√2) = -3.0103 dB. Use this (not a rounded
 # -3.0) for "−3 dB" cutoff/bandwidth so bode_metrics(mode='filter') and the AC
 # summary agree with bode_metrics(mode='crossing'/'point'), which already use the
-# exact half-power level (V7-IMP-4). The 0.0103 dB difference shifts a 1 kHz RC
+# exact half-power level. The 0.0103 dB difference shifts a 1 kHz RC
 # corner by ~0.24%.
 HALF_POWER_DB = -3.010299956639812
 
@@ -725,7 +725,7 @@ def compute_filter_metrics(
             # For an unbounded roll-off (e.g. a 1st-order LPF) there is no
             # intrinsic stopband edge, so this number is just |H| at the sweep
             # endpoint — it grows with the sweep range, it is not a filter
-            # property. Flag it so it isn't over-interpreted (V7-IMP-2). Pass
+            # property. Flag it so it isn't over-interpreted. Pass
             # ``stopband_range`` for a defined-band rejection.
             warnings.append(
                 "stopband_rejection/transition_bandwidth are measured at the "

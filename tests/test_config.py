@@ -163,7 +163,7 @@ class TestDetectionDiagnostics:
         assert any("ltspice" in d for d in diagnostics)
 
     def test_mismatched_exe_not_bound(self, work_dir: Path):
-        """NGv7-CONFIG-1: an LTspice-looking path must not bind to ngspice."""
+        """An LTspice-looking path must not bind to ngspice."""
         from ltspice_mcp.lib import simulator as sim
 
         exe = work_dir / "LTspice.exe"

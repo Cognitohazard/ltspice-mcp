@@ -55,7 +55,7 @@ class TestDecodeSpiceBytes:
         assert decode_spice_bytes(text.encode("ascii")) == text
 
     def test_cp1252_degree_sign_preserved(self) -> None:
-        # Fr4: Windows-edited LTspice files often have a single non-ASCII
+        # Windows-edited LTspice files often have a single non-ASCII
         # char (degree, mu, en-dash) without a BOM. cp1252 strict-decode
         # preserves them instead of replacing with U+FFFD.
         text = "* °C operating point\n"
@@ -117,9 +117,8 @@ class TestReadSpiceText:
         assert read_spice_text(p) == text
 
 
-# Relocated from tests/test_v6_fixes.py (regression).
-class TestJN1ReadCircuitEncodingZoo:
-    """J-N1: ``read_circuit`` used to crash on UTF-8-BOM, UTF-16-BE-no-BOM,
+class TestReadCircuitEncodingZoo:
+    """``read_circuit`` used to crash on UTF-8-BOM, UTF-16-BE-no-BOM,
     and unclosed-``.SUBCKT`` files because spicelib's ``SpiceEditor`` was
     in the read path. The fix routes ``.cir/.net`` reads through
     ``services.extract_netlist_info`` which uses ``read_spice_text`` +

@@ -170,7 +170,7 @@ def compute_batch_stats(
         "stats": stats,
         # Neutral naming: "worst"/"best" would assume larger-peak = worse,
         # which has no inherent meaning for an arbitrary signal (e.g. a
-        # passband magnitude) (NGv7-FR-7).
+        # passband magnitude).
         "max_case_run": max_case_run,
         "min_case_run": min_case_run,
     }

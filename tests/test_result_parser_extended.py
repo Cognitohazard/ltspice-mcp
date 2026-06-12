@@ -50,7 +50,7 @@ class TestParseFourierData:
     def test_log_with_fourier_data(self, work_dir: Path):
         """Parse a log file containing .FOUR results — real LTspice format.
 
-        Locks the D-N1 fix: ``reader.fourier[signal]`` is a
+        Locks the fix: ``reader.fourier[signal]`` is a
         ``list[FourierData]`` (one per .step), not a single instance.
         Pre-fix code treated the list as a single FourierData and
         silently returned all entries with thd=None / harmonics=[].

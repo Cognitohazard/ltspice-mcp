@@ -167,7 +167,7 @@ class SimulationRunner(RunnerBase):
             return
 
         job.completed_at = now()
-        # Bug I guard: spicelib signals failure by passing ``raw_file="."``
+        # Guard: spicelib signals failure by passing ``raw_file="."``
         # (a directory placeholder) and a ``.fail`` log file. Treat that as
         # "no raw produced" rather than storing ``Path(".")`` and trying to
         # stat the working directory below. The ``"."`` string and ``.fail``

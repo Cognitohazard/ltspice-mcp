@@ -390,9 +390,9 @@ class TestAnalyzePulseResponse:
 
     def test_window_straddles_edge_falls_back_to_first_sample(self):
         """When the leading 10% straddles the input edge, the auto-detected
-        initial_value is unreliable. Fr4 relaxed this: instead of refusing
-        outright, fall back to y[0] (which IS the level at t_start) and
-        emit a warning so the caller knows the auto-level was bypassed.
+        initial_value is unreliable. Instead of refusing outright, the
+        analysis falls back to y[0] (which IS the level at t_start) and
+        emits a warning so the caller knows the auto-level was bypassed.
         """
         # No pre-pad: window starts at t=0 with the step right there.
         t, y = _second_order_step(zeta=0.2, wn=2 * math.pi * 1000, t_end=20e-3, pre_pad=0.0)
@@ -411,8 +411,9 @@ class TestAnalyzePulseResponse:
         assert not any("initial_value" in w for w in result["warnings"])
 
     def test_unsettled_signal_falls_back_to_last_sample(self):
-        """When the response hasn't settled by window end, Fr4 falls back to
-        y[-1] for final_value with a warning rather than raising."""
+        """When the response hasn't settled by window end, the analysis
+        falls back to y[-1] for final_value with a warning rather than
+        raising."""
         t, y = _second_order_step(zeta=0.05, wn=2 * math.pi * 1000, t_end=2e-3, n=2001)
         result = analyze_pulse_response(t, y)
         assert result["steady_state_value"] == pytest.approx(float(y[-1]), abs=1e-9)
