@@ -21,6 +21,13 @@ tool-surface changes.
 
 ### Changed
 
+- Heavy blocking work no longer stalls the server: `.raw` parses, batch
+  result/log loops, the recent-circuits index lock and durable write, WSL
+  `cmd.exe` interop resolution, and MCP resource reads now run in worker
+  threads, so concurrent requests — including `cancel_job` — stay responsive
+  while a multi-second result parse is in flight. (The MCP SDK dispatches
+  requests concurrently; previously any large parse froze every in-flight
+  request until it finished.)
 - CI: the push/PR gate (`ci.yml`) and the release gate (`publish.yml`) now
   call one shared reusable workflow (`checks.yml`), so the two gates cannot
   drift. GitHub status-check contexts are renamed to `checks / check` and

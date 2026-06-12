@@ -124,12 +124,12 @@ def _reject_ac(raw) -> None:
         )
 
 
-def _load_real_signal(
+async def _load_real_signal(
     raw_file: str, signal: str, step: int, state: SessionState
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load (axis, wave) for a signal, rejecting AC/complex data."""
     raw_path = safe_path(raw_file, state)
-    raw = services.load_raw(raw_path, state)
+    raw = await services.load_raw(raw_path, state)
     _reject_ac(raw)
     signal = services.validate_signal(raw, signal)
     services.validate_step(raw, step)
@@ -384,7 +384,7 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
     step = args.step
     fmt = args.format
 
-    raw = services.load_raw(raw_path, state)
+    raw = await services.load_raw(raw_path, state)
     signal = services.validate_signal(raw, signal)
     services.validate_step(raw, step)
 
@@ -625,7 +625,7 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
     if not math.isfinite(target_x):
         raise ResultError(f"'at' value must be finite, got {at_str!r} (parsed as {target_x})")
 
-    raw = services.load_raw(raw_path, state)
+    raw = await services.load_raw(raw_path, state)
     signal = services.validate_signal(raw, signal)
     services.validate_step(raw, step)
 
@@ -749,7 +749,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     """Read DC operating point data (all node voltages and branch currents)."""
     raw_path = safe_path(args.raw_file, state)
     fmt = args.format
-    raw = services.load_raw(raw_path, state)
+    raw = await services.load_raw(raw_path, state)
 
     sim_type = detect_sim_type(raw)
     # ``extract_operating_point`` reads ``wave[step]`` for every trace. That's
@@ -897,7 +897,7 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
         if derived.exists():
             log_path = derived
 
-    raw = services.load_raw(raw_path, state)
+    raw = await services.load_raw(raw_path, state)
     # Honor ``step`` for the summary itself (range/point_count), not just for
     # ac_bandwidth_metrics. Validate up front so an out-of-range step errors
     # clearly instead of being silently ignored.
@@ -1257,7 +1257,7 @@ class MeasurementStatsResponse(TypedDict):
     output_model=EdgeMetricsResponse,
 )
 async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
-    axis, wave = _load_real_signal(args.raw_file, args.signal, args.step, state)
+    axis, wave = await _load_real_signal(args.raw_file, args.signal, args.step, state)
     t, y, _ = _window(axis, wave, args.t_start, args.t_end)
     data = _run(
         analyze_edge,
@@ -1316,7 +1316,7 @@ async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
     output_model=PulseResponseResponse,
 )
 async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
-    axis, wave = _load_real_signal(args.raw_file, args.signal, args.step, state)
+    axis, wave = await _load_real_signal(args.raw_file, args.signal, args.step, state)
     t, y, _ = _window(axis, wave, args.t_start, args.t_end)
     data = _run(
         analyze_pulse_response,
@@ -1384,7 +1384,7 @@ async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
 )
 async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
     raw_path = safe_path(args.raw_file, state)
-    raw = services.load_raw(raw_path, state)
+    raw = await services.load_raw(raw_path, state)
     _reject_ac(raw)
     sig_a = services.validate_signal(raw, args.signal_a)
     sig_b = services.validate_signal(raw, args.signal_b)
@@ -1468,7 +1468,7 @@ async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
     output_model=PeriodicMetricsResponse,
 )
 async def handle_periodic_metrics(args: PeriodicMetricsInput, state: SessionState):
-    axis, wave = _load_real_signal(args.raw_file, args.signal, args.step, state)
+    axis, wave = await _load_real_signal(args.raw_file, args.signal, args.step, state)
     t, y, _ = _window(axis, wave, args.t_start, args.t_end)
     data = _run(
         analyze_periodic,
@@ -1800,7 +1800,7 @@ def _parse_freq(s: str, name: str = "frequency") -> float:
     return v
 
 
-def _load_ac_signal(
+async def _load_ac_signal(
     raw_file: str | Path, signal: str, step: int, state: SessionState
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load (freqs, H) for an AC signal. Rejects transient data.
@@ -1810,7 +1810,7 @@ def _load_ac_signal(
     user input and validated via ``safe_path``.
     """
     raw_path = raw_file if isinstance(raw_file, Path) else safe_path(raw_file, state)
-    raw = services.load_raw(raw_path, state)
+    raw = await services.load_raw(raw_path, state)
     sim_type = detect_sim_type(raw)
     if not is_ac_analysis(sim_type):
         raise ResultError(
@@ -2001,7 +2001,7 @@ class ResonancesResponse(ResonancesOutput):
 
 # Internal compute adapter — exposed publicly via bode_metrics(mode="crossing").
 async def handle_find_crossing(args: FindCrossingInput, state: SessionState):
-    freqs, H = _load_ac_signal(args.raw_file, args.signal, args.step, state)
+    freqs, H = await _load_ac_signal(args.raw_file, args.signal, args.step, state)
     f_start = _parse_freq(args.f_start, "f_start") if args.f_start else None
     f_end = _parse_freq(args.f_end, "f_end") if args.f_end else None
     if args.max_results < 1 or args.max_results > 1000:
@@ -2052,7 +2052,7 @@ async def handle_gain_at(args: GainAtInput, state: SessionState):
     if len(args.frequencies) > 1000:
         raise ResultError(f"Too many frequencies ({len(args.frequencies)}); cap is 1000")
     freqs_q = [_parse_freq(f, "frequency") for f in args.frequencies]
-    freqs, H = _load_ac_signal(args.raw_file, args.signal, args.step, state)
+    freqs, H = await _load_ac_signal(args.raw_file, args.signal, args.step, state)
     points, warnings = _run(
         gain_at_frequencies,
         freqs,
@@ -2088,7 +2088,7 @@ def _parse_freq_pair(pair: list[str] | None, name: str) -> tuple[float, float] |
 
 # Internal compute adapter — exposed publicly via bode_metrics(mode="filter").
 async def handle_filter_metrics(args: FilterMetricsInput, state: SessionState):
-    freqs, H = _load_ac_signal(args.raw_file, args.signal, args.step, state)
+    freqs, H = await _load_ac_signal(args.raw_file, args.signal, args.step, state)
     pb = _parse_freq_pair(args.passband_range, "passband_range")
     sb = _parse_freq_pair(args.stopband_range, "stopband_range")
     data = _run(
@@ -2173,7 +2173,7 @@ async def handle_filter_metrics(args: FilterMetricsInput, state: SessionState):
     output_model=StabilityMetricsResponse,
 )
 async def handle_stability_metrics(args: StabilityMetricsInput, state: SessionState):
-    freqs, H = _load_ac_signal(args.raw_file, args.signal, args.step, state)
+    freqs, H = await _load_ac_signal(args.raw_file, args.signal, args.step, state)
     data = _run(
         compute_stability_metrics,
         freqs,
@@ -2216,7 +2216,7 @@ async def handle_stability_metrics(args: StabilityMetricsInput, state: SessionSt
 async def handle_roll_off(args: RollOffInput, state: SessionState):
     f_lo = _parse_freq(args.f_low, "f_low")
     f_hi = _parse_freq(args.f_high, "f_high")
-    freqs, H = _load_ac_signal(args.raw_file, args.signal, args.step, state)
+    freqs, H = await _load_ac_signal(args.raw_file, args.signal, args.step, state)
     data = _run(compute_roll_off, freqs, H, f_low=f_lo, f_high=f_hi)
     data["signal"] = args.signal
 
@@ -2399,7 +2399,7 @@ async def handle_bode_metrics(args: BodeMetricsInput, state: SessionState):
         return await _bode_dispatch(args, args.step, state, raw_path)
 
     # all_steps: compute the metric for every step of the sweep.
-    raw = services.load_raw(raw_path, state)
+    raw = await services.load_raw(raw_path, state)
     step_count = get_step_count(raw)
 
     steps_out: list[dict] = []
@@ -2565,7 +2565,7 @@ def _result_text(result: types.CallToolResult) -> str:
 async def handle_resonance(args: ResonanceInput, state: SessionState):
     if args.max_peaks < 1 or args.max_peaks > 1000:
         raise ResultError(f"max_peaks must be in [1, 1000], got {args.max_peaks}")
-    freqs, H = _load_ac_signal(args.raw_file, args.signal, args.step, state)
+    freqs, H = await _load_ac_signal(args.raw_file, args.signal, args.step, state)
     data = _run(
         compute_resonances,
         freqs,

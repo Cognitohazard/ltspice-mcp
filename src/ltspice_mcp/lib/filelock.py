@@ -8,6 +8,13 @@ and ``msvcrt.locking`` on Windows.
 
 The lock is advisory — processes that don't cooperate can still clobber
 the file — but every caller in this package goes through ``file_lock``.
+
+Acquisition BLOCKS the calling thread: the poll loop below waits with
+``time.sleep`` for up to ``timeout`` seconds (default 10). Never call
+``file_lock`` from a coroutine on the event loop — wrap the whole
+lock-and-write operation in ``asyncio.to_thread`` so a contended lock
+parks a worker thread instead of freezing every in-flight request.
+``TimeoutError`` still surfaces to the caller; don't retry around it.
 """
 
 from __future__ import annotations
