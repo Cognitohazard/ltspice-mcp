@@ -436,7 +436,7 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
         axis = np.real(axis)
     wave_real = np.asarray(wave)
 
-    # Bug E: distinguish DC sweep (axis = sweep variable, e.g. ``temp``)
+    # Distinguish DC sweep (axis = sweep variable, e.g. ``temp``)
     # from transient (axis = time). Trapezoidal mean/RMS over a sweep axis
     # is mathematically meaningless; the t_start/t_end labels are misleading
     # too since the units aren't seconds.
@@ -469,7 +469,7 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
         # Noise spectral density (V/√Hz) over a (usually log-spaced) frequency
         # axis. A plain arithmetic mean is dominated by wherever the samples
         # cluster and depends on the sweep span, not the circuit — it is not a
-        # meaningful figure of merit, so it is deliberately omitted (V7-IMP-3).
+        # meaningful figure of merit, so it is deliberately omitted.
         # min/max is the useful "worst-case noise density" reading.
         stats = {
             "analysis_type": "noise",
@@ -684,7 +684,7 @@ def _format_measurements(
         return "No .MEAS results found in log file"
 
     def _fmt_meta(value: object) -> str:
-        # Per-step lists (Fr3) are summarised as ``[lo..hi]`` rather than
+        # Per-step lists are summarised as ``[lo..hi]`` rather than
         # echoed in full — the per-step values already accompany them in
         # the entry's ``values`` field.
         if isinstance(value, list):
@@ -787,7 +787,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
 
     # A DC sweep raw has no single "operating point": point 0 is just the
     # sweep's starting value (e.g. V1=0). Flag it so an all-zeros / start-of-
-    # sweep result isn't mistaken for a degenerate circuit (V7-FR-6).
+    # sweep result isn't mistaken for a degenerate circuit.
     dc_sweep_note: str | None = None
     if "transfer" in sim_lower or "dc" in sim_lower.split():
         dc_sweep_note = (
@@ -917,7 +917,7 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
     # Compute AC bandwidth metrics on AC raws. When ``signal`` is omitted,
     # auto-pick the first V(...) trace and warn — the previous behaviour
     # silently dropped ac_bandwidth_metrics from the response, leaving
-    # users to wonder why their AC summary had no metrics (Fr4).
+    # users to wonder why their AC summary had no metrics.
     ac_metrics = None
     ac_signal_used: str | None = None
     if is_ac_analysis(summary["sim_type"]):
@@ -1507,9 +1507,14 @@ class _MeasSamples(TypedDict):
     ats: list[float | None]
 
 
+# Most distinct per-run diagnostic lines relayed in the no-measurements
+# error before truncating to a "... and N more" summary line.
+_MAX_RELAYED_RUN_DIAGNOSTICS = 8
+
+
 def _aggregate_job_measurements(
     batch_job: BatchJob,
-) -> tuple[dict[str, list[float | None]], int, dict[str, AggregatedField]]:
+) -> tuple[dict[str, list[float | None]], int, dict[str, AggregatedField], list[str]]:
     """Walk every completed run's .log and concatenate ``.MEAS`` results.
 
     The MC engine emits one log per run; this reconciles by collecting
@@ -1522,8 +1527,11 @@ def _aggregate_job_measurements(
     detected (constant ``values``, varying ``at``) the aggregator swaps to
     the ``at`` axis automatically.
 
-    Returns ``(flat_values, run_count, axis_map)`` where ``axis_map[name]``
-    is ``"value"`` or ``"at"`` describing which field was aggregated.
+    Returns ``(flat_values, run_count, axis_map, diagnostics)`` where
+    ``axis_map[name]`` is ``"value"`` or ``"at"`` describing which field was
+    aggregated, and ``diagnostics`` carries deduplicated per-run log
+    errors/warnings explaining missing measurements (e.g. ngspice's
+    batch-mode .meas skip) so an empty aggregate can relay the cause.
     """
     if not batch_job.run_results:
         raise ResultError(
@@ -1532,6 +1540,7 @@ def _aggregate_job_measurements(
         )
 
     samples: dict[str, _MeasSamples] = {}
+    diagnostics: list[str] = []
     runs_processed = 0
     for run_index in sorted(batch_job.run_results.keys()):
         run = batch_job.run_results[run_index]
@@ -1545,11 +1554,18 @@ def _aggregate_job_measurements(
             # over partial runs is the documented behaviour.
             continue
         runs_processed += 1
+        # parse_measurements only populates errors/warnings on its
+        # no-measurements branch, so this collects exactly the lines that
+        # explain an absence. Deduplicated: every run of a batch typically
+        # repeats the same simulator diagnostic verbatim.
+        for diag in list(data.get("errors") or []) + list(data.get("warnings") or []):
+            if diag not in diagnostics:
+                diagnostics.append(diag)
         for name, entry in data.get("measurements", {}).items():
             row = entry.get("values", [])
             scalar = row[0] if row else None
             at_raw = entry.get("at")
-            # Per-step lists collapse to the first scalar (Fr3): batch runs
+            # Per-step lists collapse to the first scalar: batch runs
             # usually have step_count=1 so this is a no-op, but guard anyway.
             if isinstance(at_raw, list):
                 at_raw = next((v for v in at_raw if v is not None), None)
@@ -1587,7 +1603,7 @@ def _aggregate_job_measurements(
             flat_values[name] = vals
             axis_map[name] = "value"
 
-    return flat_values, runs_processed, axis_map
+    return flat_values, runs_processed, axis_map, diagnostics
 
 
 def _aggregate_log_measurements(
@@ -1671,10 +1687,29 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
     if args.job_id is not None:
         job = services.resolve_job(args.job_id, state)
         if isinstance(job, BatchJob):
-            flat_values, run_count, axis_map = _aggregate_job_measurements(job)
+            flat_values, run_count, axis_map, run_diags = _aggregate_job_measurements(job)
             if not flat_values:
+                if run_count == 0:
+                    raise ResultError(
+                        f"No .MEAS results found across the runs of job {args.job_id!r} "
+                        "— none of the per-run log files could be read."
+                    )
+                # Relay WHY from the per-run logs, in the same indented format
+                # as the single-log branch — the cause is often stated there
+                # verbatim (e.g. ngspice's batch-mode .meas skip). Capped:
+                # run-unique lines (timestamps, values) survive deduplication,
+                # which would otherwise grow the message one line per run on
+                # a large Monte Carlo batch.
+                if run_diags:
+                    shown = run_diags[:_MAX_RELAYED_RUN_DIAGNOSTICS]
+                    hidden = len(run_diags) - len(shown)
+                    if hidden:
+                        shown.append(f"... and {hidden} more distinct diagnostic lines")
+                    err_block = "\n".join(f"  {d}" for d in shown)
+                else:
+                    err_block = "  (run logs contained no .MEAS results and no diagnostics)"
                 raise ResultError(
-                    f"No .MEAS results found across the runs of job {args.job_id!r}."
+                    f"No .MEAS results found across the runs of job {args.job_id!r}:\n{err_block}"
                 )
             steps_label = f"{run_count} run(s)"
         else:

@@ -78,8 +78,7 @@ class TestCreateNetlist:
 
     async def test_overwrite_replaces_existing(self, state_no_sim: SessionState, work_dir: Path):
         """``overwrite=True`` skips the FileExistsError path so iterating on
-        a design doesn't force read+edit roundtrips. The earlier behaviour
-        (always refuse) was friction during early stress-testing."""
+        a design doesn't force read+edit roundtrips."""
         await handle_create_netlist(
             {"name": "ow", "content": "* v1\nR1 1 0 1k\n"},
             state_no_sim,
@@ -162,7 +161,7 @@ class TestListComponents:
             )
 
     async def test_b_source_does_not_crash(self, state_no_sim: SessionState, work_dir: Path):
-        """Bug K: a behavioural source whose value has commas inside ``if(...)``
+        """A behavioural source whose value has commas inside ``if(...)``
         defeats spicelib's component-line regex. ``list_components`` used to
         return ``Internal error in ltspice_list_components``; the shared lexer
         now preserves the full function-call value."""
@@ -297,7 +296,7 @@ class TestSetComponentValue:
     async def test_batch_with_unknown_ref_is_atomic(
         self, state_no_sim: SessionState, sample_netlist: Path
     ):
-        """Bug J: a batch ``set_component_value`` with one missing ref used
+        """A batch ``set_component_value`` with one missing ref used
         to crash AFTER applying earlier writes, leaving the netlist
         half-modified. Validation must happen before any write."""
         before = sample_netlist.read_bytes()  # noqa: ASYNC240
@@ -315,7 +314,7 @@ class TestSetComponentValue:
     async def test_value_with_whitespace_rejected(
         self, state_no_sim: SessionState, sample_netlist: Path
     ):
-        """Bug L: ``set_component_value(R1, "hello world")`` used to write a
+        """``set_component_value(R1, "hello world")`` used to write a
         space-separated value into the netlist line, turning ``hello`` into
         a phantom node and ``world`` into a stray token — irrecoverable
         without manual editing."""
@@ -493,6 +492,84 @@ class TestValidateNetlist:
         assert data is not None
         assert data["issue_count"] == 0
 
+    async def test_empty_file_is_error(self, state_no_sim: SessionState, work_dir: Path):
+        # LTspice fails an empty deck immediately at line 1; the static
+        # gate must not report it as passing.
+        cir = work_dir / "empty.cir"
+        cir.write_text("")
+        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        empties = [iss for iss in data["issues"] if "empty" in iss["message"].lower()]
+        assert len(empties) == 1, data["issues"]
+        assert empties[0]["severity"] == "error"
+
+    async def test_whitespace_only_file_is_error(self, state_no_sim: SessionState, work_dir: Path):
+        cir = work_dir / "ws.cir"
+        cir.write_text("  \n\t\n\n")
+        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert any(
+            iss["severity"] == "error" and "empty" in iss["message"].lower()
+            for iss in data["issues"]
+        ), data["issues"]
+
+    async def test_asc_without_directives_not_flagged_empty(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # The .asc branch validates the schematic's directive lines only —
+        # a schematic with no SPICE directives is not an empty netlist.
+        await handle_create_schematic({"name": "blank"}, state_no_sim)
+        result = await handle_validate_netlist({"path": "blank.asc"}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert data["issue_count"] == 0, data["issues"]
+
+    async def test_dangling_node_warned(self, state_no_sim: SessionState, work_dir: Path):
+        cir = work_dir / "dangling.cir"
+        cir.write_text("* dangling\nV1 in 0 1\nR1 in float 1k\n.tran 0 1m\n.end\n")
+        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        dangling = [iss for iss in data["issues"] if "'float'" in iss["message"]]
+        assert len(dangling) == 1, data["issues"]
+        assert dangling[0]["severity"] == "warning"
+        assert "R1" in dangling[0]["message"]
+
+    async def test_title_line_words_not_phantom_nodes(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # Line 1 of a .cir/.net deck is the free-text title. The lexer has
+        # no title concept and reads it as an instance card, but its words
+        # must not be counted as circuit nodes.
+        cir = work_dir / "titled.cir"
+        cir.write_text(
+            "Voltage divider test circuit\n"
+            "V1 in 0 1\nR1 in out 1k\nR2 out 0 1k\n.tran 0 1m\n.end\n"
+        )
+        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert data["issue_count"] == 0, data["issues"]
+
+    async def test_asc_directive_elements_not_dangling_checked(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # An .asc SPICE-directive text block may legally carry element
+        # lines; the schematic wires those nodes connect to are invisible
+        # to the netlist dangling pass, so it must not run on .asc at all.
+        asc = work_dir / "gate.asc"
+        asc.write_text(
+            "Version 4\nSHEET 1 880 680\n"
+            "TEXT 16 16 Left 2 !.tran 1m\n"
+            "TEXT 16 80 Left 2 !R99 neta netb 1k\n"
+        )
+        result = await handle_validate_netlist({"path": "gate.asc"}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert data["issue_count"] == 0, data["issues"]
+
     async def test_flags_bad_meas(self, state_no_sim: SessionState, work_dir: Path):
         cir = work_dir / "bad.cir"
         cir.write_text(
@@ -590,7 +667,7 @@ class TestValidateNetlist:
     async def test_op_coexists_with_one_analysis(self, state_no_sim: SessionState, work_dir: Path):
         """``.op`` is a bias-point request, not a competing analysis — LTspice
         runs ``.op`` + one analysis fine (verified live), so the gate must NOT
-        flag it (v9-LT). Two real analyses are still flagged (tests above)."""
+        flag it. Two real analyses are still flagged (tests above)."""
         op_tran = work_dir / "op_tran.cir"
         op_tran.write_text(
             "* op+tran\nV1 a 0 PULSE(0 1 0 1u 1u 1m 2m)\nR1 a 0 1k\n.op\n.tran 1u 1m\n.end\n"
@@ -666,9 +743,8 @@ class TestDiffCircuit:
         assert data["directives_removed"] == []
 
 
-# Relocated from tests/test_v6_fixes.py (regression).
-class TestCN1PulseAcceptedOnVI:
-    """C-N1: ``set_component_value(V1, "PULSE(...)")`` was rejected as
+class TestSourceWaveformValuesAccepted:
+    """``set_component_value(V1, "PULSE(...)")`` was rejected as
     whitespace-bearing despite being a legal source spec."""
 
     def _run(self, body: str, ref: str, value: str) -> str:
@@ -702,9 +778,8 @@ class TestCN1PulseAcceptedOnVI:
         assert out.strip() == "I1 a 0 PWL(0 0 1m 1 2m 0)"
 
 
-# Relocated from tests/test_v6_fixes.py (regression).
-class TestCN2BSourcePrefixPreserved:
-    """C-N2: a brace-only value used to drop ``V=``/``I=``."""
+class TestBSourcePrefixPreserved:
+    """A brace-only value used to drop ``V=``/``I=``."""
 
     def _run(self, body: str, ref: str, value: str) -> str:
         cards = lex(body).cards
@@ -740,9 +815,8 @@ class TestCN2BSourcePrefixPreserved:
             apply_value_to_instance(b1, "10")
 
 
-# Relocated from tests/test_v6_fixes.py (regression).
-class TestCN3EgPositionalGain:
-    """C-N3: ``set_component_value(E1, "20")`` used to overwrite the
+class TestControlledSourceGainReplacement:
+    """``set_component_value(E1, "20")`` used to overwrite the
     controlling-node pair AND the gain. Should replace only the gain."""
 
     def _run(self, body: str, ref: str, value: str) -> str:

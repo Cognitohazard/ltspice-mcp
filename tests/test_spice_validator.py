@@ -9,6 +9,7 @@ from ltspice_mcp.lib.spice_validator import (
     list_rules,
     validate_directive,
     validate_netlist_arity,
+    validate_netlist_dangling_nodes,
 )
 
 
@@ -88,7 +89,7 @@ class TestRuleListing:
 
 
 class TestElementArity:
-    """C-N4: validate_netlist must flag instance lines whose positional-
+    """validate_netlist must flag instance lines whose positional-
     node count is below the per-element minimum, and B-sources missing
     the V=/I= prefix. These manifest at simulation time as 'Expected 2
     node names here' or 'Unknown parameter'."""
@@ -165,12 +166,141 @@ class TestElementArity:
         assert all("R1" not in str(i["message"]) for i in issues)
 
 
-# Relocated from tests/test_v6_fixes.py (regression).
-class TestCN4ValidatorCatchesCorruption:
-    """C-N4: ``validate_netlist`` should flag the malformed bodies that
-    used to slip through C-N2/N3 before the typed dispatch landed.
+class TestDanglingNodes:
+    """Single-connection nodes are statically detectable: a node touched by
+    exactly one element terminal in its scope gets a warning-level issue.
+    Legal in deliberately unterminated fragments, hence never an error."""
 
-    These cases now raise ``NetlistError`` at the input layer (rather
+    def _dangling(self, text: str):
+        return validate_netlist_dangling_nodes(lex(text + "\n").cards)
+
+    def test_single_connection_node_warned_with_element_named(self):
+        issues = self._dangling("V1 in 0 1\nR1 in out 1k\n.tran 1m\n.end")
+        assert len(issues) == 1
+        assert "'out'" in str(issues[0]["message"])
+        assert "R1" in str(issues[0]["message"])
+
+    def test_fully_connected_deck_yields_no_issues(self):
+        issues = self._dangling("V1 in 0 1\nR1 in out 1k\nC1 out 0 1n\n.tran 1m\n.end")
+        assert issues == []
+
+    def test_ground_aliases_excluded(self):
+        # "0" and case-insensitive "gnd" never count as dangling.
+        issues = self._dangling("V1 a GND 1\nR1 a 0 1k\nR2 gnd 0 1k\n.end")
+        assert issues == []
+
+    def test_global_nodes_excluded(self):
+        issues = self._dangling(".global VDD\nV1 vdd 0 5\nR1 in 0 1k\nR2 in 0 1k\n.end")
+        assert issues == []
+
+    def test_subckt_port_used_once_in_body_not_flagged(self):
+        # The port name on the .SUBCKT header counts as one occurrence in
+        # the body, so a port wired to a single element is fully connected.
+        issues = self._dangling(".subckt div in out\nR1 in out 1k\nR2 out 0 1k\n.ends div")
+        assert issues == []
+
+    def test_subckt_body_counted_separately_from_top_level(self):
+        # "mid" is dangling inside the body (R1 only) even though the
+        # top level reuses the same name with two connections.
+        issues = self._dangling(
+            ".subckt amp in out\nR1 in mid 1k\nR2 in out 1k\n.ends amp\nV1 mid 0 1\nR3 mid 0 1k"
+        )
+        assert len(issues) == 1
+        assert "'mid'" in str(issues[0]["message"])
+        assert "R1" in str(issues[0]["message"])
+        assert "amp" in str(issues[0]["message"])
+
+    def test_unused_subckt_port_flagged(self):
+        # A port with no body connection is its own fact: the header
+        # declaration is not an element terminal, so the message states
+        # the port case directly instead of pretending the header is one.
+        issues = self._dangling(".subckt buf in out nc\nR1 in out 1k\nR2 out 0 1k\n.ends buf")
+        assert len(issues) == 1
+        msg = str(issues[0]["message"])
+        assert "'nc'" in msg
+        assert "declared as a port of .SUBCKT buf" in msg
+        assert "connected to no element terminal in its body" in msg
+        assert "only one element terminal" not in msg
+
+    def test_x_card_subckt_name_and_params_not_counted(self):
+        # Positional tokens between the refdes and the subckt name are
+        # nodes; the subckt name and trailing k=v params are not.
+        issues = self._dangling("X1 a b myamp gain=2\nR1 a b 1k\n.end")
+        assert issues == []
+
+    def test_f_source_controlling_ref_not_counted(self):
+        # F1's third positional is the controlling V-source name, not a node.
+        issues = self._dangling("V1 in 0 1\nR1 in 0 1k\nF1 out 0 V1 2\nR2 out 0 1k\n.end")
+        assert issues == []
+
+    def test_v_source_multi_token_value_not_counted(self):
+        # DC/AC value tokens after the two node positions are not nodes.
+        issues = self._dangling("V1 in 0 DC 5 AC 1\nR1 in 0 1k\n.end")
+        assert issues == []
+
+    def test_k_card_inductor_refs_not_counted(self):
+        # K positional tokens are inductor refs, not nodes.
+        issues = self._dangling("L1 a 0 1u\nL2 b 0 1u\nK1 L1 L2 0.9\nR1 a 0 1k\nR2 b 0 1k\n.end")
+        assert issues == []
+
+    def test_directive_only_cards_no_op(self):
+        # No instance cards means no node counting at all.
+        issues = self._dangling(".tran 1m\n.meas tran v_max MAX V(out)\n.end")
+        assert issues == []
+
+    def test_diode_rectifier_deck_no_false_positives(self):
+        # D has no ELEMENT_SPECS entry, but its anode/cathode are still
+        # terminals — and the model name must not become a phantom node.
+        issues = self._dangling("V1 in 0 1\nD1 in out DMOD\nR1 out 0 1k\n.end")
+        assert issues == []
+
+    def test_diode_deck_genuinely_dangling_node_still_warned(self):
+        # Counting D's terminals cuts both ways: a cathode wired to
+        # nothing else is still a single-connection node.
+        issues = self._dangling("V1 in 0 1\nD1 in out DMOD\n.end")
+        assert len(issues) == 1
+        assert "'out'" in str(issues[0]["message"])
+        assert "D1" in str(issues[0]["message"])
+
+    def test_switch_deck_no_false_positives(self):
+        # S: two switch nodes + two control nodes, then the model name.
+        issues = self._dangling("V1 c 0 1\nVin in 0 1\nS1 in out c 0 SW1\nR1 out 0 1k\n.end")
+        assert issues == []
+
+    def test_transmission_line_deck_no_false_positives(self):
+        # T: four port nodes; the line parameters are KEY=VALUE tokens.
+        issues = self._dangling("V1 in 0 1\nT1 in 0 out 0 Td=10n Z0=50\nR1 out 0 50\n.end")
+        assert issues == []
+
+    def test_w_switch_controlling_ref_and_model_not_counted(self):
+        # W's third positional is the controlling V-source name, then the
+        # model — only n+ and n- are terminals.
+        issues = self._dangling("V1 in 0 1\nW1 in out V1 WMOD\nR1 out 0 1k\n.end")
+        assert issues == []
+
+    def test_b_source_sensed_node_suppresses_warning(self):
+        # A node probed via V(...) in a behavioural expression is a
+        # connection: it must veto the single-terminal warning.
+        issues = self._dangling("V1 in 0 1\nB1 out 0 V=V(in)\nR1 out 0 1k\n.end")
+        assert issues == []
+
+    def test_differential_probe_suppresses_both_nodes(self):
+        # V(a,b) references both names of the differential pair.
+        issues = self._dangling("V1 in 0 1\nR2 fb 0 1k\nB1 out 0 V=V(in,fb)\nR1 out 0 1k\n.end")
+        assert issues == []
+
+    def test_xspice_a_card_positionals_suppress_not_warn(self):
+        # A-cards (XSPICE) have port shapes this lint does not model: no
+        # token is counted, and every token vetoes a warning on its name.
+        issues = self._dangling("A1 in out xgate\nV1 in 0 1\nR1 out 0 1k\n.end")
+        assert issues == []
+
+
+class TestApplyValueRefusesMalformedBodies:
+    """``apply_value_to_instance`` must refuse value edits that would
+    write a malformed element body.
+
+    These cases raise ``NetlistError`` at the input layer (rather
     than producing a corrupt write that ``validate_netlist`` would
     later catch), so the regression here is that the typed dispatcher
     refuses each shape *before* the file is touched.
