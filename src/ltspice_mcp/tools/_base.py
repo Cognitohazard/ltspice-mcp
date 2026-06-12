@@ -1,5 +1,6 @@
 """Shared utilities for tool handlers."""
 
+import asyncio
 import copy
 import json
 import logging
@@ -604,11 +605,40 @@ def safe_path(user_path: str, state: SessionState) -> Path:
 # ---------------------------------------------------------------------------
 # Concurrency contract
 #
-# MCP stdio transport processes one request at a time — tool handlers run
-# synchronously on the event loop.  All spicelib parser/editor calls are
-# fast enough to run inline.  Long-lived simulation work uses
-# asyncio.to_thread() in the runner layer (sim_runner, sweep_runner,
-# montecarlo_runner), not here.
+# The MCP SDK dispatches EVERY incoming request as its own asyncio task on
+# one shared event loop (mcp.server.lowlevel.Server.run start_soons a task
+# per message), so tool handlers run concurrently. Anything that blocks the
+# loop stalls every in-flight request — including cancel_job — and the
+# transport's receive loop itself. Where work runs:
+#
+#   * Event loop (handler coroutines): argument validation, JobRegistry /
+#     SessionState mutation, and ALL response building. format_response /
+#     json_response / CallToolResult construction must stay in the handler
+#     frame — the test suite's output-schema conformance hook attributes
+#     emissions by walking the current thread's stack, so an emission from a
+#     worker thread would silently skip schema validation. Offload
+#     boundaries return plain data.
+#   * asyncio.to_thread: heavy or potentially-slow filesystem work that is
+#     read-only or atomic — RawRead parses (services.load_raw), the per-run
+#     raw loop behind batch_results (compute_batch_stats), the global
+#     recent-circuits index (a cross-process filelock poll plus a durable
+#     double-fsync write), and the first-call WSL cmd.exe interop inside
+#     resolve_output_folder. Offloaded functions must stay effect-free or
+#     atomic under cancellation: the awaiting task sees CancelledError, but
+#     a worker thread that has started runs to completion (cancellation
+#     cannot interrupt it mid-write); work cancelled before the executor
+#     picks it up never begins. Either way shared state stays consistent.
+#   * Runner threads: long-lived simulator processes are owned by the
+#     runner layer (sim_runner, sweep_runner, montecarlo_runner).
+#
+# Intentionally inline on the loop, with bounds: netlist/schematic editor
+# parses, mutations, and their cache invalidation (cached editor instances
+# are MUTABLE and entangled with per-session snapshots — concurrent edits
+# would be last-writer-wins data loss; worst case is a cold .asc parse over
+# /mnt/c, ~1 s), job sidecar JSON loads (small per-circuit files), config
+# saves (durable=False), log-file reads (KB scale), and library .lib parses
+# (LibraryManager sessions are loop-owned mutable state; worst case ~1 s for
+# a multi-MB vendor library).
 # ---------------------------------------------------------------------------
 
 
@@ -626,7 +656,7 @@ def _get_linux_output_dir(working_dir: Path) -> Path:
     return out
 
 
-def resolve_output_folder(state: SessionState) -> Path:
+async def resolve_output_folder(state: SessionState) -> Path:
     """Determine the output folder for simulation files.
 
     On WSL, if the working dir is on the Linux filesystem (not /mnt/):
@@ -638,6 +668,11 @@ def resolve_output_folder(state: SessionState) -> Path:
 
     Also adds the output dir to allowed_paths so analysis tools can read
     the result files via safe_path().
+
+    The Windows temp-dir resolution spawns a cmd.exe interop subprocess on
+    its first call (memoized afterwards), so it runs via ``asyncio.to_thread``
+    — a wedged interop must not freeze the event loop. The ``allowed_paths``
+    mutation stays on the loop, after the await.
     """
     from spicelib.simulators.ltspice_simulator import LTspice
 
@@ -646,7 +681,10 @@ def resolve_output_folder(state: SessionState) -> Path:
     if is_wsl() and not is_windows_native_path(state.working_dir):
         sim_cls = state.default_simulator
         is_ltspice = sim_cls is not None and issubclass(sim_cls, LTspice)
-        out = get_windows_output_dir() if is_ltspice else _get_linux_output_dir(state.working_dir)
+        if is_ltspice:
+            out = await asyncio.to_thread(get_windows_output_dir)
+        else:
+            out = _get_linux_output_dir(state.working_dir)
         if out is not None:
             if out not in state.config.allowed_paths:
                 logger.info(
