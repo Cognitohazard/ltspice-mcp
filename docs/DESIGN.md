@@ -20,8 +20,10 @@ project invests in:
 - **Geometry-aware** — `.asc` schematic operations work in symbol
   coordinates, not just netlist tokens.
 - **LTspice-specific** — `.asc`/`.asy`/`.raw` quirks and Windows
-  interop are first-class. Other simulators are supported through
-  spicelib's common interface but treated as secondary.
+  interop are first-class. ngspice is also first-class for simulation,
+  result parsing, diagnostics, and analysis — it simply has no
+  schematic layer for the geometry tools to operate on. QSPICE and
+  Xyce are best-effort through spicelib's common interface.
 
 ### Why an MCP server vs. asking the LLM to use spicelib directly
 
@@ -36,9 +38,12 @@ scripts directly. MCP applies in specific contexts:
   method names, forgets `save_netlist()`, etc.
 - **Context efficiency.** A tool call is ~50 tokens; equivalent Python is
   20-40 lines. Over an iterative design session this compounds.
-- **Images inline.** MCP returns base64 PNG in the protocol — Bode plots
-  and waveforms appear in the conversation, not as files the model can't
-  see.
+- **Structured analysis instead of plots.** There is no plotting layer.
+  The analysis tools return the numbers an agent actually reasons over —
+  `bode_metrics` for -3 dB points, slopes, and crossings;
+  `signal_stats` / `edge_metrics` / `pulse_response` for transient
+  shape — as schema-typed results, so nothing has to be read off an
+  image.
 - **No user setup.** Install the server once. No spicelib in the user's
   project venv, no Python knowledge required.
 
@@ -57,22 +62,24 @@ Python, and there's an extra process to maintain.
 |SPICEAssistant (arxiv 2507.10639)|none|N/A|measurement extractors|N/A — research only|
 |LTspice GUI|interactive|interactive|GUI-driven|N/A|
 
-Geometry-aware editing tools — `ltspice_connect`, `ltspice_add_component`,
-`ltspice_move_component`, `ltspice_add_net_label` (with `pin="M3.S"`),
-`ltspice_apply_schematic_ops`, `ltspice_symbol_info`,
-`ltspice_component_info` — validate against pin coordinates, bounding
-boxes, and named-net topology. The validation refuses diagonal wires,
+Geometry-aware editing tools — `connect`, `add_component`,
+`move_component`, `add_net_label` (with `pin="M3.S"`),
+`apply_schematic_ops` — work against pin coordinates, bounding
+boxes, and named-net topology: `connect` refuses diagonal wires,
 pin collisions, wire-junction overlaps, and named-net shorts before
-touching the file, and returns structured state the agent can use in
-its next call.
+touching the file, and every tool returns geometry the agent can use
+in its next call. `symbol_info` and `component_info` are the read-only
+planning half of that workflow — pin positions and bounding boxes
+looked up before an edit, not validators of one.
 
 ## Design principles
 
 ### Validate before write
 
-Every mutating tool refuses invalid states before modifying the file.
-`ltspice_connect` is the model: it returns a structured rejection payload
-naming the specific segments, pins, or labels that blocked the write so
+Mutating tools validate before writing and refuse states they can
+prove invalid.
+`connect` is the model: a refusal raises an error whose itemized text
+names the specific segments, pins, or labels that blocked the write so
 the agent can pick a new waypoint instead of guessing.
 
 Agents are bad at undoing mistakes. Tools that refuse invalid states save
@@ -86,13 +93,20 @@ obstacle. Routing is NP-hard; the conflict-set form is almost as useful
 at a fraction of the cost, and keeps the agent in control of the
 decision.
 
-### `dry_run` is scoped, not universal
+### Recovery over preview
 
-`dry_run` / preview is only on ops that are hard to undo and multi-step:
-`apply_schematic_ops`, `move_component`, `connect`, `add_component`,
-`edit_directive remove`. Atomic, trivially reversible ops
-(`set_component_value`, `parameter`) don't need preview — adding it
-would be API surface without value.
+There is no `dry_run` / preview parameter. Safe mutation rests on three
+shipped mechanisms instead:
+
+- **Validate-before-write refusals** — `connect` refuses invalid
+  geometry before the file is touched, with itemized error text naming
+  the conflicting segments, pins, or labels; `add_component` places the
+  part and returns its pin positions plus non-blocking overlap warnings.
+- **`reset_schematic`** — reverts an `.asc` to the byte snapshot taken
+  before its first in-session mutation; the recovery hatch when an
+  edit sequence went wrong.
+- **`export_netlist` diffing** — each export reports the diff against
+  the previous export, so unintended drift is visible immediately.
 
 ### Post-op validation pass
 
@@ -137,7 +151,7 @@ Key `lib/` modules:
 |`raw_parser.py`, `log_parser.py`|simulation result parsing|
 |`library_manager.py`, `library_parser.py`|component library handling|
 |`symbol_geometry.py`|`.asy` symbol parsing, pin positions, rotation transforms, bounding boxes|
-|`spice_lex/`|shared SPICE tokenizer — see [docs/spice_lex.md](spice_lex.md)|
+|`spice_lex.py`, `spice_lex_ops.py`, `spice_lex_views.py`|shared SPICE lexer pipeline — see [docs/spice_lex.md](spice_lex.md)|
 |`pathutil.py`|path security (`safe_path()`, `resolve_safe_path()`)|
 
 ### Tool profiles
@@ -146,15 +160,22 @@ Key `lib/` modules:
 
 |profile|tool count|use case|
 |-|-|-|
-|`full` (default)|49|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
-|`agentic`|33|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
+|`full` (default)|48|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
+|`agentic`|32|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
 
-The `agentic` profile drops netlist-editing wrappers (`create_netlist`,
-`read_circuit`, `set_component_value`, `parameter`, `edit_directive`)
-and library session-management tools — things a capable agent does
-natively via filesystem access. It keeps simulation lifecycle, binary
-`.raw` parsing, batch orchestration, AscEditor-dependent ops, and
-library search.
+The `agentic` profile drops 16 tools: the five netlist-editing wrappers
+(`create_netlist`, `read_circuit`, `set_component_value`, `parameter`,
+`edit_directive`) — things a capable agent does natively via filesystem
+access — the three library session tools (`load_library`,
+`unload_library`, `list_libraries`), six schematic-construction writes
+(`add_component`, `move_component`, `remove_component`,
+`set_component_attribute`, `create_schematic`, `apply_schematic_ops`),
+and the `configure_sweep` / `configure_montecarlo` config builders. It
+keeps simulation lifecycle, binary `.raw` parsing and analysis, batch
+run/results, library search (`find_model`), and the schematic tools an
+agent cannot replicate by editing text: `connect`, `add_net_label`,
+`export_netlist`, `reset_schematic`, `symbol_info`, `component_info`,
+`schematic_from_netlist`, `trace_net`.
 
 Set via `[tools] profile` in `ltspice-mcp.toml` or the
 `LTSPICE_MCP_TOOL_PROFILE` env var. Error hints adapt to the active
@@ -162,7 +183,7 @@ profile so they never point at unavailable tools.
 
 ## Backend: spicelib
 
-`spicelib` (>= 1.4.7) is the core Python library for SPICE automation,
+`spicelib` (>= 1.4.9) is the core Python library for SPICE automation,
 by Nuno Brum. PyLTSpice is a thin re-export wrapper over spicelib that
 adds nothing — we depend on `spicelib` directly.
 
@@ -185,8 +206,10 @@ Core spicelib components used:
 |`RawRead`|parse binary `.raw`/`.qraw` waveform output (dialect auto-detection)|
 |`LTSpiceLogReader`|extract `.MEAS`, step data, Fourier|
 |`SimStepper`|multi-dimensional parameter sweeps (overcomes the 3-parameter `.STEP` limit)|
-|`Montecarlo`|statistical tolerance analysis|
-|`WorstCaseAnalysis`|exhaustive min/max enumeration|
+
+Monte Carlo is not spicelib's `Montecarlo` toolkit: perturbation lives
+in the in-repo pure engine (`lib/montecarlo.py`) and runs through the
+same `SimRunner`-based execution path as everything else.
 
 Per-simulator notes:
 
@@ -226,28 +249,32 @@ auto-detect across the WSL boundary.
 ## Diagnostics
 
 `log_parser.py:extract_log_diagnostics()` extracts structured warnings
-and errors from LTspice log files — parse errors with caret pointers,
-fatal errors, convergence messages — and surfaces them through
-`run_simulation`, `check_job`, `get_measurements`, and
-`get_simulation_summary`. An agent driving raw `ngspice -b` gets a
-200-line log dump and has to grep; here, the same failure surfaces as
-typed feedback the agent can act on.
+and errors from simulator log files — parse errors with caret pointers,
+fatal errors, convergence messages, `.MEAS` parse failures — and
+`run_simulation`, `check_job`, and `simulation_summary` attach them to
+their responses as `warnings` / `errors` lists. An agent driving raw
+`ngspice -b` gets a 200-line log dump and has to grep; here the same
+failure arrives inside the tool response.
 
-Common patterns:
+Above the raw lists sits the observation surfacer
+(`lib/result_observations.py`), which lifts salient facts into a
+curated `observations` list on the run summary:
 
-|log pattern|surfaced as|suggested action|
-|-|-|-|
-|"Time step too small"|`ConvergenceError`|increase max timestep, add `.options`, simplify model|
-|"Singular matrix"|`SingularMatrixError`|check for floating nodes, verify ground connection|
-|"Unknown subcircuit"|`MissingModelError`|report missing model name, suggest alternatives|
-|"Can't find"|`MissingModelError`|report missing file, check include paths|
-|"Syntax error"|`NetlistError`|report line number and content|
-|"Analysis: interrupted"|`SimulationError`|timeout or user abort|
+|observation kind|what it surfaces|
+|-|-|
+|`relay`|the simulator's own error lines, with the simulator's severity (never an invented one)|
+|`reconciliation`|requested `.meas`/`.four` outputs that were not produced|
+|`value`|non-finite samples and extreme node values in the trace data|
+|`coverage`|checks that were skipped, so a thin result can't pass as a clean one|
 
-**Scope:** diagnostic taxonomy depth is LTspice-only. ngspice / qspice /
-xyce have different log formats — secondary simulators get
-convergence and fatal-error parsing, not the full taxonomy. Expanding
-to per-simulator parity would fragment maintenance for marginal value.
+The surfacer deliberately renders no trust verdict — it surfaces facts
+for the model to judge. An empty `observations` list means nothing
+tripped a check, not that the result is verified correct.
+
+**Scope:** LTspice and ngspice both get this first-class — ngspice's
+stdout diagnostics are captured alongside its log file and folded into
+the same pipeline. qspice / xyce get best-effort convergence and
+fatal-error parsing.
 
 ## Non-goals
 
@@ -261,11 +288,12 @@ These are intentional gaps, not pending features. Adopt accordingly.
   parameter-database effort.
 - **Thin wrappers around file-edit operations.** The `agentic` profile
   already drops these for clients with native `Read`/`Edit`.
-- **Per-simulator parity.** This is an LTspice product. NGspice,
-  QSPICE, and Xyce are supported through spicelib's common interface,
-  but LTspice-specific features (`.asc`, `.asy`, Windows interop,
-  `.raw` quirks) are first-class. Secondary simulators get best-effort
-  support.
+- **Per-simulator parity for geometry.** LTspice and ngspice are
+  co-equal for simulation, result parsing, diagnostics, and analysis.
+  The geometry layer (`.asc`, `.asy`, symbol coordinates) stays
+  LTspice-only by nature — ngspice has no schematic format to edit.
+  QSPICE and Xyce get best-effort support through spicelib's common
+  interface.
 - **Auth / multi-tenancy / remote-MCP plumbing.** Local-tool territory.
   No OAuth flows, no per-tenant isolation.
 - **Generic cross-simulator EDA features** that PyLTSpice and ngspice's
@@ -286,7 +314,7 @@ validated + geometry-aware + LTspice-specific overlap.
 - **Diagnostic taxonomy expansion**: singular matrix, gmin stepping
   suggestions, timestep too small, missing model cards, unmatched
   subcircuit pins, `.STEP` parameter mismatches. Each gets a
-  `suggested_fix` field. LTspice-scoped.
+  `suggested_fix` field. LTspice- and ngspice-scoped.
 - **Cross-run analysis**: `compare_corners`, `find_worst_case`,
   `sensitivity_ranking` — tools that aggregate measurements across a
   set of runs and return structured deltas.
@@ -302,7 +330,7 @@ Environment variables with `LTSPICE_MCP_` prefix override TOML values.
 See `config.py:ServerConfig` for all options.
 
 TOML sections: `[simulator]`, `[security]`, `[simulation]`, `[analysis]`,
-`[plotting]`, `[logging]`, `[schematic]`, `[tools]`.
+`[logging]`, `[schematic]`, `[tools]`, `[state]`.
 
 ## Verification recipe
 
@@ -311,9 +339,9 @@ End-to-end smoke test for a fresh install:
 1. Create RC lowpass netlist (R=1k, C=100n → fc ~1.59kHz)
 2. Add `.ac dec 100 1 1Meg` directive
 3. Run AC simulation
-4. Get Bode plot — verify -3dB point near 1.59kHz
+4. `bode_metrics(mode="filter")` — verify the -3dB point near 1.59kHz
 5. Change R to 10k (fc → ~159Hz)
-6. Re-simulate, re-plot — verify bandwidth shifted
+6. Re-simulate, re-run `bode_metrics` — verify the bandwidth shifted
 7. Load a custom library, use a component from it in a new circuit
 
 If any step fails, the doctor tool (see Roadmap) is the eventual answer;

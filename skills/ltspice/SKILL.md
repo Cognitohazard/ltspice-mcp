@@ -253,7 +253,7 @@ C1 out 0 {C}
 
 ### .asc Schematics
 
-`.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use spicelib's `AscEditor` or LTspice's GUI.
+`.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use the server's schematic tools (`add_component`, `connect`, `add_net_label`, ...) or LTspice's GUI. Note that the schematic-construction tools (`add_component`, `create_schematic`, `move_component`, ...) require the full tool profile; the agentic profile builds schematics via `schematic_from_netlist` plus `connect`/`add_net_label` instead.
 
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2.
 - Export to netlist for direct text editing when needed.
@@ -270,7 +270,7 @@ C1 out 0 {C}
 | res | A:(0,0) B:(0,64) | 32x64 |
 | cap | A:(16,0) B:(16,64) | 32x64 |
 
-Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M180→(x,-y). Use `ltspice_symbol_info` for exact positions.
+Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M180→(x,-y). Use `symbol_info` for exact positions.
 
 #### MOSFET orientation conventions
 
@@ -286,30 +286,30 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 - Example: if M3's gate connects to M5 on the right → use M0 (gate right), not R0 (gate left).
 - For diff pairs: M1 at R0 (gate left, toward Vinp), M2 at M0 (gate right, toward Vinn).
 - For PMOS current mirrors: M4a at R180 (gate right, toward center), M4b at M180 (gate left, toward center) — gates face each other.
-- Use `ltspice_symbol_info` with the intended rotation to verify pin directions before placing.
+- Use `symbol_info` with the intended rotation to verify pin directions before placing.
 
 #### Schematic layout best practices
 
 **Component placement:**
 - **Tier alignment**: Matched/mirrored transistors (diff pairs, current mirrors, bias mirrors) MUST share the same y-coordinate. Plan horizontal tiers: VDD rail → PMOS loads → diff pair → tail/bias → VSS.
 - **Drain/source alignment on each branch**: Within a vertical branch (e.g., PMOS load stacked above NMOS input), position components so the drain pin of the upper device is on the same x-column as the drain pin of the lower device. This eliminates horizontal jogs between stacked transistors.
-- **Pin-to-rail alignment**: Place voltage/current sources so their pins land directly on the rail they connect to — no wire through the source body. For a VDD source, position it so the `+` pin y-coordinate equals the VDD rail y-coordinate. Use `ltspice_symbol_info` to compute the exact placement origin from the desired pin position (e.g., for voltage `+` at y=128, place origin at y=128-16=112).
+- **Pin-to-rail alignment**: Place voltage/current sources so their pins land directly on the rail they connect to — no wire through the source body. For a VDD source, position it so the `+` pin y-coordinate equals the VDD rail y-coordinate. Use `symbol_info` to compute the exact placement origin from the desired pin position (e.g., for voltage `+` at y=128, place origin at y=128-16=112).
 - **Minimum 128 units vertical spacing between pin levels** of adjacent tiers (e.g., between PMOS drain y and NMOS drain y). This leaves room for horizontal buses and net labels between tiers. With MOSFET bbox height of 96, plan tier origins ~192 units apart.
 - **Bias circuit alignment**: Bias devices (e.g., M5/Ibias) should share the y-level of their functional counterpart (e.g., M3 tail current source).
-- **Plan the full layout before placing**: Decide VDD rail y, tier y-coordinates, and bus y-coordinates first. Verify that buses fit between bounding boxes of adjacent tiers. Use `ltspice_symbol_info` to check bbox extents at the intended rotation.
+- **Plan the full layout before placing**: Decide VDD rail y, tier y-coordinates, and bus y-coordinates first. Verify that buses fit between bounding boxes of adjacent tiers. Use `symbol_info` to check bbox extents at the intended rotation.
 
 **Wiring:**
-- **All wires must be orthogonal** — strictly horizontal or vertical. Never route diagonal wires. Use waypoints in `ltspice_connect` for L-shaped or multi-segment routes.
-- **Horizontal buses must route OUTSIDE all component bounding boxes.** Use `ltspice_symbol_info` to check bbox extents. For PMOS M180 with bbox top at y=160, a gate bus at y=176 is INSIDE the bbox — route at y=144 (between VDD rail and bbox top) instead. Plan bus y-coordinates BEFORE placing components.
+- **All wires must be orthogonal** — strictly horizontal or vertical. Never route diagonal wires. Use waypoints in `connect` for L-shaped or multi-segment routes.
+- **Horizontal buses must route OUTSIDE all component bounding boxes.** Use `symbol_info` to check bbox extents. For PMOS M180 with bbox top at y=160, a gate bus at y=176 is INSIDE the bbox — route at y=144 (between VDD rail and bbox top) instead. Plan bus y-coordinates BEFORE placing components.
 - **Vertical wires must not pass through component bodies to reach a bus.** When connecting a drain to a horizontal bus, jog the wire horizontally outside the bbox first, then route vertically to the bus. Example for PMOS M180 diode connection: route drain (400,256) → right to (448,256) → up to (448,144) → along bus to label, NOT straight up through the body at x=400.
 - **Leave room for buses between tiers.** The minimum 128-unit tier spacing must account for bounding box height plus bus clearance. For PMOS M180 (bbox height 96), if VDD rail is at y=128 and PMOS origins at y=288: bbox occupies y=192–288, bus fits at y=144–160 (between rail and bbox top).
-- **Heed `ltspice_connect` warnings and errors**: the tool refuses diagonal wires, pin collisions, and wire junction overlaps. Non-blocking warnings (long runs, bbox crossings) should still be addressed.
+- **Heed `connect` warnings and errors**: the tool refuses diagonal wires, pin collisions, and wire junction overlaps. Non-blocking warnings (long runs, bbox crossings) should still be addressed.
 
 **Ground and net labels:**
-- **Local ground flags**: Place a ground (`0`) label directly at each grounded pin using `ltspice_add_net_label`. Never route wires to a distant ground flag.
-- **One ground per pin**: Each component's ground connection gets its own `ltspice_add_net_label` call at the pin's coordinates — do not share ground flags between components.
-- **Do not use `ltspice_connect` with `net:0`** when multiple ground labels exist — the tool errors on ambiguous net references. Place ground flags directly at pin coordinates using `ltspice_add_net_label(net="0", pin="M3.S")` — no wire needed when the flag is on the pin.
-- **Named nets (VDD, outp, etc.)**: Use a single label per unique net name. Connect components to it via `ltspice_connect` with `net:NAME` or waypoints.
+- **Local ground flags**: Place a ground (`0`) label directly at each grounded pin using `add_net_label`. Never route wires to a distant ground flag.
+- **One ground per pin**: Each component's ground connection gets its own `add_net_label` call at the pin's coordinates — do not share ground flags between components.
+- **Do not use `connect` with `net:0`** when multiple ground labels exist — the tool errors on ambiguous net references. Place ground flags directly at pin coordinates using `add_net_label(net="0", pin="M3.S")` — no wire needed when the flag is on the pin.
+- **Named nets (VDD, outp, etc.)**: Use a single label per unique net name. Connect components to it via `connect` with `net:NAME` or waypoints.
 
 **Sources:**
 - **Voltage source polarity**: `+` pin is at the top (smaller y), `-` at bottom. For VDD sources, `+` connects to the supply rail, `-` to ground.

@@ -72,6 +72,94 @@ class TestToolCountInDocs:
         )
 
 
+DOC_PATHS = (
+    "README.md",
+    "docs/DESIGN.md",
+    "skills/ltspice/SKILL.md",
+    "skills/ngspice/SKILL.md",
+)
+
+# Tool names that existed before the v0.2.0 consolidation and no longer do.
+# Their functionality moved into other tools (bode_metrics modes, query_value
+# step addressing, simulation_summary, find_model, edit_directive); a doc that
+# still names them as tools sends users chasing ghosts.
+REMOVED_TOOL_NAMES = (
+    "measurements",
+    "model_info",
+    "add_text",
+    "step_get",
+    "filter_metrics",
+    "roll_off",
+    "gain_at",
+    "find_crossing",
+    "get_measurements",
+    "get_simulation_summary",
+)
+
+
+class TestStaleToolNamesInDocs:
+    def test_no_prefixed_tool_names_in_docs(self) -> None:
+        """Tools were renamed from `ltspice_<name>` to bare `<name>`; no doc
+        may still use the prefixed form of any registered tool."""
+        registered = {t.definition.name for t in registry._registered}
+        failures: list[str] = []
+        for rel in DOC_PATHS:
+            text = (ROOT / rel).read_text()
+            stale = sorted(f"ltspice_{name}" for name in registered if f"ltspice_{name}" in text)
+            if stale:
+                failures.append(f"  {rel}: {stale}")
+        assert not failures, (
+            "Docs reference tools by their old ltspice_-prefixed names:\n"
+            + "\n".join(failures)
+            + "\nUse the bare registered names instead."
+        )
+
+    def test_no_removed_tool_references_in_docs(self) -> None:
+        """No doc may reference a removed tool as a tool.
+
+        Only backticked forms — `name` or `name(...)` — count as tool
+        references; the bare words ("measurements" in prose) are fine.
+        The old `ltspice_`-prefixed form counts too — the prefix check
+        above only covers currently-registered names, so a removed tool's
+        prefixed form would otherwise slip through both guards.
+        """
+        failures: list[str] = []
+        for rel in DOC_PATHS:
+            text = (ROOT / rel).read_text()
+            stale = sorted(
+                name
+                for name in REMOVED_TOOL_NAMES
+                if re.search(rf"`(?:ltspice_)?{name}[`(]", text)
+            )
+            if stale:
+                failures.append(f"  {rel}: {stale}")
+        assert not failures, (
+            "Docs reference tools that no longer exist:\n"
+            + "\n".join(failures)
+            + "\nPoint at the absorbing tool instead (bode_metrics modes, "
+            "query_value step_axis/step_value, simulation_summary, "
+            "find_model, edit_directive)."
+        )
+
+
+class TestDesignDocCounts:
+    def test_design_md_full_count_matches_registry(self) -> None:
+        full, _ = _profile_counts()
+        text = (ROOT / "docs" / "DESIGN.md").read_text()
+        pattern = rf"\|\s*`full`[^|]*\|\s*{full}\s*\|"
+        assert re.search(pattern, text), (
+            f"docs/DESIGN.md tool-profile table must list {full} for the full profile"
+        )
+
+    def test_design_md_agentic_count_matches_registry(self) -> None:
+        _, agentic = _profile_counts()
+        text = (ROOT / "docs" / "DESIGN.md").read_text()
+        pattern = rf"\|\s*`agentic`[^|]*\|\s*{agentic}\s*\|"
+        assert re.search(pattern, text), (
+            f"docs/DESIGN.md tool-profile table must list {agentic} for the agentic profile"
+        )
+
+
 def _ltspice_refs_in_strings(py_path: Path) -> set[str]:
     """Extract `ltspice_*` tokens that appear INSIDE string literals.
 

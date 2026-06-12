@@ -39,13 +39,6 @@ timeout = 300.0
 # Maximum waveform data points to return per trace
 max_points = 10000
 
-[plotting]
-# Plot resolution in DPI
-dpi = 150
-
-# Matplotlib style (e.g., seaborn-v0_8-darkgrid, ggplot, bmh)
-style = "seaborn-v0_8-darkgrid"
-
 [logging]
 # Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
 level = "INFO"
@@ -57,3 +50,12 @@ symbol_paths = []
 [tools]
 # Tool profile: "full" (all tools) or "agentic" (reduced set for capable LLM agents)
 profile = "full"
+
+[state]
+# Persist simulation/batch job metadata to .ltspice-mcp/jobs/ next to each
+# circuit, so a restarted server can surface prior runs.
+persist_jobs = true
+
+# At startup, eagerly load persisted jobs for this many recently-touched
+# circuits. 0 disables preload (lazy loading on first tool call).
+preload_recent_count = 10

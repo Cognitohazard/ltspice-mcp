@@ -147,7 +147,7 @@ Users can override via `[schematic] symbol_paths` in TOML or `LTSPICE_MCP_SYMBOL
 - **Lifespan context**: `server_lifespan()` creates `SessionState` (config + detected simulators + `JobRegistry` + profile-filtered tool dispatch). Handlers receive state via `server.request_context.lifespan_context["state"]`.
 - **Job lifecycle & persistence**: `SessionState` delegates all job state to `JobRegistry` (`lib/job_registry.py`); `state.jobs`/`state.add_job`/etc. are thin delegators. When `state.persist_jobs` is on, jobs round-trip through per-circuit JSON sidecars (`{dir}/.ltspice-mcp/jobs/`) via `job_store.py`, and `preload_recent()` reloads jobs for recently-touched circuits at startup. Status transitions go through the `job_lifecycle.transition()` state machine; `run_simulation` enforces `config.max_parallel_sims`. On shutdown, `cancel_running()` kills live simulators and `drain_pending()` flushes persistence.
 - **Structured errors**: Use the hierarchy in `errors.py` (PathSecurityError, NetlistError, SimulationError variants). Handlers catch `LTSpiceMCPError` subtypes and return error text; unknown exceptions propagate to MCP SDK.
-- **Log diagnostics**: `log_parser.py:extract_log_diagnostics()` extracts structured warnings and errors from LTspice log files (parse errors with caret pointers, Fatal Error, convergence messages, etc.). Used by `run_simulation`, `check_job`, `get_measurements`, and `get_simulation_summary` to surface errors instead of silently returning empty results.
+- **Log diagnostics**: `log_parser.py:extract_log_diagnostics()` extracts structured warnings and errors from LTspice log files (parse errors with caret pointers, Fatal Error, convergence messages, etc.). Used by `run_simulation`, `check_job`, `measurement_stats`, and `simulation_summary` to surface errors instead of silently returning empty results.
 - **Runner lifecycle**: `RunnerManager` (`lib/runner_manager.py`) owns all runner instances (sim, sweep, MC). Accessed via `state.runners.get_sim_runner(loop, simulator_class, output_folder)` etc. The manager auto-invalidates cached runners when the event loop, simulator class, or output folder changes. Never create runners directly.
 
 ### Result-trust: surface, don't judge
@@ -171,7 +171,7 @@ On WSL, LTspice.exe runs via Windows interop (not Wine). Key adaptations:
 
 `ltspice-mcp.toml` in working directory (auto-generated if missing). Environment variables with `LTSPICE_MCP_` prefix override TOML values. See `config.py:ServerConfig` for all options. On WSL, set `simulator.path` to the LTspice Windows executable path.
 
-TOML sections: `[simulator]`, `[security]`, `[simulation]`, `[analysis]`, `[plotting]`, `[logging]`, `[schematic]`, `[tools]`, `[state]` (`persist_jobs`).
+TOML sections: `[simulator]`, `[security]`, `[simulation]`, `[analysis]`, `[logging]`, `[schematic]`, `[tools]`, `[state]` (`persist_jobs`).
 
 ### Tool Profiles
 
@@ -182,6 +182,6 @@ TOML sections: `[simulator]`, `[security]`, `[simulation]`, `[analysis]`, `[plot
 | `full` (default) | All 48 | Any MCP client, automation, non-agent LLMs |
 | `agentic` | 32 | LLM agents with native file access (Read/Edit/Write) |
 
-The "agentic" profile removes netlist-editing wrapper tools (e.g., `create_netlist`, `read_circuit`, `set_component_value`, `parameter`, `edit_directive`) and library session management — these are things capable agents do natively. It keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, AscEditor-dependent ops, and library search.
+The "agentic" profile removes 16 tools: the netlist-editing wrappers (`create_netlist`, `read_circuit`, `set_component_value`, `parameter`, `edit_directive`), library session management (`load_library`, `unload_library`, `list_libraries`), the schematic-construction writes (`add_component`, `move_component`, `remove_component`, `set_component_attribute`, `create_schematic`, `apply_schematic_ops`), and `configure_sweep`/`configure_montecarlo` — things capable agents do natively or via `schematic_from_netlist`. It keeps simulation lifecycle, binary `.raw` parsing, batch run/results, the wiring and inspection schematic ops (`connect`, `add_net_label`, `export_netlist`, `reset_schematic`, `symbol_info`, `component_info`, `schematic_from_netlist`, `trace_net`), and `find_model` search.
 
 Profile-filtered tool defs and dispatch live on `SessionState` (`state.tool_defs`, `state.tool_dispatch`). Each tool's `profiles` frozenset (set at registration via `@registry.tool(profiles=...)`) determines visibility. Error hints in `server.py` are profile-aware (tuples of `(full_hint, agentic_hint)`) so they don't reference tools the client can't see.

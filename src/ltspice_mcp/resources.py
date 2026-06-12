@@ -184,8 +184,6 @@ def _read_config(
         "max_parallel_sims": cfg.max_parallel_sims,
         "default_timeout": cfg.default_timeout,
         "max_points_returned": cfg.max_points_returned,
-        "plot_dpi": cfg.plot_dpi,
-        "plot_style": cfg.plot_style,
         "log_level": cfg.log_level,
     }
     return _make_result(uri_str, json.dumps(data, indent=2))
