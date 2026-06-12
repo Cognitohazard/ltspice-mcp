@@ -284,7 +284,7 @@ def load_raw(raw_path: Path, state: SessionState) -> RawRead:
     """Load and cache a ``RawRead`` instance."""
     dialect = state.raw_dialect
     try:
-        return state.results.get(
+        raw = state.results.get(
             raw_path,
             lambda p: RawRead(str(p), traces_to_read="*", dialect=dialect),
         )
@@ -297,6 +297,17 @@ def load_raw(raw_path: Path, state: SessionState) -> RawRead:
             f"Failed to parse result file: {e}. "
             "File may be corrupted or not a valid SPICE .raw file"
         ) from e
+    # spicelib parses a header truncated mid-write into a "valid" raw with no
+    # variables at all. A real SPICE raw always carries at least its axis
+    # variable, so zero variables is a corruption signature — fail here with
+    # the real cause instead of letting every consumer misreport it as
+    # "signal not found" against an empty signal list.
+    if not raw.get_trace_names():
+        raise ResultError(
+            f"Result file {raw_path} parsed with zero variables — the file is "
+            "most likely truncated or corrupt (e.g. a simulation killed mid-write)."
+        )
+    return raw
 
 
 def validate_signal(raw: RawRead, signal: str) -> str:
@@ -481,7 +492,7 @@ def job_duration_seconds(
 ) -> float | None:
     """Compute ``completed_at - started_at`` in seconds, clamped at 0.
 
-    Bug F guard: clock skew, persistence round-trips, or out-of-order
+    Guard: clock skew, persistence round-trips, or out-of-order
     timestamps occasionally produce negative durations. Clamping with a
     warning surfaces the anomaly without leaking garbage to clients.
     """
@@ -601,7 +612,7 @@ def asc_component_value(editor: AscEditor, ref: str) -> str:
     Spicelib's ``editor.get_component_value`` concatenates ``Value`` and
     ``Value2`` into a single space-separated string, which then collides
     with the ``attributes: {Value2: ...}`` map that downstream tools also
-    surface (Fr3). Read ``Value`` alone here and let ``Value2`` stay in
+    surface. Read ``Value`` alone here and let ``Value2`` stay in
     the attributes map without duplication.
     """
     comp = editor.components.get(ref)

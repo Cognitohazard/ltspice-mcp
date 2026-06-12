@@ -45,6 +45,7 @@ from ltspice_mcp.lib.spice_validator import (
     MEAS_KINDS,
     validate_directive,
     validate_netlist_arity,
+    validate_netlist_dangling_nodes,
 )
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, get_symbol_info
 from ltspice_mcp.state import SessionState
@@ -92,7 +93,7 @@ def _create_component(
         for attr_name, attr_val in attributes.items():
             # Spicelib's parser fails on subsequent reads of a SYMATTR line
             # with no value, leaving the .asc permanently unreadable until
-            # manually edited. Reject up front (P-N1).
+            # manually edited. Reject up front.
             if attr_val == "":
                 raise NetlistError(
                     f"Attribute {attr_name!r} on {reference!r}: empty value "
@@ -169,7 +170,7 @@ def _validate_component_value(reference: str, value: str) -> None:
 
     spicelib writes the value verbatim into the component line; spaces in
     a non-parameterised, non-quoted value bleed into a phantom node and
-    irrecoverably break the netlist (Bug L). The check is permissive of:
+    irrecoverably break the netlist. The check is permissive of:
     - SPICE expressions in braces (``{1/(2*pi*RC)}``) — braces protect spaces
     - quoted strings (``"a b"``)
     - ``KEY=VALUE`` parameter lists (handled by ``_apply_component_value``)
@@ -387,7 +388,7 @@ def _build_on_wire_predicate(
     The naive ``any(_point_on_segment(coord, *seg) for seg in segments)``
     scan is O(segments) per coord; calling it once per pin makes
     ``_post_op_warnings`` O(pins × segments), which becomes the dominant
-    cost during a long ``add_component`` build (V7-FR-9). Bucketing
+    cost during a long ``add_component`` build. Bucketing
     horizontal segments by row and vertical by column collapses each query
     to the handful of segments sharing that row/column.
     """
@@ -790,9 +791,9 @@ class RemoveComponentInput(ToolInput):
         default=False,
         description=(
             "When true, also delete every wire whose endpoint touches one of "
-            "the removed component's pins (Fr7). Default false keeps the v2 "
-            "behaviour of leaving wires in place and surfacing a warning, so "
-            "callers can opt in once they've confirmed the removal is clean."
+            "the removed component's pins. Default false leaves the wires in "
+            "place and surfaces a warning, so callers can opt in once "
+            "they've confirmed the removal is clean."
         ),
     )
 
@@ -991,7 +992,7 @@ def _require_asc(path: Path) -> None:
 def _atomic_save_editor(editor: Editor, target: Path) -> None:
     """Render editor to a buffer, then atomically rename onto target.
 
-    Avoids partial-write corruption (P-N1): if rendering or writing fails,
+    Avoids partial-write corruption: if rendering or writing fails,
     the original file is untouched. Spicelib's save_netlist accepts an
     io.StringIO sink (verified for AscEditor and SpiceEditor), so we can
     skip the temp-file dance and reuse atomic_write_text's tested rename.
@@ -1280,7 +1281,7 @@ async def handle_list_components(args: ListComponentsInput, state: SessionState)
 
     # Single-component lookup mode (absorbed from get_component_value).
     # For .asc, read the Value SYMATTR directly so Value2 doesn't get
-    # concatenated into the displayed value (Fr3).
+    # concatenated into the displayed value.
     reference = args.reference
     if reference is not None:
         if reference not in editor.components:
@@ -1318,7 +1319,7 @@ async def handle_list_components(args: ListComponentsInput, state: SessionState)
     comp_lines = []
     for comp_ref in page:
         try:
-            # For .asc, read Value SYMATTR directly (Fr3 — avoids the
+            # For .asc, read Value SYMATTR directly (avoids the
             # Value+Value2 concat). For .cir/.net this branch is not
             # reached; netlists go through _list_components_netlist.
             if is_asc:
@@ -1328,7 +1329,7 @@ async def handle_list_components(args: ListComponentsInput, state: SessionState)
         except Exception:
             # spicelib's component-line regex chokes on B-sources with
             # commas in if(...) expressions; degrade gracefully rather
-            # than abort the whole listing (Bug K).
+            # than abort the whole listing.
             value = "<unparseable>"
         entry: dict = {"reference": comp_ref, "value": value}
         # Surface non-default SYMATTRs (SpiceLine, SpiceModel, …) for
@@ -1756,7 +1757,7 @@ async def handle_edit_directive(
                         "kind='comment' is .asc-only — for .cir/.net files "
                         "add a literal ``*`` or ``;`` comment in the file directly."
                     )
-                # Fr5: refuse comment text that *looks* like a directive —
+                # Refuse comment text that *looks* like a directive —
                 # that's almost always a mis-typed ``kind`` and would silently
                 # render as ``* !.tran 1m`` (a comment of a directive).
                 stripped_comment = instruction.lstrip()
@@ -3856,8 +3857,12 @@ class ValidateNetlistInput(ToolInput):
     name="validate_netlist",
     description=(
         "Lint a netlist or schematic before simulation — the static circuit "
-        "check gate. Catches: element arity (too few nodes, missing "
-        "E/G/F/H/B value), duplicate/multiple analysis directives ('More than "
+        "check gate. Catches: empty/whitespace-only netlist files, element "
+        "arity (too few nodes, missing "
+        "E/G/F/H/B value), dangling nodes in .cir/.net netlists (a node "
+        "touching only one element "
+        "terminal — warning, since deliberate fragments are legal), "
+        "duplicate/multiple analysis directives ('More than "
         "one analysis specified'), .MEAS whose analysis kind isn't present, "
         "known-bad .MEAS patterns (vdb()/phase()/group_delay()), "
         "and directives the LTspice runner is known to reject. On .asc, "
@@ -3909,6 +3914,22 @@ async def handle_validate_netlist(
         content = file_path.read_text(encoding="utf-8", errors="replace")
 
     issues: list[dict] = []
+    # Empty / whitespace-only deck: LTspice fails it immediately at line 1.
+    # Non-.asc only — the .asc branch builds ``content`` from the schematic's
+    # directive lines, and a schematic without SPICE directives is fine.
+    if asc_editor is None and not content.strip():
+        issues.append(
+            {
+                "severity": "error",
+                "line": 1,
+                "directive": "",
+                "message": "Netlist is empty — the file has no circuit elements or directives.",
+                "suggestion": (
+                    "Write the netlist content (title line, elements, analysis "
+                    "directive) before simulating."
+                ),
+            }
+        )
     # Single pass: validate directives, collect each analysis directive,
     # and bookmark every ``.meas <kind>`` line.
     analysis_lines: dict[str, list[tuple[int, str]]] = {}
@@ -3941,7 +3962,7 @@ async def handle_validate_netlist(
     # analysis specified."
     # ``.op`` coexists with one real analysis in LTspice, so count only the
     # mutually-exclusive kinds — counting ``.op`` false-positived the common
-    # ``.op`` + ``.tran``/``.ac`` idiom (v9-LT). ``analysis_lines`` is left intact
+    # ``.op`` + ``.tran``/``.ac`` idiom. ``analysis_lines`` is left intact
     # so the ``.meas`` matching below still recognises ``.op``.
     exclusive = {k: v for k, v in analysis_lines.items() if k in EXCLUSIVE_ANALYSIS_KINDS}
     duplicate_kinds = sorted(k for k, entries in exclusive.items() if len(entries) > 1)
@@ -3956,7 +3977,7 @@ async def handle_validate_netlist(
             continue
         issues.append(_meas_mismatch_issue(lineno, line, kind, active_kinds))
 
-    # Element-arity pass (C-N4): walk lexer cards, consult ELEMENT_SPECS,
+    # Element-arity pass: walk lexer cards, consult ELEMENT_SPECS,
     # flag instances with too few positional nodes or B-sources missing
     # the V=/I= prefix. LTspice's "Expected 2 node names here" / "Unknown
     # parameter" errors at runtime become up-front issues here.
@@ -3966,6 +3987,21 @@ async def handle_validate_netlist(
         arity_cards = []
     for arity_issue in validate_netlist_arity(arity_cards):
         issues.append({"severity": "error", **arity_issue})
+
+    # Dangling-node pass: a node touched by exactly one element terminal in
+    # its scope. Warning only — single-connection nodes are legal in
+    # deliberate fragments. Non-.asc only: a schematic's connectivity lives
+    # in wires and flags this pass cannot see, so element lines legally
+    # embedded in .asc SPICE-directive text would all false-positive
+    # (floating pins are the schematic topology pass's job below). Line 1
+    # of a netlist is the free-text title, which the lexer reads as an
+    # instance card — excluded so title words don't become phantom nodes.
+    if asc_editor is None:
+        dangling_cards = [
+            card for card in arity_cards if not (card.kind == "instance" and card.line_start == 1)
+        ]
+        for dangling_issue in validate_netlist_dangling_nodes(dangling_cards):
+            issues.append({"severity": "warning", **dangling_issue})
 
     # .asc schematic-graph checks (named-net shorts, floating pins, dangling
     # labels) — the directive lint above only sees embedded SPICE text, so the
@@ -4134,7 +4170,7 @@ def _snap_match(requested: float, actual: float, *, rtol: float = 1e-3) -> bool:
     Step axes are discrete, so a legitimate lookup lands on (or extremely
     near) a real step value. A large gap means the request fell outside the
     swept range and was silently clamped to the nearest endpoint — worth a
-    warning rather than presenting the clamp as a valid answer (V7-P2-2).
+    warning rather than presenting the clamp as a valid answer.
     """
     scale = max(abs(actual), abs(requested), 1e-30)
     return abs(requested - actual) <= rtol * scale
@@ -4346,7 +4382,7 @@ async def handle_step_get(args: StepGetInput, state: SessionState) -> types.Call
         # No inner coordinate requested. For .op raws index 0 is the only
         # sample; for .ac/.tran it's the first (passband / t=0) bin, whose
         # value is uninterpretable without knowing the coordinate. Surface
-        # the implied coordinate when there is a real inner axis (V7-FR-5).
+        # the implied coordinate when there is a real inner axis.
         try:
             inner_axis = real_axis(np.asarray(raw.get_axis(step=best_idx)))
         except Exception:
@@ -4394,7 +4430,7 @@ async def handle_step_get(args: StepGetInput, state: SessionState) -> types.Call
 
 
 # ---------------------------------------------------------------------------
-# Batch-transaction op (Fr1) — apply many edits to one .asc atomically.
+# Batch-transaction op — apply many edits to one .asc atomically.
 # ---------------------------------------------------------------------------
 
 
@@ -4666,7 +4702,7 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
 async def handle_apply_schematic_ops(
     args: ApplySchematicOpsInput, state: SessionState
 ) -> types.CallToolResult:
-    """Apply a list of schematic edits in one transaction (Fr1)."""
+    """Apply a list of schematic edits in one transaction."""
     asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
 
