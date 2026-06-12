@@ -90,6 +90,31 @@ def make_batch_job(job_id: str = "b1", *, status: str = "completed", **overrides
     return bj
 
 
+class _FakeSession:
+    """Stub MCP session — log/progress calls are no-ops."""
+
+    async def send_log_message(self, **kwargs):
+        pass
+
+    async def send_progress_notification(self, **kwargs):
+        pass
+
+
+class _FakeRequestContext:
+    def __init__(self, state: SessionState):
+        self.lifespan_context = {"state": state}
+        self.session = _FakeSession()
+        self.meta = None
+
+
+class _FakeServer:
+    """Stands in for the module-level MCP server so dispatch-level tests can
+    drive call_tool/read_resource against a plain SessionState."""
+
+    def __init__(self, state: SessionState):
+        self.request_context = _FakeRequestContext(state)
+
+
 @pytest.fixture
 def work_dir(tmp_path: Path) -> Path:
     """Temporary working directory for tests."""

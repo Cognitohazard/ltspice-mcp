@@ -1,12 +1,11 @@
 """Server status and diagnostics tools."""
 
 import asyncio
-from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
 
-from ltspice_mcp.lib import job_store, recent
+from ltspice_mcp.lib import services
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     RO_ANNOTATIONS,
@@ -208,22 +207,7 @@ async def handle_recent(args: RecentInput, state: SessionState):
     del state  # recent.json is user-global; nothing state-scoped is needed
     fmt = args.format
 
-    def _collect() -> list[dict]:
-        # Off-loop: recent.load polls a cross-process file lock (up to 10 s)
-        # and each summary reads a circuit's job-sidecar JSON files. All
-        # reads (the prune rewrite is atomic), so safe under cancellation.
-        entries = recent.load(prune_missing=True)
-        out: list[dict] = []
-        for entry in entries:
-            raw_path = entry.get("path")
-            if not isinstance(raw_path, str):
-                continue
-            summary = job_store.summarize_circuit(Path(raw_path))
-            summary["last_touched"] = entry.get("last_touched")
-            out.append(summary)
-        return out
-
-    circuits = await asyncio.to_thread(_collect)
+    circuits = await asyncio.to_thread(services.collect_recent_circuits)
 
     if not circuits:
         text = (

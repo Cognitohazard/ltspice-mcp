@@ -12,19 +12,45 @@ request is served while the heavy one is still in flight.
 import asyncio
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+from pydantic import AnyUrl
 from spicelib.raw.raw_read import RawRead
 
-from ltspice_mcp.lib import services
+from ltspice_mcp.lib import recent, services
+from ltspice_mcp.server import read_resource
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import SignalStatsInput, handle_signal_stats
 from ltspice_mcp.tools.status import ServerStatusInput, handle_server_status
-from tests.conftest import stage_recorded_fixture
+from tests.conftest import _FakeServer, make_sim_job, stage_recorded_fixture
 
 # Stands in for a multi-hundred-MB parse over /mnt/c. The only deliberate
 # slow-op in this module; every timing assertion keeps >=4x margin to it.
 SLOW_OP_SECONDS = 1.0
+
+
+def slow_rawread(*args, **kwargs):
+    """RawRead stand-in that blocks for SLOW_OP_SECONDS before parsing."""
+    time.sleep(SLOW_OP_SECONDS)
+    return RawRead(*args, **kwargs)
+
+
+async def assert_light_request_served(heavy: asyncio.Task, state: SessionState) -> None:
+    """Serve ``server_status`` while ``heavy`` is in flight; assert it
+    returns promptly and before the heavy task completes."""
+    t0 = time.monotonic()
+    light = await handle_server_status(ServerStatusInput(), state)
+    light_elapsed = time.monotonic() - t0
+
+    assert not heavy.done(), (
+        "heavy operation finished before the light request was even served — "
+        "it ran inline on the event loop and stalled all other requests"
+    )
+    # The light handler is ms-scale; half the slow-op duration is a generous
+    # bound that still proves it was not queued behind the full parse.
+    assert light_elapsed < SLOW_OP_SECONDS / 2
+    assert light.content
 
 
 async def test_light_tool_served_while_heavy_parse_in_flight(
@@ -37,11 +63,6 @@ async def test_light_tool_served_while_heavy_parse_in_flight(
     ``server_status`` (light: no file I/O) concurrently on one event loop.
     """
     raw_path = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
-
-    def slow_rawread(*args, **kwargs):
-        time.sleep(SLOW_OP_SECONDS)
-        return RawRead(*args, **kwargs)
-
     monkeypatch.setattr(services, "RawRead", slow_rawread)
 
     heavy = asyncio.create_task(
@@ -53,18 +74,7 @@ async def test_light_tool_served_while_heavy_parse_in_flight(
     # One loop tick: the heavy handler starts and reaches the parse.
     await asyncio.sleep(0)
 
-    t0 = time.monotonic()
-    light = await handle_server_status(ServerStatusInput(), state_no_sim)
-    light_elapsed = time.monotonic() - t0
-
-    assert not heavy.done(), (
-        "heavy parse finished before the light request was even served — "
-        "the parse ran inline on the event loop and stalled all other requests"
-    )
-    # The light handler is ms-scale; half the slow-op duration is a generous
-    # bound that still proves it was not queued behind the full parse.
-    assert light_elapsed < SLOW_OP_SECONDS / 2
-    assert light.content
+    await assert_light_request_served(heavy, state_no_sim)
 
     # The offloaded parse must still produce the correct result afterward.
     result = await heavy
@@ -84,8 +94,6 @@ async def test_recent_index_write_runs_off_loop(
     complete until the slow touch returned — so reaching the ``not done``
     assertion at all proves the loop stayed live during the write.
     """
-    from ltspice_mcp.lib import recent
-
     monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path / "home"))
     state_no_sim.config.persist_jobs = True
     circuit = tmp_path / "rc.cir"
@@ -123,36 +131,15 @@ async def test_resource_read_served_off_loop(
     ``ltspice://results/{job}/signals`` route, with the parse patched to
     take SLOW_OP_SECONDS — concurrently with ``server_status``.
     """
-    from datetime import timedelta
-    from unittest.mock import patch
-
-    from pydantic import AnyUrl
-
-    from ltspice_mcp.lib import now
-    from ltspice_mcp.server import read_resource
-    from ltspice_mcp.state import SimulationJob
-    from tests.test_server import _FakeServer
-
     raw_path = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
-    job = SimulationJob(
-        job_id="resjob",
-        netlist=Path("/tmp/test.cir"),
-        simulator="FakeSim",
-        status="completed",
-        started_at=now(),
-        completed_at=now() + timedelta(seconds=1),
-        raw_file=raw_path,
-    )
+    job = make_sim_job("resjob", raw_file=raw_path)
     state_no_sim.jobs[job.job_id] = job
-
-    def slow_rawread(*args, **kwargs):
-        time.sleep(SLOW_OP_SECONDS)
-        return RawRead(*args, **kwargs)
 
     monkeypatch.setattr(services, "RawRead", slow_rawread)
 
     with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)):
-
+        # Keep this wrapper: create_task needs a true coroutine, and the
+        # SDK's read_resource is typed as returning a plain Awaitable.
         async def _read_signals_resource():
             return await read_resource(AnyUrl("ltspice://results/resjob/signals"))
 
@@ -160,16 +147,7 @@ async def test_resource_read_served_off_loop(
         # One loop tick: the read task starts and hands the router to a worker.
         await asyncio.sleep(0)
 
-        t0 = time.monotonic()
-        light = await handle_server_status(ServerStatusInput(), state_no_sim)
-        light_elapsed = time.monotonic() - t0
-
-        assert not heavy.done(), (
-            "resource read finished before the light request was even served — "
-            "the parse ran inline on the event loop and stalled all other requests"
-        )
-        assert light_elapsed < SLOW_OP_SECONDS / 2
-        assert light.content
+        await assert_light_request_served(heavy, state_no_sim)
 
         # The offloaded read must still produce the correct result afterward.
         result = await heavy

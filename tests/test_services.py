@@ -221,16 +221,16 @@ class TestLoadRaw:
 
 
 class TestGetBatchStatus:
-    def test_running(self, state_no_sim: SessionState):
+    async def test_running(self, state_no_sim: SessionState):
         bj = _make_batch(state_no_sim, status="running")
         bj.completed_at = None
-        d = services.get_batch_status(bj)
+        d = await services.get_batch_status(bj)
         assert d["status"] == "running"
         assert "elapsed_s" in d
 
-    def test_completed(self, state_no_sim: SessionState):
+    async def test_completed(self, state_no_sim: SessionState):
         bj = _make_batch(state_no_sim, status="completed")
-        d = services.get_batch_status(bj)
+        d = await services.get_batch_status(bj)
         assert d["status"] == "completed"
         assert d["duration"] is not None
         assert d["successful"] == 1
@@ -438,7 +438,7 @@ class TestBatchConvergenceSurfacing:
     that really exist on disk, in real ngspice formats, through the public
     service entry rather than by poking the scanner's internals."""
 
-    def test_flagged_runs_associated_with_their_run_index(
+    async def test_flagged_runs_associated_with_their_run_index(
         self, state_no_sim: SessionState, tmp_path: Path
     ):
         # Three completed runs: run 0 clean, run 1 hit gmin + source stepping,
@@ -456,7 +456,7 @@ class TestBatchConvergenceSurfacing:
             run_results[idx] = _run_entry(tmp_path / f"job_{idx + 1}.raw", log)
         bj = _make_batch(state_no_sim, completed=3, total=3, run_results=run_results)
 
-        data = services.get_batch_status(bj)
+        data = await services.get_batch_status(bj)
 
         assert data["status"] == "completed"
         assert data["convergence_warnings"] == [
@@ -464,7 +464,7 @@ class TestBatchConvergenceSurfacing:
             {"run_index": 2, "markers": ["singular matrix"]},
         ]
 
-    def test_missing_log_file_is_skipped_silently(
+    async def test_missing_log_file_is_skipped_silently(
         self, state_no_sim: SessionState, tmp_path: Path
     ):
         # A run whose log file no longer exists on disk is skipped without
@@ -478,13 +478,13 @@ class TestBatchConvergenceSurfacing:
         }
         bj = _make_batch(state_no_sim, completed=2, total=2, run_results=run_results)
 
-        data = services.get_batch_status(bj)
+        data = await services.get_batch_status(bj)
 
         assert data["convergence_warnings"] == [
             {"run_index": 1, "markers": ["gmin stepping", "source stepping"]}
         ]
 
-    def test_clean_job_omits_key_but_caches_completed_scan(
+    async def test_clean_job_omits_key_but_caches_completed_scan(
         self, state_no_sim: SessionState, tmp_path: Path
     ):
         # All-clean logs: the status payload omits convergence_warnings
@@ -498,7 +498,7 @@ class TestBatchConvergenceSurfacing:
         bj = _make_batch(state_no_sim, completed=2, total=2, run_results=run_results)
         assert bj.convergence_warnings is None
 
-        data = services.get_batch_status(bj)
+        data = await services.get_batch_status(bj)
 
         assert "convergence_warnings" not in data
         assert bj.convergence_warnings == []
