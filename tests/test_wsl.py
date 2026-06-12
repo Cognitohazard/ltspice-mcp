@@ -218,7 +218,7 @@ class TestFindWindowsLtspiceExe:
 
 
 class TestKillWindowsLtspiceByToken:
-    """J-KILL regression: cancel/timeout must actually terminate the Windows sim.
+    """Regression: cancel/timeout must actually terminate the Windows sim.
 
     On WSL the simulator is a Windows process invisible to spicelib's
     ``kill_all_spice`` (Linux psutil name-match), so the kill works by

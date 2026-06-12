@@ -333,8 +333,8 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 # per-tool detail stays in the individual tool descriptions, which remain the
 # contract (client injection of this string is not guaranteed). Kept terse
 # (~200 words) since every token is re-read on each LLM turn. The
-# "completed can be degenerate" line is the interim guardrail for the
-# result-trust gap tracked as `.claude/plans/open_followups.md` item 2.
+# "completed can be degenerate" line warns the consuming LLM not to
+# equate a completed run with a correct result.
 SERVER_INSTRUCTIONS = """\
 LTspice-MCP simulates SPICE circuits (LTspice and ngspice) and edits LTspice .asc schematics.
 
@@ -402,7 +402,7 @@ async def call_tool(name: str, arguments: dict | None):
         ) from None
     except LTSpiceMCPError as e:
         # Errors that already carry precise guidance opt out of the generic
-        # per-type hint (show_hint=False) so it doesn't misdirect (V7-FR-2).
+        # per-type hint (show_hint=False) so it doesn't misdirect.
         hint = _get_error_hint(type(e), state.config.tool_profile) if e.show_hint else None
         text = f"{e}\n\n{hint}" if hint else str(e)
         # When the error carries structured suggestions (e.g. fuzzy model
