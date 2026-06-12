@@ -125,12 +125,6 @@ class ServerConfig:
     max_points_returned: int = 10000
     """Maximum waveform data points to return."""
 
-    plot_dpi: int = 150
-    """Plot resolution in DPI."""
-
-    plot_style: str = "seaborn-v0_8-darkgrid"
-    """Matplotlib style."""
-
     log_level: str = "INFO"
     """Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)."""
 
@@ -211,12 +205,6 @@ class ServerConfig:
             if "analysis" in toml_data and "max_points" in toml_data["analysis"]:
                 config_dict["max_points_returned"] = toml_data["analysis"]["max_points"]
 
-            if "plotting" in toml_data:
-                if "dpi" in toml_data["plotting"]:
-                    config_dict["plot_dpi"] = toml_data["plotting"]["dpi"]
-                if "style" in toml_data["plotting"]:
-                    config_dict["plot_style"] = toml_data["plotting"]["style"]
-
             if "logging" in toml_data and "level" in toml_data["logging"]:
                 level = str(toml_data["logging"]["level"]).upper()
                 if level in VALID_LOG_LEVELS:
@@ -276,7 +264,6 @@ class ServerConfig:
                 10_000_000,
                 source="config",
             )
-            _validate_numeric(config_dict, "plot_dpi", int, 50, 600, source="config")
 
         if env_sim := os.getenv("LTSPICE_MCP_SIMULATOR"):
             config_dict["simulator"] = env_sim
@@ -312,11 +299,6 @@ class ServerConfig:
         _load_bounded_env(
             "LTSPICE_MCP_MAX_POINTS", config_dict, "max_points_returned", int, 1, 10_000_000
         )
-        _load_bounded_env("LTSPICE_MCP_PLOT_DPI", config_dict, "plot_dpi", int, 50, 600)
-
-        if env_style := os.getenv("LTSPICE_MCP_PLOT_STYLE"):
-            config_dict["plot_style"] = env_style
-
         if env_log := os.getenv("LTSPICE_MCP_LOG_LEVEL"):
             env_log_upper = env_log.upper()
             if env_log_upper in VALID_LOG_LEVELS:
@@ -421,16 +403,6 @@ def generate_default_config(path: Path) -> None:
     analysis.add(comment("Maximum waveform data points to return per trace"))
     analysis.add("max_points", 10000)
     doc.add("analysis", analysis)
-    doc.add(nl())
-
-    # Plotting section
-    plotting = table()
-    plotting.add(comment("Plot resolution in DPI"))
-    plotting.add("dpi", 150)
-    plotting.add(nl())
-    plotting.add(comment("Matplotlib style (e.g., seaborn-v0_8-darkgrid, ggplot, bmh)"))
-    plotting.add("style", "seaborn-v0_8-darkgrid")
-    doc.add("plotting", plotting)
     doc.add(nl())
 
     # Tools section

@@ -43,6 +43,23 @@ class TestServerConfig:
         config = ServerConfig.load(toml_path)
         assert config.simulator_exe is None
 
+    def test_unknown_toml_section_is_ignored(self, work_dir: Path):
+        """Sections the server no longer reads (e.g. the retired [plotting])
+        must be silently skipped, not crash the load."""
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text(
+            '[plotting]\ndpi = 150\nstyle = "seaborn-v0_8-darkgrid"\n'
+            "[simulation]\nmax_parallel = 8\n"
+        )
+        config = ServerConfig.load(toml_path)
+        assert config.max_parallel_sims == 8
+        assert not hasattr(config, "plot_dpi")
+
+    def test_generated_config_has_no_plotting_section(self, work_dir: Path):
+        path = work_dir / "generated.toml"
+        generate_default_config(path)
+        assert "[plotting]" not in path.read_text()
+
     def test_env_var_override(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("LTSPICE_MCP_SIMULATOR", "ngspice")
         monkeypatch.setenv("LTSPICE_MCP_LOG_LEVEL", "WARNING")
