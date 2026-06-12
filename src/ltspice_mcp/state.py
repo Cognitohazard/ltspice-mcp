@@ -7,6 +7,7 @@ imported them from ``state`` keep working. Splitting them out broke a
 cluster of import cycles — see ``lib/job_types.py`` for the full story.
 """
 
+import asyncio
 import logging
 from collections.abc import MutableMapping
 from dataclasses import dataclass, field
@@ -185,12 +186,18 @@ class SessionState:
     # Recent-circuits index (session-scoped state, not job-scoped)
     # ------------------------------------------------------------------
 
-    def note_recent_circuit(self, resolved_path: Path) -> None:
+    async def note_recent_circuit(self, resolved_path: Path) -> None:
         """Record a circuit in the global recent-circuits index, once per session.
 
         ``resolved_path`` must already be a resolved, sandbox-validated path.
         The per-session debounce prevents rewriting ``recent.json`` on every
         tool call that touches the same circuit.
+
+        The write itself runs in a worker thread: ``recent.touch`` polls a
+        cross-process file lock (up to 10 s with ``time.sleep``) and does a
+        durable double-fsync write — both would stall every concurrent
+        request if run on the event loop. The debounce set is updated before
+        the await, so a cancelled caller cannot double-write.
         """
         if not self.config.persist_jobs:
             return
@@ -200,7 +207,7 @@ class SessionState:
         try:
             from ltspice_mcp.lib import recent
 
-            recent.touch(resolved_path)
+            await asyncio.to_thread(recent.touch, resolved_path)
         except Exception as e:
             logger.debug("recent.touch(%s) failed: %s", resolved_path, e)
 

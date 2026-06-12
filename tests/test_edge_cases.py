@@ -668,21 +668,21 @@ class TestBatchPaginationValidation:
         state.batch_jobs["b1"] = bj
         return bj
 
-    def test_negative_offset_rejected(self, state_no_sim):
+    async def test_negative_offset_rejected(self, state_no_sim):
         from ltspice_mcp.errors import BatchJobError
         from ltspice_mcp.lib import services
 
         bj = self._make_bj(state_no_sim)
         with pytest.raises(BatchJobError, match="offset"):
-            services.get_batch_signal_data(bj, "V(out)", raw=True, offset=-5, limit=5)
+            await services.get_batch_signal_data(bj, "V(out)", raw=True, offset=-5, limit=5)
 
-    def test_zero_limit_rejected(self, state_no_sim):
+    async def test_zero_limit_rejected(self, state_no_sim):
         from ltspice_mcp.errors import BatchJobError
         from ltspice_mcp.lib import services
 
         bj = self._make_bj(state_no_sim)
         with pytest.raises(BatchJobError, match="limit"):
-            services.get_batch_signal_data(bj, "V(out)", raw=True, offset=0, limit=0)
+            await services.get_batch_signal_data(bj, "V(out)", raw=True, offset=0, limit=0)
 
 
 # ---------------------------------------------------------------------------

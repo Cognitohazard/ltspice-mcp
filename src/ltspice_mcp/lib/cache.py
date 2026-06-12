@@ -1,5 +1,6 @@
 """Generic file cache with (mtime, size)-based invalidation."""
 
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -26,12 +27,22 @@ class FileCache[T]:
     itself, the robust complement is explicit invalidation at the write boundary
     — e.g. the ``.asc`` editor cache is invalidated after every edit.
 
+    Thread safety — handlers offload heavy factories (RawRead parses) to
+    worker threads via ``asyncio.to_thread``, so ``get``/``set``/``invalidate``
+    can run concurrently. All ``_entries`` operations are guarded by a lock;
+    the factory deliberately runs *outside* it (see ``get``). The lock makes
+    the *cache* safe, not the cached values: a value shared across threads
+    must be treated as immutable after construction (true for ``RawRead``).
+    Mutable values — the netlist/schematic editor instances — must only be
+    created and used from the event-loop thread.
+
     Type parameter T is the type of cached value.
     """
 
     def __init__(self) -> None:
         """Initialize an empty cache."""
         self._entries: dict[Path, tuple[tuple[int, int], T]] = {}
+        self._lock = threading.Lock()
 
     def get(self, path: Path, factory: Callable[[Path], T]) -> T:
         """Get cached value or create it via factory function.
@@ -50,12 +61,19 @@ class FileCache[T]:
         except OSError:
             return factory(path)
 
-        entry = self._entries.get(path)
-        if entry is not None and entry[0] == stamp:
-            return entry[1]
+        with self._lock:
+            entry = self._entries.get(path)
+            if entry is not None and entry[0] == stamp:
+                return entry[1]
 
+        # The factory runs outside the lock: two threads can both miss and
+        # both build the value (benign — both derive from the same stamped
+        # bytes, last store wins), which beats serialising multi-second
+        # parses behind one mutex. A torn entry is impossible: the value is
+        # fully constructed before the locked store.
         value = factory(path)
-        self._entries[path] = (stamp, value)
+        with self._lock:
+            self._entries[path] = (stamp, value)
         return value
 
     def set(self, path: Path, value: T) -> None:
@@ -70,7 +88,8 @@ class FileCache[T]:
             stamp = (st.st_mtime_ns, st.st_size)
         except OSError:
             stamp = (0, -1)
-        self._entries[path] = (stamp, value)
+        with self._lock:
+            self._entries[path] = (stamp, value)
 
     def invalidate(self, path: Path) -> None:
         """Remove a specific entry from cache.
@@ -78,24 +97,30 @@ class FileCache[T]:
         Args:
             path: File path to invalidate
         """
-        self._entries.pop(path, None)
+        with self._lock:
+            self._entries.pop(path, None)
 
     def clear(self) -> None:
         """Remove all cached entries."""
-        self._entries.clear()
+        with self._lock:
+            self._entries.clear()
 
     def items(self) -> list[tuple[Path, tuple[tuple[int, int], T]]]:
         """Return all cached entries as (path, (stamp, value)) pairs."""
-        return list(self._entries.items())
+        with self._lock:
+            return list(self._entries.items())
 
     def keys(self) -> list[Path]:
         """Return all cached paths."""
-        return list(self._entries.keys())
+        with self._lock:
+            return list(self._entries.keys())
 
     def __contains__(self, path: Path) -> bool:
         """Check if a path is in the cache."""
-        return path in self._entries
+        with self._lock:
+            return path in self._entries
 
     def __len__(self) -> int:
         """Return number of cached entries."""
-        return len(self._entries)
+        with self._lock:
+            return len(self._entries)

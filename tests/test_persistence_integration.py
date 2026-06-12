@@ -274,7 +274,7 @@ class TestEnsureJobsLoadedFor:
 
 
 class TestRecentDebounce:
-    def test_note_recent_circuit_only_writes_once_per_session(
+    async def test_note_recent_circuit_only_writes_once_per_session(
         self,
         state: SessionState,
         tmp_path: Path,
@@ -297,7 +297,7 @@ class TestRecentDebounce:
         monkeypatch.setattr(recent, "touch", spy)
 
         for _ in range(5):
-            state.note_recent_circuit(resolved)
+            await state.note_recent_circuit(resolved)
         assert len(calls) == 1
 
 

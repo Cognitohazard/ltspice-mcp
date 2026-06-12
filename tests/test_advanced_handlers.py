@@ -1,5 +1,6 @@
 """Tests for advanced sweep/Monte Carlo handlers (configure + get_batch_results)."""
 
+import asyncio
 from datetime import timedelta
 from pathlib import Path
 
@@ -7,6 +8,7 @@ import pytest
 
 from ltspice_mcp.errors import BatchJobError, SimulationError
 from ltspice_mcp.state import BatchJob, SessionState
+from ltspice_mcp.tools import advanced
 from ltspice_mcp.tools.advanced import (
     ConfigureMonteCarloInput,
     ConfigureSweepInput,
@@ -237,6 +239,42 @@ class TestRunSweep:
         config_id = next(iter(state_no_sim.sweep_configs.keys()))
         with pytest.raises(SimulationError, match="No simulator"):
             await handle_run_sweep(RunBatchInput(config_id=config_id), state_no_sim)
+
+    async def test_cancel_during_output_folder_resolve_leaves_no_job(
+        self, state_no_sim: SessionState, sample_netlist: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A request cancelled while resolving the output folder must not
+        leave a registered (and persisted) "running" batch job with no task
+        to advance it — the job is registered only after the last await."""
+        await handle_configure_sweep(
+            ConfigureSweepInput(
+                netlist=sample_netlist.name,
+                parameters=[
+                    SweepParameter(name="R1", type="component", start=1, stop=10, points=3)
+                ],
+            ),
+            state_no_sim,
+        )
+        config_id = next(iter(state_no_sim.sweep_configs.keys()))
+        state_no_sim.default_simulator = type("FakeSim", (), {})
+
+        entered = asyncio.Event()
+
+        async def hanging_resolve(state):
+            entered.set()
+            await asyncio.Event().wait()  # suspend until cancelled
+
+        monkeypatch.setattr(advanced, "resolve_output_folder", hanging_resolve)
+
+        task = asyncio.create_task(
+            handle_run_sweep(RunBatchInput(config_id=config_id), state_no_sim)
+        )
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert state_no_sim.batch_jobs == {}
 
 
 @pytest.mark.asyncio
