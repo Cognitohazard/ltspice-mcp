@@ -33,8 +33,22 @@ tool-surface changes.
   drift. GitHub status-check contexts are renamed to `checks / check` and
   `checks / audit`.
 
+### Removed
+
+- The `[plotting]` config section (`plot_dpi`/`plot_style`): it was never
+  consumed by any code path — no plotting feature exists. Existing TOML
+  files that still contain the section parse fine (it is ignored).
+
 ### Fixed
 
+- `docs/DESIGN.md`, the example TOML, and the skills docs now match the
+  shipped surface: current tool names throughout, the real diagnostics and
+  observations mechanism, the real mutation-safety behavior
+  (validate-before-write refusals, `reset_schematic` snapshots,
+  `export_netlist` diff — no `dry_run`, no inline plot images), the exact
+  agentic-profile tool set, and ngspice's first-class status. Doc-drift
+  tests now pin tool names in README/DESIGN/skills against the live
+  registry.
 - `measurement_stats` on a batch job with no `.MEAS` results now relays the
   per-run log diagnostics that explain why (e.g. ngspice's "No .measure
   possible in batch mode"), capped at 8 distinct lines, instead of a bare
