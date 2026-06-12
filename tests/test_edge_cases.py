@@ -25,7 +25,7 @@ from ltspice_mcp.lib.sweep_utils import generate_sweep_range
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, parse_asy_file
 
 # ---------------------------------------------------------------------------
-# Bug A: generate_sweep_range crashes on log scale with step=1
+# generate_sweep_range crashes on log scale with step=1
 # ---------------------------------------------------------------------------
 
 
@@ -48,7 +48,7 @@ class TestSweepLogStepEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# Bug B: generate_sweep_range with points<2 silently produces useless output
+# generate_sweep_range with points<2 silently produces useless output
 # ---------------------------------------------------------------------------
 
 
@@ -65,7 +65,7 @@ class TestSweepPointsEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# Bug C: parse_spice_value is case-sensitive but SPICE convention is not
+# parse_spice_value is case-sensitive but SPICE convention is not
 # ---------------------------------------------------------------------------
 
 
@@ -93,7 +93,7 @@ class TestParseSpiceCaseSensitivity:
 
 
 # ---------------------------------------------------------------------------
-# Bug E: extract_log_diagnostics substring false positives
+# extract_log_diagnostics substring false positives
 # ---------------------------------------------------------------------------
 
 
@@ -142,7 +142,7 @@ class TestLogDiagnosticsFalsePositives:
 
 
 # ---------------------------------------------------------------------------
-# Bug F: filter_runs_by_params silently matches NaN run values
+# filter_runs_by_params silently matches NaN run values
 # ---------------------------------------------------------------------------
 
 
@@ -170,7 +170,7 @@ class TestFilterRunsByParamsNaN:
 
 
 # ---------------------------------------------------------------------------
-# Bug G: compute_placed_geometry assumes symbol bbox starts at (0,0),
+# compute_placed_geometry assumes symbol bbox starts at (0,0),
 # producing a bounding box that doesn't enclose pins on centered symbols.
 # ---------------------------------------------------------------------------
 
@@ -209,7 +209,7 @@ class TestSymbolGeometryBboxContainsPins:
 
 
 # ---------------------------------------------------------------------------
-# Bug H: get_progress_snapshot can produce negative ETA / negative elapsed
+# get_progress_snapshot can produce negative ETA / negative elapsed
 # ---------------------------------------------------------------------------
 
 
@@ -253,7 +253,7 @@ class TestGetProgressSnapshotEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# Bug I: _resolve_mc_ref preserved surrounding whitespace
+# _resolve_mc_ref preserved surrounding whitespace
 # ---------------------------------------------------------------------------
 
 
@@ -274,7 +274,7 @@ class TestResolveMcRefWhitespace:
 
 
 # ---------------------------------------------------------------------------
-# Bug J: stability margin detection on phase wrap and 3-pole unstable loop
+# Stability margin detection on phase wrap and 3-pole unstable loop
 # (Margins moved out of compute_ac_bandwidth_metrics — they live in
 # compute_stability_metrics, which is the right home for loop-gain analysis.)
 # ---------------------------------------------------------------------------
@@ -334,13 +334,13 @@ class TestAcBandwidthMetrics:
 
 
 # ---------------------------------------------------------------------------
-# Bug K: library_parser nested .SUBCKT, no-space paren, PARAMS: keyword
+# library_parser nested .SUBCKT, no-space paren, PARAMS: keyword
 # ---------------------------------------------------------------------------
 # (Tested in test_library_parser.py — see TestParseLibraryFile.)
 
 
 # ---------------------------------------------------------------------------
-# Bug L: handle_connect silently produces zero-wire connections for self-loops
+# handle_connect silently produces zero-wire connections for self-loops
 # ---------------------------------------------------------------------------
 
 
@@ -358,7 +358,7 @@ class TestConnectZeroLength:
 
 
 # ---------------------------------------------------------------------------
-# Bug M: linear sweep with mismatched step direction silently returns []
+# Linear sweep with mismatched step direction silently returns []
 # ---------------------------------------------------------------------------
 
 
@@ -390,7 +390,7 @@ class TestSweepDirectionMismatch:
 
 
 # ---------------------------------------------------------------------------
-# Bug V: parse_spice_value rejected SPICE values with trailing unit
+# parse_spice_value rejected SPICE values with trailing unit
 # annotations (1ms, 10us, 1uF, 100pF, 1mV, 10mA), even though the suffix
 # itself was valid. SPICE tradition treats trailing letters after the
 # scale suffix as ignorable unit annotations.
@@ -452,7 +452,7 @@ class TestParseSpiceTrailingUnits:
 
 
 # ---------------------------------------------------------------------------
-# Bug N: is_windows_native_path matches /mnt/cdrom (false positive)
+# is_windows_native_path matches /mnt/cdrom (false positive)
 # ---------------------------------------------------------------------------
 
 
@@ -480,7 +480,7 @@ class TestIsWindowsNativePath:
 
 
 # ---------------------------------------------------------------------------
-# Bug O: parse_measurements crashes on unparseable string values
+# parse_measurements crashes on unparseable string values
 # ---------------------------------------------------------------------------
 
 
@@ -502,7 +502,7 @@ class TestParseMeasurementsUnparseable:
 
 
 # ---------------------------------------------------------------------------
-# Bug P: handle_check_job reports queued status as 'unexpected'
+# handle_check_job reports queued status as 'unexpected'
 # ---------------------------------------------------------------------------
 
 
@@ -526,7 +526,7 @@ class TestCheckJobQueued:
 
 
 # ---------------------------------------------------------------------------
-# Bug Q: handle_set_component_value silently accepts contradictory inputs
+# handle_set_component_value silently accepts contradictory inputs
 # ---------------------------------------------------------------------------
 
 
@@ -559,7 +559,7 @@ class TestSetComponentValueAmbiguous:
 
 
 # ---------------------------------------------------------------------------
-# Bug R: config.py silently accepted bad TOML values (wrong type, negative,
+# config.py silently accepted bad TOML values (wrong type, negative,
 # out-of-range) and invalid log levels
 # ---------------------------------------------------------------------------
 
@@ -608,7 +608,7 @@ class TestConfigTomlValidation:
 
 
 # ---------------------------------------------------------------------------
-# Bug S: _resolve_result_file accepted empty-string paths as valid
+# _resolve_result_file accepted empty-string paths as valid
 # ---------------------------------------------------------------------------
 
 
@@ -637,7 +637,7 @@ class TestResolveResultFileEmpty:
 
 
 # ---------------------------------------------------------------------------
-# Bug T: get_batch_signal_data accepted negative offset / zero limit
+# get_batch_signal_data accepted negative offset / zero limit
 # ---------------------------------------------------------------------------
 
 
@@ -686,7 +686,7 @@ class TestBatchPaginationValidation:
 
 
 # ---------------------------------------------------------------------------
-# Bug U: handle_add_component corrupted the .asc file when given a
+# handle_add_component corrupted the .asc file when given a
 # nonexistent symbol name, making the file unopenable afterwards
 # ---------------------------------------------------------------------------
 

@@ -121,8 +121,8 @@ _RE_ERROR = re.compile(r"^(?:Error|ERROR)\s*:", re.IGNORECASE)
 # so without special handling _RE_WARNING would downgrade a run that produced no
 # usable data (a floating node prints "gmin stepping failed" + "source stepping
 # failed", the raw is numerical noise, and ngspice still exits 0). These phrases
-# are terminal, so classify them as errors regardless of any Warning prefix
-# (v9-NG F1). A transient "singular matrix" note is deliberately NOT listed —
+# are terminal, so classify them as errors regardless of any Warning prefix.
+# A transient "singular matrix" note is deliberately NOT listed —
 # ngspice may still recover from it via gmin/source stepping. Matched as a
 # case-insensitive substring, so any "Warning:" prefix is ignored without a
 # separate strip.
@@ -442,8 +442,7 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
 
         # ngspice convergence FAILURES arrive "Warning:"-prefixed; classify the
         # terminal ones as errors (substring match, so the prefix is ignored)
-        # before the generic warning rule below would downgrade a no-data run
-        # (v9-NG F1).
+        # before the generic warning rule below would downgrade a no-data run.
         stripped_lower = stripped.lower()
         if any(phrase in stripped_lower for phrase in _CONVERGENCE_FAILURE_PHRASES):
             errors.append(stripped)
@@ -689,7 +688,7 @@ _MEAS_METADATA_SUFFIXES: tuple[tuple[str, str], ...] = (
 # Pattern for FAIL'ed .MEAS results. Spicelib's LTSpiceLogReader filters
 # these out of get_measure_names() — we re-extract them from the raw log
 # text so callers can distinguish "did not trigger" from "did not parse"
-# rather than seeing a silent absence (D-N2).
+# rather than seeing a silent absence.
 _RE_MEAS_FAILED = re.compile(r"Measurement\s+\"([^\"]+)\"\s+FAIL[''`]?ed", re.IGNORECASE)
 
 
@@ -833,7 +832,7 @@ def parse_measurements(
         warnings_list = diagnostics["warnings"] or None
         # Even when spicelib reports no measurements, FAIL'ed names still
         # need to show up in ``measurements`` (value=None) so consumers
-        # don't see a silent absence — that was the original D-N2 defect.
+        # don't see a silent absence.
         measurements: dict[str, MeasurementEntry] = {
             name: {"values": [None]} for name in failed_names
         }

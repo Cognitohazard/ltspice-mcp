@@ -37,7 +37,7 @@ SCHEMA = "ltspice-mcp/job"
 # v2 (2026-05-30): SweepDimension gained an optional ``values`` list and nullable
 # ``start``/``stop`` for explicit discrete-value sweeps. The shape change is why
 # the version bumped — so a v1-only reader rejects v2 records via _accept_schema
-# instead of crashing on ``float(None)`` for a null ``start`` (see v9-NG review).
+# instead of crashing on ``float(None)`` for a null ``start``.
 SCHEMA_VERSION = 2
 # Versions this build can READ after applying ``_MIGRATIONS``. Always
 # includes the current version; older versions are added once their

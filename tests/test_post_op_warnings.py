@@ -425,12 +425,12 @@ class TestTextHandlerWarnings:
 
 
 # ---------------------------------------------------------------------------
-# Item 3 — apply_schematic_ops cache safety on uncaught exception
+# apply_schematic_ops cache safety on uncaught exception
 # ---------------------------------------------------------------------------
 
 
 class TestApplySchematicOpsRollback:
-    """E-N3/N4: an uncaught exception mid-batch (not NetlistError or
+    """An uncaught exception mid-batch (not NetlistError or
     ValueError — those are caught per-op) must:
       - leave the file on disk byte-identical to pre-call,
       - invalidate the cached editor so prior ops' mutations don't leak,
