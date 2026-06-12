@@ -23,6 +23,7 @@ from ltspice_mcp.server import (
     server,
 )
 from ltspice_mcp.state import SessionState
+from tests.conftest import _FakeServer
 
 
 class TestGetErrorHint:
@@ -144,28 +145,6 @@ class TestConfigureAscEditor:
             mock_cls.custom_lib_paths = []
             _configure_asc_editor(cfg, available={})  # empty: no simulator at all
             assert str(symdir) in mock_cls.custom_lib_paths
-
-
-class _FakeSession:
-    """Stub MCP session — log/progress calls are no-ops."""
-
-    async def send_log_message(self, **kwargs):
-        pass
-
-    async def send_progress_notification(self, **kwargs):
-        pass
-
-
-class _FakeRequestContext:
-    def __init__(self, state: SessionState):
-        self.lifespan_context = {"state": state}
-        self.session = _FakeSession()
-        self.meta = None
-
-
-class _FakeServer:
-    def __init__(self, state: SessionState):
-        self.request_context = _FakeRequestContext(state)
 
 
 @pytest.mark.asyncio

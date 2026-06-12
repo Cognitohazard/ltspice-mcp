@@ -327,6 +327,47 @@ class TestRunSimulationStubbed:
         assert job.status == "timeout"
         fake_runner.kill.assert_awaited_once_with(job.job_id)
 
+    async def test_cancel_during_submit_log_leaves_no_orphaned_job(
+        self, state_with_sim: SessionState, sample_netlist: Path, monkeypatch
+    ):
+        """A request cancelled at the post-submit MCP log notification must
+        not leave a registered job with no task to advance it — no suspension
+        point may sit between job registration and task creation (the
+        submit-ordering rule in the tools/_base.py concurrency contract)."""
+        entered = asyncio.Event()
+
+        async def hanging_log(level, msg):
+            entered.set()
+            await asyncio.Event().wait()  # suspend until cancelled
+
+        monkeypatch.setattr("ltspice_mcp.tools.simulation.mcp_log", hanging_log)
+
+        fake_runner = MagicMock()
+        fake_runner.start_simulation = AsyncMock()
+        with patch(
+            "ltspice_mcp.tools.simulation._get_or_create_runner",
+            return_value=fake_runner,
+        ):
+            request = asyncio.create_task(
+                handle_run_simulation(
+                    RunSimulationInput(netlist=sample_netlist.name, timeout=60),
+                    state_with_sim,
+                )
+            )
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            request.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request
+
+            orphaned = [j.job_id for j in state_with_sim.jobs.values() if j.task is None]
+            assert orphaned == [], (
+                "cancellation between add_job and create_task orphaned a registered job"
+            )
+            # Drain the submission task(s) so nothing is pending at teardown.
+            for job in state_with_sim.jobs.values():
+                assert job.task is not None
+                await job.task
+
     async def test_async_watchdog_leaves_completed_job_alone(
         self, state_with_sim: SessionState, sample_netlist: Path, monkeypatch
     ):

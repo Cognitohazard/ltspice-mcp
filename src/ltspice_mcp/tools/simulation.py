@@ -197,14 +197,14 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
         status="queued",
         started_at=now(),
     )
-    # Get SimulationRunner before storing job — if this fails, we don't
-    # leave an orphaned "running" job with no task to advance it
+    # Runner first, then register + create_task with no await between —
+    # submit-ordering rule, see the concurrency contract in tools/_base.py.
     runner = await _get_or_create_runner(state)
     state.add_job(job)
+    job.task = asyncio.create_task(runner.start_simulation(netlist_path, job, state))
     await mcp_log(
         "info", f"Simulation started: {netlist_path.name} ({default_simulator.__name__})"
     )
-    job.task = asyncio.create_task(runner.start_simulation(netlist_path, job, state))
 
     # Decide sync vs async
     # If wait=true: force sync with hard max timeout

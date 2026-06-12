@@ -17,6 +17,7 @@ from spicelib import AscEditor, SpiceEditor
 from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import BatchJobError, JobNotFoundError, ResultError, SimulationError
+from ltspice_mcp.lib import job_store, recent
 from ltspice_mcp.lib.batch_results import (
     compute_batch_stats,
     filter_runs_by_params,
@@ -284,13 +285,19 @@ def resolve_log_file(job_id: str, state: SessionState, run_index: int = 0) -> Pa
 async def load_raw(raw_path: Path, state: SessionState) -> RawRead:
     """Load and cache a ``RawRead`` instance without blocking the event loop.
 
-    The cache probe (a ``stat``, slow on ``/mnt/c``) and the parse both run
-    in a worker thread via ``asyncio.to_thread``. The parsed value is
+    Fast path: a fresh cache entry is returned inline — one ``os.stat`` on
+    the loop per call, accepted as far cheaper than a thread hop for the
+    guaranteed-hit patterns (``bode_metrics all_steps`` re-enters this once
+    per step of the same raw). On miss or stale entry the probe and parse
+    run in a worker thread via ``asyncio.to_thread``. The parsed value is
     immutable and the cache store is lock-guarded, so cancellation leaves
     the cache consistent: a worker that has started runs to completion
     (at worst storing a benign extra cache entry), and work cancelled
     before the executor picks it up never begins.
     """
+    cached = state.results.peek(raw_path)
+    if cached is not None:
+        return cached
     return await asyncio.to_thread(load_raw_sync, raw_path, state)
 
 
@@ -416,11 +423,33 @@ def load_measurements(
     return data
 
 
-def get_batch_status(batch_job: BatchJob) -> dict[str, Any]:
+def collect_recent_circuits() -> list[dict[str, Any]]:
+    """List recently-touched circuits with their persisted-job summaries.
+
+    Blocking — ``recent.load`` polls a cross-process file lock (up to 10 s)
+    and each summary reads a circuit's job-sidecar JSON files; all reads
+    (the prune rewrite is atomic), so safe under cancellation. Coroutine
+    callers must run this via ``asyncio.to_thread``; the synchronous MCP
+    resource router calls it directly (already off the loop).
+    """
+    entries = recent.load(prune_missing=True)
+    circuits: list[dict[str, Any]] = []
+    for entry in entries:
+        raw_path = entry.get("path")
+        if not isinstance(raw_path, str):
+            continue
+        summary = job_store.summarize_circuit(Path(raw_path))
+        summary["last_touched"] = entry.get("last_touched")
+        circuits.append(summary)
+    return circuits
+
+
+async def get_batch_status(batch_job: BatchJob) -> dict[str, Any]:
     """Build structured status/progress data for a batch job.
 
-    Walks every per-run log (the convergence scan) once the job is
-    terminal — coroutine callers must run this via ``asyncio.to_thread``.
+    Owns its offload: the convergence scan walks every per-run log once
+    the job is terminal, so it runs via ``asyncio.to_thread``; the status
+    fields themselves are assembled inline.
     """
     base = {
         "job_id": batch_job.job_id,
@@ -457,7 +486,7 @@ def get_batch_status(batch_job: BatchJob) -> dict[str, Any]:
     # batch branch).
     if batch_job.error is not None:
         out["error"] = batch_job.error
-    convergence = scan_batch_convergence(batch_job)
+    convergence = await asyncio.to_thread(scan_batch_convergence, batch_job)
     if convergence:
         out["convergence_warnings"] = convergence
     return out
@@ -550,11 +579,11 @@ async def get_batch_signal_data(
 ) -> dict[str, Any]:
     """Extract structured batch signal data for aggregated or raw mode.
 
-    The ``run_results`` snapshots are taken on the event loop (a batch
-    runner may still be appending runs); the per-run ``RawRead`` loop
-    — one header+trace parse per matching run — and the per-run log walk
-    behind the convergence scan are offloaded to worker threads, since
-    each can take seconds for a large Monte Carlo batch.
+    The ``run_results`` snapshot is taken on the event loop before the
+    first await (a batch runner may still be appending runs); the per-run
+    ``RawRead`` loop — one header+trace parse per matching run — and the
+    per-run log walk behind the convergence scan are offloaded to worker
+    threads, since each can take seconds for a large Monte Carlo batch.
     """
     if batch_job.completed_runs == 0:
         raise BatchJobError(f"No completed runs yet for job {batch_job.job_id}")
@@ -576,7 +605,11 @@ async def get_batch_signal_data(
             f"No runs match the specified filters for job {batch_job.job_id}: {filters}"
         )
 
+    # Single pre-await snapshot — both modes draw their rows from it below.
+    # Re-reading batch_job.run_results after an await could see rows a
+    # still-appending batch runner added meanwhile, breaking the contract above.
     matching_run_results = {idx: batch_job.run_results[idx] for idx in matching_indices}
+    total_available = len(batch_job.run_results)
 
     convergence = await asyncio.to_thread(scan_batch_convergence, batch_job)
 
@@ -587,7 +620,7 @@ async def get_batch_signal_data(
                 f"No runs in requested page range for job {batch_job.job_id}: "
                 f"offset={offset}, limit={limit}"
             )
-        paginated_run_results = {idx: batch_job.run_results[idx] for idx in paginated_indices}
+        paginated_run_results = {idx: matching_run_results[idx] for idx in paginated_indices}
         page_stats = await asyncio.to_thread(
             compute_batch_stats, paginated_run_results, signal, at=at, dialect=dialect
         )
@@ -610,7 +643,7 @@ async def get_batch_signal_data(
             "runs": page_stats["runs"],
             "filtered": filters is not None,
             "total_matching": total_matching,
-            "total_available": len(batch_job.run_results),
+            "total_available": total_available,
             "offset": offset,
             "limit": limit,
         }
@@ -633,7 +666,7 @@ async def get_batch_signal_data(
         "run_count": batch_stats["run_count"],
         "filtered": filters is not None,
         "total_matching": total_matching,
-        "total_available": len(batch_job.run_results),
+        "total_available": total_available,
         "stats": batch_stats["stats"],
         "max_case_run": batch_stats["max_case_run"],
         "min_case_run": batch_stats["min_case_run"],

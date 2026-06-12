@@ -1,17 +1,21 @@
-"""MCP resource handlers for browsing netlists, results, models, and config."""
+"""MCP resource handlers for browsing netlists, results, models, and config.
+
+Routes run in a worker thread via server.py's ``read_resource`` offload, so
+they may block (RawRead parses, cross-process lock polls) but must not touch
+loop-owned mutable state — in particular the editor cache.
+"""
 
 import json
 import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from mcp import types
 from pydantic import AnyUrl
 
-from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, job_store, recent, services
+from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, services
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.state import SessionState
 
@@ -291,15 +295,7 @@ def _read_recent(
 ) -> types.ReadResourceResult:
     """Summary of recently-touched circuits + persisted job counts per circuit."""
     del params, state  # state is unused; recent.json is user-global
-    entries = recent.load(prune_missing=True)
-    circuits: list[dict[str, Any]] = []
-    for entry in entries:
-        raw_path = entry.get("path")
-        if not isinstance(raw_path, str):
-            continue
-        summary = job_store.summarize_circuit(Path(raw_path))
-        summary["last_touched"] = entry.get("last_touched")
-        circuits.append(summary)
+    circuits = services.collect_recent_circuits()
     data = {
         "circuits": circuits,
         "count": len(circuits),

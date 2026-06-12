@@ -1,6 +1,8 @@
 """Tests for FileCache (mtime, size)-based invalidation."""
 
 import os
+import threading
+import time
 from pathlib import Path
 
 from ltspice_mcp.lib.cache import FileCache
@@ -147,8 +149,6 @@ class TestFileCache:
         threads. Every get() must return a fully-constructed value and no
         compound dict operation may raise (e.g. dict-changed-during-iteration
         from items() racing an insert)."""
-        import threading
-
         cache: FileCache[tuple[str, int]] = FileCache()
         p = tmp_path / "data.raw"
         p.write_text("payload")
@@ -184,3 +184,66 @@ class TestFileCache:
                 t.join(timeout=5)
         assert not any(t.is_alive() for t in threads)
         assert not errors
+
+    def test_single_flight_concurrent_cold_readers_parse_once(self, tmp_path: Path):
+        """Two threads racing a cold cache on the SAME path must run the
+        factory exactly once: the per-path lock serialises them, and the
+        follower's re-check finds the leader's stored value."""
+        cache: FileCache[str] = FileCache()
+        p = tmp_path / "big.raw"
+        p.write_text("payload")
+
+        call_count = 0
+        in_factory = threading.Event()
+        release = threading.Event()
+
+        def factory(path: Path) -> str:
+            nonlocal call_count
+            call_count += 1
+            in_factory.set()
+            assert release.wait(timeout=5)  # hold the leader mid-parse
+            return path.read_text()
+
+        results: list[str] = []
+
+        def reader() -> None:
+            results.append(cache.get(p, factory))
+
+        leader = threading.Thread(target=reader)
+        follower = threading.Thread(target=reader)
+        leader.start()
+        assert in_factory.wait(timeout=5)  # leader is inside the factory
+        follower.start()
+        time.sleep(0.05)  # let the follower reach (and block on) the per-path lock
+        release.set()
+        leader.join(timeout=5)
+        follower.join(timeout=5)
+
+        assert results == ["payload", "payload"]
+        assert call_count == 1
+
+    def test_peek_hits_only_when_cached_and_fresh(self, tmp_path: Path):
+        cache: FileCache[str] = FileCache()
+        p = tmp_path / "peek.txt"
+        p.write_text("v1")
+
+        assert cache.peek(p) is None  # cold cache
+
+        cache.get(p, lambda path: path.read_text())
+        assert cache.peek(p) == "v1"  # fresh hit, no factory involved
+
+    def test_peek_misses_on_stale_or_missing_file(self, tmp_path: Path):
+        cache: FileCache[str] = FileCache()
+        p = tmp_path / "stale.txt"
+        p.write_text("v1")
+        cache.get(p, lambda path: path.read_text())
+
+        # Stale: content rewritten with a forced mtime bump.
+        p.write_text("v2-longer")
+        future = p.stat().st_mtime + 2.0
+        os.utime(p, (future, future))
+        assert cache.peek(p) is None
+
+        # Missing: stat failure also reads as a miss.
+        p.unlink()
+        assert cache.peek(p) is None
