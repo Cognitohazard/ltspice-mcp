@@ -9,6 +9,7 @@ import pytest
 from ltspice_mcp.errors import BatchJobError, JobNotFoundError, ResultError, SimulationError
 from ltspice_mcp.lib import now, services
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
+from tests.conftest import FIXTURES_DIR
 
 
 def _make_job(
@@ -198,6 +199,26 @@ class TestLoadRaw:
         with pytest.raises(ResultError):
             services.load_raw(truncated, state_no_sim)
 
+    def test_zero_variable_raw_is_diagnosed_as_corrupt(
+        self, state_no_sim: SessionState, tmp_path: Path
+    ):
+        # A file cut mid-header (here: 100 bytes into a real LTspice raw, in
+        # the middle of the UTF-16 Title line) does NOT make spicelib raise —
+        # RawRead parses it into a "valid" raw with zero variables. A real
+        # SPICE raw always carries at least its axis variable, so zero
+        # variables is a corruption signature; without this diagnosis,
+        # consumers would report "Signal not found" against an empty
+        # signal list.
+        truncated = tmp_path / "trunc.raw"
+        truncated.write_bytes((FIXTURES_DIR / "ltspice_tran_rc.raw").read_bytes()[:100])
+
+        with pytest.raises(ResultError) as exc_info:
+            services.load_raw(truncated, state_no_sim)
+        msg = str(exc_info.value)
+        assert "zero variables" in msg
+        assert "truncated or corrupt" in msg
+        assert str(truncated) in msg
+
 
 class TestGetBatchStatus:
     def test_running(self, state_no_sim: SessionState):
@@ -301,7 +322,7 @@ class TestValidateSignal:
             services.validate_signal(raw, "V(missing)")
 
     def test_noise_alias_ltspice_form_to_ngspice(self):
-        # V7-FR-4 / NGv7-FR-3: resolve, don't just hint.
+        # Resolve the alias, don't just hint.
         raw = self._raw(["frequency", "onoise_spectrum", "inoise_spectrum"])
         assert services.validate_signal(raw, "V(onoise)") == "onoise_spectrum"
         assert services.validate_signal(raw, "V(inoise)") == "inoise_spectrum"
@@ -316,7 +337,7 @@ class TestValidateSignal:
         assert services.validate_signal(raw, "onoise_spectrum") == "v(onoise)"
 
     def test_hierarchical_colon_resolves_to_dot(self):
-        # NGv7-FR-4: LTspice V(X1:mid) <-> ngspice v(x1.mid)
+        # LTspice V(X1:mid) <-> ngspice v(x1.mid)
         raw = self._raw(["time", "v(x1.mid)", "v(out)"])
         assert services.validate_signal(raw, "V(X1:mid)") == "v(x1.mid)"
 

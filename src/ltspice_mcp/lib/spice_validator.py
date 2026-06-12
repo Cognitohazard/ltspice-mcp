@@ -19,11 +19,12 @@ mismatches, etc.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, lex, tokenize_body
-from ltspice_mcp.lib.spice_lex_views import ELEMENT_SPECS, InstanceLine, MeasCard
+from ltspice_mcp.lib.spice_lex_views import ELEMENT_SPECS, InstanceLine, MeasCard, SubcktCard
 
 # Analysis directives that LTspice accepts. Used by validate_netlist to
 # match ``.meas <kind>`` against the active analysis and detect duplicates.
@@ -35,7 +36,7 @@ MEAS_KINDS: frozenset[str] = frozenset({"tran", "ac", "dc", "op"})
 # runs it alongside exactly one real analysis (verified live: ``.op``+``.tran``
 # and ``.op``+``.ac`` run; ``.ac``+``.tran`` is rejected). The "more than one
 # analysis" gate counts only these, so it doesn't false-positive on the common
-# ``.op`` + analysis idiom (v9-LT). ``.op`` stays in ANALYSIS_KINDS/MEAS_KINDS
+# ``.op`` + analysis idiom. ``.op`` stays in ANALYSIS_KINDS/MEAS_KINDS
 # for ``.meas op`` matching.
 EXCLUSIVE_ANALYSIS_KINDS: frozenset[str] = ANALYSIS_KINDS - frozenset({"op"})
 
@@ -155,9 +156,9 @@ def validate_netlist_arity(cards: list[SpiceCard]) -> list[dict[str, object]]:
     element minimum, and B-sources missing the ``V=``/``I=`` prefix.
 
     Returns dicts matching the existing ``handle_validate_netlist`` issue
-    shape: ``{line, directive, message, suggestion}``. C-N4 class of
-    corruption — bodies LTspice rejects at simulation time with
-    ``Expected 2 node names here`` or ``Unknown parameter``.
+    shape: ``{line, directive, message, suggestion}``. These are bodies
+    LTspice rejects at simulation time with ``Expected 2 node names
+    here`` or ``Unknown parameter``.
     """
     issues: list[dict[str, object]] = []
     for card in cards:
@@ -247,6 +248,211 @@ def validate_netlist_arity(cards: list[SpiceCard]) -> list[dict[str, object]]:
                     }
                 )
 
+    return issues
+
+
+# Node spellings that are always considered connected (the SPICE ground).
+_GROUND_NODES = frozenset({"0", "gnd"})
+
+# Characters that cannot appear in a plain node name. Positional tokens
+# carrying them are value syntax that spilled into the node slots (PULSE
+# fragments, braced expressions), not nodes.
+_NON_NODE_CHARS = frozenset("(){}=\"'")
+
+# How many leading positional tokens of an instance card are element
+# terminals, per prefix. Deliberately lint-local: ELEMENT_SPECS drives the
+# arity *errors* and stays narrow, while the dangling *warning* must know
+# every standard prefix — a prefix absent here would zero out its nodes'
+# counts and fabricate warnings on neighbouring elements.
+_TERMINAL_COUNTS: dict[str, int] = {
+    "R": 2,
+    "C": 2,
+    "L": 2,
+    "V": 2,
+    "I": 2,
+    "B": 2,
+    "D": 2,
+    "F": 2,  # out+ out- (then controlling-source ref, gain)
+    "H": 2,
+    "W": 2,  # n+ n- (then controlling-source ref, model)
+    "Q": 3,  # c b e (optional substrate suppressed, not counted)
+    "J": 3,
+    "Z": 3,
+    "U": 3,
+    "M": 4,  # d g s b
+    "S": 4,  # two switch nodes + two control nodes
+    "T": 4,
+    "O": 4,
+    "K": 0,  # positionals are inductor refs, not nodes
+}
+
+# Prefixes whose final positional token is a model name, stripped before
+# the terminal slice so a short form (e.g. a 3-node MOSFET) cannot count
+# its model name as a terminal.
+_TRAILING_MODEL_PREFIXES = frozenset({"D", "J", "M", "O", "Q", "S", "U", "W", "Z"})
+
+# V(...) / I(...) probe references inside expression text on instance
+# cards (B/E/G bodies, behavioural params). Probed identifiers are
+# connections too — they feed the suppressor set, never a terminal count.
+_PROBE_REF_RE = re.compile(r"\b[VI]\s*\(([^()]*)\)", re.IGNORECASE)
+
+
+def _split_instance_positionals(card: SpiceCard) -> tuple[str, list[str], list[str]] | None:
+    """Split an instance card into ``(ref, terminal tokens, other positionals)``.
+
+    Terminals are the leading token positions known to carry circuit nodes
+    for the element's prefix. Every other positional — model names, area
+    factors, controlling-source refs, POLY tails, the X subckt name, all
+    tokens of an unknown prefix (XSPICE A-cards) — lands in the third slot:
+    those feed the suppressor set, so a card shape this table mis-models
+    can only ever hide a warning, never invent one.
+    """
+    try:
+        tokens = tokenize_body(card.body)
+    except SpiceLexError:
+        return None
+    if not tokens or tokens[0].kind != TokenKind.BARE:
+        return None
+    ref = tokens[0].text
+    first_kv = next(
+        (idx for idx, tok in enumerate(tokens) if tok.kind == TokenKind.KEY_VALUE),
+        None,
+    )
+    positionals = [
+        tok.text
+        for tok in (tokens[1:first_kv] if first_kv is not None else tokens[1:])
+        if tok.kind != TokenKind.COMMENT_TRAIL
+    ]
+    prefix = ref[:1].upper()
+
+    if prefix == "X":
+        # Every positional up to the subckt name is a node.
+        return ref, positionals[:-1], positionals[-1:]
+    if prefix in ("E", "G"):
+        # The plain gain form (out+ out- in+ in- gain) carries 4 node
+        # slots; POLY / VALUE= / truncated shapes guarantee only the two
+        # output nodes.
+        count = 4 if first_kv is None and len(positionals) == 5 else 2
+        return ref, positionals[:count], positionals[count:]
+    count = _TERMINAL_COUNTS.get(prefix)
+    if count is None:
+        return ref, [], positionals
+    tail: list[str] = []
+    if prefix in _TRAILING_MODEL_PREFIXES and positionals:
+        tail = [positionals[-1]]
+        positionals = positionals[:-1]
+    return ref, positionals[:count], positionals[count:] + tail
+
+
+def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, object]]:
+    """Flag nodes referenced by exactly one element terminal in their scope.
+
+    Warning-level companion to ``validate_netlist_arity`` — the caller
+    attaches severity. A single-connection node is legal SPICE (bias
+    fragments and test stubs leave nodes open on purpose), so each issue
+    only states the fact and names the one referencing element.
+
+    Occurrences are counted per scope: top level and each ``.SUBCKT``
+    body separately, with the header's port names counting once inside
+    the body (a port wired to one body element is fully connected).
+    Ground (``0`` / ``gnd``) and ``.GLOBAL`` nodes are excluded.
+
+    Counting is asymmetric by design: only token positions known to be
+    element terminals are counted, while every other positional token and
+    every identifier probed via ``V(...)``/``I(...)`` in instance-card
+    expressions joins a suppressor set that vetoes the warning. A token
+    the lint cannot classify can therefore only hide a warning, never
+    create a false one.
+    """
+    global_nodes: set[str] = set()
+    for card in cards:
+        if card.kind != "directive":
+            continue
+        try:
+            tokens = tokenize_body(card.body)
+        except SpiceLexError:
+            continue
+        if not tokens or tokens[0].text.lower() != ".global":
+            continue
+        for tok in tokens[1:]:
+            if tok.kind == TokenKind.COMMENT_TRAIL:
+                break
+            if tok.kind == TokenKind.BARE:
+                global_nodes.add(tok.text.lower())
+
+    # scope → lowercased node → [(display, referrer, line, directive, is_port)].
+    occurrences: dict[tuple[str, ...], dict[str, list[tuple[str, str, int, str, bool]]]] = {}
+    suppressed: set[str] = set()
+
+    def record(
+        scope: tuple[str, ...], node: str, referrer: str, card: SpiceCard, is_port: bool = False
+    ) -> None:
+        key = node.lower()
+        if key in _GROUND_NODES or key in global_nodes:
+            return
+        directive = card.raw_lines[0].rstrip() if card.raw_lines else card.body.strip()
+        occurrences.setdefault(scope, {}).setdefault(key, []).append(
+            (node, referrer, card.line_start, directive, is_port)
+        )
+
+    for card in cards:
+        if card.kind == "subckt":
+            try:
+                sub = SubcktCard.from_card(card)
+            except SpiceLexError:
+                continue
+            body_scope = (*card.scope, sub.name)
+            for port in sub.ports:
+                record(body_scope, port, f".SUBCKT {sub.name}", card, is_port=True)
+        elif card.kind == "instance":
+            split = _split_instance_positionals(card)
+            if split is None:
+                continue
+            ref, terminals, rest = split
+            for node in terminals:
+                if set(node) & _NON_NODE_CHARS:
+                    continue
+                record(card.scope, node, ref, card)
+            suppressed.update(tok.lower() for tok in rest)
+            for probe in _PROBE_REF_RE.finditer(card.body):
+                for part in probe.group(1).split(","):
+                    name = part.strip()
+                    if name:
+                        suppressed.add(name.lower())
+
+    issues: list[dict[str, object]] = []
+    for scope, nodes in occurrences.items():
+        where = f" inside .SUBCKT {scope[-1]}" if scope else ""
+        for key, refs in nodes.items():
+            if len(refs) != 1 or key in suppressed:
+                continue
+            display, referrer, line, directive, is_port = refs[0]
+            if is_port:
+                message = (
+                    f"Node '{display}' is declared as a port of .SUBCKT "
+                    f"{scope[-1]} but connected to no element terminal in its body."
+                )
+                suggestion = (
+                    "Wire the port to an element inside the body — or drop it "
+                    "from the .SUBCKT header if it is unused."
+                )
+            else:
+                message = (
+                    f"Node '{display}' is connected to only one element "
+                    f"terminal ({referrer}){where}."
+                )
+                suggestion = (
+                    "Wire the node to a second terminal — or ignore this "
+                    "warning if the netlist is a deliberately unterminated fragment."
+                )
+            issues.append(
+                {
+                    "line": line,
+                    "directive": directive,
+                    "message": message,
+                    "suggestion": suggestion,
+                }
+            )
     return issues
 
 
