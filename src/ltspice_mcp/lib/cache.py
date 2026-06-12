@@ -29,12 +29,10 @@ class FileCache[T]:
 
     Thread safety — handlers offload heavy factories (RawRead parses) to
     worker threads via ``asyncio.to_thread``, so ``get``/``set``/``invalidate``
-    can run concurrently. All ``_entries`` operations are guarded by a lock;
-    the factory deliberately runs *outside* it (see ``get``). The lock makes
-    the *cache* safe, not the cached values: a value shared across threads
-    must be treated as immutable after construction (true for ``RawRead``).
-    Mutable values — the netlist/schematic editor instances — must only be
-    created and used from the event-loop thread.
+    can run concurrently. All ``_entries`` operations are guarded by the main
+    lock; the stat+factory runs under a per-path lock instead (see ``get``).
+    The locks make the *table* safe, not the values — mutable editor
+    instances are loop-only; see the concurrency contract in tools/_base.py.
 
     Type parameter T is the type of cached value.
     """
@@ -43,9 +41,20 @@ class FileCache[T]:
         """Initialize an empty cache."""
         self._entries: dict[Path, tuple[tuple[int, int], T]] = {}
         self._lock = threading.Lock()
+        # Per-path single-flight locks. Pruned together with their cache
+        # entries (invalidate/clear), so the map is bounded by the live
+        # entries plus paths probed but never cached this session — a few
+        # dozen small Lock objects at worst for this server's workloads.
+        self._key_locks: dict[Path, threading.Lock] = {}
 
     def get(self, path: Path, factory: Callable[[Path], T]) -> T:
         """Get cached value or create it via factory function.
+
+        Single-flight per path: concurrent cold-cache readers of the SAME
+        file serialise on a per-path lock, so one thread runs the
+        multi-second parse and the rest reuse its stored value instead of
+        each re-parsing. Different paths still build concurrently — the
+        factory never runs under the main table lock.
 
         Args:
             path: File path to cache
@@ -55,26 +64,45 @@ class FileCache[T]:
             Cached value if the file's (mtime, size) stamp is unchanged,
             otherwise a newly created value
         """
+        with self._lock:
+            key_lock = self._key_locks.setdefault(path, threading.Lock())
+
+        with key_lock:
+            try:
+                st = path.stat()
+                stamp = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                return factory(path)
+
+            # Re-check under the per-path lock: a follower that waited on
+            # the leader's parse finds the freshly stored entry here.
+            with self._lock:
+                entry = self._entries.get(path)
+            if entry is not None and entry[0] == stamp:
+                return entry[1]
+
+            value = factory(path)
+            with self._lock:
+                self._entries[path] = (stamp, value)
+            return value
+
+    def peek(self, path: Path) -> T | None:
+        """Return the cached value if it is still fresh, else ``None``.
+
+        Never runs a factory and never blocks on the per-path single-flight
+        lock — one ``stat`` plus a stamp compare. Lets async callers skip
+        the ``asyncio.to_thread`` hop on a guaranteed cache hit.
+        """
         try:
             st = path.stat()
             stamp = (st.st_mtime_ns, st.st_size)
         except OSError:
-            return factory(path)
-
+            return None
         with self._lock:
             entry = self._entries.get(path)
             if entry is not None and entry[0] == stamp:
                 return entry[1]
-
-        # The factory runs outside the lock: two threads can both miss and
-        # both build the value (benign — both derive from the same stamped
-        # bytes, last store wins), which beats serialising multi-second
-        # parses behind one mutex. A torn entry is impossible: the value is
-        # fully constructed before the locked store.
-        value = factory(path)
-        with self._lock:
-            self._entries[path] = (stamp, value)
-        return value
+        return None
 
     def set(self, path: Path, value: T) -> None:
         """Store a value in the cache with the file's current mtime.
@@ -94,16 +122,23 @@ class FileCache[T]:
     def invalidate(self, path: Path) -> None:
         """Remove a specific entry from cache.
 
+        Also prunes the path's single-flight lock. A get() holding that
+        lock keeps its own reference; the next get() simply creates a
+        fresh one, which at worst lets two threads parse the same path
+        once — benign, both derive from the same stamped bytes.
+
         Args:
             path: File path to invalidate
         """
         with self._lock:
             self._entries.pop(path, None)
+            self._key_locks.pop(path, None)
 
     def clear(self) -> None:
         """Remove all cached entries."""
         with self._lock:
             self._entries.clear()
+            self._key_locks.clear()
 
     def items(self) -> list[tuple[Path, tuple[tuple[int, int], T]]]:
         """Return all cached entries as (path, (stamp, value)) pairs."""

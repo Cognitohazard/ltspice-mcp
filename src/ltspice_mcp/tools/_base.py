@@ -619,17 +619,25 @@ def safe_path(user_path: str, state: SessionState) -> Path:
 #     worker thread would silently skip schema validation. Offload
 #     boundaries return plain data.
 #   * asyncio.to_thread: heavy or potentially-slow filesystem work that is
-#     read-only or atomic — RawRead parses (services.load_raw), the per-run
-#     raw loop behind batch_results (compute_batch_stats), the global
-#     recent-circuits index (a cross-process filelock poll plus a durable
-#     double-fsync write), and the first-call WSL cmd.exe interop inside
-#     resolve_output_folder. Offloaded functions must stay effect-free or
-#     atomic under cancellation: the awaiting task sees CancelledError, but
-#     a worker thread that has started runs to completion (cancellation
-#     cannot interrupt it mid-write); work cancelled before the executor
-#     picks it up never begins. Either way shared state stays consistent.
+#     read-only or atomic. The categories, one example each: result parsing
+#     (services.load_raw), batch result/log loops (compute_batch_stats),
+#     cross-process index writes (the recent-circuits touch: filelock poll
+#     plus a durable fsync write), WSL interop (the first-call cmd.exe spawn
+#     inside resolve_output_folder), and resource reads (the whole resource
+#     router behind server.read_resource). Offloaded functions must stay
+#     effect-free or atomic under cancellation: the awaiting task sees
+#     CancelledError, but a worker thread that has started runs to
+#     completion (cancellation cannot interrupt it mid-write); work
+#     cancelled before the executor picks it up never begins. Either way
+#     shared state stays consistent.
 #   * Runner threads: long-lived simulator processes are owned by the
 #     runner layer (sim_runner, sweep_runner, montecarlo_runner).
+#
+# Submit ordering: no suspension point between job registration/persistence
+# (state.add_job / add_batch_job) and the asyncio.create_task that advances
+# the job — a request cancelled at such an await would orphan a persisted
+# "running"/"queued" job with no task behind it. Acquire runners (which
+# await output-folder resolution) BEFORE registering the job.
 #
 # Intentionally inline on the loop, with bounds: netlist/schematic editor
 # parses, mutations, and their cache invalidation (cached editor instances

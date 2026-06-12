@@ -17,6 +17,8 @@ import re
 from pathlib import Path
 from typing import ClassVar
 
+import pytest
+
 from ltspice_mcp.tools import (  # noqa: F401
     advanced,
     analysis,
@@ -36,39 +38,33 @@ def _profile_counts() -> tuple[int, int]:
     return full, agentic
 
 
+def _registered_names() -> set[str]:
+    return {t.definition.name for t in registry._registered}
+
+
+# (doc path, profile, count-pattern template). ``{n}`` is replaced with the
+# registry's count for that profile; each pattern is the exact regex the doc
+# must match (README/CLAUDE prose for full, profile-table rows otherwise).
+_DOC_COUNT_CHECKS = (
+    ("README.md", "full", r"All {n} tools"),
+    ("README.md", "agentic", r"\|\s*`agentic`\s*\|\s*{n}\s*\|"),
+    ("CLAUDE.md", "full", r"All {n}"),
+    ("CLAUDE.md", "agentic", r"\|\s*`agentic`\s*\|\s*{n}\s*\|"),
+    ("docs/DESIGN.md", "full", r"\|\s*`full`[^|]*\|\s*{n}\s*\|"),
+    ("docs/DESIGN.md", "agentic", r"\|\s*`agentic`[^|]*\|\s*{n}\s*\|"),
+)
+
+
 class TestToolCountInDocs:
-    def test_readme_full_count_matches_registry(self) -> None:
-        full, _ = _profile_counts()
-        text = (ROOT / "README.md").read_text()
-        assert f"All {full} tools" in text, (
-            f"README.md must say 'All {full} tools' — registry exposes {full} "
-            f"in the full profile. Update the three places that mention the "
-            f"count (tool profile table, tools intro, full profile row)."
-        )
-
-    def test_readme_agentic_count_matches_registry(self) -> None:
-        _, agentic = _profile_counts()
-        text = (ROOT / "README.md").read_text()
-        # "| `agentic` | 27 |" row in the tool-profile table.
-        pattern = rf"\|\s*`agentic`\s*\|\s*{agentic}\s*\|"
-        assert re.search(pattern, text), (
-            f"README.md tool-profile table must list {agentic} for the agentic profile"
-        )
-
-    def test_claude_md_full_count_matches_registry(self) -> None:
-        full, _ = _profile_counts()
-        text = (ROOT / "CLAUDE.md").read_text()
-        assert f"All {full}" in text, (
-            f"CLAUDE.md must say 'All {full}' somewhere in the tool profile "
-            f"table; registry exposes {full} tools in the full profile"
-        )
-
-    def test_claude_md_agentic_count_matches_registry(self) -> None:
-        _, agentic = _profile_counts()
-        text = (ROOT / "CLAUDE.md").read_text()
-        pattern = rf"\|\s*`agentic`\s*\|\s*{agentic}\s*\|"
-        assert re.search(pattern, text), (
-            f"CLAUDE.md tool-profile table must list {agentic} for the agentic profile"
+    @pytest.mark.parametrize(("rel", "profile", "template"), _DOC_COUNT_CHECKS)
+    def test_doc_count_matches_registry(self, rel: str, profile: str, template: str) -> None:
+        full, agentic = _profile_counts()
+        n = full if profile == "full" else agentic
+        text = (ROOT / rel).read_text()
+        assert re.search(template.format(n=n), text), (
+            f"{rel} must list {n} tools for the {profile} profile "
+            f"(expected pattern {template.format(n=n)!r}); the registry "
+            f"exposes {n} — update every place the count appears."
         )
 
 
@@ -101,7 +97,7 @@ class TestStaleToolNamesInDocs:
     def test_no_prefixed_tool_names_in_docs(self) -> None:
         """Tools were renamed from `ltspice_<name>` to bare `<name>`; no doc
         may still use the prefixed form of any registered tool."""
-        registered = {t.definition.name for t in registry._registered}
+        registered = _registered_names()
         failures: list[str] = []
         for rel in DOC_PATHS:
             text = (ROOT / rel).read_text()
@@ -142,24 +138,6 @@ class TestStaleToolNamesInDocs:
         )
 
 
-class TestDesignDocCounts:
-    def test_design_md_full_count_matches_registry(self) -> None:
-        full, _ = _profile_counts()
-        text = (ROOT / "docs" / "DESIGN.md").read_text()
-        pattern = rf"\|\s*`full`[^|]*\|\s*{full}\s*\|"
-        assert re.search(pattern, text), (
-            f"docs/DESIGN.md tool-profile table must list {full} for the full profile"
-        )
-
-    def test_design_md_agentic_count_matches_registry(self) -> None:
-        _, agentic = _profile_counts()
-        text = (ROOT / "docs" / "DESIGN.md").read_text()
-        pattern = rf"\|\s*`agentic`[^|]*\|\s*{agentic}\s*\|"
-        assert re.search(pattern, text), (
-            f"docs/DESIGN.md tool-profile table must list {agentic} for the agentic profile"
-        )
-
-
 def _ltspice_refs_in_strings(py_path: Path) -> set[str]:
     """Extract `ltspice_*` tokens that appear INSIDE string literals.
 
@@ -197,7 +175,7 @@ class TestToolNamesInErrorStrings:
         breaks many files surfaces as one readable failure instead of
         N near-identical ones.
         """
-        registered = {t.definition.name for t in registry._registered}
+        registered = _registered_names()
         failures: list[str] = []
         for py_file in sorted((ROOT / "src" / "ltspice_mcp").rglob("*.py")):
             refs = _ltspice_refs_in_strings(py_file) - self._NON_TOOL_TOKENS
