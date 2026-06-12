@@ -1,0 +1,55 @@
+name: Checks
+
+# Reusable checks shared by CI (every push/PR) and the publish workflow's
+# release gate. Both call this file, so the two gates cannot drift.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Lint
+        run: uv run ruff check src/ tests/
+
+      - name: Type check
+        run: uv run pyright
+
+      - name: Install ngspice (enables the real-ngspice e2e tier)
+        run: sudo apt-get update && sudo apt-get install -y ngspice
+
+      - name: Test
+        run: uv run pytest tests/ -v
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Export locked runtime dependencies
+        run: uv export --format requirements-txt --no-hashes --no-dev --no-emit-project --output-file requirements.txt
+
+      - name: Audit locked dependencies
+        run: uv run --with pip-audit python -m pip_audit -r requirements.txt --no-deps --strict

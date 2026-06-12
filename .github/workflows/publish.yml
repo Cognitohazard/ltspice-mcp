@@ -13,54 +13,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Mirrors ci.yml's check job — a release must clear at least the same
-  # gate as an ordinary push (pyright + the real-ngspice e2e tier included).
-  test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - name: Run linter
-        run: uv run ruff check src/ tests/
-
-      - name: Type check
-        run: uv run pyright
-
-      - name: Install ngspice (enables the real-ngspice e2e tier)
-        run: sudo apt-get update && sudo apt-get install -y ngspice
-
-      - name: Run tests
-        run: uv run pytest tests/ -v
-
-  audit:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - name: Export locked runtime dependencies
-        run: uv export --format requirements-txt --no-hashes --no-dev --no-emit-project --output-file requirements.txt
-
-      - name: Audit locked dependencies
-        run: uv run --with pip-audit python -m pip_audit -r requirements.txt --no-deps --strict
+  # Release gate: runs the exact same reusable checks workflow as CI
+  # (lint + pyright + the real-ngspice e2e tier + dependency audit),
+  # so the release gate and the CI gate cannot drift.
+  checks:
+    uses: ./.github/workflows/checks.yml
 
   build:
-    needs: [test, audit]
+    needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
