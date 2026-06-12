@@ -484,6 +484,14 @@ class TestCreateSchematic:
 
 @pytest.mark.asyncio
 class TestValidateNetlist:
+    async def _validate(self, state: SessionState, work_dir: Path, name: str, content: str):
+        """Write ``content`` to ``name``, validate it, return the data dict."""
+        (work_dir / name).write_text(content)
+        result = await handle_validate_netlist({"path": name}, state)
+        data = result.structuredContent
+        assert data is not None
+        return data
+
     async def test_clean_netlist(self, state_no_sim: SessionState, work_dir: Path):
         cir = work_dir / "clean.cir"
         cir.write_text("* clean\nVin in 0 1\nR1 in 0 1k\n.tran 0 1m\n.end\n")
@@ -495,21 +503,13 @@ class TestValidateNetlist:
     async def test_empty_file_is_error(self, state_no_sim: SessionState, work_dir: Path):
         # LTspice fails an empty deck immediately at line 1; the static
         # gate must not report it as passing.
-        cir = work_dir / "empty.cir"
-        cir.write_text("")
-        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
-        data = result.structuredContent
-        assert data is not None
+        data = await self._validate(state_no_sim, work_dir, "empty.cir", "")
         empties = [iss for iss in data["issues"] if "empty" in iss["message"].lower()]
         assert len(empties) == 1, data["issues"]
         assert empties[0]["severity"] == "error"
 
     async def test_whitespace_only_file_is_error(self, state_no_sim: SessionState, work_dir: Path):
-        cir = work_dir / "ws.cir"
-        cir.write_text("  \n\t\n\n")
-        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
-        data = result.structuredContent
-        assert data is not None
+        data = await self._validate(state_no_sim, work_dir, "ws.cir", "  \n\t\n\n")
         assert any(
             iss["severity"] == "error" and "empty" in iss["message"].lower()
             for iss in data["issues"]
@@ -527,11 +527,12 @@ class TestValidateNetlist:
         assert data["issue_count"] == 0, data["issues"]
 
     async def test_dangling_node_warned(self, state_no_sim: SessionState, work_dir: Path):
-        cir = work_dir / "dangling.cir"
-        cir.write_text("* dangling\nV1 in 0 1\nR1 in float 1k\n.tran 0 1m\n.end\n")
-        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
-        data = result.structuredContent
-        assert data is not None
+        data = await self._validate(
+            state_no_sim,
+            work_dir,
+            "dangling.cir",
+            "* dangling\nV1 in 0 1\nR1 in float 1k\n.tran 0 1m\n.end\n",
+        )
         dangling = [iss for iss in data["issues"] if "'float'" in iss["message"]]
         assert len(dangling) == 1, data["issues"]
         assert dangling[0]["severity"] == "warning"
@@ -543,14 +544,13 @@ class TestValidateNetlist:
         # Line 1 of a .cir/.net deck is the free-text title. The lexer has
         # no title concept and reads it as an instance card, but its words
         # must not be counted as circuit nodes.
-        cir = work_dir / "titled.cir"
-        cir.write_text(
+        data = await self._validate(
+            state_no_sim,
+            work_dir,
+            "titled.cir",
             "Voltage divider test circuit\n"
-            "V1 in 0 1\nR1 in out 1k\nR2 out 0 1k\n.tran 0 1m\n.end\n"
+            "V1 in 0 1\nR1 in out 1k\nR2 out 0 1k\n.tran 0 1m\n.end\n",
         )
-        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
-        data = result.structuredContent
-        assert data is not None
         assert data["issue_count"] == 0, data["issues"]
 
     async def test_asc_directive_elements_not_dangling_checked(
@@ -559,15 +559,14 @@ class TestValidateNetlist:
         # An .asc SPICE-directive text block may legally carry element
         # lines; the schematic wires those nodes connect to are invisible
         # to the netlist dangling pass, so it must not run on .asc at all.
-        asc = work_dir / "gate.asc"
-        asc.write_text(
+        data = await self._validate(
+            state_no_sim,
+            work_dir,
+            "gate.asc",
             "Version 4\nSHEET 1 880 680\n"
             "TEXT 16 16 Left 2 !.tran 1m\n"
-            "TEXT 16 80 Left 2 !R99 neta netb 1k\n"
+            "TEXT 16 80 Left 2 !R99 neta netb 1k\n",
         )
-        result = await handle_validate_netlist({"path": "gate.asc"}, state_no_sim)
-        data = result.structuredContent
-        assert data is not None
         assert data["issue_count"] == 0, data["issues"]
 
     async def test_flags_bad_meas(self, state_no_sim: SessionState, work_dir: Path):
