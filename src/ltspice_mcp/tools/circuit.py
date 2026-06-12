@@ -4207,7 +4207,7 @@ class StepGetInput(ToolInput):
 async def handle_step_get(args: StepGetInput, state: SessionState) -> types.CallToolResult:
     """Query a signal at a specific axis value of a stepped .raw result."""
     raw_path = safe_path(args.raw_file, state)
-    raw = services.load_raw(raw_path, state)
+    raw = await services.load_raw(raw_path, state)
 
     try:
         target = parse_spice_value(args.value)

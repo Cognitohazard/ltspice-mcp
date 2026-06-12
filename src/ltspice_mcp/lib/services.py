@@ -8,6 +8,7 @@ logic. All functions raise domain exceptions rather than returning error text.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -280,8 +281,25 @@ def resolve_log_file(job_id: str, state: SessionState, run_index: int = 0) -> Pa
     return _resolve_result_file(job_id, state, "log_file", "log", run_index=run_index)
 
 
-def load_raw(raw_path: Path, state: SessionState) -> RawRead:
-    """Load and cache a ``RawRead`` instance."""
+async def load_raw(raw_path: Path, state: SessionState) -> RawRead:
+    """Load and cache a ``RawRead`` instance without blocking the event loop.
+
+    The cache probe (a ``stat``, slow on ``/mnt/c``) and the parse both run
+    in a worker thread via ``asyncio.to_thread``. The parsed value is
+    immutable and the cache store is lock-guarded, so cancellation leaves
+    the cache consistent: a worker that has started runs to completion
+    (at worst storing a benign extra cache entry), and work cancelled
+    before the executor picks it up never begins.
+    """
+    return await asyncio.to_thread(load_raw_sync, raw_path, state)
+
+
+def load_raw_sync(raw_path: Path, state: SessionState) -> RawRead:
+    """Blocking implementation behind :func:`load_raw`.
+
+    Call directly only from code already off the event loop, or from the
+    synchronous resource router. Coroutine handlers must ``await load_raw``.
+    """
     dialect = state.raw_dialect
     try:
         raw = state.results.get(
@@ -373,9 +391,13 @@ def validate_step(raw: RawRead, step: int) -> None:
 
 
 def load_signal_names(job_id: str, state: SessionState) -> list[str]:
-    """Load signal names from a completed job."""
+    """Load signal names from a completed job.
+
+    Stays synchronous (via ``load_raw_sync``) because its only caller is the
+    synchronous MCP resource router.
+    """
     raw_path = resolve_raw_file(job_id, state)
-    raw = load_raw(raw_path, state)
+    raw = load_raw_sync(raw_path, state)
     return raw.get_trace_names()
 
 
@@ -395,7 +417,11 @@ def load_measurements(
 
 
 def get_batch_status(batch_job: BatchJob) -> dict[str, Any]:
-    """Build structured status/progress data for a batch job."""
+    """Build structured status/progress data for a batch job.
+
+    Walks every per-run log (the convergence scan) once the job is
+    terminal — coroutine callers must run this via ``asyncio.to_thread``.
+    """
     base = {
         "job_id": batch_job.job_id,
         "job_type": batch_job.job_type,
@@ -511,7 +537,7 @@ def job_duration_seconds(
     return delta
 
 
-def get_batch_signal_data(
+async def get_batch_signal_data(
     batch_job: BatchJob,
     signal: str,
     *,
@@ -522,7 +548,14 @@ def get_batch_signal_data(
     at: float | None = None,
     dialect: str | None = None,
 ) -> dict[str, Any]:
-    """Extract structured batch signal data for aggregated or raw mode."""
+    """Extract structured batch signal data for aggregated or raw mode.
+
+    The ``run_results`` snapshots are taken on the event loop (a batch
+    runner may still be appending runs); the per-run ``RawRead`` loop
+    — one header+trace parse per matching run — and the per-run log walk
+    behind the convergence scan are offloaded to worker threads, since
+    each can take seconds for a large Monte Carlo batch.
+    """
     if batch_job.completed_runs == 0:
         raise BatchJobError(f"No completed runs yet for job {batch_job.job_id}")
 
@@ -545,7 +578,7 @@ def get_batch_signal_data(
 
     matching_run_results = {idx: batch_job.run_results[idx] for idx in matching_indices}
 
-    convergence = scan_batch_convergence(batch_job)
+    convergence = await asyncio.to_thread(scan_batch_convergence, batch_job)
 
     if raw:
         paginated_indices = matching_indices[offset : offset + limit]
@@ -555,7 +588,9 @@ def get_batch_signal_data(
                 f"offset={offset}, limit={limit}"
             )
         paginated_run_results = {idx: batch_job.run_results[idx] for idx in paginated_indices}
-        page_stats = compute_batch_stats(paginated_run_results, signal, at=at, dialect=dialect)
+        page_stats = await asyncio.to_thread(
+            compute_batch_stats, paginated_run_results, signal, at=at, dialect=dialect
+        )
         # Mirror the aggregate path's guard: if the signal could not be read
         # from ANY run in the page, raise instead of silently returning
         # runs:[] (which reads as "no data produced"). A typo, a .MEAS name,
@@ -583,7 +618,9 @@ def get_batch_signal_data(
             out_raw["convergence_warnings"] = convergence
         return out_raw
 
-    batch_stats = compute_batch_stats(matching_run_results, signal, at=at, dialect=dialect)
+    batch_stats = await asyncio.to_thread(
+        compute_batch_stats, matching_run_results, signal, at=at, dialect=dialect
+    )
     if batch_stats["run_count"] == 0:
         raise ResultError(f"Signal '{signal}' not found in any completed run")
 

@@ -1,5 +1,6 @@
 """MCP server instance with lifespan management and tool dispatch."""
 
+import asyncio
 import logging
 import sys
 from collections.abc import AsyncIterator, Iterable
@@ -51,7 +52,7 @@ def _extract_circuit_path(arguments: dict | None) -> str | None:
     return None
 
 
-def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
+async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     """Side effects for any tool call that references a circuit file.
 
     Loads the circuit's persisted jobs (once per session) and bumps it to
@@ -59,6 +60,10 @@ def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     break dispatch. Recent-index writes are debounced per session via
     ``SessionState._touched_recent`` so repeated tool calls on the same
     circuit don't rewrite the file each time.
+
+    The sidecar job load stays on the loop (small per-circuit JSON files,
+    and it mutates the JobRegistry); the recent-index write is offloaded
+    inside ``note_recent_circuit`` (cross-process lock poll + fsync).
     """
     raw = _extract_circuit_path(arguments)
     if not raw:
@@ -70,7 +75,7 @@ def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     if resolved.suffix.lower() not in CIRCUIT_EXTENSIONS:
         return
     state.ensure_jobs_loaded_for(resolved)
-    state.note_recent_circuit(resolved)
+    await state.note_recent_circuit(resolved)
 
 
 def _configure_asc_editor(config: ServerConfig, available: dict) -> None:
@@ -383,7 +388,7 @@ async def call_tool(name: str, arguments: dict | None):
 
     # Lazy-load persisted jobs for the circuit this tool is operating on,
     # and bump it in the recent-circuits index. Best-effort; errors swallowed.
-    _notice_circuit(arguments, state)
+    await _notice_circuit(arguments, state)
 
     # Invoke handler — enrich known errors with actionable guidance.
     # Exceptions propagate to the MCP SDK which sets isError=True.
@@ -454,7 +459,12 @@ async def read_resource(uri: AnyUrl) -> Iterable[ReadResourceContents]:
     state = _get_state(server)
 
     try:
-        result = handle_read_resource(str(uri), state)
+        # Resource reads are synchronous and read-only but not cheap: the
+        # results/{job}/signals route does a full RawRead parse and the
+        # recent route polls a cross-process file lock (time.sleep), so the
+        # whole router runs off the loop. It never touches loop-owned
+        # mutable state (the editor cache and library sessions stay untouched).
+        result = await asyncio.to_thread(handle_read_resource, str(uri), state)
     except LTSpiceMCPError as e:
         raise ValueError(str(e)) from None
     except Exception as e:

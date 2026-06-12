@@ -140,3 +140,47 @@ class TestFileCache:
         cache.invalidate(p1)
         assert p1 not in cache
         assert p2 in cache
+
+    def test_concurrent_threads_get_consistent_values(self, tmp_path: Path):
+        """Handlers offload heavy cache factories to worker threads via
+        asyncio.to_thread, so get/invalidate/items can interleave across
+        threads. Every get() must return a fully-constructed value and no
+        compound dict operation may raise (e.g. dict-changed-during-iteration
+        from items() racing an insert)."""
+        import threading
+
+        cache: FileCache[tuple[str, int]] = FileCache()
+        p = tmp_path / "data.raw"
+        p.write_text("payload")
+
+        def factory(path: Path) -> tuple[str, int]:
+            text = path.read_text()
+            return (text, len(text))
+
+        errors: list[BaseException] = []
+        stop = threading.Event()
+
+        def reader() -> None:
+            try:
+                while not stop.is_set():
+                    value = cache.get(p, factory)
+                    if value != ("payload", 7):
+                        errors.append(AssertionError(f"torn value: {value!r}"))
+                        return
+            except BaseException as e:  # surface any thread crash, including asserts
+                errors.append(e)
+
+        threads = [threading.Thread(target=reader) for _ in range(4)]
+        for t in threads:
+            t.start()
+        try:
+            for _ in range(200):
+                cache.invalidate(p)
+                cache.items()
+                len(cache)
+        finally:
+            stop.set()
+            for t in threads:
+                t.join(timeout=5)
+        assert not any(t.is_alive() for t in threads)
+        assert not errors

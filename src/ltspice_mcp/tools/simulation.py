@@ -125,7 +125,7 @@ class CancelJobInput(ToolInput):
     job_id: str = Field(description="Job ID of the running simulation to cancel")
 
 
-def _get_or_create_runner(state: SessionState) -> SimulationRunner:
+async def _get_or_create_runner(state: SessionState) -> SimulationRunner:
     """Get or create a SimulationRunner via the centralized RunnerManager."""
     default_simulator = state.default_simulator
     if default_simulator is None:
@@ -133,7 +133,7 @@ def _get_or_create_runner(state: SessionState) -> SimulationRunner:
     return state.runners.get_sim_runner(
         loop=asyncio.get_running_loop(),
         simulator_class=default_simulator,
-        output_folder=resolve_output_folder(state),
+        output_folder=await resolve_output_folder(state),
         max_parallel=state.config.max_parallel_sims,
     )
 
@@ -199,7 +199,7 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     )
     # Get SimulationRunner before storing job — if this fails, we don't
     # leave an orphaned "running" job with no task to advance it
-    runner = _get_or_create_runner(state)
+    runner = await _get_or_create_runner(state)
     state.add_job(job)
     await mcp_log(
         "info", f"Simulation started: {netlist_path.name} ({default_simulator.__name__})"
@@ -816,6 +816,7 @@ async def handle_cancel_job(args: CancelJobInput, state: SessionState) -> types.
             )
         await batch_runner.cancel(job, state)
     else:
-        await _get_or_create_runner(state).cancel(job, state)
+        sim_runner = await _get_or_create_runner(state)
+        await sim_runner.cancel(job, state)
 
     return text_response(f"Job {job_id} cancelled")

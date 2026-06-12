@@ -156,16 +156,16 @@ class TestResolveResultFile:
 
 
 class TestLoadRaw:
-    def test_missing_file(self, state_no_sim: SessionState, tmp_path: Path):
+    async def test_missing_file(self, state_no_sim: SessionState, tmp_path: Path):
         with pytest.raises(ResultError, match="not found"):
-            services.load_raw(tmp_path / "nope.raw", state_no_sim)
+            await services.load_raw(tmp_path / "nope.raw", state_no_sim)
 
-    def test_caches_results(self, state_no_sim: SessionState, tmp_path: Path):
+    async def test_caches_results(self, state_no_sim: SessionState, tmp_path: Path):
         # Just cover the caching path - call twice on missing file
         with pytest.raises(ResultError):
-            services.load_raw(tmp_path / "x.raw", state_no_sim)
+            await services.load_raw(tmp_path / "x.raw", state_no_sim)
 
-    def test_truncated_binary_raw_raises_not_silently_short(
+    async def test_truncated_binary_raw_raises_not_silently_short(
         self, state_no_sim: SessionState, tmp_path: Path
     ):
         # A killed/interrupted sim can leave a .raw with a valid header but a
@@ -186,7 +186,7 @@ class TestLoadRaw:
 
         # Sanity: the intact fixture parses (valid header). This proves the
         # truncated case below fails on the truncation, not a malformed header.
-        raw = services.load_raw(good, state_no_sim)
+        raw = await services.load_raw(good, state_no_sim)
         names = [t.lower() for t in raw.get_trace_names()]
         assert "time" in names and "v(out)" in names
 
@@ -197,9 +197,9 @@ class TestLoadRaw:
         truncated.write_bytes(data[: int(len(data) * 0.6)])
 
         with pytest.raises(ResultError):
-            services.load_raw(truncated, state_no_sim)
+            await services.load_raw(truncated, state_no_sim)
 
-    def test_zero_variable_raw_is_diagnosed_as_corrupt(
+    async def test_zero_variable_raw_is_diagnosed_as_corrupt(
         self, state_no_sim: SessionState, tmp_path: Path
     ):
         # A file cut mid-header (here: 100 bytes into a real LTspice raw, in
@@ -213,7 +213,7 @@ class TestLoadRaw:
         truncated.write_bytes((FIXTURES_DIR / "ltspice_tran_rc.raw").read_bytes()[:100])
 
         with pytest.raises(ResultError) as exc_info:
-            services.load_raw(truncated, state_no_sim)
+            await services.load_raw(truncated, state_no_sim)
         msg = str(exc_info.value)
         assert "zero variables" in msg
         assert "truncated or corrupt" in msg
@@ -237,20 +237,20 @@ class TestGetBatchStatus:
 
 
 class TestGetBatchSignalData:
-    def test_no_completed(self, state_no_sim: SessionState):
+    async def test_no_completed(self, state_no_sim: SessionState):
         bj = _make_batch(state_no_sim, completed=0)
         with pytest.raises(BatchJobError, match="No completed runs"):
-            services.get_batch_signal_data(bj, "V(out)")
+            await services.get_batch_signal_data(bj, "V(out)")
 
-    def test_no_runs_match_filter(self, state_no_sim: SessionState):
+    async def test_no_runs_match_filter(self, state_no_sim: SessionState):
         bj = _make_batch(state_no_sim, run_results={0: {"params": {"R1": "1k"}}})
         with pytest.raises(BatchJobError, match="No runs match"):
-            services.get_batch_signal_data(bj, "V(out)", filters={"R1": "999k"})
+            await services.get_batch_signal_data(bj, "V(out)", filters={"R1": "999k"})
 
-    def test_raw_mode_pagination_empty(self, state_no_sim: SessionState):
+    async def test_raw_mode_pagination_empty(self, state_no_sim: SessionState):
         bj = _make_batch(state_no_sim, run_results={0: {"params": {}}})
         with pytest.raises(BatchJobError, match="page range"):
-            services.get_batch_signal_data(bj, "V(out)", raw=True, offset=10, limit=5)
+            await services.get_batch_signal_data(bj, "V(out)", raw=True, offset=10, limit=5)
 
 
 class TestExtractModelSuggestions:
