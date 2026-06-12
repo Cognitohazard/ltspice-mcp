@@ -151,8 +151,8 @@ class TestComputeBatchStatsAt:
         assert no_at["stats"]["max_across_runs"] == 10.0
         assert no_at["stats"]["min_across_runs"] == 6.0
 
-        # With ``at=2.0``: each run reduced to the value at that time. Per
-        # Fr2, when peak/mean/min would collapse, the row drops them and
+        # With ``at=2.0``: each run reduced to the value at that time. When
+        # peak/mean/min would collapse, the row drops them and
         # surfaces just ``value``.
         sliced = compute_batch_stats(runs, "V(out)", at=2.0)
         assert sliced["at"] == 2.0

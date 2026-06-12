@@ -330,7 +330,7 @@ def build_simulation_summary(
     trace_names = raw.get_trace_names()
     step_count = get_step_count(raw)
 
-    # Bug D: stepped ``.op`` raw files have no axis — spicelib raises
+    # Stepped ``.op`` raw files have no axis — spicelib raises
     # "This RAW file does not have an axis." Treat that as a valid degenerate
     # case (no range, no point_count beyond step_count) instead of aborting
     # the whole summary.
@@ -384,7 +384,7 @@ def build_simulation_summary(
                     summary["measurements"] = meas_data["measurements"]
                 # FAIL'ed measurements aren't in get_measure_names(); surface
                 # them as a separate list so consumers can distinguish "did
-                # not trigger" from "did not parse" (D-N2).
+                # not trigger" from "did not parse".
                 failed = meas_data.get("failed_measurements") or []
                 if failed:
                     summary["failed_measurements"] = list(failed)

@@ -539,9 +539,8 @@ class TestMagnitudeDb:
         assert np.isfinite(db).all()
 
 
-# Relocated from tests/test_v5_fixes.py (regression).
-class TestN5StabilityPhaseWarning:
-    """N5: stability_metrics warns when DC phase is near ±180°."""
+class TestStabilityPhaseWarning:
+    """stability_metrics warns when DC phase is near ±180°."""
 
     def test_warns_on_inverting_output(self):
         # Synthesize a CS-amp-style transfer: gain 1000 at DC, single pole at
@@ -562,12 +561,11 @@ class TestN5StabilityPhaseWarning:
         assert not any("doesn't look like a loop-gain probe" in w for w in out["warnings"])
 
 
-# Relocated from tests/test_v5_fixes.py (regression).
-class TestFr5PoleOrderTolerance:
-    """Fr5: pole-order estimate accepts ±3 dB/dec around an integer."""
+class TestPoleOrderTolerance:
+    """Pole-order estimate accepts ±3 dB/dec around an integer."""
 
     def test_accepts_minus_18(self):
-        # A real-world miller_ota slope was -17.97 dB/dec; the v4 ±2 cutoff
+        # A real-world miller_ota slope was -17.97 dB/dec; the earlier ±2 cutoff
         # rejected it. ±3 should accept "1" as the order.
         from ltspice_mcp.lib.ac_analysis import _estimate_order_from_slope
 
@@ -581,9 +579,8 @@ class TestFr5PoleOrderTolerance:
         assert _estimate_order_from_slope(-10.0) is None
 
 
-# Relocated from tests/test_v5_fixes.py (regression).
-class TestFr6GainAtPhaseUnwrappedOmitted:
-    """Fr6: phase_deg_unwrapped is absent when not requested."""
+class TestGainAtPhaseUnwrappedOmitted:
+    """phase_deg_unwrapped is absent when not requested."""
 
     def test_omitted_by_default(self):
         freqs = np.logspace(0, 6, 100)

@@ -139,7 +139,7 @@ class TestSimulationRunnerHandleCompletion:
     def test_completion_dot_placeholder_marks_failed(
         self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
     ):
-        """Bug I: spicelib signals failure by passing ``raw_file="."`` and a
+        """spicelib signals failure by passing ``raw_file="."`` and a
         ``.fail`` log file. Treating ``Path(".")`` as a real raw file
         would let ``stat()`` succeed (directory size is non-zero) and
         leak ``status="completed"`` + ``raw_file="."`` to clients."""
@@ -1591,9 +1591,8 @@ class TestMCRunnerCardFlowIntegration:
         assert variant in models
 
 
-# Relocated from tests/test_v6_fixes.py (regression).
-class TestAN1HierarchicalMcDoesNotJoinSpiceCircuits:
-    """A-N1: the MC runner used to do ``"".join(editor.netlist)`` which
+class TestHierarchicalMcDoesNotJoinSpiceCircuits:
+    """The MC runner used to do ``"".join(editor.netlist)`` which
     crashed on hierarchical netlists where ``editor.netlist`` contains
     ``SpiceCircuit`` objects for ``.subckt`` blocks. The fix reads the
     netlist via ``read_spice_text`` and lexes once instead.

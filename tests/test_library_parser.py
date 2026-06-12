@@ -139,7 +139,7 @@ class TestParseLibraryFile:
         assert m.params == {"gain": "10"}
 
     def test_subckt_with_param_defaults_surfaces_params(self, tmp_path: Path):
-        # Fr2: .SUBCKT with `params:` clause should expose both `ports`
+        # .SUBCKT with `params:` clause should expose both `ports`
         # (the positional port list) and `params` (the default values).
         lib = tmp_path / "amp.lib"
         lib.write_text(".SUBCKT amp in out params: gain=10\nR1 in out {gain}k\n.ENDS\n")
@@ -236,7 +236,7 @@ class TestParseLibraryFile:
 
     def test_utf16_le_without_bom(self, tmp_path: Path):
         """Some LTspice 26+ installs ship ``standard.{mos,bjt}`` as UTF-16 LE
-        WITHOUT a BOM. Bug H: ``load_library`` returned 0 models for those
+        WITHOUT a BOM. ``load_library`` returned 0 models for those
         files. Heuristic null-byte detection picks them up now."""
         lib = tmp_path / "no_bom.mos"
         text = ".MODEL NMOS_NB NMOS(VTO=2.0 KP=0.05)\n.MODEL PMOS_NB PMOS(VTO=-1.5)\n"

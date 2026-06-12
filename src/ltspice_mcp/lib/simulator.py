@@ -101,7 +101,7 @@ def _apply_simulator_exe(config: ServerConfig, diagnostics: list[str] | None = N
     # Guard against binding a path to the wrong simulator: if the exe filename
     # clearly belongs to a *different* known simulator than ``default``, skip it
     # (and fall back to auto-detection) rather than binding e.g. LTspice.exe to
-    # ngspice — which silently mis-runs and hangs to timeout (NGv7-CONFIG-1).
+    # ngspice — which silently mis-runs and hangs to timeout.
     guessed = _exe_simulator_hint(exe_path)
     if guessed is not None and guessed != target_name:
         msg = (

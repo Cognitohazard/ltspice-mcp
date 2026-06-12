@@ -302,7 +302,7 @@ def analyze_edge(
     ``low_level`` / ``high_level`` override the auto-detected rail levels with
     absolute values. Use them when the auto estimate is biased — e.g. a
     rise-from-rail where samples cluster in the fast early ramp pull the
-    first-10% mean off zero (V7-P2-1). Direction is still inferred from the
+    first-10% mean off zero. Direction is still inferred from the
     signal, not the overrides.
     """
     if len(t) < 3:

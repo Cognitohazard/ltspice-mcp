@@ -511,7 +511,7 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
 
     # Compute total runs: product of each dimension's point count, and capture
     # the resolved value list per dimension so the response can enumerate them
-    # (log vs linear spacing is otherwise unverifiable without running — Fr13).
+    # (log vs linear spacing is otherwise unverifiable without running).
     dim_sizes: list[int] = []
     dim_values: list[tuple[str, list[float]]] = []
     for dim in dimensions:
@@ -803,7 +803,7 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
 
     # Validate per-component overrides against the netlist so an unmatched ref
     # (e.g. C99) is flagged here rather than silently perturbing nothing and
-    # understating the variation with no signal to the user (V7-P1-4).
+    # understating the variation with no signal to the user.
     warnings: list[str] = []
     if component_overrides:
         netlist_refs = _netlist_component_refs(netlist_path)
