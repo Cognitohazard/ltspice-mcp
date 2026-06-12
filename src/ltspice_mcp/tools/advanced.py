@@ -616,9 +616,8 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
     default_simulator = state.default_simulator
     if default_simulator is None:
         raise BatchJobError("No simulator available. Check server status.")
-    # Acquire the runner (which awaits output-folder resolution) before
-    # registering the job — a request cancelled at that await must not
-    # leave a persisted "running" job with no task to advance it.
+    # Runner first, then register + create_task with no await between —
+    # submit-ordering rule, see the concurrency contract in tools/_base.py.
     runner = state.runners.get_sweep_runner(
         loop=asyncio.get_running_loop(),
         simulator_class=default_simulator,
@@ -894,9 +893,8 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
     default_simulator = state.default_simulator
     if default_simulator is None:
         raise BatchJobError("No simulator available. Check server status.")
-    # Acquire the runner (which awaits output-folder resolution) before
-    # registering the job — a request cancelled at that await must not
-    # leave a persisted "running" job with no task to advance it.
+    # Runner first, then register + create_task with no await between —
+    # submit-ordering rule, see the concurrency contract in tools/_base.py.
     runner = state.runners.get_mc_runner(
         loop=asyncio.get_running_loop(),
         simulator_class=default_simulator,
@@ -1008,9 +1006,7 @@ async def handle_batch_results(args: GetBatchResultsInput, state: SessionState):
     batch_job = services.resolve_batch_job(job_id, state)
 
     if signal is None:
-        # On terminal jobs the status builder walks every per-run log for
-        # convergence markers — keep that off the event loop.
-        data = await asyncio.to_thread(services.get_batch_status, batch_job)
+        data = await services.get_batch_status(batch_job)
         return format_response(_format_batch_status_text(data), data, fmt)
 
     filters = args.filters
