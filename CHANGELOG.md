@@ -18,6 +18,20 @@ tool-surface changes.
   (`V(...)`/`I(...)`), unrecognized elements, or non-terminal tokens are never
   warned about. `.asc` schematics are exempt (their connectivity lives in
   wires and flags, which this pass cannot see).
+- `validate_netlist` warns on bias-topology degeneracies in `.cir`/`.net`
+  decks — a net with no DC path to ground, whose operating-point bias is
+  undefined: a floating MOSFET gate, an all-capacitive (AC-coupled) island, a
+  node driven only by a current source (independent, controlled, or a
+  behavioral `B… I=` source without `Rpar`), or a galvanically-isolated
+  domain. The check is built by conservative over-connection (only capacitor
+  dielectrics, MOSFET gate oxides, and current-source branches count as DC
+  opens; bias-dependent diodes, transistor channels, and switches all
+  conduct), so a warning is provable rather than a guess, and each
+  physically-contiguous floating domain reports once. A subckt that grounds a
+  port through node 0 internally biases the net wired to it; a `.GLOBAL` rail
+  is a ground reference only where it actually reaches node 0 somewhere in the
+  deck (a floating global is flagged). Messages state the topology fact only —
+  no convergence verdict. `.asc` is exempt, as for the dangling-node pass.
 
 ### Changed
 
