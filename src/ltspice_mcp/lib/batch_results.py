@@ -91,11 +91,18 @@ def compute_batch_stats(
                 axis = None  # type: ignore[assignment]
                 axis_size = 0
 
+            # ``collapsed`` marks a genuine point query (``at=`` or a .op
+            # single-sample raw), where peak/mean/min are the same sample by
+            # construction. It is NOT inferred from data equality: a flat
+            # full-waveform run also has peak==mean==min, but it is still a
+            # waveform and must keep the trio so the row shape stays uniform
+            # across a sweep.
             if axis is None or axis_size == 0:
                 if wave.size == 0:
                     continue
                 point = float(wave[0])
                 peak = mean_val = min_val = point
+                collapsed = True
             elif at is not None:
                 if np.iscomplexobj(axis):
                     axis = np.real(axis)
@@ -113,20 +120,21 @@ def compute_batch_stats(
                     idx = ins - 1 if abs(axis[ins - 1] - at) <= abs(axis[ins] - at) else ins
                 point = float(wave[idx])
                 peak = mean_val = min_val = point
+                collapsed = True
             else:
                 peak = float(np.max(wave))
                 mean_val = float(np.mean(wave))
                 min_val = float(np.min(wave))
+                collapsed = False
 
             entry: dict = {
                 "run_index": run_index,
                 "params": run.get("params", {}),
             }
-            # When peak/mean/min collapse (point query via ``at=`` or .op
-            # single-sample raw), drop the redundant trio and surface just
-            # ``value``. Otherwise keep peak/mean/min so callers can see
-            # the per-run waveform shape.
-            if peak == mean_val == min_val:
+            # Point query -> surface just ``value``; full-waveform aggregation
+            # -> always keep peak/mean/min, even when they happen to be equal,
+            # so every run in a full-waveform sweep has the same row shape.
+            if collapsed:
                 entry["value"] = peak
             else:
                 entry["peak"] = peak

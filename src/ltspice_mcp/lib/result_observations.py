@@ -254,9 +254,10 @@ def surface_observations(
                 "code": "value_scan_skipped",
                 "kind": "coverage",
                 "detail": (
-                    "Result has many points; traces were not scanned for NaN/Inf or "
-                    "extreme values. Inspect specific signals with signal_stats/query_value "
-                    "if a degenerate result is suspected."
+                    "Result is too large to scan (trace samples exceed the value-scan "
+                    "budget); traces were not scanned for NaN/Inf or extreme values. "
+                    "Inspect specific signals with signal_stats/query_value if a "
+                    "degenerate result is suspected."
                 ),
                 "evidence": {"point_count": summary.get("point_count")},
             }
