@@ -9,6 +9,7 @@ from ltspice_mcp.lib.spice_validator import (
     list_rules,
     validate_directive,
     validate_netlist_arity,
+    validate_netlist_bias_topology,
     validate_netlist_dangling_nodes,
 )
 
@@ -294,6 +295,238 @@ class TestDanglingNodes:
         # token is counted, and every token vetoes a warning on its name.
         issues = self._dangling("A1 in out xgate\nV1 in 0 1\nR1 out 0 1k\n.end")
         assert issues == []
+
+
+class TestBiasTopology:
+    """Nets with no DC path to ground are statically detectable: a node
+    touched by two or more element terminals that still cannot reach ground
+    through any DC-conductive element has undefined operating-point bias.
+
+    The graph is built by conservative over-connection — only capacitor
+    dielectrics, MOSFET gate oxides, and current-source branches are DC
+    opens; bias-dependent diodes / transistor channels / switches all
+    conduct — so a flag is provable, never a guess. Warning severity;
+    degree-1 nodes belong to the dangling pass, not this one."""
+
+    def _bias(self, text: str):
+        return validate_netlist_bias_topology(lex(text + "\n").cards)
+
+    # --- must FIRE: true degeneracies ---
+
+    def test_mosfet_gate_on_coupling_cap_only_flagged(self):
+        # Gate reached only through a coupling cap, no bias resistor: the
+        # gate oxide is a DC open, so the gate net floats at DC.
+        issues = self._bias(
+            "V1 vdd 0 5\nVin in 0 AC 1\nC1 in g 1u\nM1 d g s 0 NMOS\nRd vdd d 1k\nRs s 0 1k\n.op"
+        )
+        assert len(issues) == 1
+        msg = str(issues[0]["message"])
+        assert "'g'" in msg
+        assert "M1" in msg
+        assert "no DC path to ground" in msg
+
+    def test_capacitive_divider_midnode_flagged(self):
+        # C-C divider to ground with no resistive tie: the mid node floats.
+        issues = self._bias("V1 in 0 1\nC1 in mid 1n\nC2 mid 0 1n\n.op")
+        assert len(issues) == 1
+        msg = str(issues[0]["message"])
+        assert "'mid'" in msg
+        assert "capacitor" in msg.lower()
+
+    def test_current_source_only_node_flagged(self):
+        # A node driven by a current source (plus a cap) has no path that
+        # pins its voltage — DC voltage is undefined.
+        issues = self._bias("I1 0 n 1m\nC1 n 0 1u\n.op")
+        assert len(issues) == 1
+        msg = str(issues[0]["message"])
+        assert "'n'" in msg
+        assert "I1" in msg
+
+    def test_isolated_transformer_secondary_collapses_to_one_issue(self):
+        # Galvanically isolated secondary with no reference to node 0:
+        # the whole domain floats and reports a SINGLE grouped issue.
+        issues = self._bias(
+            "V1 p1 0 1\nL1 p1 0 1m\nL2 s1 s2 1m\nK1 L1 L2 0.99\nRload s1 s2 1k\n.op"
+        )
+        assert len(issues) == 1
+        msg = str(issues[0]["message"])
+        assert "group" in msg.lower()
+        assert "s1" in msg and "s2" in msg
+
+    # --- must STAY CLEAN: no false positive ---
+
+    def test_rc_lowpass_clean(self):
+        assert self._bias("V1 in 0 1\nR1 in out 1k\nC1 out 0 1n\n.op") == []
+
+    def test_biased_mosfet_gate_clean(self):
+        # Gate tied to a rail through a bias resistor: it has a DC path.
+        assert (
+            self._bias(
+                "V1 vdd 0 5\nVin in 0 AC 1\nC1 in g 1u\nRg vdd g 1meg\n"
+                "M1 d g s 0 NMOS\nRd vdd d 1k\nRs s 0 1k\n.op"
+            )
+            == []
+        )
+
+    def test_common_source_amp_clean(self):
+        assert (
+            self._bias(
+                "V1 vdd 0 5\nVin in 0 AC 1\nRg1 vdd g 1meg\nRg2 g 0 1meg\n"
+                "Cin in g 1u\nM1 d g s 0 NMOS\nRd vdd d 1k\nRs s 0 1k\nCs s 0 10u\n.op"
+            )
+            == []
+        )
+
+    def test_switched_cap_clean(self):
+        # A switch can be closed: conservative edge, so the sampling cap
+        # node is not flagged floating.
+        assert (
+            self._bias(
+                "V1 vdd 0 5\nVc clk 0 PULSE(0 5 0 1n 1n 1u 2u)\nS1 vdd n clk 0 SW\nC1 n 0 1p\n.op"
+            )
+            == []
+        )
+
+    def test_subckt_grounded_through_port_clean(self):
+        # An internal node reaches "ground" only through a port — the port
+        # is a sink, so no false positive inside the body.
+        assert (
+            self._bias(
+                ".subckt rcfilter in out\nR1 in out 1k\nC1 out ref 1n\n"
+                "R2 out ref 1meg\n.ends rcfilter"
+            )
+            == []
+        )
+
+    def test_x_instance_clique_reaches_ground_clean(self):
+        # An X instance is a clique over its terminals: a node reaching
+        # ground only through the subckt body approximation is not flagged.
+        assert self._bias("V1 a 0 1\nR1 a 0 1k\nX1 a b SUB\nC1 b 0 1n\n.op") == []
+
+    def test_diode_coupled_node_clean(self):
+        # Reaches ground only through a diode (bias-dependent -> conservative
+        # edge), so not flagged.
+        assert self._bias("V1 in 0 1\nD1 in out DMOD\nR1 out 0 1k\n.op") == []
+
+    def test_degree_one_stub_owned_by_dangling_not_bias(self):
+        # A genuinely open degree-1 node is the dangling pass's job; the
+        # bias-topology pass must not double-flag it.
+        assert self._bias("V1 in 0 1\nR1 in out 1k\n.op") == []
+
+    def test_fully_grounded_deck_clean(self):
+        assert self._bias("V1 in 0 1\nR1 in mid 1k\nR2 mid 0 1k\n.op") == []
+
+    # --- adversarial-verify regressions ---
+
+    def test_subckt_grounded_via_internal_node_0_clean(self):
+        # A subckt that references ground through node 0 INSIDE its body
+        # (not via a passed port) still biases the external node — node 0 is
+        # global. Common in op-amp / regulator / sensor macromodels.
+        assert (
+            self._bias(
+                ".subckt LOAD sig\nR1 sig 0 1k\n.ends\nV1 vin 0 AC 1\nC1 vin a 1u\nX1 a LOAD\n.op"
+            )
+            == []
+        )
+
+    def test_single_port_subckt_grounded_internally_clean(self):
+        # A one-port X instance has no clique peer, so internal-node-0
+        # grounding is the only way its port can pass a DC reference up.
+        assert (
+            self._bias(
+                ".subckt PULLDN p\nR1 p 0 1k\n.ends\n"
+                "V1 vin 0 AC 1\nC1 vin n1 1u\nX1 n1 PULLDN\n.op"
+            )
+            == []
+        )
+
+    def test_capacitive_ladder_collapses_to_one_issue(self):
+        # A physically-contiguous capacitive region is one floating domain,
+        # not one issue per conductive fragment.
+        issues = self._bias("C1 a b 1u\nC2 b c 1u\nC3 c d 1u\nV1 s 0 1\nR9 s 0 1k\n.op")
+        assert len(issues) == 1, issues
+        assert "group" in str(issues[0]["message"]).lower()
+
+    def test_ac_coupled_chain_collapses_to_one_issue(self):
+        # A floating multi-stage chain that spans capacitor boundaries
+        # reports once, not once per R-bridged fragment.
+        issues = self._bias(
+            "C1 n1 n2 1u\nR1 n2 n3 1k\nC2 n3 n4 1u\nR2 n4 n5 1k\nC3 n5 n6 1u\n"
+            "V1 s 0 1\nR9 s 0 1k\n.op"
+        )
+        assert len(issues) == 1, issues
+        msg = str(issues[0]["message"])
+        for node in ("n2", "n3", "n4", "n5"):
+            assert node in msg
+
+    def test_vccs_only_node_named_as_current_source(self):
+        # A node reached only through a VCCS (G) output is a current-source
+        # degeneracy, named as such — not the generic message.
+        issues = self._bias("V1 in 0 1\nR1 in 0 1k\nG1 0 n3 in 0 1m\nC1 n3 0 1u\n.op")
+        assert len(issues) == 1, issues
+        msg = str(issues[0]["message"])
+        assert "current source G1" in msg
+
+    def test_degree_one_member_not_named_in_bias_group(self):
+        # A degree-1 node belongs to the dangling pass; even when it hangs
+        # off a floating domain, the bias group message must not name it.
+        issues = self._bias("V1 in 0 1\nR1 in 0 1k\nC1 m1 m2 1u\nC2 m2 0 1u\nR2 m1 m3 1k\n.op")
+        assert len(issues) == 1, issues
+        assert "m3" not in str(issues[0]["message"])
+
+    # --- behavioral B-source: I= is a current source (no DC voltage path) ---
+
+    def test_behavioral_current_source_only_node_flagged(self):
+        # B... I= is a current source (ngspice ASRC: I given => current
+        # source); a node reached only through it and a cap is DC-undefined,
+        # the same degeneracy as the independent I element.
+        issues = self._bias("B1 0 n I=1m\nC1 n 0 1u\n.op")
+        assert len(issues) == 1, issues
+        assert "'n'" in str(issues[0]["message"])
+        assert "no DC path to ground" in str(issues[0]["message"])
+
+    def test_behavioral_voltage_source_node_clean(self):
+        # B... V= is a voltage source — it pins the node-pair voltage, so it
+        # conducts a DC reference like any voltage source.
+        assert self._bias("B1 n 0 V=5\nC1 n 0 1u\n.op") == []
+
+    def test_behavioral_current_source_with_rpar_clean(self):
+        # LTspice's Rpar adds a parallel resistor — the explicit DC path
+        # workaround — so an I= source with Rpar is not floating.
+        assert self._bias("B1 0 n I=1m Rpar=1k\nC1 n 0 1u\n.op") == []
+
+    def test_behavioral_current_source_with_cpar_still_flagged(self):
+        # Cpar is a parallel capacitor — open at DC — so it does NOT rescue
+        # the node; only Rpar does.
+        issues = self._bias("B1 0 n I=1m Cpar=1p\nC1 n 0 1u\n.op")
+        assert len(issues) == 1, issues
+
+    # --- .GLOBAL is name-scoping, not a ground reference ---
+
+    def test_floating_global_rail_flagged(self):
+        # .global only shares the name across scopes; an undriven global rail
+        # still has no DC path to ground (node 0 is the only inherent ref).
+        issues = self._bias(".global vdd\nI1 0 vdd 1m\nC1 vdd 0 1u\n.op")
+        assert len(issues) == 1, issues
+        assert "vdd" in str(issues[0]["message"])
+
+    def test_driven_global_rail_clean(self):
+        # A global rail driven to a defined potential at top level reaches
+        # ground and must not be flagged.
+        assert self._bias(".global vdd\nVdd vdd 0 5\nR1 vdd out 1k\nR2 out 0 1k\n.op") == []
+
+    def test_global_driven_inside_subckt_not_false_positive(self):
+        # A global's driver may live in a different scope than where it is
+        # used. The deck-wide reachability must see the subckt-internal drive
+        # (here through a one-port subckt) so the top-level net is not
+        # falsely flagged.
+        assert (
+            self._bias(
+                ".global vdd\n.subckt REG out\nV1 out 0 5\n.ends\n"
+                "X1 vdd REG\nR1 vdd a 1k\nC1 a 0 1u\n.op"
+            )
+            == []
+        )
 
 
 class TestApplyValueRefusesMalformedBodies:
