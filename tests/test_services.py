@@ -93,10 +93,13 @@ class TestResolveJob:
         _make_job(state_no_sim)
         with pytest.raises(BatchJobError) as exc:
             services.resolve_batch_job("j1", state_no_sim)
-        assert str(exc.value) == (
-            "Job 'j1' is a single simulation job — its results are "
-            "available via check_job / simulation_summary."
-        )
+        msg = str(exc.value)
+        assert "single simulation job" in msg
+        # The redirect must name only tools that accept a job id, not
+        # simulation_summary (which takes a raw_file).
+        assert "check_job" in msg
+        assert "query_value" in msg
+        assert "simulation_summary" not in msg
 
     def test_resolve_job_finds_sim(self, state_no_sim: SessionState):
         _make_job(state_no_sim)
