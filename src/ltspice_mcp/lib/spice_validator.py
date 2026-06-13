@@ -20,7 +20,8 @@ mismatches, etc.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Iterator
+from dataclasses import dataclass, field
 from typing import Literal
 
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, lex, tokenize_body
@@ -377,6 +378,33 @@ def drop_title_card(cards: list[SpiceCard]) -> list[SpiceCard]:
     return [card for card in cards if not (card.kind == "instance" and card.line_start == 1)]
 
 
+def _scan_global_nodes(cards: list[SpiceCard]) -> set[str]:
+    """Collect lowercased node names declared via ``.GLOBAL`` directives.
+
+    Shared by the dangling-node and bias-topology passes — a ``.GLOBAL``
+    node is connected across every scope by convention, so neither pass
+    should treat it as locally unterminated or floating.
+    """
+    nodes: set[str] = set()
+    for card in cards:
+        if card.kind != "directive":
+            continue
+        if not card.body.lstrip().lower().startswith(".global"):
+            continue
+        try:
+            tokens = tokenize_body(card.body)
+        except SpiceLexError:
+            continue
+        if not tokens or tokens[0].text.lower() != ".global":
+            continue
+        for tok in tokens[1:]:
+            if tok.kind == TokenKind.COMMENT_TRAIL:
+                break
+            if tok.kind == TokenKind.BARE:
+                nodes.add(tok.text.lower())
+    return nodes
+
+
 def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, object]]:
     """Flag nodes referenced by exactly one element terminal in their scope.
 
@@ -397,23 +425,7 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
     the lint cannot classify can therefore only hide a warning, never
     create a false one.
     """
-    global_nodes: set[str] = set()
-    for card in cards:
-        if card.kind != "directive":
-            continue
-        if not card.body.lstrip().lower().startswith(".global"):
-            continue
-        try:
-            tokens = tokenize_body(card.body)
-        except SpiceLexError:
-            continue
-        if not tokens or tokens[0].text.lower() != ".global":
-            continue
-        for tok in tokens[1:]:
-            if tok.kind == TokenKind.COMMENT_TRAIL:
-                break
-            if tok.kind == TokenKind.BARE:
-                global_nodes.add(tok.text.lower())
+    global_nodes = _scan_global_nodes(cards)
 
     # scope → lowercased node → first reference + total reference count.
     occurrences: dict[tuple[str, ...], dict[str, _NodeUse]] = {}
@@ -497,6 +509,426 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
                 }
             )
     return issues
+
+
+class _DSU:
+    """Minimal union-find over node names for DC-reachability grouping."""
+
+    def __init__(self) -> None:
+        self._parent: dict[str, str] = {}
+
+    def find(self, x: str) -> str:
+        parent = self._parent
+        parent.setdefault(x, x)
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:  # path compression
+            parent[x], x = root, parent[x]
+        return root
+
+    def union(self, a: str, b: str) -> None:
+        ra, rb = self.find(a), self.find(b)
+        if ra != rb:
+            self._parent[ra] = rb
+
+
+# Sentinel node that every ground / sink unions into, so "has a DC path to
+# ground" reduces to "shares a DSU root with this". A NUL byte can never
+# occur in a real node name, so the sentinel cannot collide with one.
+_GROUND_SINK = "\x00ground\x00"
+
+# Element prefixes whose terminals carry NO DC current path: a capacitor's
+# dielectric, a current source's branch, and the current outputs of a VCCS
+# (G) / CCCS (F). These are the only provable DC opens — every other element
+# gets a conservative conductive edge (see ``_dc_edges``).
+_NO_DC_PATH_PREFIXES = frozenset({"C", "I", "G", "F"})
+
+# Terminal slot of a MOSFET's insulated gate (``M nd ng ns nb``): a true DC
+# open that conducts to nothing, and the node a floating-gate message names.
+_MOSFET_GATE_INDEX = 1
+
+
+def _star(nodes: list[str]) -> list[tuple[str, str]]:
+    """Edges that union ``nodes`` into one component (star from the first)."""
+    return [(nodes[0], n) for n in nodes[1:]]
+
+
+def _b_source_is_dc_open(inst: InstanceLine) -> bool:
+    """True for a behavioral ``B`` source that carries no DC path between its
+    nodes: a current source (``I=``) with no parallel resistor (``Rpar``).
+
+    ngspice's arbitrary source is a current source when ``I=`` is given and a
+    voltage source when ``V=`` is given. LTspice additionally allows ``Rpar``
+    (an explicit parallel resistor — the documented fix for a floating
+    current-source node), which restores a DC path. ``Cpar`` is a parallel
+    *capacitor*, open at DC, so it does not. Anything else (``V=``, a
+    behavioral ``R=``, a power source) conducts and keeps the default edge.
+    """
+    keys = {k.lower() for k in inst.params}
+    return "i" in keys and "v" not in keys and "rpar" not in keys
+
+
+def _dc_edges(
+    prefix: str, terminals: list[str], *, b_dc_open: bool = False
+) -> list[tuple[str, str]]:
+    """Node pairs an element makes DC-conductive, for the bias-topology graph.
+
+    Conservative over-connection: an element contributes edges wherever DC
+    conduction is *possible*. Only provable opens contribute none — a
+    capacitor's dielectric, a MOSFET's gate oxide, current-source /
+    current-output branches, and a behavioral current source (``b_dc_open``).
+    A missing edge can only hide a no-DC-path warning, never invent one, so
+    bias-dependent devices (diodes, transistor channels, switches) are all
+    treated as conductive.
+    """
+    if prefix in _NO_DC_PATH_PREFIXES:
+        return []
+    if prefix == "B" and b_dc_open:
+        # Behavioral CURRENT source (I=, no Rpar): pins current, not voltage —
+        # the same DC open as the independent I element.
+        return []
+    if prefix in ("E", "H"):
+        # Controlled VOLTAGE source: only the output pair is pinned; the
+        # controlling inputs are high-impedance sense nodes.
+        return _star(terminals[:2])
+    if prefix == "M":
+        # The insulated gate is a true DC open; the drain, source, and bulk
+        # terminals form one conductive group.
+        return _star([t for i, t in enumerate(terminals) if i != _MOSFET_GATE_INDEX])
+    return _star(terminals)
+
+
+def _apply_instance_edges(
+    dsu: _DSU,
+    inst: InstanceLine,
+    terminals: list[str],
+    subckt_grounds: dict[str, frozenset[int]],
+) -> list[str]:
+    """Union an instance's DC-conductive terminal pairs into ``dsu``.
+
+    ``terminals`` may be name-keyed (per-scope graph) or scope-qualified
+    (deck-wide global graph); the source kind comes from ``inst``. Returns
+    the external nodes an ``X`` instance is grounded through — the ports its
+    subckt body ties to ground (node ``0`` / ``.GLOBAL``) internally, which
+    the black-box clique alone cannot see. The caller folds those into its
+    ground set.
+    """
+    prefix = inst.ref[:1].upper()
+    b_dc_open = prefix == "B" and _b_source_is_dc_open(inst)
+    for a, b in _dc_edges(prefix, terminals, b_dc_open=b_dc_open):
+        if _NON_NODE_CHARS.isdisjoint(a) and _NON_NODE_CHARS.isdisjoint(b):
+            dsu.union(a.lower(), b.lower())
+    if prefix == "X" and inst.model:
+        nested = subckt_grounds.get(inst.model.lower(), frozenset())
+        return [terminals[i].lower() for i in nested if i < len(terminals)]
+    return []
+
+
+def _iter_instances(
+    cards: list[SpiceCard],
+) -> Iterator[tuple[SpiceCard, InstanceLine, list[str]]]:
+    """Yield ``(card, view, terminals)`` for each instance card that lexes,
+    skipping the ones the view rejects. Shared by every DC-graph walk."""
+    for card in cards:
+        if card.kind != "instance":
+            continue
+        try:
+            inst = InstanceLine.from_card(card)
+        except SpiceLexError:
+            continue
+        yield card, inst, _instance_terminals(inst)[0]
+
+
+def _union_instance(
+    dsu: _DSU,
+    inst: InstanceLine,
+    terminals: list[str],
+    subckt_grounds: dict[str, frozenset[int]],
+) -> None:
+    """Apply an instance's DC edges and fold its ``X``-internal grounds into
+    the ground sentinel — the ground-reachability walks' inner step."""
+    for node in _apply_instance_edges(dsu, inst, terminals, subckt_grounds):
+        dsu.union(_GROUND_SINK, node)
+
+
+@dataclass
+class _BiasGraph:
+    """Per-scope DC-reachability accumulator for the bias-topology pass."""
+
+    dsu: _DSU = field(default_factory=_DSU)
+    display: dict[str, str] = field(default_factory=dict)
+    first_card: dict[str, SpiceCard] = field(default_factory=dict)
+    # node -> the refdes of every terminal that references it (the source
+    # prefix is recovered as ref[0]); its length is the node's degree.
+    referrers: dict[str, list[str]] = field(default_factory=dict)
+    gate_of: dict[str, str] = field(default_factory=dict)
+    sinks: set[str] = field(default_factory=set)
+    # Every element's full terminal set (capacitors included), so a
+    # physically-contiguous but internally-AC-coupled floating region can be
+    # collapsed to one issue — the DC graph alone cannot represent it.
+    phys_groups: list[list[str]] = field(default_factory=list)
+
+
+def _subckt_internal_grounds(
+    cards: list[SpiceCard], global_nodes: set[str]
+) -> dict[str, frozenset[int]]:
+    """Map each ``.SUBCKT`` name to the indices of its ports that reach
+    ground (node ``0`` / ``.GLOBAL``) through the body's own elements.
+
+    Node ``0`` is global, so a subckt can reference ground internally
+    without a dedicated ground port — op-amp / regulator / sensor
+    macromodels routinely do. An ``X`` instance of such a subckt biases the
+    external node wired to that port even though the black-box clique cannot
+    see inside, so the port must be propagated as a ground source. A
+    fixpoint resolves subckts that ground a port only through a nested ``X``.
+    """
+    # Parse each body once up front; the fixpoint below only re-runs the
+    # cheap union step, never re-lexes.
+    defs: dict[str, tuple[list[str], list[tuple[InstanceLine, list[str]]]]] = {}
+    for card in cards:
+        if card.kind != "subckt":
+            continue
+        try:
+            sub = SubcktCard.from_card(card)
+        except SpiceLexError:
+            continue
+        body_cards = [c for c in cards if c.scope == (*card.scope, sub.name)]
+        body = [(inst, terminals) for _c, inst, terminals in _iter_instances(body_cards)]
+        defs[sub.name.lower()] = ([p.lower() for p in sub.ports], body)
+
+    sinks = _GROUND_NODES | global_nodes
+    grounds: dict[str, frozenset[int]] = {name: frozenset() for name in defs}
+    for _ in range(len(defs) + 1):  # bounded fixpoint over nested grounding
+        changed = False
+        for name, (ports, body) in defs.items():
+            dsu = _DSU()
+            for sink in sinks:
+                dsu.union(_GROUND_SINK, sink)
+            for inst, terminals in body:
+                _union_instance(dsu, inst, terminals, grounds)
+            groot = dsu.find(_GROUND_SINK)
+            reached = frozenset(i for i, port in enumerate(ports) if dsu.find(port) == groot)
+            if reached != grounds[name]:
+                grounds[name] = reached
+                changed = True
+        if not changed:
+            break
+    return grounds
+
+
+def _qualify(node: str, scope: tuple[str, ...], global_nodes: set[str]) -> str:
+    """Key a node for the deck-wide global-reachability graph.
+
+    Ground and global names stay shared (bare); every local name is
+    namespaced by its scope so identically-named locals in different
+    subckts never merge. The NUL / SOH separators cannot occur in a real
+    node name, so a namespaced local can never collide with a bare global
+    or the ground sentinel.
+    """
+    key = node.lower()
+    if key in _GROUND_NODES or key in global_nodes:
+        return key
+    return "\x00".join(s.lower() for s in scope) + "\x01" + key
+
+
+def _grounded_globals(
+    cards: list[SpiceCard],
+    global_nodes: set[str],
+    subckt_grounds: dict[str, frozenset[int]],
+) -> set[str]:
+    """The ``.GLOBAL`` nodes that reach ground (node ``0``) somewhere in the
+    whole deck.
+
+    ``.GLOBAL`` is only name-scoping — it confers no DC reference — so a
+    global is a valid ground sink for the bias pass *only* if it actually
+    reaches node 0 through a DC-conductive element in some scope (its driver
+    may live in a different scope than a given reference). A global that
+    reaches ground nowhere is genuinely floating and must stay a normal node
+    so the pass can flag it. Local names are scope-qualified here so they do
+    not merge across subckts; globals and ground stay shared.
+    """
+    if not global_nodes:
+        return set()
+    dsu = _DSU()
+    for sink in _GROUND_NODES:
+        dsu.union(_GROUND_SINK, sink)
+    for card, inst, terminals in _iter_instances(cards):
+        qualified = [_qualify(t, card.scope, global_nodes) for t in terminals]
+        _union_instance(dsu, inst, qualified, subckt_grounds)
+    ground_root = dsu.find(_GROUND_SINK)
+    return {g for g in global_nodes if dsu.find(g) == ground_root}
+
+
+def validate_netlist_bias_topology(cards: list[SpiceCard]) -> list[dict[str, object]]:
+    """Flag nets with no DC path to ground — undefined operating-point bias.
+
+    Companion to the dangling-node pass (which owns degree-1 nodes): this
+    finds nodes touched by two or more element terminals that still cannot
+    reach ground (node ``0``) through any DC-conductive element, so their DC
+    operating point is undefined.
+
+    The graph is built by conservative over-connection (see ``_dc_edges``):
+    only capacitor dielectrics, MOSFET gate oxides, and current-source
+    branches are DC opens; everything else — including bias-dependent
+    diodes, transistor channels, and switches — conducts. So a flagged net
+    is provably floating, never a guess, which keeps the pass safe to run
+    always-on. Each physically-contiguous floating domain collapses to a
+    single issue. Warning severity; the caller attaches it.
+
+    Scopes (top level and each ``.SUBCKT`` body) are handled separately,
+    with the subckt's ports treated as ground-equivalent sinks (a body node
+    reaching a port reaches the outside world). ``.GLOBAL`` nodes are sinks
+    too, and an ``X`` instance inherits ground through any port its subckt
+    body ties to node ``0`` internally. ``.asc`` connectivity is invisible
+    to this text pass, so the handler runs it on ``.cir``/``.net`` only.
+    """
+    global_nodes = _scan_global_nodes(cards)
+    subckt_grounds = _subckt_internal_grounds(cards, global_nodes)
+    # .GLOBAL is name-scoping, not a ground reference: a global is a sink only
+    # where it actually reaches node 0 somewhere in the deck. A floating
+    # global rail stays a normal node so it can be flagged.
+    grounded_globals = _grounded_globals(cards, global_nodes, subckt_grounds)
+    graphs: dict[tuple[str, ...], _BiasGraph] = {}
+
+    for card in cards:
+        if card.kind != "subckt":
+            continue
+        try:
+            sub = SubcktCard.from_card(card)
+        except SpiceLexError:
+            continue
+        body_graph = graphs.setdefault((*card.scope, sub.name), _BiasGraph())
+        body_graph.sinks.update(port.lower() for port in sub.ports)
+
+    for card, inst, terminals in _iter_instances(cards):
+        graph = graphs.setdefault(card.scope, _BiasGraph())
+        prefix = inst.ref[:1].upper()
+        cleaned: list[str] = []
+        for idx, node in enumerate(terminals):
+            if not _NON_NODE_CHARS.isdisjoint(node):
+                continue
+            key = node.lower()
+            cleaned.append(key)
+            graph.display.setdefault(key, node)
+            graph.first_card.setdefault(key, card)
+            graph.referrers.setdefault(key, []).append(inst.ref)
+            if prefix == "M" and idx == _MOSFET_GATE_INDEX:
+                graph.gate_of.setdefault(key, inst.ref)
+        if cleaned:
+            graph.phys_groups.append(cleaned)
+        graph.sinks.update(_apply_instance_edges(graph.dsu, inst, terminals, subckt_grounds))
+
+    issues: list[dict[str, object]] = []
+    for scope, graph in graphs.items():
+        for sink in graph.sinks | grounded_globals | _GROUND_NODES:
+            graph.dsu.union(_GROUND_SINK, sink)
+        ground_root = graph.dsu.find(_GROUND_SINK)
+
+        # Candidates: referenced nodes with no DC path to ground and degree
+        # >= 2 (degree-1 nodes are the dangling pass's job).
+        candidates = {
+            key
+            for key, refs in graph.referrers.items()
+            if len(refs) >= 2 and graph.dsu.find(key) != ground_root
+        }
+        if not candidates:
+            continue
+
+        # Group candidates into physical domains so an internally-AC-coupled
+        # floating region reports once. Only candidate<->candidate edges
+        # merge, so a domain never bridges through a grounded or degree-1
+        # node — the capacitor that fragments the DC graph reunites them here.
+        domain = _DSU()
+        for group in graph.phys_groups:
+            members = [k for k in group if k in candidates]
+            for other in members[1:]:
+                domain.union(members[0], other)
+        islands: dict[str, list[str]] = {}
+        for key in candidates:
+            islands.setdefault(domain.find(key), []).append(key)
+
+        for members in islands.values():
+            issues.append(_bias_issue(scope, members, graph))
+    return issues
+
+
+def _bias_issue(
+    scope: tuple[str, ...], members: list[str], graph: _BiasGraph
+) -> dict[str, object]:
+    """Build one bias-topology issue for a floating island, classifying the
+    message by what the island is made of: a MOSFET gate, a current-source
+    node, a purely capacitive node, or a generic multi-node domain."""
+    where = f" inside .SUBCKT {scope[-1]}" if scope else ""
+    rep = min(members, key=lambda k: graph.first_card[k].line_start)
+    card = graph.first_card[rep]
+    common: dict[str, object] = {"line": card.line_start, "directive": _card_directive(card)}
+
+    if len(members) == 1:
+        key = members[0]
+        display = graph.display[key]
+        refs = graph.referrers[key]
+        prefixes = {r[:1].upper() for r in refs}
+        if key in graph.gate_of:
+            gate_ref = graph.gate_of[key]
+            others = [r for r in refs if r != gate_ref]
+            via = f", reached only through {', '.join(others)}" if others else ""
+            return {
+                **common,
+                "message": (
+                    f"Node '{display}' is the gate of {gate_ref} and has no DC path "
+                    f"to ground{where} — the gate oxide is an open{via}. "
+                    "Operating-point bias is undefined."
+                ),
+                "suggestion": (
+                    "Add a DC bias path to the gate (e.g. a resistor to a bias node "
+                    "or rail), or set its DC level explicitly."
+                ),
+            }
+        # I, plus the current outputs of a VCCS (G) / CCCS (F): all pin
+        # current, not voltage, so a node reached only through them floats.
+        current_sources = prefixes & {"I", "F", "G"}
+        if current_sources:
+            srcs = [r for r in refs if r[:1].upper() in current_sources]
+            return {
+                **common,
+                "message": (
+                    f"Node '{display}' is driven only by current source "
+                    f"{', '.join(srcs)} with no path that pins its voltage{where} — "
+                    "its DC voltage is undefined."
+                ),
+                "suggestion": "Add a resistive or voltage path from the node to a reference node.",
+            }
+        if prefixes == {"C"}:
+            caps = list(refs)
+            return {
+                **common,
+                "message": (
+                    f"Node '{display}' connects to ground only through capacitors "
+                    f"({', '.join(caps)}){where} — no DC path, so its DC bias is undefined."
+                ),
+                "suggestion": "Add a DC bias path (e.g. a bias resistor to a rail or ground).",
+            }
+        return {
+            **common,
+            "message": (
+                f"Node '{display}' has no DC path to ground{where} — its DC bias is undefined."
+            ),
+            "suggestion": "Add a DC path from the node to a reference node.",
+        }
+
+    names = ", ".join(sorted(graph.display[k] for k in members))
+    return {
+        **common,
+        "message": (
+            f"A group of {len(members)} nodes ({names}) has no DC path to ground "
+            f"(node 0){where} — their DC bias is undefined."
+        ),
+        "suggestion": (
+            "Reference the domain to ground (e.g. a high-value resistor to node 0), "
+            "or confirm the isolation is intentional."
+        ),
+    }
 
 
 def list_rules() -> list[dict[str, object]]:

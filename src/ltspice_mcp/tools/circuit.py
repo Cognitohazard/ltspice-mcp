@@ -46,6 +46,7 @@ from ltspice_mcp.lib.spice_validator import (
     drop_title_card,
     validate_directive,
     validate_netlist_arity,
+    validate_netlist_bias_topology,
     validate_netlist_dangling_nodes,
 )
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, get_symbol_info
@@ -3863,6 +3864,10 @@ class ValidateNetlistInput(ToolInput):
         "E/G/F/H/B value), dangling nodes in .cir/.net netlists (a node "
         "touching only one element "
         "terminal — warning, since deliberate fragments are legal), "
+        "bias-topology degeneracies in .cir/.net netlists (a net with no DC "
+        "path to ground — floating MOSFET gate, capacitive island, "
+        "current-source-only node, or isolated domain — warning, since the "
+        "operating point may still be defined by other means), "
         "duplicate/multiple analysis directives ('More than "
         "one analysis specified'), .MEAS whose analysis kind isn't present, "
         "known-bad .MEAS patterns (vdb()/phase()/group_delay()), "
@@ -3996,8 +4001,17 @@ async def handle_validate_netlist(
     # embedded in .asc SPICE-directive text would all false-positive
     # (floating pins are the schematic topology pass's job below).
     if asc_editor is None:
-        for dangling_issue in validate_netlist_dangling_nodes(drop_title_card(arity_cards)):
+        title_dropped = drop_title_card(arity_cards)
+        for dangling_issue in validate_netlist_dangling_nodes(title_dropped):
             issues.append({"severity": "warning", **dangling_issue})
+        # Bias-topology pass: a node touched by two or more terminals that
+        # still has no DC path to ground (floating gate, capacitive island,
+        # current-source-only node, isolated domain). Warning only — a
+        # flag is provable, but the deck may bias it by other means. Same
+        # non-.asc gate: schematic connectivity lives in wires this pass
+        # cannot see.
+        for bias_issue in validate_netlist_bias_topology(title_dropped):
+            issues.append({"severity": "warning", **bias_issue})
 
     # .asc schematic-graph checks (named-net shorts, floating pins, dangling
     # labels) — the directive lint above only sees embedded SPICE text, so the
