@@ -538,6 +538,39 @@ class TestValidateNetlist:
         assert dangling[0]["severity"] == "warning"
         assert "R1" in dangling[0]["message"]
 
+    async def test_bias_topology_floating_gate_warned(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A MOSFET gate reached only through a coupling cap has no DC path
+        # to ground — a warning naming the gate and the transistor.
+        data = await self._validate(
+            state_no_sim,
+            work_dir,
+            "floatgate.cir",
+            "* float gate\nV1 vdd 0 5\nVin in 0 AC 1\nC1 in g 1u\n"
+            "M1 d g s 0 NMOS\nRd vdd d 1k\nRs s 0 1k\n.op\n.end\n",
+        )
+        bias = [iss for iss in data["issues"] if "'g'" in iss["message"]]
+        assert len(bias) == 1, data["issues"]
+        assert bias[0]["severity"] == "warning"
+        assert "M1" in bias[0]["message"]
+        assert "no DC path to ground" in bias[0]["message"]
+
+    async def test_bias_topology_not_run_on_asc(self, state_no_sim: SessionState, work_dir: Path):
+        # A capacitive island (degree-2 floating node) embedded in .asc
+        # directive text would fire the bias pass on a netlist — but the
+        # schematic's wires are invisible here, so the pass must not run.
+        data = await self._validate(
+            state_no_sim,
+            work_dir,
+            "caps.asc",
+            "Version 4\nSHEET 1 880 680\n"
+            "TEXT 16 16 Left 2 !.op\n"
+            "TEXT 16 48 Left 2 !C1 na mid 1n\n"
+            "TEXT 16 80 Left 2 !C2 mid nb 1n\n",
+        )
+        assert data["issue_count"] == 0, data["issues"]
+
     async def test_title_line_words_not_phantom_nodes(
         self, state_no_sim: SessionState, work_dir: Path
     ):
