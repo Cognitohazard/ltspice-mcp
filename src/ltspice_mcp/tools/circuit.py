@@ -991,6 +991,23 @@ def _require_asc(path: Path) -> None:
         raise NetlistError(f"This operation requires an .asc schematic, got '{path.suffix}'. ")
 
 
+# spicelib's SpiceEditor.set_parameter appends this exact boilerplate comment
+# to a .PARAM line when it INSERTS a new parameter. Strip it on save so it
+# doesn't leak into the netlist. End-anchored and gated to .param lines, so a
+# user-authored "; note" on any line (including a real .param) is preserved.
+_BATCH_INSTRUCTION_RE = re.compile(r"[ \t]*;[ \t]*Batch instruction[ \t]*$")
+
+
+def _strip_batch_instruction(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.lstrip().lower().startswith(".param"):
+            stripped = line.rstrip("\r\n")
+            ending = line[len(stripped) :]
+            lines[i] = _BATCH_INSTRUCTION_RE.sub("", stripped) + ending
+    return "".join(lines)
+
+
 def _atomic_save_editor(editor: Editor, target: Path) -> None:
     """Render editor to a buffer, then atomically rename onto target.
 
@@ -1001,9 +1018,12 @@ def _atomic_save_editor(editor: Editor, target: Path) -> None:
     """
     buf = io.StringIO()
     editor.save_netlist(buf)
+    text = buf.getvalue()
+    if isinstance(editor, SpiceEditor):
+        text = _strip_batch_instruction(text)
     atomic_write_text(
         target,
-        buf.getvalue(),
+        text,
         encoding=getattr(editor, "encoding", "utf-8") or "utf-8",
         durable=False,
     )
@@ -1727,7 +1747,8 @@ def _append_asc_text(
         "``kind=comment`` for annotation text; default is a SPICE directive. "
         "Works on .cir/.net and .asc; ``kind=comment`` is .asc-only. "
         "``remove`` matches against directives AND comments, so callers can "
-        "delete either kind without knowing which it is."
+        "delete either kind without knowing which it is. Adding a ``.param`` "
+        "is not supported here — use the 'parameter' tool to set .PARAM values."
     ),
     input_model=EditDirectiveInput,
     annotations=types.ToolAnnotations(
@@ -4042,6 +4063,14 @@ class DiffCircuitInput(ToolInput):
     )
 
 
+def _norm_micro(s: str) -> str:
+    """Map both micro codepoints (µ U+00B5, μ U+03BC) to ASCII 'u' so a value
+    LTspice renders with the micro sign compares equal to the same value
+    authored as 'u' (e.g. 1µ vs 1u). Used ONLY for diff equality, never on the
+    displayed strings — a real magnitude change like 1u vs 2u still differs."""
+    return s.replace("µ", "u").replace("μ", "u")
+
+
 def _component_signature(comp: dict) -> str:
     """Comparable string for a component: its Value plus any extra SYMATTR
     attributes (Value2/SpiceLine/SpiceModel). ``set_component_attribute`` edits
@@ -4112,7 +4141,10 @@ async def handle_diff_circuit(args: DiffCircuitInput, state: SessionState) -> ty
     removed = sorted(set(a) - set(b))
     changed: list[dict[str, str]] = []
     for ref in sorted(set(a) & set(b)):
-        if a[ref] != b[ref]:
+        # Normalize the micro sign for the equality test only — a value LTspice
+        # rendered as 1µ must not read as changed vs an authored 1u — while the
+        # before/after shown stays exactly what each file contains.
+        if _norm_micro(a[ref]) != _norm_micro(b[ref]):
             changed.append({"reference": ref, "before": a[ref], "after": b[ref]})
 
     # Case-insensitive directive comparison — SPICE directives are
@@ -4125,7 +4157,9 @@ async def handle_diff_circuit(args: DiffCircuitInput, state: SessionState) -> ty
         for d in directives:
             if d.strip().lower() == ".end":
                 continue
-            by_lower.setdefault(d.lower(), []).append(d)
+            # Key on the micro-normalized lowercase form so ".tran 1µ" and
+            # ".tran 1u" collapse; the original string is kept for display.
+            by_lower.setdefault(_norm_micro(d.lower()), []).append(d)
         return by_lower
 
     da_by_lower = _by_lower(da)

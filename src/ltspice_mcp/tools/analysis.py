@@ -167,10 +167,15 @@ def _run(compute, *args, **kwargs) -> dict:
         raise ResultError(str(e)) from e
 
 
+# Header line for a rendered warnings block. Shared so _strip_warning_block
+# (which splits rendered text on it) can't drift from what _warning_lines emits.
+_WARNINGS_HEADER = "Warnings:"
+
+
 def _warning_lines(warnings: list[str]) -> list[str]:
     if not warnings:
         return []
-    return ["", "Warnings:", *(f"  - {w}" for w in warnings)]
+    return ["", _WARNINGS_HEADER, *(f"  - {w}" for w in warnings)]
 
 
 class SignalStatsInput(ToolInput):
@@ -586,13 +591,17 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
         if args.job_id is not None:
             raise ResultError(
                 "query_value: 'step_axis' selects a step of a .step raw and can't be "
-                "combined with 'job_id' (the run is already selected — pass 'at')."
+                "combined with 'job_id' (the run is already selected — pass 'at').",
+                show_hint=False,
             )
         step_raw = args.raw_file
         if step_raw is None:
-            raise ResultError("query_value: 'step_axis' requires 'raw_file'.")
+            raise ResultError("query_value: 'step_axis' requires 'raw_file'.", show_hint=False)
         if args.step_value is None:
-            raise ResultError("query_value: 'step_value' is required when 'step_axis' is given.")
+            raise ResultError(
+                "query_value: 'step_value' is required when 'step_axis' is given.",
+                show_hint=False,
+            )
         from ltspice_mcp.tools.circuit import StepGetInput, handle_step_get
 
         return await handle_step_get(
@@ -610,7 +619,9 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     signal = args.signal
     if args.at is None:
-        raise ResultError("query_value: 'at' is required (or use step_axis + step_value).")
+        raise ResultError(
+            "query_value: 'at' is required (or use step_axis + step_value).", show_hint=False
+        )
     at_str = args.at
     step = args.step
     fmt = args.format
@@ -618,12 +629,14 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
     try:
         target_x = parse_spice_value(at_str)
     except ValueError as e:
-        raise ResultError(f"Invalid 'at' value: {e}") from e
+        raise ResultError(f"Invalid 'at' value: {e}", show_hint=False) from e
 
     # np.searchsorted treats NaN as greater than everything and returns the
     # last index, which looks like a valid result but isn't.
     if not math.isfinite(target_x):
-        raise ResultError(f"'at' value must be finite, got {at_str!r} (parsed as {target_x})")
+        raise ResultError(
+            f"'at' value must be finite, got {at_str!r} (parsed as {target_x})", show_hint=False
+        )
 
     raw = await services.load_raw(raw_path, state)
     signal = services.validate_signal(raw, signal)
@@ -908,7 +921,9 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
         # the value scan is affordable and surfaces NaN/extreme-value facts.
         summary = build_simulation_summary(raw, log_path, None, step=args.step, value_scan="scan")
     except Exception as e:
-        raise ResultError(f"Failed to build summary: {e}") from e
+        # Suppress the generic ResultError hint — it points at simulation_summary,
+        # which is the tool that just failed (self-referential).
+        raise ResultError(f"Failed to build summary: {e}", show_hint=False) from e
 
     suggestions = services.suggestions_from_errors(summary.get("errors"), state.libraries)
     if suggestions:
@@ -2404,12 +2419,20 @@ async def handle_bode_metrics(args: BodeMetricsInput, state: SessionState):
 
     steps_out: list[dict] = []
     step_texts: list[str] = []
+    # Distinct per-step warning -> the step indices that emitted it. A warning
+    # that fires identically on every step (e.g. the no-stopband_range sweep-
+    # endpoint note) is surfaced ONCE at the top level with its step coverage,
+    # not repeated per step in both the structured 'steps' and the text.
+    warning_steps: dict[str, list[int]] = {}
     first_error: ResultError | None = None
     for i in range(step_count):
         try:
             res = await _bode_dispatch(args, i, state, raw_path)
-            steps_out.append({"step": i, **_structured(res)})
-            step_texts.append(f"── step {i} ──\n{_result_text(res)}")
+            sc = _structured(res)
+            for w in sc.pop("warnings", None) or []:
+                warning_steps.setdefault(w, []).append(i)
+            steps_out.append({"step": i, **sc})
+            step_texts.append(f"── step {i} ──\n{_strip_warning_block(_result_text(res))}")
         except ResultError as e:
             if first_error is None:
                 first_error = e
@@ -2433,6 +2456,8 @@ async def handle_bode_metrics(args: BodeMetricsInput, state: SessionState):
     warnings: list[str] = []
     if step_count == 1:
         warnings.append("Raw is not stepped (step_count=1); 'steps' has a single entry.")
+    for w, idxs in warning_steps.items():
+        warnings.append(f"{w} ({_warning_coverage(idxs, step_count)})")
     if errored:
         warnings.append(f"{len(errored)} of {step_count} steps failed (see per-step 'error').")
     if warnings:
@@ -2538,6 +2563,23 @@ def _structured(result: types.CallToolResult) -> dict:
 def _result_text(result: types.CallToolResult) -> str:
     block = result.content[0] if result.content else None
     return block.text if isinstance(block, types.TextContent) else ""
+
+
+def _strip_warning_block(text: str) -> str:
+    """Drop the trailing ``_warning_lines`` block from an adapter's rendered
+    text. In all_steps mode the per-step warnings are hoisted (deduped) to the
+    top level, so repeating them inside every step's text is noise."""
+    return text.split(f"\n\n{_WARNINGS_HEADER}\n", 1)[0]
+
+
+def _warning_coverage(step_indices: list[int], step_count: int) -> str:
+    """Describe which steps a hoisted all_steps warning applies to. Lists the
+    actual step indices for ANY partial subset — never a bare count — so a
+    consumer can still identify exactly which sweep cases emitted it; only the
+    every-step case collapses to a compact label."""
+    if len(step_indices) == step_count:
+        return f"all {step_count} steps"
+    return "steps " + ",".join(str(i) for i in step_indices)
 
 
 @registry.tool(

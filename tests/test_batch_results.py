@@ -163,3 +163,45 @@ class TestComputeBatchStatsAt:
         assert sliced["runs"][1]["value"] == 6.0
         assert sliced["stats"]["max_across_runs"] == 10.0
         assert sliced["stats"]["min_across_runs"] == 6.0
+
+    def test_constant_waveform_run_keeps_peak_mean_min_shape(self, tmp_path: Path):
+        # Row shape is decided by an explicit point-query flag, NOT by whether
+        # peak/mean/min happen to be equal. A flat full-waveform run (at=None)
+        # has peak==mean==min by value, but it is still a waveform and must
+        # keep the {peak,mean,min} trio so every row in a sweep has the same
+        # shape — it must NOT collapse to {value} like a genuine point query.
+        const_run = tmp_path / "const.raw"
+        vary_run = tmp_path / "vary.raw"
+        self._write_transient_raw(
+            const_run, [0.0, 1.0, 2.0, 3.0], {"V(out)": [5.0, 5.0, 5.0, 5.0]}
+        )
+        self._write_transient_raw(vary_run, [0.0, 1.0, 2.0, 3.0], {"V(out)": [1.0, 4.0, 8.0, 2.0]})
+
+        runs = {
+            0: _make_run({"R": 1000.0}, raw_file=str(const_run)),
+            1: _make_run({"R": 2000.0}, raw_file=str(vary_run)),
+        }
+
+        # No ``at`` → full-waveform aggregation. The constant run keeps the
+        # same row shape as the varying run.
+        result = compute_batch_stats(runs, "V(out)")
+        assert result["at"] is None
+        assert result["run_count"] == 2
+
+        const_row = result["runs"][0]
+        vary_row = result["runs"][1]
+
+        # Constant run: trio present, all equal to the flat value; no ``value``.
+        assert const_row["peak"] == 5.0
+        assert const_row["mean"] == 5.0
+        assert const_row["min"] == 5.0
+        assert "value" not in const_row
+
+        # Varying run: same shape (trio present, no ``value``).
+        assert "peak" in vary_row
+        assert "mean" in vary_row
+        assert "min" in vary_row
+        assert "value" not in vary_row
+
+        # Both rows expose exactly the same keys → uniform sweep row shape.
+        assert const_row.keys() == vary_row.keys()

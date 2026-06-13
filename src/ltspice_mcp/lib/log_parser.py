@@ -87,7 +87,20 @@ class MeasurementsOutput(TypedDict):
 
 _MAX_DIAGNOSTICS = 50
 
-# Error keywords to search for in log files (case-insensitive)
+# Above this many ESTIMATED trace samples (axis points × number of non-axis
+# traces) a completed result is loaded axis-only and the per-trace value scan
+# (NaN/Inf/extreme-magnitude detection) is skipped, with the gap surfaced as a
+# coverage observation. At or below it, all traces are loaded and scanned so the
+# value facts are surfaced and no skip is reported. Budgeting on TOTAL samples,
+# not axis points alone, bounds the actual load: a wide node dump with a
+# moderate point count costs as much memory as a long single-probe .tran, and
+# both must skip. 5M samples ≈ 40 MB (real) / 80 MB (complex AC).
+_VALUE_SCAN_SAMPLE_BUDGET = 5_000_000
+
+# Error keywords to search for in log files (case-insensitive). The trailing
+# entries are LTspice convergence-abort phrases (the one-word "Timestep too
+# small", the failing-node line, and the "Last Node Voltages" dump) that name
+# the actual failure and land at the very END of the log.
 _ERROR_KEYWORDS = [
     "error",
     "fatal",
@@ -95,6 +108,9 @@ _ERROR_KEYWORDS = [
     "singular matrix",
     "convergence",
     "time step too small",
+    "timestep too small",
+    "trouble with node",
+    "last node voltages",
     "missing",
     "can't find",
 ]
@@ -529,29 +545,46 @@ def extract_error_context(log_file: Path, max_lines: int = 20) -> str:
                 excerpt.insert(0, "...")
             return "\n".join(excerpt)
 
-        first_error = error_indices[0]
-        start = max(0, first_error - 3)
-        end = min(len(lines), first_error + 7)
+        # Anchor a [center-3, center+7] context window on both the FIRST and
+        # the LAST keyword hit. The first hit captures a parse error's caret
+        # block; the last captures the convergence-abort tail (failing node,
+        # "Last Node Voltages") an LTspice run writes at the very end — which a
+        # first-only anchor dropped whenever an earlier benign keyword line
+        # (e.g. "Missing parameter") came first.
+        def _window(center: int) -> tuple[int, int]:
+            return max(0, center - 3), min(len(lines), center + 7)
 
-        next_error = None
-        for idx in error_indices[1:]:
-            if idx > first_error + 7:
-                next_error = idx
-                break
+        head_start, head_end = _window(error_indices[0])
+        tail_start, tail_end = _window(error_indices[-1])
 
-        if next_error is not None:
-            end = min(end, next_error)
+        if tail_start <= head_end:
+            # First and last windows touch/overlap — render one contiguous
+            # slice spanning both, capped at max_lines.
+            start = head_start
+            end = max(head_end, tail_end)
+            if end - start > max_lines:
+                end = start + max_lines
+            excerpt = lines[start:end]
+            if start > 0:
+                excerpt.insert(0, "...")
+            if end < len(lines):
+                excerpt.append("...")
+            return "\n".join(excerpt)
 
-        if end - start > max_lines:
-            end = start + max_lines
+        # Disjoint head and tail — show both, joined by an ellipsis, splitting
+        # the line budget so neither dominates.
+        head_budget = max_lines // 2
+        head_slice = lines[head_start : min(head_end, head_start + head_budget)]
+        tail_slice = lines[max(tail_start, tail_end - (max_lines - head_budget)) : tail_end]
 
-        excerpt = lines[start:end]
-
-        if start > 0:
-            excerpt.insert(0, "...")
-        if end < len(lines):
+        excerpt = []
+        if head_start > 0:
             excerpt.append("...")
-
+        excerpt.extend(head_slice)
+        excerpt.append("...")
+        excerpt.extend(tail_slice)
+        if tail_end < len(lines):
+            excerpt.append("...")
         return "\n".join(excerpt)
 
     except Exception as e:
@@ -619,17 +652,20 @@ def parse_success_summary(
         # short .op, unbounded for a long .tran (Codex M3).
         header = RawRead(str(raw_file), traces_to_read=None, dialect=dialect)
         trace_names = header.get_trace_names()
-        # Decide value-scan coverage by point count, read from the header (no
-        # trace load). A single-point result (an operating point) is cheap to
-        # load in full and is exactly the floating-node / 1e30 case worth
-        # scanning; multi-point .tran/.ac stays axis-only (the Codex M3 bound)
-        # and the surfacer records the skipped scan. Reading nPoints off the
-        # header avoids a throwaway axis-only open just to count points.
+        # Decide value-scan coverage by the ESTIMATED total sample count (axis
+        # points × number of non-axis traces) — the real memory/time cost of
+        # loading "*", not the axis length alone. At or below the budget, load
+        # all traces and scan (every normal interactive run, including a
+        # single-point operating point and the floating-node / 1e30 case worth
+        # scanning); above it (a long .tran OR a wide node dump) stay axis-only
+        # and let the surfacer record the skipped scan, bounding the worst-case
+        # load. Reading the header counts avoids a throwaway open to size it.
         try:
             point_count = header.nPoints
         except Exception:
             point_count = 1
-        if point_count <= 1:
+        trace_count = max(0, len(trace_names) - 1)  # exclude the axis
+        if point_count * trace_count <= _VALUE_SCAN_SAMPLE_BUDGET:
             raw_read = RawRead(str(raw_file), traces_to_read="*", dialect=dialect)
             value_scan = "scan"
         else:

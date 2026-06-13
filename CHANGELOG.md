@@ -46,6 +46,26 @@ tool-surface changes.
   call one shared reusable workflow (`checks.yml`), so the two gates cannot
   drift. GitHub status-check contexts are renamed to `checks / check` and
   `checks / audit`.
+- Monte-Carlo per-run parameters in `batch_results`/`measurement_stats` are
+  now JSON numbers (the actual perturbed magnitudes), matching the sweep
+  runner, which already emitted numbers — previously Monte-Carlo emitted them
+  as strings, so the same field had two types across the two batch run kinds.
+- The completion value-scan (NaN/Inf/extreme-magnitude surfacing) now runs on
+  every result up to a total-sample budget (axis points × trace count, ~5M
+  samples) instead of only on single-point operating points. A normal
+  `.tran`/`.ac` is now fully scanned — so a degenerate value is surfaced and the
+  `value_scan_skipped` observation no longer fires on essentially every
+  multi-point run; only a result whose traces exceed the budget (a long
+  transient or a wide node dump) reports the skipped scan. The budget counts
+  total samples, not axis points alone, so a wide result can't force every
+  trace into memory on the completion path.
+- `bode_metrics` filter mode now references the `-3 dB` cutoff to the passband
+  *plateau* gain (the flat DC-side edge for a lowpass, the high-frequency edge
+  for a highpass, the peak for a bandpass) instead of the band median. The band
+  median was dragged down by the roll-off knee inside the auto-detected band,
+  which biased the reported cutoff outward (several percent on a sweep that
+  starts only a decade below the cutoff); the plateau reference removes that
+  bias. The explicit `passband_range` path is unchanged.
 
 ### Removed
 
@@ -70,6 +90,42 @@ tool-surface changes.
 - A truncated or corrupt `.raw` file that parses as having zero variables is
   now diagnosed as corrupt when loaded, instead of surfacing downstream as
   "Signal not found" with an empty available-signals list.
+- A failed or timed-out simulation now returns its `log_file` and `raw_file`
+  paths (and a text footer naming them), so the caller can open the full log
+  rather than working from the excerpt alone. The error excerpt is also
+  tail-aware — it now anchors a window on both the first and last diagnostic
+  line, so a convergence abort's failing-node tail ("Timestep too small",
+  "trouble with node", "Last Node Voltages") survives even when an earlier
+  benign line came first. Those phrases are now recognized as error anchors.
+- An interrupted job (the server stopped mid-run and recovered it on restart)
+  no longer reports a wall-clock-to-recovery "duration … (running)" in the
+  `check_job` list — its true runtime is unknowable after a restart, so the
+  list now shows "unknown" and omits the duration, matching the single-job view.
+- `batch_results` raw-mode rows now have a uniform shape: a full-waveform run
+  whose signal happens to be flat keeps `peak`/`mean`/`min` like its siblings
+  instead of collapsing to a single `value` (the collapse is now scoped to
+  genuine point queries — `at=` or an operating-point raw).
+- `batch_results` given a single-simulation job id now points at tools that
+  accept a job id (`check_job`, `query_value`) instead of `simulation_summary`,
+  which takes a raw-file path and cannot be reached with a job id.
+- Error hints are no longer misleading on job-state and argument-shape errors:
+  cancelling an already-finished job, `query_value` argument mistakes, and a
+  `simulation_summary` build failure no longer append the generic "verify
+  simulator availability" / "check signal names with simulation_summary" footer
+  (the latter was self-referential). Genuine result-content errors keep it.
+- A bare `check_job()` whose default (queued/running) view is empty but which
+  has finished jobs now says how many are hidden and that `status="all"` lists
+  them, instead of a bare "No active jobs" that read as "nothing exists".
+- `bode_metrics(all_steps=true)` surfaces an identical per-step warning once at
+  the top level with its step coverage, instead of repeating the same string in
+  every step's entry and text.
+- `edit_directive`'s description now states that adding a `.param` is
+  unsupported (use the `parameter` tool), matching the runtime refusal.
+- Setting a new `.param` via the `parameter` tool no longer leaves spicelib's
+  `; Batch instruction` boilerplate comment in the saved netlist.
+- `diff_circuit` no longer reports a component or directive as changed when the
+  only difference is the micro prefix's rendering (`1u` vs `1µ`); a real
+  magnitude change (`1u` vs `2u`) is still reported.
 
 ## [0.2.0] - 2026-06-10
 

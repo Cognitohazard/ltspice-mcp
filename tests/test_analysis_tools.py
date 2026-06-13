@@ -1354,6 +1354,62 @@ class TestBodeMetricsAllSteps:
             cs = steps[i]["crossings"]
             assert cs and abs(cs[0]["frequency_hz"] - fc) / fc < 0.05
 
+    async def test_all_steps_dedups_identical_step_warnings(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # Three lowpass steps, mode='filter' with NO stopband_range: every step
+        # emits the identical sweep-endpoint rejection warning. all_steps must
+        # hoist it to the top level ONCE with a coverage note, drop the per-step
+        # 'warnings' key, and strip it from each per-step text block.
+        fcs = [500.0, 1000.0, 5000.0]
+        path = work_dir / "stepped_dedup.raw"
+        _inject_raw(state_no_sim, path, _stepped_ac_raw(fcs))
+        res = await handle_bode_metrics(
+            BodeMetricsInput(
+                raw_file="stepped_dedup.raw",
+                signal="V(out)",
+                mode="filter",
+                all_steps=True,
+            ),
+            state_no_sim,
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        assert sc["step_count"] == 3
+        warnings = sc.get("warnings", [])
+        # The sweep-endpoint rejection warning every step emits.
+        sentinel = "no stopband_range given"
+        hoisted = [w for w in warnings if sentinel in w]
+        # Hoisted exactly once (not once per step).
+        assert len(hoisted) == 1
+        # Carries a coverage note naming the steps it covered.
+        assert "steps" in hoisted[0]
+        assert "all 3 steps" in hoisted[0]
+        # Per-step structured entries no longer carry that warning under a
+        # 'warnings' key — it was popped during hoisting.
+        for entry in sc["steps"]:
+            assert sentinel not in entry.get("warnings", [])
+            assert not any(sentinel in w for w in entry.get("warnings", []))
+        # The per-step text blocks no longer repeat the warning either.
+        text = res.content[0].text
+        assert text.count(sentinel) == 1
+
+    def test_warning_coverage_lists_indices_for_large_subset(self):
+        # A warning on a >6 SUBSET of steps must enumerate every affected step
+        # index, not collapse to a bare "N of M" count — otherwise a structured
+        # consumer can't tell which sweep cases emitted it.
+        from ltspice_mcp.tools.analysis import _warning_coverage
+
+        idxs = [0, 2, 4, 6, 8, 10, 12]  # 7 of 20 — past the old 6-item cap
+        cov = _warning_coverage(idxs, 20)
+        for i in idxs:
+            assert str(i) in cov
+        assert "of 20" not in cov  # not collapsed to a count
+        # Every-step case stays compact.
+        assert _warning_coverage(list(range(5)), 5) == "all 5 steps"
+        # A small subset still enumerates.
+        assert _warning_coverage([1, 3], 5) == "steps 1,3"
+
     async def test_single_step_warns(self, state_no_sim: SessionState, work_dir: Path):
         path = work_dir / "onestep.raw"
         _inject_raw(state_no_sim, path, _ac_raw_mock())  # get_steps == [0]
@@ -1555,3 +1611,67 @@ class TestRecordedSteppedAcRaw:
         assert sc["exact_match"] is True
         assert sc["magnitude_db"] == pytest.approx(-3.0103, abs=0.05)
         assert sc["phase_deg"] == pytest.approx(-45.0, abs=1.0)
+
+
+@pytest.mark.asyncio
+class TestQueryValueArgErrorHints:
+    """Argument-shape ResultErrors from query_value must NOT trigger the generic
+    'check_job for details' dispatch hint — they are caller mistakes, not run
+    failures, so they carry ``show_hint=False``."""
+
+    async def test_step_axis_with_job_id_conflict_no_hint(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # step_axis selects a step of a .step raw; job_id already selects a run.
+        # The conflict is a caller mistake — suppress the generic hint.
+        path = work_dir / "conflict.raw"
+        _inject_raw(state_no_sim, path, _ac_raw_mock())
+        with pytest.raises(ResultError) as excinfo:
+            await handle_query_value(
+                QueryValueInput(
+                    raw_file="conflict.raw",
+                    signal="V(out)",
+                    step_axis="Rval",
+                    step_value="1k",
+                    job_id="job-123",
+                ),
+                state_no_sim,
+            )
+        assert excinfo.value.show_hint is False
+
+    async def test_missing_at_no_hint(self, state_no_sim: SessionState, work_dir: Path):
+        # 'at' omitted on a normal (non-step_axis) raw is a caller mistake.
+        path = work_dir / "needat.raw"
+        _inject_raw(state_no_sim, path, _ac_raw_mock())
+        with pytest.raises(ResultError) as excinfo:
+            await handle_query_value(
+                QueryValueInput(raw_file="needat.raw", signal="V(out)"),
+                state_no_sim,
+            )
+        assert excinfo.value.show_hint is False
+
+
+@pytest.mark.asyncio
+class TestSimulationSummaryBuildFailureHint:
+    """When build_simulation_summary itself raises, the wrapping ResultError must
+    suppress the generic hint (it would point back at simulation_summary, the
+    very tool that just failed)."""
+
+    async def test_build_failure_show_hint_false(
+        self, state_no_sim: SessionState, fake_raw: Path, monkeypatch
+    ):
+        # The raw loads fine; force build_simulation_summary to raise so we hit
+        # the self-referential-hint suppression path.
+        import ltspice_mcp.tools.analysis as analysis_mod
+
+        def _boom(*_args, **_kwargs):
+            raise ValueError("synthetic build failure")
+
+        monkeypatch.setattr(analysis_mod, "build_simulation_summary", _boom)
+        with pytest.raises(ResultError) as excinfo:
+            await handle_simulation_summary(
+                SimulationSummaryInput(raw_file=fake_raw.name), state_no_sim
+            )
+        assert excinfo.value.show_hint is False
+        # Must not re-suggest the tool that just failed.
+        assert "simulation_summary" not in str(excinfo.value)

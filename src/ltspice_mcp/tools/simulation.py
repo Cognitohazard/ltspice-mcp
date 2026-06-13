@@ -333,10 +333,11 @@ async def _wait_for_completion(
             "duration": duration,
             "netlist": str(job.netlist),
         }
+        files_note = _attach_result_files(data, job)
         return format_response(
             f"Simulation timed out after {duration:.1f}s (killed by server)\n"
             f"Job ID: {job.job_id}\n"
-            f"Netlist: {job.netlist}{log_excerpt}",
+            f"Netlist: {job.netlist}{log_excerpt}{files_note}",
             data,
             fmt,
         )
@@ -374,8 +375,9 @@ async def _wait_for_completion(
             error_msg = services.attach_suggestions_to_failure(
                 error_msg, data, job.log_file, state.libraries
             )
+        files_note = _attach_result_files(data, job)
         return format_response(
-            f"Simulation failed\nJob ID: {job.job_id}\nDuration: {duration:.2f}s\n\n{error_msg}",
+            f"Simulation failed\nJob ID: {job.job_id}\nDuration: {duration:.2f}s\n\n{error_msg}{files_note}",
             data,
             fmt,
         )
@@ -605,8 +607,9 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
             error_msg = services.attach_suggestions_to_failure(
                 error_msg, data, job.log_file, state.libraries
             )
+        files_note = _attach_result_files(data, job)
         return format_response(
-            f"Simulation failed\nJob ID: {job_id}\nDuration: {duration:.2f}s\n\n{error_msg}",
+            f"Simulation failed\nJob ID: {job_id}\nDuration: {duration:.2f}s\n\n{error_msg}{files_note}",
             data,
             fmt,
         )
@@ -627,10 +630,11 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
             "duration": duration,
             "netlist": str(job.netlist),
         }
+        files_note = _attach_result_files(data, job)
         return format_response(
             f"Simulation timed out after {duration:.1f}s (killed by server)\n"
             f"Job ID: {job_id}\n"
-            f"Netlist: {job.netlist}{log_excerpt}",
+            f"Netlist: {job.netlist}{log_excerpt}{files_note}",
             data,
             fmt,
         )
@@ -655,6 +659,22 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
     else:
         data = {"job_id": job_id, "status": job.status}
         return format_response(f"Job {job_id} has unexpected status: {job.status}", data, fmt)
+
+
+def _attach_result_files(data: dict, job: SimulationJob) -> str:
+    """Record the job's raw/log paths on a failed/timed-out response ``data``
+    dict and return a matching text footer, so the caller can open the full
+    .log/.raw instead of working from the truncated excerpt alone. Both schema
+    keys are typed string, so a path is omitted when the job has none.
+    """
+    notes = []
+    if job.log_file:
+        data["log_file"] = str(job.log_file)
+        notes.append(f"  log: {job.log_file}")
+    if job.raw_file:
+        data["raw_file"] = str(job.raw_file)
+        notes.append(f"  raw: {job.raw_file}")
+    return "\n\nResult files:\n" + "\n".join(notes) if notes else ""
 
 
 def _terminal_job_data(job: SimulationJob, status: str) -> dict:
@@ -722,10 +742,23 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
     jobs_to_show.sort(key=lambda j: j.started_at, reverse=True)
 
     if not jobs_to_show:
-        if status_filter == "all" or not status_filter:
-            message = "No active jobs" if not status_filter else "No jobs found"
+        if status_filter == "all":
+            message = "No jobs found"
+        elif status_filter:
+            message = (
+                f"No jobs with status '{status_filter}'. Pass status=\"all\" to list every job."
+            )
+        elif all_jobs:
+            # Default view shows only queued/running; terminal jobs are hidden.
+            # Say so and how to widen, so a just-completed run isn't read as
+            # "nothing exists".
+            message = (
+                f"No active jobs (queued/running). {len(all_jobs)} finished job(s) are "
+                'hidden — pass status="all" to list them, or a specific status '
+                "(completed, failed, timeout, cancelled, interrupted)."
+            )
         else:
-            message = f"No jobs with status '{status_filter}'"
+            message = "No active jobs"
         return format_response(message, {"jobs": [], "count": 0}, fmt)
 
     # Build structured data
@@ -735,7 +768,11 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
     lines.append("-" * 100)
 
     for job in jobs_to_show:
-        if job.completed_at:
+        emit_duration = True
+        if job.status in NON_TERMINAL_LIVE_STATUSES:
+            duration = max(0.0, (now() - job.started_at).total_seconds())
+            duration_str = f"{duration:.1f}s (running)"
+        elif job.completed_at:
             duration = (
                 services.job_duration_seconds(
                     job.started_at, job.completed_at, label=f"sim job {job.job_id}"
@@ -744,8 +781,14 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
             )
             duration_str = f"{duration:.1f}s"
         else:
-            duration = max(0.0, (now() - job.started_at).total_seconds())
-            duration_str = f"{duration:.1f}s (running)"
+            # Terminal but no completed_at — an interrupted/recovered job. True
+            # runtime is unknowable after a restart, so don't fabricate a
+            # wall-clock-to-now number (which read as a multi-hour sim) or the
+            # "(running)" label. Omit the duration key, matching the single-job
+            # _terminal_job_data path.
+            duration = None
+            duration_str = "unknown"
+            emit_duration = False
 
         started_str = job.started_at.strftime("%Y-%m-%d %H:%M")
         netlist_name = job.netlist.name
@@ -755,16 +798,16 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
         lines.append(
             f"{job.job_id:<28} | {job.status:<10} | {netlist_name:<20} | {started_str:<17} | {duration_str}"
         )
-        jobs_data.append(
-            {
-                "job_id": job.job_id,
-                "job_type": getattr(job, "job_type", "single"),
-                "status": job.status,
-                "netlist": str(job.netlist),
-                "started_at": job.started_at.isoformat(),
-                "duration": duration,
-            }
-        )
+        entry = {
+            "job_id": job.job_id,
+            "job_type": getattr(job, "job_type", "single"),
+            "status": job.status,
+            "netlist": str(job.netlist),
+            "started_at": job.started_at.isoformat(),
+        }
+        if emit_duration:
+            entry["duration"] = duration
+        jobs_data.append(entry)
 
     return format_response("\n".join(lines), {"jobs": jobs_data, "count": len(jobs_data)}, fmt)
 
@@ -797,7 +840,15 @@ async def handle_cancel_job(args: CancelJobInput, state: SessionState) -> types.
 
     # Check if job is running
     if job.status not in NON_TERMINAL_LIVE_STATUSES:
-        raise SimulationError(f"Job {job_id} is not running (status: {job.status})")
+        # A terminal job has nothing to cancel — this is a job-state error, not
+        # a simulator-availability one, so suppress the generic SimulationError
+        # hint ("verify simulator availability") and point at check_job instead.
+        raise SimulationError(
+            f"Job {job_id} is not running (status: {job.status}) — it has already "
+            f"finished, so there is nothing to cancel. Use check_job('{job_id}') to "
+            "read its result.",
+            show_hint=False,
+        )
 
     # Cancel via the runner that owns the job. A batch job's cancel event and
     # live-process map live on the SweepRunner/MonteCarloRunner instance that

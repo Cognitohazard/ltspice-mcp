@@ -542,6 +542,13 @@ def _find_passband_range(
     The passband is the contiguous region within ``flatness_db`` of the peak
     (or for BSF, the two lobes flanking the notch — we report the broader
     lobe as "the passband" for ripple and the notch itself for rejection).
+
+    ``passband_gain_db`` is the flat-plateau gain — anchored at the DC-side
+    edge for a lowpass, the high-frequency edge for a highpass, and the peak
+    for a bandpass. It is deliberately NOT the band median: the auto band runs
+    from the peak up into the roll-off knee, so the median sits below the true
+    plateau and biases the -3 dB cutoff outward (worse the narrower the in-band
+    span). A short median at the flat edge stays robust to a noisy edge sample.
     """
     g_max = float(np.max(mag_db))
     in_band = mag_db >= (g_max - flatness_db)
@@ -571,8 +578,19 @@ def _find_passband_range(
         lo -= 1
     while hi < len(freqs) - 1 and in_band[hi + 1]:
         hi += 1
-    passband = mag_db[lo : hi + 1]
-    return float(freqs[lo]), float(freqs[hi]), float(np.median(passband))
+    if filter_type == "lowpass":
+        # Plateau is the DC-side edge; a 3-sample median tolerates a noisy
+        # low-frequency point without re-admitting the roll-off knee.
+        pb_gain = float(np.median(mag_db[lo : min(lo + 3, hi + 1)]))
+    elif filter_type == "highpass":
+        pb_gain = float(np.median(mag_db[max(lo, hi - 2) : hi + 1]))
+    elif filter_type == "bandpass":
+        # The bandpass plateau IS the peak; -3 dB bandwidth is referenced to it.
+        pb_gain = g_max
+    else:
+        # Ambiguous/unknown: no well-defined plateau, keep the band median.
+        pb_gain = float(np.median(mag_db[lo : hi + 1]))
+    return float(freqs[lo]), float(freqs[hi]), pb_gain
 
 
 def _estimate_order_from_slope(slope_db_per_dec: float) -> int | None:

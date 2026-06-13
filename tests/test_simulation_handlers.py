@@ -78,6 +78,25 @@ class TestCheckJob:
         assert "failed" in text
         assert "convergence" in text
 
+    async def test_failed_response_includes_result_file_paths(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A failed run must surface its raw/log paths so the caller can open the
+        # full artifacts instead of working from the truncated log excerpt alone.
+        raw = work_dir / "fail.raw"
+        log = work_dir / "fail.log"
+        raw.write_text("partial")
+        log.write_text("Error: convergence failed\n")
+        job = _make_job(state_no_sim, status="failed", raw_file=raw, log_file=log)
+        job.error = "Sim failed"
+        result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert data["log_file"] == str(log)
+        assert data["raw_file"] == str(raw)
+        # The human-readable footer points the caller at the full artifacts.
+        assert "Result files:" in result.content[0].text
+
     async def test_cancelled(self, state_no_sim: SessionState):
         _make_job(state_no_sim, status="cancelled")
         result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
@@ -112,6 +131,50 @@ class TestCheckJob:
     async def test_list_empty_no_filter(self, state_no_sim: SessionState):
         result = await handle_check_job(CheckJobInput(), state_no_sim)
         assert "No active jobs" in result.content[0].text
+
+    async def test_interrupted_job_list_duration_is_unknown_not_wallclock(
+        self, state_no_sim: SessionState
+    ):
+        # A recovered/interrupted job is terminal with completed_at=None. Its
+        # true runtime is unknowable after a restart, so the list row must NOT
+        # report a wall-clock-to-now number labelled "(running)" — it shows
+        # "unknown" and omits the numeric duration from the structured row.
+        long_ago = now() - timedelta(hours=5)
+        job = SimulationJob(
+            job_id="interrupted1",
+            netlist=Path("/tmp/test.cir"),
+            simulator="FakeSim",
+            status="interrupted",  # type: ignore[arg-type]
+            started_at=long_ago,
+            completed_at=None,
+        )
+        state_no_sim.jobs["interrupted1"] = job
+        result = await handle_check_job(CheckJobInput(status="interrupted"), state_no_sim)
+        text = result.content[0].text
+        assert "interrupted1" in text
+        assert "(running)" not in text
+        assert "unknown" in text
+        rows = result.structuredContent["jobs"]
+        (row,) = [r for r in rows if r["job_id"] == "interrupted1"]
+        assert row.get("duration") is None
+
+    async def test_check_job_empty_default_mentions_status_all(self, state_no_sim: SessionState):
+        # Default (no-arg) view hides terminal jobs. When the only jobs are
+        # terminal, the empty message must tell the caller they exist and how to
+        # widen the view, rather than reading as "nothing exists".
+        _make_job(state_no_sim, job_id="done1", status="completed")
+        result = await handle_check_job(CheckJobInput(), state_no_sim)
+        text = result.content[0].text
+        assert 'status="all"' in text
+        assert "are hidden" in text or "hidden" in text
+
+    async def test_check_job_empty_no_jobs_stays_minimal(self, state_no_sim: SessionState):
+        # With zero jobs of any kind, the default message is the plain
+        # "No active jobs" with no claim that finished jobs are hidden.
+        result = await handle_check_job(CheckJobInput(), state_no_sim)
+        text = result.content[0].text
+        assert "No active jobs" in text
+        assert "hidden" not in text
 
     async def test_list_filter_status(self, state_no_sim: SessionState):
         _make_job(state_no_sim, job_id="r1", status="running")
@@ -186,6 +249,18 @@ class TestCancelJob:
         _make_job(state_no_sim, status="completed")
         with pytest.raises(SimulationError, match="not running"):
             await handle_cancel_job(CancelJobInput(job_id="j1"), state_no_sim)
+
+    async def test_cancel_terminal_job_show_hint_false(self, state_no_sim: SessionState):
+        # Cancelling a job that already finished is a job-state error, not a
+        # simulator-availability one: the generic "verify simulator" hint must
+        # be suppressed and the message must point the caller at check_job.
+        _make_job(state_no_sim, status="completed")
+        with pytest.raises(SimulationError) as exc_info:
+            await handle_cancel_job(CancelJobInput(job_id="j1"), state_no_sim)
+        exc = exc_info.value
+        assert exc.show_hint is False
+        assert "not running" in str(exc)
+        assert "check_job" in str(exc)
 
     async def test_no_simulator(self, state_no_sim: SessionState):
         _make_job(state_no_sim, status="running")

@@ -127,8 +127,10 @@ class MonteCarloRunner(BatchRunnerBase):
         """Submit the Monte Carlo analysis to a worker thread; return immediately."""
         cancel_event = self._register_cancel(batch_job.job_id)
         # Keyed by 1-based runno; populated at submission time and popped
-        # by the callback so memory doesn't grow with run count.
-        per_run_params: dict[int, dict[str, str]] = {}
+        # by the callback so memory doesn't grow with run count. Values are
+        # floats (the actual perturbed magnitudes), matching the sweep runner's
+        # numeric per-run params so both job types expose the same type.
+        per_run_params: dict[int, dict[str, float]] = {}
 
         def run_completion_callback(raw_file, log_file, runno: int) -> None:
             if cancel_event.is_set():
@@ -294,7 +296,9 @@ class MonteCarloRunner(BatchRunnerBase):
                 if cancel_event.is_set():
                     break
                 runno = run_i + 1  # spicelib's runno is 1-based.
-                run_params: dict[str, str] = {}
+                # Float values, like the sweep runner — the formatted SPICE
+                # string is computed separately for the netlist edit only.
+                run_params: dict[str, float] = {}
 
                 # Re-lex baseline text per iteration. ~0.6 ms on a 200-
                 # card netlist — measured ~2.4× faster than
@@ -332,7 +336,7 @@ class MonteCarloRunner(BatchRunnerBase):
                     )
                     formatted = format_spice_value(perturbed)
                     InstanceLine.from_card(inst_card).set_value(formatted)
-                    run_params[ref] = formatted
+                    run_params[ref] = perturbed
 
                 # ---- Phase 1: process variation (.MODEL perturbation) ----
                 # ``run_perturbations[model]`` accumulates this run's
@@ -356,7 +360,7 @@ class MonteCarloRunner(BatchRunnerBase):
                         model_view.set_param(p, v)
                     run_perturbations[mt.model_name] = perturbations
                     for p, v in perturbations.items():
-                        run_params[f"{mt.model_name}.{p}"] = format_spice_value(v)
+                        run_params[f"{mt.model_name}.{p}"] = v
 
                 # ---- Phase 2: mismatch (per-instance variant models) ----
                 for instance in mosfet_instances:
@@ -392,10 +396,8 @@ class MonteCarloRunner(BatchRunnerBase):
                     inst_card = instance_by_ref.get(instance.ref.lower())
                     if inst_card is not None:
                         InstanceLine.from_card(inst_card).set_model(variant)
-                    run_params[f"{instance.ref}.dvth"] = format_spice_value(deltas["dvth"])
-                    run_params[f"{instance.ref}.dk_over_k"] = format_spice_value(
-                        deltas["dk_over_k"]
-                    )
+                    run_params[f"{instance.ref}.dvth"] = deltas["dvth"]
+                    run_params[f"{instance.ref}.dk_over_k"] = deltas["dk_over_k"]
 
                 # ---- Phase 3: .PARAM perturbation ----
                 for pt in param_tolerances:
@@ -407,7 +409,7 @@ class MonteCarloRunner(BatchRunnerBase):
                     param_card = param_by_name.get(pt.name.lower())
                     if param_card is not None:
                         ParamCard.from_card(param_card).set_value(new_value)
-                    run_params[f"PARAM.{pt.name}"] = format_spice_value(new_value)
+                    run_params[f"PARAM.{pt.name}"] = new_value
 
                 # Emit once and push the rewritten lines back into the
                 # editor. SpiceEditor expects each entry to be one line
@@ -456,7 +458,7 @@ class MonteCarloRunner(BatchRunnerBase):
         log_file: Path,
         state: SessionState,
         runno: int | None = None,
-        params: dict[str, str] | None = None,
+        params: dict[str, float] | None = None,
     ) -> None:
         batch_job = state.batch_jobs.get(job_id)
         if not batch_job:
