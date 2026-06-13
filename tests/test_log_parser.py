@@ -268,6 +268,39 @@ class TestExtractErrorContext:
         result = extract_error_context(log)
         assert "Error reading log file" in result
 
+    def test_convergence_failure_excerpt_keeps_failing_node_tail(self, tmp_path: Path):
+        """An EARLY benign keyword line (e.g. a "Missing parameter" warning)
+        must not swallow the budget — the convergence-abort tail an LTspice
+        run writes at the very END (failing node, "Last Node Voltages",
+        timestep abort) names the actual failure and has to survive."""
+        log = tmp_path / "conv.log"
+        lines = (
+            ["WARNING: Missing parameter foo"]
+            + [f"progress line {i}" for i in range(40)]
+            + [
+                "Analysis: timestep too small",
+                "Last Node Voltages:",
+                'trouble with node "n002"',
+                "Fatal Error: Iteration limit reached. time step too small",
+            ]
+        )
+        log.write_text("\n".join(lines))
+        result = extract_error_context(log, max_lines=20)
+        # The tail (which names the real failure) must be present, not dropped
+        # in favor of only the early benign "Missing parameter" hit.
+        assert "trouble with node" in result
+        assert "timestep too small" in result
+
+    def test_bare_timestep_line_is_error_anchor(self, tmp_path: Path):
+        """A bare one-word ``Timestep too small`` line (no co-occurring
+        "convergence"/"error" word) is recognized as an error anchor, so it
+        lands in the excerpt rather than being missed entirely."""
+        log = tmp_path / "timestep.log"
+        lines = [f"progress line {i}" for i in range(30)] + ["Timestep too small"]
+        log.write_text("\n".join(lines))
+        result = extract_error_context(log, max_lines=20)
+        assert "Timestep too small" in result
+
 
 class TestParseSuccessSummary:
     def test_missing_raw_graceful(self, tmp_path: Path):

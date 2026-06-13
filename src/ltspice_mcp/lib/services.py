@@ -153,9 +153,14 @@ def resolve_batch_job(job_id: str, state: SessionState) -> BatchJob:
         # surface text — this is the one remaining not-found translation.
         raise BatchJobError(f"Batch job not found: {job_id}") from None
     if isinstance(job, SimulationJob):
+        # Point only at tools that accept a job id: check_job (status +
+        # completion results) and query_value (job_id + run_index for a
+        # signal). simulation_summary takes a raw_file, not a job id, so it
+        # is reached only after check_job hands back that path.
         raise BatchJobError(
-            f"Job '{job_id}' is a single simulation job — its results are "
-            "available via check_job / simulation_summary."
+            f"Job '{job_id}' is a single simulation job — read its results with "
+            "check_job (status + completion summary) or query_value (job_id + "
+            "run_index) for a signal value."
         )
     return job
 

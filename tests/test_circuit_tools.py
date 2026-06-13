@@ -244,6 +244,34 @@ class TestParameter:
         params = await handle_parameter({"path": sample_netlist.name}, state_no_sim)
         assert "2k" in params.content[0].text
 
+    async def test_set_param_does_not_leave_batch_instruction_comment(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # Creating a NEW .param via spicelib appends a "; Batch instruction"
+        # comment to the rendered line. The save path strips that leaked marker
+        # while keeping the directive and its value intact.
+        cir = work_dir / "freshparam.cir"
+        cir.write_text("* fresh\nR1 in 0 1k\n.END\n")
+        await handle_parameter({"path": cir.name, "name": "Gain", "value": "3"}, state_no_sim)
+        text = cir.read_text()
+        assert "Batch instruction" not in text
+        assert ".param" in text.lower()
+        assert "Gain" in text
+        assert "3" in text
+
+    async def test_set_param_preserves_user_comment_on_other_lines(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # The batch-instruction strip is scoped to .param lines, so a
+        # user-authored '; note' on an element line must survive an unrelated
+        # param-set untouched.
+        cir = work_dir / "withnote.cir"
+        cir.write_text("* note test\nR1 n1 0 1k ; my note\n.END\n")
+        await handle_parameter({"path": cir.name, "name": "Gain", "value": "3"}, state_no_sim)
+        text = cir.read_text()
+        assert "; my note" in text
+        assert "Batch instruction" not in text
+
 
 @pytest.mark.asyncio
 class TestSetComponentValue:
@@ -404,6 +432,17 @@ class TestEditDirective:
                 {"path": sample_netlist.name, "action": "add", "instruction": ".PARAM bar=2"},
                 state_no_sim,
             )
+
+    async def test_edit_directive_description_mentions_param_refusal(
+        self, state_no_sim: SessionState
+    ):
+        # The registered tool description must steer callers away from adding a
+        # '.param' here and point them at the 'parameter' tool, since spicelib's
+        # add_instruction refuses .param with an opaque error.
+        edit_def = next(td for td in state_no_sim.tool_defs if td.name == "edit_directive")
+        desc = edit_def.description or ""
+        assert "param" in desc.lower()
+        assert "parameter" in desc
 
     async def test_remove_directive(self, state_no_sim: SessionState, sample_netlist: Path):
         result = await handle_edit_directive(
@@ -757,6 +796,30 @@ class TestDiffCircuit:
         assert data is not None
         assert any(".ac" in d for d in data["directives_added"])
         assert any(".tran" in d for d in data["directives_removed"])
+
+    async def test_diff_circuit_micro_sign_not_reported_as_change(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A value LTspice renders with the micro sign (1µ, U+00B5) must compare
+        # equal to the same value authored as '1u' — only the rendering differs,
+        # not the magnitude. A real magnitude change (1u vs 2u) still surfaces.
+        a = work_dir / "a.cir"
+        b = work_dir / "b.cir"
+        a.write_text("* a\nR1 in out 1k\nC1 out 0 1u\n.end\n")
+        b.write_text("* b\nR1 in out 1k\nC1 out 0 1µ\n.end\n")
+        result = await handle_diff_circuit({"path_a": a.name, "path_b": b.name}, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert data["components_changed"] == [], data["components_changed"]
+
+        # Guard: a genuine magnitude change is still reported.
+        b.write_text("* b\nR1 in out 1k\nC1 out 0 2u\n.end\n")
+        result2 = await handle_diff_circuit({"path_a": a.name, "path_b": b.name}, state_no_sim)
+        data2 = result2.structuredContent
+        assert data2 is not None
+        assert any(c["reference"].upper() == "C1" for c in data2["components_changed"]), data2[
+            "components_changed"
+        ]
 
     async def test_deck_end_not_a_spurious_directive(
         self, state_no_sim: SessionState, work_dir: Path

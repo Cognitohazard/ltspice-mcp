@@ -211,10 +211,11 @@ class TestCrossTypeRedirects:
         _make_sim(state_no_sim, status="completed", log_file=LTSPICE_TRAN_RC_LOG)
         with pytest.raises(BatchJobError) as exc:
             await handle_batch_results(GetBatchResultsInput(job_id="j1"), state_no_sim)
-        assert str(exc.value) == (
-            "Job 'j1' is a single simulation job — its results are "
-            "available via check_job / simulation_summary."
-        )
+        msg = str(exc.value)
+        assert "single simulation job" in msg
+        # Redirect names only job-id-accepting tools, never simulation_summary.
+        assert "check_job" in msg
+        assert "simulation_summary" not in msg
 
 
 class TestCancelJobRoutingFork:

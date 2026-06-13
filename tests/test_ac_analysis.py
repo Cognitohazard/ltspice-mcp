@@ -381,6 +381,44 @@ class TestComputeFilterMetrics:
         with pytest.raises(ValueError, match="negative"):
             compute_filter_metrics(f, H, ref_db=3.0)
 
+    def test_filter_cutoff_reference_is_plateau_not_band_median(self):
+        # Sweep starts only ONE decade below fc=1 kHz, so the in-band median
+        # sits meaningfully below the DC plateau (the auto band runs up into
+        # the roll-off knee). The reference gain must anchor to the flat
+        # DC-side plateau, not the band median — otherwise the -3 dB cutoff
+        # is dragged outward. On the old band-median code cutoff_high landed
+        # ~+4.7% high; the plateau anchor pulls it back to ~fc.
+        f = _log_freqs(2, 5, 200)  # 100 Hz .. 100 kHz, ~66 pts/decade
+        H = _lpf_1pole(f, 1000.0)  # H(f) = 1/(1 + j f/fc), unity DC gain
+        m = compute_filter_metrics(f, H)
+        assert m["filter_type"] == "lowpass"
+        # Plateau gain is |H| at the DC-side edge (100 Hz, one decade below fc).
+        plateau_db = magnitude_db(H)[0]
+        assert m["passband_gain_db"] == pytest.approx(plateau_db, abs=0.02)
+        # Plateau anchor pulls the cutoff to ~+1% of fc (the residual is the
+        # reference frame: |H| is already -0.043 dB at the 100 Hz plateau edge,
+        # so -3 dB below THAT lands just above fc). The old band-median code put
+        # it at ~+5%.
+        assert m["cutoff_high_hz"] == pytest.approx(1000.0, rel=0.02)
+
+    def test_highpass_cutoff_reference_is_plateau(self):
+        # Mirror of the LPF case for a 1st-order HPF H(f) = (j f/fc)/(1+j f/fc),
+        # fc=1 kHz. Sweep runs well above fc so the high-frequency plateau is
+        # the unity passband; the reference gain must anchor to that high-freq
+        # plateau (not the band median dragged down by the knee on the low
+        # side), keeping cutoff_low within ~1% of fc.
+        f = _log_freqs(2, 5, 200)  # 100 Hz .. 100 kHz, ~1-2 decades above fc
+        fc = 1000.0
+        s = 1j * 2 * np.pi * f
+        wc = 2 * np.pi * fc
+        H = s / (s + wc)  # 1st-order HPF, unity gain at high f
+        m = compute_filter_metrics(f, H)
+        assert m["filter_type"] == "highpass"
+        # Plateau gain is |H| at the high-frequency edge (100 kHz).
+        plateau_db = magnitude_db(H)[-1]
+        assert m["passband_gain_db"] == pytest.approx(plateau_db, abs=0.02)
+        assert m["cutoff_low_hz"] == pytest.approx(fc, rel=0.02)
+
 
 # ---------------------------------------------------------------------------
 # compute_stability_metrics

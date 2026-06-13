@@ -751,6 +751,130 @@ class TestMonteCarloRunnerHandlers:
         assert len(set(names)) == 2  # unique per run
         assert all(exe is True for _, exe in runs)  # ngspice stdout capture on
 
+    @pytest.mark.asyncio
+    async def test_mc_params_are_numeric_like_sweep(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch,
+    ):
+        # Per-run params stored in run_results[i]["params"] are the actual
+        # perturbed magnitudes as FLOATS, matching the sweep runner (which
+        # stores parsed numerics) — not the formatted SPICE strings MC used
+        # to record. Drive the real perturbation path: the mocked spicelib
+        # runner fires the runno-aware completion callback so the real
+        # _handle_run_completion stores per_run_params into run_results.
+        # The runner is bound to the RUNNING loop so the bridged callbacks
+        # (call_soon_threadsafe) actually execute under this test.
+        mc_runner = MonteCarloRunner(
+            loop=asyncio.get_running_loop(),
+            simulator_class=FakeSim,
+            output_folder=work_dir,
+            max_parallel=1,
+        )
+        (work_dir / "n.cir").write_text("* mc test\nV1 in 0 1\nR1 in 0 1k\n.tran 1m\n.end\n")
+        bj = _make_batch(state_no_sim, work_dir, job_type="montecarlo")
+        bj.total_runs = 2
+        bj.mc_config = MonteCarloConfig(
+            netlist=work_dir / "n.cir",
+            type_tolerances={"R": (0.05, "uniform")},
+            num_runs=2,
+            seed=1,
+        )
+
+        def build():
+            m = MagicMock(_runno=0)
+
+            def fake_run(*a, callback=None, **k):
+                # A real spicelib runner increments _runno before the run task
+                # exists, and the runno-aware wrapper passes the runno into the
+                # callback as a kwarg. The mock's auto-attr ``run`` defeats the
+                # wrapper's idempotency sentinel, so emulate the wrapped shape
+                # here: invoke the callback with runno= directly.
+                m._runno += 1
+                runno = m._runno
+                raw = work_dir / f"mc_{runno}.raw"
+                raw.write_text("d")
+                log = work_dir / f"mc_{runno}.log"
+                log.write_text("l")
+                if callback is not None:
+                    callback(raw, log, runno=runno)
+
+            m.run.side_effect = fake_run
+            return m
+
+        monkeypatch.setattr(mc_runner, "_build_sim_runner", build)
+
+        await mc_runner.start_montecarlo(bj, state_no_sim)
+        # The per-run + completion callbacks are bridged onto the loop via
+        # call_soon_threadsafe; yield so they drain before we read results.
+        await asyncio.sleep(0.05)
+
+        assert bj.status == "completed"
+        assert set(bj.run_results.keys()) == {0, 1}
+        for run_index in (0, 1):
+            params = bj.run_results[run_index]["params"]
+            # R1 was the only perturbable component, so it must be present.
+            assert "R1" in params
+            # Every value is a real number, not a formatted SPICE string.
+            assert all(
+                isinstance(v, (int, float)) and not isinstance(v, bool) for v in params.values()
+            ), params
+            # The perturbed R1 is a plausible ±5% draw around the 1k nominal.
+            assert 900.0 < params["R1"] < 1100.0
+
+    @pytest.mark.asyncio
+    async def test_sweep_and_mc_params_are_same_type(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch,
+    ):
+        # Parity check: a sweep run records float params (see
+        # TestSweepRunnerHandlers.test_handle_sweep_completion's R1 == 1000.0),
+        # and a Monte Carlo run must use the same numeric type for its params
+        # so both job types are uniform for downstream consumers.
+        mc_runner = MonteCarloRunner(
+            loop=asyncio.get_running_loop(),
+            simulator_class=FakeSim,
+            output_folder=work_dir,
+            max_parallel=1,
+        )
+        (work_dir / "n.cir").write_text("* mc test\nV1 in 0 1\nR1 in 0 1k\n.tran 1m\n.end\n")
+        bj = _make_batch(state_no_sim, work_dir, job_type="montecarlo")
+        bj.total_runs = 1
+        bj.mc_config = MonteCarloConfig(
+            netlist=work_dir / "n.cir",
+            type_tolerances={"R": (0.05, "uniform")},
+            num_runs=1,
+            seed=1,
+        )
+
+        def build():
+            m = MagicMock(_runno=0)
+
+            def fake_run(*a, callback=None, **k):
+                m._runno += 1
+                raw = work_dir / f"mc_{m._runno}.raw"
+                raw.write_text("d")
+                log = work_dir / f"mc_{m._runno}.log"
+                log.write_text("l")
+                if callback is not None:
+                    callback(raw, log, runno=m._runno)
+
+            m.run.side_effect = fake_run
+            return m
+
+        monkeypatch.setattr(mc_runner, "_build_sim_runner", build)
+        await mc_runner.start_montecarlo(bj, state_no_sim)
+        await asyncio.sleep(0.05)  # let the bridged callbacks drain
+
+        mc_params = bj.run_results[0]["params"]
+        # Mirror the sweep handler's assertion target: the param value is a
+        # float, the exact type the sweep runner stores via parse_spice_value.
+        sweep_r1_type = float
+        assert all(type(v) is sweep_r1_type for v in mc_params.values()), mc_params
+
 
 class TestParseRunno:
     """``_parse_runno`` extracts spicelib's 1-based runno from raw filenames."""
