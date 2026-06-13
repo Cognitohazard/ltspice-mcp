@@ -17,6 +17,9 @@ wheels/
 
 .mcp.json
 
+# CodeGraphContext (MCP) local index config
+.cgcignore
+
 # Runtime artifacts
 workspace/
 ltspice-mcp.toml
