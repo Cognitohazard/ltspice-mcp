@@ -19,9 +19,11 @@ from ltspice_mcp.lib import now, services
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
 from ltspice_mcp.tools.analysis import (
     BodeMetricsInput,
+    GetWaveformInput,
     QueryValueInput,
     SimulationSummaryInput,
     handle_bode_metrics,
+    handle_get_waveform,
     handle_query_value,
     handle_simulation_summary,
 )
@@ -296,6 +298,56 @@ class TestBodeMetricsJobRun:
                 BodeMetricsInput(raw_file="x.raw", job_id="b1", signal="V(out)", mode="filter"),
                 state_no_sim,
             )
+
+
+def _tran_raw_wave(scale: float = 1.0) -> MagicMock:
+    """A transient raw with enough samples to bucket (window_and_clean needs >=3).
+
+    ``scale`` lets two runs carry distinguishable data so a per-run-index test
+    could assert it threaded the right run; the envelope min/max are raw extrema.
+    """
+    raw = MagicMock()
+    raw.get_raw_property.return_value = "Transient Analysis"
+    raw.get_trace_names.return_value = ["time", "V(out)"]
+    raw.get_steps.return_value = [0]
+    raw.get_axis.return_value = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    raw.get_wave.return_value = np.array([0.0, 1.0, 2.0, 1.0, 0.0]) * scale
+    return raw
+
+
+@pytest.mark.asyncio
+class TestGetWaveformJobRun:
+    async def test_get_waveform_run_by_index(self, state_no_sim: SessionState, work_dir: Path):
+        # run_index=1 must reach run 1's raw (run 1 has 2x amplitude) — confirms
+        # the index is threaded through _effective_raw_path, not hardcoded to 0.
+        p0, p1 = work_dir / "wf_run0.raw", work_dir / "wf_run1.raw"
+        _inject_raw(state_no_sim, p0, _tran_raw_wave(scale=1.0))
+        _inject_raw(state_no_sim, p1, _tran_raw_wave(scale=2.0))
+        _batch(
+            state_no_sim,
+            {0: {"raw_file": p0, "params": {}}, 1: {"raw_file": p1, "params": {}}},
+        )
+        res = await handle_get_waveform(
+            GetWaveformInput(job_id="b1", run_index=1, signal="V(out)"),
+            state_no_sim,
+        )
+        assert res.structuredContent is not None
+        sc = res.structuredContent
+        assert sc["analysis_type"] == "transient"
+        assert sc["buckets"]  # non-empty envelope
+        # Run 1's wave peaks at 2.0 * 2.0 = 4.0; run 0 would peak at 2.0.
+        assert max(b["max"] for b in sc["buckets"]) == 4.0
+
+    async def test_raw_file_and_job_id_mutually_exclusive(self, state_no_sim: SessionState):
+        with pytest.raises(ResultError, match="exactly one"):
+            await handle_get_waveform(
+                GetWaveformInput(raw_file="x.raw", job_id="b1", signal="V(out)"),
+                state_no_sim,
+            )
+
+    async def test_neither_raw_nor_job(self, state_no_sim: SessionState):
+        with pytest.raises(ResultError, match="exactly one"):
+            await handle_get_waveform(GetWaveformInput(signal="V(out)"), state_no_sim)
 
 
 # ---------------------------------------------------------------------------

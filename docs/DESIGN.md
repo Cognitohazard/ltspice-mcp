@@ -38,12 +38,16 @@ scripts directly. MCP applies in specific contexts:
   method names, forgets `save_netlist()`, etc.
 - **Context efficiency.** A tool call is ~50 tokens; equivalent Python is
   20-40 lines. Over an iterative design session this compounds.
-- **Structured analysis instead of plots.** There is no plotting layer.
-  The analysis tools return the numbers an agent actually reasons over —
-  `bode_metrics` for -3 dB points, slopes, and crossings;
-  `signal_stats` / `edge_metrics` / `pulse_response` for transient
-  shape — as schema-typed results, so nothing has to be read off an
-  image.
+- **Structured analysis as the default.** The analysis tools return the
+  numbers an agent reasons over — `bode_metrics` for -3 dB points,
+  slopes, and crossings; `signal_stats` / `edge_metrics` /
+  `pulse_response` for transient shape — as schema-typed results, so the
+  common questions are answered without reading anything off an image.
+  Decimated raw-waveform egress ships as `get_waveform` (a min/max
+  stat-envelope for seeing shape); rendered plots remain roadmapped. Both
+  complement the structured numbers for the shape-recognition cases a
+  scalar can't cover (see *Waveforms: scalars first, egress and plots for
+  shape*), rather than replacing them.
 - **No user setup.** Install the server once. No spicelib in the user's
   project venv, no Python knowledge required.
 
@@ -122,6 +126,86 @@ return `structuredContent` alongside text. When MCP clients run code
 execution against tool calls, the schemas serve as the types the
 sandboxed code consumes.
 
+### Waveforms: scalars first, egress and plots for shape
+
+Analysis tools return **scalars, not samples** by default — time-weighted
+RMS, rise time, phase margin, the salient number — because the consumer
+is an LLM reasoning over meaning, and a correct scalar beats a wall of
+points it must interpret. This is a **scoped default, not the end state**:
+it answers "what is X" for waveforms whose shape a single number
+captures. It does not serve cases where the *shape itself* is the
+signal — switching-converter nodes, amplifier internal nodes, startup
+transients.
+
+Those split in two, and want different things:
+
+- **Known shape-question** (subharmonic oscillation, CCM/DCM mode, slew
+  limiting, switch-node ringing) → a *specialized detector* (FFT, mode
+  detector, dV/dt), not raw data: it returns the precise number instead
+  of making the caller read it off a curve. Doctrine favors detectors.
+- **Exploratory "let me look"** (why won't this converter start?) → no
+  detector helps, because the metric isn't known yet; you look,
+  hypothesize, then measure. This is the irreducible case for waveform
+  egress.
+
+The axis that matters is **consumer × format**, not scalar-vs-waveform:
+
+- **LLM computing** → decimated numeric arrays, with **min/max envelope**
+  decimation (each bucket carries its min and max), never stride — stride
+  drops glitches and ringing peaks; the envelope preserves every
+  extremum, losing only sub-bucket timing. The LLM computes on the array
+  (FFT, period, overshoot), which is more reliable than reading a picture.
+- **LLM recognizing shape** → a rendered plot, as a backup and complement
+  to the array. Vision catches gestalt — slewing, a settling envelope,
+  "this looks unstable" — at a glance that's tedious to derive from
+  numbers; plot-plus-array is more robust than either alone.
+- **Human** → the same egress as a hand-off (CSV to a viewer, PNG
+  inline). Recognition reliability is moot; the human's eyes are the
+  recognizer.
+
+So the surface is layered: scalar detectors for "what is X", specialized
+shape-detectors for known signatures, decimated egress for "let me look",
+and plots as a shape-recognition backup for both LLM and human. Decimated
+egress ships as `get_waveform`; rendered plots remain roadmap. The
+principle is recorded so scalar-first reads as a scoped default, not the
+end state.
+
+**Scalar-guided zoom.** The waveforms this server sees — switching nodes,
+amplifier internal nodes — are multi-scale: a piecewise-smooth backbone
+plus sparse localized events (ringing spikes, coupling glitches,
+crossover kinks). No single fixed-resolution view fits, so fidelity comes
+from *navigation*, not from one lossy encoding. The overview is a
+**stat-envelope**: per bucket, `[min, max, rms, mean]` — min/max
+guarantees a narrow spike's amplitude survives bucketing, rms/mean
+localize energy and drift. From the surfaced per-bucket facts the consumer
+picks a sub-window and re-requests it finer — the same `get_waveform`
+call with a narrower `[t_start, t_end]` — and recurses. Full-resolution
+data stays on disk; detail enters context only when a measured quantity
+earned the zoom. This is the engineer's own look-then-zoom loop, and it
+reuses windowed egress plus the detectors (an envelope+carrier or
+edge-metric descriptor is just the zoom-time payload for a flagged
+window).
+
+**Surface, don't judge — applied to navigation.** The stat-envelope and
+any ranking obey the same rule as the rest of the result layer: the tool
+surfaces *measured conditions* — crest factor, a bucket's spread relative
+to its neighbors, `mean` drift, alternating-peak spacing, spectral
+concentration — and may sort buckets by a named quantity, but it emits
+**no phenomenon label and no trust verdict**. "Crest factor 8.1 here, 5.2×
+the median bucket" is a fact; "spike / unstable / unreliable" is the
+model's conclusion. Relative comparisons beat bare-magnitude thresholds
+(one constant, one meaning). The model decides what the shape *is* and
+where to look next; the server only makes the facts cheap to read.
+
+**Optional always-attach plot.** A config option makes waveform / analysis
+responses carry a rendered plot (MCP `ImageContent`) of the queried window
+*alongside* the scalars and the stat-envelope datapoints — not instead of
+them. The plot is the gestalt layer for the vision branch above, and it is
+AI-zoomable by construction: because it renders the *queried window*, the
+same narrowing zoom loop re-renders it at finer scale. Off by default
+(token cost, non-vision clients); on for clients that want
+shape-at-a-glance riding with every result.
+
 ## Architecture
 
 ```
@@ -160,8 +244,8 @@ Key `lib/` modules:
 
 |profile|tool count|use case|
 |-|-|-|
-|`full` (default)|48|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
-|`agentic`|32|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
+|`full` (default)|49|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
+|`agentic`|33|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
 
 The `agentic` profile drops 16 tools: the five netlist-editing wrappers
 (`create_netlist`, `read_circuit`, `set_component_value`, `parameter`,
@@ -318,6 +402,13 @@ validated + geometry-aware + LTspice-specific overlap.
 - **Cross-run analysis**: `compare_corners`, `find_worst_case`,
   `sensitivity_ranking` — tools that aggregate measurements across a
   set of runs and return structured deltas.
+- **Waveform plotting**: rendered plots (Bode magnitude/phase pairs,
+  stepped-param overlays) and an opt-in always-attach plot, as a
+  shape-recognition backup for LLM and human alike — riding alongside the
+  scalars and the shipped `get_waveform` stat-envelope (which already
+  provides the decimated "let me look" egress and consumes
+  `max_points_returned` as its bucket ceiling). Resolves the remaining
+  half of the scalar-only rigidity noted under *Waveforms* above.
 - **Pin-compatible alternate suggestions** for unknown parts.
 - **`schematic` profile** (geometry tools only, no simulation) for
   layout-focused agents — pending a real user request, since each

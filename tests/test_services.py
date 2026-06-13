@@ -376,6 +376,51 @@ class TestNgspicePreflightWarnings:
             services.ngspice_preflight_warnings(net, self._ngspice_cls())
 
 
+class TestNgspicePreflightMeasNames:
+    """The analysis-type token (tran/ac/dc/op/noise) in a ``.meas`` line is
+    OPTIONAL. The measurement NAME must be read from the right position whether
+    or not the token is present. Regression: the parser used a fixed ``parts[2]``
+    index, so a keyword-less ``.meas vfoo FIND ...`` wrongly reported the
+    ``FIND`` keyword (and a keyword-ful ``.meas tran trise TRIG ...`` wrongly
+    reported ``TRIG``) as the measurement name. ``ngspice_preflight_warnings``
+    echoes the lowercased line, so names come back lowercase."""
+
+    @staticmethod
+    def _ngspice_cls():
+        from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+        return NGspiceSimulator
+
+    def test_keywordless_and_keywordful_names_parsed_correctly(self, tmp_path: Path):
+        net = tmp_path / "meas.cir"
+        net.write_text(
+            "R1 out 0 1k\n"
+            "V1 out 0 PULSE(0 1 0 1n 1n 1u 2u)\n"
+            ".meas vfoo FIND V(out) AT 1n\n"
+            ".meas tran trise TRIG V(out)=0.1 RISE=1 TARG V(out)=0.9 RISE=1\n"
+            ".tran 1n 1u\n"
+            ".end\n"
+        )
+        warns = services.ngspice_preflight_warnings(net, self._ngspice_cls())
+        assert warns, "expected a non-empty warning list for ngspice + .meas"
+        # One combined warning lists every skipped measurement name.
+        text = " ".join(warns).lower()
+        assert "vfoo" in text
+        assert "trise" in text
+        # The bug grabbed the FIND/TRIG keyword as the name — must not appear.
+        assert "find" not in text
+        assert "trig" not in text
+
+    def test_non_ngspice_simulator_returns_empty(self, tmp_path: Path):
+        net = tmp_path / "meas.cir"
+        net.write_text("R1 out 0 1k\n.meas vfoo FIND V(out) AT 1n\n.tran 1n 1u\n.end\n")
+
+        class NotNgspice:  # not an NGspiceSimulator subclass
+            pass
+
+        assert services.ngspice_preflight_warnings(net, NotNgspice) == []
+
+
 class TestScanBatchConvergence:
     """scan_batch_convergence must scan EVERY terminal batch — including an
     ``interrupted`` job recovered after restart, whose completed sub-runs are
