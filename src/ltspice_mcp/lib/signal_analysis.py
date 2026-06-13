@@ -117,6 +117,31 @@ class SignalStatsOutput(TypedDict):
     pk_pk: float
 
 
+class WaveformBucket(TypedDict):
+    """One equal-time bucket of a decimated waveform envelope."""
+
+    x_start: float
+    x_end: float
+    min: float
+    max: float
+    mean: float
+    rms: float
+    pk_pk: float
+    crest_factor: float | None
+    num_samples: int
+
+
+class StatEnvelopeOutput(TypedDict):
+    """Return shape of :func:`stat_envelope`."""
+
+    buckets: list[WaveformBucket]
+    point_count: int
+    bucket_count: int
+    x_start: float
+    x_end: float
+    decimated: bool
+
+
 class HistogramBin(TypedDict):
     """One bin in a ``.MEAS`` value histogram."""
 
@@ -861,6 +886,85 @@ def compute_signal_stats(
         "min": y_min,
         "max": y_max,
         "pk_pk": y_max - y_min,
+    }
+
+
+def stat_envelope(t: np.ndarray, y: np.ndarray, n_buckets: int) -> StatEnvelopeOutput:
+    """Decimate a real waveform into up to ``n_buckets`` equal-time buckets.
+
+    Each bucket carries the raw sample ``min``/``max`` over its time slice — a
+    narrow spike is never averaged away (the point of an envelope vs a plain
+    downsample) — plus time-weighted trapezoidal ``mean``/``rms`` (via
+    :func:`compute_signal_stats`, correct on LTspice's adaptive timestep) and
+    ``pk_pk``/``crest_factor`` facts. Buckets tile ``[t[0], t[-1]]`` by equal
+    time width so each maps to a comparable real interval (like a plot column);
+    intervals with no samples are skipped, so ``bucket_count`` may be less than
+    the requested count. ``crest_factor`` is ``peak/rms`` (peak =
+    max(|min|, |max|)), or ``None`` when ``rms`` is ~0 — a meaningless ratio is
+    omitted rather than reported. Assumes a monotonically non-decreasing axis
+    (as produced by :func:`window_and_clean`).
+    """
+    if len(t) != len(y):
+        raise ValueError(f"Axis and wave have different lengths: {len(t)} vs {len(y)}")
+    if len(t) < 1:
+        raise ValueError("Signal has no samples")
+    if n_buckets < 1:
+        raise ValueError(f"n_buckets must be >= 1, got {n_buckets}")
+
+    x_start = float(t[0])
+    x_end = float(t[-1])
+    n = min(n_buckets, len(t))
+
+    if x_end <= x_start or n == 1:
+        # Degenerate axis span (or a single bucket requested): one bucket holding
+        # every sample. compute_signal_stats' duration==0 path handles it.
+        edges = np.array([x_start, x_end], dtype=float)
+        idx = np.zeros(len(t), dtype=np.intp)
+        n = 1
+    else:
+        edges = np.linspace(x_start, x_end, n + 1)
+        # Bucket index = count of interior edges <= the sample (side="right" so a
+        # sample landing exactly on an edge falls into the upper bucket).
+        idx = np.searchsorted(edges[1:-1], t, side="right")
+
+    # idx is non-decreasing (t is sorted and edges are sorted), so each bucket's
+    # samples form a CONTIGUOUS slice. Aggregate by slice bounds — O(samples +
+    # buckets) total — instead of rebuilding an ``idx == b`` full-length mask per
+    # bucket, which is O(samples * buckets) and would stall the event loop on a
+    # large raw with a high bucket count.
+    bounds = np.concatenate(([0], np.cumsum(np.bincount(idx, minlength=n)))).astype(np.intp)
+
+    buckets: list[WaveformBucket] = []
+    for b in range(n):
+        lo = int(bounds[b])
+        hi = int(bounds[b + 1])
+        if hi == lo:
+            continue
+        core = compute_signal_stats(t[lo:hi], y[lo:hi])
+        rms = core["rms"]
+        peak = max(abs(core["min"]), abs(core["max"]))
+        crest = float(peak / rms) if rms > _LEVEL_EPSILON else None
+        buckets.append(
+            {
+                "x_start": float(edges[b]),
+                "x_end": float(edges[b + 1]),
+                "min": core["min"],
+                "max": core["max"],
+                "mean": core["mean"],
+                "rms": rms,
+                "pk_pk": core["pk_pk"],
+                "crest_factor": crest,
+                "num_samples": core["num_samples"],
+            }
+        )
+
+    return {
+        "buckets": buckets,
+        "point_count": len(t),
+        "bucket_count": len(buckets),
+        "x_start": x_start,
+        "x_end": x_end,
+        "decimated": len(t) > len(buckets),
     }
 
 

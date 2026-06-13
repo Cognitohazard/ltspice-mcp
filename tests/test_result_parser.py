@@ -18,6 +18,7 @@ from ltspice_mcp.lib.raw_parser import (
     extract_operating_point,
     get_step_count,
     is_ac_analysis,
+    is_dc_analysis,
     query_point_value,
     sample_to_dict,
 )
@@ -69,6 +70,23 @@ class TestIsAcAnalysis:
     def test_non_ac(self):
         assert is_ac_analysis("Transient Analysis") is False
         assert is_ac_analysis("DC sweep") is False
+
+
+class TestIsDcAnalysis:
+    def test_dc_analysis_variants(self):
+        assert is_dc_analysis("DC transfer characteristic") is True
+        assert is_dc_analysis("DC sweep") is True
+
+    def test_dc_analysis_non_dc(self):
+        assert is_dc_analysis("Transient Analysis") is False
+        assert is_dc_analysis("AC Analysis") is False
+        assert is_dc_analysis("Noise Spectral Density") is False
+
+    def test_dc_analysis_word_boundary(self):
+        # "dc" appearing only inside a word (substring present, no word
+        # boundary) must not match — these discriminate \bDC\b from `"dc" in s`.
+        assert is_dc_analysis("abcdc") is False
+        assert is_dc_analysis("adc") is False
 
 
 class TestGetStepCount:

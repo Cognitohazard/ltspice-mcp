@@ -248,9 +248,17 @@ def ngspice_preflight_warnings(netlist_path: Path, simulator_class: type) -> lis
                 "or remove the .step line and set the parameter to a fixed value."
             )
         if stripped.startswith(".meas"):
+            # .meas[ure] [analysis-type] <name> <FIND|PARAM|TRIG|WHEN|...> ...
+            # The analysis-type token (tran/ac/dc/op/noise) is OPTIONAL; when it
+            # is omitted the name is parts[1], not parts[2] (e.g. ".meas vfoo FIND
+            # V(a)" — parts[2] would wrongly grab "find"). ``stripped`` is already
+            # lowercased. Mirrors MeasCard.from_card's optional-token skip.
             parts = stripped.split()
-            if len(parts) >= 3:
-                meas_names.append(parts[2])
+            idx = 1
+            if len(parts) > idx and parts[idx] in ("tran", "ac", "dc", "op", "noise"):
+                idx += 1
+            if len(parts) > idx:
+                meas_names.append(parts[idx])
     if meas_names:
         names = ", ".join(meas_names)
         warnings.append(
