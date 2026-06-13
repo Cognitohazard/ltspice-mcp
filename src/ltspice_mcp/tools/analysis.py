@@ -61,6 +61,7 @@ from ltspice_mcp.lib.raw_parser import (
     extract_operating_point,
     get_step_count,
     is_ac_analysis,
+    is_dc_analysis,
     is_noise_analysis,
     query_point_value,
     safe_magnitude_db,
@@ -77,6 +78,7 @@ from ltspice_mcp.lib.signal_analysis import (
     analyze_timing_between,
     compute_measurement_stats,
     compute_signal_stats,
+    stat_envelope,
     window_and_clean,
 )
 from ltspice_mcp.state import BatchJob, SessionState
@@ -114,14 +116,42 @@ def _parse_time(s: str | None, name: str) -> float | None:
     return v
 
 
-def _reject_ac(raw) -> None:
+def _reject_non_transient(raw) -> None:
+    """Reject AC / DC / noise raws from a transient-only metric tool.
+
+    edge/pulse/periodic/timing read rise-times, periods, and delays off a time
+    axis; an AC sweep (frequency axis, complex data), a .DC sweep (voltage
+    axis), or a noise spectrum (frequency axis) all produce meaningless numbers
+    here, so refuse them with a pointer to the right tool. A .op raw has no axis
+    and is not a sweep; the caller's get_axis call is guarded to surface a clean
+    ResultError pointing at operating_point.
+    """
     sim_type = detect_sim_type(raw)
-    if is_ac_analysis(sim_type):
+    if is_ac_analysis(sim_type) or is_dc_analysis(sim_type) or is_noise_analysis(sim_type):
         raise ResultError(
-            f"This tool requires transient analysis data; got {sim_type!r}. "
-            "Use signal_stats or simulation_summary for "
-            "frequency-domain analysis."
+            f"This tool requires transient analysis (.tran) data; got {sim_type!r}. "
+            "For a .DC sweep use query_value or signal_stats; for frequency-domain "
+            "(.AC / .noise) use bode_metrics or signal_stats."
         )
+
+
+def _guarded_axis(raw, step: int) -> np.ndarray:
+    """Real-valued sweep axis for ``step``, or a clean error for a no-axis raw.
+
+    spicelib's ``get_axis`` raises when a result has no axis (e.g. an Operating
+    Point run); convert that into a friendly ResultError pointing at
+    ``operating_point`` rather than letting it surface as a generic internal
+    error. AC frequency axes come back complex — strip to the real part.
+    """
+    try:
+        axis = np.asarray(raw.get_axis(step=step))
+    except Exception as e:
+        raise ResultError(
+            f"This result has no data axis ({e}). Use operating_point for a .op result."
+        ) from e
+    if np.iscomplexobj(axis):
+        axis = np.real(axis)
+    return axis
 
 
 async def _load_real_signal(
@@ -130,12 +160,10 @@ async def _load_real_signal(
     """Load (axis, wave) for a signal, rejecting AC/complex data."""
     raw_path = safe_path(raw_file, state)
     raw = await services.load_raw(raw_path, state)
-    _reject_ac(raw)
+    _reject_non_transient(raw)
     signal = services.validate_signal(raw, signal)
     services.validate_step(raw, step)
-    axis = np.asarray(raw.get_axis(step=step))
-    if np.iscomplexobj(axis):
-        axis = np.real(axis)
+    axis = _guarded_axis(raw, step)
     wave = np.asarray(raw.get_wave(signal, step=step))
     if np.iscomplexobj(wave):
         raise ResultError(
@@ -540,6 +568,247 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
             f"  ({stats['point_count']} samples)"
         )
     return format_response("\n".join(lines), {"signal": signal, **stats}, fmt)
+
+
+_DEFAULT_WAVEFORM_BUCKETS = 200
+
+
+def _busiest_bucket(buckets: list[dict]) -> int | None:
+    """Index of the bucket with the largest peak-to-peak (a where-to-look fact)."""
+    if not buckets:
+        return None
+    return max(range(len(buckets)), key=lambda i: buckets[i]["pk_pk"])
+
+
+def _format_waveform_text(
+    signal: str,
+    sim_type: str,
+    axis_unit: str,
+    env: dict,
+    observations: list[dict],
+) -> list[str]:
+    buckets = env["buckets"]
+    g_min = min((b["min"] for b in buckets), default=float("nan"))
+    g_max = max((b["max"] for b in buckets), default=float("nan"))
+    unit = f" {axis_unit}" if axis_unit else ""
+    lines = [
+        f"Waveform envelope: {signal} ({sim_type})",
+        f"  Window:  [{env['x_start']:.6g}, {env['x_end']:.6g}]{unit}",
+        f"  Points:  {env['point_count']} -> {env['bucket_count']} buckets"
+        + ("  (decimated)" if env["decimated"] else ""),
+        f"  Range:   min {g_min:.6g}   max {g_max:.6g}",
+        "",
+        "Per-bucket envelope (x_start, x_end, min, max, mean, rms, pk_pk, "
+        "crest_factor) is in structuredContent; narrow [t_start, t_end] to zoom.",
+    ]
+    lines.extend(format_observations(observations))
+    return lines
+
+
+class GetWaveformInput(ToolInput):
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to .raw result file. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Decimate a specific run of a completed sweep/MC (or single) job "
+            "instead of a raw_file path; pair with ``run_index``."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to read when ``job_id`` is given (default 0).",
+    )
+    signal: str = Field(description="Signal/trace name (e.g., 'V(out)', 'I(R1)').")
+    step: int = Field(default=0, description="Step index for .step directives.")
+    t_start: str | None = Field(
+        default=None,
+        description=(
+            "Window start in SPICE notation (e.g. '1m', '100u'). Narrow the window "
+            "and re-request to zoom into a region of interest."
+        ),
+    )
+    t_end: str | None = Field(
+        default=None,
+        description="Window end in SPICE notation.",
+    )
+    buckets: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Number of equal-time envelope buckets (overview resolution). Defaults "
+            "to 200; capped at the server's max_points_returned ceiling and at the "
+            "sample count."
+        ),
+    )
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
+
+
+@registry.tool(
+    name="get_waveform",
+    description=(
+        "Decimated waveform egress: a min/max-preserving stat-envelope of one "
+        "real-valued signal over a time/sweep/frequency window — for when a scalar "
+        "isn't enough and you need to see the SHAPE (switching nodes, amplifier "
+        "internal nodes, startup transients).\n\n"
+        "Splits the window into equal-time buckets; each bucket reports the raw "
+        "sample min/max (a narrow spike or ringing peak is never averaged away), "
+        "time-weighted trapezoidal mean/rms (correct on LTspice's adaptive "
+        "timestep), pk_pk, and crest_factor (peak/rms — high = impulsive/spiky). "
+        "Scalar-guided zoom: read the envelope, then re-request a narrower "
+        "[t_start, t_end] to resolve a region at higher resolution (same call, "
+        "tighter window). The ``observations`` list surfaces FACTS, not verdicts "
+        "(decimation coverage, dropped non-finite samples, which bucket has the "
+        "largest pk-to-pk) — you decide what the shape means.\n\n"
+        "Works on transient (.tran), DC sweep (.dc), and noise (.noise) results. "
+        "For complex AC data use bode_metrics; for a single scalar use "
+        "signal_stats; for one point value use query_value."
+    ),
+    input_model=GetWaveformInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "signal": {"type": "string"},
+            "analysis_type": {"type": "string"},
+            "axis_unit": {"type": "string"},
+            "window_start_used": {"type": "number"},
+            "window_end_used": {"type": "number"},
+            "point_count": {"type": "integer"},
+            "bucket_count": {"type": "integer"},
+            "max_points_ceiling": {"type": "integer"},
+            "decimated": {"type": "boolean"},
+            "buckets": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "x_start": {"type": "number"},
+                        "x_end": {"type": "number"},
+                        "min": {"type": "number"},
+                        "max": {"type": "number"},
+                        "mean": {"type": "number"},
+                        "rms": {"type": "number"},
+                        "pk_pk": {"type": "number"},
+                        "crest_factor": {"type": ["number", "null"]},
+                        "num_samples": {"type": "integer"},
+                    },
+                },
+            },
+            "observations": OBSERVATIONS_SCHEMA,
+        },
+    },
+)
+async def handle_get_waveform(args: GetWaveformInput, state: SessionState):
+    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
+    fmt = args.format
+    step = args.step
+
+    raw = await services.load_raw(raw_path, state)
+    signal = services.validate_signal(raw, args.signal)
+    services.validate_step(raw, step)
+
+    try:
+        wave = np.asarray(raw.get_wave(signal, step=step))
+    except Exception as e:
+        raise ResultError(f"Failed to read signal {signal!r}: {e}") from e
+    if wave.size == 0:
+        raise ResultError(f"Signal {signal!r} has no data points at step {step}.")
+    if np.iscomplexobj(wave):
+        raise ResultError(
+            "get_waveform returns a real-valued (time/sweep-domain) envelope; "
+            f"signal {signal!r} is complex (AC analysis). Use bode_metrics for "
+            "magnitude/phase vs frequency, or query_value at a specific frequency.",
+            show_hint=False,
+        )
+
+    axis = _guarded_axis(raw, step)
+
+    sim_type_raw = detect_sim_type(raw)
+    if is_noise_analysis(sim_type_raw):
+        analysis_type, axis_unit = "noise", "Hz"
+    elif is_dc_analysis(sim_type_raw):
+        analysis_type, axis_unit = "dc", ""
+    else:
+        analysis_type, axis_unit = "transient", "s"
+
+    x_win, y_win, dropped = _window(axis, wave, args.t_start, args.t_end)
+
+    ceiling = state.config.max_points_returned
+    requested = args.buckets if args.buckets is not None else _DEFAULT_WAVEFORM_BUCKETS
+    n_buckets = max(1, min(requested, ceiling))
+
+    env = _run(stat_envelope, x_win, y_win, n_buckets)
+
+    # Surface FACTS, not verdicts (result-trust doctrine): decimation coverage,
+    # dropped non-finite samples, and a where-to-look pointer to the busiest
+    # bucket. The model decides what the shape is and where to zoom next.
+    observations: list[dict] = []
+    if env["decimated"]:
+        observations.append(
+            {
+                "code": "decimated",
+                "kind": "coverage",
+                "detail": (
+                    f"{env['point_count']} samples reduced to {env['bucket_count']} "
+                    "equal-time buckets; sub-bucket detail is not represented. "
+                    "Re-request a narrower [t_start, t_end] to resolve a region."
+                ),
+            }
+        )
+    if dropped:
+        observations.append(
+            {
+                "code": "non_finite",
+                "kind": "value",
+                "detail": (
+                    f"{dropped} non-finite sample(s) dropped from the window before bucketing."
+                ),
+            }
+        )
+    busiest = _busiest_bucket(env["buckets"])
+    if busiest is not None:
+        b = env["buckets"][busiest]
+        unit = f" {axis_unit}" if axis_unit else ""
+        observations.append(
+            {
+                "code": "max_pk_pk_bucket",
+                "kind": "value",
+                "detail": (
+                    f"Bucket {busiest} ([{b['x_start']:.6g}, {b['x_end']:.6g}]{unit}) "
+                    f"has the largest peak-to-peak ({b['pk_pk']:.6g}) in the window; "
+                    "narrow the window there to resolve it."
+                ),
+                "evidence": {
+                    "bucket_index": busiest,
+                    "x_start": b["x_start"],
+                    "x_end": b["x_end"],
+                    "pk_pk": b["pk_pk"],
+                },
+            }
+        )
+
+    data = {
+        "signal": signal,
+        "analysis_type": analysis_type,
+        "axis_unit": axis_unit,
+        "window_start_used": env["x_start"],
+        "window_end_used": env["x_end"],
+        "point_count": env["point_count"],
+        "bucket_count": env["bucket_count"],
+        "max_points_ceiling": ceiling,
+        "decimated": env["decimated"],
+        "buckets": env["buckets"],
+        "observations": observations,
+    }
+    lines = _format_waveform_text(signal, sim_type_raw, axis_unit, env, observations)
+    return format_response("\n".join(lines), data, fmt)
 
 
 @registry.tool(
@@ -1400,14 +1669,12 @@ async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
 async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
     raw_path = safe_path(args.raw_file, state)
     raw = await services.load_raw(raw_path, state)
-    _reject_ac(raw)
+    _reject_non_transient(raw)
     sig_a = services.validate_signal(raw, args.signal_a)
     sig_b = services.validate_signal(raw, args.signal_b)
     services.validate_step(raw, args.step)
 
-    axis = np.asarray(raw.get_axis(step=args.step))
-    if np.iscomplexobj(axis):
-        axis = np.real(axis)
+    axis = _guarded_axis(raw, args.step)
     ya_full = np.asarray(raw.get_wave(sig_a, step=args.step))
     yb_full = np.asarray(raw.get_wave(sig_b, step=args.step))
     if np.iscomplexobj(ya_full) or np.iscomplexobj(yb_full):

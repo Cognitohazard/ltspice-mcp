@@ -103,6 +103,15 @@ def is_noise_analysis(sim_type: str) -> bool:
     return bool(_RE_NOISE.search(sim_type))
 
 
+def is_dc_analysis(sim_type: str) -> bool:
+    """Check if the sim type is a .DC sweep (transfer characteristic).
+
+    Word-boundary match on "DC" so LTspice's "DC transfer characteristic"
+    matches while substrings inside unrelated words do not.
+    """
+    return bool(_RE_DC.search(sim_type))
+
+
 def get_step_count(raw: RawRead) -> int:
     """Get number of simulation steps (for .step directives).
 

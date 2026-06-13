@@ -6,6 +6,7 @@ known answers and edge-case handling.
 
 from __future__ import annotations
 
+import itertools
 import math
 
 import numpy as np
@@ -19,6 +20,7 @@ from ltspice_mcp.lib.signal_analysis import (
     analyze_timing_between,
     compute_measurement_stats,
     compute_signal_stats,
+    stat_envelope,
     window_and_clean,
 )
 
@@ -797,3 +799,105 @@ class TestPulseResponseDoubleTransition:
         assert out["overshoot_pct"] == 0
         assert out["quality"] == []
         assert not any("full pulse" in w for w in out["warnings"])
+
+
+# ---------------------------------------------------------------------------
+# stat_envelope
+# ---------------------------------------------------------------------------
+
+
+class TestStatEnvelope:
+    def test_spike_survives_bucketing(self):
+        # A single tall sample must show up as the max of exactly one bucket —
+        # an envelope keeps raw extrema, it never averages a narrow spike away.
+        t = np.linspace(0, 1, 1000)
+        y = np.zeros_like(t)
+        spike_idx = 437
+        y[spike_idx] = 5.0
+        env = stat_envelope(t, y, 10)
+        maxes = [b["max"] for b in env["buckets"]]
+        spike_buckets = [m for m in maxes if m == pytest.approx(5.0)]
+        assert len(spike_buckets) == 1
+        # Every other bucket's max stays at the baseline.
+        others = [m for m in maxes if m != pytest.approx(5.0)]
+        assert all(m == pytest.approx(0.0, abs=1e-12) for m in others)
+
+    def test_single_bucket_matches_compute_signal_stats(self):
+        t = np.linspace(0, 1, 1000)
+        y = np.sin(2 * np.pi * 3 * t)
+        env = stat_envelope(t, y, 1)
+        assert len(env["buckets"]) == 1
+        bucket = env["buckets"][0]
+        stats = compute_signal_stats(t, y)
+        assert bucket["min"] == pytest.approx(stats["min"])
+        assert bucket["max"] == pytest.approx(stats["max"])
+        assert bucket["mean"] == pytest.approx(stats["mean"])
+        assert bucket["rms"] == pytest.approx(stats["rms"])
+
+    def test_crest_factor_none_on_zero_rms(self):
+        t = np.linspace(0, 1, 1000)
+        y = np.zeros_like(t)
+        env = stat_envelope(t, y, 1)
+        assert env["buckets"][0]["crest_factor"] is None
+
+    def test_crest_factor_on_nonzero_signal(self):
+        t = np.linspace(0, 1, 1000)
+        y = 2.0 + np.sin(2 * np.pi * 5 * t)
+        env = stat_envelope(t, y, 1)
+        bucket = env["buckets"][0]
+        peak = max(abs(bucket["min"]), abs(bucket["max"]))
+        assert bucket["crest_factor"] == pytest.approx(peak / bucket["rms"])
+
+    def test_bucket_cap_not_decimated_when_buckets_exceed_points(self):
+        t = np.linspace(0, 1, 1000)
+        y = np.sin(2 * np.pi * 3 * t)
+        env = stat_envelope(t[:50], y[:50], 1000)
+        assert env["bucket_count"] <= 50
+        assert env["decimated"] is False
+
+    def test_coarse_request_is_decimated(self):
+        t = np.linspace(0, 1, 1000)
+        y = np.sin(2 * np.pi * 3 * t)
+        env = stat_envelope(t, y, 10)
+        assert env["decimated"] is True
+
+    def test_equal_time_tiling(self):
+        t = np.linspace(0, 1, 1000)
+        y = np.sin(2 * np.pi * 3 * t)
+        env = stat_envelope(t, y, 10)
+        buckets = env["buckets"]
+        starts = [b["x_start"] for b in buckets]
+        ends = [b["x_end"] for b in buckets]
+        # Strictly ascending bucket boundaries.
+        assert all(b > a for a, b in itertools.pairwise(starts))
+        assert all(b > a for a, b in itertools.pairwise(ends))
+        assert buckets[0]["x_start"] == pytest.approx(float(t[0]))
+        assert buckets[-1]["x_end"] == pytest.approx(float(t[-1]))
+
+    def test_invalid_n_buckets(self):
+        t = np.linspace(0, 1, 1000)
+        y = np.zeros_like(t)
+        with pytest.raises(ValueError, match="n_buckets must be >= 1"):
+            stat_envelope(t, y, 0)
+
+    def test_length_mismatch(self):
+        with pytest.raises(ValueError, match="different lengths"):
+            stat_envelope(np.zeros(10), np.zeros(11), 5)
+
+    def test_large_input_is_linear_not_quadratic(self):
+        # Complexity regression: stat_envelope is O(samples + buckets) (np.bincount
+        # + contiguous slices). Under the old O(samples * buckets) implementation —
+        # an ``idx == b`` full-length mask rebuilt per bucket — this 1e6-sample /
+        # 1e4-bucket call would do ~1e10 operations and effectively hang. Completing
+        # quickly AND correctly is the guard; no brittle wall-clock assertion.
+        n_samples = 1_000_000
+        t = np.linspace(0, 1, n_samples)
+        y = np.zeros(n_samples)
+        y[500_000] = 7.0  # single narrow spike
+        env = stat_envelope(t, y, 10_000)
+        assert env["point_count"] == n_samples
+        assert 1 <= env["bucket_count"] <= 10_000
+        assert env["decimated"] is True
+        # The spike survives decimation — envelope keeps raw extrema, never averages
+        # a narrow spike away.
+        assert max(b["max"] for b in env["buckets"]) == pytest.approx(7.0)

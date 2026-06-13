@@ -20,6 +20,7 @@ from ltspice_mcp.tools.analysis import (
     FilterMetricsInput,
     FindCrossingInput,
     GainAtInput,
+    GetWaveformInput,
     MeasurementStatsInput,
     OperatingPointInput,
     PeriodicMetricsInput,
@@ -36,6 +37,7 @@ from ltspice_mcp.tools.analysis import (
     handle_filter_metrics,
     handle_find_crossing,
     handle_gain_at,
+    handle_get_waveform,
     handle_measurement_stats,
     handle_operating_point,
     handle_periodic_metrics,
@@ -1675,3 +1677,297 @@ class TestSimulationSummaryBuildFailureHint:
         assert excinfo.value.show_hint is False
         # Must not re-suggest the tool that just failed.
         assert "simulation_summary" not in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+class TestGetWaveform:
+    """get_waveform decimates one real-valued signal into a min/max-preserving
+    stat-envelope. The autouse output-schema conformance hook validates the
+    structuredContent shape on every successful call, so each happy-path case
+    here is also a schema-conformance test."""
+
+    async def test_no_axis_op_raw_rejected(self, state_no_sim: SessionState, work_dir: Path):
+        # A real Operating Point raw has no axis; _guarded_axis must surface a
+        # clean ResultError pointing at operating_point, not a generic crash.
+        raw = _stage_recorded(work_dir, "op_extreme_node")
+        with pytest.raises(ResultError, match="operating_point"):
+            await handle_get_waveform(
+                GetWaveformInput(raw_file=raw.name, signal="V(hot)"), state_no_sim
+            )
+
+    async def test_transient_envelope_invariants(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "wave.raw"
+        t = np.linspace(0, 1, 200)
+        y = np.sin(2 * np.pi * t)
+        raw = _make_raw_mock(
+            plotname="Transient Analysis",
+            trace_names=["time", "V(out)"],
+            waves={"time": t, "V(out)": y},
+            axis=t,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+
+        result = await handle_get_waveform(
+            GetWaveformInput(raw_file=raw_file.name, signal="V(out)"),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc is not None
+        assert sc["analysis_type"] == "transient"
+        assert sc["bucket_count"] > 0
+        assert sc["point_count"] > 0
+        assert len(sc["buckets"]) == sc["bucket_count"]
+        for b in sc["buckets"]:
+            assert b["min"] <= b["mean"] <= b["max"]
+            assert b["rms"] >= 0
+            assert b["pk_pk"] == pytest.approx(b["max"] - b["min"])
+
+    async def test_decimated_observations(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "wave.raw"
+        t = np.linspace(0, 1, 1000)
+        y = np.sin(2 * np.pi * 5 * t)
+        raw = _make_raw_mock(
+            plotname="Transient Analysis",
+            trace_names=["time", "V(out)"],
+            waves={"time": t, "V(out)": y},
+            axis=t,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+
+        result = await handle_get_waveform(
+            GetWaveformInput(raw_file=raw_file.name, signal="V(out)", buckets=10),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc is not None
+        assert sc["decimated"] is True
+        codes = {(o["code"], o["kind"]) for o in sc["observations"]}
+        assert ("decimated", "coverage") in codes
+        assert "max_pk_pk_bucket" in {o["code"] for o in sc["observations"]}
+
+    async def test_bucket_cap_from_config(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "wave.raw"
+        t = np.linspace(0, 1, 500)
+        y = np.cos(2 * np.pi * t)
+        raw = _make_raw_mock(
+            plotname="Transient Analysis",
+            trace_names=["time", "V(out)"],
+            waves={"time": t, "V(out)": y},
+            axis=t,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        state_no_sim.config.max_points_returned = 5
+
+        result = await handle_get_waveform(
+            GetWaveformInput(raw_file=raw_file.name, signal="V(out)", buckets=1000),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc is not None
+        assert sc["bucket_count"] <= 5
+        assert sc["max_points_ceiling"] == 5
+
+    async def test_ac_complex_rejected_points_to_bode(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw_file = work_dir / "ac.raw"
+        freqs = np.logspace(0, 6, 100)
+        wave = 1.0 / (1 + 1j * freqs / 1000)
+        raw = _make_raw_mock(
+            plotname="AC Analysis",
+            trace_names=["frequency", "V(out)"],
+            waves={"frequency": freqs, "V(out)": wave},
+            axis=freqs,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        with pytest.raises(ResultError, match="bode_metrics"):
+            await handle_get_waveform(
+                GetWaveformInput(raw_file=raw_file.name, signal="V(out)"),
+                state_no_sim,
+            )
+
+    async def test_recorded_transient_fixture(self, state_no_sim: SessionState, work_dir: Path):
+        raw = _stage_recorded(work_dir, "ltspice_tran_rc")
+        result = await handle_get_waveform(
+            GetWaveformInput(raw_file=raw.name, signal="V(out)"),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc is not None
+        assert sc["analysis_type"] == "transient"
+        assert sc["bucket_count"] > 0
+
+    async def test_recorded_dc_fixture_accepted(self, state_no_sim: SessionState, work_dir: Path):
+        # get_waveform accepts a .DC sweep raw (it only rejects complex AC);
+        # the real Plotname 'DC transfer characteristic' must classify as 'dc'.
+        raw = _stage_recorded(work_dir, "ltspice_dc_div")
+        result = await handle_get_waveform(
+            GetWaveformInput(raw_file=raw.name, signal="V(out)"),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc is not None
+        assert sc["analysis_type"] == "dc"
+        assert sc["bucket_count"] > 0
+
+    async def test_narrower_window_zoom(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "wave.raw"
+        t = np.linspace(0, 1, 400)
+        y = np.sin(2 * np.pi * t)
+        raw = _make_raw_mock(
+            plotname="Transient Analysis",
+            trace_names=["time", "V(out)"],
+            waves={"time": t, "V(out)": y},
+            axis=t,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+
+        full = await handle_get_waveform(
+            GetWaveformInput(raw_file=raw_file.name, signal="V(out)"),
+            state_no_sim,
+        )
+        full_sc = full.structuredContent
+        assert full_sc is not None
+
+        zoom = await handle_get_waveform(
+            GetWaveformInput(
+                raw_file=raw_file.name,
+                signal="V(out)",
+                t_start="0.25",
+                t_end="0.75",
+            ),
+            state_no_sim,
+        )
+        zoom_sc = zoom.structuredContent
+        assert zoom_sc is not None
+        # The narrower window is strictly inside the full window.
+        assert zoom_sc["window_start_used"] >= full_sc["window_start_used"]
+        assert zoom_sc["window_end_used"] <= full_sc["window_end_used"]
+        assert zoom_sc["window_start_used"] >= 0.25 - 1e-9
+        assert zoom_sc["window_end_used"] <= 0.75 + 1e-9
+        # Every bucket's x-range stays within the requested zoom bounds.
+        for b in zoom_sc["buckets"]:
+            assert b["x_start"] >= 0.25 - 1e-9
+            assert b["x_end"] <= 0.75 + 1e-9
+
+    async def test_noise_classification(self, state_no_sim: SessionState, work_dir: Path):
+        # LTspice's real Plotname for a .noise run is "Noise Spectral Density -
+        # (V/Hz½)"; the axis is frequency (Hz), not time, and the wave is a real,
+        # positive spectral density. get_waveform must classify it as 'noise' and
+        # label the axis 'Hz'.
+        raw_file = work_dir / "noise.raw"
+        freqs = np.logspace(0, 6, 100)
+        density = 1e-9 / np.sqrt(1 + (freqs / 1000) ** 2)
+        raw = _make_raw_mock(
+            plotname="Noise Spectral Density - (V/Hz½)",
+            trace_names=["frequency", "V(onoise)"],
+            waves={"frequency": freqs, "V(onoise)": density},
+            axis=freqs,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+
+        result = await handle_get_waveform(
+            GetWaveformInput(raw_file=raw_file.name, signal="V(onoise)"),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc is not None
+        assert sc["analysis_type"] == "noise"
+        assert sc["axis_unit"] == "Hz"
+
+    async def test_crest_factor_none_for_zero_signal(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # An all-zero wave makes every bucket's rms == 0, so crest_factor (peak/rms)
+        # is undefined and surfaced as null. Exercising it through the handler
+        # carries the None through format_response + the autouse schema-conformance
+        # hook, proving the WaveformBucket schema accepts a null crest_factor.
+        raw_file = work_dir / "zero.raw"
+        t = np.linspace(0, 1, 200)
+        y = np.zeros(200)
+        raw = _make_raw_mock(
+            plotname="Transient Analysis",
+            trace_names=["time", "V(out)"],
+            waves={"time": t, "V(out)": y},
+            axis=t,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+
+        result = await handle_get_waveform(
+            GetWaveformInput(raw_file=raw_file.name, signal="V(out)"),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc is not None
+        assert sc["buckets"]
+        assert any(b["crest_factor"] is None for b in sc["buckets"])
+        # And the rms that drove it to None really is zero.
+        for b in sc["buckets"]:
+            if b["crest_factor"] is None:
+                assert b["rms"] == pytest.approx(0.0, abs=1e-12)
+
+    async def test_sub_three_sample_window_rejected(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A coarse 5-point axis with a window that brackets a single sample:
+        # [1.5, 2.5] slices to index [2:3] (one sample). window_and_clean needs
+        # at least 3 samples, so the handler must RAISE a ResultError, not return
+        # a degenerate one-bucket envelope.
+        raw_file = work_dir / "coarse.raw"
+        t = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+        y = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+        raw = _make_raw_mock(
+            plotname="Transient Analysis",
+            trace_names=["time", "V(out)"],
+            waves={"time": t, "V(out)": y},
+            axis=t,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+
+        with pytest.raises(ResultError, match="at least 3"):
+            await handle_get_waveform(
+                GetWaveformInput(
+                    raw_file=raw_file.name, signal="V(out)", t_start="1.5", t_end="2.5"
+                ),
+                state_no_sim,
+            )
+
+
+@pytest.mark.asyncio
+class TestDcRejectedByTransientTools:
+    """Regression: a .DC sweep raw produces a voltage (not time) axis, so the
+    transient-only tools (edge/pulse/periodic/timing) must refuse it instead of
+    reading meaningless rise-times off it. A real recorded raw is used so the
+    actual Plotname 'DC transfer characteristic' flows through the reject path
+    (a mock could mask the classification)."""
+
+    @pytest.mark.parametrize(
+        ("handler", "input_factory"),
+        [
+            (handle_edge_metrics, lambda name: EdgeMetricsInput(raw_file=name, signal="V(out)")),
+            (
+                handle_pulse_response,
+                lambda name: PulseResponseInput(raw_file=name, signal="V(out)"),
+            ),
+            (
+                handle_periodic_metrics,
+                lambda name: PeriodicMetricsInput(raw_file=name, signal="V(out)"),
+            ),
+            (
+                handle_timing_between,
+                lambda name: TimingBetweenInput(
+                    raw_file=name, signal_a="V(out)", signal_b="V(out)"
+                ),
+            ),
+        ],
+        ids=["edge_metrics", "pulse_response", "periodic_metrics", "timing_between"],
+    )
+    async def test_transient_tools_reject_dc_raw(
+        self, state_no_sim: SessionState, work_dir: Path, handler, input_factory
+    ):
+        # timing_between rejects at a DISTINCT call site from the edge/pulse/
+        # periodic loader, so it gets its own parametrize case rather than relying
+        # on the shared one being exercised.
+        raw = _stage_recorded(work_dir, "ltspice_dc_div")
+        with pytest.raises(ResultError, match="transient"):
+            await handler(input_factory(raw.name), state_no_sim)
