@@ -197,14 +197,107 @@ model's conclusion. Relative comparisons beat bare-magnitude thresholds
 (one constant, one meaning). The model decides what the shape *is* and
 where to look next; the server only makes the facts cheap to read.
 
-**Optional always-attach plot.** A config option makes waveform / analysis
-responses carry a rendered plot (MCP `ImageContent`) of the queried window
-*alongside* the scalars and the stat-envelope datapoints — not instead of
-them. The plot is the gestalt layer for the vision branch above, and it is
-AI-zoomable by construction: because it renders the *queried window*, the
-same narrowing zoom loop re-renders it at finer scale. Off by default
-(token cost, non-vision clients); on for clients that want
-shape-at-a-glance riding with every result.
+**Optional always-attach plot.** A config default plus a per-call tool
+parameter make waveform / analysis responses carry a rendered plot (MCP
+`ImageContent`) of the queried window *alongside* the scalars and the
+stat-envelope datapoints — not instead of them. The plot is the gestalt
+layer for the vision branch above, and it is AI-zoomable by construction:
+because it renders the *queried window*, the same narrowing zoom loop
+re-renders it at finer scale. Off by default (token cost, non-vision
+clients); on for clients that want shape-at-a-glance riding with every
+result, with a per-call override either way.
+
+### Decided egress & plot surface (2026-06-13)
+
+The layered surface above resolves into three delivery channels, keyed by
+*who consumes the output* — and the right channel for each is settled even
+though one library choice is still open.
+
+| Consumer | Needs | Channel |
+|-|-|-|
+| The agent (computes) | the numbers, full fidelity | `export_waveform` → CSV on disk |
+| A vision model (one frame) | shape-at-a-glance | static PNG (`ImageContent`) attached to a result |
+| A human (explores) | an interactive plot | `plot_waveform`, rendered to the richest surface the client supports |
+
+A verified constraint shapes the last two: **the terminal CLIs do not render
+images for the human.** Claude Code passes an `ImageContent` PNG to the
+*model* (vision works) but never shows it to the user; Codex handles
+tool-returned images unreliably (it tends to dump base64 into context). The
+MCP "apps" widget surface (`ui://` HTML in a sandboxed iframe) is
+**GUI-host-only** — Claude Desktop / claude.ai web, not the terminal. And
+**interactivity benefits the human, not the LLM** — a model consumes a single
+rendered frame, so zoom / pan / hover buys it nothing.
+
+- **`export_waveform` (CSV) — full-fidelity egress to disk.** Returns a path,
+  not data (full resolution in a response would blow context — the reason
+  `get_waveform` decimates). Works on every analysis type. `.step` /
+  Monte-Carlo runs are written **tidy / long** (`step_index, step_value, x,
+  <signals…>`), which is forced rather than chosen: transient `.step` runs
+  have a *different time vector per step*, so a wide shared-`x` layout is
+  wrong. Complex AC traces default to **magnitude(dB) + phase(deg)** columns
+  (lossless polar form, plot-ready, and the form the AC structural-analysis
+  methods read), with `re/im` and `both` as a `complex_format` option. This
+  is the *only* path that emits the full complex `H(f)` array — `get_waveform`
+  rejects AC and `bode_metrics` returns scalars — so it is also the substrate
+  the AC structural-analysis layer stands on. It stays a clean egress: **no**
+  derived slope / group-delay / residual columns (those belong to the
+  detector layer, not the substrate). Bounded by *windowing* (the
+  scalar-guided-zoom loop), not silent decimation. No new dependencies.
+  **Shipped.** Final column scheme: a unit-tagged x header (`time_s` /
+  `freq_Hz` / `sweep`); real traces as their canonical name (`V(out)`);
+  complex traces as `V(out)_mag_dB` + `V(out)_phase_deg` (or `_re`/`_im`, or
+  all four). Phase is the **wrapped** `np.angle` (the lossless primitive — a
+  consumer runs `np.unwrap` themselves). Non-finite samples are **kept** and
+  counted (not dropped), so columns stay row-aligned. The CSV lands under
+  `<circuit_dir>/.ltspice-mcp/waveforms/` (Linux-side, never beside a
+  Windows-temp raw); a descending/non-monotonic axis is refused when windowed
+  (searchsorted would corrupt it). Hardening from review: rows stream straight
+  into the atomic temp file (no whole-CSV copy held in memory) under a generous
+  row-count backstop that raises rather than truncates; the resolved output is
+  rejected if a symlinked sidecar would redirect it outside the circuit
+  directory; and in a stepped run a step whose axis misses the window is skipped
+  with a surfaced fact rather than failing the whole export.
+- **`plot_waveform` — adaptive, progressive enhancement.** One interactive
+  chart core, two delivery wrappers chosen by the client detected at
+  `initialize`: an in-chat **`ui://` widget** for an apps-capable GUI host
+  (realistically Claude Desktop for a local stdio server), or render-to-HTML
+  **opened on the local desktop** (probe an available opener — on WSL
+  `explorer.exe` / `cmd.exe /c start` via a `wslpath -w` conversion, else
+  `xdg-open` / `open` / `start`) for a terminal client — and *always* a text
+  summary + the data path so the model
+  keeps reasoning. Because the server is local, "interactive for co-design"
+  needs no widget infrastructure: it just opens a window / browser the OS
+  renders, which works identically under any CLI. The interactive chart is
+  built on **uPlot** (~50 KB, zero-dependency, canvas-2D) inlined into one
+  self-contained HTML — it inlines cleanly into both the offline file and the
+  payload-capped widget and has the perf headroom to render full-fidelity
+  transients; chosen over Plotly (~1.5 MB, heavy to inline per widget) because
+  both inline size and tail perf favor it once the chart can receive full
+  data. It is **not** a Python plotting dependency. **Fidelity:** full by
+  default, a `max_points` parameter to override, and a min/max-preserving
+  downsample that engages only above a high cap and is surfaced in
+  `observations` (no silent truncation).
+- **Static PNG (the vision tier) — opt-in.** A config default
+  `[analysis] attach_plot` (off) **plus** a per-call `attach_plot` tool
+  parameter that overrides it: an operator can make a plot ride with every
+  analysis result, while the model can opt in or out for a single call.
+  Default off (a base64 PNG on every result is expensive, useless to
+  non-vision clients, and barely works in Codex). Gated on the optional
+  `[plot]` extra (matplotlib); absent → skip and note, don't error. Scoped to
+  the tools where a plot adds gestalt first (`get_waveform`, `bode_metrics`).
+
+**Fidelity by consumer.** `get_waveform` decimates (the LLM's context is the
+limit), `export_waveform` is lossless (disk has no such limit), and
+`plot_waveform` defaults to full fidelity (a browser is not context-bound),
+capping only at the byte tail.
+
+**Dependency line.** The core install stays lean. The interactive channel
+adds **uPlot** (~50 KB, zero-dep, inlined) only (no Python plotting
+dependency); **matplotlib is confined to the static-PNG tier and ships as an
+optional `[plot]` extra.**
+**Renderer principle:** the plot layer takes plain arrays + labels and is
+ignorant of `job` / `RunRef` internals, so the three channels stay swappable
+behind one data contract.
 
 ## Architecture
 
@@ -244,8 +337,8 @@ Key `lib/` modules:
 
 |profile|tool count|use case|
 |-|-|-|
-|`full` (default)|49|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
-|`agentic`|33|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
+|`full` (default)|50|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
+|`agentic`|34|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
 
 The `agentic` profile drops 16 tools: the five netlist-editing wrappers
 (`create_netlist`, `read_circuit`, `set_component_value`, `parameter`,
@@ -402,13 +495,13 @@ validated + geometry-aware + LTspice-specific overlap.
 - **Cross-run analysis**: `compare_corners`, `find_worst_case`,
   `sensitivity_ranking` — tools that aggregate measurements across a
   set of runs and return structured deltas.
-- **Waveform plotting**: rendered plots (Bode magnitude/phase pairs,
-  stepped-param overlays) and an opt-in always-attach plot, as a
-  shape-recognition backup for LLM and human alike — riding alongside the
-  scalars and the shipped `get_waveform` stat-envelope (which already
-  provides the decimated "let me look" egress and consumes
-  `max_points_returned` as its bucket ceiling). Resolves the remaining
-  half of the scalar-only rigidity noted under *Waveforms* above.
+- **Waveform egress & plotting**: the surface is now specified (see *Decided
+  egress & plot surface* above) — `export_waveform` (full-fidelity CSV, all
+  analysis types) first, then the adaptive `plot_waveform` (terminal
+  local-open before the GUI-host `ui://` widget), then the opt-in static-PNG
+  attach for the vision tier. What remains is implementation (uPlot for the
+  interactive tier). Resolves the remaining half of the scalar-only rigidity
+  noted under *Waveforms* above.
 - **Pin-compatible alternate suggestions** for unknown parts.
 - **`schematic` profile** (geometry tools only, no simulation) for
   layout-focused agents — pending a real user request, since each

@@ -23,8 +23,11 @@ return derived metrics. Organized by what the tool answers:
         simulation_summary  — sim type, signals, warnings, key metrics
 """
 
+import asyncio
 import contextlib
+import csv
 import math
+from datetime import datetime
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -33,7 +36,7 @@ from mcp import types
 from pydantic import Field
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib import services
+from ltspice_mcp.lib import atomic_write, services
 from ltspice_mcp.lib.ac_analysis import (
     CrossingWithQuantity,
     FilterMetricsOutput,
@@ -52,7 +55,8 @@ from ltspice_mcp.lib.ac_analysis import (
     prepare_ac_arrays,
 )
 from ltspice_mcp.lib.format import parse_spice_value
-from ltspice_mcp.lib.log_parser import parse_measurements
+from ltspice_mcp.lib.job_store import SIDECAR_DIRNAME
+from ltspice_mcp.lib.log_parser import parse_measurements, parse_step_iterations
 from ltspice_mcp.lib.raw_parser import (
     OperatingPointOutput,
     build_simulation_summary,
@@ -808,6 +812,469 @@ async def handle_get_waveform(args: GetWaveformInput, state: SessionState):
         "observations": observations,
     }
     lines = _format_waveform_text(signal, sim_type_raw, axis_unit, env, observations)
+    return format_response("\n".join(lines), data, fmt)
+
+
+# ---------------------------------------------------------------------------
+# export_waveform — full-fidelity CSV egress to disk
+# ---------------------------------------------------------------------------
+
+WAVEFORMS_SUBDIR = "waveforms"
+
+# Generous backstop against a pathological export exhausting memory/disk. Full
+# fidelity is the contract, so this is high and RAISES with guidance to window —
+# never silently truncates (no silent caps).
+_EXPORT_MAX_ROWS = 20_000_000
+
+# x-column header per analysis type (unit-tagged so the CSV is self-describing).
+_X_HEADER = {
+    "transient": "time_s",
+    "ac": "freq_Hz",
+    "noise": "freq_Hz",
+    "dc": "sweep",
+}
+
+
+def _window_indices(axis: np.ndarray, ts: float | None, te: float | None) -> tuple[int, int]:
+    """``[lo, hi)`` sample indices for the ``[ts, te]`` window on a real axis.
+
+    Unlike ``window_and_clean`` this keeps non-finite samples (full-fidelity
+    egress) and imposes no minimum sample count. It DOES reproduce the
+    monotonicity requirement: ``searchsorted`` returns silently-wrong indices on
+    a descending sweep, so refuse one rather than write a corrupt window.
+
+    An empty selection (``lo >= hi``) is returned, not raised: a stepped export
+    may legitimately have one step whose axis does not reach the window, and the
+    caller decides whether to skip that step or fail the whole export.
+    """
+    if ts is None and te is None:
+        return 0, int(axis.size)
+    if axis.size > 1 and not bool(np.all(np.diff(axis) >= 0)):
+        raise ResultError(
+            "Cannot apply a [t_start, t_end] window to a non-monotonic axis "
+            "(e.g. a descending sweep); omit the window to export the full axis."
+        )
+    if ts is not None and te is not None and ts >= te:
+        raise ResultError(f"t_start ({ts:g}) must be < t_end ({te:g}).")
+    lo = 0 if ts is None else int(np.searchsorted(axis, ts, side="left"))
+    hi = int(axis.size) if te is None else int(np.searchsorted(axis, te, side="right"))
+    return lo, hi
+
+
+def _complex_columns(
+    name: str, wave: np.ndarray, complex_format: str
+) -> tuple[list[str], list[np.ndarray]]:
+    """Expand one complex AC trace into (column names, real-valued arrays).
+
+    Phase is the WRAPPED ``np.angle`` in degrees — the lossless primitive
+    matching query_value/bode_metrics; a consumer who wants a continuous curve
+    runs ``np.unwrap`` themselves. Magnitude uses the shared ``safe_magnitude_db``
+    (floored to avoid -inf at exact zeros).
+    """
+    if complex_format == "re_im":
+        return [f"{name}_re", f"{name}_im"], [np.real(wave), np.imag(wave)]
+    if complex_format == "both":
+        return (
+            [f"{name}_mag_dB", f"{name}_phase_deg", f"{name}_re", f"{name}_im"],
+            [safe_magnitude_db(wave), np.degrees(np.angle(wave)), np.real(wave), np.imag(wave)],
+        )
+    return (
+        [f"{name}_mag_dB", f"{name}_phase_deg"],
+        [safe_magnitude_db(wave), np.degrees(np.angle(wave))],
+    )
+
+
+def _export_filename(
+    raw_path: Path, analysis_type: str, job_id: str | None, run_index: int
+) -> str:
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S_%f")
+    run = f"_run{run_index}" if job_id else ""
+    return f"{raw_path.stem}_{analysis_type}{run}_{stamp}.csv"
+
+
+def _build_and_write(
+    raw,
+    raw_path: Path,
+    cols: list[str],
+    n_steps: int,
+    analysis_type: str,
+    ts: float | None,
+    te: float | None,
+    complex_format: str,
+    out_path: Path,
+) -> dict:
+    """Assemble tidy/long rows for every step, render CSV, write it atomically.
+
+    Runs entirely in a worker thread: heavy numpy reads, O(N) row assembly, and
+    file I/O. Returns only FACTS — the handler turns them into observations and
+    builds the response on the event loop (the concurrency contract keeps
+    response building off worker threads).
+    """
+    stepped = n_steps > 1
+    x_header = _X_HEADER[analysis_type]
+
+    # Per-step .step parameter values for the step_value column. spicelib's
+    # get_steps() carries only integers, not the name=value map, so recover it
+    # from the sibling .log (same source query_value(step_axis=) uses).
+    step_dicts: list[dict[str, float]] = []
+    if stepped:
+        log_path = raw_path.with_suffix(".log")
+        if log_path.exists():
+            step_dicts = parse_step_iterations(log_path)
+
+    header: list[str] | None = None
+    row_count = 0
+    non_finite = 0
+    had_complex = False
+    empty_steps: list[int] = []
+    win_lo: float | None = None
+    win_hi: float | None = None
+
+    # Stream rows straight into the atomic temp file: one step's data is the most
+    # held in memory at once (no global rows list, no whole-CSV StringIO copy), so
+    # a huge full-fidelity export does not balloon RAM. Any exception here unlinks
+    # the temp and leaves the destination untouched.
+    with atomic_write(out_path) as f:
+        csv_writer = csv.writer(f)
+        for step in range(n_steps):
+            axis = _guarded_axis(raw, step)
+            lo, hi = _window_indices(axis, ts, te)
+            if lo >= hi:
+                # This step's axis does not intersect the window (a step may end
+                # earlier than its siblings). Skip it; surfaced as a fact.
+                empty_steps.append(step)
+                continue
+            axis_w = axis[lo:hi]
+            col_names: list[str] = []
+            col_arrays: list[np.ndarray] = []
+            for name in cols:
+                wave = np.asarray(raw.get_wave(name, step=step))
+                if wave.size == 0:
+                    raise ResultError(f"Signal {name!r} has no data points at step {step}.")
+                wave_w = wave[lo:hi]
+                non_finite += int(np.count_nonzero(~np.isfinite(wave_w)))
+                # Key on the trace's own dtype, not the run type: an AC raw can hold
+                # a real trace, and a stray complex trace must not become one column.
+                if np.iscomplexobj(wave_w):
+                    had_complex = True
+                    names, arrays = _complex_columns(name, wave_w, complex_format)
+                else:
+                    names, arrays = [name], [wave_w]
+                col_names.extend(names)
+                col_arrays.extend(arrays)
+
+            if header is None:
+                prefix = ["step_index", "step_value"] if stepped else []
+                header = [*prefix, x_header, *col_names]
+                csv_writer.writerow(header)
+
+            lo0, hi0 = float(axis_w[0]), float(axis_w[-1])
+            win_lo = lo0 if win_lo is None else min(win_lo, lo0)
+            win_hi = hi0 if win_hi is None else max(win_hi, hi0)
+
+            # .tolist() converts numpy -> python floats (full round-trippable repr)
+            # at C speed; zip transposes columns into tidy/long rows.
+            columns = [axis_w.tolist(), *(a.tolist() for a in col_arrays)]
+            if stepped:
+                label = (
+                    ";".join(f"{k}={v:g}" for k, v in step_dicts[step].items())
+                    if step < len(step_dicts)
+                    else ""
+                )
+                csv_writer.writerows(
+                    [step, label, *values] for values in zip(*columns, strict=True)
+                )
+            else:
+                csv_writer.writerows(zip(*columns, strict=True))
+            row_count += len(axis_w)
+            if row_count > _EXPORT_MAX_ROWS:
+                raise ResultError(
+                    f"Export exceeds the {_EXPORT_MAX_ROWS:,}-row safety cap "
+                    f"({row_count:,}+ rows). Narrow [t_start, t_end] or export fewer signals."
+                )
+
+        if header is None:
+            # Every step was skipped — the window selected no samples anywhere.
+            raise ResultError(
+                "The [t_start, t_end] window selects no samples"
+                + (f" in any of the {n_steps} steps." if stepped else ".")
+            )
+
+    return {
+        "row_count": row_count,
+        "column_count": len(header),
+        "columns": header,
+        "n_steps": n_steps,
+        "window_used": [win_lo, win_hi] if win_lo is not None else [],
+        "non_finite": non_finite,
+        "had_complex": had_complex,
+        "empty_steps": empty_steps,
+        "step_values_available": bool(step_dicts) if stepped else None,
+    }
+
+
+class ExportWaveformInput(ToolInput):
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to .raw result file. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Export a specific run of a completed sweep/MC (or single) job "
+            "instead of a raw_file path; pair with ``run_index``."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to read when ``job_id`` is given (default 0).",
+    )
+    signals: list[str] | Literal["all"] = Field(
+        default="all",
+        description=(
+            "Trace names to export (e.g. ['V(out)', 'I(R1)']) or 'all' for every non-axis trace."
+        ),
+    )
+    t_start: str | None = Field(
+        default=None,
+        description=(
+            "Window start in SPICE notation (e.g. '1m', '100u', '1k'). Bounds the "
+            "export by windowing, not decimation — full fidelity inside the window."
+        ),
+    )
+    t_end: str | None = Field(
+        default=None,
+        description="Window end in SPICE notation.",
+    )
+    complex_format: Literal["mag_phase", "re_im", "both"] = Field(
+        default="mag_phase",
+        description=(
+            "How complex AC traces become columns: 'mag_phase' = magnitude(dB) + "
+            "phase(deg) [default], 're_im' = real + imag, 'both' = all four. Ignored "
+            "for real-valued (.tran/.dc/.noise) traces."
+        ),
+    )
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
+
+
+@registry.tool(
+    name="export_waveform",
+    description=(
+        "Full-fidelity waveform egress: write every sample of one or more signals "
+        "to a CSV file on disk and return its path — for when you want to compute on "
+        "the raw data yourself (FFT, custom metrics, cross-correlation) rather than "
+        "read a scalar or a decimated envelope.\n\n"
+        "Lossless within the chosen window (no decimation — that is get_waveform's "
+        "job). Works on transient (.tran), DC sweep (.dc), AC (.ac), and noise "
+        "(.noise). Complex AC traces are written as magnitude(dB)+phase(deg) by "
+        "default (``complex_format`` selects re/im or both); phase is the wrapped "
+        "np.angle — run np.unwrap yourself for a continuous curve. A stepped "
+        "(.step / Monte-Carlo) run is written tidy/long: one row per (step, sample) "
+        "with leading step_index/step_value columns, because each transient step has "
+        "its own time vector. The ``observations`` list surfaces FACTS (rows written, "
+        "window coverage, non-finite samples KEPT, the complex format used) — not "
+        "verdicts.\n\n"
+        "Returns the CSV path plus row/column counts; read the file with your own "
+        "tools. For a quick in-context shape use get_waveform; for a single scalar "
+        "use signal_stats/query_value."
+    ),
+    input_model=ExportWaveformInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=False,
+    ),
+    profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "row_count": {"type": "integer"},
+            "column_count": {"type": "integer"},
+            "columns": {"type": "array", "items": {"type": "string"}},
+            "signals": {"type": "array", "items": {"type": "string"}},
+            "analysis_type": {"type": "string", "enum": ["transient", "ac", "dc", "noise"]},
+            "n_steps": {"type": "integer"},
+            "window_used": {"type": "array", "items": {"type": "number"}},
+            "complex_format": {"type": ["string", "null"]},
+            "observations": OBSERVATIONS_SCHEMA,
+        },
+    },
+)
+async def handle_export_waveform(args: ExportWaveformInput, state: SessionState):
+    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
+    fmt = args.format
+    if isinstance(args.signals, list) and not args.signals:
+        raise ResultError("Pass at least one signal, or 'all'.")
+
+    raw = await services.load_raw(raw_path, state)
+    # A .op raw has no sweep axis to tabulate — refuse early with the clean
+    # pointer to operating_point, not by failing mid-write inside the worker.
+    _guarded_axis(raw, 0)
+
+    sim_type = detect_sim_type(raw)
+    if is_noise_analysis(sim_type):
+        analysis_type = "noise"
+    elif is_ac_analysis(sim_type):
+        analysis_type = "ac"
+    elif is_dc_analysis(sim_type):
+        analysis_type = "dc"
+    else:
+        analysis_type = "transient"
+
+    # Signal columns (canonical names), excluding the axis (trace 0).
+    trace_names = raw.get_trace_names()
+    axis_name = trace_names[0]
+    if args.signals == "all":
+        cols = list(trace_names[1:])
+    else:
+        seen: set[str] = set()
+        cols = []
+        for s in args.signals:
+            canon = services.validate_signal(raw, s)
+            if canon == axis_name:
+                raise ResultError(f"{s!r} is the sweep axis, not a signal column.")
+            if canon not in seen:
+                seen.add(canon)
+                cols.append(canon)
+    if not cols:
+        raise ResultError("No signal traces to export (the result has only an axis).")
+
+    n_steps = get_step_count(raw)
+    ts = _parse_time(args.t_start, "t_start")
+    te = _parse_time(args.t_end, "t_end")
+
+    # Destination: a Linux-side sidecar next to the CIRCUIT, never next to the
+    # raw — a job-run raw can live in a Windows temp under /mnt/c that the client
+    # cannot Read. Output is a server artifact, so it is not run through safe_path.
+    if args.job_id:
+        dest_anchor = services.resolve_job(args.job_id, state).netlist.parent
+    else:
+        dest_anchor = safe_path(args.raw_file, state).parent  # type: ignore[arg-type]
+    out_path = (
+        dest_anchor
+        / SIDECAR_DIRNAME
+        / WAVEFORMS_SUBDIR
+        / _export_filename(raw_path, analysis_type, args.job_id, args.run_index)
+    ).resolve()
+    # Refuse to follow a symlinked sidecar out of the circuit directory: if
+    # .ltspice-mcp/ or waveforms/ is a symlink, .resolve() would point the write
+    # outside the anchor. Server-artifact paths skip safe_path, so enforce
+    # containment explicitly here.
+    if not out_path.is_relative_to(dest_anchor.resolve()):
+        raise ResultError(
+            "Refusing to write the export outside the circuit directory "
+            "(a symlinked .ltspice-mcp/ or waveforms/ would redirect it)."
+        )
+
+    try:
+        facts = await asyncio.to_thread(
+            _build_and_write,
+            raw,
+            raw_path,
+            cols,
+            n_steps,
+            analysis_type,
+            ts,
+            te,
+            args.complex_format,
+            out_path,
+        )
+    except ValueError as e:
+        raise ResultError(
+            f"Failed to assemble the export (corrupt or truncated .raw?): {e}"
+        ) from e
+
+    # Surface FACTS, not verdicts (result-trust doctrine).
+    observations: list[dict] = []
+    step_note = " with step_index/step_value columns (tidy/long)" if facts["n_steps"] > 1 else ""
+    observations.append(
+        {
+            "code": "export_written",
+            "kind": "coverage",
+            "detail": (
+                f"Wrote {facts['row_count']} row(s) x {facts['column_count']} column(s) "
+                f"for {facts['n_steps']} step(s){step_note}."
+            ),
+        }
+    )
+    if args.t_start is not None or args.t_end is not None:
+        observations.append(
+            {
+                "code": "window_applied",
+                "kind": "coverage",
+                "detail": (
+                    f"Exported the windowed range {facts['window_used']} "
+                    f"({_X_HEADER[analysis_type]}); samples outside it were excluded."
+                ),
+            }
+        )
+    if facts["empty_steps"]:
+        observations.append(
+            {
+                "code": "window_empty_steps",
+                "kind": "coverage",
+                "detail": (
+                    f"{len(facts['empty_steps'])} step(s) had no samples in the window "
+                    f"and were omitted: {facts['empty_steps']}."
+                ),
+            }
+        )
+    if facts["non_finite"]:
+        observations.append(
+            {
+                "code": "non_finite",
+                "kind": "value",
+                "detail": (
+                    f"{facts['non_finite']} non-finite sample(s) are present and were "
+                    "KEPT in the CSV (full fidelity), not dropped."
+                ),
+            }
+        )
+    if facts["step_values_available"] is False:
+        observations.append(
+            {
+                "code": "step_value_unavailable",
+                "kind": "value",
+                "detail": (
+                    "step_value column left blank: no .step parameter map found in the "
+                    "sibling .log."
+                ),
+            }
+        )
+    if facts["had_complex"]:
+        observations.append(
+            {
+                "code": "complex_format_used",
+                "kind": "value",
+                "detail": (
+                    f"Complex AC traces written as {args.complex_format!r}; phase is "
+                    "the WRAPPED np.angle in degrees (run np.unwrap for a continuous curve)."
+                ),
+            }
+        )
+
+    data = {
+        "path": str(out_path),
+        "row_count": facts["row_count"],
+        "column_count": facts["column_count"],
+        "columns": facts["columns"],
+        "signals": cols,
+        "analysis_type": analysis_type,
+        "n_steps": facts["n_steps"],
+        "window_used": facts["window_used"],
+        "complex_format": args.complex_format if facts["had_complex"] else None,
+        "observations": observations,
+    }
+    lines = [
+        f"Exported {facts['row_count']} row(s) to {out_path}",
+        f"Columns: {', '.join(facts['columns'])}",
+        *format_observations(observations),
+    ]
     return format_response("\n".join(lines), data, fmt)
 
 

@@ -121,8 +121,8 @@ Simulation output is automatically redirected to a Windows temp directory: LTspi
 
 | Profile | Tools | Use case |
 |-|-|-|
-| `full` (default) | 49 | Any MCP client, automation, non-agent LLMs |
-| `agentic` | 33 | LLM agents with native file access (Read/Edit/Write) |
+| `full` (default) | 50 | Any MCP client, automation, non-agent LLMs |
+| `agentic` | 34 | LLM agents with native file access (Read/Edit/Write) |
 
 The `agentic` profile drops netlist-editing wrappers and library session management — work a capable agent does through direct file edits — and keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, and the `.asc` geometry tools. The `skills/` directory (`skills/ltspice/SKILL.md`, `skills/ngspice/SKILL.md`) contains the domain knowledge that pairs with it: copy the relevant skill into your client's persistent-instructions location.
 
@@ -173,7 +173,7 @@ and gets back scalars, not a plot:
 Off-target → `set_component_value`, re-run, re-measure. Long simulations return a job ID instead of blocking; `check_job`/`cancel_job` manage them. Job metadata persists in per-circuit sidecars (`{dir}/.ltspice-mcp/jobs/` — add `.ltspice-mcp/` to your `.gitignore`), and MCP resources (`ltspice://results/...`, `ltspice://netlists/...`, `ltspice://config`) expose jobs, signals, measurements, and config for browsing.
 
 <details>
-<summary><strong>All 49 tools</strong></summary>
+<summary><strong>All 50 tools</strong></summary>
 
 Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`); data-returning tools declare an `outputSchema` for `structuredContent` introspection.
 
@@ -206,6 +206,7 @@ Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempot
 | `cancel_job` | Cancel a running simulation or batch; kills the simulator process(es) |
 | `signal_stats` | Min, max, mean, RMS, peak-to-peak (dB/phase for AC) |
 | `get_waveform` | Decimated min/max stat-envelope of a signal over a window — see the shape, then re-request a narrower window to zoom |
+| `export_waveform` | Full-fidelity CSV egress of one or more signals to disk (all analysis types; tidy/long for `.step`); returns the path to compute on yourself |
 | `query_value` | Signal value at a specific time/frequency; `step_axis`+`step_value` picks a `.step` run |
 | `operating_point` | DC operating point: all node voltages and branch currents |
 | `simulation_summary` | Full summary: simulation type, signals, measurements, warnings |
