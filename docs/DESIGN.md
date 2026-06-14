@@ -276,7 +276,21 @@ rendered frame, so zoom / pan / hover buys it nothing.
   data. It is **not** a Python plotting dependency. **Fidelity:** full by
   default, a `max_points` parameter to override, and a min/max-preserving
   downsample that engages only above a high cap and is surfaced in
-  `observations` (no silent truncation).
+  `observations` (no silent truncation). **Shipped (terminal local-open
+  tier).** uPlot is vendored as a bundled MIT asset under
+  `src/ltspice_mcp/assets/uplot/` (shipped in the wheel, inlined at render — no
+  pip dep, no CDN). The opener probes WSL `explorer.exe` (via `wslpath -w`) else
+  `xdg-open`/`open`/`startfile`, spawned detached so it never blocks; a step
+  whose axis misses the window is skipped, transient `.step` overlays with
+  differing per-step time vectors are null-padded onto a union x, AC Bode phase
+  is unwrapped for a readable curve, and non-finite samples become JSON `null`
+  gaps. A global per-panel **cell cap** refuses (before allocating) a plot whose
+  union-padded size would blow up — many distinct-axis steps null-pad every
+  series onto the union x, which `max_points` alone doesn't bound — pointing the
+  caller at fewer signals/steps or a window. This tier unconditionally writes
+  HTML and opens it locally; client detection and the in-chat `ui://` widget are
+  the documented follow-up (to be wired against the MCP apps capability once that
+  surface is standardized), reusing the same chart core.
 - **Static PNG (the vision tier) — opt-in.** A config default
   `[analysis] attach_plot` (off) **plus** a per-call `attach_plot` tool
   parameter that overrides it: an operator can make a plot ride with every
@@ -337,8 +351,8 @@ Key `lib/` modules:
 
 |profile|tool count|use case|
 |-|-|-|
-|`full` (default)|50|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
-|`agentic`|34|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
+|`full` (default)|51|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
+|`agentic`|35|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
 
 The `agentic` profile drops 16 tools: the five netlist-editing wrappers
 (`create_netlist`, `read_circuit`, `set_component_value`, `parameter`,
