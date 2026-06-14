@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib import services
 from ltspice_mcp.lib.log_parser import extract_log_diagnostics, parse_measurements
 from ltspice_mcp.lib.raw_parser import (
     compute_ac_bandwidth_metrics,
@@ -22,6 +23,8 @@ from ltspice_mcp.lib.raw_parser import (
     query_point_value,
     sample_to_dict,
 )
+from ltspice_mcp.state import SessionState
+from tests.conftest import stage_recorded_fixture
 
 # --- Helpers to build mock RawRead objects ---
 
@@ -316,3 +319,29 @@ class TestSampleToDict:
         d = sample_to_dict(3.5)
         assert d == {"value": 3.5}
         assert "magnitude_linear" not in d
+
+
+class TestSteppedTransientAxes:
+    """Per-step structure of a real stepped ``.tran`` raw."""
+
+    def test_each_step_has_a_distinct_time_vector(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A stepped ``.tran`` run stores a different time vector per step.
+
+        LTspice's adaptive timestep yields a different sample count for each
+        ``.step`` value, so the steps cannot share one x-axis. This pins the
+        contract behind writing stepped runs in a tidy/long layout (one row
+        per step+sample) instead of a wide shared-x table. Recorded from a
+        real stepped-damping RLC transient (underdamped -> overdamped).
+        """
+        raw_path = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+        raw = services.load_raw_sync(raw_path, state_no_sim)
+
+        n_steps = get_step_count(raw)
+        assert n_steps > 1, "fixture must be a multi-step run"
+
+        lengths = [len(np.asarray(raw.get_axis(step=s))) for s in range(n_steps)]
+        assert len(set(lengths)) > 1, (
+            f"per-step time vectors should differ in length; got {lengths}"
+        )
