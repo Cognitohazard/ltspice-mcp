@@ -163,6 +163,15 @@ class TestServerLifecycle:
             missing = expected - names
             assert not missing, f"Missing tools: {missing}"
 
+    async def test_plot_waveform_declares_ui_resource_over_protocol(self, tmp_path):
+        # The MCP Apps UI link must survive the wire as _meta on the tool
+        # declaration (serialized by alias), or an apps host never fetches the
+        # renderer. Verify the round-tripped tool carries it.
+        async with mcp_session(tmp_path) as session:
+            result = await session.list_tools()
+            plot = next(t for t in result.tools if t.name == "plot_waveform")
+            assert plot.meta == {"ui": {"resourceUri": "ui://ltspice-mcp/plot"}}
+
     async def test_ping(self, tmp_path):
         async with mcp_session(tmp_path) as session:
             result = await session.send_ping()
@@ -548,17 +557,18 @@ class TestStatusTool:
 
 
 class TestResources:
-    async def test_list_resources_returns_five_static(self, tmp_path):
+    async def test_list_resources_returns_static_set(self, tmp_path):
         async with mcp_session(tmp_path) as session:
             result = await session.list_resources()
             resources = {r.name: r for r in result.resources}
-            assert len(resources) == 5
+            assert len(resources) == 6
             assert set(resources.keys()) == {
                 "netlists",
                 "results",
                 "models",
                 "config",
                 "recent",
+                "plot_widget",
             }
             assert str(resources["config"].uri) == "ltspice://config"
             assert str(resources["recent"].uri) == "ltspice://recent"
@@ -568,6 +578,15 @@ class TestResources:
             result = await session.list_resource_templates()
             templates = {t.name for t in result.resourceTemplates}
             assert templates == {"netlist_content", "job_signals", "job_measurements"}
+
+    async def test_read_ui_widget_resource_over_protocol(self, tmp_path):
+        # The MCP Apps renderer is served under the ui:// scheme — exercise the
+        # full SDK read path (AnyUrl parsing of a non-ltspice scheme) end to end.
+        async with mcp_session(tmp_path) as session:
+            result = await session.read_resource(AnyUrl("ui://ltspice-mcp/plot"))
+            entry = result.contents[0]
+            assert entry.mimeType == "text/html;profile=mcp-app"
+            assert "globalThis.ExtApps" in entry.text  # type: ignore[union-attr]
 
     async def test_read_config_resource_has_correct_fields(self, tmp_path):
         async with mcp_session(tmp_path) as session:

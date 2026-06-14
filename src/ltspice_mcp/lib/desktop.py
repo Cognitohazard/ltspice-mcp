@@ -1,17 +1,51 @@
-"""Non-blocking, best-effort local-desktop file opening.
+"""Plot delivery: client classification + non-blocking local-desktop opening.
 
-``plot_waveform`` writes an interactive HTML chart and opens it on the user's
-desktop. This module owns the detached opener so the chart core stays ignorant
-of how the result is delivered.
+``plot_waveform`` renders an interactive HTML chart and delivers it one of two
+ways: as an in-chat ``ui://`` widget for hosts that advertise MCP Apps support
+(SEP-1865), or by opening the HTML on the user's desktop for everyone else. This
+module owns the pure client classifier and the detached opener so the chart core
+stays ignorant of how the result is delivered.
 """
 
 import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from ltspice_mcp.lib.wsl import is_wsl, to_windows_path
+
+DeliveryChannel = Literal["terminal", "ui"]
+
+# SEP-1865 (MCP Apps) capability identifier. A client advertises it under
+# ``capabilities.extensions[...]`` at initialize to signal it can render ui://
+# HTML widgets in-chat. (Final/Stable since 2026-01-26.)
+_UI_EXTENSION = "io.modelcontextprotocol/ui"
+
+
+def client_supports_ui(caps: Any | None) -> bool:
+    """Whether the client advertised MCP Apps (``ui://`` widget) support.
+
+    The capability lives at ``capabilities.extensions["io.modelcontextprotocol/ui"]``.
+    The mcp SDK's ``ClientCapabilities`` has no typed ``extensions`` field, so it
+    arrives as an extra attribute (the model is ``extra="allow"``) — read it
+    defensively and default to unsupported.
+    """
+    if caps is None:
+        return False
+    extensions = getattr(caps, "extensions", None)
+    return isinstance(extensions, dict) and _UI_EXTENSION in extensions
+
+
+def resolve_delivery_channel(caps: Any | None) -> DeliveryChannel:
+    """Pick the plot delivery channel for the connected client.
+
+    ``"ui"`` (embed a ``ui://`` widget the host renders in-chat) when the client
+    advertises MCP Apps support, else ``"terminal"`` (write the HTML and open it
+    locally). The safe default is ``"terminal"``: a local server can always open a
+    window, and a non-UI host gets the universally-working path.
+    """
+    return "ui" if client_supports_ui(caps) else "terminal"
 
 
 def open_in_desktop(path: Path, *, spawn: Any = subprocess.Popen) -> tuple[bool, str | None]:

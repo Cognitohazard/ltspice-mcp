@@ -276,21 +276,30 @@ rendered frame, so zoom / pan / hover buys it nothing.
   data. It is **not** a Python plotting dependency. **Fidelity:** full by
   default, a `max_points` parameter to override, and a min/max-preserving
   downsample that engages only above a high cap and is surfaced in
-  `observations` (no silent truncation). **Shipped (terminal local-open
-  tier).** uPlot is vendored as a bundled MIT asset under
-  `src/ltspice_mcp/assets/uplot/` (shipped in the wheel, inlined at render — no
-  pip dep, no CDN). The opener probes WSL `explorer.exe` (via `wslpath -w`) else
-  `xdg-open`/`open`/`startfile`, spawned detached so it never blocks; a step
-  whose axis misses the window is skipped, transient `.step` overlays with
-  differing per-step time vectors are null-padded onto a union x, AC Bode phase
-  is unwrapped for a readable curve, and non-finite samples become JSON `null`
-  gaps. A global per-panel **cell cap** refuses (before allocating) a plot whose
-  union-padded size would blow up — many distinct-axis steps null-pad every
-  series onto the union x, which `max_points` alone doesn't bound — pointing the
-  caller at fewer signals/steps or a window. This tier unconditionally writes
-  HTML and opens it locally; client detection and the in-chat `ui://` widget are
-  the documented follow-up (to be wired against the MCP apps capability once that
-  surface is standardized), reusing the same chart core.
+  `observations` (no silent truncation). **Shipped — both delivery tiers.**
+  uPlot is vendored as a bundled MIT asset under `src/ltspice_mcp/assets/uplot/`
+  (in the wheel, inlined at render — no pip dep, no CDN); a step whose axis misses
+  the window is skipped, transient `.step` overlays with differing per-step time
+  vectors are null-padded onto a union x, AC Bode phase is unwrapped, and
+  non-finite samples become JSON `null` gaps. A global per-panel **cell cap**
+  refuses (before allocating) a plot whose union-padded size would blow up.
+  Delivery is chosen by the client detected at `initialize`
+  (`capabilities.extensions["io.modelcontextprotocol/ui"]`):
+  - **MCP Apps host (SEP-1865, Final 2026-01-26)** → an in-chat **`ui://`
+    widget**. The canonical wiring, *not* inline embedding: the `plot_waveform`
+    tool declares `_meta.ui.resourceUri`; one stable, predeclared renderer
+    resource (`ui://ltspice-mcp/plot`, uPlot + the vendored Apache-2.0 ext-apps
+    `App` runtime inlined) is served via `resources/read`; the host renders it in
+    a sandboxed iframe and pipes a **compact** chart spec — decimated harder than
+    the file, carried in the result **`_meta`** (a *non-model-visible* channel, so
+    the plot still returns no numbers to the model) — which `app.ontoolresult`
+    draws. The full-fidelity HTML still lands on disk; an oversized spec (byte cap)
+    or a build failure falls back to local-open, surfaced as a fact.
+  - **Terminal client** → the self-contained HTML is **opened locally**
+    (`explorer.exe` via `wslpath -w`, else `xdg-open`/`open`/`startfile`, spawned
+    detached so it never blocks).
+  Both always return the file path + a text summary, so a host with neither
+  surface degrades gracefully (the spec'd MCP Apps fallback).
 - **Static PNG (the vision tier) — opt-in.** A config default
   `[analysis] attach_plot` (off) **plus** a per-call `attach_plot` tool
   parameter that overrides it: an operator can make a plot ride with every
