@@ -24,6 +24,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
+from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, lex, tokenize_body
 from ltspice_mcp.lib.spice_lex_views import ELEMENT_SPECS, InstanceLine, MeasCard, SubcktCard
 
@@ -107,19 +108,60 @@ _RULES: tuple[_Rule, ...] = (
 )
 
 
+def _validate_tran_tstep(directive: str, simulator: str) -> ValidationError | None:
+    """Flag ``.tran 0 <tstop>`` (zero step time) when targeting ngspice.
+
+    LTspice accepts a zero step time as a request to pick the timestep itself
+    (auto-timestep). ngspice requires a positive step time and aborts the run
+    with "TSTEP is invalid". Only fires for the ngspice target so a clean
+    LTspice deck stays clean. The directive form is
+    ``.tran <Tstep> <Tstop> [<Tstart> [<Tmax>]] [modifiers]``; a parameterised
+    or non-numeric Tstep/Tstop is left alone (resolved at run time).
+    """
+    if simulator != "ngspice":
+        return None
+    tokens = directive.split()[1:]
+    if len(tokens) < 2:
+        # A lone value is a bare Tstop (an LTspice shorthand), not Tstep=0.
+        return None
+    try:
+        tstep = parse_spice_value(tokens[0])
+        tstop = parse_spice_value(tokens[1])
+    except ValueError:
+        return None
+    if tstep != 0 or tstop <= 0:
+        return None
+    return ValidationError(
+        rule_name="tran_tstep_zero_ngspice",
+        message=(
+            "ngspice rejects a zero step time (.tran 0 ...) with 'TSTEP is "
+            "invalid'; LTspice accepts it as auto-timestep. This deck will fail "
+            "on ngspice."
+        ),
+        suggestion=(
+            "Give a positive step time, e.g. '.tran <tstep> <tstop>' with "
+            "tstep around tstop/1000, or run it on LTspice."
+        ),
+    )
+
+
 def validate_directive(directive: str, simulator: str = "LTspice") -> ValidationError | None:
-    """Check a directive against the blocklist for the given simulator.
+    """Check a directive against the pre-flight rules for the given simulator.
 
     Returns the first matched rule's error, or None if no rule fires.
-    Empty / whitespace-only input is a no-op. Non-``.MEAS`` directives
-    pass through unchecked (no current rule applies to them).
+    Empty / whitespace-only input is a no-op. Covers ``.MEAS`` function
+    blocklists and the ``.tran`` zero-step ngspice incompatibility; other
+    directives pass through unchecked.
     """
     if not directive:
         return None
     stripped = directive.lstrip()
     if not stripped:
         return None
-    if not stripped.lower().startswith(".meas"):
+    lower = stripped.lower()
+    if lower.startswith(".tran"):
+        return _validate_tran_tstep(stripped, simulator)
+    if not lower.startswith(".meas"):
         return None
 
     # Parse via spice_lex to get classified tokens.
@@ -157,14 +199,17 @@ def _card_directive(card: SpiceCard) -> str:
     return card.raw_lines[0].rstrip() if card.raw_lines else card.body.strip()
 
 
-def validate_netlist_arity(cards: list[SpiceCard]) -> list[dict[str, object]]:
+def validate_netlist_arity(
+    cards: list[SpiceCard], *, simulator: str = "LTspice"
+) -> list[dict[str, object]]:
     """Flag instance cards whose positional-node count is below the per-
     element minimum, and B-sources missing the ``V=``/``I=`` prefix.
 
     Returns dicts matching the existing ``handle_validate_netlist`` issue
-    shape: ``{line, directive, message, suggestion}``. These are bodies
-    LTspice rejects at simulation time with ``Expected 2 node names
-    here`` or ``Unknown parameter``.
+    shape: ``{line, directive, message, suggestion}``. The node-count and
+    B-source checks are simulator-agnostic. ``simulator`` gates the one
+    LTspice-only rule (the ``C=``/``L=`` primary-value rejection): under a
+    non-LTspice target it is suppressed, since ngspice accepts those forms.
     """
     issues: list[dict[str, object]] = []
     for card in cards:
@@ -211,9 +256,11 @@ def validate_netlist_arity(cards: list[SpiceCard]) -> list[dict[str, object]]:
             )
             node_count = positionals_after_ref
             # Real LTspice 26 accepts R=<value>, but rejects C=<value> and
-            # L=<value> as unknown parameters. ngspice accepts all three; this
-            # validator is the LTspice pre-flight path.
-            if prefix in ("C", "L"):
+            # L=<value> as unknown parameters. ngspice accepts all three, so
+            # this rejection only applies to the LTspice target. (The
+            # node-count recompute above stays for both — it keeps the keyed
+            # value from being miscounted as a node either way.)
+            if prefix in ("C", "L") and simulator == "LTspice":
                 rewrite = " ".join([inst.ref, *inst.nodes, inst.value or ""])
                 issues.append(
                     {

@@ -822,6 +822,17 @@ def _extract_instance_ref(body: str) -> str | None:
     return parts[0] if parts else None
 
 
+# The optional analysis-type token that may precede the NAME in a
+# ``.MEAS [analysis] NAME ...`` directive. Distinct from
+# ``spice_validator.ANALYSIS_KINDS`` (top-level analysis directives) and
+# ``MEAS_KINDS`` (valid ``.meas <kind>`` forms): this set exists only to skip
+# the token during NAME extraction, so it includes ngspice's ``sp``
+# (S-parameter). ``spice_lex_views.MeasAnalysis`` mirrors these values at the
+# type level (a Literal cannot be derived from a runtime constant — keep both
+# in sync).
+MEAS_ANALYSIS_TOKENS: frozenset[str] = frozenset({"tran", "ac", "dc", "op", "noise", "sp"})
+
+
 def extract_meas_name(body: str) -> str | None:
     """Pull the measurement label from ``.MEAS [analysis] NAME ...``.
 
@@ -833,7 +844,7 @@ def extract_meas_name(body: str) -> str | None:
     if len(parts) < 2:
         return None
     second = parts[1].lower()
-    if second in ("tran", "ac", "dc", "op", "noise") and len(parts) >= 3:
+    if second in MEAS_ANALYSIS_TOKENS and len(parts) >= 3:
         return parts[2]
     return parts[1]
 

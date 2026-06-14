@@ -173,18 +173,31 @@ def window_and_clean(
     y: np.ndarray,
     t_start: float | None,
     t_end: float | None,
+    *,
+    allow_descending: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     """Slice to ``[t_start, t_end]`` and strip non-finite samples.
 
     Returns ``(t_clean, y_clean, dropped_nonfinite)``. Requires at least 3
     samples after cleaning.
+
+    ``allow_descending`` is for sweep axes (DC/noise) where a strictly
+    decreasing axis is a legitimate ordering (e.g. ``.dc V1 5 0 -0.1``), not
+    corruption: the axis and wave are flipped to ascending together so the
+    windowing below stays correct. It stays off for time/frequency axes, where
+    a non-monotonic axis means a corrupt result and must be refused.
     """
     if len(t) != len(y):
         raise ValueError(f"Axis and wave have different lengths: {len(t)} vs {len(y)}")
     if len(t) < 3:
         raise ValueError(f"Signal has only {len(t)} samples; need at least 3")
-    if not np.all(np.diff(t) >= 0):
-        raise ValueError("Time axis is not monotonically non-decreasing; cannot analyze")
+    dt = np.diff(t)
+    if not np.all(dt >= 0):
+        if allow_descending and np.all(dt <= 0):
+            t = t[::-1]
+            y = y[::-1]
+        else:
+            raise ValueError("Time axis is not monotonically non-decreasing; cannot analyze")
 
     axis_min = float(t[0])
     axis_max = float(t[-1])

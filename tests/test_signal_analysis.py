@@ -87,6 +87,40 @@ class TestWindowAndClean:
         with pytest.raises(ValueError, match="must be less than"):
             window_and_clean(t, y, 0.8, 0.2)
 
+    def test_descending_axis_refused_by_default(self):
+        # A strictly-decreasing axis is corruption for a time/frequency axis,
+        # so it is refused unless the caller opts in.
+        t = np.array([5.0, 4.0, 3.0, 2.0, 1.0, 0.0])
+        y = t * 2.0
+        with pytest.raises(ValueError, match="monotonically"):
+            window_and_clean(t, y, None, None)
+
+    def test_descending_axis_flipped_when_allowed(self):
+        # A descending DC sweep (e.g. ``.dc V1 5 0 -1``) is a legitimate
+        # ordering: allow_descending flips axis + wave together to ascending.
+        t = np.array([5.0, 4.0, 3.0, 2.0, 1.0, 0.0])
+        y = t * 2.0  # y tracks t so we can confirm the pairing survives the flip
+        t_out, y_out, _ = window_and_clean(t, y, None, None, allow_descending=True)
+        assert np.all(np.diff(t_out) >= 0)  # now ascending
+        assert np.allclose(y_out, t_out * 2.0)  # axis/wave stayed paired
+        assert t_out[0] == 0.0 and t_out[-1] == 5.0
+
+    def test_descending_axis_flip_then_window(self):
+        # Windowing after the flip uses ascending searchsorted correctly.
+        t = np.array([5.0, 4.0, 3.0, 2.0, 1.0, 0.0])
+        y = t.copy()
+        t_out, y_out, _ = window_and_clean(t, y, 1.0, 4.0, allow_descending=True)
+        assert t_out[0] >= 1.0 and t_out[-1] <= 4.0
+        assert np.allclose(y_out, t_out)
+
+    def test_scrambled_axis_refused_even_when_allowed(self):
+        # allow_descending only rescues a strictly-decreasing axis, not a
+        # genuinely non-monotonic (scrambled) one.
+        t = np.array([0.0, 2.0, 1.0, 3.0])
+        y = np.zeros_like(t)
+        with pytest.raises(ValueError, match="monotonically"):
+            window_and_clean(t, y, None, None, allow_descending=True)
+
 
 # ---------------------------------------------------------------------------
 # _interp_crossings

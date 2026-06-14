@@ -203,16 +203,28 @@ async def _load_real_signal(
     return axis, wave
 
 
+def _axis_may_descend(sim_type: str) -> bool:
+    """Whether this analysis can legitimately produce a descending axis.
+
+    Sweep analyses (DC, noise) may run high→low (e.g. ``.dc V1 5 0 -0.1``), so
+    their callers opt into the ``window_and_clean`` flip. Time/frequency axes
+    cannot descend, so a non-monotonic one there is corruption, not a sweep.
+    """
+    return is_dc_analysis(sim_type) or is_noise_analysis(sim_type)
+
+
 def _window(
     axis: np.ndarray,
     wave: np.ndarray,
     t_start: str | None,
     t_end: str | None,
+    *,
+    allow_descending: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     ts = _parse_time(t_start, "t_start")
     te = _parse_time(t_end, "t_end")
     try:
-        return window_and_clean(axis, wave, ts, te)
+        return window_and_clean(axis, wave, ts, te, allow_descending=allow_descending)
     except ValueError as e:
         raise ResultError(str(e)) from e
 
@@ -518,7 +530,9 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
     ts = _parse_time(args.t_start, "t_start")
     te = _parse_time(args.t_end, "t_end")
     try:
-        t_win, y_win, _ = window_and_clean(axis, wave_real, ts, te)
+        t_win, y_win, _ = window_and_clean(
+            axis, wave_real, ts, te, allow_descending=_axis_may_descend(sim_type_raw)
+        )
     except ValueError as e:
         raise ResultError(str(e)) from e
 
@@ -764,7 +778,9 @@ async def handle_get_waveform(args: GetWaveformInput, state: SessionState):
 
     sim_type_raw, analysis_type, axis_unit, _ = _classify_analysis(raw)
 
-    x_win, y_win, dropped = _window(axis, wave, args.t_start, args.t_end)
+    x_win, y_win, dropped = _window(
+        axis, wave, args.t_start, args.t_end, allow_descending=_axis_may_descend(sim_type_raw)
+    )
 
     ceiling = state.config.max_points_returned
     requested = args.buckets if args.buckets is not None else _DEFAULT_WAVEFORM_BUCKETS
