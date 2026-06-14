@@ -889,6 +889,36 @@ def compute_signal_stats(
     }
 
 
+def _equal_time_buckets(t: np.ndarray, n_buckets: int) -> tuple[np.ndarray, np.ndarray, int]:
+    """Tile ``[t[0], t[-1]]`` into up to ``n_buckets`` equal-time buckets.
+
+    Returns ``(edges, bounds, n)``: ``edges`` are the ``n + 1`` bucket boundaries
+    and ``bounds`` are ``n + 1`` cumulative sample counts, so bucket ``b`` owns the
+    contiguous slice ``[bounds[b]:bounds[b + 1]]`` of a sorted ``t`` (empty buckets
+    have ``bounds[b] == bounds[b + 1]``). A degenerate span — or ``n == 1`` —
+    collapses to one bucket holding every sample. Assumes a non-decreasing axis.
+    """
+    x_start = float(t[0])
+    x_end = float(t[-1])
+    n = min(n_buckets, len(t))
+    if x_end <= x_start or n == 1:
+        edges = np.array([x_start, x_end], dtype=float)
+        idx = np.zeros(len(t), dtype=np.intp)
+        n = 1
+    else:
+        edges = np.linspace(x_start, x_end, n + 1)
+        # Bucket index = count of interior edges <= the sample (side="right" so a
+        # sample landing exactly on an edge falls into the upper bucket).
+        idx = np.searchsorted(edges[1:-1], t, side="right")
+    # idx is non-decreasing (t and edges are sorted), so each bucket is a
+    # CONTIGUOUS slice; cumulative bincount gives its bounds in O(samples + n).
+    return (
+        edges,
+        np.concatenate(([0], np.cumsum(np.bincount(idx, minlength=n)))).astype(np.intp),
+        n,
+    )
+
+
 def stat_envelope(t: np.ndarray, y: np.ndarray, n_buckets: int) -> StatEnvelopeOutput:
     """Decimate a real waveform into up to ``n_buckets`` equal-time buckets.
 
@@ -913,26 +943,7 @@ def stat_envelope(t: np.ndarray, y: np.ndarray, n_buckets: int) -> StatEnvelopeO
 
     x_start = float(t[0])
     x_end = float(t[-1])
-    n = min(n_buckets, len(t))
-
-    if x_end <= x_start or n == 1:
-        # Degenerate axis span (or a single bucket requested): one bucket holding
-        # every sample. compute_signal_stats' duration==0 path handles it.
-        edges = np.array([x_start, x_end], dtype=float)
-        idx = np.zeros(len(t), dtype=np.intp)
-        n = 1
-    else:
-        edges = np.linspace(x_start, x_end, n + 1)
-        # Bucket index = count of interior edges <= the sample (side="right" so a
-        # sample landing exactly on an edge falls into the upper bucket).
-        idx = np.searchsorted(edges[1:-1], t, side="right")
-
-    # idx is non-decreasing (t is sorted and edges are sorted), so each bucket's
-    # samples form a CONTIGUOUS slice. Aggregate by slice bounds — O(samples +
-    # buckets) total — instead of rebuilding an ``idx == b`` full-length mask per
-    # bucket, which is O(samples * buckets) and would stall the event loop on a
-    # large raw with a high bucket count.
-    bounds = np.concatenate(([0], np.cumsum(np.bincount(idx, minlength=n)))).astype(np.intp)
+    edges, bounds, n = _equal_time_buckets(t, n_buckets)
 
     buckets: list[WaveformBucket] = []
     for b in range(n):
@@ -966,6 +977,37 @@ def stat_envelope(t: np.ndarray, y: np.ndarray, n_buckets: int) -> StatEnvelopeO
         "x_end": x_end,
         "decimated": len(t) > len(buckets),
     }
+
+
+def downsample_minmax(
+    x: np.ndarray, y: np.ndarray, target_points: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Downsample ``(x, y)`` to about ``target_points``, preserving min and max.
+
+    Buckets the axis into equal-time spans (:func:`_equal_time_buckets`) and emits
+    two points per non-empty bucket — its ``min`` at the left edge and ``max`` at
+    the right — so a narrow glitch's amplitude survives display decimation, losing
+    only sub-bucket timing. Returns flat ``(x, y)`` arrays in axis order. Computes
+    only per-bucket min/max via ``reduceat`` over the contiguous slices (not the
+    full envelope stats). For an unbucketed view pass ``target_points`` >= the
+    sample count.
+
+    Used by ``plot_waveform`` to bound the points handed to the browser; the
+    full-resolution data stays on disk (``export_waveform``).
+    """
+    if len(x) == 0:
+        return np.empty(0, dtype=float), np.empty(0, dtype=float)
+    edges, bounds, _ = _equal_time_buckets(x, max(1, target_points // 2))
+    starts = bounds[:-1]
+    nonempty = bounds[1:] > starts
+    block_starts = starts[nonempty]
+    xs = np.empty(2 * len(block_starts), dtype=float)
+    ys = np.empty_like(xs)
+    xs[0::2] = edges[:-1][nonempty]
+    xs[1::2] = edges[1:][nonempty]
+    ys[0::2] = np.minimum.reduceat(y, block_starts)
+    ys[1::2] = np.maximum.reduceat(y, block_starts)
+    return xs, ys
 
 
 def compute_measurement_stats(
