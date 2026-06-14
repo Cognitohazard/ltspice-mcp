@@ -36,7 +36,7 @@ from mcp import types
 from pydantic import Field
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib import atomic_write, services
+from ltspice_mcp.lib import atomic_write, desktop, services
 from ltspice_mcp.lib.ac_analysis import (
     CrossingWithQuantity,
     FilterMetricsOutput,
@@ -53,10 +53,12 @@ from ltspice_mcp.lib.ac_analysis import (
     find_crossings_any_quantity,
     gain_at_frequencies,
     prepare_ac_arrays,
+    unwrap_phase_safe,
 )
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.job_store import SIDECAR_DIRNAME
 from ltspice_mcp.lib.log_parser import parse_measurements, parse_step_iterations
+from ltspice_mcp.lib.plot_html import build_plot_html
 from ltspice_mcp.lib.raw_parser import (
     OperatingPointOutput,
     build_simulation_summary,
@@ -82,6 +84,7 @@ from ltspice_mcp.lib.signal_analysis import (
     analyze_timing_between,
     compute_measurement_stats,
     compute_signal_stats,
+    downsample_minmax,
     stat_envelope,
     window_and_clean,
 )
@@ -156,6 +159,24 @@ def _guarded_axis(raw, step: int) -> np.ndarray:
     if np.iscomplexobj(axis):
         axis = np.real(axis)
     return axis
+
+
+def _classify_analysis(raw) -> tuple[str, str, str, bool]:
+    """``(plotname, analysis_type, axis_unit, x_is_log)`` for a result raw.
+
+    ``analysis_type`` is one of ``transient``/``ac``/``dc``/``noise``;
+    ``axis_unit`` is the x unit (``s``/``Hz``/``""``); ``x_is_log`` marks a
+    log-frequency x (ac/noise). Shared by ``get_waveform``, ``export_waveform``,
+    and ``plot_waveform`` so the classification lives in one place.
+    """
+    sim_type = detect_sim_type(raw)
+    if is_noise_analysis(sim_type):
+        return sim_type, "noise", "Hz", True
+    if is_ac_analysis(sim_type):
+        return sim_type, "ac", "Hz", True
+    if is_dc_analysis(sim_type):
+        return sim_type, "dc", "", False
+    return sim_type, "transient", "s", False
 
 
 async def _load_real_signal(
@@ -734,13 +755,7 @@ async def handle_get_waveform(args: GetWaveformInput, state: SessionState):
 
     axis = _guarded_axis(raw, step)
 
-    sim_type_raw = detect_sim_type(raw)
-    if is_noise_analysis(sim_type_raw):
-        analysis_type, axis_unit = "noise", "Hz"
-    elif is_dc_analysis(sim_type_raw):
-        analysis_type, axis_unit = "dc", ""
-    else:
-        analysis_type, axis_unit = "transient", "s"
+    sim_type_raw, analysis_type, axis_unit, _ = _classify_analysis(raw)
 
     x_win, y_win, dropped = _window(axis, wave, args.t_start, args.t_end)
 
@@ -1116,15 +1131,7 @@ async def handle_export_waveform(args: ExportWaveformInput, state: SessionState)
     # pointer to operating_point, not by failing mid-write inside the worker.
     _guarded_axis(raw, 0)
 
-    sim_type = detect_sim_type(raw)
-    if is_noise_analysis(sim_type):
-        analysis_type = "noise"
-    elif is_ac_analysis(sim_type):
-        analysis_type = "ac"
-    elif is_dc_analysis(sim_type):
-        analysis_type = "dc"
-    else:
-        analysis_type = "transient"
+    _, analysis_type, _, _ = _classify_analysis(raw)
 
     # Signal columns (canonical names), excluding the axis (trace 0).
     trace_names = raw.get_trace_names()
@@ -3362,3 +3369,550 @@ async def handle_resonance(args: ResonanceInput, state: SessionState):
         )
     lines += _warning_lines(data["warnings"])
     return format_response("\n".join(lines), data, args.format)
+
+
+# ---------------------------------------------------------------------------
+# plot_waveform — interactive HTML chart opened on the local desktop
+# ---------------------------------------------------------------------------
+
+PLOTS_SUBDIR = "plots"
+_DEFAULT_PLOT_MAX_POINTS = 100_000
+_PLOT_MAX_POINTS_CEILING = 2_000_000
+# Global backstop on the rendered panel size. ``max_points`` caps each series,
+# but null-padding every series onto a union x (distinct per-step axes) multiplies
+# series-count by union-length — so a many-step distinct-axis run could blow far
+# past the per-series cap. Refuse with guidance before materializing, rather than
+# allocate a giant payload / write an unopenable HTML (no silent truncation).
+_PLOT_MAX_CELLS = 10_000_000
+
+_X_LABEL = {
+    "transient": "Time (s)",
+    "ac": "Frequency (Hz)",
+    "noise": "Frequency (Hz)",
+    "dc": "Sweep",
+}
+
+
+def _plot_filename(raw_path: Path, analysis_type: str, job_id: str | None, run_index: int) -> str:
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S_%f")
+    run = f"_run{run_index}" if job_id else ""
+    return f"{raw_path.stem}_{analysis_type}{run}_{stamp}.html"
+
+
+def _to_json_floats(arr: np.ndarray) -> list[float | None]:
+    """Array -> JSON-safe list; non-finite samples become ``None`` (a uPlot gap).
+
+    Pairs with ``json.dumps(allow_nan=False)`` in the renderer: a literal NaN/Inf
+    token would make the browser's ``JSON.parse`` reject the whole blob, silently
+    blanking the chart — so non-finite values are converted to null here.
+    """
+    return [v if math.isfinite(v) else None for v in np.asarray(arr, dtype=float).tolist()]
+
+
+def _plot_cells_exceeded(n_rows: int, x_len: int) -> ResultError:
+    return ResultError(
+        f"This plot would render ~{n_rows * x_len:,} cells ({n_rows - 1} series x "
+        f"{x_len:,} x-points), over the {_PLOT_MAX_CELLS:,} cap. Stepped runs with "
+        "distinct per-step axes inflate the shared x-axis — plot fewer signals, a "
+        "single step (step=N), or narrow [t_start, t_end]."
+    )
+
+
+def _union_panel(
+    series: list[tuple[np.ndarray, np.ndarray, str]],
+    x_scale: str,
+    x_label: str,
+    y_label: str,
+) -> tuple[dict, bool]:
+    """Build a uPlot panel (shared x + N y-series) from per-series ``(x, y, label)``.
+
+    Series whose x differs from the others — e.g. a transient ``.step`` run where
+    each step has its own adaptive time vector — are null-padded onto the union x
+    so each renders as a clean gap off its own support (uPlot's data model is one
+    shared x-row + N y-series). Returns ``(panel, unioned)``.
+
+    Guards the rendered size in two cheap stages so neither the concat nor the pad
+    can blow up: the longest single series is a lower bound on the union (stage 1,
+    before concatenating — also bounds the concat to <= the cap), and the actual
+    union length is the exact size (stage 2, before padding).
+    """
+    n_rows = len(series) + 1  # the x row plus one row per series
+    longest = max(len(s[0]) for s in series)
+    if n_rows * longest > _PLOT_MAX_CELLS:
+        raise _plot_cells_exceeded(n_rows, longest)
+    union = series[0][0] if len(series) == 1 else np.unique(np.concatenate([s[0] for s in series]))
+    if n_rows * len(union) > _PLOT_MAX_CELLS:
+        raise _plot_cells_exceeded(n_rows, len(union))
+    data: list[list[float | None]] = [_to_json_floats(union)]
+    labels: list[dict[str, str]] = []
+    unioned = False
+    for x, y, label in series:
+        if len(x) == len(union) and np.array_equal(x, union):
+            data.append(_to_json_floats(y))
+        else:
+            unioned = True
+            col = np.full(len(union), np.nan)
+            col[np.searchsorted(union, x)] = y
+            data.append(_to_json_floats(col))
+        labels.append({"label": label})
+    panel = {
+        "x_scale": x_scale,
+        "x_label": x_label,
+        "y_label": y_label,
+        "series": labels,
+        "data": data,
+    }
+    return panel, unioned
+
+
+def _build_plot_and_write(
+    raw,
+    raw_path: Path,
+    cols: list[str],
+    steps_to_plot: list[int],
+    step_dicts: list[dict[str, float]],
+    analysis_type: str,
+    x_is_log: bool,
+    ts: float | None,
+    te: float | None,
+    max_points: int,
+    out_path: Path,
+    title: str,
+) -> dict:
+    """Build per-series plot data, assemble the HTML, write it atomically.
+
+    Runs in a worker thread (heavy numpy + HTML string build + file I/O) and
+    returns only FACTS — the handler turns them into observations and builds the
+    response on the event loop (the concurrency contract keeps response building
+    off worker threads).
+    """
+    is_ac = analysis_type == "ac"
+    x_label = _X_LABEL[analysis_type]
+    multi = len(steps_to_plot) > 1
+
+    def _label(col: str, step: int) -> str:
+        if not multi:
+            return col
+        sv = (
+            ";".join(f"{k}={v:g}" for k, v in step_dicts[step].items())
+            if step < len(step_dicts)
+            else ""
+        )
+        return f"{col} [{sv}]" if sv else f"{col} [step {step}]"
+
+    empty_steps: list[int] = []
+    non_finite = 0
+    downsampled = False
+    points_per_series: list[int] = []
+    phase_warnings: list[str] = []
+    win_lo: float | None = None
+    win_hi: float | None = None
+
+    def _track_window(x: np.ndarray) -> None:
+        nonlocal win_lo, win_hi
+        lo0, hi0 = float(x[0]), float(x[-1])
+        win_lo = lo0 if win_lo is None else min(win_lo, lo0)
+        win_hi = hi0 if win_hi is None else max(win_hi, hi0)
+
+    if is_ac:
+        mag_series: list[tuple[np.ndarray, np.ndarray, str]] = []
+        phase_series: list[tuple[np.ndarray, np.ndarray, str]] = []
+        for step in steps_to_plot:
+            axis = _guarded_axis(raw, step)
+            lo, hi = _window_indices(axis, ts, te)
+            if lo >= hi:
+                empty_steps.append(step)
+                continue
+            for col in cols:
+                wave = np.asarray(raw.get_wave(col, step=step))[lo:hi]
+                freq, h = prepare_ac_arrays(axis[lo:hi], wave)
+                mag = safe_magnitude_db(h)
+                phase, warns = unwrap_phase_safe(h)
+                phase_warnings.extend(warns)
+                non_finite += int(np.count_nonzero(~np.isfinite(mag)))
+                non_finite += int(np.count_nonzero(~np.isfinite(phase)))
+                if len(freq) > max_points:
+                    downsampled = True
+                    f_ds, mag = downsample_minmax(freq, mag, max_points)
+                    _, phase = downsample_minmax(freq, phase, max_points)
+                    freq = f_ds
+                _track_window(freq)
+                points_per_series.append(len(freq))
+                label = _label(col, step)
+                mag_series.append((freq, mag, label))
+                phase_series.append((freq, phase, label))
+        if not mag_series:
+            raise ResultError(
+                "The [t_start, t_end] window selects no samples"
+                + (f" in any of the {len(steps_to_plot)} steps." if multi else ".")
+            )
+        mag_panel, u1 = _union_panel(mag_series, "log", x_label, "Magnitude (dB)")
+        phase_panel, u2 = _union_panel(phase_series, "log", x_label, "Phase (deg)")
+        unioned = u1 or u2
+        spec = {"analysis_type": analysis_type, "bode": True, "panels": [mag_panel, phase_panel]}
+    else:
+        plot_series: list[tuple[np.ndarray, np.ndarray, str]] = []
+        for col in cols:
+            for step in steps_to_plot:
+                axis = _guarded_axis(raw, step)
+                lo, hi = _window_indices(axis, ts, te)
+                if lo >= hi:
+                    if step not in empty_steps:
+                        empty_steps.append(step)
+                    continue
+                axis_w = axis[lo:hi]
+                wave = np.asarray(raw.get_wave(col, step=step))[lo:hi]
+                if np.iscomplexobj(wave):
+                    # Defensive: a stray complex trace in a non-AC raw.
+                    wave = np.real(wave)
+                non_finite += int(np.count_nonzero(~np.isfinite(wave)))
+                x_arr, y_arr = axis_w, wave
+                if len(y_arr) > max_points:
+                    downsampled = True
+                    x_arr, y_arr = downsample_minmax(axis_w, wave, max_points)
+                _track_window(x_arr)
+                points_per_series.append(len(y_arr))
+                plot_series.append((x_arr, y_arr, _label(col, step)))
+        if not plot_series:
+            raise ResultError(
+                "The [t_start, t_end] window selects no samples"
+                + (f" in any of the {len(steps_to_plot)} steps." if multi else ".")
+            )
+        y_label = ", ".join(cols) if len(cols) <= 3 else f"{len(cols)} signals"
+        panel, unioned = _union_panel(
+            plot_series, "log" if x_is_log else "linear", x_label, y_label
+        )
+        spec = {"analysis_type": analysis_type, "bode": False, "panels": [panel]}
+
+    series_count = sum(len(p["series"]) for p in spec["panels"])
+    summary = f"{raw_path.stem} — {analysis_type}: {series_count} series"
+    html_str = build_plot_html(spec, title=title, summary=summary)
+    with atomic_write(out_path) as f:
+        f.write(html_str)
+
+    return {
+        "panels": len(spec["panels"]),
+        "series_count": series_count,
+        "points_per_series": points_per_series,
+        "downsampled": downsampled,
+        "unioned": unioned,
+        "empty_steps": sorted(set(empty_steps)),
+        "non_finite": non_finite,
+        "phase_unwrapped": is_ac,
+        "phase_warnings": phase_warnings,
+        "window_used": [win_lo, win_hi] if win_lo is not None else [],
+        "step_values_available": (bool(step_dicts) if multi else None),
+    }
+
+
+class PlotWaveformInput(ToolInput):
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to .raw result file. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Plot a specific run of a completed sweep/MC (or single) job instead "
+            "of a raw_file path; pair with ``run_index``."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to read when ``job_id`` is given (default 0).",
+    )
+    signals: list[str] | Literal["all"] = Field(
+        default="all",
+        description="Trace names to plot (e.g. ['V(out)', 'I(R1)']) or 'all' for every non-axis trace.",
+    )
+    step: int | None = Field(
+        default=None,
+        description=(
+            "For a .step run: omit to overlay ALL steps as separate traces, or give "
+            "a 0-based step index to plot just that one."
+        ),
+    )
+    t_start: str | None = Field(
+        default=None,
+        description="Window start in SPICE notation (e.g. '1m', '1k'); bounds the plotted range.",
+    )
+    t_end: str | None = Field(
+        default=None,
+        description="Window end in SPICE notation.",
+    )
+    max_points: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Per-series point budget before a min/max-preserving downsample engages "
+            f"(default {_DEFAULT_PLOT_MAX_POINTS}). Full fidelity below this; spikes "
+            "are preserved when it engages."
+        ),
+    )
+    open: bool = Field(
+        default=True,
+        description="Open the written HTML in the local browser (terminal clients). Set false to only write it.",
+    )
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
+
+
+@registry.tool(
+    name="plot_waveform",
+    description=(
+        "Render an INTERACTIVE chart of one or more signals and open it on your "
+        "desktop — for a human to see the SHAPE and zoom/pan/hover, the co-design "
+        "complement to the numeric tools.\n\n"
+        "Picks the chart from the run type: transient (V/I vs time), DC sweep, AC "
+        "Bode (stacked magnitude-dB + phase-deg vs log frequency), noise (vs log "
+        "frequency); a .step / Monte-Carlo run overlays every step as a labelled "
+        "trace (or pass ``step`` for one). Full fidelity by default, with a "
+        "min/max-preserving downsample above ``max_points`` (spikes survive; "
+        "surfaced as a fact). Writes a self-contained HTML file next to the circuit "
+        "and returns its path; on a terminal client it also opens it locally.\n\n"
+        "For numbers to compute on use export_waveform (CSV) or the scalar tools "
+        "(signal_stats, bode_metrics); this tool is for looking, not measuring."
+    ),
+    input_model=PlotWaveformInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+    profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "analysis_type": {"type": "string", "enum": ["transient", "ac", "dc", "noise"]},
+            "signals": {"type": "array", "items": {"type": "string"}},
+            "n_steps": {"type": "integer"},
+            "steps_plotted": {"type": "integer"},
+            "panels": {"type": "integer"},
+            "series_count": {"type": "integer"},
+            "points_per_series": {"type": "array", "items": {"type": "integer"}},
+            "max_points": {"type": "integer"},
+            "downsampled": {"type": "boolean"},
+            "window_used": {"type": "array", "items": {"type": "number"}},
+            "opened": {"type": "boolean"},
+            "opener": {"type": ["string", "null"]},
+            "observations": OBSERVATIONS_SCHEMA,
+        },
+    },
+)
+async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
+    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
+    fmt = args.format
+    if isinstance(args.signals, list) and not args.signals:
+        raise ResultError("Pass at least one signal, or 'all'.")
+
+    raw = await services.load_raw(raw_path, state)
+    # A .op raw has no sweep axis to plot — refuse early with the clean pointer.
+    _guarded_axis(raw, 0)
+
+    _, analysis_type, _, x_is_log = _classify_analysis(raw)
+
+    trace_names = raw.get_trace_names()
+    axis_name = trace_names[0]
+    if args.signals == "all":
+        cols = list(trace_names[1:])
+    else:
+        seen: set[str] = set()
+        cols = []
+        for s in args.signals:
+            canon = services.validate_signal(raw, s)
+            if canon == axis_name:
+                raise ResultError(f"{s!r} is the sweep axis, not a signal column.")
+            if canon not in seen:
+                seen.add(canon)
+                cols.append(canon)
+    if not cols:
+        raise ResultError("No signal traces to plot (the result has only an axis).")
+
+    n_steps = get_step_count(raw)
+    if args.step is not None:
+        services.validate_step(raw, args.step)
+        steps_to_plot = [args.step]
+    else:
+        steps_to_plot = list(range(n_steps))
+
+    ts = _parse_time(args.t_start, "t_start")
+    te = _parse_time(args.t_end, "t_end")
+
+    step_dicts: list[dict[str, float]] = []
+    if len(steps_to_plot) > 1:
+        log_path = raw_path.with_suffix(".log")
+        if log_path.exists():
+            step_dicts = parse_step_iterations(log_path)
+
+    max_points = min(args.max_points or _DEFAULT_PLOT_MAX_POINTS, _PLOT_MAX_POINTS_CEILING)
+
+    # Destination: a Linux-side sidecar next to the CIRCUIT, never next to a raw
+    # that may live in a Windows temp under /mnt/c. Output is a server artifact,
+    # so it is not run through safe_path — but the resolved path must stay under
+    # the anchor (a symlinked sidecar would otherwise redirect it out).
+    if args.job_id:
+        dest_anchor = services.resolve_job(args.job_id, state).netlist.parent
+    else:
+        dest_anchor = safe_path(args.raw_file, state).parent  # type: ignore[arg-type]
+    out_path = (
+        dest_anchor
+        / SIDECAR_DIRNAME
+        / PLOTS_SUBDIR
+        / _plot_filename(raw_path, analysis_type, args.job_id, args.run_index)
+    ).resolve()
+    if not out_path.is_relative_to(dest_anchor.resolve()):
+        raise ResultError(
+            "Refusing to write the plot outside the circuit directory "
+            "(a symlinked .ltspice-mcp/ or plots/ would redirect it)."
+        )
+
+    title = f"{raw_path.stem} — {analysis_type}"
+    try:
+        facts = await asyncio.to_thread(
+            _build_plot_and_write,
+            raw,
+            raw_path,
+            cols,
+            steps_to_plot,
+            step_dicts,
+            analysis_type,
+            x_is_log,
+            ts,
+            te,
+            max_points,
+            out_path,
+            title,
+        )
+    except ValueError as e:
+        raise ResultError(f"Failed to build the plot (corrupt or truncated .raw?): {e}") from e
+
+    opened, opener = False, None
+    if args.open:
+        opened, opener = await asyncio.to_thread(desktop.open_in_desktop, out_path)
+
+    # Surface FACTS, not verdicts (result-trust doctrine).
+    observations: list[dict] = [
+        {
+            "code": "plot_written",
+            "kind": "coverage",
+            "detail": (
+                f"Wrote an interactive {analysis_type} plot: {facts['panels']} panel(s), "
+                f"{facts['series_count']} series ({len(steps_to_plot)} of {n_steps} step(s))."
+            ),
+        }
+    ]
+    if facts["downsampled"]:
+        observations.append(
+            {
+                "code": "downsampled",
+                "kind": "coverage",
+                "detail": (
+                    f"At least one series exceeded {max_points} points and was reduced by "
+                    "min/max-preserving decimation (spikes preserved; sub-bucket detail not "
+                    "shown). Pass a larger max_points or narrow [t_start, t_end] for more."
+                ),
+            }
+        )
+    if facts["phase_unwrapped"]:
+        observations.append(
+            {
+                "code": "phase_unwrapped",
+                "kind": "value",
+                "detail": (
+                    "Bode phase is UNWRAPPED for a readable continuous curve — this differs "
+                    "from export_waveform, which keeps the wrapped np.angle as its lossless "
+                    "primitive."
+                ),
+            }
+        )
+    for warn in facts["phase_warnings"]:
+        observations.append({"code": "sparse_sweep", "kind": "value", "detail": warn})
+    if facts["unioned"]:
+        observations.append(
+            {
+                "code": "step_axis_unioned",
+                "kind": "coverage",
+                "detail": (
+                    "Steps have different per-step x vectors; series were aligned onto a "
+                    "union x (each renders as a gap off its own support)."
+                ),
+            }
+        )
+    if facts["empty_steps"]:
+        observations.append(
+            {
+                "code": "window_empty_steps",
+                "kind": "coverage",
+                "detail": (
+                    f"{len(facts['empty_steps'])} step(s) had no samples in the window and "
+                    f"were omitted: {facts['empty_steps']}."
+                ),
+            }
+        )
+    if facts["non_finite"]:
+        observations.append(
+            {
+                "code": "non_finite",
+                "kind": "value",
+                "detail": (
+                    f"{facts['non_finite']} non-finite sample(s) are present; they render as "
+                    "gaps in the plot."
+                ),
+            }
+        )
+    if facts["step_values_available"] is False:
+        observations.append(
+            {
+                "code": "step_value_unavailable",
+                "kind": "value",
+                "detail": (
+                    "Step legend labels left blank: no .step parameter map found in the "
+                    "sibling .log."
+                ),
+            }
+        )
+    if not args.open:
+        observations.append(
+            {
+                "code": "open_skipped",
+                "kind": "coverage",
+                "detail": "Local open skipped (open=false); open the returned path manually.",
+            }
+        )
+    elif not opened:
+        observations.append(
+            {
+                "code": "open_failed",
+                "kind": "coverage",
+                "detail": (
+                    "Could not launch a local opener (headless or none found); open the "
+                    "returned path manually."
+                ),
+            }
+        )
+
+    data = {
+        "path": str(out_path),
+        "analysis_type": analysis_type,
+        "signals": cols,
+        "n_steps": n_steps,
+        "steps_plotted": len(steps_to_plot),
+        "panels": facts["panels"],
+        "series_count": facts["series_count"],
+        "points_per_series": facts["points_per_series"],
+        "max_points": max_points,
+        "downsampled": facts["downsampled"],
+        "window_used": facts["window_used"],
+        "opened": opened,
+        "opener": opener,
+        "observations": observations,
+    }
+    head = f"Wrote interactive {analysis_type} plot to {out_path}"
+    if opened:
+        head += f" (opened with {opener})"
+    lines = [head, *format_observations(observations)]
+    return format_response("\n".join(lines), data, fmt)
