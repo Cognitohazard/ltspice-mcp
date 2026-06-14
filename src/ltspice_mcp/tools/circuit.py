@@ -3870,6 +3870,18 @@ def _asc_topology_issues(editor: AscEditor) -> list[dict]:
 
 class ValidateNetlistInput(ToolInput):
     path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
+    target_simulator: Literal["LTspice", "ngspice"] = Field(
+        default="LTspice",
+        description=(
+            "Simulator the deck is intended to run on; selects which simulator's "
+            "pre-flight rules apply. 'LTspice' runs the LTspice-specific gates "
+            "(more-than-one-analysis rejection, .meas analysis-kind matching, "
+            "C=/L= primary-value, viewer-only .meas functions). 'ngspice' skips "
+            "those and applies ngspice-only checks instead (a zero '.tran' step "
+            "time is rejected). Structural checks (element arity, dangling nodes, "
+            "bias topology) apply to both. Defaults to LTspice."
+        ),
+    )
     format: Literal["json", "text"] | None = Field(
         default=None,
         description="Response format: 'json' for structured data, 'text' for human-readable",
@@ -3892,7 +3904,9 @@ class ValidateNetlistInput(ToolInput):
         "duplicate/multiple analysis directives ('More than "
         "one analysis specified'), .MEAS whose analysis kind isn't present, "
         "known-bad .MEAS patterns (vdb()/phase()/group_delay()), "
-        "and directives the LTspice runner is known to reject. On .asc, "
+        "and directives the LTspice runner is known to reject (set "
+        "target_simulator='ngspice' to instead flag ngspice-only "
+        "incompatibilities, e.g. a zero '.tran' step time). On .asc, "
         "also surfaces named-net shorts, "
         "floating pins, and dangling labels. Returns a structured issue list; "
         "an empty list means the file passes the static gate. Note: value "
@@ -3973,7 +3987,7 @@ async def handle_validate_netlist(
             tokens = lower.split()
             if len(tokens) >= 2 and tokens[1] in MEAS_KINDS:
                 meas_lines.append((lineno, line, tokens[1]))
-        err = validate_directive(line, simulator="LTspice")
+        err = validate_directive(line, simulator=args.target_simulator)
         if err is not None:
             issues.append(
                 {
@@ -3985,24 +3999,31 @@ async def handle_validate_netlist(
                 }
             )
 
-    # LTspice rejects more than one analysis directive with "More than one
-    # analysis specified."
-    # ``.op`` coexists with one real analysis in LTspice, so count only the
-    # mutually-exclusive kinds — counting ``.op`` false-positived the common
-    # ``.op`` + ``.tran``/``.ac`` idiom. ``analysis_lines`` is left intact
-    # so the ``.meas`` matching below still recognises ``.op``.
-    exclusive = {k: v for k, v in analysis_lines.items() if k in EXCLUSIVE_ANALYSIS_KINDS}
-    duplicate_kinds = sorted(k for k, entries in exclusive.items() if len(entries) > 1)
-    if duplicate_kinds or len(exclusive) > 1:
-        issues.append(_multiple_analyses_issue(exclusive, duplicate_kinds))
+    # The multiple-analysis and .meas-kind-matching gates below encode LTspice
+    # semantics specifically (its "More than one analysis specified" rejection
+    # and its silent-drop of mismatched .meas lines). They are skipped for a
+    # non-LTspice target rather than emitting LTspice-worded errors under it; no
+    # ngspice equivalent is invented here (ngspice's batch-mode constraints are
+    # surfaced at run time by services.ngspice_preflight_warnings).
+    if args.target_simulator == "LTspice":
+        # LTspice rejects more than one analysis directive with "More than one
+        # analysis specified."
+        # ``.op`` coexists with one real analysis in LTspice, so count only the
+        # mutually-exclusive kinds — counting ``.op`` false-positived the common
+        # ``.op`` + ``.tran``/``.ac`` idiom. ``analysis_lines`` is left intact
+        # so the ``.meas`` matching below still recognises ``.op``.
+        exclusive = {k: v for k, v in analysis_lines.items() if k in EXCLUSIVE_ANALYSIS_KINDS}
+        duplicate_kinds = sorted(k for k, entries in exclusive.items() if len(entries) > 1)
+        if duplicate_kinds or len(exclusive) > 1:
+            issues.append(_multiple_analyses_issue(exclusive, duplicate_kinds))
 
-    # ``.meas <kind>`` runs only when the matching analysis is present.
-    # LTspice silently drops mismatched .meas lines from the log.
-    active_kinds = analysis_lines.keys()
-    for lineno, line, kind in meas_lines:
-        if kind in active_kinds:
-            continue
-        issues.append(_meas_mismatch_issue(lineno, line, kind, active_kinds))
+        # ``.meas <kind>`` runs only when the matching analysis is present.
+        # LTspice silently drops mismatched .meas lines from the log.
+        active_kinds = analysis_lines.keys()
+        for lineno, line, kind in meas_lines:
+            if kind in active_kinds:
+                continue
+            issues.append(_meas_mismatch_issue(lineno, line, kind, active_kinds))
 
     # Element-arity pass: walk lexer cards, consult ELEMENT_SPECS,
     # flag instances with too few positional nodes or B-sources missing
@@ -4012,7 +4033,14 @@ async def handle_validate_netlist(
         arity_cards = lex(content).cards
     except SpiceLexError:
         arity_cards = []
-    for arity_issue in validate_netlist_arity(arity_cards):
+
+    # Line 1 of a .cir/.net is the free-text title, not an element — drop it
+    # before the arity / dangling / bias passes so a title that happens to start
+    # with an element letter ("RC filter") isn't lexed as an R-element with too
+    # few nodes (and its words don't leak into the dangling-node suppressor set).
+    # .asc ``content`` is directive-only (no title line), so it keeps every card.
+    lint_cards = drop_title_card(arity_cards) if asc_editor is None else arity_cards
+    for arity_issue in validate_netlist_arity(lint_cards, simulator=args.target_simulator):
         issues.append({"severity": "error", **arity_issue})
 
     # Dangling-node pass: a node touched by exactly one element terminal in
@@ -4022,8 +4050,7 @@ async def handle_validate_netlist(
     # embedded in .asc SPICE-directive text would all false-positive
     # (floating pins are the schematic topology pass's job below).
     if asc_editor is None:
-        title_dropped = drop_title_card(arity_cards)
-        for dangling_issue in validate_netlist_dangling_nodes(title_dropped):
+        for dangling_issue in validate_netlist_dangling_nodes(lint_cards):
             issues.append({"severity": "warning", **dangling_issue})
         # Bias-topology pass: a node touched by two or more terminals that
         # still has no DC path to ground (floating gate, capacitive island,
@@ -4031,7 +4058,7 @@ async def handle_validate_netlist(
         # flag is provable, but the deck may bias it by other means. Same
         # non-.asc gate: schematic connectivity lives in wires this pass
         # cannot see.
-        for bias_issue in validate_netlist_bias_topology(title_dropped):
+        for bias_issue in validate_netlist_bias_topology(lint_cards):
             issues.append({"severity": "warning", **bias_issue})
 
     # .asc schematic-graph checks (named-net shorts, floating pins, dangling

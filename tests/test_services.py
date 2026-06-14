@@ -411,6 +411,22 @@ class TestNgspicePreflightMeasNames:
         assert "find" not in text
         assert "trig" not in text
 
+    def test_sp_analysis_token_skipped(self, tmp_path: Path):
+        # ngspice's S-parameter analysis token ``sp`` is an optional .meas
+        # keyword like tran/ac; the NAME after it must be read, not the token.
+        net = tmp_path / "meas.cir"
+        net.write_text(
+            "R1 out 0 1k\n"
+            "V1 out 0 AC 1\n"
+            ".meas sp zout FIND V(out) AT 1Meg\n"
+            ".ac dec 10 1 1Meg\n"
+            ".end\n"
+        )
+        warns = services.ngspice_preflight_warnings(net, self._ngspice_cls())
+        text = " ".join(warns).lower()
+        # The name after the ``sp`` token is captured; the bug recorded ``sp``.
+        assert "zout" in text
+
     def test_non_ngspice_simulator_returns_empty(self, tmp_path: Path):
         net = tmp_path / "meas.cir"
         net.write_text("R1 out 0 1k\n.meas vfoo FIND V(out) AT 1n\n.tran 1n 1u\n.end\n")
