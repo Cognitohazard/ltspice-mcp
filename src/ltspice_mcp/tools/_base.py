@@ -414,6 +414,7 @@ class ToolRegistry:
         profiles: tuple[str, ...] = ("full",),
         output_schema: dict[str, Any] | None = None,
         output_model: type | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> Callable[[Callable], Callable]:
         """Register a tool and derive its schema from the input model.
 
@@ -421,6 +422,9 @@ class ToolRegistry:
         (a hand-written dict): the schema is generated once at registration
         time from the same type the lib already returns, so the two can't
         drift. Only one of the two should be supplied.
+
+        ``meta`` populates the tool definition's ``_meta`` object (e.g.
+        ``{"ui": {"resourceUri": ...}}`` to declare an MCP Apps UI resource).
         """
         if output_model is not None and output_schema is not None:
             raise ValueError(
@@ -452,9 +456,14 @@ class ToolRegistry:
             elif output_schema is not None:
                 definition_kwargs["outputSchema"] = output_schema
 
+            definition = types.Tool(**definition_kwargs)
+            if meta is not None:
+                # ``meta`` is the field name; serializes by alias to ``_meta``.
+                definition.meta = meta
+
             self._registered.append(
                 RegisteredTool(
-                    definition=types.Tool(**definition_kwargs),
+                    definition=definition,
                     handler=wrapped,
                     input_model=input_model,
                     profiles=frozenset(profiles),

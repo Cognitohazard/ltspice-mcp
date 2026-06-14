@@ -7,10 +7,12 @@ launched. The AC dual-panel, .step overlay, and noise cases are load-bearing.
 """
 
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
+from mcp import types
 from pydantic import ValidationError
 
 from ltspice_mcp.errors import ResultError
@@ -153,6 +155,41 @@ class TestBuildPlotHtml:
             build_plot_html(spec, title="t")
 
 
+def _ui_caps() -> types.ClientCapabilities:
+    """Client capabilities advertising MCP Apps (ui://) support per SEP-1865.
+
+    ``extensions`` is an extra field (the model is ``extra="allow"``), so inject it
+    via ``model_validate`` rather than a constructor kwarg.
+    """
+    return types.ClientCapabilities.model_validate(
+        {
+            "extensions": {
+                "io.modelcontextprotocol/ui": {"mimeTypes": ["text/html;profile=mcp-app"]}
+            }
+        }
+    )
+
+
+class TestDeliveryChannel:
+    def test_ui_when_extension_advertised(self):
+        caps = _ui_caps()
+        assert desktop.client_supports_ui(caps) is True
+        assert desktop.resolve_delivery_channel(caps) == "ui"
+
+    def test_terminal_when_no_extension(self):
+        caps = types.ClientCapabilities()
+        assert desktop.client_supports_ui(caps) is False
+        assert desktop.resolve_delivery_channel(caps) == "terminal"
+
+    def test_terminal_when_caps_none(self):
+        assert desktop.client_supports_ui(None) is False
+        assert desktop.resolve_delivery_channel(None) == "terminal"
+
+    def test_unrelated_extension_does_not_count(self):
+        caps = types.ClientCapabilities.model_validate({"extensions": {"some.other/ext": {}}})
+        assert desktop.resolve_delivery_channel(caps) == "terminal"
+
+
 class TestOpenInDesktop:
     def test_wsl_uses_explorer_with_windows_path(self, monkeypatch):
         monkeypatch.setattr(desktop, "is_wsl", lambda: True)
@@ -166,7 +203,7 @@ class TestOpenInDesktop:
 
     def test_linux_uses_xdg_open(self, monkeypatch):
         monkeypatch.setattr(desktop, "is_wsl", lambda: False)
-        monkeypatch.setattr(desktop.sys, "platform", "linux")
+        monkeypatch.setattr(sys, "platform", "linux")
         calls = []
         opened, method = desktop.open_in_desktop(
             Path("/x/plot.html"), spawn=lambda argv, **kw: calls.append(argv)
@@ -176,7 +213,7 @@ class TestOpenInDesktop:
 
     def test_failure_degrades(self, monkeypatch):
         monkeypatch.setattr(desktop, "is_wsl", lambda: False)
-        monkeypatch.setattr(desktop.sys, "platform", "linux")
+        monkeypatch.setattr(sys, "platform", "linux")
 
         def boom(*a, **k):
             raise OSError("no opener")
@@ -367,3 +404,180 @@ class TestDeliveryAndSecurity:
         out = Path(data["path"])
         assert (work_dir / ".ltspice-mcp" / "plots") in out.parents
         assert raw_dir not in out.parents
+
+
+def _widget_spec(result) -> dict | None:
+    """Parse the widget chart spec from the result's _meta (the hidden channel).
+
+    Also asserts the spec is NOT leaked into model-visible content (no content
+    block parses to a chart spec)."""
+    from ltspice_mcp.lib.plot_html import WIDGET_SPEC_META_KEY
+
+    for c in result.content:
+        text = getattr(c, "text", None)
+        if not text:
+            continue
+        try:
+            obj = json.loads(text)
+        except (ValueError, TypeError):
+            continue
+        assert not (isinstance(obj, dict) and isinstance(obj.get("panels"), list)), (
+            "chart spec must not appear in model-visible content"
+        )
+    meta = result.meta
+    if not meta or WIDGET_SPEC_META_KEY not in meta:
+        return None
+    return json.loads(meta[WIDGET_SPEC_META_KEY])
+
+
+@pytest.mark.asyncio
+class TestWidgetDelivery:
+    """On an MCP Apps host the chart spec rides in the result _meta (hidden from the
+    model) for the host to render via the predeclared ui:// renderer, and the local
+    open is skipped; on a plain client there is no spec and the file is opened."""
+
+    async def test_ui_host_pipes_spec_and_skips_open(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr("ltspice_mcp.server.get_client_capabilities", _ui_caps)
+        opens: list = []
+        monkeypatch.setattr(
+            desktop, "open_in_desktop", lambda p: (opens.append(p), (True, "x"))[1]
+        )
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        # open=True, but a UI host must NOT trigger the local opener.
+        result = await handle_plot_waveform(
+            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=True), state_no_sim
+        )
+        assert opens == []  # no local open on a UI host
+
+        # The compact chart spec rides in _meta (NOT content, NOT inline HTML).
+        spec = _widget_spec(result)
+        assert spec is not None and spec["bode"] is False
+        assert not any(isinstance(c, types.EmbeddedResource) for c in result.content)
+        # The full-fidelity HTML file is still written.
+        assert "uPlot" in _read(Path(result.structuredContent["path"]))
+
+        sc = result.structuredContent
+        assert sc["delivery"] == "ui"
+        assert sc["opened"] is False
+        assert any(o["code"] == "widget_delivered" for o in sc["observations"])
+
+    async def test_ui_widget_spec_is_decimated_small(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # The widget spec is capped to a small per-series budget so the _meta
+        # payload stays small even when the file keeps full fidelity.
+        monkeypatch.setattr("ltspice_mcp.server.get_client_capabilities", _ui_caps)
+        monkeypatch.setattr(desktop, "open_in_desktop", lambda p: (True, "x"))
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        result = await handle_plot_waveform(
+            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False), state_no_sim
+        )
+        spec = _widget_spec(result)
+        assert spec is not None
+        longest = max(len(p["data"][0]) for p in spec["panels"])
+        assert longest <= 4_000
+
+    async def test_ui_widget_respects_lower_max_points(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # A caller-lowered max_points must bound the widget spec too (min of the
+        # two), not be ignored in favor of the widget budget.
+        monkeypatch.setattr("ltspice_mcp.server.get_client_capabilities", _ui_caps)
+        monkeypatch.setattr(desktop, "open_in_desktop", lambda p: (True, "x"))
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        result = await handle_plot_waveform(
+            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], max_points=500, open=False),
+            state_no_sim,
+        )
+        spec = _widget_spec(result)
+        assert spec is not None
+        longest = max(len(p["data"][0]) for p in spec["panels"])
+        assert longest <= 500
+
+    async def test_ui_widget_oversize_falls_back_to_terminal(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # If the widget spec exceeds the byte budget, deliver the file locally
+        # instead of shipping a huge _meta payload — surfaced as a fact.
+        import ltspice_mcp.tools.analysis as mod
+
+        monkeypatch.setattr(mod, "_WIDGET_MAX_BYTES", 100)
+        monkeypatch.setattr("ltspice_mcp.server.get_client_capabilities", _ui_caps)
+        opens: list = []
+        monkeypatch.setattr(
+            desktop, "open_in_desktop", lambda p: (opens.append(p), (True, "x"))[1]
+        )
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        result = await handle_plot_waveform(
+            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=True), state_no_sim
+        )
+        assert _widget_spec(result) is None  # no widget
+        assert result.structuredContent["delivery"] == "terminal"  # fell back
+        assert opens  # opened locally instead
+        assert any(
+            o["code"] == "widget_unavailable" for o in result.structuredContent["observations"]
+        )
+
+    async def test_terminal_host_no_widget(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr("ltspice_mcp.server.get_client_capabilities", lambda: None)
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        result = await handle_plot_waveform(
+            PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False), state_no_sim
+        )
+        assert _widget_spec(result) is None
+        assert result.meta is None
+        assert not any(isinstance(c, types.EmbeddedResource) for c in result.content)
+        assert result.structuredContent["delivery"] == "terminal"
+
+
+class TestWidgetTemplateAndResource:
+    """The predeclared ui:// renderer: a static template served via resources/read,
+    referenced by the tool declaration's _meta (canonical SEP-1865 wiring)."""
+
+    def test_widget_template_inlines_runtimes(self):
+        from ltspice_mcp.lib.plot_html import WIDGET_SPEC_META_KEY, build_widget_html
+
+        html_doc = build_widget_html()
+        assert "uPlot" in html_doc  # chart library inlined
+        assert "globalThis.ExtApps" in html_doc  # ext-apps runtime globalized + inlined
+        assert "ontoolresult" in html_doc  # receives the piped chart spec
+        assert "renderSpec" in html_doc  # shared render core
+        assert WIDGET_SPEC_META_KEY in html_doc  # reads the spec from result _meta
+        # Self-contained for the iframe CSP: no external script/style/link tags
+        # (URL strings inside the minified bundle, e.g. the SVG namespace, are fine).
+        assert 'src="http' not in html_doc
+        assert "<link" not in html_doc
+
+    def test_globalize_rewrites_export(self):
+        from ltspice_mcp.lib.plot_html import _globalize_ext_apps
+
+        rewritten = _globalize_ext_apps("var a=1;export{a as App,b as Other};")
+        assert rewritten == "var a=1;globalThis.ExtApps={App:a,Other:b};"
+
+    def test_resource_read_serves_template(self, state_no_sim: SessionState):
+        from ltspice_mcp.lib.plot_html import WIDGET_RESOURCE_URI
+        from ltspice_mcp.resources import handle_read_resource
+
+        result = handle_read_resource(WIDGET_RESOURCE_URI, state_no_sim)
+        entry = result.contents[0]
+        assert entry.mimeType == "text/html;profile=mcp-app"
+        assert "globalThis.ExtApps" in getattr(entry, "text", "")
+
+    def test_widget_resource_is_listed(self):
+        from ltspice_mcp.lib.plot_html import WIDGET_RESOURCE_URI
+        from ltspice_mcp.resources import get_static_resources
+
+        uris = {str(r.uri) for r in get_static_resources()}
+        assert WIDGET_RESOURCE_URI in uris
+
+    def test_tool_declares_ui_resource(self):
+        from ltspice_mcp.lib.plot_html import WIDGET_RESOURCE_URI
+        from ltspice_mcp.tools._base import registry
+
+        defs, _ = registry.get_for_profile("full")
+        plot = next(d for d in defs if d.name == "plot_waveform")
+        assert plot.meta == {"ui": {"resourceUri": WIDGET_RESOURCE_URI}}
