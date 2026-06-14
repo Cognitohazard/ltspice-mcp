@@ -26,6 +26,7 @@ return derived metrics. Organized by what the tool answers:
 import asyncio
 import contextlib
 import csv
+import json
 import math
 from datetime import datetime
 from pathlib import Path
@@ -58,7 +59,11 @@ from ltspice_mcp.lib.ac_analysis import (
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.job_store import SIDECAR_DIRNAME
 from ltspice_mcp.lib.log_parser import parse_measurements, parse_step_iterations
-from ltspice_mcp.lib.plot_html import build_plot_html
+from ltspice_mcp.lib.plot_html import (
+    WIDGET_RESOURCE_URI,
+    WIDGET_SPEC_META_KEY,
+    build_plot_html,
+)
 from ltspice_mcp.lib.raw_parser import (
     OperatingPointOutput,
     build_simulation_summary,
@@ -499,8 +504,7 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
     # is mathematically meaningless; the t_start/t_end labels are misleading
     # too since the units aren't seconds.
     sim_type_raw = detect_sim_type(raw)
-    sim_type = sim_type_raw.lower()
-    is_dc_sweep = "dc transfer" in sim_type or "dc " in sim_type
+    is_dc_sweep = is_dc_analysis(sim_type_raw)
     is_noise = is_noise_analysis(sim_type_raw)
 
     if is_noise and (args.t_start is not None or args.t_end is not None):
@@ -677,10 +681,11 @@ class GetWaveformInput(ToolInput):
 @registry.tool(
     name="get_waveform",
     description=(
-        "Decimated waveform egress: a min/max-preserving stat-envelope of one "
-        "real-valued signal over a time/sweep/frequency window — for when a scalar "
-        "isn't enough and you need to see the SHAPE (switching nodes, amplifier "
-        "internal nodes, startup transients).\n\n"
+        "Decimated numeric egress FOR THE MODEL: returns a min/max-preserving "
+        "stat-envelope of one real-valued signal as DATA in your context (numbers, "
+        "not a picture) over a time/sweep/frequency window — for when a scalar isn't "
+        "enough and you need the SHAPE (switching nodes, amplifier internal nodes, "
+        "startup transients).\n\n"
         "Splits the window into equal-time buckets; each bucket reports the raw "
         "sample min/max (a narrow spike or ringing peak is never averaged away), "
         "time-weighted trapezoidal mean/rms (correct on LTspice's adaptive "
@@ -691,8 +696,10 @@ class GetWaveformInput(ToolInput):
         "(decimation coverage, dropped non-finite samples, which bucket has the "
         "largest pk-to-pk) — you decide what the shape means.\n\n"
         "Works on transient (.tran), DC sweep (.dc), and noise (.noise) results. "
-        "For complex AC data use bode_metrics; for a single scalar use "
-        "signal_stats; for one point value use query_value."
+        "Sibling egress, don't confuse: export_waveform writes EVERY sample to a "
+        "CSV FILE for your own code; plot_waveform renders an interactive PICTURE "
+        "for a human to look at. For complex AC data use bode_metrics; for a single "
+        "scalar use signal_stats; for one point value use query_value."
     ),
     input_model=GetWaveformInput,
     annotations=RO_ANNOTATIONS,
@@ -1093,8 +1100,10 @@ class ExportWaveformInput(ToolInput):
         "window coverage, non-finite samples KEPT, the complex format used) — not "
         "verdicts.\n\n"
         "Returns the CSV path plus row/column counts; read the file with your own "
-        "tools. For a quick in-context shape use get_waveform; for a single scalar "
-        "use signal_stats/query_value."
+        "tools. Sibling egress, don't confuse: get_waveform returns a DECIMATED "
+        "envelope as numbers in your context (no file); plot_waveform renders an "
+        "interactive PICTURE for a human. For a single scalar use "
+        "signal_stats/query_value."
     ),
     input_model=ExportWaveformInput,
     annotations=types.ToolAnnotations(
@@ -2276,6 +2285,42 @@ def _diagnostics_block(diags: list[str], empty_note: str) -> str:
     return "\n".join(f"  {d}" for d in diags)
 
 
+def _apply_when_axis_swap(
+    flat_values: dict[str, list[float | None]],
+    at_map: dict[str, list[float | None]],
+) -> dict[str, AggregatedField]:
+    """Pick each .MEAS name's aggregation axis, swapping WHEN-style ones to ``at``.
+
+    For a ``WHEN``/``AT`` .MEAS the per-sample ``values`` are the trigger level
+    (constant by construction) while the interesting axis is the crossing time in
+    ``at``. When the levels are constant (or all-None) and the ``at`` values vary,
+    swap ``flat_values[name]`` to the ``at`` list and mark the axis ``"at"``;
+    otherwise keep ``"value"``. Shared by the batch (per-run) and single-log
+    (per-step) aggregators so both classify identically. Mutates ``flat_values``
+    in place for swapped names; returns the axis map.
+
+    The WHEN-vs-FIND operator is not recoverable from the parsed log (the
+    simulator prints only the folded ``at`` value, not the directive), so this
+    infers it from numeric shape. The one misread is the degenerate
+    ``FIND ... AT=<stepped>`` whose found value happens to be constant to 12
+    decimals across steps — then the probe axis is aggregated instead. The chosen
+    axis is always reported via ``aggregated_field`` so the consumer can tell.
+    """
+    axis_map: dict[str, AggregatedField] = {}
+    for name, vals in flat_values.items():
+        ats = at_map.get(name) or []
+        valid_vals = [v for v in vals if v is not None]
+        valid_ats = [a for a in ats if a is not None]
+        levels_constant = len({round(v, 12) for v in valid_vals}) <= 1
+        ats_vary = len({round(a, 12) for a in valid_ats}) > 1
+        if levels_constant and ats_vary:
+            flat_values[name] = ats
+            axis_map[name] = "at"
+        else:
+            axis_map[name] = "value"
+    return axis_map
+
+
 def _aggregate_job_measurements(
     batch_job: BatchJob,
 ) -> tuple[dict[str, list[float | None]], int, dict[str, AggregatedField], list[str]]:
@@ -2351,23 +2396,9 @@ def _aggregate_job_measurements(
                 bucket["values"].append(None)
                 bucket["ats"].append(None)
 
-    flat_values: dict[str, list[float | None]] = {}
-    axis_map: dict[str, AggregatedField] = {}
-    for name, bucket in samples.items():
-        vals = bucket["values"]
-        ats = bucket["ats"]
-        # Swap to ``at`` when the level is constant (or all-None) and the
-        # per-run frequency varies — the WHEN-style case.
-        valid_vals = [v for v in vals if v is not None]
-        valid_ats = [a for a in ats if a is not None]
-        levels_constant = len({round(v, 12) for v in valid_vals}) <= 1
-        ats_vary = len({round(a, 12) for a in valid_ats}) > 1
-        if levels_constant and ats_vary:
-            flat_values[name] = ats
-            axis_map[name] = "at"
-        else:
-            flat_values[name] = vals
-            axis_map[name] = "value"
+    flat_values: dict[str, list[float | None]] = {n: b["values"] for n, b in samples.items()}
+    at_map: dict[str, list[float | None]] = {n: b["ats"] for n, b in samples.items()}
+    axis_map = _apply_when_axis_swap(flat_values, at_map)
 
     return flat_values, runs_processed, axis_map, diagnostics
 
@@ -2404,7 +2435,18 @@ def _aggregate_log_measurements(
         raise ResultError(f"No .MEAS results in log:\n{err_block}")
 
     flat_values = {name: list(entry.get("values", [])) for name, entry in measurements.items()}
-    axis_map: dict[str, AggregatedField] = dict.fromkeys(flat_values, "value")
+    # Per-step ``at`` (crossing time) list per name, so a stepped WHEN .MEAS swaps
+    # to the ``at`` axis exactly as the batch path does (was: always "value" here).
+    at_map: dict[str, list[float | None]] = {}
+    for name, entry in measurements.items():
+        at_field = entry.get("at")
+        if isinstance(at_field, list):
+            at_map[name] = list(at_field)
+        elif isinstance(at_field, int | float):
+            at_map[name] = [float(at_field)]
+        else:
+            at_map[name] = []
+    axis_map = _apply_when_axis_swap(flat_values, at_map)
     steps_label = f"{meas_data.get('step_count', 1)} step(s)"
     return flat_values, axis_map, steps_label
 
@@ -2421,13 +2463,12 @@ def _aggregate_log_measurements(
         "count, and an optional histogram (set histogram_bins=0 to skip).\n\n"
         "Accepts any job id: a sweep/MC batch aggregates across its runs; a "
         "single-simulation job aggregates its own log (one value per step "
-        "for a .step run). Axis choice differs by shape: a batch detects "
-        "WHEN-style .MEAS (constant level, varying crossing) and swaps to "
-        "aggregating the 'at' field; a stepped single-run log always "
-        "aggregates the 'value' field. The aggregated_field output says "
-        "which was used. On a plain single run there's only one value per "
-        "measurement, so stats collapse to n=1 — use simulation_summary "
-        "instead to just read the scalars.\n\n"
+        "for a .step run). WHEN-style .MEAS (constant level, varying crossing) "
+        "is detected the same way on both paths and swaps to aggregating the "
+        "'at' (crossing) field; the aggregated_field output says which was "
+        "used. On a plain single run there's only one value per measurement, "
+        "so stats collapse to n=1 — use simulation_summary instead to just "
+        "read the scalars.\n\n"
         "Works with .MEAS from any analysis type (.tran/.ac/.dc/.op) — the "
         "measurement directives themselves embed the analysis context. Pass "
         "measurement=NAME to aggregate just one; otherwise returns all "
@@ -3376,6 +3417,16 @@ async def handle_resonance(args: ResonanceInput, state: SessionState):
 # ---------------------------------------------------------------------------
 
 PLOTS_SUBDIR = "plots"
+# Per-series point budget for the in-chat widget's chart spec (MCP Apps): the
+# spec rides in the tool result (hidden in _meta), so it is decimated harder than
+# the on-disk file (full fidelity stays in the file) — an overview for the eye.
+# Bounded by the caller's max_points too (min of the two).
+_WIDGET_SPEC_MAX_POINTS = 4_000
+# Total serialized-spec ceiling for the widget. Over this the widget is skipped
+# and delivery falls back to opening the full-fidelity file locally (surfaced as a
+# fact) — keeps a pathological many-series/step overlay from shipping a huge _meta
+# payload. Not a model-context limit (the spec is hidden from the model).
+_WIDGET_MAX_BYTES = 4_000_000
 _DEFAULT_PLOT_MAX_POINTS = 100_000
 _PLOT_MAX_POINTS_CEILING = 2_000_000
 # Global backstop on the rendered panel size. ``max_points`` caps each series,
@@ -3465,9 +3516,8 @@ def _union_panel(
     return panel, unioned
 
 
-def _build_plot_and_write(
+def _compute_plot_spec(
     raw,
-    raw_path: Path,
     cols: list[str],
     steps_to_plot: list[int],
     step_dicts: list[dict[str, float]],
@@ -3476,15 +3526,13 @@ def _build_plot_and_write(
     ts: float | None,
     te: float | None,
     max_points: int,
-    out_path: Path,
-    title: str,
-) -> dict:
-    """Build per-series plot data, assemble the HTML, write it atomically.
+) -> tuple[dict, dict]:
+    """Build the renderer-ready plot spec + coverage facts (no I/O).
 
-    Runs in a worker thread (heavy numpy + HTML string build + file I/O) and
-    returns only FACTS — the handler turns them into observations and builds the
-    response on the event loop (the concurrency contract keeps response building
-    off worker threads).
+    Runs in a worker thread (heavy numpy). Returns ``(spec, facts)``: ``spec`` is
+    the PlotSpec (panels/bode/analysis_type) consumed by both the offline HTML
+    file and the in-chat widget (called at different point budgets); ``facts`` are
+    the coverage facts the handler turns into observations on the event loop.
     """
     is_ac = analysis_type == "ac"
     x_label = _X_LABEL[analysis_type]
@@ -3585,12 +3633,7 @@ def _build_plot_and_write(
         spec = {"analysis_type": analysis_type, "bode": False, "panels": [panel]}
 
     series_count = sum(len(p["series"]) for p in spec["panels"])
-    summary = f"{raw_path.stem} — {analysis_type}: {series_count} series"
-    html_str = build_plot_html(spec, title=title, summary=summary)
-    with atomic_write(out_path) as f:
-        f.write(html_str)
-
-    return {
+    facts = {
         "panels": len(spec["panels"]),
         "series_count": series_count,
         "points_per_series": points_per_series,
@@ -3603,6 +3646,62 @@ def _build_plot_and_write(
         "window_used": [win_lo, win_hi] if win_lo is not None else [],
         "step_values_available": (bool(step_dicts) if multi else None),
     }
+    return spec, facts
+
+
+def _build_plot_and_write(
+    raw,
+    raw_path: Path,
+    cols: list[str],
+    steps_to_plot: list[int],
+    step_dicts: list[dict[str, float]],
+    analysis_type: str,
+    x_is_log: bool,
+    ts: float | None,
+    te: float | None,
+    max_points: int,
+    out_path: Path,
+    title: str,
+) -> dict:
+    """Compute the spec, assemble the offline HTML, write it atomically; return facts.
+
+    Runs in a worker thread (heavy numpy + HTML build + file I/O). The handler
+    turns the returned facts into observations on the event loop (the concurrency
+    contract keeps response building off worker threads).
+    """
+    spec, facts = _compute_plot_spec(
+        raw, cols, steps_to_plot, step_dicts, analysis_type, x_is_log, ts, te, max_points
+    )
+    summary = f"{raw_path.stem} — {analysis_type}: {facts['series_count']} series"
+    html_str = build_plot_html(spec, title=title, summary=summary)
+    with atomic_write(out_path) as f:
+        f.write(html_str)
+    return facts
+
+
+def _compute_widget_spec_json(
+    raw,
+    cols: list[str],
+    steps_to_plot: list[int],
+    step_dicts: list[dict[str, float]],
+    analysis_type: str,
+    x_is_log: bool,
+    ts: float | None,
+    te: float | None,
+    max_points: int,
+) -> str:
+    """Build the compact widget chart spec and serialize it — all in the worker.
+
+    Both the numpy spec build AND the (potentially large) JSON serialization run
+    off the event loop. Returns the spec as a JSON string for the result ``_meta``
+    (read by the widget in ``app.ontoolresult``); raises ``ResultError`` like
+    :func:`_compute_plot_spec` (e.g. the cell cap), which the handler catches to
+    fall back to local-open delivery.
+    """
+    spec, _ = _compute_plot_spec(
+        raw, cols, steps_to_plot, step_dicts, analysis_type, x_is_log, ts, te, max_points
+    )
+    return json.dumps(spec, ensure_ascii=True, allow_nan=False)
 
 
 class PlotWaveformInput(ToolInput):
@@ -3651,7 +3750,11 @@ class PlotWaveformInput(ToolInput):
     )
     open: bool = Field(
         default=True,
-        description="Open the written HTML in the local browser (terminal clients). Set false to only write it.",
+        description=(
+            "Open the written HTML in the local browser. Applies to terminal clients "
+            "only — ignored when the chart is delivered as an in-chat widget (MCP Apps "
+            "host). Set false to only write the file."
+        ),
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
@@ -3662,18 +3765,21 @@ class PlotWaveformInput(ToolInput):
 @registry.tool(
     name="plot_waveform",
     description=(
-        "Render an INTERACTIVE chart of one or more signals and open it on your "
-        "desktop — for a human to see the SHAPE and zoom/pan/hover, the co-design "
-        "complement to the numeric tools.\n\n"
+        "Render an INTERACTIVE chart of one or more signals FOR A HUMAN to look at "
+        "(zoom/pan/hover) — the co-design complement to the numeric tools. It returns "
+        "NO data values to the model; it produces a picture.\n\n"
         "Picks the chart from the run type: transient (V/I vs time), DC sweep, AC "
         "Bode (stacked magnitude-dB + phase-deg vs log frequency), noise (vs log "
         "frequency); a .step / Monte-Carlo run overlays every step as a labelled "
         "trace (or pass ``step`` for one). Full fidelity by default, with a "
         "min/max-preserving downsample above ``max_points`` (spikes survive; "
-        "surfaced as a fact). Writes a self-contained HTML file next to the circuit "
-        "and returns its path; on a terminal client it also opens it locally.\n\n"
-        "For numbers to compute on use export_waveform (CSV) or the scalar tools "
-        "(signal_stats, bode_metrics); this tool is for looking, not measuring."
+        "surfaced as a fact). Always writes a self-contained HTML file next to the "
+        "circuit and returns its path; on a host that supports MCP Apps the chart is "
+        "also embedded as an interactive in-chat widget, otherwise it opens in your "
+        "local browser.\n\n"
+        "Sibling egress, don't confuse: for numbers in your context use get_waveform "
+        "(decimated); for every sample on disk use export_waveform (CSV); for a "
+        "scalar use signal_stats/bode_metrics. This tool is for looking, not measuring."
     ),
     input_model=PlotWaveformInput,
     annotations=types.ToolAnnotations(
@@ -3683,6 +3789,9 @@ class PlotWaveformInput(ToolInput):
         openWorldHint=True,
     ),
     profiles=("full", "agentic"),
+    # MCP Apps (SEP-1865): declare the in-chat renderer so an apps-capable host
+    # fetches it via resources/read and pipes the chart spec into it.
+    meta={"ui": {"resourceUri": WIDGET_RESOURCE_URI}},
     output_schema={
         "type": "object",
         "properties": {
@@ -3697,6 +3806,7 @@ class PlotWaveformInput(ToolInput):
             "max_points": {"type": "integer"},
             "downsampled": {"type": "boolean"},
             "window_used": {"type": "array", "items": {"type": "number"}},
+            "delivery": {"type": "string", "enum": ["terminal", "ui"]},
             "opened": {"type": "boolean"},
             "opener": {"type": ["string", "null"]},
             "observations": OBSERVATIONS_SCHEMA,
@@ -3790,8 +3900,47 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     except ValueError as e:
         raise ResultError(f"Failed to build the plot (corrupt or truncated .raw?): {e}") from e
 
+    # Is this an MCP Apps host? Resolved ON THE LOOP (the request context is a
+    # ContextVar not propagated into to_thread workers). If so, build a COMPACT spec
+    # to ride in the result _meta (the host pipes it into the widget via
+    # ontoolresult; the tool declares ui.resourceUri and the host fetched the
+    # renderer via resources/read). Decimated harder than the on-disk file (bounded
+    # by the caller's max_points too); the spec build AND its JSON serialization run
+    # in the worker so nothing heavy hits the loop. If it can't be built within
+    # budget, widget_spec_json stays None and we open the full-fidelity file locally.
+    from ltspice_mcp.server import get_client_capabilities
+
+    is_ui = desktop.resolve_delivery_channel(get_client_capabilities()) == "ui"
+    widget_spec_json: str | None = None
+    widget_skipped: str | None = None
+    if is_ui:
+        budget = min(max_points, _WIDGET_SPEC_MAX_POINTS)
+        try:
+            widget_spec_json = await asyncio.to_thread(
+                _compute_widget_spec_json,
+                raw,
+                cols,
+                steps_to_plot,
+                step_dicts,
+                analysis_type,
+                x_is_log,
+                ts,
+                te,
+                budget,
+            )
+        except ResultError as e:
+            widget_skipped = str(e)
+        if widget_spec_json is not None and len(widget_spec_json) > _WIDGET_MAX_BYTES:
+            widget_skipped = (
+                f"The widget chart ({len(widget_spec_json):,} bytes) exceeds the "
+                f"{_WIDGET_MAX_BYTES:,}-byte in-result budget — plot fewer "
+                "signals/steps or a single step (step=N) for an in-chat widget."
+            )
+            widget_spec_json = None
+
+    # No widget (terminal host, or a UI build that fell back) → open the file.
     opened, opener = False, None
-    if args.open:
+    if widget_spec_json is None and args.open:
         opened, opener = await asyncio.to_thread(desktop.open_in_desktop, out_path)
 
     # Surface FACTS, not verdicts (result-trust doctrine).
@@ -3875,25 +4024,50 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
                 ),
             }
         )
-    if not args.open:
+    if widget_spec_json is not None:
         observations.append(
             {
-                "code": "open_skipped",
-                "kind": "coverage",
-                "detail": "Local open skipped (open=false); open the returned path manually.",
-            }
-        )
-    elif not opened:
-        observations.append(
-            {
-                "code": "open_failed",
+                "code": "widget_delivered",
                 "kind": "coverage",
                 "detail": (
-                    "Could not launch a local opener (headless or none found); open the "
-                    "returned path manually."
+                    "Client advertises MCP Apps (ui://) support; the chart spec rides in "
+                    "this result's _meta for the host to render in-chat (not shown to the "
+                    "model; local open skipped). The full-fidelity HTML was still written "
+                    "to the returned path."
                 ),
             }
         )
+    else:
+        if widget_skipped is not None:
+            observations.append(
+                {
+                    "code": "widget_unavailable",
+                    "kind": "coverage",
+                    "detail": (
+                        widget_skipped + " Wrote the full-fidelity file and opened it "
+                        "locally instead."
+                    ),
+                }
+            )
+        if not args.open:
+            observations.append(
+                {
+                    "code": "open_skipped",
+                    "kind": "coverage",
+                    "detail": "Local open skipped (open=false); open the returned path manually.",
+                }
+            )
+        elif not opened:
+            observations.append(
+                {
+                    "code": "open_failed",
+                    "kind": "coverage",
+                    "detail": (
+                        "Could not launch a local opener (headless or none found); open the "
+                        "returned path manually."
+                    ),
+                }
+            )
 
     data = {
         "path": str(out_path),
@@ -3907,12 +4081,27 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         "max_points": max_points,
         "downsampled": facts["downsampled"],
         "window_used": facts["window_used"],
+        "delivery": "ui" if widget_spec_json is not None else "terminal",
         "opened": opened,
         "opener": opener,
         "observations": observations,
     }
-    head = f"Wrote interactive {analysis_type} plot to {out_path}"
-    if opened:
-        head += f" (opened with {opener})"
+    if widget_spec_json is not None:
+        head = (
+            f"Rendered an interactive {analysis_type} plot widget in-chat (also wrote {out_path})"
+        )
+    else:
+        head = f"Wrote interactive {analysis_type} plot to {out_path}"
+        if opened:
+            head += f" (opened with {opener})"
     lines = [head, *format_observations(observations)]
-    return format_response("\n".join(lines), data, fmt)
+    result = format_response("\n".join(lines), data, fmt)
+
+    if widget_spec_json is not None:
+        # Pipe the compact chart spec through the result _meta (a non-model-visible
+        # channel) as a JSON string. The MCP Apps host forwards the full result to
+        # the widget (declared via the tool's ui.resourceUri), where
+        # ``app.ontoolresult`` reads _meta and renders it — so the model sees the
+        # summary/path, never the numbers.
+        result.meta = {WIDGET_SPEC_META_KEY: widget_spec_json}
+    return result

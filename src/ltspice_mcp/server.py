@@ -368,6 +368,22 @@ server = Server("ltspice-mcp", instructions=SERVER_INSTRUCTIONS)
 server.lifespan = server_lifespan
 
 
+def get_client_capabilities() -> types.ClientCapabilities | None:
+    """The connected client's capabilities, or ``None`` if unavailable.
+
+    Reads the live MCP session's ``initialize`` params. Returns ``None`` outside a
+    request (``LookupError``) or in stateless mode (no ``client_params``). Call
+    this from a handler coroutine — the request context is a ``ContextVar`` bound
+    to the current task and is NOT propagated into ``asyncio.to_thread`` workers.
+    Used to pick the plot delivery channel (in-chat ``ui://`` widget vs local open).
+    """
+    try:
+        params = server.request_context.session.client_params
+    except LookupError:
+        return None
+    return params.capabilities if params is not None else None
+
+
 @server.list_tools()
 async def list_tools() -> list[types.Tool]:
     """Return MCP tools filtered by the active tool profile."""

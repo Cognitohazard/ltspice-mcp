@@ -21,7 +21,11 @@ import pytest
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
-from ltspice_mcp.tools.analysis import MeasurementStatsInput, handle_measurement_stats
+from ltspice_mcp.tools.analysis import (
+    MeasurementStatsInput,
+    _aggregate_log_measurements,
+    handle_measurement_stats,
+)
 from tests.conftest import (
     FIXTURES_DIR,
     LTSPICE_SWEEP_RUN_LOGS,
@@ -38,6 +42,12 @@ RUN_PARAMS = [1000.0, 2200.0, 4700.0]
 VFINAL = [0.999876166042, 0.98323999039, 0.852486569628]
 # Crossing times printed by LTspice (tcross: WHEN V(out)=0.5 -> "... AT <t>").
 TCROSS_AT = [6.98285618328e-05, 0.000152998664495, 0.000326276827772]
+
+# Stepped single-run log (3 steps in ONE log, not one log per run): vfinal is a
+# FIND (value varies), tcross is a WHEN (level constant 0.5, crossing varies).
+STEP_WHEN_LOG = FIXTURES_DIR / "ltspice_step_when.log"
+STEP_WHEN_VFINAL = [0.63212, 0.77687, 0.95021]
+STEP_WHEN_TCROSS_AT = [6.98285e-05, 1.53000e-04, 3.26000e-04]
 
 
 def _make_sweep_batch(
@@ -327,6 +337,40 @@ class TestSingleSimJobAggregation:
         _make_single_sim(state_no_sim, log_file=None)
         with pytest.raises(ResultError, match="has no log file"):
             await handle_measurement_stats(MeasurementStatsInput(job_id="single1"), state_no_sim)
+
+
+class TestSteppedLogWhenAxis:
+    """A stepped single-run log must apply the WHEN -> ``at`` axis swap exactly
+    like the batch path. Before the shared swap, this path always aggregated the
+    ``value`` field, so a stepped WHEN .MEAS reported the constant trigger level
+    instead of the per-step crossing times. Fixture: ltspice_step_when.log."""
+
+    def test_stepped_log_when_swaps_to_at_axis(self):
+        flat_values, axis_map, steps_label = _aggregate_log_measurements(STEP_WHEN_LOG)
+        # Constant level (0.5) across steps + varying crossing -> aggregate ``at``.
+        assert axis_map["tcross"] == "at"
+        assert flat_values["tcross"] == pytest.approx(STEP_WHEN_TCROSS_AT)
+        assert "3 step(s)" in steps_label
+
+    def test_stepped_log_find_stays_on_value_axis(self):
+        flat_values, axis_map, _ = _aggregate_log_measurements(STEP_WHEN_LOG)
+        # FIND value varies per step -> stays on the value axis.
+        assert axis_map["vfinal"] == "value"
+        assert flat_values["vfinal"] == pytest.approx(STEP_WHEN_VFINAL)
+
+    async def test_stepped_when_sim_job_swaps_to_at_axis(self, state_no_sim: SessionState):
+        _make_single_sim(state_no_sim, job_id="stepped_when", log_file=STEP_WHEN_LOG)
+        result = await handle_measurement_stats(
+            MeasurementStatsInput(job_id="stepped_when"), state_no_sim
+        )
+        assert result.structuredContent is not None
+        tcross = result.structuredContent["stats"]["tcross"]
+        assert tcross["aggregated_field"] == "at"
+        assert tcross["min"] == pytest.approx(STEP_WHEN_TCROSS_AT[0])
+        assert tcross["max"] == pytest.approx(STEP_WHEN_TCROSS_AT[2])
+        assert tcross["mean"] == pytest.approx(sum(STEP_WHEN_TCROSS_AT) / 3)
+        # The FIND measurement in the same log stays on the value axis.
+        assert result.structuredContent["stats"]["vfinal"]["aggregated_field"] == "value"
 
 
 @pytest.mark.asyncio

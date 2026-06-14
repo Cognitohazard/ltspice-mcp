@@ -1,25 +1,47 @@
-"""Self-contained interactive-plot HTML assembly (uPlot, vendored).
+"""Interactive-plot HTML assembly (uPlot, vendored) — two delivery shapes.
 
 :func:`build_plot_html` turns a plain ``PlotSpec`` dict (arrays + labels,
 ignorant of job/RunRef internals) into one offline HTML file with uPlot and the
 data inlined — no CDN, no network, no template engine. ``plot_waveform`` writes
-the result to disk and opens it on the desktop.
+it to disk and opens it on the desktop (terminal clients).
 
-Security: signal/node names flow into the page, so chart data + labels are
-emitted as a single JSON blob in a ``<script type="application/json">`` element
-(``</`` neutralized so a crafted name cannot close the script early), and the
-page-chrome strings (title, summary) are ``html.escape``-d. The init script is a
-static literal that reads the JSON blob — no user data is ever interpolated into
-markup attributes or executable script.
+:func:`build_widget_html` builds the *generic* MCP Apps renderer template
+(SEP-1865): uPlot + the vendored ext-apps ``App`` runtime inlined, NO data baked
+in. It is served once as the stable ``ui://`` resource the tool references; the
+host renders it in a sandboxed iframe and pipes the per-call chart spec in via
+``app.ontoolresult``. Both shapes share the same :data:`_RENDER_JS` core.
+
+Security: signal/node names flow into the page. For the file, chart data + labels
+are emitted as a single JSON blob in a ``<script type="application/json">``
+element (``</`` neutralized so a crafted name cannot close the script early) and
+chrome strings (title, summary) are ``html.escape``-d. The widget template is a
+static literal with NO user data interpolated at all — the per-call spec arrives
+at runtime via the host bridge, never as markup.
 """
 
 import html
 import json
+import re
 from functools import lru_cache
 from importlib.resources import files
 from typing import Any
 
 _ASSET_PKG = "ltspice_mcp"
+
+# MIME type SEP-1865 mandates for an HTML UI resource — how an apps-capable host
+# knows to render the resource as an interactive iframe, not show its source.
+WIDGET_MIME_TYPE = "text/html;profile=mcp-app"
+
+# Stable, predeclared ``ui://`` URI for the one generic plot renderer. The tool
+# references it via ``_meta.ui.resourceUri``; the host fetches it with
+# ``resources/read``. One renderer serves every plot — the per-call data is piped
+# in at runtime, so the URI never changes (it stays prefetchable/cacheable).
+WIDGET_RESOURCE_URI = "ui://ltspice-mcp/plot"
+
+# Namespaced key under the tool result's ``_meta`` carrying the per-call chart
+# spec (a JSON string) for the widget. ``_meta`` is not shown to the model, so the
+# plot returns no numbers to it; the widget reads this in ``app.ontoolresult``.
+WIDGET_SPEC_META_KEY = "ltspice/plotSpec"
 
 
 @lru_cache(maxsize=1)
@@ -38,13 +60,12 @@ _PAGE_CSS = (
     "font-size:12px;margin:0 0 12px;white-space:pre-wrap}.uplot{margin-bottom:18px}"
 )
 
-# Static init script — NO user data is interpolated; it parses the JSON blob and
-# builds one uPlot per panel. A 'bode' spec stacks two panels sharing a synced
-# log-frequency x cursor/zoom. All presentation (palette, sizes) lives here.
-_INIT_JS = """
-(function () {
-  var spec = JSON.parse(document.getElementById('plot-data').textContent);
-  var root = document.getElementById('panels');
+# Shared render core — NO user data is interpolated. Defines renderSpec(spec, root):
+# one uPlot per panel; a 'bode' spec stacks two panels sharing a synced
+# log-frequency x cursor/zoom. All presentation (palette, sizes) lives here. Used
+# by both the offline file and the in-chat widget so they render identically.
+_RENDER_JS = """
+function renderSpec(spec, root) {
   var palette = ['#1f77b4','#d62728','#2ca02c','#ff7f0e','#9467bd','#8c564b',
                  '#e377c2','#7f7f7f','#bcbd22','#17becf'];
   var charts = [];
@@ -82,6 +103,14 @@ _INIT_JS = """
     var w = width();
     for (var i = 0; i < charts.length; i++) charts[i].setSize({ width: w, height: H });
   });
+}
+"""
+
+# Offline-file driver: reads the inlined JSON blob and renders once.
+_FILE_INIT_JS = """
+(function () {
+  var spec = JSON.parse(document.getElementById('plot-data').textContent);
+  renderSpec(spec, document.getElementById('panels'));
 })();
 """
 
@@ -127,7 +156,108 @@ def build_plot_html(spec: dict[str, Any], *, title: str, summary: str = "") -> s
             _uplot_js(),
             "</script>\n",
             "<script>",
-            _INIT_JS,
+            _RENDER_JS,
+            _FILE_INIT_JS,
+            "</script>\n</body></html>\n",
+        ]
+    )
+
+
+def _globalize_ext_apps(bundle: str) -> str:
+    """Rewrite the ext-apps ESM ``export{…}`` tail into a ``globalThis`` assign.
+
+    The vendored ``app-with-deps`` bundle is minified ESM ending in
+    ``export{a as App,…}``; an inline ``<script type="module">`` can't re-export,
+    so turn the trailing export list into ``globalThis.ExtApps={App:a,…}``. Done
+    with ``str`` slicing (not ``re.sub``) because the minified body is full of
+    ``$`` sequences a regex replacement would mangle.
+    """
+    m = re.search(r"export\{([^}]+)\};?\s*$", bundle)
+    if m is None:  # pragma: no cover - shape guard; vendored bundle always matches
+        return bundle
+    pairs = []
+    for pair in m.group(1).split(","):
+        names = [s.strip() for s in pair.split(" as ")]
+        local = names[0]
+        exported = names[1] if len(names) > 1 else local
+        pairs.append(f"{exported}:{local}")
+    return bundle[: m.start()] + "globalThis.ExtApps={" + ",".join(pairs) + "};"
+
+
+@lru_cache(maxsize=1)
+def _ext_apps_bundle() -> str:
+    raw = (files(_ASSET_PKG) / "assets" / "ext-apps" / "app-with-deps.js").read_text("utf-8")
+    return _globalize_ext_apps(raw)
+
+
+# Light/dark variables for the widget (the host advertises its theme; the file
+# uses the fixed light _PAGE_CSS since a browser tab has no host theme to follow).
+_WIDGET_THEME_CSS = (
+    ":root{color-scheme:light}"
+    "html.dark{color-scheme:dark}html.dark body{background:#1f2428;color:#e6e6e6}"
+    "#status{color:#666;font-size:12px;margin:0 0 8px}"
+)
+
+# Widget driver — set ontoolresult BEFORE connect (the result can arrive
+# immediately). ``ontoolresult`` receives the full CallToolResult; the chart spec
+# rides in ``_meta["ltspice/plotSpec"]`` (a JSON string) — a non-model-visible
+# channel, so the plot returns no numbers to the model. NO user data is in this
+# template; the per-call spec arrives at runtime via the host bridge.
+_WIDGET_INIT_JS = """
+(async function () {
+  var App = globalThis.ExtApps.App;
+  var root = document.getElementById('panels');
+  var status = document.getElementById('status');
+  function applyTheme(t) { document.documentElement.classList.toggle('dark', t === 'dark'); }
+  function draw(result) {
+    var raw = result && result._meta && result._meta['__SPEC_KEY__'];
+    if (!raw) { status.textContent = 'No plot data in this result.'; return; }
+    var spec;
+    try { spec = JSON.parse(raw); } catch (e) { status.textContent = 'Could not parse plot data.'; return; }
+    status.style.display = 'none';
+    root.innerHTML = '';
+    renderSpec(spec, root);
+  }
+  var app = new App({ name: 'ltspice-plot', version: '1.0.0' }, {});
+  app.onhostcontextchanged = function (ctx) { applyTheme(ctx && ctx.theme); };
+  app.ontoolresult = draw;
+  await app.connect();
+  var ctx = app.getHostContext ? app.getHostContext() : null;
+  applyTheme(ctx && ctx.theme);
+})();
+""".replace("__SPEC_KEY__", WIDGET_SPEC_META_KEY)
+
+
+@lru_cache(maxsize=1)
+def build_widget_html() -> str:
+    """The generic MCP Apps renderer template (static; no per-call data).
+
+    Inlines uPlot + the ext-apps ``App`` runtime; receives the chart spec at
+    runtime via ``app.ontoolresult`` and renders it with the shared
+    :data:`_RENDER_JS` core. Served as the stable ``ui://`` resource that the
+    ``plot_waveform`` tool references via ``_meta.ui.resourceUri``. Cached: it
+    never varies, so it is built once.
+    """
+    return "".join(
+        [
+            '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width,initial-scale=1">',
+            "<title>LTspice plot</title>\n<style>",
+            _uplot_css(),
+            "</style>\n<style>",
+            _PAGE_CSS,
+            _WIDGET_THEME_CSS,
+            "</style>\n</head><body>\n",
+            '<div id="status">Waiting for plot data…</div>\n',
+            '<div id="panels"></div>\n',
+            "<script>",
+            _uplot_js(),
+            "</script>\n",
+            '<script type="module">\n',
+            _ext_apps_bundle(),
+            "\n",
+            _RENDER_JS,
+            _WIDGET_INIT_JS,
             "</script>\n</body></html>\n",
         ]
     )

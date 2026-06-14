@@ -1,0 +1,29 @@
+LTspice 26.0.2 for Windows
+Circuit: C:\temp\ltmcp_fix\step_when_rc.net
+Start Time: Sat Jun 13 18:30:00 2026
+
+.step r=1
+solver = Normal
+Maximum thread count: 32
+tnom = 27
+temp = 27
+method = trap
+
+.step r=22
+
+.step r=680
+Total elapsed time: 0.050 seconds.
+
+Files loaded:
+C:\temp\ltmcp_fix\step_when_rc.net
+
+Measurement: vfinal
+  step	V(out)	at
+     1	0.63212	0.0009
+     2	0.77687	0.0009
+     3	0.95021	0.0009
+Measurement: tcross
+  step	V(out)=0.5	at
+     1	0.5	6.98285e-05
+     2	0.5	1.53000e-04
+     3	0.5	3.26000e-04

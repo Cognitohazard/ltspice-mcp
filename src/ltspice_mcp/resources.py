@@ -17,6 +17,11 @@ from pydantic import AnyUrl
 
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, services
 from ltspice_mcp.lib.pathutil import resolve_safe_path
+from ltspice_mcp.lib.plot_html import (
+    WIDGET_MIME_TYPE,
+    WIDGET_RESOURCE_URI,
+    build_widget_html,
+)
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
@@ -76,7 +81,10 @@ _router = ResourceRouter()
 
 
 def get_static_resources() -> list[types.Resource]:
-    """Return the 4 static resources always present on this server."""
+    """Return the static resources always present on this server.
+
+    (netlists, results, models, config, recent, and the plot_widget UI renderer.)
+    """
     return [
         types.Resource(
             name="netlists",
@@ -101,6 +109,16 @@ def get_static_resources() -> list[types.Resource]:
             uri=AnyUrl("ltspice://config"),
             description="Server configuration and detected simulators",
             mimeType="application/json",
+        ),
+        types.Resource(
+            name="plot_widget",
+            uri=AnyUrl(WIDGET_RESOURCE_URI),
+            description=(
+                "Interactive chart renderer (MCP Apps / SEP-1865). plot_waveform "
+                "references this via _meta.ui.resourceUri; an apps-capable host "
+                "fetches it and renders the chart inline."
+            ),
+            mimeType=WIDGET_MIME_TYPE,
         ),
         types.Resource(
             name="recent",
@@ -167,6 +185,19 @@ def _make_result(
             )
         ]
     )
+
+
+@_router.route(WIDGET_RESOURCE_URI)
+def _read_plot_widget(
+    uri_str: str, params: dict[str, str], state: SessionState
+) -> types.ReadResourceResult:
+    """Serve the generic interactive-plot renderer (MCP Apps widget template).
+
+    Static HTML (uPlot + ext-apps runtime, no per-call data); the chart spec is
+    piped in by the host at render time. Built once and cached in plot_html.
+    """
+    del params, state
+    return _make_result(uri_str, build_widget_html(), mime=WIDGET_MIME_TYPE)
 
 
 @_router.route("ltspice://config")
