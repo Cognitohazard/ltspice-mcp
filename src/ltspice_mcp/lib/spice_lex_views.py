@@ -19,6 +19,7 @@ from typing import Literal
 
 from ltspice_mcp.lib.format import format_spice_value as _format_value
 from ltspice_mcp.lib.spice_lex import (
+    MEAS_ANALYSIS_TOKENS,
     SpiceCard,
     SpiceLexError,
     SpiceLexErrorCategory,
@@ -720,7 +721,9 @@ class SubcktCard:
 # ---------------------------------------------------------------------------
 
 
-MeasAnalysis = Literal["tran", "ac", "dc", "op", "noise"]
+# Mirrors ``spice_lex.MEAS_ANALYSIS_TOKENS`` at the type level (a Literal cannot
+# be derived from the runtime constant — keep the two in sync).
+MeasAnalysis = Literal["tran", "ac", "dc", "op", "noise", "sp"]
 
 
 @dataclass
@@ -764,7 +767,7 @@ class MeasCard:
         idx = 1
         analysis: MeasAnalysis | None = None
         second = tokens[idx].text.lower()
-        if second in ("tran", "ac", "dc", "op", "noise"):
+        if second in MEAS_ANALYSIS_TOKENS:
             analysis = second  # type: ignore[assignment]
             idx += 1
         if idx >= len(tokens):

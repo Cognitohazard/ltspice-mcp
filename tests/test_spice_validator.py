@@ -64,6 +64,39 @@ class TestGroupDelayInMeas:
         assert err.rule_name == "group_delay_in_meas"
 
 
+class TestTranTstepZero:
+    """``.tran 0 <tstop>`` (zero step time, auto-timestep) runs on LTspice but
+    ngspice rejects it. Flagged only for the ngspice target so a clean LTspice
+    deck stays clean."""
+
+    def test_tstep_zero_flagged_for_ngspice(self):
+        err = validate_directive(".tran 0 5m", simulator="ngspice")
+        assert err is not None
+        assert err.rule_name == "tran_tstep_zero_ngspice"
+        assert "TSTEP" in err.message
+
+    def test_tstep_zero_allowed_for_ltspice(self):
+        assert validate_directive(".tran 0 5m") is None  # default is LTspice
+        assert validate_directive(".tran 0 5m", simulator="LTspice") is None
+
+    def test_zero_tstep_with_trailing_args_still_flagged(self):
+        # .tran <Tstep> <Tstop> <Tstart> <Tmax> [uic] — Tstep is still arg 1.
+        assert validate_directive(".tran 0 5m 0 1u", simulator="ngspice") is not None
+        assert validate_directive(".tran 0 5m uic", simulator="ngspice") is not None
+
+    def test_nonzero_tstep_passes_ngspice(self):
+        assert validate_directive(".tran 1u 5m", simulator="ngspice") is None
+        assert validate_directive(".tran 1u 5m 0 1u", simulator="ngspice") is None
+
+    def test_bare_tstop_not_flagged(self):
+        # ".tran 5m" is a lone Tstop (LTspice shorthand), not Tstep=0.
+        assert validate_directive(".tran 5m", simulator="ngspice") is None
+
+    def test_parameterised_tstep_left_alone(self):
+        # A braced/param step time is resolved at run time, not pre-flighted.
+        assert validate_directive(".tran {ts} 5m", simulator="ngspice") is None
+
+
 class TestEdgeCases:
     def test_empty_directive_is_no_op(self):
         assert validate_directive("") is None
@@ -165,6 +198,15 @@ class TestElementArity:
         # KV (not the primary-value KV). The R= rule shouldn't trigger.
         issues = self._arity("R1 a b 1k TC=0.001\n.end")
         assert all("R1" not in str(i["message"]) for i in issues)
+
+    def test_cl_keyed_primary_value_accepted_for_ngspice(self):
+        # The C=/L= primary-value rejection is LTspice-only; ngspice accepts
+        # those forms, so the ngspice target must not flag them.
+        cards = lex("C1 c d C=10n\nL1 e f L=1u\n.end\n").cards
+        issues = validate_netlist_arity(cards, simulator="ngspice")
+        assert all(
+            "C1" not in str(i["message"]) and "L1" not in str(i["message"]) for i in issues
+        ), issues
 
 
 class TestDanglingNodes:

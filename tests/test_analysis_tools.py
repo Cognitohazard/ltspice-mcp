@@ -142,6 +142,30 @@ class TestSignalStats:
         # over a swept variable.
         assert "rms" not in data
 
+    async def test_dc_sweep_descending_axis(self, state_no_sim: SessionState, work_dir: Path):
+        """A descending DC sweep (e.g. ``.dc V1 5 0 -0.25``) has a strictly
+        decreasing axis. window_and_clean refuses that by default; the DC path
+        opts into a flip so signal_stats analyzes it instead of erroring."""
+        raw_file = work_dir / "dcdesc.raw"
+        v = np.linspace(5.0, 0.0, 21)  # high → low sweep
+        raw = _make_raw_mock(
+            plotname="DC transfer characteristic",
+            trace_names=["v-sweep", "V(out)"],
+            waves={"v-sweep": v, "V(out)": v * 0.5},
+            axis=v,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_signal_stats(
+            SignalStatsInput(raw_file=raw_file.name, signal="V(out)"),
+            state_no_sim,
+        )
+        data = result.structuredContent
+        assert data is not None
+        assert data["analysis_type"] == "dc"
+        # min/max computed over the flipped-to-ascending axis.
+        assert data["min"] == pytest.approx(0.0)
+        assert data["max"] == pytest.approx(2.5)
+
     async def test_signal_not_found(self, state_no_sim: SessionState, fake_raw: Path):
         with pytest.raises(ResultError, match="not found"):
             await handle_signal_stats(
@@ -1721,6 +1745,30 @@ class TestGetWaveform:
             assert b["min"] <= b["mean"] <= b["max"]
             assert b["rms"] >= 0
             assert b["pk_pk"] == pytest.approx(b["max"] - b["min"])
+
+    async def test_dc_sweep_descending_axis(self, state_no_sim: SessionState, work_dir: Path):
+        # A descending DC sweep must be decimated, not refused: the DC path
+        # flips the axis to ascending before bucketing.
+        raw_file = work_dir / "wave_dcdesc.raw"
+        v = np.linspace(5.0, 0.0, 200)  # high → low
+        raw = _make_raw_mock(
+            plotname="DC transfer characteristic",
+            trace_names=["v-sweep", "V(out)"],
+            waves={"v-sweep": v, "V(out)": v * 0.5},
+            axis=v,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_get_waveform(
+            GetWaveformInput(raw_file=raw_file.name, signal="V(out)"),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc is not None
+        assert sc["analysis_type"] == "dc"
+        assert sc["bucket_count"] > 0
+        # The envelope spans the full sweep regardless of original direction.
+        assert min(b["min"] for b in sc["buckets"]) == pytest.approx(0.0, abs=0.05)
+        assert max(b["max"] for b in sc["buckets"]) == pytest.approx(2.5, abs=0.05)
 
     async def test_decimated_observations(self, state_no_sim: SessionState, work_dir: Path):
         raw_file = work_dir / "wave.raw"
