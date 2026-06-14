@@ -625,6 +625,98 @@ class TestValidateNetlist:
         )
         assert data["issue_count"] == 0, data["issues"]
 
+    async def test_title_line_short_element_letter_not_arity_flagged(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A title starting with an element letter and too few words ("RC filter"
+        # → reads as an R-element with a single node) must not be arity-flagged:
+        # line 1 is the free-text title, dropped before the arity pass.
+        data = await self._validate(
+            state_no_sim,
+            work_dir,
+            "rc.cir",
+            "RC filter\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1n\n.tran 0 1m\n.end\n",
+        )
+        assert data["issue_count"] == 0, data["issues"]
+
+    async def test_tstep_zero_flagged_only_for_ngspice_target(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # ".tran 0 1m" (auto-timestep) is clean for LTspice but fails on ngspice.
+        # The target_simulator arg selects which portability rules apply.
+        (work_dir / "tz.cir").write_text(
+            "* tstep zero\nVin in 0 1\nR1 in 0 1k\n.tran 0 1m\n.end\n"
+        )
+        d_lt = (await handle_validate_netlist({"path": "tz.cir"}, state_no_sim)).structuredContent
+        assert d_lt is not None
+        assert d_lt["issue_count"] == 0, d_lt["issues"]
+        d_ng = (
+            await handle_validate_netlist(
+                {"path": "tz.cir", "target_simulator": "ngspice"}, state_no_sim
+            )
+        ).structuredContent
+        assert d_ng is not None
+        assert any("TSTEP" in iss["message"] for iss in d_ng["issues"]), d_ng["issues"]
+
+    async def test_ngspice_target_skips_ltspice_multiple_analysis_gate(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # "More than one analysis" is an LTspice rejection; it must not fire
+        # (with LTspice wording) once the user targets ngspice.
+        (work_dir / "multi.cir").write_text(
+            "* multi\nVin in 0 AC 1\nR1 in 0 1k\n.ac dec 10 1 1Meg\n.tran 1u 1m\n.end\n"
+        )
+        d_lt = (
+            await handle_validate_netlist({"path": "multi.cir"}, state_no_sim)
+        ).structuredContent
+        assert any("analysis" in iss["message"].lower() for iss in d_lt["issues"]), d_lt["issues"]
+        d_ng = (
+            await handle_validate_netlist(
+                {"path": "multi.cir", "target_simulator": "ngspice"}, state_no_sim
+            )
+        ).structuredContent
+        assert not any(
+            "More than one" in iss["message"] or "Multiple distinct" in iss["message"]
+            for iss in d_ng["issues"]
+        ), d_ng["issues"]
+
+    async def test_ngspice_target_skips_ltspice_meas_kind_mismatch(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # The silent-drop-on-mismatch reasoning is LTspice-specific; under
+        # ngspice (which skips all .meas in batch mode at run time) it must not
+        # emit the LTspice mismatch error.
+        (work_dir / "mm.cir").write_text(
+            "* meas mismatch\nVin in 0 1\nR1 in out 1k\nC1 out 0 1n\n"
+            ".tran 1u 1m\n.meas ac gain FIND V(out) AT 1k\n.end\n"
+        )
+        d_lt = (await handle_validate_netlist({"path": "mm.cir"}, state_no_sim)).structuredContent
+        assert any(".meas ac" in iss["message"] for iss in d_lt["issues"]), d_lt["issues"]
+        d_ng = (
+            await handle_validate_netlist(
+                {"path": "mm.cir", "target_simulator": "ngspice"}, state_no_sim
+            )
+        ).structuredContent
+        assert not any(".meas ac" in iss["message"] for iss in d_ng["issues"]), d_ng["issues"]
+
+    async def test_ngspice_target_accepts_cl_keyed_primary_value(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # ``C1 a b C=10n`` / ``L1 b 0 L=1u`` are LTspice errors but valid ngspice.
+        (work_dir / "cl.cir").write_text(
+            "* cl keyed\nV1 a 0 1\nC1 a b C=10n\nL1 b 0 L=1u\n.tran 1u 1m\n.end\n"
+        )
+        d_lt = (await handle_validate_netlist({"path": "cl.cir"}, state_no_sim)).structuredContent
+        assert any("does not accept" in iss["message"] for iss in d_lt["issues"]), d_lt["issues"]
+        d_ng = (
+            await handle_validate_netlist(
+                {"path": "cl.cir", "target_simulator": "ngspice"}, state_no_sim
+            )
+        ).structuredContent
+        assert not any("does not accept" in iss["message"] for iss in d_ng["issues"]), d_ng[
+            "issues"
+        ]
+
     async def test_asc_directive_elements_not_dangling_checked(
         self, state_no_sim: SessionState, work_dir: Path
     ):
