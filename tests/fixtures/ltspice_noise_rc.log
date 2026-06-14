@@ -1,0 +1,15 @@
+LTspice 26.0.2 for Windows
+Circuit: C:\temp\ltmcp_fix\noise_rc.net
+Start Time: Sat Jun 13 18:48:29 2026
+solver = Normal
+Maximum thread count: 32
+tnom = 27
+temp = 27
+method = trap
+.OP point found by inspection.
+.OP point found by inspection.
+Total elapsed time: 0.018 seconds.
+
+Files loaded:
+C:\temp\ltmcp_fix\noise_rc.net
+

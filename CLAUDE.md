@@ -179,8 +179,8 @@ TOML sections: `[simulator]`, `[security]`, `[simulation]`, `[analysis]`, `[logg
 
 | Profile | Tools | Use case |
 |-|-|-|
-| `full` (default) | All 49 | Any MCP client, automation, non-agent LLMs |
-| `agentic` | 33 | LLM agents with native file access (Read/Edit/Write) |
+| `full` (default) | All 50 | Any MCP client, automation, non-agent LLMs |
+| `agentic` | 34 | LLM agents with native file access (Read/Edit/Write) |
 
 The "agentic" profile removes 16 tools: the netlist-editing wrappers (`create_netlist`, `read_circuit`, `set_component_value`, `parameter`, `edit_directive`), library session management (`load_library`, `unload_library`, `list_libraries`), the schematic-construction writes (`add_component`, `move_component`, `remove_component`, `set_component_attribute`, `create_schematic`, `apply_schematic_ops`), and `configure_sweep`/`configure_montecarlo` — things capable agents do natively or via `schematic_from_netlist`. It keeps simulation lifecycle, binary `.raw` parsing, batch run/results, the wiring and inspection schematic ops (`connect`, `add_net_label`, `export_netlist`, `reset_schematic`, `symbol_info`, `component_info`, `schematic_from_netlist`, `trace_net`), and `find_model` search.
 
