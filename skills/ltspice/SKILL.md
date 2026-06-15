@@ -253,7 +253,7 @@ C1 out 0 {C}
 
 ### .asc Schematics
 
-`.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use the server's schematic tools (`add_component`, `connect`, `add_net_label`, ...) or LTspice's GUI. Note that the schematic-construction tools (`add_component`, `create_schematic`, `move_component`, ...) require the full tool profile; the agentic profile builds schematics via `schematic_from_netlist` plus `connect`/`add_net_label` instead.
+`.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use the server's schematic tools (`add_component`, `connect`, `add_net_label`, ...) or LTspice's GUI. The schematic-construction tools (`add_component`, `create_schematic`, `move_component`, `apply_schematic_ops`, ...) are available in both the full and agentic profiles — geometry-aware editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match.
 
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2.
 - Export to netlist for direct text editing when needed.
