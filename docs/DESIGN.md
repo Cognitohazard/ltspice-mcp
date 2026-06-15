@@ -360,8 +360,8 @@ Key `lib/` modules:
 
 |profile|tool count|use case|
 |-|-|-|
-|`full` (default)|51|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
-|`agentic`|35|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
+|`full` (default)|52|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
+|`agentic`|36|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
 
 The `agentic` profile drops 16 tools: the five netlist-editing wrappers
 (`create_netlist`, `read_circuit`, `set_component_value`, `parameter`,

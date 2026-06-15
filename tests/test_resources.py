@@ -21,9 +21,17 @@ def _text(contents) -> str:
 class TestStaticResources:
     def test_returns_static_resources(self):
         resources = get_static_resources()
-        assert len(resources) == 6
+        assert len(resources) == 7
         names = {r.name for r in resources}
-        assert names == {"netlists", "results", "models", "config", "recent", "plot_widget"}
+        assert names == {
+            "netlists",
+            "results",
+            "models",
+            "config",
+            "recent",
+            "plot_widget",
+            "guide",
+        }
 
     def test_resource_uris(self):
         resources = get_static_resources()
@@ -68,6 +76,18 @@ class TestReadResource:
     def test_read_models_empty(self, state_no_sim: SessionState):
         result = handle_read_resource("ltspice://models/", state_no_sim)
         assert "libraries" in _text(result.contents[0])
+
+    def test_read_guide(self, state_no_sim: SessionState):
+        result = handle_read_resource("ltspice://guide", state_no_sim)
+        assert result.contents
+        contents = result.contents[0]
+        assert isinstance(contents, TextResourceContents)
+        assert contents.mimeType == "text/markdown"
+        text = contents.text
+        # Both strings come from the real SKILL.md body, proving the packaged
+        # guide is served (not a placeholder).
+        assert "Schematic layout best practices" in text
+        assert "means MILLI" in text
 
     def test_unknown_uri_raises(self, state_no_sim: SessionState):
         with pytest.raises(ValueError, match="Unknown resource URI"):

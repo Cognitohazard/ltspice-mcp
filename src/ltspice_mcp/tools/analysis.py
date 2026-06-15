@@ -56,6 +56,7 @@ from ltspice_mcp.lib.ac_analysis import (
     prepare_ac_arrays,
     unwrap_phase_safe,
 )
+from ltspice_mcp.lib.ac_structure import AcStructureResult, analyze_ac_structure
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.job_store import SIDECAR_DIRNAME
 from ltspice_mcp.lib.log_parser import parse_measurements, parse_step_iterations
@@ -3428,6 +3429,130 @@ async def handle_resonance(args: ResonanceInput, state: SessionState):
     return format_response("\n".join(lines), data, args.format)
 
 
+class AcStructureInput(ToolInput):
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to AC analysis .raw result file. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Analyze a completed job run by id instead of a raw_file path; pair "
+            "with ``run_index``. Lets you read a sweep / Monte-Carlo run's structure."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to read when ``job_id`` is given (default 0).",
+    )
+    signal: str = Field(
+        description="Signal name (e.g. 'V(out)') — the transfer function H(jω) to analyze."
+    )
+    step: int = Field(default=0, description="Step index for .step sweeps")
+    format: FormatField = Field(default=None)
+
+
+class AcStructureResponse(AcStructureResult):
+    """Tool-layer response = lib structure facts + the signal name."""
+
+    signal: str
+
+
+def _fmt_hz_range(f_lo: float, f_hi: float) -> str:
+    """Compact display of a corner's frequency range (a point sets lo == hi)."""
+    if abs(f_hi - f_lo) <= 1e-9 * max(abs(f_hi), 1.0):
+        return f"{f_lo:.3g} Hz"
+    return f"{f_lo:.3g} to {f_hi:.3g} Hz"
+
+
+@registry.tool(
+    name="ac_structure",
+    description=(
+        "Read the pole/zero STRUCTURE of an .AC response — net order, corner "
+        "frequencies (as ranges) with Q, out-of-phase zeros, and "
+        "transport delay — to support design reasoning (where the poles/zeros "
+        "roughly are, damping, out-of-phase zeros). It first tries a rational fit and "
+        "uses its poles/zeros when the fit is clean; otherwise it falls back to "
+        "asymptotic Bode reading (slope breakpoints + joint gain-phase + group "
+        "delay + a gain-phase consistency residual).\n\n"
+        "Returns FACTS, not a verdict — bring your own control/design knowledge. "
+        "The most design-critical fact is the non_minimum_phase flag: an "
+        "out-of-phase zero or a transport delay adds phase lag the magnitude plot "
+        "cannot show, and caps achievable loop bandwidth; do not close a loop on "
+        "magnitude alone when it is flagged.\n\n"
+        "IMPORTANT — these are read from a finite sweep, so HAVE A HUMAN REVIEW "
+        "them against the Bode plot (use plot_waveform on the same signal) and "
+        "the circuit before acting. Closely-spaced corners merge into one range "
+        "(``merged: true``) rather than being resolved individually, and exact "
+        "pole/zero COUNTS are not guaranteed — for exact poles/zeros run a .pz "
+        "analysis on ngspice. Requires a .AC run. Siblings: bode_metrics "
+        "(margins / cutoffs / point queries), resonance (peaks + Q), "
+        "stability_metrics (loop margins)."
+    ),
+    input_model=AcStructureInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_model=AcStructureResponse,
+)
+async def handle_ac_structure(args: AcStructureInput, state: SessionState):
+    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
+    freqs, H = await _load_ac_signal(raw_path, args.signal, args.step, state)
+    data = _run(analyze_ac_structure, freqs, H)
+    data["signal"] = args.signal
+
+    order = data["net_order"]
+    lines = [
+        f"AC structure: {args.signal}",
+        "",
+        f"Net high-frequency order (pole-zero excess): "
+        f"{order if order is not None else 'unknown'}",
+    ]
+    if data["integrator"]:
+        lines.append(
+            f"Low-frequency asymptote: integrator / pole at origin "
+            f"({data['lf_slope_db_per_decade']:.0f} dB/dec)"
+        )
+    if data["corners"]:
+        lines.append("Corners:")
+        kinds = {
+            "real_pole": "real pole",
+            "real_zero": "real zero",
+            "complex_pair": "complex pole pair",
+            "complex_zero_pair": "complex zero pair",
+        }
+        for c in data["corners"]:
+            q = f", Q~{c['q']:.1f}" if c["q"] is not None else ""
+            merged = (
+                " (closely-spaced cluster — range only, not individually resolved)"
+                if c["merged"]
+                else ""
+            )
+            rng = _fmt_hz_range(c["f_lo"], c["f_hi"])
+            lines.append(f"  - {kinds[c['kind']]} near {rng}{q}{merged}")
+    else:
+        lines.append("Corners: none located (flat magnitude or near-cancellation)")
+    if data["non_minimum_phase"]:
+        resid = data["phase_residual_deg"]
+        extra = f" (phase residual ~{resid:.0f}°)" if resid is not None else ""
+        lines.append(
+            f"Out-of-phase zero / delay: YES{extra} — excess phase lag the "
+            "magnitude alone understates; caps achievable bandwidth"
+        )
+    else:
+        lines.append("No excess phase: phase tracks the magnitude (no out-of-phase zero or delay)")
+    if data["transport_delay_s"]:
+        lines.append(f"Transport delay: ~{data['transport_delay_s'] * 1e6:.1f} µs")
+    fit = data["fit_rel_err"]
+    lines.append(
+        f"Method: {data['method']}" + (f" (fit error {fit:.1e})" if fit is not None else "")
+    )
+    if data["observations"]:
+        lines.append("")
+        lines.append("Observations (facts to weigh, not verdicts):")
+        lines += [f"  - {o['detail']}" for o in data["observations"]]
+    return format_response("\n".join(lines), data, args.format)
+
+
 # ---------------------------------------------------------------------------
 # plot_waveform — interactive HTML chart opened on the local desktop
 # ---------------------------------------------------------------------------
@@ -3532,6 +3657,72 @@ def _union_panel(
     return panel, unioned
 
 
+def _compact_hz(f: float) -> str:
+    """Render a frequency (Hz) compactly with an engineering suffix.
+
+    e.g. 1200 -> "1.2k", 20000 -> "20k", 3.4e6 -> "3.4M". Used for the on-plot
+    corner-marker labels, which must stay short.
+    """
+    if not np.isfinite(f) or f <= 0:
+        return "?"
+    for div, suffix in ((1e9, "G"), (1e6, "M"), (1e3, "k"), (1.0, ""), (1e-3, "m")):
+        if f >= div:
+            v = f / div
+            s = f"{v:.1f}".rstrip("0").rstrip(".")
+            return f"{s}{suffix}"
+    return f"{f:.2g}"
+
+
+# Structure reading is density-robust (validated at 10 and 50 points/decade), so a
+# huge AC sweep is decimated to this many evenly-spaced samples before the
+# per-sample analysis — bounding annotation cost without changing the result (the
+# plot itself is downsampled separately by max_points).
+_ANNOTATION_MAX_POINTS = 4000
+
+# Corner kinds whose marker is a zero (circle); everything else is a pole (cross).
+_ZERO_KINDS = ("real_zero", "complex_zero_pair")
+
+
+def _ac_annotations(freq: np.ndarray, h: np.ndarray) -> tuple[list[dict], bool]:
+    """Corner markers + non-minimum-phase flag for a single AC trace.
+
+    Runs :func:`analyze_ac_structure` (on a bounded, evenly-spaced subset of large
+    sweeps) and projects each located corner to one annotation: an x at the
+    corner's geometric center (``sqrt(f_lo*f_hi)``), a compact label naming the
+    kind/frequency (Q appended for a complex pair, ``" (merged)"`` for an
+    under-resolved cluster), and a ``marker`` of ``"pole"`` (drawn as a cross) or
+    ``"zero"`` (a circle). Returns ``(annotations, non_minimum_phase)``. All x
+    values are finite (json.dumps(allow_nan=False) is used for the widget).
+    """
+    if len(freq) > _ANNOTATION_MAX_POINTS:
+        idx = np.linspace(0, len(freq) - 1, _ANNOTATION_MAX_POINTS).astype(int)
+        freq, h = freq[idx], h[idx]
+    result: AcStructureResult = analyze_ac_structure(freq, h)
+    annotations: list[dict] = []
+    for corner in result["corners"]:
+        f_lo = float(corner["f_lo"])
+        f_hi = float(corner["f_hi"])
+        center = float(np.sqrt(f_lo * f_hi)) if f_lo > 0 and f_hi > 0 else max(f_lo, f_hi)
+        if not np.isfinite(center) or center <= 0:
+            continue
+        kind = corner["kind"]
+        if kind == "real_pole":
+            label = f"pole ~{_compact_hz(center)}"
+        elif kind == "real_zero":
+            label = f"zero ~{_compact_hz(center)}"
+        else:
+            noun = "zero pair" if kind == "complex_zero_pair" else "pole pair"
+            q = corner["q"]
+            label = f"{noun} ~{_compact_hz(center)}"
+            if q is not None and np.isfinite(q):
+                label += f" Q{q:.1f}".rstrip("0").rstrip(".")
+        if corner["merged"]:
+            label += " (merged)"
+        marker = "zero" if kind in _ZERO_KINDS else "pole"
+        annotations.append({"x": center, "label": label, "kind": kind, "marker": marker})
+    return annotations, bool(result["non_minimum_phase"])
+
+
 def _compute_plot_spec(
     raw,
     cols: list[str],
@@ -3542,6 +3733,7 @@ def _compute_plot_spec(
     ts: float | None,
     te: float | None,
     max_points: int,
+    annotate: bool = False,
 ) -> tuple[dict, dict]:
     """Build the renderer-ready plot spec + coverage facts (no I/O).
 
@@ -3581,6 +3773,11 @@ def _compute_plot_spec(
     if is_ac:
         mag_series: list[tuple[np.ndarray, np.ndarray, str]] = []
         phase_series: list[tuple[np.ndarray, np.ndarray, str]] = []
+        # Single-trace annotation: capture the full-resolution complex response
+        # BEFORE any downsampling so the corner reading runs on every sample.
+        single_trace = annotate and len(cols) == 1 and len(steps_to_plot) == 1
+        annotate_freq: np.ndarray | None = None
+        annotate_h: np.ndarray | None = None
         for step in steps_to_plot:
             axis = _guarded_axis(raw, step)
             lo, hi = _window_indices(axis, ts, te)
@@ -3590,6 +3787,8 @@ def _compute_plot_spec(
             for col in cols:
                 wave = np.asarray(raw.get_wave(col, step=step))[lo:hi]
                 freq, h = prepare_ac_arrays(axis[lo:hi], wave)
+                if single_trace:
+                    annotate_freq, annotate_h = freq, h
                 mag = safe_magnitude_db(h)
                 phase, warns = unwrap_phase_safe(h)
                 phase_warnings.extend(warns)
@@ -3614,6 +3813,10 @@ def _compute_plot_spec(
         phase_panel, u2 = _union_panel(phase_series, "log", x_label, "Phase (deg)")
         unioned = u1 or u2
         spec = {"analysis_type": analysis_type, "bode": True, "panels": [mag_panel, phase_panel]}
+        if single_trace and annotate_freq is not None and annotate_h is not None:
+            annotations, nmp = _ac_annotations(annotate_freq, annotate_h)
+            spec["annotations"] = annotations
+            spec["nmp"] = nmp
     else:
         plot_series: list[tuple[np.ndarray, np.ndarray, str]] = []
         for col in cols:
@@ -3678,6 +3881,7 @@ def _build_plot_and_write(
     max_points: int,
     out_path: Path,
     title: str,
+    annotate: bool = False,
 ) -> dict:
     """Compute the spec, assemble the offline HTML, write it atomically; return facts.
 
@@ -3686,7 +3890,7 @@ def _build_plot_and_write(
     contract keeps response building off worker threads).
     """
     spec, facts = _compute_plot_spec(
-        raw, cols, steps_to_plot, step_dicts, analysis_type, x_is_log, ts, te, max_points
+        raw, cols, steps_to_plot, step_dicts, analysis_type, x_is_log, ts, te, max_points, annotate
     )
     summary = f"{raw_path.stem} — {analysis_type}: {facts['series_count']} series"
     html_str = build_plot_html(spec, title=title, summary=summary)
@@ -3705,6 +3909,7 @@ def _compute_widget_spec_json(
     ts: float | None,
     te: float | None,
     max_points: int,
+    annotate: bool = False,
 ) -> str:
     """Build the compact widget chart spec and serialize it — all in the worker.
 
@@ -3715,7 +3920,7 @@ def _compute_widget_spec_json(
     fall back to local-open delivery.
     """
     spec, _ = _compute_plot_spec(
-        raw, cols, steps_to_plot, step_dicts, analysis_type, x_is_log, ts, te, max_points
+        raw, cols, steps_to_plot, step_dicts, analysis_type, x_is_log, ts, te, max_points, annotate
     )
     return json.dumps(spec, ensure_ascii=True, allow_nan=False)
 
@@ -3770,6 +3975,14 @@ class PlotWaveformInput(ToolInput):
             "Open the written HTML in the local browser. Applies to terminal clients "
             "only — ignored when the chart is delivered as an in-chat widget (MCP Apps "
             "host). Set false to only write the file."
+        ),
+    )
+    annotate: bool = Field(
+        default=True,
+        description=(
+            "Annotate an AC/Bode plot with detected corner markers (vertical lines) + "
+            "an out-of-phase-zero / delay flag, from ac_structure. AC plots only; ignored "
+            "for transient/DC."
         ),
     )
     format: Literal["json", "text"] | None = Field(
@@ -3912,6 +4125,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
             max_points,
             out_path,
             title,
+            args.annotate,
         )
     except ValueError as e:
         raise ResultError(f"Failed to build the plot (corrupt or truncated .raw?): {e}") from e
@@ -3943,6 +4157,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
                 ts,
                 te,
                 budget,
+                args.annotate,
             )
         except ResultError as e:
             widget_skipped = str(e)
