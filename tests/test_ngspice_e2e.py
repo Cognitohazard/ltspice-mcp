@@ -36,8 +36,10 @@ from ltspice_mcp.tools.advanced import (
 )
 from ltspice_mcp.tools.analysis import (
     MeasurementStatsInput,
+    OperatingPointInput,
     QueryValueInput,
     handle_measurement_stats,
+    handle_operating_point,
     handle_query_value,
 )
 from ltspice_mcp.tools.simulation import (
@@ -109,6 +111,76 @@ async def test_op_divider_full_stack(ngspice_state: SessionState, work_dir: Path
     assert any(s.lower() == "v(out)" for s in sc["signals"])
     # A clean divider trips no observation checks.
     assert sc["observations"] == []
+
+
+async def test_active_npn_switch_op_full_stack(ngspice_state: SessionState, work_dir: Path):
+    # An ACTIVE circuit must simulate end to end through the real stack — the
+    # capability the removed netlist->asc converter silently lacked (it dropped
+    # every active device, so active circuits could not even start). A heavily
+    # base-driven NPN saturates, pulling the collector from the 5 V rail down to
+    # Vce(sat); an unconducting or floating device would sit near 5 V. The
+    # assertion is physical ground truth (saturation), not a model-fit number.
+    net = _write(
+        work_dir,
+        "npnsw.cir",
+        "* npn saturated switch\n"
+        "Vcc vcc 0 5\n"
+        "Vb vb 0 5\n"
+        "Rb vb b 10k\n"
+        "Rc vcc c 1k\n"
+        "Q1 c b 0 QMOD\n"
+        ".model QMOD NPN(BF=100)\n"
+        ".op\n"
+        ".end\n",
+    )
+    res = await handle_run_simulation(RunSimulationInput(netlist=net, wait=True), ngspice_state)
+    sc = res.structuredContent
+    assert sc is not None
+    assert sc["status"] == "completed"
+    assert "Operating Point" in sc["sim_type"]
+
+    op = await handle_operating_point(OperatingPointInput(raw_file=sc["raw_file"]), ngspice_state)
+    osc = op.structuredContent
+    assert osc is not None
+    voltages = osc["voltages"]
+    vc = next(v for k, v in voltages.items() if k.lower() == "v(c)")
+    # Saturated switch: collector pulled well below the 5 V rail, proving the
+    # transistor is actually conducting (active), not floating or cut off.
+    assert 0.0 < vc < 1.0, voltages
+
+
+async def test_subckt_macromodel_op_full_stack(ngspice_state: SessionState, work_dir: Path):
+    # A .subckt X-instance must simulate end to end. The macromodel is its own
+    # parse/expansion path (X-card, port-order binding, internal nodes) — the
+    # form every real opamp/regulator ships in, and exactly the multi-terminal
+    # construct a converter that "only understood 2-terminal devices" would
+    # mishandle. An ideal-opamp .subckt wired as a unity buffer must drive the
+    # output to the input: ground truth is V(out) == Vin, not a model-fit number.
+    net = _write(
+        work_dir,
+        "buffer.cir",
+        "* opamp subckt unity buffer\n"
+        ".subckt opamp inp inn out\n"
+        "Eop out 0 inp inn 100k\n"
+        ".ends\n"
+        "Vin inp 0 2\n"
+        "Xop inp out out opamp\n"
+        "Rl out 0 1k\n"
+        ".op\n"
+        ".end\n",
+    )
+    res = await handle_run_simulation(RunSimulationInput(netlist=net, wait=True), ngspice_state)
+    sc = res.structuredContent
+    assert sc is not None
+    assert sc["status"] == "completed"
+    assert "Operating Point" in sc["sim_type"]
+
+    op = await handle_operating_point(OperatingPointInput(raw_file=sc["raw_file"]), ngspice_state)
+    osc = op.structuredContent
+    assert osc is not None
+    vout = next(v for k, v in osc["voltages"].items() if k.lower() == "v(out)")
+    # Unity buffer of a 2 V input: the subckt expanded and its feedback closed.
+    assert vout == pytest.approx(2.0, abs=1e-2), osc["voltages"]
 
 
 async def test_no_phantom_circuit_measurement(ngspice_state: SessionState, work_dir: Path):

@@ -583,6 +583,74 @@ class TestOrientationPlacementAndRouting:
         assert _has_segment(segments, (gx, 452), (700, 452)), segments
 
 
+# Canonical device archetypes the schematic-build path MUST handle, beyond the
+# passive R/C/V that dominated every battery. (symbol, ordered pin names from the
+# fixture .asy.) Covers two-terminal active, three-terminal active, and the
+# four-terminal controlled sources — the >2-pin classes a converter/synth that
+# only understood 2-terminal devices silently dropped.
+BUILD_ARCHETYPES: list[tuple[str, tuple[str, ...]]] = [
+    ("diode", ("A", "K")),  # two-terminal active
+    ("nmos", ("D", "G", "S")),  # three-terminal active
+    ("e", ("+", "-", "P", "N")),  # controlled source (VCVS)
+    ("g", ("+", "-", "NC+", "NC-")),  # controlled source (VCCS)
+]
+
+
+@pytest.mark.asyncio
+class TestArchetypeBuildCoverage:
+    """The build battery's anti-passive-bias guard. A build or synth tool that
+    silently skips a device class is an absence-class bug — it has no failing
+    code path, so happy-path stress tests on passive circuits never surface it
+    (the netlist->asc converter skipped every active device yet passed every
+    stress pass). Each non-passive archetype is placed and wired through the real
+    build path here, so an unusable-for-a-class regression fails on the next run
+    instead of after it ships.
+    """
+
+    @pytest.mark.parametrize(("symbol", "pin_names"), BUILD_ARCHETYPES)
+    async def test_archetype_places_with_all_terminals_and_wires(
+        self, asc_state: SessionState, work_dir: Path, symbol: str, pin_names: tuple[str, ...]
+    ):
+        asc = work_dir / f"arch_{symbol}.asc"
+        asc.write_text("Version 4\nSHEET 1 880 680\n")
+
+        added = await handle_add_component(
+            AddComponentInput(path=asc.name, reference="X1", symbol=symbol, x=400, y=300),
+            asc_state,
+        )
+        assert added.structuredContent is not None
+        pins = {p["name"]: (p["x"], p["y"]) for p in added.structuredContent["pins"]}
+        # The symbol-geometry layer must report every terminal of the class. This
+        # extends the nmos-only orientation coverage to the 2-terminal active and
+        # 4-terminal controlled-source classes, so a PIN-parser regression that
+        # truncated the terminal list for one of them fails here.
+        assert set(pins) == set(pin_names), pins
+
+        # Wire the LAST terminal (a non-positional name — N / NC- — on the
+        # 4-terminal sources, which the positional-pin nmos orientation test
+        # never reaches) to a passive load. This is the load-bearing part: the
+        # terminal must resolve by NAME through connect's pin lookup and the wire
+        # must persist to disk at the geometry coordinate — not merely be
+        # reported in memory. The load sits collinear and outward from the pin
+        # (left if the pin is on the body's left half, else right), so the single
+        # straight segment leaves the body without crossing another terminal
+        # (every pin of these symbols has a unique y).
+        name = pin_names[-1]
+        px, py = pins[name]
+        out_x = px + (300 if px >= 400 else -300)
+        await handle_add_component(
+            AddComponentInput(path=asc.name, reference="RL", symbol="res", x=out_x, y=py + 48),
+            asc_state,
+        )  # res pin 1 = (0,-48) offset -> (out_x, py), collinear with X1.{name}
+        connected = await handle_connect(
+            ConnectInput(path=asc.name, from_pin=f"X1.{name}", to_pin="RL.1"),
+            asc_state,
+        )
+        assert connected.structuredContent is not None
+        # Re-read from disk: the named terminal resolved and the wire persisted.
+        assert _has_segment(_wire_segments(asc), (px, py), (out_x, py)), (name, asc.read_text())
+
+
 @pytest.mark.asyncio
 class TestConnectPersistsWires:
     """connect's success path must actually write WIRE records to disk —
@@ -1311,6 +1379,126 @@ class TestRemoveWireAndNetLabelOps:
         assert data["saved"] is False
         assert data["failed_count"] == 1
         assert "No net label found" in data["results"][0]["error"]
+
+    async def test_remove_directive_round_trip(self, asc_state: SessionState, work_dir: Path):
+        from ltspice_mcp.tools.circuit import (
+            CreateSchematicInput,
+            handle_create_schematic,
+        )
+
+        await handle_create_schematic(CreateSchematicInput(name="rm_dir"), asc_state)
+        # add_directive then remove_directive is the inverse pair the closure
+        # test requires — exercise it end to end so the op actually edits.
+        add = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="rm_dir.asc",
+                ops=[{"op": "add_directive", "instruction": ".tran 1m"}],  # type: ignore[arg-type]
+            ),
+            asc_state,
+        )
+        assert add.structuredContent["saved"] is True
+        read = await handle_read_circuit(CircuitReadInput(path="rm_dir.asc"), asc_state)
+        assert any(".tran 1m" in d for d in read.structuredContent["directives"])
+
+        rm = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="rm_dir.asc",
+                ops=[{"op": "remove_directive", "instruction": ".tran 1m"}],  # type: ignore[arg-type]
+            ),
+            asc_state,
+        )
+        data = rm.structuredContent
+        assert data["saved"] is True
+        assert data["failed_count"] == 0
+        assert data["results"][0]["removed"] == "directive"
+
+        read2 = await handle_read_circuit(CircuitReadInput(path="rm_dir.asc"), asc_state)
+        assert not any(".tran 1m" in d for d in read2.structuredContent["directives"])
+
+    async def test_remove_directive_no_match_raises(self, asc_state: SessionState, work_dir: Path):
+        from ltspice_mcp.tools.circuit import (
+            CreateSchematicInput,
+            handle_create_schematic,
+        )
+
+        await handle_create_schematic(CreateSchematicInput(name="rm_dir_nomatch"), asc_state)
+        res = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="rm_dir_nomatch.asc",
+                ops=[{"op": "remove_directive", "instruction": ".tran 999"}],  # type: ignore[arg-type]
+            ),
+            asc_state,
+        )
+        data = res.structuredContent
+        assert data["saved"] is False
+        assert data["failed_count"] == 1
+        assert "No directive or comment" in data["results"][0]["error"]
+
+    async def test_remove_directive_is_exact_not_substring(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # The inverse must match the full directive text, not a substring:
+        # removing ".tran 1" must NOT delete ".tran 10m" (spicelib's matcher
+        # would, silently corrupting the simulation setup).
+        from ltspice_mcp.tools.circuit import (
+            CreateSchematicInput,
+            handle_create_schematic,
+        )
+
+        await handle_create_schematic(CreateSchematicInput(name="rm_substr"), asc_state)
+        await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="rm_substr.asc",
+                ops=[{"op": "add_directive", "instruction": ".tran 10m"}],  # type: ignore[arg-type]
+            ),
+            asc_state,
+        )
+        res = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="rm_substr.asc",
+                ops=[{"op": "remove_directive", "instruction": ".tran 1"}],  # type: ignore[arg-type]
+            ),
+            asc_state,
+        )
+        data = res.structuredContent
+        # ".tran 1" is a substring of ".tran 10m" but not an exact match: refuse.
+        assert data["saved"] is False
+        assert data["failed_count"] == 1
+        assert "No directive or comment" in data["results"][0]["error"]
+        read = await handle_read_circuit(CircuitReadInput(path="rm_substr.asc"), asc_state)
+        assert any(".tran 10m" in d for d in read.structuredContent["directives"])
+
+    async def test_remove_directive_removes_one_of_duplicates(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # Inverse of a single add removes a single record: with two identical
+        # directives, one remove_directive leaves exactly one.
+        from ltspice_mcp.tools.circuit import (
+            CreateSchematicInput,
+            handle_create_schematic,
+        )
+
+        await handle_create_schematic(CreateSchematicInput(name="rm_dup"), asc_state)
+        await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="rm_dup.asc",
+                ops=[  # type: ignore[arg-type]
+                    {"op": "add_directive", "instruction": ".tran 1m"},
+                    {"op": "add_directive", "instruction": ".tran 1m"},
+                ],
+            ),
+            asc_state,
+        )
+        res = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="rm_dup.asc",
+                ops=[{"op": "remove_directive", "instruction": ".tran 1m"}],  # type: ignore[arg-type]
+            ),
+            asc_state,
+        )
+        assert res.structuredContent["saved"] is True
+        read = await handle_read_circuit(CircuitReadInput(path="rm_dup.asc"), asc_state)
+        assert sum(1 for d in read.structuredContent["directives"] if d == ".tran 1m") == 1
 
 
 @pytest.mark.asyncio
