@@ -361,20 +361,21 @@ Key `lib/` modules:
 |profile|tool count|use case|
 |-|-|-|
 |`full` (default)|52|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
-|`agentic`|36|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
+|`agentic`|42|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
 
-The `agentic` profile drops 16 tools: the five netlist-editing wrappers
+The `agentic` profile drops 10 tools: the five netlist-editing wrappers
 (`create_netlist`, `read_circuit`, `set_component_value`, `parameter`,
 `edit_directive`) — things a capable agent does natively via filesystem
 access — the three library session tools (`load_library`,
-`unload_library`, `list_libraries`), six schematic-construction writes
-(`add_component`, `move_component`, `remove_component`,
-`set_component_attribute`, `create_schematic`, `apply_schematic_ops`),
-and the `configure_sweep` / `configure_montecarlo` config builders. It
-keeps simulation lifecycle, binary `.raw` parsing and analysis, batch
-run/results, library search (`find_model`), and the schematic tools an
-agent cannot replicate by editing text: `connect`, `add_net_label`,
-`export_netlist`, `reset_schematic`, `symbol_info`, `component_info`,
+`unload_library`, `list_libraries`), and the `configure_sweep` /
+`configure_montecarlo` config builders. It keeps simulation lifecycle,
+binary `.raw` parsing and analysis, batch run/results, library search
+(`find_model`), and the full schematic toolset an agent cannot replicate
+by editing text — geometry-aware editing with orthogonal routing and
+pin-collision/junction checks: `create_schematic`, `add_component`,
+`move_component`, `remove_component`, `set_component_attribute`,
+`apply_schematic_ops`, `connect`, `add_net_label`, `export_netlist`,
+`reset_schematic`, `symbol_info`, `component_info`,
 `schematic_from_netlist`, `trace_net`.
 
 Set via `[tools] profile` in `ltspice-mcp.toml` or the

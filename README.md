@@ -122,7 +122,7 @@ Simulation output is automatically redirected to a Windows temp directory: LTspi
 | Profile | Tools | Use case |
 |-|-|-|
 | `full` (default) | 52 | Any MCP client, automation, non-agent LLMs |
-| `agentic` | 36 | LLM agents with native file access (Read/Edit/Write) |
+| `agentic` | 42 | LLM agents with native file access (Read/Edit/Write) |
 
 The `agentic` profile drops netlist-editing wrappers and library session management — work a capable agent does through direct file edits — and keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, and the `.asc` geometry tools. The `skills/` directory (`skills/ltspice/SKILL.md`, `skills/ngspice/SKILL.md`) contains the domain knowledge that pairs with it: copy the relevant skill into your client's persistent-instructions location.
 
@@ -181,7 +181,7 @@ Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempot
 |-|-|
 | `create_netlist` | Create a new netlist from a content string |
 | `create_schematic` | Create an empty `.asc` ready for incremental editing |
-| `schematic_from_netlist` | Generate an `.asc` from SPICE netlist text — grid-places R/C/L/V/I/D and wires pins by net label |
+| `schematic_from_netlist` | Generate an `.asc` from SPICE netlist text — grid-places R/C/L/V/I/D and E/G controlled sources, wires pins by net label |
 | `read_circuit` | Read a circuit file (netlist text for `.cir`, schematic layout for `.asc`) |
 | `list_components` | List components (optional prefix filter) or look up one by reference |
 | `set_component_value` | Set one component value, or batch-set many via a `values` dict |
