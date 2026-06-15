@@ -361,7 +361,7 @@ Match the analysis tool to the run type or it errors: bode_metrics/resonance/sta
 
 A run can report "completed" yet be degenerate (floating node, coerced value, skipped .meas) — check the returned warnings/errors and the `observations` list, don't assume success means correct. `observations` surfaces facts worth weighing (the simulator's own error lines, requested .meas/.four that weren't produced, extreme/non-finite node values, and scans that were skipped) — they are facts for you to judge, not a verdict; an empty list means nothing tripped a check, NOT that the result is verified. validate_netlist is the pre-flight gate but won't catch value typos or undefined models (resolved at run time).
 
-When editing .asc, pin names are symbol-specific (a resistor's are A/B, not 1/2) — get them and their coordinates from add_component/symbol_info, and reuse those coordinates as connect waypoints.
+Build or edit .asc with the schematic tools, never by hand — hand-writing the file forfeits connect's orthogonal routing and its pin-collision/junction checks. Pin names and coordinates are symbol-specific (a resistor's are A/B, not 1/2) — read them from add_component/symbol_info. Wire signal nets with connect (orthogonal segments only; waypoints for bends; route outside component bodies); put a ground flag at each ground pin with add_net_label(net="0", pin=...); do NOT net-label signal nets — wire them. For a multi-step build use apply_schematic_ops (one transaction). The full schematic-layout playbook (tier alignment, mirror/diff-pair orientations, bus routing) is the ltspice://guide resource.
 """
 
 server = Server("ltspice-mcp", instructions=SERVER_INSTRUCTIONS)

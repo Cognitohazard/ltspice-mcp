@@ -71,8 +71,98 @@ function renderSpec(spec, root) {
   var charts = [];
   var H = spec.bode ? 300 : 440;
   function width() { return Math.max(640, Math.floor(window.innerWidth - 40)); }
+  function fmtHz(v) { var a = Math.abs(v);
+    if (a >= 1e6) return (v / 1e6) + 'M'; if (a >= 1e3) return (v / 1e3) + 'k'; return '' + v; }
+  // Log-axis tick label: only label exact decades (10/100/1k/...), leave minor
+  // ticks and uPlot's null padding-slots blank (returning null, NOT the string
+  // "null"), so the frequency axis stays readable.
+  function hzTick(v) {
+    if (v == null || !isFinite(v)) return null;
+    var l = Math.log10(v);
+    return Math.abs(l - Math.round(l)) > 1e-6 ? null : fmtHz(v);
+  }
+  // Draw detected AC corner markers (dashed vertical lines + labels) and an
+  // out-of-phase-zero / delay tag straight onto each panel's canvas. Pure canvas — no
+  // extra deps. Reads spec.annotations / spec.nmp from the renderSpec closure;
+  // a no-op when neither is present (transient/DC and un-annotated AC unchanged).
+  function annotPlugin() {
+    return { hooks: { draw: function (u) {
+      var anns = spec.annotations || [];
+      if (!anns.length && !spec.nmp) return;
+      var ctx = u.ctx;
+      // uPlot draws in DEVICE pixels (valToPos/bbox are device px), so every size
+      // must scale by the pixel ratio or it renders tiny on a hi-DPI display.
+      var dpr = (typeof uPlot !== 'undefined' && uPlot.pxRatio) || window.devicePixelRatio || 1;
+      var L = u.bbox.left, T = u.bbox.top, W = u.bbox.width, Hh = u.bbox.height;
+      var xs = u.data[0], ys = u.data[1] || [];
+      var fs = Math.round(13 * dpr), r = 6 * dpr;
+      ctx.save();
+      ctx.font = fs + 'px system-ui,-apple-system,sans-serif';
+      ctx.textBaseline = 'top';
+      ctx.textAlign = 'left';
+      function chip(text, lx, ly, fill) {  // white-backed text for legibility over the curve
+        var w = ctx.measureText(text).width;
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        ctx.fillRect(lx - 3 * dpr, ly - 2 * dpr, w + 6 * dpr, fs + 5 * dpr);
+        ctx.fillStyle = fill;
+        ctx.fillText(text, lx, ly);
+      }
+      for (var i = 0; i < anns.length; i++) {
+        var ax = anns[i].x;
+        var x = u.valToPos(ax, 'x', true);
+        if (x < L || x > L + W) continue;
+        // faint dashed guide line down the panel at the corner frequency
+        ctx.strokeStyle = 'rgba(120,120,120,0.4)';
+        ctx.lineWidth = 1 * dpr;
+        ctx.setLineDash([3 * dpr, 3 * dpr]);
+        ctx.beginPath(); ctx.moveTo(x, T); ctx.lineTo(x, T + Hh); ctx.stroke();
+        ctx.setLineDash([]);
+        // marker placed ON this panel's curve at the nearest sample: a cross for
+        // a pole, a circle for a zero (the control-theory convention).
+        var j = 0, best = Infinity;
+        for (var k = 0; k < xs.length; k++) {
+          var d = Math.abs(xs[k] - ax);
+          if (d < best) { best = d; j = k; }
+        }
+        var yv = ys.length ? ys[j] : null;
+        var my = (yv !== null && isFinite(yv)) ? u.valToPos(yv, 'y', true) : T + 16 * dpr;
+        ctx.lineWidth = 2.5 * dpr;
+        if (anns[i].marker === 'zero') {
+          ctx.strokeStyle = '#2ca02c';
+          ctx.beginPath(); ctx.arc(x, my, r, 0, 6.2832); ctx.stroke();
+        } else {
+          ctx.strokeStyle = '#d62728';
+          ctx.beginPath();
+          ctx.moveTo(x - r, my - r); ctx.lineTo(x + r, my + r);
+          ctx.moveTo(x - r, my + r); ctx.lineTo(x + r, my - r);
+          ctx.stroke();
+        }
+        // label lifted clear of the marker and the curve, with a white backing
+        var ly = Math.max(T + 3 * dpr, my - r - fs - 6 * dpr);
+        chip(anns[i].label, x + 9 * dpr, ly, 'rgba(20,20,20,0.97)');
+      }
+      if (anns.length) {
+        // Legend in the usually-empty top-left (low-frequency, flat) corner.
+        chip(String.fromCharCode(215) + ' pole   ' + String.fromCharCode(9675) + ' zero',
+          L + 6 * dpr, T + 4 * dpr, 'rgba(70,70,70,0.95)');
+      }
+      if (spec.nmp) {
+        ctx.font = 'bold ' + Math.round(15 * dpr) + 'px system-ui,-apple-system,sans-serif';
+        var tag = 'OUT-OF-PHASE ZERO / DELAY';
+        var tw = ctx.measureText(tag).width;
+        var tx = L + W - tw - 6 * dpr;
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        ctx.fillRect(tx - 4 * dpr, T + 3 * dpr, tw + 8 * dpr, Math.round(15 * dpr) + 6 * dpr);
+        ctx.fillStyle = '#d62728';
+        ctx.fillText(tag, tx, T + 5 * dpr);
+      }
+      ctx.restore();
+    } } };
+  }
   function mkOpts(panel, syncKey) {
-    var series = [{}];
+    var logx = panel.x_scale === 'log';
+    // x series (index 0): format the cursor-legend readout as Hz on a log axis.
+    var series = [logx ? { value: function (u, v) { return v == null ? '' : fmtHz(v) + ' Hz'; } } : {}];
     for (var i = 0; i < panel.series.length; i++) {
       series.push({ label: panel.series[i].label,
                     stroke: palette[i % palette.length],
@@ -80,9 +170,15 @@ function renderSpec(spec, root) {
     }
     var opts = {
       width: width(), height: H, title: panel.y_label,
-      scales: { x: panel.x_scale === 'log' ? { distr: 3, log: 10 } : { time: false } },
-      axes: [{ label: panel.x_label }, { label: panel.y_label }],
+      // time:false on BOTH branches — a log frequency axis must not be formatted
+      // as epoch time (uPlot's x-scale default), which renders Hz values as dates.
+      scales: { x: logx ? { distr: 3, log: 10, time: false } : { time: false } },
+      axes: [
+        { label: panel.x_label, values: logx ? function (u, sp) { return sp.map(hzTick); } : null },
+        { label: panel.y_label },
+      ],
       series: series,
+      plugins: [annotPlugin()],
     };
     if (syncKey) opts.cursor = { sync: { key: syncKey, scales: ['x', null] } };
     return opts;
