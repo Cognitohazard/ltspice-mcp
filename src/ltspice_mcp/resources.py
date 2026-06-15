@@ -10,6 +10,8 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import lru_cache
+from importlib.resources import files
 from typing import Any
 
 from mcp import types
@@ -129,6 +131,17 @@ def get_static_resources() -> list[types.Resource]:
             ),
             mimeType="application/json",
         ),
+        types.Resource(
+            name="guide",
+            uri=AnyUrl("ltspice://guide"),
+            mimeType="text/markdown",
+            description=(
+                "LTspice authoring & schematic guide: SPICE/LTspice syntax, value "
+                "notation (M=milli), waveform sources, .meas, behavioral sources, "
+                "convergence, and the schematic-layout playbook (wiring, tiers, "
+                "mirror/diff-pair orientations)."
+            ),
+        ),
     ]
 
 
@@ -198,6 +211,21 @@ def _read_plot_widget(
     """
     del params, state
     return _make_result(uri_str, build_widget_html(), mime=WIDGET_MIME_TYPE)
+
+
+@lru_cache(maxsize=1)
+def _guide_text() -> str:
+    """Read the packaged guide once; it is immutable for the process lifetime."""
+    return (files("ltspice_mcp") / "assets" / "ltspice_guide.md").read_text("utf-8")
+
+
+@_router.route("ltspice://guide")
+def _read_guide(
+    uri_str: str, params: dict[str, str], state: SessionState
+) -> types.ReadResourceResult:
+    """Serve the packaged LTspice authoring + schematic-layout guide."""
+    del params, state
+    return _make_result(uri_str, _guide_text(), mime="text/markdown")
 
 
 @_router.route("ltspice://config")

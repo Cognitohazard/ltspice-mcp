@@ -154,6 +154,24 @@ class TestBuildPlotHtml:
         with pytest.raises(ValueError, match="JSON compliant"):
             build_plot_html(spec, title="t")
 
+    def test_render_js_has_annotation_draw_hook(self):
+        # The shared render core carries the canvas draw-hook that paints AC
+        # corner markers + the out-of-phase-zero / delay tag.
+        html = build_plot_html(self._spec(), title="t")
+        assert "annotPlugin" in html
+        assert "hooks: { draw:" in html
+        assert "spec.annotations" in html
+        assert "OUT-OF-PHASE ZERO / DELAY" in html
+
+    def test_annotations_roundtrip_into_blob(self):
+        spec = self._spec()
+        spec["bode"] = True
+        spec["annotations"] = [{"x": 1234.0, "label": "pole ~1.2k", "kind": "real_pole"}]
+        spec["nmp"] = True
+        blob = _data_blob(build_plot_html(spec, title="t"))
+        assert blob["annotations"][0]["label"] == "pole ~1.2k"
+        assert blob["nmp"] is True
+
 
 def _ui_caps() -> types.ClientCapabilities:
     """Client capabilities advertising MCP Apps (ui://) support per SEP-1865.
@@ -192,6 +210,8 @@ class TestDeliveryChannel:
 
 class TestOpenInDesktop:
     def test_wsl_uses_explorer_with_windows_path(self, monkeypatch):
+        # No Chromium available -> falls back to the OS default opener.
+        monkeypatch.setattr(desktop, "_chromium_exes", lambda: [])
         monkeypatch.setattr(desktop, "is_wsl", lambda: True)
         monkeypatch.setattr(desktop, "to_windows_path", lambda p: "C:\\plot.html")
         calls = []
@@ -202,6 +222,7 @@ class TestOpenInDesktop:
         assert calls == [["explorer.exe", "C:\\plot.html"]]
 
     def test_linux_uses_xdg_open(self, monkeypatch):
+        monkeypatch.setattr(desktop, "_chromium_exes", lambda: [])
         monkeypatch.setattr(desktop, "is_wsl", lambda: False)
         monkeypatch.setattr(sys, "platform", "linux")
         calls = []
@@ -212,6 +233,7 @@ class TestOpenInDesktop:
         assert calls == [["xdg-open", "/x/plot.html"]]
 
     def test_failure_degrades(self, monkeypatch):
+        monkeypatch.setattr(desktop, "_chromium_exes", lambda: [])
         monkeypatch.setattr(desktop, "is_wsl", lambda: False)
         monkeypatch.setattr(sys, "platform", "linux")
 
@@ -219,6 +241,63 @@ class TestOpenInDesktop:
             raise OSError("no opener")
 
         assert desktop.open_in_desktop(Path("/x/p.html"), spawn=boom) == (False, None)
+
+    def test_app_window_preferred_on_wsl_with_unc_url(self, monkeypatch):
+        # A chromeless Edge app window over the \\wsl.localhost UNC file URL is
+        # tried before explorer.exe when Chromium is present.
+        monkeypatch.setattr(desktop, "is_wsl", lambda: True)
+        monkeypatch.setattr(desktop, "_chromium_exes", lambda: ["/mnt/c/edge/msedge.exe"])
+        monkeypatch.setattr(
+            desktop, "to_windows_path", lambda p: "\\\\wsl.localhost\\Claude\\x\\plot.html"
+        )
+        calls = []
+        opened, method = desktop.open_in_desktop(
+            Path("/x/plot.html"), spawn=lambda argv, **kw: calls.append(argv)
+        )
+        assert opened is True and method == "msedge.exe"
+        assert calls == [
+            [
+                "/mnt/c/edge/msedge.exe",
+                "--app=file:////wsl.localhost/Claude/x/plot.html",
+                "--window-size=1100,860",
+            ]
+        ]
+
+    def test_app_window_falls_back_when_spawn_fails(self, monkeypatch):
+        # Chromium present but its spawn raises -> fall through to xdg-open.
+        monkeypatch.setattr(desktop, "is_wsl", lambda: False)
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(desktop, "_chromium_exes", lambda: ["/usr/bin/chromium"])
+        calls = []
+
+        def spawn(argv, **kw):
+            if "--app" in str(argv):
+                raise OSError("app mode unavailable")
+            calls.append(argv)
+
+        opened, method = desktop.open_in_desktop(Path("/x/plot.html"), spawn=spawn)
+        assert opened is True and method == "xdg-open"
+        assert calls == [["xdg-open", "/x/plot.html"]]
+
+    def test_app_window_drive_path_url_is_well_formed(self, monkeypatch):
+        # A /mnt/c-backed workspace yields a Windows DRIVE path from wslpath -w,
+        # which must become file:///C:/... (3 slashes), not file://C:/... — and
+        # spaces must be percent-encoded so the browser isn't handed a bad URI.
+        monkeypatch.setattr(desktop, "is_wsl", lambda: True)
+        monkeypatch.setattr(desktop, "_chromium_exes", lambda: ["/mnt/c/edge/msedge.exe"])
+        monkeypatch.setattr(desktop, "to_windows_path", lambda p: "C:\\Temp\\my plot.html")
+        calls = []
+        opened, method = desktop.open_in_desktop(
+            Path("/mnt/c/Temp/my plot.html"), spawn=lambda argv, **kw: calls.append(argv)
+        )
+        assert opened is True and method == "msedge.exe"
+        assert calls == [
+            [
+                "/mnt/c/edge/msedge.exe",
+                "--app=file:///C:/Temp/my%20plot.html",
+                "--window-size=1100,860",
+            ]
+        ]
 
 
 # --- input model -----------------------------------------------------------
@@ -298,6 +377,35 @@ class TestRender:
         assert blob["panels"][1]["y_label"] == "Phase (deg)"
         assert blob["panels"][0]["x_scale"] == "log"
         assert any(o["code"] == "phase_unwrapped" for o in data["observations"])
+
+    async def test_ac_annotate_emits_corner_and_nmp(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # Single-trace AC + annotate=True -> the spec carries corner markers near
+        # the RC corner plus a non-minimum-phase flag.
+        raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], annotate=True)
+        blob = _data_blob(_read(Path(data["path"])))
+        assert blob["bode"] is True
+        anns = blob["annotations"]
+        assert isinstance(anns, list) and len(anns) >= 1
+        assert "nmp" in blob and isinstance(blob["nmp"], bool)
+        # The RC fixture has a single real pole somewhere in the swept decade(s).
+        xs = [a["x"] for a in anns]
+        lo = blob["panels"][0]["data"][0][0]
+        hi = blob["panels"][0]["data"][0][-1]
+        assert any(lo <= x <= hi for x in xs)
+        assert all(isinstance(a["label"], str) and a["label"] for a in anns)
+        # Each marker is classified pole (drawn as a cross) or zero (a circle).
+        assert all(a.get("marker") in ("pole", "zero") for a in anns)
+
+    async def test_ac_annotate_off_omits_markers(self, state_no_sim: SessionState, work_dir: Path):
+        raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+        data = await _plot(state_no_sim, raw_file=str(raw), signals=["V(out)"], annotate=False)
+        blob = _data_blob(_read(Path(data["path"])))
+        # No annotation keys when annotate is off (or an empty list at most).
+        assert not blob.get("annotations")
+        assert "nmp" not in blob
 
     async def test_dc_sweep(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_dc_div")
