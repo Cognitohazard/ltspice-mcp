@@ -52,9 +52,9 @@ class TestServerInstructions:
 
     def test_instructions_cover_key_workflow_guidance(self):
         text = SERVER_INSTRUCTIONS
-        # netlist-first default + the asc-conversion bridge
+        # netlist-first default + the asc-build doctrine
         assert "netlist" in text.lower()
-        assert "schematic_from_netlist" in text
+        assert "apply_schematic_ops" in text
         # analysis-tool/run-type pairing + the result-trust guardrail
         assert "operating_point" in text and "bode_metrics" in text
         assert "completed" in text

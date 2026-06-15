@@ -121,8 +121,8 @@ Simulation output is automatically redirected to a Windows temp directory: LTspi
 
 | Profile | Tools | Use case |
 |-|-|-|
-| `full` (default) | 52 | Any MCP client, automation, non-agent LLMs |
-| `agentic` | 42 | LLM agents with native file access (Read/Edit/Write) |
+| `full` (default) | 47 | Any MCP client, automation, non-agent LLMs |
+| `agentic` | 37 | LLM agents with native file access (Read/Edit/Write) |
 
 The `agentic` profile drops netlist-editing wrappers and library session management — work a capable agent does through direct file edits — and keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, and the `.asc` geometry tools. The `skills/` directory (`skills/ltspice/SKILL.md`, `skills/ngspice/SKILL.md`) contains the domain knowledge that pairs with it: copy the relevant skill into your client's persistent-instructions location.
 
@@ -173,7 +173,7 @@ and gets back scalars, not a plot:
 Off-target → `set_component_value`, re-run, re-measure. Long simulations return a job ID instead of blocking; `check_job`/`cancel_job` manage them. Job metadata persists in per-circuit sidecars (`{dir}/.ltspice-mcp/jobs/` — add `.ltspice-mcp/` to your `.gitignore`), and MCP resources (`ltspice://results/...`, `ltspice://netlists/...`, `ltspice://config`) expose jobs, signals, measurements, and config for browsing.
 
 <details>
-<summary><strong>All 52 tools</strong></summary>
+<summary><strong>All 47 tools</strong></summary>
 
 Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`); data-returning tools declare an `outputSchema` for `structuredContent` introspection.
 
@@ -181,18 +181,13 @@ Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempot
 |-|-|
 | `create_netlist` | Create a new netlist from a content string |
 | `create_schematic` | Create an empty `.asc` ready for incremental editing |
-| `schematic_from_netlist` | Generate an `.asc` from SPICE netlist text — grid-places R/C/L/V/I/D and E/G controlled sources, wires pins by net label |
 | `read_circuit` | Read a circuit file (netlist text for `.cir`, schematic layout for `.asc`) |
 | `list_components` | List components (optional prefix filter) or look up one by reference |
 | `set_component_value` | Set one component value, or batch-set many via a `values` dict |
 | `parameter` | Read all `.PARAM` values or set one |
 | `edit_directive` | Add or remove SPICE directives (`.tran`, `.ac`, `.lib`, ...) |
-| `remove_component` | Remove a component (warns about orphaned wires) |
-| `move_component` | Move or rotate a component in an `.asc` schematic |
-| `set_component_attribute` | Set a component attribute (SpiceLine, Value2, ...) |
 | `add_component` | Add a component; returns pin positions, bounding box, overlap warnings |
 | `connect` | Wire two pins by reference with waypoint routing; validates pin collisions, junctions, diagonals |
-| `add_net_label` | Add/remove net labels and ground flags (supports pin-reference placement) |
 | `symbol_info` | Symbol pin positions, directions, bounding box, description |
 | `component_info` | Placed component pin positions, bounding box, attributes |
 | `export_netlist` | Export `.asc` to `.net` via LTspice (with diff against previous export) |
@@ -200,7 +195,7 @@ Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempot
 | `trace_net` | Every pin/label/wire on a net at a pin / `net:NAME` / `(x,y)`; flags accidental shorts |
 | `reset_schematic` | Revert an `.asc` to its pre-edit snapshot from this session |
 | `diff_circuit` | Structural diff between two circuit files |
-| `apply_schematic_ops` | Apply many `.asc` edits in one transaction |
+| `apply_schematic_ops` | Apply many `.asc` edits in one transaction; home for the ack-only mutation ops (`move_component`, `remove_component`, `set_component_attribute`, `add_net_label`, `remove_net_label`, `remove_wire`) |
 | `run_simulation` | Run a simulation — sync for short runs, async (job ID) for long ones |
 | `check_job` | Check a job's status by ID, or list all jobs |
 | `cancel_job` | Cancel a running simulation or batch; kills the simulator process(es) |

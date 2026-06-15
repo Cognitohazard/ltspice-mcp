@@ -114,9 +114,6 @@ class TestToolProfiles:
         construction = {
             "create_schematic",
             "add_component",
-            "move_component",
-            "remove_component",
-            "set_component_attribute",
             "apply_schematic_ops",
         }
         _, handlers = get_tools_for_profile("agentic")
@@ -133,13 +130,13 @@ class TestDestructiveAnnotations:
     def test_component_removing_tools_are_destructive(self):
         defs, _ = get_tools_for_profile("full")
         by_name = {d.name: d for d in defs}
-        for name in ("remove_component", "create_schematic", "apply_schematic_ops"):
+        for name in ("create_schematic", "apply_schematic_ops"):
             tool = by_name[name]
             assert tool.annotations is not None
             assert tool.annotations.destructiveHint is True, f"{name} not marked destructive"
-        # apply_schematic_ops earns the hint because its batch can run
-        # remove_component (and persist a partial subset); keep the two tied so
-        # the hint can't silently rot if that op is ever dropped.
+        # apply_schematic_ops earns the hint because its batch can run the
+        # remove_component op (and persist a partial subset); keep the two tied
+        # so the hint can't silently rot if that op is ever dropped.
         assert "remove_component" in (by_name["apply_schematic_ops"].description or "")
 
 

@@ -745,11 +745,24 @@ def extract_asc_info(editor: AscEditor, file_path: Path) -> dict[str, Any]:
     ]
     directive_data = [directive.text for directive in editor.directives]
 
+    # Surface each wire segment's endpoints so callers can target a specific
+    # wire for removal (apply_schematic_ops remove_wire) without re-deriving it.
+    wire_data = [
+        {
+            "x1": int(w.V1.X),
+            "y1": int(w.V1.Y),
+            "x2": int(w.V2.X),
+            "y2": int(w.V2.Y),
+        }
+        for w in editor.wires
+    ]
+
     return {
         "file": str(file_path),
         "type": "asc",
         "components": comp_data,
         "labels": label_data,
+        "wires": wire_data,
         "wire_count": len(editor.wires),
         "directives": directive_data,
     }

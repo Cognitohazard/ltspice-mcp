@@ -67,14 +67,32 @@ Python, and there's an extra process to maintain.
 |LTspice GUI|interactive|interactive|GUI-driven|N/A|
 
 Geometry-aware editing tools — `connect`, `add_component`,
-`move_component`, `add_net_label` (with `pin="M3.S"`),
-`apply_schematic_ops` — work against pin coordinates, bounding
+`apply_schematic_ops` (whose ops include `move_component`,
+`add_net_label` with `pin="M3.S"`, `remove_net_label`, and
+`remove_wire`) — work against pin coordinates, bounding
 boxes, and named-net topology: `connect` refuses diagonal wires,
 pin collisions, wire-junction overlaps, and named-net shorts before
-touching the file, and every tool returns geometry the agent can use
-in its next call. `symbol_info` and `component_info` are the read-only
-planning half of that workflow — pin positions and bounding boxes
-looked up before an edit, not validators of one.
+touching the file, and every standalone tool returns geometry the agent
+can use in its next call. `symbol_info` and `component_info` are the
+read-only planning half of that workflow — pin positions and bounding
+boxes looked up before an edit, not validators of one.
+
+### Standalone tool vs. apply_schematic_ops op
+
+A schematic mutation earns a standalone MCP tool only when its result
+returns information the model acts on (structured output the next call
+consumes — `add_component`'s pin geometry and bounding box, `connect`'s
+routing result). An ack-only mutation — one that just confirms "done" —
+lives only as an `apply_schematic_ops` op: a standalone tool's schema
+costs the model context whether or not it is ever called, and that cost
+is only earned by a useful return. The MCP guidance is fewer, more
+capable tools (tool-selection accuracy degrades past roughly 15 tools),
+so `move_component`, `remove_component`, `set_component_attribute`,
+`add_net_label`, `remove_net_label`, and `remove_wire` are ops on
+`apply_schematic_ops` rather than standalone tools. `create_schematic`
+and `reset_schematic` are the lifecycle exception — they stay standalone
+regardless of return shape because they have no batch home; reads stay
+standalone too.
 
 ## Design principles
 
@@ -360,8 +378,8 @@ Key `lib/` modules:
 
 |profile|tool count|use case|
 |-|-|-|
-|`full` (default)|52|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
-|`agentic`|42|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
+|`full` (default)|47|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
+|`agentic`|37|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
 
 The `agentic` profile drops 10 tools: the five netlist-editing wrappers
 (`create_netlist`, `read_circuit`, `set_component_value`, `parameter`,
@@ -370,13 +388,14 @@ access — the three library session tools (`load_library`,
 `unload_library`, `list_libraries`), and the `configure_sweep` /
 `configure_montecarlo` config builders. It keeps simulation lifecycle,
 binary `.raw` parsing and analysis, batch run/results, library search
-(`find_model`), and the full schematic toolset an agent cannot replicate
+(`find_model`), and the schematic toolset an agent cannot replicate
 by editing text — geometry-aware editing with orthogonal routing and
 pin-collision/junction checks: `create_schematic`, `add_component`,
-`move_component`, `remove_component`, `set_component_attribute`,
-`apply_schematic_ops`, `connect`, `add_net_label`, `export_netlist`,
-`reset_schematic`, `symbol_info`, `component_info`,
-`schematic_from_netlist`, `trace_net`.
+`apply_schematic_ops`, `connect`, `export_netlist`,
+`reset_schematic`, `symbol_info`, `component_info`, `trace_net`. The
+ack-only mutations (`move_component`, `remove_component`,
+`set_component_attribute`, `add_net_label`, `remove_net_label`,
+`remove_wire`) are `apply_schematic_ops` ops, not standalone tools.
 
 Set via `[tools] profile` in `ltspice-mcp.toml` or the
 `LTSPICE_MCP_TOOL_PROFILE` env var. Error hints adapt to the active
