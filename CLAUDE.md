@@ -116,14 +116,21 @@ Direct editing of LTspice `.asc` schematics is a first-class feature. All circui
 - **`set_component_value`** handles both single (`reference`+`value`) and batch (`values` dict) modes.
 - **`parameter`** reads all .PARAM values (no args) or sets one (`name`+`value`).
 - **`edit_directive`** adds or removes SPICE directives via `action: "add"|"remove"`.
-- **Schematic-only tools** (`remove_component`, `move_component`, `set_component_attribute`, `export_netlist`, `connect`, `add_net_label`, `symbol_info`, `component_info`, `reset_schematic`) validate `.asc` extension and use `_get_asc_editor()`.
+- **Schematic-only tools** (`export_netlist`, `connect`, `symbol_info`, `component_info`, `reset_schematic`) validate `.asc` extension and use `_get_asc_editor()`.
 - **`reset_schematic`** reverts an `.asc` to the byte snapshot taken before its first in-session mutation (recovery hatch). `_snapshot_asc()` captures it at the `_editing` choke point and in `apply_schematic_ops`; the snapshot lives on `state.asc_snapshots` (per-session only).
 - **`connect`** wires two pins by reference (e.g., `M1.D` → `M4a.D`) with waypoint routing. Validates before writing: refuses diagonal wires, pin collisions, and wire junction overlaps. Warns on long runs and bbox crossings.
 - **`add_component`** returns pin positions (with direction), bounding box, and overlap warnings.
 - **`symbol_info`** / **`component_info`** provide pin geometry for layout planning.
-- **`add_net_label`** supports `pin="M3.S"` for placement at pin coordinates.
-- **`schematic_from_netlist`** generates a full `.asc` from SPICE netlist text: grid-places supported elements (R/C/L/V/I/D plus the voltage-controlled sources E/G) on their LTspice symbols and connects pins by net label (FLAGs carrying the node name) so the result is electrically identical to the netlist. Node→pin assignment is by SpiceOrder, so the 4-node E/G map to the `e`/`g` symbols without special-casing. Model-polarity devices (M/Q/J), subckt instances (X), current-controlled sources (F/H), and behavioral E/G (Laplace/poly/table/value) are returned in `skipped`. Reuses `_parse_netlist_for_synth` (pure) + `_layout_synth_components`.
 - **`trace_net`** reports every pin/label/wire vertex on the net at a pin/`net:NAME`/`(x,y)`, flagging multi-label shorts. Built on the shared `_net_partition` union-find (also backs `_trace_nets`).
+
+#### Standalone tool vs. apply_schematic_ops op
+
+A schematic mutation is exposed as a **standalone MCP tool only when its result returns information the model acts on** (structured `format_response`/`output_schema`). An ack-only mutation — one that just confirms "done" — lives **only as an `apply_schematic_ops` op**: a standalone tool's schema costs the model context whether or not it's ever called, and that cost is only earned by a useful return. MCP best practice is fewer, more capable tools (Anthropic's "writing tools for agents"; tool-selection accuracy degrades past roughly 15 tools), and this server is over budget. The rule:
+
+- **Standalone (structured return the model uses):** `add_component` (pin positions, bounding box, overlap warnings), `connect` (orthogonal routing result, collision/junction checks).
+- **Ops-only (ack-only mutations):** `move_component`, `remove_component`, `set_component_attribute`, `add_net_label`, `remove_net_label`, `remove_wire`. Their `handle_*` functions stay as unregistered internal handlers (their tests call them directly); the `apply_schematic_ops` op path (`_apply_op_inplace`) is what the MCP surface reaches.
+- **Lifecycle / entry exception:** `create_schematic` and `reset_schematic` stay standalone regardless of return shape — they have no batch home.
+- **Reads** (`read_circuit`, `list_components`, `symbol_info`, `component_info`, `trace_net`) stay standalone.
 
 **Consolidated AC / step tools (clean break — no aliases):** `bode_metrics(mode="filter"|"slope"|"point"|"crossing")` is the single public AC tool; it dispatches to the now-unregistered internal compute adapters `handle_filter_metrics`/`handle_roll_off`/`handle_gain_at`/`handle_find_crossing` (still in `tools/analysis.py`, still unit-tested directly). `query_value(step_axis=, step_value=)` absorbs the former `step_get` (the `handle_step_get` adapter stays internal in `tools/circuit.py`; `query_value` imports it lazily). To re-expose any adapter, re-add its `@registry.tool(...)`. `bode_metrics(all_steps=true)` runs the chosen mode for every step of a `.step` sweep (per-step dispatch via the shared `_bode_dispatch`), returning a `steps` list.
 - **`export_netlist`** shows diff against previous export.
@@ -179,9 +186,9 @@ TOML sections: `[simulator]`, `[security]`, `[simulation]`, `[analysis]`, `[logg
 
 | Profile | Tools | Use case |
 |-|-|-|
-| `full` (default) | All 52 | Any MCP client, automation, non-agent LLMs |
-| `agentic` | 42 | LLM agents with native file access (Read/Edit/Write) |
+| `full` (default) | All 47 | Any MCP client, automation, non-agent LLMs |
+| `agentic` | 37 | LLM agents with native file access (Read/Edit/Write) |
 
-The "agentic" profile removes 10 tools: the netlist-editing wrappers (`create_netlist`, `read_circuit`, `set_component_value`, `parameter`, `edit_directive`), library session management (`load_library`, `unload_library`, `list_libraries`), and `configure_sweep`/`configure_montecarlo` — things capable agents do natively or via `schematic_from_netlist`. It keeps simulation lifecycle, binary `.raw` parsing, batch run/results, `find_model` search, and the full schematic-construction + wiring + inspection set (`create_schematic`, `add_component`, `move_component`, `remove_component`, `set_component_attribute`, `apply_schematic_ops`, `connect`, `add_net_label`, `export_netlist`, `reset_schematic`, `symbol_info`, `component_info`, `schematic_from_netlist`, `trace_net`) — geometry-aware .asc editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match.
+The "agentic" profile removes 10 tools: the netlist-editing wrappers (`create_netlist`, `read_circuit`, `set_component_value`, `parameter`, `edit_directive`), library session management (`load_library`, `unload_library`, `list_libraries`), and `configure_sweep`/`configure_montecarlo` — things capable agents do natively. It keeps simulation lifecycle, binary `.raw` parsing, batch run/results, `find_model` search, and the schematic-construction + wiring + inspection set (`create_schematic`, `add_component`, `apply_schematic_ops`, `connect`, `export_netlist`, `reset_schematic`, `symbol_info`, `component_info`, `trace_net`) — geometry-aware .asc editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match. The ack-only mutations (`move_component`, `remove_component`, `set_component_attribute`, `add_net_label`, `remove_net_label`, `remove_wire`) are `apply_schematic_ops` ops, not standalone tools (see the standalone-vs-op rule above).
 
 Profile-filtered tool defs and dispatch live on `SessionState` (`state.tool_defs`, `state.tool_dispatch`). Each tool's `profiles` frozenset (set at registration via `@registry.tool(profiles=...)`) determines visibility. Error hints in `server.py` are profile-aware (tuples of `(full_hint, agentic_hint)`) so they don't reference tools the client can't see.

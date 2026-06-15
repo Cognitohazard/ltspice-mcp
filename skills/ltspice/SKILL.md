@@ -253,7 +253,7 @@ C1 out 0 {C}
 
 ### .asc Schematics
 
-`.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use the server's schematic tools (`add_component`, `connect`, `add_net_label`, ...) or LTspice's GUI. The schematic-construction tools (`add_component`, `create_schematic`, `move_component`, `apply_schematic_ops`, ...) are available in both the full and agentic profiles — geometry-aware editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match.
+`.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use the server's schematic tools (`create_schematic`, `add_component`, `connect`, `apply_schematic_ops`, ...) or LTspice's GUI. These are available in both the full and agentic profiles — geometry-aware editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match. Ack-only mutations (move/remove a component, set an attribute, add or remove a net label, remove a wire) are `apply_schematic_ops` ops rather than standalone tools, so batch them in one transaction.
 
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2.
 - Export to netlist for direct text editing when needed.
@@ -306,9 +306,9 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 - **Heed `connect` warnings and errors**: the tool refuses diagonal wires, pin collisions, and wire junction overlaps. Non-blocking warnings (long runs, bbox crossings) should still be addressed.
 
 **Ground and net labels:**
-- **Local ground flags**: Place a ground (`0`) label directly at each grounded pin using `add_net_label`. Never route wires to a distant ground flag.
-- **One ground per pin**: Each component's ground connection gets its own `add_net_label` call at the pin's coordinates — do not share ground flags between components.
-- **Do not use `connect` with `net:0`** when multiple ground labels exist — the tool errors on ambiguous net references. Place ground flags directly at pin coordinates using `add_net_label(net="0", pin="M3.S")` — no wire needed when the flag is on the pin.
+- **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `apply_schematic_ops` `add_net_label` op. Never route wires to a distant ground flag.
+- **One ground per pin**: Each component's ground connection gets its own `add_net_label` op at the pin's coordinates — do not share ground flags between components.
+- **Do not use `connect` with `net:0`** when multiple ground labels exist — the tool errors on ambiguous net references. Place ground flags directly at pin coordinates with an `add_net_label` op (`net="0", pin="M3.S"`) — no wire needed when the flag is on the pin.
 - **Named nets (VDD, outp, etc.)**: Use a single label per unique net name. Connect components to it via `connect` with `net:NAME` or waypoints.
 
 **Sources:**
