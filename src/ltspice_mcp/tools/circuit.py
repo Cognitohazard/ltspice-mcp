@@ -10,7 +10,6 @@ import asyncio
 import bisect
 import contextlib
 import io
-import math
 import re
 from collections.abc import AsyncIterator, Callable
 from collections.abc import Set as AbstractSet
@@ -1181,6 +1180,18 @@ async def handle_create_netlist(
                     },
                 },
             },
+            "wires": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "x1": {"type": "integer"},
+                        "y1": {"type": "integer"},
+                        "x2": {"type": "integer"},
+                        "y2": {"type": "integer"},
+                    },
+                },
+            },
             "wire_count": {"type": "integer"},
             "directives": {"type": "array", "items": {"type": "string"}},
         },
@@ -1954,18 +1965,78 @@ def _strip_matching_comments(editor, matcher) -> bool:
 # ---------------------------------------------------------------------------
 
 
-@registry.tool(
-    name="remove_component",
-    description="Remove a component from an .asc schematic by reference designator.",
-    input_model=RemoveComponentInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=True,
-        idempotentHint=False,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-)
+def _orphaned_wire_coords(editor: AscEditor, target_only_pins: set[tuple[int, int]]) -> list[str]:
+    """``(x,y)`` strings for wires still ending on a removed/moved component's
+    former pins (its pins minus other components' pins). Shared by the standalone
+    handlers and the apply_schematic_ops ops; call AFTER the mutation."""
+    orphaned: list[str] = []
+    for w in editor.wires:
+        for coord in ((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))):
+            label = f"({coord[0]},{coord[1]})"
+            if coord in target_only_pins and label not in orphaned:
+                orphaned.append(label)
+    return orphaned
+
+
+def _drop_wires_at(editor: AscEditor, coords: set[tuple[int, int]]) -> int:
+    """Remove every wire with an endpoint in ``coords``; return how many were
+    dropped. Shared by remove_component's wire cleanup and the remove_wire op."""
+    if not coords:
+        return 0
+    kept = [
+        w
+        for w in editor.wires
+        if (int(w.V1.X), int(w.V1.Y)) not in coords and (int(w.V2.X), int(w.V2.Y)) not in coords
+    ]
+    dropped = len(editor.wires) - len(kept)
+    editor.wires = kept
+    return dropped
+
+
+def _move_component_warnings(
+    editor: AscEditor,
+    reference: str,
+    rot_name: str,
+    x: int,
+    y: int,
+    old_pin_coords: set[tuple[int, int]],
+    other_pins: set[tuple[int, int]],
+) -> list[str]:
+    """Bounding-box-overlap + orphaned-wire warnings for a just-moved component.
+
+    Shared by the standalone handler and the apply_schematic_ops move op so both
+    surface the same facts. ``old_pin_coords`` and ``other_pins`` must be
+    captured BEFORE the move; call this AFTER ``set_component_position``.
+    """
+    warnings: list[str] = []
+    new_pin_coords = _component_pin_coords(editor, reference)
+
+    comp = editor.components[reference]
+    moved_bb: dict[str, int] | None = None
+    if comp.symbol:
+        moved_sym = get_symbol_info(comp.symbol)
+        if moved_sym is not None:
+            moved_bb = compute_placed_geometry(moved_sym, x, y, rot_name)["bounding_box"]
+    if moved_bb is not None:
+        for ebb in _collect_component_geometry(editor):
+            if ebb["ref"] != reference and _bboxes_overlap(moved_bb, ebb):
+                warnings.append(f"Overlaps {ebb['ref']} bounding box")
+
+    # Pins that the move abandoned (no longer this component's, not a neighbour's)
+    # but that still have a wire ending on them are orphaned by the move.
+    abandoned_pins = old_pin_coords - new_pin_coords - other_pins
+    orphaned = _orphaned_wire_coords(editor, abandoned_pins) if abandoned_pins else []
+    if orphaned:
+        warnings.append(
+            f"wires left at old pin coordinates with no connection: {', '.join(orphaned)}. "
+            "Re-route or delete these wires."
+        )
+    return warnings
+
+
+# Unregistered ack-only schematic mutation. Reached via apply_schematic_ops'
+# remove_component op; kept as an internal handler so its existing tests can
+# call it directly. See the standalone-vs-op rule in CLAUDE.md.
 async def handle_remove_component(
     args: RemoveComponentInput, state: SessionState
 ) -> types.CallToolResult:
@@ -1986,17 +2057,7 @@ async def handle_remove_component(
 
     async with _editing_asc(asc_path, state) as editor:
         editor.remove_component(reference)
-        deleted_wires = 0
-        if args.cleanup_wires and target_only_pins:
-            kept_wires = []
-            for w in editor.wires:
-                v1 = (int(w.V1.X), int(w.V1.Y))
-                v2 = (int(w.V2.X), int(w.V2.Y))
-                if v1 in target_only_pins or v2 in target_only_pins:
-                    deleted_wires += 1
-                    continue
-                kept_wires.append(w)
-            editor.wires = kept_wires
+        deleted_wires = _drop_wires_at(editor, target_only_pins) if args.cleanup_wires else 0
         validation_warnings = _post_op_warnings(editor)
 
     result = f"Removed {reference} from {asc_path.name}"
@@ -2004,12 +2065,7 @@ async def handle_remove_component(
         result += f" (also deleted {deleted_wires} attached wire(s))"
     elif target_only_pins and not args.cleanup_wires:
         editor_post = _get_asc_editor(asc_path, state)
-        orphaned_at: list[str] = []
-        for w in editor_post.wires:
-            for coord in [(int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))]:
-                if coord in target_only_pins:
-                    orphaned_at.append(f"({coord[0]},{coord[1]})")
-                    target_only_pins.discard(coord)
+        orphaned_at = _orphaned_wire_coords(editor_post, target_only_pins)
         if orphaned_at:
             result += (
                 f"\n\nWarning: orphaned wires remain at: {', '.join(orphaned_at)}. "
@@ -2022,23 +2078,9 @@ async def handle_remove_component(
     return text_response(result)
 
 
-@registry.tool(
-    name="move_component",
-    description=(
-        "Move and/or rotate a component in an .asc schematic. Warns if the "
-        "new position overlaps another component's bounding box, and lists "
-        "wire endpoints orphaned by the move (the component's old pin "
-        "coordinates are no longer connected to anything)."
-    ),
-    input_model=MoveComponentInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-)
+# Unregistered ack-only schematic mutation. Reached via apply_schematic_ops'
+# move_component op; kept as an internal handler so its existing tests can
+# call it directly. See the standalone-vs-op rule in CLAUDE.md.
 async def handle_move_component(
     args: MoveComponentInput, state: SessionState
 ) -> types.CallToolResult:
@@ -2065,78 +2107,24 @@ async def handle_move_component(
         new_pos = Point(x, y)
         editor.set_component_position(reference, new_pos, new_rot)
 
-        new_pin_coords = _component_pin_coords(editor, reference)
-
-        # Overlap check mirrors add_component's: any other component whose
-        # bounding box intersects the moved one's NEW bounding box.
-        moved_bb: dict[str, int] | None = None
-        comp = editor.components[reference]
-        if comp.symbol:
-            moved_sym = get_symbol_info(comp.symbol)
-            if moved_sym is not None:
-                rot_str = new_rot.name
-                moved_bb = compute_placed_geometry(moved_sym, x, y, rot_str)["bounding_box"]
-        overlap_warnings: list[str] = []
-        if moved_bb is not None:
-            for ebb in _collect_component_geometry(editor):
-                if ebb["ref"] == reference:
-                    continue
-                if _bboxes_overlap(moved_bb, ebb):
-                    overlap_warnings.append(f"Overlaps {ebb['ref']} bounding box")
-
-        # Wires whose endpoint sat on a pin that moved — and that pin's
-        # coordinate isn't now another component's pin — are orphaned by
-        # the move. Don't auto-delete; surface so the caller can fix routing.
-        abandoned_pins = old_pin_coords - new_pin_coords - other_pins
-        orphan_coords: list[tuple[int, int]] = []
-        if abandoned_pins:
-            for w in editor.wires:
-                for coord in (
-                    (int(w.V1.X), int(w.V1.Y)),
-                    (int(w.V2.X), int(w.V2.Y)),
-                ):
-                    if coord in abandoned_pins and coord not in orphan_coords:
-                        orphan_coords.append(coord)
-
+        warnings = _move_component_warnings(
+            editor, reference, new_rot.name, x, y, old_pin_coords, other_pins
+        )
         validation_warnings = _post_op_warnings(editor)
 
     rot_str = f"R{new_rot.value}" if new_rot.value < 360 else f"M{new_rot.value - 360}"
     msg = f"Moved {reference}: ({old_pos.X},{old_pos.Y}) -> ({x},{y}) {rot_str}"
-    if overlap_warnings:
-        msg += "\n\nWarnings:"
-        for w_msg in overlap_warnings:
-            msg += f"\n  {w_msg}"
-    if orphan_coords:
-        coord_str = ", ".join(f"({cx},{cy})" for cx, cy in orphan_coords)
-        msg += (
-            f"\n\nWarning: wires left at old pin coordinates with no "
-            f"connection: {coord_str}. Re-route or delete these wires."
-        )
+    if warnings:
+        msg += "\n\nWarnings:\n" + "\n".join(f"  {w}" for w in warnings)
     extra_lines = _validation_warnings_lines(validation_warnings)
     if extra_lines:
         msg += "\n" + "\n".join(extra_lines)
     return text_response(msg)
 
 
-@registry.tool(
-    name="set_component_attribute",
-    description=(
-        "Set a schematic-only component attribute. The standard LTspice slots "
-        "are ``Value``, ``Value2``, ``SpiceLine``, ``SpiceLine2``, "
-        "``SpiceModel``, ``InstName`` — anything else is rejected, since "
-        "LTspice silently ignores unknown SYMATTR keys at netlist time. To "
-        "set arbitrary KEY=val pairs (e.g. ``W=10u L=0.5u``), pass them as "
-        "the ``SpiceLine`` value."
-    ),
-    input_model=SetComponentAttributeInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-)
+# Unregistered ack-only schematic mutation. Reached via apply_schematic_ops'
+# set_component_attribute op; kept as an internal handler so its existing tests
+# can call it directly. See the standalone-vs-op rule in CLAUDE.md.
 async def handle_set_component_attribute(
     args: SetComponentAttributeInput, state: SessionState
 ) -> types.CallToolResult:
@@ -2626,18 +2614,58 @@ def _resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
     )
 
 
-@registry.tool(
-    name="add_net_label",
-    description="Add a net label or ground flag to an .asc schematic at a wire junction.",
-    input_model=NetLabelInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-)
+def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[str]:
+    """Validate placing net label ``net`` at ``(x, y)``; shared by the standalone
+    handler and the ``apply_schematic_ops`` add_net_label op so both enforce the
+    same rules from either entry point.
+
+    Raises ``NetlistError`` if a non-ground label would merge two different named
+    nets (a short at netlist time) — a structural error, refused outright.
+    Returns advisory warnings (duplicate name, floating placement) as plain
+    facts for the caller to surface; placing labels before wiring them is a
+    legitimate workflow, so those are warnings, not refusals.
+    """
+    warnings: list[str] = []
+    if net != "0":
+        # Duplicate non-ground label name: connect errors on the ambiguity.
+        for lbl in editor.labels:
+            if lbl.text == net:
+                warnings.append(
+                    f"'{net}' already exists at ({int(lbl.coord.X)},{int(lbl.coord.Y)}). "
+                    "Multiple labels with the same name will cause connect to error "
+                    "on ambiguity."
+                )
+                break
+        # Net-label conflict: a non-ground label on a network that already
+        # carries a different named net shorts the two at netlist time. Refuse.
+        nets = _trace_nets(editor)
+        other_labels = {n for n in _net_label_at(nets, (x, y)) if n != net and n != "0"}
+        if other_labels:
+            raise NetlistError(
+                f"Refused to add net '{net}' at ({x},{y}): the wire network at this "
+                f"coordinate already carries the label(s) {sorted(other_labels)}. Adding "
+                f"'{net}' would short those nets together. Remove the existing label(s) "
+                f"first or pick a different coordinate."
+            )
+    # Floating label: a FLAG at a coordinate with no wire endpoint and no
+    # component pin is silently ignored by LTspice at netlist time.
+    wire_endpoints = {(int(w.V1.X), int(w.V1.Y)) for w in editor.wires} | {
+        (int(w.V2.X), int(w.V2.Y)) for w in editor.wires
+    }
+    all_pin_coords: set[tuple[int, int]] = set()
+    for ref in editor.get_components():
+        all_pin_coords.update(_component_pin_coords(editor, ref))
+    if (x, y) not in wire_endpoints and (x, y) not in all_pin_coords:
+        warnings.append(
+            f"({x},{y}) has no wire endpoint or component pin — LTspice will ignore "
+            "this floating label until you wire it up."
+        )
+    return warnings
+
+
+# Unregistered ack-only schematic mutation. Reached via apply_schematic_ops'
+# add_net_label / remove_net_label ops; kept as an internal handler so its
+# existing tests can call it directly. See the standalone-vs-op rule in CLAUDE.md.
 async def handle_add_net_label(args: NetLabelInput, state: SessionState) -> types.CallToolResult:
     """Add or remove a FLAG (net label or ground) in a schematic."""
     asc_path = safe_path(args.path, state)
@@ -2663,57 +2691,11 @@ async def handle_add_net_label(args: NetLabelInput, state: SessionState) -> type
                     return text_response(f"Removed {label_desc} at ({x},{y})")
             raise NetlistError(f"No {label_desc} found at ({x},{y})")
 
-    result = ""
     async with _editing_asc(asc_path, state) as editor:
-        # Warn on duplicate non-ground labels
-        if net != "0":
-            for lbl in editor.labels:
-                if lbl.text == net:
-                    result = (
-                        f"Warning: '{net}' already exists at "
-                        f"({int(lbl.coord.X)},{int(lbl.coord.Y)}). "
-                        "Multiple labels with the same name will cause "
-                        "connect to error on ambiguity.\n"
-                    )
-                    break
-
-        # Floating-label detection: a FLAG placed at a coordinate with
-        # no wire endpoint and no component pin is silently ignored at
-        # netlist time. Surface a warning so the caller can verify; don't
-        # refuse outright since a common workflow is "place labels first,
-        # wire them up later".
-        wire_endpoints = {(int(w.V1.X), int(w.V1.Y)) for w in editor.wires} | {
-            (int(w.V2.X), int(w.V2.Y)) for w in editor.wires
-        }
-        all_pin_coords: set[tuple[int, int]] = set()
-        for ref in editor.get_components():
-            all_pin_coords.update(_component_pin_coords(editor, ref))
-        is_floating = (x, y) not in wire_endpoints and (x, y) not in all_pin_coords
-
-        # Net-label conflict: adding a label to a coord that's already
-        # on a different named net would short the two nets at netlist
-        # time. Catch deliberately, with a clear message.
-        if net != "0":
-            nets = _trace_nets(editor)
-            existing = _net_label_at(nets, (x, y))
-            other_labels = {n for n in existing if n != net and n != "0"}
-            if other_labels:
-                raise NetlistError(
-                    f"Refused to add net '{net}' at ({x},{y}): the wire "
-                    f"network at this coordinate already carries the label(s) "
-                    f"{sorted(other_labels)}. Adding '{net}' would short "
-                    f"those nets together. Remove the existing label(s) "
-                    f"first or pick a different coordinate."
-                )
-
+        warnings = _add_net_label_checks(editor, net, x, y)
         editor.labels.append(Text(coord=Point(x, y), text=net, type=TextTypeEnum.LABEL))
 
-    if is_floating:
-        result = (
-            f"Warning: ({x},{y}) has no wire endpoint or component pin — "
-            f"LTspice will ignore this floating label until you wire it up.\n"
-        ) + result
-    result += f"Added {label_desc} at ({x},{y})"
+    result = "".join(f"Warning: {w}\n" for w in warnings) + f"Added {label_desc} at ({x},{y})"
     return text_response(result)
 
 
@@ -3141,465 +3123,6 @@ async def handle_create_schematic(
     )
 
 
-# SPICE element prefix → (LTspice symbol, fixed node count). These have
-# unambiguous standard symbols and a fixed arity, so the netlist round-trips
-# exactly: the six 2-terminal passives/sources, plus the voltage-controlled
-# sources E (VCVS) and G (VCCS), whose four nodes map to the symbol pins by
-# SpiceOrder. Model-polarity devices (M/Q/J), subcircuit instances (X), and the
-# current-controlled sources (F/H — they reference a source name, not control
-# nodes) are intentionally left for manual placement (reported as ``skipped``)
-# — their symbol/polarity can't be inferred from the instance line alone.
-_SYNTH_SYMBOL_MAP: dict[str, tuple[str, int]] = {
-    "R": ("res", 2),
-    "C": ("cap", 2),
-    "L": ("ind", 2),
-    "V": ("voltage", 2),
-    "I": ("current", 2),
-    "D": ("diode", 2),
-    "E": ("e", 4),  # VCVS: out+ out- ctrl+ ctrl- gain
-    "G": ("g", 4),  # VCCS: out+ out- ctrl+ ctrl- transconductance
-}
-
-# Characters a SPICE node name can never contain — the same set the validator
-# uses to spot value syntax (POLY(...), value={...}, Laplace {...}) that spilled
-# into a node slot. A behavioral E/G carries one of these where a control node
-# would be, so it isn't a plain N-node device and is left for manual placement.
-_SYNTH_NON_NODE_CHARS = "(){}=\"'"
-
-# Directive card kinds passed through verbatim into the .asc as SPICE
-# directive text. ``subckt``/``ends`` block delimiters and the ``end``
-# terminator are dropped (a standalone .ends in a flat schematic is
-# meaningless); ``comment``/``blank`` carry no electrical meaning.
-_SYNTH_PASSTHROUGH_KINDS = frozenset({"directive", "model", "param", "meas"})
-
-
-class _SynthInstance(NamedTuple):
-    """An element parsed from a netlist, ready for placement (2- or 4-terminal)."""
-
-    ref: str
-    symbol: str
-    nodes: tuple[str, ...]
-    value: str | None
-
-
-def _parse_netlist_for_synth(
-    content: str,
-) -> tuple[list[_SynthInstance], list[str], list[dict], list[str]]:
-    """Parse a SPICE netlist into placeable instances + directives.
-
-    Returns ``(instances, directives, skipped, warnings)``. Pure — no symbol
-    lookup or filesystem access — so it is unit-testable without an LTspice
-    symbol library. Per SPICE convention the first non-blank line is the
-    deck title and is dropped.
-    """
-    try:
-        cards = lex(content).cards
-    except SpiceLexError as e:
-        raise NetlistError(f"Could not parse netlist: {e}") from e
-
-    instances: list[_SynthInstance] = []
-    directives: list[str] = []
-    skipped: list[dict] = []
-    warnings: list[str] = []
-    title_consumed = False
-
-    for card in cards:
-        if card.kind == "blank":
-            continue
-        if not title_consumed:
-            title_consumed = True
-            if card.kind == "comment":
-                # A leading ``*`` comment is the conventional SPICE deck
-                # title — drop it.
-                continue
-            # No title comment present (a bare netlist fragment). Dropping the
-            # first card here would silently delete a real element — e.g. the
-            # source on a typical ``V1 ... / R1 ...`` fragment (F2). Keep it as
-            # circuit content and warn instead of losing it.
-            warnings.append(
-                "No title line found (first line is not a '*' comment); kept it "
-                "as circuit content. Prepend a '* title' line to suppress."
-            )
-            # fall through to classify this card below
-        if card.kind == "instance":
-            ref = card.instance_ref or ""
-            prefix = ref[:1].upper()
-            entry = _SYNTH_SYMBOL_MAP.get(prefix)
-            if entry is None:
-                skipped.append(
-                    {
-                        "ref": ref,
-                        "reason": (
-                            f"element type '{prefix or '?'}' is not auto-placed; "
-                            "add it manually with add_component + connect"
-                        ),
-                    }
-                )
-                continue
-            symbol, n_nodes = entry
-            try:
-                toks = tokenize_body(card.body)
-            except SpiceLexError as e:
-                # lex() classifies any letter-prefixed line as an instance by
-                # prefix alone, without tokenizing — so a malformed body (e.g.
-                # unbalanced parens) only fails here. Skip it cleanly with a
-                # reason instead of letting the ValueError surface as a generic
-                # "internal error", mirroring the guarded sites elsewhere.
-                skipped.append({"ref": ref, "reason": f"could not tokenize element body: {e}"})
-                continue
-            if len(toks) < n_nodes + 1:
-                skipped.append(
-                    {
-                        "ref": ref,
-                        "reason": f"fewer than {n_nodes} nodes; cannot place a {symbol} symbol",
-                    }
-                )
-                continue
-            nodes = tuple(t.text for t in toks[1 : n_nodes + 1])
-            # A controlled source in a behavioral/expression form (Laplace/poly/
-            # table/value=) has value syntax where a control node would be — not
-            # a plain 4-node VCVS/VCCS, so leave it for manual placement.
-            if n_nodes > 2 and any(ch in tok for tok in nodes for ch in _SYNTH_NON_NODE_CHARS):
-                skipped.append(
-                    {
-                        "ref": ref,
-                        "reason": (
-                            "behavioral/expression controlled source "
-                            "(Laplace/poly/table/value); place manually"
-                        ),
-                    }
-                )
-                continue
-            value = card.body[toks[n_nodes].body_end :].strip() or None
-            instances.append(_SynthInstance(ref=ref, symbol=symbol, nodes=nodes, value=value))
-        elif card.kind in _SYNTH_PASSTHROUGH_KINDS:
-            body = card.body.strip()
-            if body:
-                directives.append(body)
-        elif card.kind == "subckt":
-            warnings.append(
-                f"Subcircuit definition '{card.subckt_name}' not transferred — "
-                "reference it via a .lib/.include directive or add instances manually."
-            )
-        # "ends", "end", "comment" are dropped.
-
-    return instances, directives, skipped, warnings
-
-
-class _PlacedSynthComponent(NamedTuple):
-    """A synthesised component with absolute geometry and pin→net labels."""
-
-    ref: str
-    symbol: str
-    x: int
-    y: int
-    value: str | None
-    labels: list[tuple[str, int, int]]  # (net, x, y)
-
-
-def _round_up_grid(value: int, grid: int = 16) -> int:
-    """Round ``value`` up to the next multiple of ``grid``."""
-    return ((value + grid - 1) // grid) * grid
-
-
-def _layout_synth_components(
-    instances: list[_SynthInstance],
-) -> tuple[list[_PlacedSynthComponent], list[dict], list[str], set[str]]:
-    """Grid-place instances and label each pin with its SPICE node.
-
-    Connectivity is by net label (a FLAG carrying the node name at each pin),
-    not by routed wires — same-named labels are electrically common in
-    LTspice, so the result matches the netlist regardless of geometry. Needs
-    the symbol library (``get_symbol_info``); instances whose symbol is
-    unavailable or whose pin count ≠ node count are returned in ``skipped``.
-
-    Returns ``(placed, skipped, warnings, nets)``.
-    """
-    placed: list[_PlacedSynthComponent] = []
-    skipped: list[dict] = []
-    warnings: list[str] = []
-    nets: set[str] = set()
-
-    # Resolve symbols up front so the grid step can clear the largest symbol.
-    resolved: list[tuple[_SynthInstance, object]] = []
-    max_dim = 96
-    for inst in instances:
-        sym_info = get_symbol_info(inst.symbol)
-        if sym_info is None:
-            skipped.append(
-                {
-                    "ref": inst.ref,
-                    "reason": (
-                        f"symbol '{inst.symbol}' not found in any configured symbol "
-                        "library (no LTspice install / symbol paths?)"
-                    ),
-                }
-            )
-            continue
-        resolved.append((inst, sym_info))
-        max_dim = max(max_dim, sym_info.bbox.width, sym_info.bbox.height)
-
-    if not resolved:
-        return placed, skipped, warnings, nets
-
-    step = max(192, _round_up_grid(max_dim + 96))
-    ncols = max(1, math.ceil(math.sqrt(len(resolved))))
-    origin = 128
-
-    coord_owner: dict[tuple[int, int], str] = {}  # (x,y) → net, to catch collisions
-    for i, (inst, sym_info) in enumerate(resolved):
-        col, row = i % ncols, i // ncols
-        x = origin + col * step
-        y = origin + row * step
-        geo = compute_placed_geometry(sym_info, x, y, "R0")  # type: ignore[arg-type]
-        pins = geo["pins"]
-        if len(pins) != len(inst.nodes):
-            skipped.append(
-                {
-                    "ref": inst.ref,
-                    "reason": (
-                        f"symbol '{inst.symbol}' has {len(pins)} pins but the netlist "
-                        f"gives {len(inst.nodes)} nodes"
-                    ),
-                }
-            )
-            continue
-        labels: list[tuple[str, int, int]] = []
-        ok = True
-        for pin in pins:
-            order = pin["order"]
-            if not 1 <= order <= len(inst.nodes):
-                warnings.append(
-                    f"{inst.ref}: pin '{pin['name']}' has SpiceOrder {order} outside "
-                    f"1..{len(inst.nodes)}; skipped (symbol/netlist arity mismatch)."
-                )
-                ok = False
-                break
-            net = inst.nodes[order - 1]
-            px, py = int(pin["x"]), int(pin["y"])
-            prior = coord_owner.get((px, py))
-            if prior is not None and prior != net:
-                warnings.append(
-                    f"{inst.ref}: pin coordinate ({px},{py}) already carries net "
-                    f"'{prior}' — '{net}' would short to it. Move the component."
-                )
-                ok = False
-                break
-            coord_owner[(px, py)] = net
-            labels.append((net, px, py))
-            nets.add(net)
-        if not ok:
-            # Roll back the partial coordinate registrations for this rejected
-            # component so its pins don't pollute coord_owner and spuriously
-            # block a later component that lands on the same coordinate.
-            for _net, lx, ly in labels:
-                coord_owner.pop((lx, ly), None)
-            skipped.append({"ref": inst.ref, "reason": "pin layout collision; not placed"})
-            continue
-        placed.append(
-            _PlacedSynthComponent(
-                ref=inst.ref, symbol=inst.symbol, x=x, y=y, value=inst.value, labels=labels
-            )
-        )
-
-    return placed, skipped, warnings, nets
-
-
-class SchematicFromNetlistInput(ToolInput):
-    name: str = Field(description="Output file name without the .asc extension")
-    content: str = Field(
-        description=(
-            "SPICE netlist text. Supported elements (R/C/L/V/I/D plus the "
-            "voltage-controlled sources E/G) are placed on a grid and wired by "
-            "net label; per SPICE convention the first non-blank line is treated "
-            "as the deck title and ignored. Directives (.model, .tran, .ac, "
-            ".param, .meas, ...) are carried over verbatim."
-        )
-    )
-    overwrite: bool = Field(
-        default=False,
-        description="Overwrite an existing file at this path. Default is to refuse.",
-    )
-    format: Literal["json", "text"] | None = Field(
-        default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
-    )
-
-
-@registry.tool(
-    name="schematic_from_netlist",
-    description=(
-        "Generate an .asc schematic from SPICE netlist text. Parses the netlist, "
-        "grid-places each supported component (R/C/L/V/I/D and the voltage-"
-        "controlled sources E/G) on its LTspice symbol, and connects pins by net "
-        "label (FLAGs carrying the node name) so the result is electrically "
-        "identical to the netlist — no manual pin-by-pin placement. Directives "
-        "(.model/.tran/.ac/.param/.meas/...) are carried over. Model-polarity "
-        "devices (M, Q, J), subcircuit instances (X), current-controlled sources "
-        "(F, H), and behavioral E/G (Laplace/poly/table/value) can't have their "
-        "symbol inferred from the instance line and are returned in ``skipped`` "
-        "for manual placement. Round-trips through read_circuit. Connection is "
-        "label-based, not routed wires, so the layout is functional rather than "
-        "pretty."
-        " For a circuit whose remaining parts land in `skipped` (M/Q/X/F/H/...), "
-        "build via add_component + connect or apply_schematic_ops; "
-        "see the ltspice://guide resource for layout."
-    ),
-    input_model=SchematicFromNetlistInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=True,
-        idempotentHint=False,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-    output_schema={
-        "type": "object",
-        "properties": {
-            "file": {"type": "string"},
-            "placed": {"type": "integer"},
-            "components": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "reference": {"type": "string"},
-                        "symbol": {"type": "string"},
-                        "position": {
-                            "type": "object",
-                            "properties": {
-                                "x": {"type": "integer"},
-                                "y": {"type": "integer"},
-                            },
-                        },
-                        "value": {"type": ["string", "null"]},
-                    },
-                },
-            },
-            "skipped": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "ref": {"type": "string"},
-                        "reason": {"type": "string"},
-                    },
-                },
-            },
-            "directive_count": {"type": "integer"},
-            "nets": {"type": "array", "items": {"type": "string"}},
-            "warnings": {"type": "array", "items": {"type": "string"}},
-            "validation_warnings": VALIDATION_WARNINGS_SCHEMA,
-        },
-    },
-)
-async def handle_schematic_from_netlist(
-    args: SchematicFromNetlistInput, state: SessionState
-) -> types.CallToolResult:
-    """Build an .asc schematic from SPICE netlist text (label-based wiring)."""
-    target_path = safe_path(f"{args.name}.asc", state)
-
-    instances, directives, skipped, warnings = _parse_netlist_for_synth(args.content)
-    placed, place_skipped, place_warnings, nets = _layout_synth_components(instances)
-    skipped = skipped + place_skipped
-    warnings = warnings + place_warnings
-
-    if not placed and not directives:
-        raise NetlistError(
-            "Nothing to place: no supported components (R/C/L/V/I/D/E/G) and no "
-            "directives were parsed from the netlist. Skipped: "
-            + (", ".join(f"{s['ref']} ({s['reason']})" for s in skipped) or "none")
-        )
-
-    body = "Version 4\nSHEET 1 880 680\n"
-    # Hold the per-path edit lock across the WHOLE existence-check → snapshot →
-    # stub-write → populate → save. The lock is non-reentrant, so we inline
-    # _editing_asc's save/invalidate contract rather than nest it — otherwise a
-    # concurrent edit/reset on the same path could interleave with the overwrite
-    # and corrupt the file or the reset snapshot.
-    async with _get_edit_lock(target_path):
-        pre_existed = target_path.exists()
-        if pre_existed:
-            # overwrite=true on an existing file: snapshot the ORIGINAL bytes
-            # before we clobber them, so reset_schematic restores the
-            # pre-synthesis file rather than the blank stub written below.
-            _snapshot_asc(target_path, state)
-        try:
-            atomic_write_text(target_path, body, overwrite=args.overwrite, durable=False)
-        except FileExistsError as e:
-            raise NetlistError(
-                f"File already exists: {target_path}. Pass overwrite=true to replace it."
-            ) from e
-        # Drop any editor cached from the pre-overwrite content (e.g. a prior
-        # read_circuit) so we populate the fresh blank stub, not stale content.
-        state.editors.invalidate(target_path)
-        try:
-            editor = _get_asc_editor(target_path, state)
-            for comp in placed:
-                _create_component(
-                    editor, comp.ref, comp.symbol, comp.x, comp.y, ERotation.R0, value=comp.value
-                )
-                for net, px, py in comp.labels:
-                    editor.labels.append(
-                        Text(coord=Point(px, py), text=net, type=TextTypeEnum.LABEL)
-                    )
-            # Stack directives below the component grid; coordinates are cosmetic.
-            dir_y = 128 + (max((c.y for c in placed), default=96) - 96) + 256
-            for i, directive in enumerate(directives):
-                editor.directives.append(
-                    Text(
-                        coord=Point(128, dir_y + i * 32),
-                        text=directive,
-                        type=TextTypeEnum.DIRECTIVE,
-                        size=2,
-                    )
-                )
-            validation_warnings = _post_op_warnings(editor)
-            _atomic_save_editor(editor, target_path)
-        finally:
-            state.editors.invalidate(target_path)
-
-    if not pre_existed:
-        # A freshly synthesized file has no pre-session state to revert to —
-        # drop the blank-stub snapshot so reset_schematic reports reverted=False
-        # (matching create_schematic).
-        state.asc_snapshots.pop(str(target_path), None)
-
-    data: dict = {
-        "file": str(target_path),
-        "placed": len(placed),
-        "components": [
-            {
-                "reference": c.ref,
-                "symbol": c.symbol,
-                "position": {"x": c.x, "y": c.y},
-                "value": c.value,
-            }
-            for c in placed
-        ],
-        "skipped": skipped,
-        "directive_count": len(directives),
-        "nets": sorted(nets),
-        "warnings": warnings,
-    }
-    if validation_warnings:
-        data["validation_warnings"] = validation_warnings
-
-    lines = [
-        f"Created schematic from netlist: {target_path}",
-        f"  Placed {len(placed)} component(s), {len(directives)} directive(s), "
-        f"{len(nets)} net(s).",
-    ]
-    if skipped:
-        lines.append(f"  Skipped {len(skipped)} element(s):")
-        for s in skipped:
-            lines.append(f"    {s['ref']}: {s['reason']}")
-    for w in warnings:
-        lines.append(f"  Warning: {w}")
-    lines.extend(_validation_warnings_lines(validation_warnings))
-    return format_response("\n".join(lines), data, args.format)
-
-
 class TraceNetInput(ToolInput):
     path: str = Field(description="Path to an .asc schematic")
     pin: str | None = Field(
@@ -3624,8 +3147,8 @@ class TraceNetInput(ToolInput):
         "('Ref.Pin'), a net label ('net:NAME'), or an (x,y) coordinate, return the "
         "net's labels and every component pin, FLAG, and wire vertex on it. "
         "Follows both wires (segment-aware — catches labels placed mid-wire) and "
-        "same-name FLAGs (LTspice's name-based nets, as produced by "
-        "schematic_from_netlist). Use it to answer 'what's on net X', to confirm "
+        "same-name FLAGs (LTspice's name-based nets). Use it to answer 'what's on "
+        "net X', to confirm "
         "a connect landed, or to spot an accidental short (a net carrying two "
         "different non-ground labels)."
     ),
@@ -3671,7 +3194,7 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
 
     if args.pin is not None and args.pin.startswith("net:"):
         # A net: reference legitimately matches many same-name FLAGs — the
-        # normal case on schematic_from_netlist output (one FLAG per pin).
+        # normal case on label-wired schematics (one FLAG per pin).
         # _resolve_pin refuses ambiguous net labels, but trace_net's own
         # name-merge step below absorbs duplicates, so just seed from any
         # matching label coordinate (lowest, for determinism).
@@ -3706,8 +3229,8 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
     # The physical partition connects by wire only; LTspice also makes FLAGs
     # with the same NAME electrically common. Fold physical nets that share a
     # label name together (a second union-find over physical roots) so
-    # trace_net answers "what's on net X" on label-wired schematics (e.g.
-    # schematic_from_netlist output), not just wire-routed ones.
+    # trace_net answers "what's on net X" on label-wired schematics,
+    # not just wire-routed ones.
     root_parent: dict[tuple[int, int], tuple[int, int]] = {}
 
     def _rfind(r: tuple[int, int]) -> tuple[int, int]:
@@ -4603,6 +4126,26 @@ class _OpConnect(StrictModel):
     waypoints: list[WaypointInput] = Field(default_factory=list)
 
 
+class _OpRemoveNetLabel(StrictModel):
+    op: Literal["remove_net_label"]
+    pin: str | None = None
+    x: int | None = None
+    y: int | None = None
+
+
+class _OpRemoveWire(StrictModel):
+    op: Literal["remove_wire"]
+    # Exact-segment form: all four endpoints (either direction).
+    x1: int | None = None
+    y1: int | None = None
+    x2: int | None = None
+    y2: int | None = None
+    # Incident-point form: every segment touching this coordinate.
+    pin: str | None = None
+    x: int | None = None
+    y: int | None = None
+
+
 class _OpAddDirective(StrictModel):
     op: Literal["add_directive"]
     instruction: str
@@ -4619,6 +4162,8 @@ SchematicOp = (
     | _OpRemoveComponent
     | _OpMoveComponent
     | _OpAddNetLabel
+    | _OpRemoveNetLabel
+    | _OpRemoveWire
     | _OpConnect
     | _OpAddDirective
 )
@@ -4643,6 +4188,17 @@ class ApplySchematicOpsInput(ToolInput):
             "did succeed — set false only when failures are recoverable."
         ),
     )
+
+
+def _resolve_op_xy(
+    op: "_OpAddNetLabel | _OpRemoveNetLabel | _OpRemoveWire", editor: AscEditor
+) -> tuple[int, int]:
+    """Resolve an op's ``pin`` | ``x,y`` point locator to a coordinate."""
+    if op.pin is not None:
+        return _resolve_pin(op.pin, editor)
+    if op.x is not None and op.y is not None:
+        return op.x, op.y
+    raise NetlistError(f"{op.op} needs either pin or both x and y.")
 
 
 def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dict[str, object]:
@@ -4701,14 +4257,18 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
             editor, op.reference
         )
         editor.remove_component(op.reference)
+        rm_result: dict[str, object] = {"op": "remove_component", "reference": op.reference}
         if op.cleanup_wires and target_only:
-            editor.wires = [
-                w
-                for w in editor.wires
-                if (int(w.V1.X), int(w.V1.Y)) not in target_only
-                and (int(w.V2.X), int(w.V2.Y)) not in target_only
-            ]
-        return {"op": "remove_component", "reference": op.reference}
+            rm_result["deleted_wires"] = _drop_wires_at(editor, target_only)
+        elif target_only:
+            # Same orphaned-wire warning the standalone handler surfaces.
+            orphaned = _orphaned_wire_coords(editor, target_only)
+            if orphaned:
+                rm_result["warnings"] = [
+                    f"orphaned wires remain at: {', '.join(orphaned)}. "
+                    "Re-run with cleanup_wires=true to delete them."
+                ]
+        return rm_result
 
     if isinstance(op, _OpMoveComponent):
         if op.reference not in editor.components:
@@ -4718,18 +4278,63 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
             if op.rotation is not None
             else editor.get_component_position(op.reference)[1]
         )
+        old_pins = _component_pin_coords(editor, op.reference)
+        other_pins = _other_components_pin_coords(editor, op.reference)
         editor.set_component_position(op.reference, Point(op.x, op.y), new_rot)
-        return {"op": "move_component", "reference": op.reference}
+        # Same bbox-overlap + orphaned-wire warnings as the standalone handler.
+        mv_warnings = _move_component_warnings(
+            editor, op.reference, new_rot.name, op.x, op.y, old_pins, other_pins
+        )
+        mv_result: dict[str, object] = {"op": "move_component", "reference": op.reference}
+        if mv_warnings:
+            mv_result["warnings"] = mv_warnings
+        return mv_result
 
     if isinstance(op, _OpAddNetLabel):
-        if op.pin is not None:
-            x, y = _resolve_pin(op.pin, editor)
-        elif op.x is not None and op.y is not None:
-            x, y = op.x, op.y
-        else:
-            raise NetlistError("add_net_label needs either pin or both x and y.")
+        x, y = _resolve_op_xy(op, editor)
+        # Same short-refusal + duplicate/floating warnings as the standalone
+        # handler — the op is the public path, so it enforces the same rules.
+        warnings = _add_net_label_checks(editor, op.net, x, y)
         editor.labels.append(Text(coord=Point(x, y), text=op.net, type=TextTypeEnum.LABEL))
-        return {"op": "add_net_label", "net": op.net, "x": x, "y": y}
+        result: dict[str, object] = {"op": "add_net_label", "net": op.net, "x": x, "y": y}
+        if warnings:
+            result["warnings"] = warnings
+        return result
+
+    if isinstance(op, _OpRemoveNetLabel):
+        x, y = _resolve_op_xy(op, editor)
+        before = len(editor.labels)
+        editor.labels = [
+            lbl for lbl in editor.labels if not (int(lbl.coord.X) == x and int(lbl.coord.Y) == y)
+        ]
+        removed = before - len(editor.labels)
+        if removed == 0:
+            raise NetlistError(f"No net label found at ({x},{y}).")
+        return {"op": "remove_net_label", "x": x, "y": y, "removed": removed}
+
+    if isinstance(op, _OpRemoveWire):
+        before = len(editor.wires)
+        if all(v is not None for v in (op.x1, op.y1, op.x2, op.y2)):
+            # Exact-segment form: drop the matching segment in either direction.
+            seg = ((op.x1, op.y1), (op.x2, op.y2))
+            rev = ((op.x2, op.y2), (op.x1, op.y1))
+            editor.wires = [
+                w
+                for w in editor.wires
+                if ((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) not in (seg, rev)
+            ]
+        elif op.pin is not None or (op.x is not None and op.y is not None):
+            # Incident-point form: drop every segment touching the coordinate.
+            _drop_wires_at(editor, {_resolve_op_xy(op, editor)})
+        else:
+            raise NetlistError(
+                "remove_wire needs either all of x1,y1,x2,y2 (a segment) or a "
+                "pin / both x and y (a point)."
+            )
+        removed = before - len(editor.wires)
+        if removed == 0:
+            raise NetlistError("No matching wire segment found to remove.")
+        return {"op": "remove_wire", "removed": removed}
 
     if isinstance(op, _OpConnect):
         plan = _plan_connect_route(editor, op.from_pin, op.to_pin, op.waypoints)
@@ -4767,11 +4372,14 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
         "runs each op against the in-memory editor in order, and saves once at "
         "the end. Cuts the typical 25+ tool calls to build a real circuit "
         "(add_component × N + connect × N + add_net_label × N + edit_directive "
-        "× N) down to a single round-trip.\n\n"
+        "× N) down to a single round-trip. This is also the home for the "
+        "ack-only schematic mutations that have no standalone tool — they return "
+        "no geometry to act on, so they live here rather than each costing a "
+        "separate tool slot.\n\n"
         "Supported ops (each tagged via the ``op`` field): ``add_component``, "
         "``set_component_value``, ``set_component_attribute``, "
         "``remove_component``, ``move_component``, ``add_net_label``, "
-        "``connect``, ``add_directive``.\n\n"
+        "``remove_net_label``, ``remove_wire``, ``connect``, ``add_directive``.\n\n"
         "By default, the first op that raises aborts the whole transaction "
         "and nothing is written to disk. Set ``stop_on_error=false`` to run "
         "every op and persist whatever subset succeeded — useful when each op "

@@ -90,6 +90,7 @@ REMOVED_TOOL_NAMES = (
     "find_crossing",
     "get_measurements",
     "get_simulation_summary",
+    "schematic_from_netlist",
 )
 
 
