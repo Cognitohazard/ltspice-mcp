@@ -98,9 +98,6 @@ class TestToolProfiles:
             "edit_directive",
             "configure_sweep",
             "configure_montecarlo",
-            "remove_component",
-            "move_component",
-            "set_component_attribute",
             "load_library",
             "unload_library",
             "list_libraries",
@@ -108,6 +105,42 @@ class TestToolProfiles:
         _, handlers = get_tools_for_profile("agentic")
         present = filtered_out & set(handlers.keys())
         assert not present, f"Tools that should be filtered out are present: {present}"
+
+    def test_schematic_construction_writes_in_agentic(self):
+        """The schematic-construction writes stay in agentic: geometry-aware
+        .asc editing (orthogonal routing, pin-collision/junction checks) is
+        something an agent can't replicate by hand-writing the file, so it must
+        not be dropped from the agent-facing profile."""
+        construction = {
+            "create_schematic",
+            "add_component",
+            "move_component",
+            "remove_component",
+            "set_component_attribute",
+            "apply_schematic_ops",
+        }
+        _, handlers = get_tools_for_profile("agentic")
+        missing = construction - set(handlers.keys())
+        assert not missing, f"Construction writes missing from agentic: {missing}"
+
+
+class TestDestructiveAnnotations:
+    """A tool's destructiveHint is what an MCP client gates write-risk on. A
+    batch writer that can delete or overwrite must not advertise itself as
+    non-destructive — especially now that the schematic writes are in the
+    agent-facing profile."""
+
+    def test_component_removing_tools_are_destructive(self):
+        defs, _ = get_tools_for_profile("full")
+        by_name = {d.name: d for d in defs}
+        for name in ("remove_component", "create_schematic", "apply_schematic_ops"):
+            tool = by_name[name]
+            assert tool.annotations is not None
+            assert tool.annotations.destructiveHint is True, f"{name} not marked destructive"
+        # apply_schematic_ops earns the hint because its batch can run
+        # remove_component (and persist a partial subset); keep the two tied so
+        # the hint can't silently rot if that op is ever dropped.
+        assert "remove_component" in (by_name["apply_schematic_ops"].description or "")
 
 
 def _assert_no_key_at_depth(node, key: str, tool_name: str, path: str) -> None:

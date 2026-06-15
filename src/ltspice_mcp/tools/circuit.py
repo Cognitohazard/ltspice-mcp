@@ -1964,7 +1964,7 @@ def _strip_matching_comments(editor, matcher) -> bool:
         idempotentHint=False,
         openWorldHint=False,
     ),
-    profiles=("full",),
+    profiles=("full", "agentic"),
 )
 async def handle_remove_component(
     args: RemoveComponentInput, state: SessionState
@@ -2037,7 +2037,7 @@ async def handle_remove_component(
         idempotentHint=False,
         openWorldHint=False,
     ),
-    profiles=("full",),
+    profiles=("full", "agentic"),
 )
 async def handle_move_component(
     args: MoveComponentInput, state: SessionState
@@ -2135,7 +2135,7 @@ async def handle_move_component(
         idempotentHint=True,
         openWorldHint=False,
     ),
-    profiles=("full",),
+    profiles=("full", "agentic"),
 )
 async def handle_set_component_attribute(
     args: SetComponentAttributeInput, state: SessionState
@@ -2182,7 +2182,7 @@ async def handle_set_component_attribute(
         idempotentHint=False,
         openWorldHint=False,
     ),
-    profiles=("full",),
+    profiles=("full", "agentic"),
     output_schema={
         "type": "object",
         "properties": {
@@ -3109,7 +3109,7 @@ class CreateSchematicInput(ToolInput):
         idempotentHint=False,
         openWorldHint=False,
     ),
-    profiles=("full",),
+    profiles=("full", "agentic"),
 )
 async def handle_create_schematic(
     args: CreateSchematicInput, state: SessionState
@@ -3141,20 +3141,30 @@ async def handle_create_schematic(
     )
 
 
-# SPICE element prefix → standard LTspice 2-terminal symbol. These six have
-# unambiguous standard symbols and a fixed 2-node arity, so the netlist
-# round-trips exactly. Multi-terminal / model-polarity devices (M/Q/J),
-# subcircuit instances (X), and controlled sources are intentionally left
-# for manual placement (reported as ``skipped``) — their symbol and polarity
-# can't be inferred from the instance line alone.
-_SYNTH_SYMBOL_MAP: dict[str, str] = {
-    "R": "res",
-    "C": "cap",
-    "L": "ind",
-    "V": "voltage",
-    "I": "current",
-    "D": "diode",
+# SPICE element prefix → (LTspice symbol, fixed node count). These have
+# unambiguous standard symbols and a fixed arity, so the netlist round-trips
+# exactly: the six 2-terminal passives/sources, plus the voltage-controlled
+# sources E (VCVS) and G (VCCS), whose four nodes map to the symbol pins by
+# SpiceOrder. Model-polarity devices (M/Q/J), subcircuit instances (X), and the
+# current-controlled sources (F/H — they reference a source name, not control
+# nodes) are intentionally left for manual placement (reported as ``skipped``)
+# — their symbol/polarity can't be inferred from the instance line alone.
+_SYNTH_SYMBOL_MAP: dict[str, tuple[str, int]] = {
+    "R": ("res", 2),
+    "C": ("cap", 2),
+    "L": ("ind", 2),
+    "V": ("voltage", 2),
+    "I": ("current", 2),
+    "D": ("diode", 2),
+    "E": ("e", 4),  # VCVS: out+ out- ctrl+ ctrl- gain
+    "G": ("g", 4),  # VCCS: out+ out- ctrl+ ctrl- transconductance
 }
+
+# Characters a SPICE node name can never contain — the same set the validator
+# uses to spot value syntax (POLY(...), value={...}, Laplace {...}) that spilled
+# into a node slot. A behavioral E/G carries one of these where a control node
+# would be, so it isn't a plain N-node device and is left for manual placement.
+_SYNTH_NON_NODE_CHARS = "(){}=\"'"
 
 # Directive card kinds passed through verbatim into the .asc as SPICE
 # directive text. ``subckt``/``ends`` block delimiters and the ``end``
@@ -3164,11 +3174,11 @@ _SYNTH_PASSTHROUGH_KINDS = frozenset({"directive", "model", "param", "meas"})
 
 
 class _SynthInstance(NamedTuple):
-    """A 2-terminal element parsed from a netlist, ready for placement."""
+    """An element parsed from a netlist, ready for placement (2- or 4-terminal)."""
 
     ref: str
     symbol: str
-    nodes: tuple[str, str]
+    nodes: tuple[str, ...]
     value: str | None
 
 
@@ -3214,8 +3224,8 @@ def _parse_netlist_for_synth(
         if card.kind == "instance":
             ref = card.instance_ref or ""
             prefix = ref[:1].upper()
-            symbol = _SYNTH_SYMBOL_MAP.get(prefix)
-            if symbol is None:
+            entry = _SYNTH_SYMBOL_MAP.get(prefix)
+            if entry is None:
                 skipped.append(
                     {
                         "ref": ref,
@@ -3226,6 +3236,7 @@ def _parse_netlist_for_synth(
                     }
                 )
                 continue
+            symbol, n_nodes = entry
             try:
                 toks = tokenize_body(card.body)
             except SpiceLexError as e:
@@ -3236,19 +3247,31 @@ def _parse_netlist_for_synth(
                 # "internal error", mirroring the guarded sites elsewhere.
                 skipped.append({"ref": ref, "reason": f"could not tokenize element body: {e}"})
                 continue
-            if len(toks) < 3:
+            if len(toks) < n_nodes + 1:
                 skipped.append(
                     {
                         "ref": ref,
-                        "reason": "fewer than two nodes; cannot place a 2-terminal symbol",
+                        "reason": f"fewer than {n_nodes} nodes; cannot place a {symbol} symbol",
                     }
                 )
                 continue
-            node1, node2 = toks[1].text, toks[2].text
-            value = card.body[toks[2].body_end :].strip() or None
-            instances.append(
-                _SynthInstance(ref=ref, symbol=symbol, nodes=(node1, node2), value=value)
-            )
+            nodes = tuple(t.text for t in toks[1 : n_nodes + 1])
+            # A controlled source in a behavioral/expression form (Laplace/poly/
+            # table/value=) has value syntax where a control node would be — not
+            # a plain 4-node VCVS/VCCS, so leave it for manual placement.
+            if n_nodes > 2 and any(ch in tok for tok in nodes for ch in _SYNTH_NON_NODE_CHARS):
+                skipped.append(
+                    {
+                        "ref": ref,
+                        "reason": (
+                            "behavioral/expression controlled source "
+                            "(Laplace/poly/table/value); place manually"
+                        ),
+                    }
+                )
+                continue
+            value = card.body[toks[n_nodes].body_end :].strip() or None
+            instances.append(_SynthInstance(ref=ref, symbol=symbol, nodes=nodes, value=value))
         elif card.kind in _SYNTH_PASSTHROUGH_KINDS:
             body = card.body.strip()
             if body:
@@ -3386,10 +3409,11 @@ class SchematicFromNetlistInput(ToolInput):
     name: str = Field(description="Output file name without the .asc extension")
     content: str = Field(
         description=(
-            "SPICE netlist text. Supported elements (R/C/L/V/I/D) are placed on a "
-            "grid and wired by net label; per SPICE convention the first non-blank "
-            "line is treated as the deck title and ignored. Directives (.model, "
-            ".tran, .ac, .param, .meas, ...) are carried over verbatim."
+            "SPICE netlist text. Supported elements (R/C/L/V/I/D plus the "
+            "voltage-controlled sources E/G) are placed on a grid and wired by "
+            "net label; per SPICE convention the first non-blank line is treated "
+            "as the deck title and ignored. Directives (.model, .tran, .ac, "
+            ".param, .meas, ...) are carried over verbatim."
         )
     )
     overwrite: bool = Field(
@@ -3406,17 +3430,19 @@ class SchematicFromNetlistInput(ToolInput):
     name="schematic_from_netlist",
     description=(
         "Generate an .asc schematic from SPICE netlist text. Parses the netlist, "
-        "grid-places each supported component (R/C/L/V/I/D) on its LTspice symbol, "
-        "and connects pins by net label (FLAGs carrying the node name) so the "
-        "result is electrically identical to the netlist — no manual pin-by-pin "
-        "placement. Directives (.model/.tran/.ac/.param/.meas/...) are carried over. "
-        "Multi-terminal / controlled / subcircuit elements (M, Q, J, X, E, G, F, H) "
-        "can't have their symbol inferred from the instance line and are returned "
-        "in ``skipped`` for manual placement. Round-trips through read_circuit. "
-        "Connection is label-based, not routed wires, so the layout is functional "
-        "rather than pretty."
-        " For a circuit whose active/multi-terminal parts land in `skipped` "
-        "(E/G/M/Q/X/...), build via add_component + connect or apply_schematic_ops; "
+        "grid-places each supported component (R/C/L/V/I/D and the voltage-"
+        "controlled sources E/G) on its LTspice symbol, and connects pins by net "
+        "label (FLAGs carrying the node name) so the result is electrically "
+        "identical to the netlist — no manual pin-by-pin placement. Directives "
+        "(.model/.tran/.ac/.param/.meas/...) are carried over. Model-polarity "
+        "devices (M, Q, J), subcircuit instances (X), current-controlled sources "
+        "(F, H), and behavioral E/G (Laplace/poly/table/value) can't have their "
+        "symbol inferred from the instance line and are returned in ``skipped`` "
+        "for manual placement. Round-trips through read_circuit. Connection is "
+        "label-based, not routed wires, so the layout is functional rather than "
+        "pretty."
+        " For a circuit whose remaining parts land in `skipped` (M/Q/X/F/H/...), "
+        "build via add_component + connect or apply_schematic_ops; "
         "see the ltspice://guide resource for layout."
     ),
     input_model=SchematicFromNetlistInput,
@@ -3480,7 +3506,7 @@ async def handle_schematic_from_netlist(
 
     if not placed and not directives:
         raise NetlistError(
-            "Nothing to place: no supported components (R/C/L/V/I/D) and no "
+            "Nothing to place: no supported components (R/C/L/V/I/D/E/G) and no "
             "directives were parsed from the netlist. Skipped: "
             + (", ".join(f"{s['ref']} ({s['reason']})" for s in skipped) or "none")
         )
@@ -4756,11 +4782,14 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
     input_model=ApplySchematicOpsInput,
     annotations=types.ToolAnnotations(
         readOnlyHint=False,
-        destructiveHint=False,
+        # Destructive: the batch can include remove_component (and, with
+        # stop_on_error=false, persist a partial subset), so it carries the same
+        # hint as the standalone remove_component a client would gate on.
+        destructiveHint=True,
         idempotentHint=False,
         openWorldHint=False,
     ),
-    profiles=("full",),
+    profiles=("full", "agentic"),
     output_schema={
         "type": "object",
         "properties": {

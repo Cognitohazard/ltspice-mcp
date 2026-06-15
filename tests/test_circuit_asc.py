@@ -502,6 +502,17 @@ def _has_segment(
     return (a, b) in segments or (b, a) in segments
 
 
+def _flag_records(asc_path: Path) -> list[tuple[tuple[int, int], str]]:
+    """Parse FLAG (net-label / ground) records from an .asc as ((x, y), net)."""
+    text = asc_path.read_bytes().decode("utf-8", errors="replace")
+    flags: list[tuple[tuple[int, int], str]] = []
+    for line in text.splitlines():
+        if line.startswith("FLAG"):
+            _, x, y, net = line.split(maxsplit=3)
+            flags.append(((int(x), int(y)), net))
+    return flags
+
+
 # Absolute pin positions expected for the fixture nmos symbol (pin offsets
 # D=(0,-96), G=(-48,0), S=(0,96)) placed at (400, 200), hand-computed from the
 # LTspice orientation transforms (y axis points down; R90 maps (x, y) to
@@ -613,6 +624,83 @@ class TestConnectPersistsWires:
         after = _wire_segments(asc)
         assert len(after) == len(before) + sc["wire_count"]
         assert _has_segment(after, (200, 248), (200, 352)), after
+
+
+@pytest.mark.asyncio
+class TestSchematicReadability:
+    """Readability eval for a schematic built the way the guide recommends:
+    apply_schematic_ops + connect for the signal path, add_net_label only for
+    the ground/global nets. The result must come out WIRED — not 'net-label
+    soup', where every component pin floats on its own same-named FLAG and there
+    are no wires. This is the regression guard for the blind spot that let a
+    label-only build ship: the signal junctions have to be real WIRE records,
+    and net labels stay scoped to the terminal nets.
+    """
+
+    async def test_built_schematic_is_wired_not_label_soup(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        from ltspice_mcp.tools.circuit import CreateSchematicInput, handle_create_schematic
+
+        await handle_create_schematic(CreateSchematicInput(name="readable"), asc_state)
+        # A 3-resistor chain stacked on x=200: the two internal junctions are
+        # wired by connect; only the two terminal nets (in, ground) get a label.
+        # Fixture res pins: 1=(0,-48), 2=(0,48), so Rn at (200, y) has pins at
+        # (200, y-48) and (200, y+48).
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="readable.asc",
+                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
+                    {
+                        "op": "add_component",
+                        "reference": "R1",
+                        "symbol": "res",
+                        "x": 200,
+                        "y": 200,
+                    },
+                    {
+                        "op": "add_component",
+                        "reference": "R2",
+                        "symbol": "res",
+                        "x": 200,
+                        "y": 400,
+                    },
+                    {
+                        "op": "add_component",
+                        "reference": "R3",
+                        "symbol": "res",
+                        "x": 200,
+                        "y": 600,
+                    },
+                    {"op": "connect", "from_pin": "R1.2", "to_pin": "R2.1"},
+                    {"op": "connect", "from_pin": "R2.2", "to_pin": "R3.1"},
+                    {"op": "add_net_label", "net": "in", "pin": "R1.1"},
+                    {"op": "add_net_label", "net": "0", "pin": "R3.2"},
+                ],
+            ),
+            asc_state,
+        )
+        assert result.structuredContent is not None
+        assert result.structuredContent["failed_count"] == 0
+        assert result.structuredContent["saved"] is True
+
+        asc = work_dir / "readable.asc"
+        wires = _wire_segments(asc)
+        flags = _flag_records(asc)
+        flag_coords = {coord for coord, _net in flags}
+
+        # The signal path is WIRED: both internal junctions are real segments.
+        assert _has_segment(wires, (200, 248), (200, 352)), wires  # R1.2 - R2.1
+        assert _has_segment(wires, (200, 448), (200, 552)), wires  # R2.2 - R3.1
+
+        # Net labels are scoped to the two terminal nets, placed at the terminal
+        # pins — not one FLAG per junction.
+        assert sorted(net for _coord, net in flags) == ["0", "in"]
+        assert flag_coords == {(200, 152), (200, 648)}  # R1.1 (in), R3.2 (gnd)
+
+        # The anti-soup invariant: no internal junction is realized as a label.
+        for junction in ((200, 248), (200, 352), (200, 448), (200, 552)):
+            assert junction not in flag_coords, f"junction {junction} labeled, not wired"
 
 
 @pytest.mark.asyncio
@@ -1207,6 +1295,41 @@ class TestParseNetlistForSynth:
         assert {i.ref for i in instances} == {"V1", "R1", "C1"}
         assert not any("title" in w.lower() for w in warnings)
 
+    def test_vcvs_four_nodes_and_gain(self):
+        # E (VCVS): out+ out- ctrl+ ctrl- gain. All four nodes are captured and
+        # the trailing gain becomes the value; the symbol is the LTspice 'e'.
+        instances, _, skipped, _ = _parse_netlist_for_synth(
+            "* t\nE1 out 0 in 0 10\nR1 out 0 1k\n.end\n"
+        )
+        e1 = next(i for i in instances if i.ref == "E1")
+        assert e1.symbol == "e"
+        assert e1.nodes == ("out", "0", "in", "0")
+        assert e1.value == "10"
+        assert not skipped
+
+    def test_vccs_four_nodes_parsed(self):
+        instances, *_ = _parse_netlist_for_synth("* t\nG1 o 0 c 0 1m\n.end\n")
+        g1 = next(i for i in instances if i.ref == "G1")
+        assert g1.symbol == "g"
+        assert g1.nodes == ("o", "0", "c", "0")
+        assert g1.value == "1m"
+
+    def test_behavioral_controlled_source_skipped(self):
+        # POLY/Laplace/value= forms aren't plain 4-node devices — auto-placing
+        # one would label keyword/expression text as a net, so they are skipped.
+        instances, _, skipped, _ = _parse_netlist_for_synth(
+            "* t\nE1 out 0 POLY(1) cn 0 0 1e3\nR1 out 0 1k\n.end\n"
+        )
+        assert {i.ref for i in instances} == {"R1"}
+        assert any(s["ref"] == "E1" for s in skipped)
+
+    def test_vcvs_too_few_nodes_skipped(self):
+        # E with only two nodes can't be a controlled source — skipped, not
+        # mis-placed as a 2-terminal part.
+        instances, _, skipped, _ = _parse_netlist_for_synth("* t\nE1 out 0 5\n.end\n")
+        assert not instances
+        assert any(s["ref"] == "E1" for s in skipped)
+
 
 # Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
@@ -1267,6 +1390,34 @@ class TestSchematicFromNetlist:
         sc = res.structuredContent
         assert sc["placed"] == 2  # R1, C1
         assert any(s["ref"] == "M1" for s in sc["skipped"])
+
+    async def test_places_vcvs_controlled_source(self, asc_state: SessionState):
+        # A plain 4-node VCVS is auto-placed on the 'e' symbol (not skipped), so
+        # an active circuit gets a one-shot netlist→.asc path. Its four nodes are
+        # labeled by SpiceOrder and the gain round-trips as the component value.
+        content = (
+            "* vcvs amp\n"
+            "V1 in 0 AC 1\n"
+            "R1 in n1 1k\n"
+            "E1 out 0 n1 0 10\n"
+            "Rl out 0 1Meg\n"
+            ".ac dec 10 1 100k\n"
+            ".end\n"
+        )
+        res = await handle_schematic_from_netlist(
+            SchematicFromNetlistInput(name="synth_vcvs", content=content, overwrite=True),
+            asc_state,
+        )
+        assert res.structuredContent is not None
+        sc = res.structuredContent
+        assert sc["placed"] == 4  # V1, R1, E1, Rl
+        assert not sc["skipped"]
+        assert {"in", "0", "n1", "out"} <= set(sc["nets"])
+
+        read = await handle_read_circuit(CircuitReadInput(path="synth_vcvs.asc"), asc_state)
+        rsc = read.structuredContent
+        assert "E1" in {c["reference"] for c in rsc["components"]}
+        assert {c["reference"]: c["value"] for c in rsc["components"]}["E1"] == "10"
 
     async def test_refuses_overwrite_by_default(self, asc_state: SessionState, work_dir: Path):
         await handle_schematic_from_netlist(
