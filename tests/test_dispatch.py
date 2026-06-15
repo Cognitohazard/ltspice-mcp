@@ -1,10 +1,12 @@
 """Tests for tool dispatch, schema validation, and profile filtering."""
 
 import json
+import typing
 
 from pydantic import ValidationError
 
 from ltspice_mcp.tools import get_tools_for_profile
+from ltspice_mcp.tools.circuit import SchematicOp
 
 
 class TestDispatchTable:
@@ -138,6 +140,172 @@ class TestDestructiveAnnotations:
         # remove_component op (and persist a partial subset); keep the two tied
         # so the hint can't silently rot if that op is ever dropped.
         assert "remove_component" in (by_name["apply_schematic_ops"].description or "")
+
+
+# A self-inverse op reverts itself: re-applying it with the prior arguments
+# undoes the change (move it back, re-set the old value). Distinct from a paired
+# inverse, which is a *different* op. The reversal holds when the prior state
+# existed to restore — re-setting a value/position that was already there. It
+# does not reconstruct a slot that was previously absent (setting an attribute
+# that did not exist captures no prior value); reset_schematic is the recovery
+# hatch for that residual. This table guards that an undo *capability* exists,
+# not that every edit round-trips byte-for-byte.
+_SELF_INVERSE = "<self>"
+
+# Declared inverse for every schematic op. This table is a forcing function, not
+# documentation: a new add_*/connect/create op with no entry fails
+# test_every_op_has_a_declared_inverse, so shipping a one-way mutation becomes a
+# reviewed decision instead of an accident. The schematic editor once shipped
+# add_net_label without remove_net_label and connect without remove_wire — both
+# invisible to happy-path stress tests because a missing capability has no code
+# path to walk. This suite walks the op *surface* instead, where absence shows.
+_DECLARED_INVERSES: dict[str, str] = {
+    "add_component": "remove_component",
+    "remove_component": "add_component",
+    "add_net_label": "remove_net_label",
+    "remove_net_label": "add_net_label",
+    "connect": "remove_wire",
+    "remove_wire": "connect",
+    "add_directive": "remove_directive",
+    "remove_directive": "add_directive",
+    "set_component_value": _SELF_INVERSE,
+    "set_component_attribute": _SELF_INVERSE,
+    "move_component": _SELF_INVERSE,
+}
+
+
+def _schematic_op_literals() -> set[str]:
+    """The ``op`` discriminator strings in the SchematicOp union, derived from
+    the union itself so the test cannot silently miss a newly added op."""
+    literals: set[str] = set()
+    for member in typing.get_args(SchematicOp):
+        (literal,) = typing.get_args(member.model_fields["op"].annotation)
+        literals.add(literal)
+    return literals
+
+
+class TestOpInverseClosure:
+    """The schematic-editing OP surface must be closed under inversion: for every
+    op that mutates the .asc, an inverse op exists (or it is self-inverse). This
+    is a SURFACE guard — it asserts an undo *capability* exists, not that state
+    round-trips byte-for-byte (e.g. remove_component(cleanup_wires=true) drops
+    wires add_component will not restore; reset_schematic is the recovery hatch
+    for those). It is scoped to the apply_schematic_ops op union; the standalone
+    mutating tools are guarded separately by TestMutatingToolsAreReversible.
+    Absence-class gaps have no happy path to stress-test, so a missing inverse
+    ships silently (as remove_wire/remove_net_label once did) — asserting the
+    property over the op union catches it the moment the asymmetry lands."""
+
+    def test_every_op_has_a_declared_inverse(self):
+        """Each op in the union must classify its inverse in _DECLARED_INVERSES.
+        A new op with no entry fails here, forcing the author to add an inverse
+        op (or declare it self-inverse) rather than ship a one-way mutation."""
+        undeclared = _schematic_op_literals() - _DECLARED_INVERSES.keys()
+        assert not undeclared, (
+            f"Schematic ops with no declared inverse: {sorted(undeclared)}. "
+            "Add an inverse op to the SchematicOp union (mirroring "
+            "remove_wire/remove_net_label) and register the pair in "
+            "_DECLARED_INVERSES, or map it to _SELF_INVERSE if re-applying it "
+            "with the prior arguments undoes it."
+        )
+
+    def test_no_stale_inverse_entries(self):
+        """_DECLARED_INVERSES must not name ops that no longer exist — a stale
+        entry would hide a real op that has lost its inverse."""
+        stale = _DECLARED_INVERSES.keys() - _schematic_op_literals()
+        assert not stale, f"_DECLARED_INVERSES names ops not in the union: {sorted(stale)}"
+
+    def test_paired_inverses_exist_in_the_union(self):
+        """Every named (non-self) inverse must be a real op in the union — the
+        check that would have failed on add_net_label-without-remove_net_label
+        and connect-without-remove_wire."""
+        ops = _schematic_op_literals()
+        for op, inverse in _DECLARED_INVERSES.items():
+            if inverse == _SELF_INVERSE:
+                continue
+            assert inverse in ops, (
+                f"Op {op!r} declares inverse {inverse!r}, but no such op exists "
+                "in the SchematicOp union — the mutation is one-way."
+            )
+
+    def test_pairings_are_symmetric(self):
+        """If A's inverse is B, B's inverse must be A — a one-directional pairing
+        means one of the two directions is actually unhandled."""
+        for op, inverse in _DECLARED_INVERSES.items():
+            if inverse == _SELF_INVERSE:
+                continue
+            assert _DECLARED_INVERSES.get(inverse) == op, (
+                f"Asymmetric pairing: {op!r} -> {inverse!r}, but {inverse!r} -> "
+                f"{_DECLARED_INVERSES.get(inverse)!r}."
+            )
+
+
+# Every registered tool that can mutate state must have a reversal path, or be a
+# deliberately-accepted one-way mutation. Like _DECLARED_INVERSES, this is a
+# forcing function: a NEW mutating tool (a future delete_component, rename, ...)
+# added with @registry.tool and no entry here fails the test, so a one-way tool
+# becomes a reviewed decision instead of a silent absence-class gap. This is the
+# coverage the op-union closure alone lacks — a standalone mutate tool lives
+# outside the SchematicOp union. Each entry names how the mutation is undone, or
+# why a one-way mutation is accepted (see docs/TESTING.md).
+_TOOL_REVERSAL: dict[str, str] = {
+    # Schematic op batch — per-op closure guarded by TestOpInverseClosure.
+    "apply_schematic_ops": "per-op inverse (see TestOpInverseClosure)",
+    # Schematic standalone writes whose inverse is an apply_schematic_ops op.
+    "add_component": "remove_component op",
+    "connect": "remove_wire op",
+    # Self-inverse standalone edits (re-invoke with the prior value/state).
+    "set_component_value": "re-set to prior value",
+    "parameter": "re-set to prior value",
+    "edit_directive": "action=add <-> action=remove",
+    # Recovery hatch — reset_schematic IS the inverse mechanism for .asc edits.
+    "reset_schematic": "reverts to the pre-edit snapshot (it is the undo)",
+    # Accepted one-way mutations (documented in docs/TESTING.md).
+    "create_netlist": "creates a file; deletion is a native filesystem op",
+    "create_schematic": "creates a file; deletion is a native filesystem op",
+    "configure_sweep": "overwrite-in-place config; a stale config is inert",
+    "configure_montecarlo": "overwrite-in-place config; a stale config is inert",
+    # Job lifecycle — not a file mutation; cancel / re-launch via the registry.
+    "run_simulation": "cancel_job; re-launch",
+    "run_sweep": "cancel_job; re-launch",
+    "run_montecarlo": "cancel_job; re-launch",
+    "cancel_job": "re-launch the run",
+    # Library session — paired load/unload.
+    "load_library": "unload_library",
+    "unload_library": "load_library",
+    # Export / render — emit a derived artifact (netlist, CSV, plot) from
+    # existing data; the source circuit/raw is untouched, so no edit-inverse
+    # applies. Not read-only because writing the artifact is an environment
+    # side effect, but the output is regenerable and deletable natively.
+    "export_netlist": "derived export; source .asc untouched, output regenerable",
+    "export_waveform": "derived export; source raw untouched, output regenerable",
+    "plot_waveform": "derived render; source raw untouched, output regenerable",
+}
+
+
+class TestMutatingToolsAreReversible:
+    """Companion to TestOpInverseClosure at the TOOL level. Every registered tool
+    that is not read-only must declare a reversal path in _TOOL_REVERSAL, so a new
+    one-way mutating tool can't ship without a reviewed decision — the guard the
+    op-union closure alone does not provide, since a standalone mutate tool added
+    directly via @registry.tool lives outside the SchematicOp union."""
+
+    def test_every_mutating_tool_declares_a_reversal(self):
+        defs, _ = get_tools_for_profile("full")
+        mutating = {d.name for d in defs if not (d.annotations and d.annotations.readOnlyHint)}
+        undeclared = mutating - _TOOL_REVERSAL.keys()
+        assert not undeclared, (
+            f"Mutating tools with no declared reversal: {sorted(undeclared)}. "
+            "Add each to _TOOL_REVERSAL naming how the mutation is undone, or — if "
+            "it is a deliberately-accepted one-way mutation — note why (see the "
+            "accepted-one-way entries and docs/TESTING.md)."
+        )
+
+    def test_no_stale_reversal_entries(self):
+        defs, _ = get_tools_for_profile("full")
+        names = {d.name for d in defs}
+        stale = _TOOL_REVERSAL.keys() - names
+        assert not stale, f"_TOOL_REVERSAL names tools not in the registry: {sorted(stale)}"
 
 
 def _assert_no_key_at_depth(node, key: str, tool_name: str, path: str) -> None:
