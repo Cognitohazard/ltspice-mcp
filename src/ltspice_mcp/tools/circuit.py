@@ -1826,7 +1826,7 @@ async def handle_edit_directive(
                     )
                 # spicelib refuses .param via add_instruction (RuntimeError,
                 # surfaced to the user as an opaque "Internal error"); route
-                # them to the dedicated tool instead (F3).
+                # them to the dedicated tool instead.
                 if stripped.lower().startswith(".param"):
                     raise NetlistError(
                         "edit_directive cannot add a '.param' — SPICE parameters "
@@ -1871,14 +1871,40 @@ async def handle_edit_directive(
     return text_response(result)
 
 
+def _remove_exact_directive(editor, instruction: str) -> bool:
+    """Remove one DIRECTIVE-type record matching ``instruction`` by FULL-TEXT
+    equality (not substring), returning whether one was removed.
+
+    spicelib's ``remove_instruction`` matches by substring and removes the first
+    hit, so an undo of ``.tran 1m`` could instead delete ``.tran 10m`` (or a
+    pre-existing duplicate) and silently corrupt the simulation setup. On an
+    AscEditor (``directives`` is a list of typed Text records) we filter by exact
+    text and drop a single record. Netlist editors (SpiceEditor — no
+    ``directives`` list) keep spicelib's substring matcher; the ``.cir``/``.net``
+    edit path is out of scope here.
+    """
+    directives = getattr(editor, "directives", None)
+    if directives is None:
+        return bool(editor.remove_instruction(instruction))
+    for idx, d in enumerate(directives):
+        dtype = getattr(d, "type", None)
+        dtext = getattr(d, "text", None)
+        if dtype == TextTypeEnum.DIRECTIVE and dtext == instruction:
+            del directives[idx]
+            return True
+    return False
+
+
 def _remove_directive_or_comment(editor, instruction: str) -> str:
     """Remove a directive or comment matching ``instruction``.
 
-    Treats the input as a literal exact-match by default — common SPICE
-    directives contain ``(`` and ``)`` (every ``.meas``/``.four``/``.print``
-    referencing ``V(node)``) which would silently turn into regex capture
-    groups under any "metachar means regex" heuristic. Pass an explicit
-    ``regex:`` prefix to opt in to regex matching.
+    The default path is an exact, literal match: a DIRECTIVE is removed only when
+    its full text equals ``instruction`` (see ``_remove_exact_directive``), and a
+    comment only when its body equals it. ``instruction`` is never treated as a
+    regex by default — common SPICE directives contain ``(`` and ``)`` (every
+    ``.meas``/``.four``/``.print`` referencing ``V(node)``) which would silently
+    turn into regex capture groups under any "metachar means regex" heuristic.
+    Pass an explicit ``regex:`` prefix to opt in to regex matching.
 
     Returns a label describing what was removed. Raises NetlistError when
     nothing matched, so the user can't think they cleaned a directive
@@ -1904,7 +1930,7 @@ def _remove_directive_or_comment(editor, instruction: str) -> str:
             )
         return "directive(s)/comment(s)"
 
-    directive_hit = bool(editor.remove_instruction(instruction))
+    directive_hit = _remove_exact_directive(editor, instruction)
     comment_hit = _strip_matching_comments(editor, instruction)
     if not (directive_hit or comment_hit):
         raise NetlistError(
@@ -2935,7 +2961,7 @@ def _plan_connect_route(
     # ``(px, py) in endpoints`` check below), NOT by whole component: the
     # OTHER pin of an endpoint component still lies on the route and must be
     # flagged — otherwise a waypoint landing on it silently shorts the
-    # component while connect reports success (F1). ``skip_refs`` stays in the
+    # component while connect reports success. ``skip_refs`` stays in the
     # bbox-crossing *warning* loop, where exempting an endpoint component is
     # reasonable.
     for cg in component_geo:
@@ -3667,8 +3693,7 @@ def _component_signature(comp: dict) -> str:
     """Comparable string for a component: its Value plus any extra SYMATTR
     attributes (Value2/SpiceLine/SpiceModel). ``set_component_attribute`` edits
     land in these attributes and change the exported netlist, so diff_circuit
-    must compare them too — otherwise such an edit reads as 'no differences'
-    (F6)."""
+    must compare them too — otherwise such an edit reads as 'no differences'."""
     value = str(comp["value"])
     attrs = comp.get("attributes") or {}
     if not attrs:
@@ -4100,7 +4125,14 @@ class _OpSetComponentAttribute(StrictModel):
 class _OpRemoveComponent(StrictModel):
     op: Literal["remove_component"]
     reference: str
-    cleanup_wires: bool = False
+    cleanup_wires: bool = Field(
+        default=False,
+        description=(
+            "Also delete wires left dangling at the removed component's pins. "
+            "These wire deletions are NOT restored by a later add_component — use "
+            "reset_schematic to recover if you remove the wrong component."
+        ),
+    )
 
 
 class _OpMoveComponent(StrictModel):
@@ -4135,12 +4167,15 @@ class _OpRemoveNetLabel(StrictModel):
 
 class _OpRemoveWire(StrictModel):
     op: Literal["remove_wire"]
-    # Exact-segment form: all four endpoints (either direction).
+    # Exact-segment form: all four endpoints (either direction). This is the
+    # precise inverse of a single connect segment — it removes only that segment.
     x1: int | None = None
     y1: int | None = None
     x2: int | None = None
     y2: int | None = None
-    # Incident-point form: every segment touching this coordinate.
+    # Incident-point form: every segment touching this coordinate. Broader than
+    # the segment form — at a shared node it also drops wires from other
+    # connections, so prefer the segment form to undo one specific connect.
     pin: str | None = None
     x: int | None = None
     y: int | None = None
@@ -4155,6 +4190,17 @@ class _OpAddDirective(StrictModel):
     size: int = 2
 
 
+class _OpRemoveDirective(StrictModel):
+    op: Literal["remove_directive"]
+    instruction: str = Field(
+        description=(
+            "Directive or comment text to remove. Matched literally (exact) by "
+            "default; prefix with 'regex:' to match by pattern. Inverse of "
+            "add_directive."
+        )
+    )
+
+
 SchematicOp = (
     _OpAddComponent
     | _OpSetComponentValue
@@ -4166,6 +4212,7 @@ SchematicOp = (
     | _OpRemoveWire
     | _OpConnect
     | _OpAddDirective
+    | _OpRemoveDirective
 )
 
 
@@ -4362,6 +4409,12 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
         )
         return {"op": "add_directive", "instruction": op.instruction}
 
+    if isinstance(op, _OpRemoveDirective):
+        # Reuse the same matcher the standalone edit_directive(action=remove)
+        # uses — literal-by-default, 'regex:' opt-in, raises if nothing matched.
+        removed = _remove_directive_or_comment(editor, op.instruction)
+        return {"op": "remove_directive", "instruction": op.instruction, "removed": removed}
+
     raise NetlistError(f"Unknown op type: {type(op).__name__}")
 
 
@@ -4379,7 +4432,8 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
         "Supported ops (each tagged via the ``op`` field): ``add_component``, "
         "``set_component_value``, ``set_component_attribute``, "
         "``remove_component``, ``move_component``, ``add_net_label``, "
-        "``remove_net_label``, ``remove_wire``, ``connect``, ``add_directive``.\n\n"
+        "``remove_net_label``, ``remove_wire``, ``connect``, ``add_directive``, "
+        "``remove_directive``.\n\n"
         "By default, the first op that raises aborts the whole transaction "
         "and nothing is written to disk. Set ``stop_on_error=false`` to run "
         "every op and persist whatever subset succeeded — useful when each op "
