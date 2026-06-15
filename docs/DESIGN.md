@@ -575,3 +575,8 @@ If any step fails, the doctor tool (see Roadmap) is the eventual answer;
 until it ships, check `simulator.path` in TOML and confirm
 `ltspice-mcp.toml`'s `[security] allowed_paths` includes your working
 directory.
+
+For how the project tests — and the absence-class bugs its testing once
+missed, plus the mechanisms (inverse-op closure, the archetype build
+battery, task-down coverage, blind-artifact judging) added to catch them —
+see `docs/TESTING.md`.
