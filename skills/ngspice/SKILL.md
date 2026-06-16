@@ -113,8 +113,7 @@ PWL(t1 v1 t2 v2 ...)
 - **Node "0" is ground**. Using `GND` without `.global GND` or tying it to 0 creates a floating node — no error, wrong results.
 - **MOSFET requires 4 terminals**: `M1 d g s b` — ngspice does NOT auto-connect bulk to source (LTspice does).
 - **Impedance ratios**: Beyond ~1e16 cause numerical issues (64-bit doubles).
-- **Parameter sweep**: `.step param <name> <start> <stop> <increment>`
-- **Parameter list**: `.step param <name> list <v1> <v2> ...`
+- **Parameter sweep**: ngspice has **no native `.step`** (that is LTspice syntax). The MCP runs parametric sweeps through `configure_sweep` + `run_sweep`, which generate and simulate one netlist per value. For a hand-written deck outside the MCP, use a `.control` block with an `alter`/loop. A `.step` line in a deck handed to `run_simulation` is rejected with a pointer to `configure_sweep`.
 
 ---
 

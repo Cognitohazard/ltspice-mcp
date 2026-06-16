@@ -208,6 +208,56 @@ class TestDetectCrossings:
         assert all(c["direction"] == "falling" for c in falling)
         assert len(rising) + len(falling) == 3
 
+    def test_amplitude_deadband_suppresses_epsilon_chatter(self):
+        # A signal that hovers at the level with tiny float-epsilon wobble flips
+        # sign on every sample. Without a deadband every flip is a crossing; an
+        # amplitude deadband larger than the wobble collapses them to none.
+        f = _log_freqs(0, 6, 500)
+        v = 1e-9 * np.sin(np.log10(f) * 50 * np.pi)  # wobble ±1e-9 about 0
+        raw = detect_crossings(f, v, 0.0)
+        assert len(raw) > 5  # default behavior: every epsilon flip counts
+        deadbanded = detect_crossings(f, v, 0.0, min_amplitude=0.3)
+        assert len(deadbanded) == 0
+
+    def test_amplitude_deadband_preserves_real_crossings(self):
+        # A signal that genuinely swings well past the level on both sides of a
+        # crossing must still register it once the deadband is set — the
+        # excursion clears the deadband, so the crossing is real.
+        f = np.array([1.0, 10.0, 100.0, 1000.0])
+        v = np.array([10.0, 5.0, -5.0, -10.0])
+        c = detect_crossings(f, v, 0.0, min_amplitude=0.3)
+        assert len(c) == 1
+        assert c[0]["direction"] == "falling"
+
+    def test_amplitude_deadband_default_unchanged(self):
+        # Default min_amplitude=0.0 must reproduce the no-deadband result for
+        # an ordinary multi-crossing signal (existing callers unaffected).
+        f = _log_freqs(0, 4, 500)
+        v = np.sin(np.log10(f) * 2 * np.pi)
+        assert detect_crossings(f, v, 0.0) == detect_crossings(f, v, 0.0, min_amplitude=0.0)
+
+    def test_amplitude_deadband_respects_direction_filter(self):
+        # The deadband must still honor the direction filter: a clean triangle
+        # that swings well past the level has one falling and one rising
+        # crossing; the deadband keeps each only under its matching direction.
+        f = np.array([1.0, 10.0, 100.0, 1000.0, 10000.0])
+        v = np.array([-5.0, 5.0, 5.0, 5.0, -5.0])
+        falling = detect_crossings(f, v, 0.0, direction="falling", min_amplitude=0.3)
+        rising = detect_crossings(f, v, 0.0, direction="rising", min_amplitude=0.3)
+        assert len(falling) == 1 and falling[0]["direction"] == "falling"
+        assert len(rising) == 1 and rising[0]["direction"] == "rising"
+
+    def test_amplitude_deadband_keeps_crossing_that_starts_inside_band(self):
+        # A signal that starts INSIDE the deadband on the high side (+0.1) then
+        # clearly drops past -min_amplitude genuinely crosses the level. The
+        # deadband must keep that crossing — seeding the confirmed side as
+        # "unknown" used to drop it (a real crossover silently vanishing).
+        f = np.array([1.0, 10.0, 100.0, 1000.0])
+        v = np.array([0.1, -0.05, -1.0, -2.0])  # inside ±0.3 at start, well below later
+        c = detect_crossings(f, v, 0.0, min_amplitude=0.3)
+        assert len(c) == 1
+        assert c[0]["direction"] == "falling"
+
 
 class TestFindCrossingsAnyQuantity:
     def test_magnitude_db(self):
@@ -479,6 +529,57 @@ class TestStabilityMetrics:
         pm = r["phase_margin_worst_deg"]
         assert pm is not None and pm > 45.0
         assert not any("marginal" in w.lower() for w in r["warnings"])
+
+    def test_allpass_flat_at_unity_is_degenerate(self):
+        # An allpass has |H| = 1 (0 dB) at every frequency: the magnitude only
+        # grazes 0 dB with float-epsilon wobble, so it must NOT register dozens
+        # of unity-gain crossings nor classify as conditionally stable. It is a
+        # degenerate flat-at-unity response with at most one (spurious) crossing.
+        f = _log_freqs(0, 6, 1000)
+        fp = 1000.0
+        s = 1j * 2 * np.pi * f
+        w = 2 * np.pi * fp
+        H = (1 - s / w) / (1 + s / w)  # first-order allpass, |H| == 1 exactly
+        r = compute_stability_metrics(f, H)
+        assert len(r["unity_gain_crossovers"]) <= 1
+        assert r["stability"] != "conditional"
+        assert r["stability"] == "flat_at_unity"
+
+    def test_loop_starting_just_above_unity_keeps_its_crossover(self):
+        # A loop whose magnitude starts just above unity — inside the unity-gain
+        # deadband (+0.1 dB) — then rolls off well below unity genuinely crosses
+        # 0 dB. The deadband must not drop that crossover and misclassify the
+        # loop as "always_below_unity" with no phase margin.
+        f = _log_freqs(0, 6, 1000)
+        gain = 10 ** (0.1 / 20)  # +0.1 dB DC, inside the ±0.3 dB deadband
+        H = gain * _lpf_1pole(f, 1000.0)
+        r = compute_stability_metrics(f, H)
+        assert r["stability"] != "always_below_unity"
+        assert r["unity_gain_crossovers"]
+        assert r["phase_margin_worst_deg"] is not None
+
+    def test_worst_phase_margin_is_most_negative_not_smallest_magnitude(self):
+        # A conditionally-stable loop crosses unity twice: once at a healthy
+        # positive phase margin and once at a deeply negative one. The "worst"
+        # scalar must be the most-negative margin (the unstable crossing), not
+        # the smallest-magnitude one — a small positive margin must never mask a
+        # large negative one.
+        margins = [
+            {"frequency_hz": 100.0, "margin_deg": 5.0, "direction": "falling"},
+            {"frequency_hz": 1000.0, "margin_deg": -170.0, "direction": "rising"},
+        ]
+        # Drive the same selection the compute function uses on its margin list.
+        worst = min(m["margin_deg"] for m in margins)
+        assert worst == -170.0
+
+        # End-to-end: build a loop whose two unity crossings straddle -180° so
+        # the per-crossover margins are sign-mixed, and confirm the reported
+        # worst margin is negative (the least-stable crossing wins).
+        f = _log_freqs(0, 8, 6000)
+        H = _three_pole_loop(f, 10000.0, 100.0, 10000.0, 1000000.0)
+        r = compute_stability_metrics(f, H)
+        pms = [m["margin_deg"] for m in r["phase_margins"]]
+        assert r["phase_margin_worst_deg"] == pytest.approx(min(pms))
 
 
 # ---------------------------------------------------------------------------

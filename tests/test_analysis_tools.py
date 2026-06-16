@@ -5,6 +5,7 @@ instead drive the handlers against real recorded LTspice binary raws from
 ``tests/fixtures/`` — see those classes for what the mocks cannot cover.
 """
 
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -13,7 +14,7 @@ import pytest
 from mcp import types
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.state import SessionState
+from ltspice_mcp.state import BatchJob, SessionState
 from ltspice_mcp.tools.analysis import (
     BodeMetricsInput,
     EdgeMetricsInput,
@@ -89,6 +90,23 @@ def _make_raw_mock(
 
     raw.get_wave = get_wave
     return raw
+
+
+def _completed_batch(state: SessionState, run_results: dict, *, job_id: str = "b1") -> BatchJob:
+    """Register a completed sweep BatchJob so its runs are reachable by
+    ``job_id`` + ``run_index`` through the result read-model."""
+    bj = BatchJob(
+        job_id=job_id,
+        job_type="sweep",
+        netlist=Path("/tmp/x.cir"),
+        total_runs=len(run_results),
+        completed_runs=len(run_results),
+        status="completed",
+    )
+    bj.run_results = run_results
+    bj.completed_at = bj.started_at + timedelta(seconds=5)
+    state.add_batch_job(bj)
+    return bj
 
 
 @pytest.fixture
@@ -2019,3 +2037,195 @@ class TestDcRejectedByTransientTools:
         raw = _stage_recorded(work_dir, "ltspice_dc_div")
         with pytest.raises(ResultError, match="transient"):
             await handler(input_factory(raw.name), state_no_sim)
+
+
+@pytest.mark.asyncio
+class TestAnalysisToolsJobRun:
+    """A completed sweep/MC run must be analyzable by ``job_id`` + ``run_index``,
+    reaching the same raw — and returning the same result — as addressing that
+    run's raw by path. A reloaded job's raw can live outside ``allowed_paths``
+    (e.g. a WSL temp dir), so the job-run path deliberately skips ``safe_path``;
+    these address the run by index and compare against the by-path call.
+    """
+
+    async def test_signal_stats_by_job_run(self, state_no_sim: SessionState, work_dir: Path):
+        p0, p1 = work_dir / "ss_run0.raw", work_dir / "ss_run1.raw"
+        t = np.linspace(0, 1, 100)
+        _inject_raw_mock(state_no_sim, p0, _make_raw_mock(waves={"time": t, "V(out)": t}, axis=t))
+        _inject_raw_mock(
+            state_no_sim, p1, _make_raw_mock(waves={"time": t, "V(out)": 2.0 * t}, axis=t)
+        )
+        _completed_batch(
+            state_no_sim,
+            {0: {"raw_file": p0, "params": {}}, 1: {"raw_file": p1, "params": {}}},
+        )
+        by_job = await handle_signal_stats(
+            SignalStatsInput(job_id="b1", run_index=1, signal="V(out)"), state_no_sim
+        )
+        by_path = await handle_signal_stats(
+            SignalStatsInput(raw_file=p1.name, signal="V(out)"), state_no_sim
+        )
+        assert by_job.structuredContent == by_path.structuredContent
+        # run_index actually selected run 1 (2x amplitude), not run 0.
+        assert by_job.structuredContent["max"] == pytest.approx(2.0, abs=1e-6)
+
+    async def test_operating_point_by_job_run(self, state_no_sim: SessionState, work_dir: Path):
+        p0, p1 = work_dir / "op_run0.raw", work_dir / "op_run1.raw"
+        _inject_raw_mock(
+            state_no_sim,
+            p0,
+            _make_raw_mock(
+                plotname="Operating Point",
+                trace_names=["V(out)"],
+                waves={"V(out)": np.array([1.0])},
+            ),
+        )
+        _inject_raw_mock(
+            state_no_sim,
+            p1,
+            _make_raw_mock(
+                plotname="Operating Point",
+                trace_names=["V(out)"],
+                waves={"V(out)": np.array([2.5])},
+            ),
+        )
+        _completed_batch(
+            state_no_sim,
+            {0: {"raw_file": p0, "params": {}}, 1: {"raw_file": p1, "params": {}}},
+        )
+        by_job = await handle_operating_point(
+            OperatingPointInput(job_id="b1", run_index=1), state_no_sim
+        )
+        by_path = await handle_operating_point(OperatingPointInput(raw_file=p1.name), state_no_sim)
+        assert by_job.structuredContent == by_path.structuredContent
+        assert by_job.structuredContent["voltages"]["V(out)"] == pytest.approx(2.5)
+
+    async def test_edge_metrics_by_job_run(self, state_no_sim: SessionState, work_dir: Path):
+        p0, p1 = work_dir / "em_run0.raw", work_dir / "em_run1.raw"
+        t, y = _step_waveform()
+        _inject_raw_mock(state_no_sim, p0, _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t))
+        _inject_raw_mock(state_no_sim, p1, _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t))
+        _completed_batch(
+            state_no_sim,
+            {0: {"raw_file": p0, "params": {}}, 1: {"raw_file": p1, "params": {}}},
+        )
+        by_job = await handle_edge_metrics(
+            EdgeMetricsInput(job_id="b1", run_index=1, signal="V(out)"), state_no_sim
+        )
+        by_path = await handle_edge_metrics(
+            EdgeMetricsInput(raw_file=p1.name, signal="V(out)"), state_no_sim
+        )
+        assert by_job.structuredContent == by_path.structuredContent
+        assert by_job.structuredContent["is_rise_time"] is True
+
+    async def test_stability_metrics_by_job_run(self, state_no_sim: SessionState, work_dir: Path):
+        freqs = np.logspace(0, 8, 500)
+        s = 1j * 2 * np.pi * freqs
+        H = 1000.0 / ((1 + s / (2 * np.pi * 1000)) * (1 + s / (2 * np.pi * 100000)))
+        p0, p1 = work_dir / "sm_run0.raw", work_dir / "sm_run1.raw"
+        for p in (p0, p1):
+            _inject_raw_mock(
+                state_no_sim,
+                p,
+                _make_raw_mock(
+                    plotname="AC Analysis",
+                    trace_names=["frequency", "V(loop)"],
+                    waves={"frequency": freqs, "V(loop)": H},
+                    axis=freqs,
+                ),
+            )
+        _completed_batch(
+            state_no_sim,
+            {0: {"raw_file": p0, "params": {}}, 1: {"raw_file": p1, "params": {}}},
+        )
+        by_job = await handle_stability_metrics(
+            StabilityMetricsInput(job_id="b1", run_index=1, signal="V(loop)"), state_no_sim
+        )
+        by_path = await handle_stability_metrics(
+            StabilityMetricsInput(raw_file=p1.name, signal="V(loop)"), state_no_sim
+        )
+        assert by_job.structuredContent == by_path.structuredContent
+        assert by_job.structuredContent["dc_gain_db"] == pytest.approx(60.0, abs=0.1)
+
+    async def test_resonance_by_job_run(self, state_no_sim: SessionState, work_dir: Path):
+        freqs = np.logspace(1, 5, 3000)
+        s = 1j * 2 * np.pi * freqs
+        w0 = 2 * np.pi * 1000
+        H = (w0 * w0) / (s * s + (w0 / 10.0) * s + w0 * w0)
+        p0, p1 = work_dir / "rs_run0.raw", work_dir / "rs_run1.raw"
+        for p in (p0, p1):
+            _inject_raw_mock(
+                state_no_sim,
+                p,
+                _make_raw_mock(
+                    plotname="AC Analysis",
+                    trace_names=["frequency", "V(out)"],
+                    waves={"frequency": freqs, "V(out)": H},
+                    axis=freqs,
+                ),
+            )
+        _completed_batch(
+            state_no_sim,
+            {0: {"raw_file": p0, "params": {}}, 1: {"raw_file": p1, "params": {}}},
+        )
+        by_job = await handle_resonance(
+            ResonanceInput(job_id="b1", run_index=1, signal="V(out)"), state_no_sim
+        )
+        by_path = await handle_resonance(
+            ResonanceInput(raw_file=p1.name, signal="V(out)"), state_no_sim
+        )
+        assert by_job.structuredContent == by_path.structuredContent
+        assert by_job.structuredContent["peaks"][0]["frequency_hz"] == pytest.approx(
+            1000.0, rel=0.05
+        )
+
+    async def test_raw_file_and_job_id_mutually_exclusive(self, state_no_sim: SessionState):
+        with pytest.raises(ResultError, match="exactly one"):
+            await handle_signal_stats(
+                SignalStatsInput(raw_file="x.raw", job_id="b1", signal="V(out)"),
+                state_no_sim,
+            )
+
+    async def test_neither_raw_file_nor_job_id(self, state_no_sim: SessionState):
+        with pytest.raises(ResultError, match="exactly one"):
+            await handle_signal_stats(SignalStatsInput(signal="V(out)"), state_no_sim)
+
+
+@pytest.mark.asyncio
+class TestSignalStatsAnalysisTypeRobustness:
+    """signal_stats on raws without the usual transient shape must not crash."""
+
+    async def test_noise_raw_omits_mean(self, state_no_sim: SessionState, work_dir: Path):
+        # A .noise raw has a real, positive spectral density over a frequency
+        # axis. signal_stats must classify it 'noise' and return min/max/pk-pk
+        # WITHOUT a 'mean' (a plain mean of spectral density is meaningless) —
+        # the text formatter must not KeyError on the absent 'mean'.
+        raw_file = work_dir / "noise_stats.raw"
+        freqs = np.logspace(0, 6, 100)
+        density = 1e-9 / np.sqrt(1 + (freqs / 1000) ** 2)
+        raw = _make_raw_mock(
+            plotname="Noise Spectral Density - (V/Hz½)",
+            trace_names=["frequency", "V(onoise)"],
+            waves={"frequency": freqs, "V(onoise)": density},
+            axis=freqs,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_signal_stats(
+            SignalStatsInput(raw_file=raw_file.name, signal="V(onoise)"), state_no_sim
+        )
+        sc = result.structuredContent
+        assert sc["analysis_type"] == "noise"
+        assert "mean" not in sc
+        assert "min" in sc
+        assert "max" in sc
+        assert "peak_to_peak" in sc
+
+    async def test_op_raw_rejected_with_pointer(self, state_no_sim: SessionState, work_dir: Path):
+        # A real Operating Point raw has no data axis. signal_stats must raise a
+        # clean ResultError pointing at operating_point, not a generic internal
+        # error / RuntimeError from spicelib's get_axis.
+        raw = _stage_recorded(work_dir, "op_extreme_node")
+        with pytest.raises(ResultError, match="operating_point"):
+            await handle_signal_stats(
+                SignalStatsInput(raw_file=raw.name, signal="V(hot)"), state_no_sim
+            )

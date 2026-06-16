@@ -28,6 +28,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     ModelCard,
     ParamCard,
     SubcktCard,
+    body_has_stray_kv_remnant,
     find_model,
     iter_instances,
     iter_models,
@@ -118,6 +119,48 @@ class TestTokenizeBody:
         assert [(t.kind, t.text) for t in toks] == [(TokenKind.KEY_VALUE, "V=if(V(in)>1, 5, 0)")]
         assert toks[0].key == "V"
         assert toks[0].value == "if(V(in)>1, 5, 0)"
+
+    def test_key_value_operator_after_call_is_one_token(self) -> None:
+        # An unbraced behavioural expression with an operator AFTER a V()/I()
+        # call must stay one KEY_VALUE — not split into ``V=V(in)`` plus a
+        # stray ``*2`` that reads back truncated and corrupts a value-edit.
+        toks = tokenize_body("V=V(in)*2")
+        assert [(t.kind, t.text) for t in toks] == [(TokenKind.KEY_VALUE, "V=V(in)*2")]
+        assert toks[0].key == "V"
+        assert toks[0].value == "V(in)*2"
+
+    def test_key_value_operator_between_two_calls_is_one_token(self) -> None:
+        toks = tokenize_body("V=V(p)-V(n)")
+        assert [(t.kind, t.text) for t in toks] == [(TokenKind.KEY_VALUE, "V=V(p)-V(n)")]
+        assert toks[0].value == "V(p)-V(n)"
+
+    def test_key_value_current_division_after_call_is_one_token(self) -> None:
+        toks = tokenize_body("I=V(n)/1k")
+        assert [(t.kind, t.text) for t in toks] == [(TokenKind.KEY_VALUE, "I=V(n)/1k")]
+        assert toks[0].value == "V(n)/1k"
+
+    def test_key_value_braced_with_trailing_operator_is_one_token(self) -> None:
+        toks = tokenize_body("V={V(in)*3}*2")
+        assert [(t.kind, t.text) for t in toks] == [(TokenKind.KEY_VALUE, "V={V(in)*3}*2")]
+        assert toks[0].value == "{V(in)*3}*2"
+
+    def test_glued_operator_chain_does_not_swallow_next_keyed_param(self) -> None:
+        # A following ``key=`` separated by whitespace must stay its own token,
+        # and even a missing space before it must not be swallowed.
+        toks = tokenize_body("R=1k tc=0.1")
+        kvs = [(t.key, t.value) for t in toks if t.kind == TokenKind.KEY_VALUE]
+        assert kvs == [("R", "1k"), ("tc", "0.1")]
+        glued = tokenize_body("V=V(in) tc=0.1")
+        kvs2 = [(t.key, t.value) for t in glued if t.kind == TokenKind.KEY_VALUE]
+        assert kvs2 == [("V", "V(in)"), ("tc", "0.1")]
+
+    def test_stray_remnant_detector_glued_vs_spaced(self) -> None:
+        # The glued operator forms now parse cleanly (no remnant); the spaced
+        # form (operators surrounded by whitespace) still cannot be re-joined
+        # unambiguously, so it is flagged rather than silently truncated.
+        assert not body_has_stray_kv_remnant("V=V(in)*2")
+        assert not body_has_stray_kv_remnant("V=V(p)-V(n)")
+        assert body_has_stray_kv_remnant("V = V(a) + V(b)")
 
     def test_comment_trail_semicolon(self) -> None:
         toks = tokenize_body("R1 n1 n2 1k ; this is a comment")

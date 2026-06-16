@@ -10,6 +10,17 @@ from ltspice_mcp.lib.encoding import read_spice_text as _read_library_text
 logger = logging.getLogger(__name__)
 
 
+# Model type assigned to a definition recovered from an encrypted vendor
+# library. Such files carry no plaintext .MODEL/.SUBCKT cards (the body is
+# an encrypted blob), so the name is derived from the filename and the ports
+# are unknown — but the part is still surfaced so search can report that it
+# exists rather than returning unrelated near-neighbours.
+ENCRYPTED_MODEL_TYPE = ".ENCRYPTED"
+
+# Leading-comment marker LTspice writes at the top of an encrypted library.
+_ENCRYPTED_MARKER = "ltspice encrypted file"
+
+
 @dataclass(frozen=True)
 class ModelEntry:
     """Immutable model or subcircuit definition metadata.
@@ -17,7 +28,8 @@ class ModelEntry:
     Attributes:
         name: Original case model/subcircuit name
         name_lower: Pre-computed lowercase name for fast search
-        model_type: ".MODEL" or ".SUBCKT"
+        model_type: ".MODEL", ".SUBCKT", or ".ENCRYPTED" (a part recovered
+            by name from an encrypted vendor file whose body cannot be parsed)
         source_path: Library file path
         line_start: Line number where definition starts (1-indexed)
         line_count: Number of lines in definition
@@ -161,6 +173,42 @@ def _extract_parameters(param_text: str, limit: int = 5) -> dict[str, str]:
     return params
 
 
+def _encrypted_stub(path: Path) -> ModelEntry:
+    """Build a name-only entry for an encrypted vendor library.
+
+    The body of such a file is an encrypted blob with no parseable
+    .MODEL/.SUBCKT cards, so the part name is taken from the filename
+    (the convention vendors follow) and the ports are left unknown.
+    """
+    name = path.stem
+    return ModelEntry(
+        name=name,
+        name_lower=name.lower(),
+        model_type=ENCRYPTED_MODEL_TYPE,
+        source_path=path,
+        line_start=1,
+        line_count=0,
+        raw_text="",
+        ports=[],
+        params={},
+    )
+
+
+def _is_encrypted_library(content: str) -> bool:
+    """True if the file opens with the LTspice encrypted-library marker.
+
+    LTspice writes ``* LTspice Encrypted File`` as the first comment line
+    of an encrypted ``.lib``; the rest of the body is an encrypted blob
+    that carries no plaintext model definitions.
+    """
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        return stripped.lstrip("*").strip().lower().startswith(_ENCRYPTED_MARKER)
+    return False
+
+
 def parse_library_file(path: Path) -> LibraryIndex:
     """Parse SPICE library file and extract .MODEL and .SUBCKT definitions.
 
@@ -170,8 +218,15 @@ def parse_library_file(path: Path) -> LibraryIndex:
     cards inside ``.SUBCKT`` blocks (still indexed) and avoids the
     "param body lost when the closing paren spans a line" failure mode.
 
+    A ``.MODEL`` card whose body the strict lexer rejects (e.g. the
+    legacy paren-less form with a stray trailing ``)``) is still indexed
+    by name and type so it remains findable; only its parameters are
+    dropped. Encrypted vendor libraries (which carry no plaintext model
+    cards) yield a single name-only stub so the part is reported as
+    existing rather than vanishing.
+
     Args:
-        path: Path to library file (.lib, .mod, etc.)
+        path: Path to library file (.lib, .mod, .sub, etc.)
 
     Returns:
         LibraryIndex with all parsed models and subcircuits
@@ -190,6 +245,10 @@ def parse_library_file(path: Path) -> LibraryIndex:
         logger.error(f"Failed to read library file {path}: {e}")
         raise
 
+    if _is_encrypted_library(content):
+        logger.info(f"Encrypted library {path}: surfacing name-only stub for {path.stem}")
+        return LibraryIndex(path=path, models=[_encrypted_stub(path)])
+
     cards = lex(content).cards
     models: list[ModelEntry] = []
 
@@ -198,7 +257,30 @@ def parse_library_file(path: Path) -> LibraryIndex:
             try:
                 view = ModelCard.from_card(c)
             except Exception as e:
-                logger.warning(f"Malformed .MODEL at line {c.line_start} in {path}: {e}")
+                # The strict lexer rejected the body (e.g. legacy paren-less
+                # syntax with a stray trailing ``)``). The card name still
+                # survives lex's tolerant name extraction, so index the model
+                # by name rather than dropping it — callers must be able to
+                # find it. The parameters are not recovered.
+                if c.name:
+                    entry = ModelEntry(
+                        name=c.name,
+                        name_lower=c.name.lower(),
+                        model_type=".MODEL",
+                        source_path=path,
+                        line_start=c.line_start,
+                        line_count=len(c.raw_lines),
+                        raw_text="".join(c.raw_lines).rstrip("\n"),
+                        ports=[],
+                        params={},
+                    )
+                    models.append(entry)
+                    logger.warning(
+                        f"Loosely indexed .MODEL {c.name} at line {c.line_start} in {path} "
+                        f"(strict parse failed, parameters dropped): {e}"
+                    )
+                else:
+                    logger.warning(f"Malformed .MODEL at line {c.line_start} in {path}: {e}")
                 continue
             params = dict(islice(view.params.items(), 5))
             entry = ModelEntry(

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from ltspice_mcp.lib.library_parser import (
+    ENCRYPTED_MODEL_TYPE,
     _extract_parameters,
     _merge_continuation_lines,
     parse_library_file,
@@ -119,6 +120,50 @@ class TestParseLibraryFile:
         assert m.model_type == ".SUBCKT"
         assert m.ports[:2] == ["in+", "in-"]
         assert m.line_count == 3
+
+    def test_parenless_model_with_stray_paren_still_indexed(self, tmp_path: Path):
+        # Some shipped LTspice .lib files write a .MODEL in the legacy
+        # paren-less form but leave a stray trailing ')' (e.g. an LT1575-style
+        # NPN1). The strict lexer rejects that body; the model must still be
+        # indexed by name (findable) rather than silently dropped, even though
+        # its parameters can't be recovered. A well-formed model in the same
+        # file must be unaffected.
+        lib = tmp_path / "legacy.lib"
+        lib.write_text(".MODEL NPN1 NPN BF=100 VAF=50 IS=1e-15)\n.MODEL CLEAN NPN(BF=200)\n")
+        index = parse_library_file(lib)
+        names = {m.name for m in index.models}
+        assert "NPN1" in names
+        assert "CLEAN" in names
+
+        recovered = index.get_model("NPN1")
+        assert recovered is not None
+        assert recovered.model_type == ".MODEL"
+        # The well-formed model keeps its parameters.
+        clean = index.get_model("CLEAN")
+        assert clean is not None
+        assert clean.params["BF"] == "200"
+
+    def test_encrypted_library_surfaces_name_only_stub(self, tmp_path: Path):
+        # Encrypted vendor .lib files carry no plaintext .MODEL/.SUBCKT cards
+        # (the body is an encrypted blob marked by a leading comment), so they
+        # parse to zero models. Instead of vanishing, the part must surface as
+        # an exists-but-encrypted entry named from the filename, with unknown
+        # ports, so search can report it exists.
+        lib = tmp_path / "2SA2206_enc.lib"
+        lib.write_text(
+            "* LTspice Encrypted File\n"
+            "* This encrypted file has been supplied by a 3rd party vendor.\n"
+            "* Begin:\n"
+            " 05 AC A3 C2 F3 67 62 13 CC 3C A0 EA 5B 94 EC E3\n"
+        )
+        index = parse_library_file(lib)
+        assert len(index.models) == 1
+        m = index.models[0]
+        assert m.name == "2SA2206_enc"
+        assert m.model_type == ENCRYPTED_MODEL_TYPE
+        assert m.ports == []
+        # Reachable by exact name lookup through the normal index.
+        assert index.get_model("2sa2206_enc") is not None
 
     def test_parse_subckt_missing_ends(self, tmp_path: Path):
         lib = tmp_path / "broken.lib"

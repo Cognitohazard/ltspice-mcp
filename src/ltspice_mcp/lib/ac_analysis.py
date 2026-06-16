@@ -38,6 +38,16 @@ from ltspice_mcp.lib.raw_parser import safe_magnitude_db as magnitude_db
 # can snap the wrong way and invert the sign of the gain margin.
 _UNWRAP_WARN_STEP_DEG = 90.0
 
+# Amplitude deadband (dB) for the unity-gain (0 dB) crossing search in
+# compute_stability_metrics. A loop whose magnitude hovers at unity across the
+# sweep (an allpass, or a flat-gain loop grazing 0 dB) would otherwise register
+# float-epsilon sign flips as dozens of unity-gain crossings, producing a bogus
+# multi-element phase-margin list and a wrong "conditional" label. The magnitude
+# must swing at least this far past 0 dB between crossings for one to count; the
+# value is small enough not to miss any real crossover, where the slope carries
+# the magnitude well past a few tenths of a dB within one sample.
+_UNITY_GAIN_DEADBAND_DB = 0.3
+
 # True half-power point: 20·log10(1/√2) = -3.0103 dB. Use this (not a rounded
 # -3.0) for "−3 dB" cutoff/bandwidth so bode_metrics(mode='filter') and the AC
 # summary agree with bode_metrics(mode='crossing'/'point'), which already use the
@@ -201,6 +211,7 @@ def detect_crossings(
     *,
     direction: SearchDirection = "any",
     min_separation_decades: float = 0.0,
+    min_amplitude: float = 0.0,
 ) -> list[Crossover]:
     """Find all frequencies where ``values`` crosses ``level``.
 
@@ -208,6 +219,14 @@ def detect_crossings(
     crossings ordered by frequency. ``min_separation_decades`` suppresses
     crossings that would duplicate a jittery near-zero-slope region — two
     crossings within that many decades collapse to the first.
+
+    ``min_amplitude`` is an amplitude deadband (in the same units as
+    ``values``) for signals that hover at ``level``: a crossing only counts
+    once ``values`` has moved at least this far past ``level`` since the
+    previous accepted crossing. With the default of 0.0 every sign flip is
+    reported, so existing callers are unaffected. Set it to suppress the
+    float-epsilon chatter a flat-at-level loop (e.g. an allpass grazing 0 dB)
+    would otherwise register as dozens of crossings.
     """
     if direction not in ("any", "rising", "falling"):
         raise ValueError(f"direction must be 'any', 'rising', or 'falling', got {direction!r}")
@@ -215,6 +234,8 @@ def detect_crossings(
         raise ValueError(f"freqs ({len(freqs)}) and values ({len(values)}) length mismatch")
     if min_separation_decades < 0:
         raise ValueError(f"min_separation_decades must be >= 0, got {min_separation_decades}")
+    if min_amplitude < 0:
+        raise ValueError(f"min_amplitude must be >= 0, got {min_amplitude}")
 
     d = np.asarray(values, dtype=float) - float(level)
     sign_change = (d[:-1] * d[1:]) < 0
@@ -238,19 +259,80 @@ def detect_crossings(
     directions: list[str]
     if direction == "rising":
         fc = fc[rising_mask]
+        seg_idx = idx[rising_mask]
         directions = ["rising"] * len(fc)
     elif direction == "falling":
         fc = fc[~rising_mask]
+        seg_idx = idx[~rising_mask]
         directions = ["falling"] * len(fc)
     else:
+        seg_idx = idx
         directions = ["rising" if r else "falling" for r in rising_mask]
 
     order = np.argsort(fc)
     fc = fc[order]
+    seg_idx = seg_idx[order]
     directions = [directions[i] for i in order]
 
     crossings: list[Crossover] = []
     last_log = -np.inf
+    # Amplitude-deadband hysteresis, applied via the signal's confirmed side of
+    # ``level``. The signal is "confirmed high" once d >= +min_amplitude and
+    # "confirmed low" once d <= -min_amplitude; in between it is unconfirmed. A
+    # candidate crossing counts only when the confirmed side flips across it —
+    # i.e. the signal genuinely departed ``level`` by at least min_amplitude on
+    # both sides. A signal that only grazes ``level`` (an allpass at 0 dB, or
+    # float-epsilon wobble) never confirms either side, so nothing is emitted.
+    if min_amplitude > 0:
+        confirmed_at: list[int] = []  # sample indices where the side flips
+        # Seed the confirmed side from the signal's sign BEFORE any crossing,
+        # not 0. A loop that starts inside the deadband but on the high side
+        # (e.g. +0.1 dB) and then drops past -min_amplitude genuinely crosses
+        # ``level``; seeding with 0 would treat that 0 -> -1 transition as "not
+        # yet confirmed on both sides" and silently drop a real unity crossing
+        # (misclassifying the loop as never reaching unity). A pure graze still
+        # never reaches +/-min_amplitude, so it records no flips regardless of
+        # this seed.
+        confirmed_side = int(np.sign(d[0])) if len(d) else 0
+        for j in range(len(d)):
+            val = float(d[j])
+            if val >= min_amplitude:
+                new_side = 1
+            elif val <= -min_amplitude:
+                new_side = -1
+            else:
+                continue
+            if new_side != confirmed_side:
+                if confirmed_side != 0:
+                    confirmed_at.append(j)
+                confirmed_side = new_side
+        # Each confirmed-side flip brackets exactly one real crossing of
+        # ``level``; map it to the candidate crossing whose segment lies in the
+        # bracket. ``prev`` walks the last sample of the previous confirmed run.
+        kept: list[tuple[float, str]] = []
+        prev = 0
+        cand = sorted(
+            zip(seg_idx.tolist(), fc.tolist(), directions, strict=True),
+            key=lambda t: t[0],
+        )
+        ci = 0
+        for j in confirmed_at:
+            # Advance to the first candidate crossing at/after the previous
+            # bracket end, then take the one inside [prev, j).
+            while ci < len(cand) and cand[ci][0] < prev:
+                ci += 1
+            if ci < len(cand) and cand[ci][0] < j:
+                _si, fcross, dirn = cand[ci]
+                kept.append((float(fcross), dirn))
+                ci += 1
+            prev = j
+        kept.sort(key=lambda t: t[0])
+        # Re-point fc/directions at the deadband-confirmed crossings and fall
+        # through to the shared min_separation filter + emit loop below, instead
+        # of duplicating it here.
+        fc = np.array([f for f, _ in kept], dtype=float)
+        directions = [dirn for _, dirn in kept]
+
     for f, dirn in zip(fc, directions, strict=True):
         lf = float(np.log10(f))
         if min_separation_decades > 0 and (lf - last_log) < min_separation_decades:
@@ -856,6 +938,7 @@ StabilityLabel = Literal[
     "conditional",
     "unconditional",
     "always_below_unity",
+    "flat_at_unity",
 ]
 
 
@@ -910,8 +993,10 @@ def compute_stability_metrics(
     conditionally-stable loops (where phase dips below -180° and comes
     back) are characterized correctly.
 
-    The worst-case margin is the SMALLEST margin across crossovers — that's
-    the one that determines stability. If no unity-gain crossing exists,
+    The worst-case margin is the most negative (least stable) margin across
+    crossovers — that's the one that determines stability, and a negative
+    margin at any crossover must not be masked by a smaller positive one. If
+    no unity-gain crossing exists,
     the loop has |H|<1 everywhere and phase margin is meaningless; if no
     -180° crossing exists (and phase stays above -180°), gain margin is
     "infinite" (reported as ``None`` + ``stability: "unconditional"``).
@@ -948,6 +1033,7 @@ def compute_stability_metrics(
         0.0,
         direction="any",
         min_separation_decades=min_separation_decades,
+        min_amplitude=_UNITY_GAIN_DEADBAND_DB,
     )
     phase_crossings = detect_crossings(
         freqs,
@@ -993,28 +1079,32 @@ def compute_stability_metrics(
             }
         )
 
-    # Worst-case: smallest MAGNITUDE of margin. A sign-correct "worst"
-    # must treat negative margins as worse than positive — but since any
-    # negative margin means instability, the absolute-minimum convention
-    # is what downstream consumers expect.
-    phase_margin_worst: float | None
-    if phase_margins:
-        phase_margin_worst = float(
-            min(phase_margins, key=lambda m: abs(m["margin_deg"]))["margin_deg"]
-        )
-    else:
-        phase_margin_worst = None
-
-    gain_margin_worst: float | None
-    if gain_margins:
-        gain_margin_worst = float(
-            min(gain_margins, key=lambda m: abs(m["margin_db"]))["margin_db"]
-        )
-    else:
-        gain_margin_worst = None
+    # Worst-case: the signed minimum (most negative, least stable) margin. A
+    # negative margin means instability at that crossover, so it must dominate
+    # any smaller positive margin — selecting by magnitude would let a +5°
+    # margin mask a -170° one and hide the unstable crossing.
+    phase_margin_worst: float | None = (
+        float(min(m["margin_deg"] for m in phase_margins)) if phase_margins else None
+    )
+    gain_margin_worst: float | None = (
+        float(min(m["margin_db"] for m in gain_margins)) if gain_margins else None
+    )
 
     # Stability classification.
-    if not unity_crossings:
+    # Magnitude that hovers within the unity-gain deadband across the entire
+    # sweep (an allpass, or a flat 0 dB loop) produces no real crossing — its
+    # sign flips are float-epsilon graze. That is degenerate, not "below unity":
+    # phase margin is ill-defined and the usual stability verdict does not apply.
+    grazes_unity = bool(np.all(np.abs(mag_db) < _UNITY_GAIN_DEADBAND_DB))
+    if not unity_crossings and grazes_unity:
+        stability = "flat_at_unity"
+        warnings.append(
+            "Loop magnitude sits at unity (0 dB) across the whole sweep — the "
+            "gain never genuinely crosses 0 dB, so phase margin is ill-defined. "
+            "This looks like an allpass or a flat-gain loop, not a normal "
+            "single-crossover response; the stability verdict does not apply."
+        )
+    elif not unity_crossings:
         stability = "always_below_unity"
         warnings.append(
             "Loop gain never reaches unity in the sweep range — phase "
