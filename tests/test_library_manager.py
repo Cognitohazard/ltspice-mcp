@@ -314,6 +314,57 @@ class TestFindSimilarModels:
         assert set(names[:2]) == {"LTC3406A", "LTC3406B"}, f"got: {names}"
 
 
+class TestIncludeDirectiveWslPath:
+    def test_wsl_emits_windows_path_not_mnt_c(
+        self, monkeypatch, empty_manager: LibraryManager, tmp_path: Path
+    ):
+        # On WSL the built-in libraries are discovered as /mnt/c/... Linux
+        # paths, but LTspice.exe runs Windows-side and rejects those in an
+        # .include body (the runner only translates the netlist file path).
+        # The emitted directive must therefore carry a Windows-style path.
+        p = tmp_path / "win.lib"
+        p.write_text(".MODEL 2N2222 NPN(BF=200)\n")
+        empty_manager.load_library(p)
+        monkeypatch.setattr("ltspice_mcp.lib.library_manager.is_wsl", lambda: True)
+        monkeypatch.setattr(
+            "ltspice_mcp.lib.library_manager.to_windows_path",
+            lambda native: r"C:\Users\me\win.lib",
+        )
+        info = empty_manager.get_model_info("2N2222", include_builtin=False)
+        assert info is not None
+        directive = info["include_directive"]
+        assert "\\" in directive or "C:" in directive
+        assert "/mnt/c" not in directive
+        # source_path stays native for in-process filesystem access.
+        assert info["source_path"] == str(p)
+
+
+class TestModelDeviceUsage:
+    def test_npn_model_reports_device_type_and_usage(
+        self, empty_manager: LibraryManager, tmp_path: Path
+    ):
+        # A .MODEL conveys parameters but not node order; the device token
+        # (NPN here) dictates connection order. find_model must carry the
+        # parsed device_type and a usage string so the part is wired right.
+        p = tmp_path / "bjt.lib"
+        p.write_text(".MODEL 2N2222 NPN(BF=200 IS=1e-14)\n")
+        empty_manager.load_library(p)
+        info = empty_manager.get_model_info("2N2222", include_builtin=False)
+        assert info is not None
+        assert info["device_type"] == "NPN"
+        assert "Qxxx C B E" in info["usage"]
+        assert "2N2222" in info["usage"]
+
+    def test_subckt_has_no_device_type(self, empty_manager: LibraryManager, tmp_path: Path):
+        p = tmp_path / "sub.lib"
+        p.write_text(".SUBCKT MYPART in out\nR1 in out 1k\n.ENDS\n")
+        empty_manager.load_library(p)
+        info = empty_manager.get_model_info("MYPART", include_builtin=False)
+        assert info is not None
+        assert "device_type" not in info
+        assert "usage" not in info
+
+
 class TestListLibraries:
     def test_empty(self, empty_manager: LibraryManager):
         assert empty_manager.list_libraries() == []

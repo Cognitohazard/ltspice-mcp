@@ -1197,3 +1197,86 @@ class TestModelNameElementsEditable:
         o1 = next(c for c in cards if c.kind == "instance" and c.name == "O1")
         with pytest.raises(NetlistError, match="Edit the card directly"):
             apply_value_to_instance(o1, "TLINE2")
+
+
+@pytest.mark.asyncio
+class TestSetComponentNodes:
+    """set_component_value(nodes=...) rewires .cir connectivity — the fix for a
+    mis-wired/typo'd net that the value path can't touch."""
+
+    async def test_rewire_simple_node(self, state_no_sim: SessionState, work_dir: Path):
+        cir = work_dir / "rewire.cir"
+        cir.write_text("* rewire\nR1 in outt 1k\nC1 outt 0 1n\n.END\n")
+        await handle_set_component_value(
+            {"path": cir.name, "reference": "R1", "nodes": ["in", "out"]},
+            state_no_sim,
+        )
+        text = cir.read_text()
+        assert "R1 in out 1k" in text
+
+    async def test_rewire_preserves_multitoken_source_spec(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # The corruption guard: a node rewrite must leave the value tail
+        # byte-for-byte, never mangle a multi-token source spec like PULSE(...).
+        cir = work_dir / "src.cir"
+        cir.write_text("* src\nV1 a 0 PULSE(0 5 0 1n 1n 1m 2m)\nR1 a 0 1k\n.END\n")
+        await handle_set_component_value(
+            {"path": cir.name, "reference": "V1", "nodes": ["in", "0"]},
+            state_no_sim,
+        )
+        text = cir.read_text()
+        assert "V1 in 0 PULSE(0 5 0 1n 1n 1m 2m)" in text
+
+    async def test_rewire_rejects_too_few_nodes(self, state_no_sim: SessionState, work_dir: Path):
+        cir = work_dir / "few.cir"
+        cir.write_text("* few\nR1 in 0 1k\n.END\n")
+        with pytest.raises(NetlistError, match="2 node"):
+            await handle_set_component_value(
+                {"path": cir.name, "reference": "R1", "nodes": ["in"]},
+                state_no_sim,
+            )
+
+    async def test_nodes_on_asc_points_at_connect(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        asc = work_dir / "sch.asc"
+        asc.write_text("Version 4\nSHEET 1 880 680\nSYMBOL res 100 100 R0\nSYMATTR InstName R1\n")
+        with pytest.raises(NetlistError, match="connect"):
+            await handle_set_component_value(
+                {"path": asc.name, "reference": "R1", "nodes": ["in", "out"]},
+                state_no_sim,
+            )
+
+    async def test_nodes_not_combined_with_value(self, state_no_sim: SessionState, work_dir: Path):
+        cir = work_dir / "both.cir"
+        cir.write_text("* both\nR1 in 0 1k\n.END\n")
+        with pytest.raises(NetlistError, match="separate call"):
+            await handle_set_component_value(
+                {"path": cir.name, "reference": "R1", "value": "2k", "nodes": ["a", "b"]},
+                state_no_sim,
+            )
+
+
+@pytest.mark.asyncio
+class TestSetComponentValueNoOp:
+    async def test_noop_value_is_flagged(self, state_no_sim: SessionState, work_dir: Path):
+        # A no-op write (old == new) must not read like a real edit.
+        cir = work_dir / "noop.cir"
+        cir.write_text("* noop\nC1 in 0 159n\n.END\n")
+        result = await handle_set_component_value(
+            {"path": cir.name, "reference": "C1", "value": "159n"},
+            state_no_sim,
+        )
+        assert "unchanged" in result.content[0].text
+
+
+@pytest.mark.asyncio
+class TestCreateNetlistSubpath:
+    async def test_relative_subpath_creates_dirs(self, state_no_sim: SessionState, work_dir: Path):
+        # The name field accepts a relative subpath; parent dirs are created.
+        await handle_create_netlist(
+            {"name": "sub/dir/rc", "content": "* x\nR1 in 0 1k\n.END\n"},
+            state_no_sim,
+        )
+        assert (work_dir / "sub" / "dir" / "rc.cir").exists()

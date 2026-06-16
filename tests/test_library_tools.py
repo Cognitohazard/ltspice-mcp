@@ -195,12 +195,27 @@ class TestFindModel:
         assert result.structuredContent is not None
         assert "results" in result.structuredContent
 
+    async def test_model_device_type_and_usage_surfaced(
+        self, state_no_sim: SessionState, fuzzy_lib: Path
+    ):
+        # A .MODEL NPN entry must report its device token and a connection-order
+        # usage string (node order isn't conveyed by the .MODEL itself).
+        await handle_load_library(LoadLibraryInput(path=fuzzy_lib.name), state_no_sim)
+        result = await handle_find_model(FindModelInput(name="2N3904", exact=True), state_no_sim)
+        entry = result.structuredContent["results"][0]
+        assert entry["device_type"] == "NPN"
+        assert "Qxxx C B E" in entry["usage"]
+        assert "Qxxx C B E" in result.content[0].text
+
 
 @pytest.mark.asyncio
 class TestListLibraries:
     async def test_empty(self, state_no_sim: SessionState):
         result = await handle_list_libraries(ListLibrariesInput(), state_no_sim)
-        assert "No libraries" in result.content[0].text
+        text = result.content[0].text
+        assert "No libraries" in text
+        # Points the model at the built-in libraries it can still reach.
+        assert "include_builtin=true" in text
 
     async def test_populated_simple(self, state_no_sim: SessionState, lib_file: Path):
         await handle_load_library(LoadLibraryInput(path=lib_file.name), state_no_sim)

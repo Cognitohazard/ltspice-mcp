@@ -76,6 +76,81 @@ class TestConfigureSweep:
         dim = next(iter(state_no_sim.sweep_configs.values())).dimensions[0]
         assert dim.resolved_values() == [1000.0, 2200.0, 4700.0]
 
+    async def test_values_spice_notation_matches_plain_numbers(
+        self, state_no_sim: SessionState, sample_netlist: Path
+    ):
+        # SPICE-notation strings ('1k', '4.7k', '10k') must resolve to the same
+        # sweep values as the equivalent plain numbers — consistency with the
+        # rest of the surface (set_component_value, filters), which parse them.
+        await handle_configure_sweep(
+            ConfigureSweepInput(
+                netlist=sample_netlist.name,
+                parameters=[
+                    SweepParameter(name="R1", type="component", values=["1k", "4.7k", "10k"])
+                ],
+            ),
+            state_no_sim,
+        )
+        spice_dim = next(iter(state_no_sim.sweep_configs.values())).dimensions[0]
+
+        state_no_sim.sweep_configs.clear()
+        await handle_configure_sweep(
+            ConfigureSweepInput(
+                netlist=sample_netlist.name,
+                parameters=[
+                    SweepParameter(name="R1", type="component", values=[1000, 4700, 10000])
+                ],
+            ),
+            state_no_sim,
+        )
+        plain_dim = next(iter(state_no_sim.sweep_configs.values())).dimensions[0]
+
+        assert spice_dim.resolved_values() == plain_dim.resolved_values()
+        assert spice_dim.resolved_values() == [1000.0, 4700.0, 10000.0]
+
+    async def test_range_spice_notation_matches_plain_numbers(
+        self, state_no_sim: SessionState, sample_netlist: Path
+    ):
+        # start/stop/step accept SPICE notation too.
+        await handle_configure_sweep(
+            ConfigureSweepInput(
+                netlist=sample_netlist.name,
+                parameters=[
+                    SweepParameter(name="R1", type="component", start="1k", stop="3k", step="1k")
+                ],
+            ),
+            state_no_sim,
+        )
+        spice_dim = next(iter(state_no_sim.sweep_configs.values())).dimensions[0]
+
+        state_no_sim.sweep_configs.clear()
+        await handle_configure_sweep(
+            ConfigureSweepInput(
+                netlist=sample_netlist.name,
+                parameters=[
+                    SweepParameter(name="R1", type="component", start=1000, stop=3000, step=1000)
+                ],
+            ),
+            state_no_sim,
+        )
+        plain_dim = next(iter(state_no_sim.sweep_configs.values())).dimensions[0]
+
+        assert spice_dim.resolved_values() == plain_dim.resolved_values()
+
+    async def test_unparseable_spice_value_rejected(
+        self, state_no_sim: SessionState, sample_netlist: Path
+    ):
+        with pytest.raises(BatchJobError, match="not a number or valid SPICE notation"):
+            await handle_configure_sweep(
+                ConfigureSweepInput(
+                    netlist=sample_netlist.name,
+                    parameters=[
+                        SweepParameter(name="R1", type="component", values=["notanumber"])
+                    ],
+                ),
+                state_no_sim,
+            )
+
     async def test_values_mutually_exclusive_with_range(
         self, state_no_sim: SessionState, sample_netlist: Path
     ):
@@ -295,6 +370,11 @@ class TestConfigureMonteCarlo:
         assert "Config ID:" in text
         assert "50" in text
         assert len(state_no_sim.mc_configs) == 1
+        # Ack vocabulary maps to the input schema's ref/type distinction, and
+        # never uses the internal word "override".
+        assert "Per-component tolerances (refs e.g. R1):" in text
+        assert "Type-level tolerances (type names e.g. R/resistors):" in text
+        assert "override" not in text.lower()
 
     async def test_empty_tolerances(self, state_no_sim: SessionState, sample_netlist: Path):
         with pytest.raises(BatchJobError, match="At least one tolerance"):

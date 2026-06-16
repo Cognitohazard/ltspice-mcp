@@ -181,6 +181,52 @@ OBSERVATIONS_SCHEMA: dict[str, Any] = {
     },
 }
 
+# Parsed .MEAS results, keyed by measurement name. Shared by run_simulation,
+# check_job, and simulation_summary so the WHEN/AT field semantics are
+# described identically everywhere. For a plain value measurement ``values``
+# holds the scalar(s); for a WHEN/AT point measurement ``values`` is the
+# constant trigger LEVEL and the crossing time/frequency lives in ``at`` —
+# the descriptions below are the only place that distinction is self-evident
+# to a client reading the schema.
+MEASUREMENTS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": {
+        "type": "object",
+        "properties": {
+            "values": {
+                "type": "array",
+                "items": {"type": ["number", "null"]},
+                "description": (
+                    "Per-.step scalar(s). For a WHEN/AT measurement this is the "
+                    "constant trigger LEVEL, not the crossing point — read 'at' "
+                    "for the crossing time/frequency."
+                ),
+            },
+            # Scalar when the bound is constant across .step iterations; list
+            # (one entry per step) when it varies (e.g. TRIG/TARG marker times).
+            "range_from": {
+                "type": ["number", "array", "null"],
+                "items": {"type": ["number", "null"]},
+            },
+            "range_to": {
+                "type": ["number", "array", "null"],
+                "items": {"type": ["number", "null"]},
+            },
+            "at": {
+                "type": ["number", "array", "null"],
+                "items": {"type": ["number", "null"]},
+                "description": (
+                    "Crossing time (.tran) or frequency (.ac) for a WHEN/AT point "
+                    "measurement — THIS is the answer for a WHEN rise-time/crossing "
+                    "query; 'values' holds the constant level. Null for plain "
+                    "value measurements."
+                ),
+            },
+        },
+        "required": ["values"],
+    },
+}
+
 
 def format_meas_errors(meas_errors: list[dict[str, Any]]) -> list[str]:
     """Render structured .MEAS errors for the text-format response.

@@ -312,6 +312,29 @@ ELEMENT_SPECS: dict[str, ElementSpec] = {
 
 _DEFAULT_ELEMENT_SPEC = ElementSpec(default_kind="model", min_nodes=0)
 
+# EXACT terminal count per element class, for node-connectivity editing only
+# (set_nodes). Unlike ElementSpec.min_nodes (a sanity floor), these are the
+# precise node counts, so the node-token span can be taken as the FIRST N
+# positional tokens — which is the only way to leave a multi-token value tail
+# (e.g. ``PULSE(...)`` on a source, where the generic last-positional-is-the-slot
+# model wrongly counts ``PULSE`` as a node) byte-for-byte intact. Classes with a
+# variable or ambiguous terminal count (MOSFET 3-vs-4 bulk, subcircuit X, mutual
+# inductance K) are omitted: set_nodes refuses them rather than risk corruption.
+_EXACT_NODE_COUNT: dict[str, int] = {
+    "R": 2,
+    "C": 2,
+    "L": 2,
+    "V": 2,
+    "I": 2,
+    "D": 2,
+    "F": 2,
+    "H": 2,
+    "Q": 3,
+    "J": 3,
+    "E": 4,
+    "G": 4,
+}
+
 
 @dataclass
 class InstanceLine:
@@ -343,6 +366,10 @@ class InstanceLine:
     _model_token: Token | None = None
     _param_tokens: dict[str, Token] = field(default_factory=dict)
     _value_param_key: str | None = None
+    # Body span (start, end) covering exactly the positional node tokens, so
+    # set_nodes can rewrite connectivity without disturbing the value/params
+    # tail. None when there are no nodes or their offsets are synthesized.
+    _node_span: tuple[int, int] | None = None
 
     @classmethod
     def from_card(cls, card: SpiceCard) -> InstanceLine:
@@ -417,6 +444,18 @@ class InstanceLine:
                 nodes = [t.text for t in positional]
                 value = params[value_param_key]
 
+        # Node-edit span: the FIRST N positional tokens, N = the element's EXACT
+        # terminal count. Only set for fixed-arity classes whose multi-token
+        # value/model tail must stay untouched; set_nodes refuses the rest.
+        exact_nodes = _EXACT_NODE_COUNT.get(prefix)
+        node_span: tuple[int, int] | None = None
+        if (
+            exact_nodes is not None
+            and len(positional) >= exact_nodes
+            and all(t.body_offset >= 0 for t in positional[:exact_nodes])
+        ):
+            node_span = (positional[0].body_offset, positional[exact_nodes - 1].body_end)
+
         return cls(
             card=card,
             ref=ref,
@@ -427,6 +466,7 @@ class InstanceLine:
             _model_token=model_token,
             _param_tokens=param_tokens,
             _value_param_key=value_param_key,
+            _node_span=node_span,
         )
 
     def set_model(self, name: str) -> None:
@@ -442,6 +482,40 @@ class InstanceLine:
             self.set_param(self._value_param_key, new)
             return
         self._update_slot_in_place(new)
+
+    def set_nodes(self, new_nodes: list[str]) -> None:
+        """Rewrite the positional node list (connectivity edit).
+
+        Replaces only the leading node-token span, leaving the value/model/params
+        tail byte-for-byte — a canonical re-render would risk mangling multi-token
+        source specs (e.g. ``PULSE(...)``). Supported only for fixed-arity element
+        classes (see ``_EXACT_NODE_COUNT``); a rewire must keep the terminal
+        count. Variable/ambiguous classes (MOSFET bulk, subcircuit, mutual
+        inductance) raise — edit those cards directly.
+        """
+        prefix = self.ref[:1].upper()
+        exact = _EXACT_NODE_COUNT.get(prefix)
+        if exact is None or self._node_span is None:
+            raise ValueError(
+                f"node editing is not supported for {self.ref} (variable or "
+                "ambiguous terminal count) — edit the card directly"
+            )
+        if len(new_nodes) != exact:
+            raise ValueError(
+                f"{self.ref} has {exact} node(s); got {len(new_nodes)} "
+                "(a rewire keeps the terminal count)"
+            )
+        if any((not n) or n.split() != [n] for n in new_nodes):
+            raise ValueError("node names must be non-empty single tokens")
+        start, end = self._node_span
+        self.card.replace_span(start, end, " ".join(new_nodes))
+        self.nodes = list(new_nodes)
+        # Offsets past the edit are now stale; drop cached tokens so any
+        # subsequent edit on this view re-renders canonically instead of
+        # writing at a wrong offset.
+        self._node_span = None
+        self._model_token = None
+        self._param_tokens.clear()
 
     def get_param(self, key: str) -> str | None:
         """Case-insensitive parameter read, matching the CI semantics of

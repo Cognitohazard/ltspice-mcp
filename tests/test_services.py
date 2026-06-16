@@ -288,6 +288,27 @@ class TestExtractModelSuggestions:
         assert services.format_suggestion_block(None) == ""
         assert services.format_suggestion_block({}) == ""
 
+
+class TestAttachSuggestionsToFailure:
+    def test_recovery_hint_fires_without_library(self, state_no_sim: SessionState, tmp_path: Path):
+        # With no library loaded (the common case stock parts fail in), a
+        # missing-model failure still gets a library-independent find_model
+        # recovery hint naming the unresolved ref.
+        log = tmp_path / "err.log"
+        log.write_text('Error on line 2 : s1 0 0 sw Unable to find definition of model "sw"\n')
+        msg = services.attach_suggestions_to_failure("failed", {}, log, state_no_sim.libraries)
+        assert "find_model" in msg
+        assert "include_builtin=true" in msg
+        assert "sw" in msg
+
+    def test_no_hint_for_clean_log(self, state_no_sim: SessionState, tmp_path: Path):
+        log = tmp_path / "clean.log"
+        log.write_text("Total elapsed time: 0.01 seconds.\n")
+        assert (
+            services.attach_suggestions_to_failure("failed", {}, log, state_no_sim.libraries)
+            == "failed"
+        )
+
     def test_format_suggestion_block_renders(self):
         out = services.format_suggestion_block(
             {"swx": [{"name": "SW", "score": 0.9, "source_path": "/tmp/sw.lib"}]}

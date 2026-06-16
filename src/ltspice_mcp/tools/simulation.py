@@ -22,6 +22,7 @@ from ltspice_mcp.state import (
 )
 from ltspice_mcp.tools._base import (
     MEAS_ERRORS_SCHEMA,
+    MEASUREMENTS_SCHEMA,
     OBSERVATIONS_SCHEMA,
     ToolInput,
     format_meas_errors,
@@ -60,7 +61,7 @@ _SIM_RESULT_FIELDS_SCHEMA: dict[str, dict] = {
     "warnings": {"type": "array", "items": {"type": "string"}},
     "errors": {"type": "array", "items": {"type": "string"}},
     "meas_errors": MEAS_ERRORS_SCHEMA,
-    "measurements": {"type": "object"},
+    "measurements": MEASUREMENTS_SCHEMA,
     "fourier": {"type": "array", "items": {"type": "object"}},
     "range": {"type": "object"},
     "point_count": {"type": "integer"},

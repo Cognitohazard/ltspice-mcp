@@ -493,7 +493,7 @@ class TestDeliveryAndSecurity:
         outside = work_dir.parent / "plot_outside_target"
         outside.mkdir(exist_ok=True)
         (work_dir / ".ltspice-mcp").symlink_to(outside)
-        with pytest.raises(ResultError, match="outside the circuit directory"):
+        with pytest.raises(ResultError, match="outside the destination directory"):
             await handle_plot_waveform(
                 PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=False),
                 state_no_sim,
