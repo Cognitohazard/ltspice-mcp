@@ -168,6 +168,17 @@ class TestTransient:
         assert "step_index" not in header
         assert len(rows) == data["row_count"]
 
+    async def test_out_dir_override(self, state_no_sim: SessionState, work_dir: Path):
+        # An explicit out_dir (under an allowed path) wins over the sidecar.
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        dest = work_dir / "exports"
+        data = await _export(
+            state_no_sim, raw_file=str(raw), signals=["V(out)"], out_dir=str(dest)
+        )
+        out = Path(data["path"])
+        assert out.parent == dest.resolve()
+        assert out.exists()  # noqa: ASYNC240
+
     async def test_signals_all_excludes_axis(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         data = await _export(state_no_sim, raw_file=str(raw), signals="all")
@@ -343,7 +354,7 @@ class TestDestination:
         # A symlinked .ltspice-mcp/ must not redirect the export outside the
         # circuit directory (server-artifact paths skip safe_path).
         raw = _setup_symlinked_sidecar(work_dir)
-        with pytest.raises(ResultError, match="outside the circuit directory"):
+        with pytest.raises(ResultError, match="outside the destination directory"):
             await handle_export_waveform(
                 ExportWaveformInput(raw_file=str(raw), signals=["V(out)"]), state_no_sim
             )

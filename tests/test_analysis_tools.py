@@ -1534,6 +1534,25 @@ class TestRecordedAcRaw:
         assert sc["cutoff_high_hz"] == pytest.approx(1000.0, rel=0.02)
         assert sc["estimated_order"] == 1
 
+    async def test_by_job_run_echoes_swept_params(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # Analyzing a sweep run by job_id+run_index echoes which sweep point it
+        # is (params + run_index), so no extra batch_results call is needed.
+        raw = _stage_recorded(work_dir, "ltspice_ac_rc")
+        _completed_batch(
+            state_no_sim,
+            {0: {"raw_file": str(raw), "params": {"R": "1k"}}},
+        )
+        res = await handle_bode_metrics(
+            BodeMetricsInput(job_id="b1", run_index=0, signal="V(out)", mode="filter"),
+            state_no_sim,
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        assert sc["run_index"] == 0
+        assert sc["params"] == {"R": "1k"}
+
     async def test_crossing_mode_minus_3db_at_cutoff(
         self, state_no_sim: SessionState, work_dir: Path
     ):

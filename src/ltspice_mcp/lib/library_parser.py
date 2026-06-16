@@ -38,6 +38,11 @@ class ModelEntry:
         params: Default parameter values. For .MODEL, the first 5 key
             parameters extracted from the model body. For .SUBCKT, the
             ``param:`` clause defaults (e.g. ``gain=10``).
+        device_type: For .MODEL cards, the SPICE device token that follows
+            the model name (``NPN``, ``PNP``, ``D``, ``NMOS``, ``VDMOS``,
+            ``NJF`` …). This dictates the element's connection order, which
+            ``model_type`` (always ``.MODEL`` for these) does not convey.
+            Empty for .SUBCKT and encrypted entries.
     """
 
     name: str
@@ -49,6 +54,7 @@ class ModelEntry:
     raw_text: str
     ports: list[str]
     params: dict[str, str]
+    device_type: str = ""
 
 
 @dataclass
@@ -293,6 +299,7 @@ def parse_library_file(path: Path) -> LibraryIndex:
                 raw_text="".join(c.raw_lines).rstrip("\n"),
                 ports=[],
                 params=params,
+                device_type=view.type,
             )
             models.append(entry)
             logger.debug(f"Parsed .MODEL {view.name} from {path.name}")

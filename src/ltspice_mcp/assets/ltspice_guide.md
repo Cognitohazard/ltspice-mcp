@@ -95,6 +95,7 @@ PWL file=<filename>
 - If TRIG event never occurs, measurement silently fails (no error, no warning).
 - Without `TD=` parameter, TARG matches from t=0 — can hit wrong edge.
 - AC measurements use **65k point ceiling** — exceeding this silently reduces resolution.
+- WHEN/AT measurements return the crossing time (.tran) or frequency (.ac) in the result's `at` field; the headline `values` scalar is the constant target LEVEL, not the crossing point.
 
 ### General Pitfalls
 
@@ -256,7 +257,7 @@ C1 out 0 {C}
 | pmos | D:(48,0) G:(0,80) S:(48,96) | 48x96 |
 | voltage | +:(0,16) -:(0,96) | 64x80 |
 | current | +:(0,0) -:(0,80) | 64x80 |
-| res | A:(0,0) B:(0,64) | 32x64 |
+| res | A:(16,16) B:(16,96) | 32x80 |
 | cap | A:(16,0) B:(16,64) | 32x64 |
 
 Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M180→(x,-y). Use `symbol_info` for exact positions.

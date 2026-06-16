@@ -859,20 +859,22 @@ class TestEditingAscRollback:
         self, asc_state: SessionState, asc_file: Path, monkeypatch: pytest.MonkeyPatch
     ):
         # Inject a failure after add_component has already mutated the
-        # editor in-memory but before save. _post_op_warnings runs in the
-        # handler body after _create_component, so raising from it
-        # simulates a real spicelib internal error mid-edit.
+        # editor in-memory but before save: wrap _create_component so the real
+        # in-memory mutation runs, then raise — simulating a spicelib internal
+        # error mid-edit, after the editor is dirty but before the editing
+        # context saves.
         from ltspice_mcp.tools import circuit as circuit_mod
 
         original = asc_file.read_bytes()  # noqa: ASYNC240
         boom_calls = {"n": 0}
+        real_create = circuit_mod._create_component
 
-        def boom(*_a, **_kw):
-            del _a, _kw
+        def boom(*a, **kw):
+            real_create(*a, **kw)  # do the real in-memory mutation
             boom_calls["n"] += 1
             raise RuntimeError("injected post-op failure")
 
-        monkeypatch.setattr(circuit_mod, "_post_op_warnings", boom)
+        monkeypatch.setattr(circuit_mod, "_create_component", boom)
 
         with pytest.raises(RuntimeError, match="injected"):
             await handle_add_component(

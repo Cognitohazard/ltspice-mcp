@@ -81,9 +81,15 @@ class ListLibrariesInput(ToolInput):
         "libraries. Default is fuzzy matching — finds typos, case variants, and "
         "near-neighbour part numbers (e.g., '2N3905' → '2N3904'); pass exact=true "
         "to only return the exact case-insensitive match. Returns ranked candidates "
-        "with similarity score and ready-to-paste .include directive. Each "
-        "candidate carries ``ports`` (the .SUBCKT port list, empty for .MODEL) "
-        "and ``params`` (default parameter values from the body / ``params:`` clause)."
+        "with similarity score and an ``include_directive`` emitted in the "
+        "simulator's native path form (on WSL this is the Windows path LTspice.exe "
+        "expects, not the /mnt/c Linux path). Each candidate carries ``ports`` (the "
+        ".SUBCKT port list, empty for .MODEL) and ``params`` (default parameter "
+        "values from the body / ``params:`` clause). For .MODEL devices it also "
+        "carries ``device_type`` (the SPICE device token: NPN, PNP, D, NMOS, "
+        "VDMOS, NJF …) and, for recognised tokens, a ``usage`` connection-order "
+        "string (e.g. ``Qxxx C B E <name>``) — a .MODEL gives parameters but not "
+        "node order, and wiring the part in the wrong order simulates silently wrong."
     ),
     input_model=FindModelInput,
     annotations=RO_ANNOTATIONS,
@@ -99,6 +105,8 @@ class ListLibrariesInput(ToolInput):
                     "properties": {
                         "name": {"type": "string"},
                         "type": {"type": "string"},
+                        "device_type": {"type": "string"},
+                        "usage": {"type": "string"},
                         "source_path": {"type": "string"},
                         "include_directive": {"type": "string"},
                         "score": {"type": "number"},
@@ -171,6 +179,10 @@ async def handle_find_model(args: FindModelInput, state: SessionState):
     for r in results:
         lines.append(f"  {r['name']} ({r['type']}, score={r['score']}) - {r['source_path']}")
         lines.append(f"    {r['include_directive']}")
+        if "usage" in r:
+            lines.append(f"    device: {r['device_type']}  usage: {r['usage']}")
+        elif "device_type" in r:
+            lines.append(f"    device: {r['device_type']}")
         if args.full and "raw_text" in r:
             for body_line in str(r["raw_text"]).splitlines():
                 lines.append(f"      {body_line}")
@@ -308,7 +320,12 @@ async def handle_list_libraries(args: ListLibrariesInput, state: SessionState):
     libs = state.libraries.list_libraries()
 
     if not libs:
-        return format_response("No libraries loaded", {"libraries": []}, fmt)
+        return format_response(
+            "No libraries loaded. Common parts live in built-in libraries — "
+            "search with find_model(name=…, include_builtin=true).",
+            {"libraries": []},
+            fmt,
+        )
 
     # Apply path filter
     if filter_path:
