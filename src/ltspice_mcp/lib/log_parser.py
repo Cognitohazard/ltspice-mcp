@@ -200,6 +200,13 @@ _RE_MISSING_MODEL = re.compile(
     r'(?:Unable to find|Can\'?t find) definition of model\s+"([^"]+)"',
     re.IGNORECASE,
 )
+# ngspice phrasing for an unresolved model reference, e.g.:
+#   Error: undefined model 2n2222
+# The name is the next token, with or without surrounding quotes.
+_RE_MISSING_MODEL_NGSPICE = re.compile(
+    r'undefined model\s*:?\s+"?([A-Za-z0-9_.\-]+)"?',
+    re.IGNORECASE,
+)
 # Missing .SUBCKT — appears in log as:
 #   Fatal Error: Unknown subcircuit called in: xu1 n004 n001 vcc 0 lm741
 # The missing subcircuit name is the LAST token of the instance line.
@@ -319,11 +326,12 @@ def missing_refs_from_text(text: str) -> list[str]:
     seen: set[str] = set()
     refs: list[str] = []
 
-    for m in _RE_MISSING_MODEL.finditer(text):
-        name = m.group(1)
-        if name and name not in seen:
-            seen.add(name)
-            refs.append(name)
+    for regex in (_RE_MISSING_MODEL, _RE_MISSING_MODEL_NGSPICE):
+        for m in regex.finditer(text):
+            name = m.group(1)
+            if name and name not in seen:
+                seen.add(name)
+                refs.append(name)
 
     for m in _RE_MISSING_SUBCKT.finditer(text):
         tokens = m.group(1).split()

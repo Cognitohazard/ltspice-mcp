@@ -97,6 +97,7 @@ from ltspice_mcp.lib.signal_analysis import (
 from ltspice_mcp.state import BatchJob, SessionState
 from ltspice_mcp.tools._base import (
     MEAS_ERRORS_SCHEMA,
+    MEASUREMENTS_SCHEMA,
     OBSERVATIONS_SCHEMA,
     RO_ANNOTATIONS,
     ToolInput,
@@ -320,6 +321,57 @@ def _effective_raw_path(
         return run.raw_file
     assert raw_file  # truthy per the guard above
     return safe_path(raw_file, state)
+
+
+def _run_meta(job_id: str | None, run_index: int, state: SessionState) -> dict | None:
+    """Identify which job run an analysis addressed: ``{run_index, params}``.
+
+    ``None`` for a direct ``raw_file`` (there's no run to name). Cheap: a sweep /
+    MC run's swept-parameter values are already on the ``RunRef`` resolved during
+    path lookup, so echoing them tells the caller which point of the sweep this
+    result is — no extra ``batch_results`` round-trip to map run_index → params.
+    """
+    if not job_id:
+        return None
+    run = services.resolve_run(job_id, state, run_index)
+    return {"run_index": run.index, "params": dict(run.params)}
+
+
+def _resolve_artifact_dest(
+    *,
+    out_dir: str | None,
+    job_id: str | None,
+    raw_file: str | None,
+    subdir: str,
+    filename: str,
+    artifact: str,
+    state: SessionState,
+) -> Path:
+    """Resolve where a generated artifact (CSV / HTML) is written.
+
+    An explicit ``out_dir`` (validated via ``safe_path``) wins; otherwise a
+    Linux-side ``.ltspice-mcp/<subdir>/`` sidecar next to the CIRCUIT for a
+    job_id, or next to the raw for a raw_file — a job-run raw can live in a
+    Windows temp under /mnt/c the client cannot Read, so the job path anchors on
+    the circuit. Server-artifact paths skip ``safe_path`` except the out_dir
+    override; the resolved path must stay under its anchor (a symlinked sidecar
+    would otherwise redirect the write out).
+    """
+    if out_dir:
+        dest_anchor = safe_path(out_dir, state)
+        out_path = (dest_anchor / filename).resolve()
+    elif job_id:
+        dest_anchor = services.resolve_job(job_id, state).netlist.parent
+        out_path = (dest_anchor / SIDECAR_DIRNAME / subdir / filename).resolve()
+    else:
+        dest_anchor = safe_path(raw_file, state).parent  # type: ignore[arg-type]
+        out_path = (dest_anchor / SIDECAR_DIRNAME / subdir / filename).resolve()
+    if not out_path.is_relative_to(dest_anchor.resolve()):
+        raise ResultError(
+            f"Refusing to write the {artifact} outside the destination directory "
+            "(a symlinked .ltspice-mcp/ sidecar would redirect it)."
+        )
+    return out_path
 
 
 class QueryValueInput(ToolInput):
@@ -1152,6 +1204,14 @@ class ExportWaveformInput(ToolInput):
             "for real-valued (.tran/.dc/.noise) traces."
         ),
     )
+    out_dir: str | None = Field(
+        default=None,
+        description=(
+            "Directory to write the CSV into (resolved under an allowed path; "
+            "created if needed). Default: a '.ltspice-mcp/waveforms/' sidecar next "
+            "to the circuit for a job_id, or next to the raw for a raw_file."
+        ),
+    )
     format: Literal["json", "text"] | None = Field(
         default=None,
         description="Response format: 'json' for structured data, 'text' for human-readable",
@@ -1240,28 +1300,15 @@ async def handle_export_waveform(args: ExportWaveformInput, state: SessionState)
     ts = _parse_time(args.t_start, "t_start")
     te = _parse_time(args.t_end, "t_end")
 
-    # Destination: a Linux-side sidecar next to the CIRCUIT, never next to the
-    # raw — a job-run raw can live in a Windows temp under /mnt/c that the client
-    # cannot Read. Output is a server artifact, so it is not run through safe_path.
-    if args.job_id:
-        dest_anchor = services.resolve_job(args.job_id, state).netlist.parent
-    else:
-        dest_anchor = safe_path(args.raw_file, state).parent  # type: ignore[arg-type]
-    out_path = (
-        dest_anchor
-        / SIDECAR_DIRNAME
-        / WAVEFORMS_SUBDIR
-        / _export_filename(raw_path, analysis_type, args.job_id, args.run_index)
-    ).resolve()
-    # Refuse to follow a symlinked sidecar out of the circuit directory: if
-    # .ltspice-mcp/ or waveforms/ is a symlink, .resolve() would point the write
-    # outside the anchor. Server-artifact paths skip safe_path, so enforce
-    # containment explicitly here.
-    if not out_path.is_relative_to(dest_anchor.resolve()):
-        raise ResultError(
-            "Refusing to write the export outside the circuit directory "
-            "(a symlinked .ltspice-mcp/ or waveforms/ would redirect it)."
-        )
+    out_path = _resolve_artifact_dest(
+        out_dir=args.out_dir,
+        job_id=args.job_id,
+        raw_file=args.raw_file,
+        subdir=WAVEFORMS_SUBDIR,
+        filename=_export_filename(raw_path, analysis_type, args.job_id, args.run_index),
+        artifact="export",
+        state=state,
+    )
 
     try:
         facts = await asyncio.to_thread(
@@ -1448,7 +1495,10 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
     signal = args.signal
     if args.at is None:
         raise ResultError(
-            "query_value: 'at' is required (or use step_axis + step_value).", show_hint=False
+            "query_value: 'at' is required (or use step_axis + step_value). "
+            "If this is a .op (operating point) result, it has no time/frequency "
+            "axis — use operating_point instead.",
+            show_hint=False,
         )
     at_str = args.at
     step = args.step
@@ -1680,34 +1730,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
             "point_count": {"type": "integer"},
             "step_count": {"type": "integer"},
             "signals": {"type": "array", "items": {"type": "string"}},
-            "measurements": {
-                "type": "object",
-                "additionalProperties": {
-                    "type": "object",
-                    "properties": {
-                        "values": {
-                            "type": "array",
-                            "items": {"type": ["number", "null"]},
-                        },
-                        # Scalar when the bound is constant across .step
-                        # iterations; list (one entry per step) when it
-                        # varies (e.g. TRIG/TARG marker times).
-                        "range_from": {
-                            "type": ["number", "array", "null"],
-                            "items": {"type": ["number", "null"]},
-                        },
-                        "range_to": {
-                            "type": ["number", "array", "null"],
-                            "items": {"type": ["number", "null"]},
-                        },
-                        "at": {
-                            "type": ["number", "array", "null"],
-                            "items": {"type": ["number", "null"]},
-                        },
-                    },
-                    "required": ["values"],
-                },
-            },
+            "measurements": MEASUREMENTS_SCHEMA,
             "fourier": {"type": "array", "items": {"type": "object"}},
             "ac_bandwidth_metrics": {
                 "type": "object",
@@ -1933,7 +1956,9 @@ class EdgeMetricsInput(ToolInput):
         description=(
             "Absolute low rail level, overriding auto-detection. Use when the "
             "auto estimate (mean of first/last 10%) is biased — e.g. a "
-            "rise-from-rail where early samples cluster in the fast ramp."
+            "rise-from-rail where early samples cluster in the fast ramp, or a "
+            "step that starts at t=0 from rest (no flat low rail to average). "
+            "Pass low_level/high_level explicitly there."
         ),
     )
     high_level: float | None = Field(
@@ -2353,7 +2378,9 @@ async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
         "jitter_rms (std-dev of period lengths — timing jitter, NOT signal "
         "amplitude variance), duty_cycle_pct, mean high/low pulse widths, "
         "edge counts. duty_cycle_pct / pulse_widths are null if no full "
-        "periods could be paired.\n\n"
+        "periods could be paired. A period is the span between consecutive "
+        "rising crossings, so num_periods_measured = num_rising_edges - 1 "
+        "(you need N+1 edges to measure N periods).\n\n"
         "Uses threshold crossings; threshold defaults to the midpoint of "
         "window min/max. For a signal with DC drift, set an explicit "
         "threshold — the auto midpoint moves with the drift and the edge "
@@ -2605,8 +2632,10 @@ def _aggregate_log_measurements(
         "is detected the same way on both paths and swaps to aggregating the "
         "'at' (crossing) field; the aggregated_field output says which was "
         "used. On a plain single run there's only one value per measurement, "
-        "so stats collapse to n=1 — use simulation_summary instead to just "
-        "read the scalars.\n\n"
+        "so stats collapse to n=1 — use simulation_summary to just read the "
+        "scalars, but note it returns the raw per-measurement shape: for a "
+        "WHEN/AT measurement the crossing time/frequency is in each entry's "
+        "'at' field, not 'values' (which holds the constant trigger level).\n\n"
         "Works with .MEAS from any analysis type (.tran/.ac/.dc/.op) — the "
         "measurement directives themselves embed the analysis context. Pass "
         "measurement=NAME to aggregate just one; otherwise returns all "
@@ -3238,6 +3267,8 @@ def _bode_output_schema() -> dict:
             "step_count": {"type": "integer"},
             "steps": {"type": "array", "items": step_item},
             "warnings": {"type": "array", "items": {"type": "string"}},
+            "run_index": {"type": "integer"},
+            "params": {"type": "object"},
         },
     }
 
@@ -3251,8 +3282,12 @@ class BodeMetricsInput(ToolInput):
         default=None,
         description=(
             "Analyze a specific run of a completed sweep/MC (or single) job instead "
-            "of a raw_file path; pair with ``run_index``. Combine with ``all_steps`` "
-            "to sweep the .step axis WITHIN that run."
+            "of a raw_file path; pair with ``run_index``. The analyzed run's swept "
+            "parameter values are echoed back under ``params`` (with ``run_index``), "
+            "so you can tell which sweep point this is without a separate "
+            "batch_results call. Combine with ``all_steps`` to sweep the .step axis "
+            "WITHIN that run (a value-list/param sweep stores each run as its own "
+            "raw — address those by run_index, not all_steps)."
         ),
     )
     run_index: int = Field(
@@ -3263,9 +3298,13 @@ class BodeMetricsInput(ToolInput):
     mode: BodeMode = Field(
         description=(
             "Which view of the AC response to compute:\n"
-            "  'filter'   — LPF/HPF/BPF/BSF type, cutoffs, ripple, rejection "
+            "  'filter'   — LPF/HPF/BPF/BSF type, cutoffs, ripple, rejection, "
+            "and an auto-estimated asymptotic roll-off slope (dB/decade) — so "
+            "one call gives both cutoff AND slope "
             "(args: ref_db, flatness_db, passband_range, stopband_range)\n"
-            "  'slope'    — magnitude slope between two frequencies "
+            "  'slope'    — magnitude slope between two explicit frequencies; "
+            "use when you need a custom window or dB/octave ('filter' already "
+            "reports an asymptotic dB/decade slope) "
             "(args: f_low, f_high — both required)\n"
             "  'point'    — magnitude (dB + linear) and phase at specific "
             "frequencies (args: frequencies — required; include_unwrapped_phase)\n"
@@ -3333,9 +3372,13 @@ class BodeMetricsInput(ToolInput):
         "AC / Bode-plot analysis in one tool, selected by `mode`. The response "
         "shape depends on the mode:\n"
         "  mode='filter'   — filter type, cutoffs (at `ref_db` below passband), "
-        "passband gain/ripple, stopband rejection, transition BW, pole-order.\n"
+        "passband gain/ripple, stopband rejection, transition BW, pole-order, "
+        "and an auto-estimated asymptotic roll-off slope (dB/decade) — covers "
+        "cutoff AND slope in one call.\n"
         "  mode='slope'    — magnitude slope (dB/decade + dB/octave) between "
-        "`f_low` and `f_high`; pick endpoints ≥1 decade past any knee.\n"
+        "`f_low` and `f_high`; pick endpoints ≥1 decade past any knee. Use when "
+        "you need a custom window or dB/octave ('filter' already reports an "
+        "auto-estimated asymptotic dB/decade slope).\n"
         "  mode='point'    — magnitude (dB + linear) and phase at each of "
         "`frequencies` (log-axis interpolation; out-of-range clamps + warns).\n"
         "  mode='crossing' — every frequency where `quantity` crosses `level` "
@@ -3359,8 +3402,12 @@ async def handle_bode_metrics(args: BodeMetricsInput, state: SessionState):
     """Dispatch to the per-mode AC compute adapters (one shared AC load each)."""
     _validate_bode_mode_args(args)
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
+    run_meta = _run_meta(args.job_id, args.run_index, state)
     if not args.all_steps:
-        return await _bode_dispatch(args, args.step, state, raw_path)
+        res = await _bode_dispatch(args, args.step, state, raw_path)
+        if run_meta and res.structuredContent is not None:
+            res.structuredContent.update(run_meta)
+        return res
 
     # all_steps: compute the metric for every step of the sweep.
     raw = await services.load_raw(raw_path, state)
@@ -3402,6 +3449,8 @@ async def handle_bode_metrics(args: BodeMetricsInput, state: SessionState):
         "step_count": step_count,
         "steps": steps_out,
     }
+    if run_meta:
+        data.update(run_meta)
     warnings: list[str] = []
     if step_count == 1:
         warnings.append("Raw is not stepped (step_count=1); 'steps' has a single entry.")
@@ -4136,6 +4185,14 @@ class PlotWaveformInput(ToolInput):
             "for transient/DC."
         ),
     )
+    out_dir: str | None = Field(
+        default=None,
+        description=(
+            "Directory to write the HTML into (resolved under an allowed path; "
+            "created if needed). Default: a '.ltspice-mcp/plots/' sidecar next to "
+            "the circuit for a job_id, or next to the raw for a raw_file."
+        ),
+    )
     format: Literal["json", "text"] | None = Field(
         default=None,
         description="Response format: 'json' for structured data, 'text' for human-readable",
@@ -4153,8 +4210,10 @@ class PlotWaveformInput(ToolInput):
         "frequency); a .step / Monte-Carlo run overlays every step as a labelled "
         "trace (or pass ``step`` for one). Full fidelity by default, with a "
         "min/max-preserving downsample above ``max_points`` (spikes survive; "
-        "surfaced as a fact). Always writes a self-contained HTML file next to the "
-        "circuit and returns its path; on a host that supports MCP Apps the chart is "
+        "surfaced as a fact). Writes a self-contained HTML file and returns its path "
+        "— into ``out_dir`` if given, else a '.ltspice-mcp/plots/' sidecar next to "
+        "the circuit (for a job_id) or next to the raw (for a raw_file); on a host "
+        "that supports MCP Apps the chart is "
         "also embedded as an interactive in-chat widget, otherwise it opens in your "
         "local browser.\n\n"
         "Sibling egress, don't confuse: for numbers in your context use get_waveform "
@@ -4240,25 +4299,15 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
 
     max_points = min(args.max_points or _DEFAULT_PLOT_MAX_POINTS, _PLOT_MAX_POINTS_CEILING)
 
-    # Destination: a Linux-side sidecar next to the CIRCUIT, never next to a raw
-    # that may live in a Windows temp under /mnt/c. Output is a server artifact,
-    # so it is not run through safe_path — but the resolved path must stay under
-    # the anchor (a symlinked sidecar would otherwise redirect it out).
-    if args.job_id:
-        dest_anchor = services.resolve_job(args.job_id, state).netlist.parent
-    else:
-        dest_anchor = safe_path(args.raw_file, state).parent  # type: ignore[arg-type]
-    out_path = (
-        dest_anchor
-        / SIDECAR_DIRNAME
-        / PLOTS_SUBDIR
-        / _plot_filename(raw_path, analysis_type, args.job_id, args.run_index)
-    ).resolve()
-    if not out_path.is_relative_to(dest_anchor.resolve()):
-        raise ResultError(
-            "Refusing to write the plot outside the circuit directory "
-            "(a symlinked .ltspice-mcp/ or plots/ would redirect it)."
-        )
+    out_path = _resolve_artifact_dest(
+        out_dir=args.out_dir,
+        job_id=args.job_id,
+        raw_file=args.raw_file,
+        subdir=PLOTS_SUBDIR,
+        filename=_plot_filename(raw_path, analysis_type, args.job_id, args.run_index),
+        artifact="plot",
+        state=state,
+    )
 
     title = f"{raw_path.stem} — {analysis_type}"
     try:

@@ -204,6 +204,14 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
     }
 
 
+# Branch-current trace names carry an optional terminal letter between ``I`` and
+# ``(`` for multi-terminal devices: e.g. ``Ic(Q1)``/``Ib(Q1)`` (BJT),
+# ``Id(M1)``/``Ig(M1)`` (MOSFET/JFET). A bare ``I(...)`` covers two-terminal
+# element currents like ``I(RC)``/``I(VCC)``. A plain ``startswith("I(")`` test
+# drops the terminal-letter forms, so match the optional letter explicitly.
+_OP_CURRENT_RE = re.compile(r"^I[A-Z]?\(", re.IGNORECASE)
+
+
 def extract_operating_point(raw: RawRead, step: int = 0) -> OperatingPointOutput:
     """Extract DC operating point data (all node voltages and branch currents).
 
@@ -234,7 +242,7 @@ def extract_operating_point(raw: RawRead, step: int = 0) -> OperatingPointOutput
         trace_upper = trace.upper()
         if trace_upper.startswith("V("):
             voltages[trace] = value
-        elif trace_upper.startswith("I("):
+        elif _OP_CURRENT_RE.match(trace):
             currents[trace] = value
 
     return {"voltages": voltages, "currents": currents}
