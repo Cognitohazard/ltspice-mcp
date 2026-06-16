@@ -344,19 +344,27 @@ def _merge_key_values(atoms: Sequence[_Atom]) -> Iterator[Token]:
             value_text = v.text
             value_end = v.offset + len(v.text)
             consumed = 3
-            # Function-call values can be written with whitespace around
-            # ``=`` (``V = if(...)``). Keep the function name and its
-            # parenthesized arguments in one KEY_VALUE token instead of
-            # leaving the PARENED token as a stray remnant.
-            if (
-                v.kind == TokenKind.BARE.value
-                and i + 3 < n
-                and atoms[i + 3].kind == TokenKind.PARENED.value
-            ):
-                suffix = atoms[i + 3]
-                value_text += suffix.text
-                value_end = suffix.offset + len(suffix.text)
-                consumed = 4
+            # An unbraced behavioral expression splits into several atoms
+            # because ``(`` ends a BARE run while operators (``* / - +``) do
+            # not: ``V=V(in)*2`` lexes as BARE ``V`` / PARENED ``(in)`` / BARE
+            # ``*2``, and ``V=V(p)-V(n)`` adds a second PARENED. Greedily
+            # re-join atoms that are GLUED to the value (no whitespace gap) so
+            # the whole expression lands in one KEY_VALUE instead of leaving
+            # the tail as stray remnant tokens — which otherwise read back as
+            # ``<unparseable>`` and silently corrupt a value-edit. This also
+            # subsumes the whitespace-around-``=`` function-call case
+            # (``V = if(...)``). A glued BARE that is itself the next ``key=``
+            # (followed by EQUALS) is left alone, so a missing space before the
+            # next parameter does not swallow it.
+            j = i + 3
+            while j < n and atoms[j].offset == value_end and atoms[j].kind != _EQUALS:
+                nxt = atoms[j]
+                if nxt.kind == TokenKind.BARE.value and j + 1 < n and atoms[j + 1].kind == _EQUALS:
+                    break
+                value_text += nxt.text
+                value_end = nxt.offset + len(nxt.text)
+                consumed += 1
+                j += 1
             # The body span runs from the start of the key to the end
             # of the value, so any whitespace around ``=`` (``KP = 100u``)
             # is included. ``text`` is the canonical no-whitespace form.

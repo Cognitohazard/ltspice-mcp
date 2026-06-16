@@ -223,3 +223,19 @@ class TestListLibraries:
         other.write_text(".MODEL X NPN()\n")
         result = await handle_list_libraries(ListLibrariesInput(path=other.name), state_no_sim)
         assert "No libraries matching" in result.content[0].text
+
+    async def test_detail_surfaces_encrypted_library(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # An encrypted vendor library must read as "exists but encrypted" in
+        # detail mode, not vanish: it carries no plaintext .MODEL/.SUBCKT cards
+        # but is surfaced by name with a clear encrypted marker.
+        enc = work_dir / "2SA2206_enc.lib"
+        enc.write_text("* LTspice Encrypted File\nencrypted body, not parseable\n")
+        await handle_load_library(LoadLibraryInput(path=enc.name), state_no_sim)
+        result = await handle_list_libraries(ListLibrariesInput(detail=True), state_no_sim)
+        text = result.content[0].text
+        assert "2SA2206_enc" in text
+        assert "encrypted" in text.lower()
+        libs = result.structuredContent["libraries"]
+        assert any(lib.get("encrypted") for lib in libs)

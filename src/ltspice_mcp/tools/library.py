@@ -270,7 +270,8 @@ async def handle_unload_library(
     description=(
         "List loaded libraries. With detail=true, also shows the .SUBCKT and "
         ".MODEL names defined in each library (so foundry .bjt/.mod files "
-        "with hundreds of .MODEL cards are discoverable without guessing)."
+        "with hundreds of .MODEL cards are discoverable without guessing), and "
+        "names encrypted vendor files whose bodies can't be parsed."
     ),
     input_model=ListLibrariesInput,
     annotations=RO_ANNOTATIONS,
@@ -288,6 +289,7 @@ async def handle_unload_library(
                         "models": {"type": "array", "items": {"type": "string"}},
                         "models_total": {"type": "integer"},
                         "models_truncated": {"type": "boolean"},
+                        "encrypted": {"type": "array", "items": {"type": "string"}},
                     },
                 },
             },
@@ -343,12 +345,17 @@ async def handle_list_libraries(args: ListLibrariesInput, state: SessionState):
     # candidate without the O(L*S) substring scan the previous loop did.
     subcircuits_by_path: dict[str, list[str]] = {}
     models_by_path: dict[str, list[str]] = {}
+    encrypted_by_path: dict[str, list[str]] = {}
     for r in result["results"]:
         src = r["source_path"]
         if r["type"] == ".SUBCKT":
             subcircuits_by_path.setdefault(src, []).append(r["name"])
         elif r["type"] == ".MODEL":
             models_by_path.setdefault(src, []).append(r["name"])
+        elif r["type"] == ".ENCRYPTED":
+            # An encrypted vendor library — surfaced by name so it reads as
+            # "exists but the body is encrypted", not as an empty file.
+            encrypted_by_path.setdefault(src, []).append(r["name"])
 
     DETAIL_NAME_CAP = 25
     lines = [header]
@@ -357,6 +364,7 @@ async def handle_list_libraries(args: ListLibrariesInput, state: SessionState):
         lib_str = str(lib_path)
         matching_subs = sorted(subcircuits_by_path.get(lib_str, []))
         matching_models = sorted(models_by_path.get(lib_str, []))
+        matching_encrypted = sorted(encrypted_by_path.get(lib_str, []))
         lines.append(f"  {lib_path}")
         if matching_subs:
             for name in matching_subs:
@@ -366,7 +374,10 @@ async def handle_list_libraries(args: ListLibrariesInput, state: SessionState):
                 lines.append(f"    .MODEL  {name}")
             if len(matching_models) > DETAIL_NAME_CAP:
                 lines.append(f"    .MODEL  ... (+{len(matching_models) - DETAIL_NAME_CAP} more)")
-        if not matching_subs and not matching_models:
+        if matching_encrypted:
+            for name in matching_encrypted:
+                lines.append(f"    [encrypted] {name} (body encrypted; ports unknown)")
+        if not matching_subs and not matching_models and not matching_encrypted:
             lines.append("    (no subcircuits or models)")
         # Cap structuredContent identically — a foundry library can carry
         # thousands of .MODEL cards and we don't want every recent client
@@ -379,6 +390,7 @@ async def handle_list_libraries(args: ListLibrariesInput, state: SessionState):
                 "models": matching_models[:DETAIL_NAME_CAP],
                 "models_total": len(matching_models),
                 "models_truncated": models_truncated,
+                "encrypted": matching_encrypted,
             }
         )
 

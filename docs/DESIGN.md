@@ -379,14 +379,18 @@ Key `lib/` modules:
 |profile|tool count|use case|
 |-|-|-|
 |`full` (default)|47|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
-|`agentic`|37|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
+|`agentic`|39|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
 
-The `agentic` profile drops 10 tools: the five netlist-editing wrappers
+The `agentic` profile drops 8 tools: the five netlist-editing wrappers
 (`create_netlist`, `read_circuit`, `set_component_value`, `parameter`,
 `edit_directive`) — things a capable agent does natively via filesystem
-access — the three library session tools (`load_library`,
-`unload_library`, `list_libraries`), and the `configure_sweep` /
-`configure_montecarlo` config builders. It keeps simulation lifecycle,
+access — and the three library session tools (`load_library`,
+`unload_library`, `list_libraries`). It keeps the `configure_sweep` /
+`configure_montecarlo` config builders: they are the only producers of the
+`config_id` that `run_sweep` / `run_montecarlo` consume, and Monte Carlo
+perturbation with N-run aggregation (and the batch-sweep route) is not
+something an agent reproduces with native file edits the way it can a plain
+LTspice `.step`. It keeps simulation lifecycle,
 binary `.raw` parsing and analysis, batch run/results, library search
 (`find_model`), and the schematic toolset an agent cannot replicate
 by editing text — geometry-aware editing with orthogonal routing and

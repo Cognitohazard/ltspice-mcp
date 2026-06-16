@@ -24,7 +24,7 @@ from ltspice_mcp.lib.spice_lex import (
     TokenKind,
     tokenize_body,
 )
-from ltspice_mcp.lib.spice_lex_views import InstanceLine
+from ltspice_mcp.lib.spice_lex_views import InstanceLine, body_has_stray_kv_remnant
 
 _POSITIONAL_KINDS = (
     TokenKind.BARE,
@@ -102,7 +102,10 @@ def apply_value_to_instance(card: SpiceCard, raw_value: str) -> ApplyResult:
                 f"set_component_value does not support mutual-inductance "
                 f"K elements (got {ref!r}). Edit the card directly."
             )
-        raise NetlistError(f"Unsupported element prefix {prefix!r} for {ref!r}")
+        raise NetlistError(
+            f"set_component_value does not support {prefix!r}-prefixed element "
+            f"{ref!r}. Edit the card directly."
+        )
 
     ctx = _ApplyCtx(
         card=card,
@@ -190,6 +193,16 @@ def _apply_indep_source(ctx: _ApplyCtx) -> ApplyResult:
 
 
 def _apply_b_source(ctx: _ApplyCtx) -> ApplyResult:
+    # An unbraced expression with whitespace around its operators
+    # (``V = V(a) + V(b)``) parses to a first key=value plus orphan tokens the
+    # editor can't see. Rewriting the key=value span would leave those orphans
+    # behind and corrupt the card, so refuse rather than silently mangle it.
+    if body_has_stray_kv_remnant(ctx.card.body):
+        raise NetlistError(
+            f"Component {ctx.ref!r}: its behavioural expression is not fully "
+            "parseable (orphan tokens after the first key=value). Wrap the "
+            "expression in braces (e.g. V={...}) in the netlist, then edit it."
+        )
     inst = InstanceLine.from_card(ctx.card)
     existing_upper = {k.upper(): v for k, v in inst.params.items()}
     has_v, has_i = "V" in existing_upper, "I" in existing_upper
@@ -365,5 +378,11 @@ _DISPATCH: dict[str, Callable[[_ApplyCtx], ApplyResult]] = {
     "M": _apply_active_device,
     "Q": _apply_active_device,
     "J": _apply_active_device,
+    # Diode and the voltage/current-controlled switches carry a trailing model
+    # name — the same card shape as M/Q/J, so set_component_value swaps the
+    # model/part number the same way.
+    "D": _apply_active_device,
+    "S": _apply_active_device,
+    "W": _apply_active_device,
     "X": _apply_subckt,
 }

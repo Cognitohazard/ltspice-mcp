@@ -63,6 +63,44 @@ class TestLoadLibrary:
         with pytest.raises(LibraryError, match="No valid models"):
             empty_manager.load_library(garbage)
 
+    def test_directory_scan_discovers_sub_subcircuit_libraries(
+        self, empty_manager: LibraryManager, tmp_path: Path
+    ):
+        # ``.sub`` files hold the bulk of LTspice's bundled vendor subcircuit
+        # models. The directory scan shares its accepted-suffix set with the
+        # built-in detection walk, so a SUBCKT defined in a ``.sub`` file must
+        # be discovered (and findable) the same as one in a ``.lib``.
+        d = tmp_path / "subs"
+        d.mkdir()
+        (d / "vendor.sub").write_text(".SUBCKT MYPART in out\nR1 in out 1k\n.ENDS\n")
+        summary = empty_manager.load_library(d)
+        assert summary["files_loaded"] == 1
+        assert summary["subcircuits"] == 1
+        info = empty_manager.get_model_info("MYPART", include_builtin=False)
+        assert info is not None
+        assert info["type"] == ".SUBCKT"
+
+    def test_load_encrypted_only_dir_reports_encrypted_not_error(
+        self, empty_manager: LibraryManager, tmp_path: Path
+    ):
+        # A directory of only encrypted vendor libraries must not raise the
+        # misleading "No valid models or subcircuits found" — each part is
+        # surfaced by name as an encrypted entry so search can report it
+        # exists.
+        d = tmp_path / "enc"
+        d.mkdir()
+        (d / "PART_A_enc.lib").write_text("* LTspice Encrypted File\n* Begin:\n 05 AC A3 C2\n")
+        (d / "PART_B_enc.lib").write_text("* LTspice Encrypted File\n* Begin:\n 11 22 33 44\n")
+        summary = empty_manager.load_library(d)
+        assert summary["files_loaded"] == 2
+        assert summary["models"] == 0
+        assert summary["subcircuits"] == 0
+        assert summary["encrypted"] == 2
+        # The encrypted part is reachable by name through search.
+        result = empty_manager.search_user_libraries("PART_A_enc")
+        assert result["total"] == 1
+        assert result["results"][0]["type"] == ".ENCRYPTED"
+
 
 class TestUnloadLibrary:
     def test_unload_single(self, empty_manager: LibraryManager, lib_file: Path):

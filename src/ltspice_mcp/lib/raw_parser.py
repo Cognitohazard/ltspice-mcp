@@ -296,7 +296,10 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
         # signals (it's just a 0 dB crossing).
         pm_entries = stability["phase_margins"]
         if pm_entries:
-            worst_pm = min(pm_entries, key=lambda m: abs(m["margin_deg"]))
+            # Worst-case unity-gain crossover is the one with the most negative
+            # (least stable) phase margin — a negative margin must not be masked
+            # by a smaller positive one (matches compute_stability_metrics).
+            worst_pm = min(pm_entries, key=lambda m: m["margin_deg"])
             metrics["unity_gain_freq"] = float(worst_pm["frequency_hz"])
     except Exception:
         pass
