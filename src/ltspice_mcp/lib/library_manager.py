@@ -11,19 +11,26 @@ from rapidfuzz import fuzz
 
 from ltspice_mcp.errors import LibraryError
 from ltspice_mcp.lib.cache import FileCache
-from ltspice_mcp.lib.library_parser import LibraryIndex, ModelEntry, parse_library_file
+from ltspice_mcp.lib.library_parser import (
+    ENCRYPTED_MODEL_TYPE,
+    LibraryIndex,
+    ModelEntry,
+    parse_library_file,
+)
 from ltspice_mcp.lib.wsl import is_wsl
 
 logger = logging.getLogger(__name__)
 
 
-# Suffixes treated as SPICE library files. ``.lib`` / ``.mod`` cover third-party
-# packs; ``standard.bjt`` / ``.mos`` / ``.dio`` / ``.jft`` (and the device-default
-# ``.cap`` / ``.ind`` / ``.res`` / ``.bead``) are LTspice's bundled stock decks
-# under ``lib/cmp``. Shared by the builtin detection walk AND the explicit
-# ``load_library`` directory scan so the two agree on what a "library file" is.
+# Suffixes treated as SPICE library files. ``.lib`` / ``.mod`` / ``.sub`` cover
+# third-party packs (``.sub`` holds the subcircuit decks that make up the bulk
+# of LTspice's bundled vendor models); ``standard.bjt`` / ``.mos`` / ``.dio`` /
+# ``.jft`` (and the device-default ``.cap`` / ``.ind`` / ``.res`` / ``.bead``)
+# are LTspice's bundled stock decks under ``lib/cmp``. Shared by the builtin
+# detection walk AND the explicit ``load_library`` directory scan so the two
+# agree on what a "library file" is.
 _SPICE_LIB_SUFFIXES = frozenset(
-    {".lib", ".mod", ".bjt", ".mos", ".dio", ".cap", ".ind", ".res", ".jft", ".bead"}
+    {".lib", ".mod", ".sub", ".bjt", ".mos", ".dio", ".cap", ".ind", ".res", ".jft", ".bead"}
 )
 
 
@@ -294,6 +301,7 @@ class LibraryManager:
 
         total_models = 0
         total_subcircuits = 0
+        total_encrypted = 0
 
         for lib_file in files_to_load:
             try:
@@ -301,10 +309,12 @@ class LibraryManager:
                 # Store in cache
                 self._user_libs.set(lib_file, index)
 
-                # Count models vs subcircuits
+                # Count models vs subcircuits vs encrypted-only stubs.
                 for model in index.models:
                     if model.model_type == ".MODEL":
                         total_models += 1
+                    elif model.model_type == ENCRYPTED_MODEL_TYPE:
+                        total_encrypted += 1
                     else:
                         total_subcircuits += 1
 
@@ -312,7 +322,7 @@ class LibraryManager:
             except Exception as e:
                 logger.warning(f"Failed to parse library file {lib_file}: {e}")
 
-        if total_models == 0 and total_subcircuits == 0:
+        if total_models == 0 and total_subcircuits == 0 and total_encrypted == 0:
             raise LibraryError(f"No valid models or subcircuits found in {path}")
 
         return {
@@ -320,6 +330,7 @@ class LibraryManager:
             "files_loaded": len(files_to_load),
             "models": total_models,
             "subcircuits": total_subcircuits,
+            "encrypted": total_encrypted,
         }
 
     def unload_library(self, path: Path) -> dict:

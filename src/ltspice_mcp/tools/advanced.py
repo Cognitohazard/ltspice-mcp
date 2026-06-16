@@ -415,7 +415,7 @@ def _netlist_component_refs(netlist_path) -> set[str]:
         idempotentHint=True,
         openWorldHint=False,
     ),
-    profiles=("full",),
+    profiles=("full", "agentic"),
 )
 async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState):
     """Configure a multi-parameter sweep and store it for later execution.
@@ -656,7 +656,7 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
         idempotentHint=True,
         openWorldHint=False,
     ),
-    profiles=("full",),
+    profiles=("full", "agentic"),
 )
 async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: SessionState):
     """Configure a Monte Carlo analysis and store it for later execution.

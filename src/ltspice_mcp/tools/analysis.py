@@ -186,10 +186,21 @@ def _classify_analysis(raw) -> tuple[str, str, str, bool]:
 
 
 async def _load_real_signal(
-    raw_file: str, signal: str, step: int, state: SessionState
+    raw_file: str | None,
+    signal: str,
+    step: int,
+    state: SessionState,
+    *,
+    job_id: str | None = None,
+    run_index: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Load (axis, wave) for a signal, rejecting AC/complex data."""
-    raw_path = safe_path(raw_file, state)
+    """Load (axis, wave) for a signal, rejecting AC/complex data.
+
+    Resolves the raw from EITHER a user ``raw_file`` OR a completed job run
+    (``job_id`` + ``run_index``) via :func:`_effective_raw_path`, so a sweep /
+    Monte-Carlo run can be analyzed the same way as a standalone raw.
+    """
+    raw_path = _effective_raw_path(raw_file, job_id, run_index, state)
     raw = await services.load_raw(raw_path, state)
     _reject_non_transient(raw)
     signal = services.validate_signal(raw, signal)
@@ -250,7 +261,22 @@ def _warning_lines(warnings: list[str]) -> list[str]:
 
 
 class SignalStatsInput(ToolInput):
-    raw_file: str = Field(description="Path to .raw result file from simulation")
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to .raw result file. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Analyze a specific run of a completed sweep/MC (or single) job instead "
+            "of a raw_file path; pair with ``run_index``. Lets you summarize a sweep "
+            "run the same way you'd summarize a standalone raw."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to analyze when ``job_id`` is given (default 0).",
+    )
     signal: str = Field(description="Signal/trace name (e.g., 'V(out)', 'I(R1)').")
     step: int = Field(default=0, description="Step index for .step directives")
     t_start: str | None = Field(
@@ -346,7 +372,21 @@ class QueryValueInput(ToolInput):
 
 
 class OperatingPointInput(ToolInput):
-    raw_file: str = Field(description="Path to .raw result file from simulation")
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to .raw result file. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Read the operating point of a specific run of a completed sweep/MC "
+            "(or single) job instead of a raw_file path; pair with ``run_index``."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to read when ``job_id`` is given (default 0).",
+    )
     step: int = Field(
         default=0,
         description=(
@@ -362,11 +402,26 @@ class OperatingPointInput(ToolInput):
 
 
 class SimulationSummaryInput(ToolInput):
-    raw_file: str = Field(description="Path to .raw result file from simulation")
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to .raw result file. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Summarize a specific run of a completed sweep/MC (or single) job "
+            "instead of a raw_file path; pair with ``run_index``. The .log is "
+            "taken from beside the run's raw unless ``log_file`` is given."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to summarize when ``job_id`` is given (default 0).",
+    )
     log_file: str | None = Field(
         default=None,
         description=(
-            "Optional path to .log file. Defaults to ``raw_file`` with the "
+            "Optional path to .log file. Defaults to the resolved raw with the "
             "extension swapped to ``.log`` — pass an explicit value only if "
             "the log lives somewhere unusual."
         ),
@@ -408,11 +463,12 @@ class SimulationSummaryInput(ToolInput):
         "AC: returns magnitude (dB) min/max/mean and phase (deg) min/max. "
         "t_start/t_end are rejected for AC — use query_value for a "
         "point at a specific frequency.\n\n"
-        "Noise: returns min/max/pk-pk and the simple/abs mean of the noise "
-        "spectral density over the frequency axis, plus ``freq_start_used``/"
-        "``freq_end_used``. RMS/std/duration are omitted; t_start/t_end are "
-        "rejected — pass them via query_value at specific frequencies "
-        "instead.\n\n"
+        "Noise: returns min/max/pk-pk of the noise spectral density over the "
+        "frequency axis, plus ``freq_start_used``/``freq_end_used``. Mean, RMS, "
+        "std, and duration are omitted — a plain mean of spectral density is "
+        "dominated by sample clustering and the sweep span, not the circuit; "
+        "min/max is the useful worst-case reading. t_start/t_end are rejected "
+        "— pass them via query_value at specific frequencies instead.\n\n"
         "Related tools: for rise/fall times use edge_metrics; for "
         "overshoot/settling use pulse_response; for period/duty use "
         "periodic_metrics; to aggregate .MEAS values across a sweep "
@@ -455,7 +511,7 @@ class SimulationSummaryInput(ToolInput):
     },
 )
 async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
-    raw_path = safe_path(args.raw_file, state)
+    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     signal = args.signal
     step = args.step
     fmt = args.format
@@ -507,9 +563,7 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
         ]
         return format_response("\n".join(lines), {"signal": signal, **stats}, fmt)
 
-    axis = np.asarray(raw.get_axis(step=step))
-    if np.iscomplexobj(axis):
-        axis = np.real(axis)
+    axis = _guarded_axis(raw, step)
     wave_real = np.asarray(wave)
 
     # Distinguish DC sweep (axis = sweep variable, e.g. ``temp``)
@@ -595,13 +649,18 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
         f"Min:          {stats['min']:.6g}",
         f"Max:          {stats['max']:.6g}",
         f"Peak-to-Peak: {stats['peak_to_peak']:.6g}",
-        f"Mean:         {stats['mean']:.6g}",
     ]
+    # Mean / abs-mean are present for transient and DC sweeps; the Noise branch
+    # omits them on purpose (a plain mean of spectral density is dominated by
+    # sample clustering and the sweep span, not the circuit), so guard them.
+    if "mean" in stats:
+        lines.append(f"Mean:         {stats['mean']:.6g}")
     if "rms" in stats:
         lines.append(f"RMS:          {stats['rms']:.6g}")
     if "std" in stats:
         lines.append(f"Std:          {stats['std']:.6g}")
-    lines.append(f"Abs mean:     {stats['abs_mean']:.6g}")
+    if "abs_mean" in stats:
+        lines.append(f"Abs mean:     {stats['abs_mean']:.6g}")
     if "duration" in stats:
         lines.append(f"Duration:     {stats['duration']:.6g} s  ({stats['point_count']} samples)")
     elif "sweep_span" in stats:
@@ -1529,7 +1588,7 @@ def _format_measurements(
 )
 async def handle_operating_point(args: OperatingPointInput, state: SessionState):
     """Read DC operating point data (all node voltages and branch currents)."""
-    raw_path = safe_path(args.raw_file, state)
+    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     fmt = args.format
     raw = await services.load_raw(raw_path, state)
 
@@ -1667,7 +1726,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
 )
 async def handle_simulation_summary(args: SimulationSummaryInput, state: SessionState):
     """Get comprehensive simulation summary."""
-    raw_path = safe_path(args.raw_file, state)
+    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     fmt = args.format
     log_path = None
     if args.log_file is not None:
@@ -1832,7 +1891,21 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
 
 
 class EdgeMetricsInput(ToolInput):
-    raw_file: str = Field(description="Path to .raw transient result file")
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to .raw transient result file. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Analyze a specific run of a completed sweep/MC (or single) job instead "
+            "of a raw_file path; pair with ``run_index``."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to analyze when ``job_id`` is given (default 0).",
+    )
     signal: str = Field(description="Signal name (e.g. 'V(out)')")
     step: int = Field(default=0, description="Step index for .step sweeps")
     t_start: str | None = Field(
@@ -1871,7 +1944,21 @@ class EdgeMetricsInput(ToolInput):
 
 
 class PulseResponseInput(ToolInput):
-    raw_file: str = Field(description="Path to .raw transient result file")
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to .raw transient result file. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Analyze a specific run of a completed sweep/MC (or single) job instead "
+            "of a raw_file path; pair with ``run_index``."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to analyze when ``job_id`` is given (default 0).",
+    )
     signal: str = Field(description="Signal name (e.g. 'V(out)')")
     step: int = Field(default=0, description="Step index for .step sweeps")
     t_start: str | None = Field(
@@ -1895,7 +1982,21 @@ class PulseResponseInput(ToolInput):
 
 
 class TimingBetweenInput(ToolInput):
-    raw_file: str = Field(description="Path to .raw transient result file")
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to .raw transient result file. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Analyze a specific run of a completed sweep/MC (or single) job instead "
+            "of a raw_file path; pair with ``run_index``."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to analyze when ``job_id`` is given (default 0).",
+    )
     signal_a: str = Field(description="Reference signal (e.g. 'V(in)')")
     signal_b: str = Field(description="Delayed signal (e.g. 'V(out)'). delay = t_b - t_a.")
     step: int = Field(default=0, description="Step index for .step sweeps")
@@ -1919,7 +2020,21 @@ class TimingBetweenInput(ToolInput):
 
 
 class PeriodicMetricsInput(ToolInput):
-    raw_file: str = Field(description="Path to .raw transient result file")
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to .raw transient result file. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Analyze a specific run of a completed sweep/MC (or single) job instead "
+            "of a raw_file path; pair with ``run_index``."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to analyze when ``job_id`` is given (default 0).",
+    )
     signal: str = Field(description="Signal name (e.g. 'V(clk)')")
     step: int = Field(default=0, description="Step index for .step sweeps")
     t_start: str | None = Field(
@@ -2041,7 +2156,9 @@ class MeasurementStatsResponse(TypedDict):
     output_model=EdgeMetricsResponse,
 )
 async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
-    axis, wave = await _load_real_signal(args.raw_file, args.signal, args.step, state)
+    axis, wave = await _load_real_signal(
+        args.raw_file, args.signal, args.step, state, job_id=args.job_id, run_index=args.run_index
+    )
     t, y, _ = _window(axis, wave, args.t_start, args.t_end)
     data = _run(
         analyze_edge,
@@ -2100,7 +2217,9 @@ async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
     output_model=PulseResponseResponse,
 )
 async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
-    axis, wave = await _load_real_signal(args.raw_file, args.signal, args.step, state)
+    axis, wave = await _load_real_signal(
+        args.raw_file, args.signal, args.step, state, job_id=args.job_id, run_index=args.run_index
+    )
     t, y, _ = _window(axis, wave, args.t_start, args.t_end)
     data = _run(
         analyze_pulse_response,
@@ -2167,7 +2286,7 @@ async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
     output_model=TimingBetweenResponse,
 )
 async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
-    raw_path = safe_path(args.raw_file, state)
+    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     raw = await services.load_raw(raw_path, state)
     _reject_non_transient(raw)
     sig_a = services.validate_signal(raw, args.signal_a)
@@ -2250,7 +2369,9 @@ async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
     output_model=PeriodicMetricsResponse,
 )
 async def handle_periodic_metrics(args: PeriodicMetricsInput, state: SessionState):
-    axis, wave = await _load_real_signal(args.raw_file, args.signal, args.step, state)
+    axis, wave = await _load_real_signal(
+        args.raw_file, args.signal, args.step, state, job_id=args.job_id, run_index=args.run_index
+    )
     t, y, _ = _window(axis, wave, args.t_start, args.t_end)
     data = _run(
         analyze_periodic,
@@ -2726,7 +2847,21 @@ class FilterMetricsInput(ToolInput):
 
 
 class StabilityMetricsInput(ToolInput):
-    raw_file: str = Field(description="Path to loop-gain AC analysis .raw file")
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to loop-gain AC analysis .raw file. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Analyze a completed job run by id instead of a raw_file path; pair "
+            "with ``run_index``. Lets you read a sweep / Monte-Carlo run's margins."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to analyze when ``job_id`` is given (default 0).",
+    )
     signal: str = Field(description="Loop-gain signal (e.g. 'V(loop)')")
     min_separation_decades: float = Field(
         default=0.1,
@@ -2746,7 +2881,21 @@ class RollOffInput(ToolInput):
 
 
 class ResonanceInput(ToolInput):
-    raw_file: str = Field(description="Path to AC analysis .raw result file")
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to AC analysis .raw result file. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Analyze a completed job run by id instead of a raw_file path; pair "
+            "with ``run_index``. Lets you read a sweep / Monte-Carlo run's peaks."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to analyze when ``job_id`` is given (default 0).",
+    )
     signal: str = Field(description="Signal name (e.g. 'V(out)')")
     min_prominence_db: float = Field(
         default=3.0,
@@ -2987,7 +3136,8 @@ async def handle_filter_metrics(args: FilterMetricsInput, state: SessionState):
     output_model=StabilityMetricsResponse,
 )
 async def handle_stability_metrics(args: StabilityMetricsInput, state: SessionState):
-    freqs, H = await _load_ac_signal(args.raw_file, args.signal, args.step, state)
+    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
+    freqs, H = await _load_ac_signal(raw_path, args.signal, args.step, state)
     data = _run(
         compute_stability_metrics,
         freqs,
@@ -3406,7 +3556,8 @@ def _warning_coverage(step_indices: list[int], step_count: int) -> str:
 async def handle_resonance(args: ResonanceInput, state: SessionState):
     if args.max_peaks < 1 or args.max_peaks > 1000:
         raise ResultError(f"max_peaks must be in [1, 1000], got {args.max_peaks}")
-    freqs, H = await _load_ac_signal(args.raw_file, args.signal, args.step, state)
+    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
+    freqs, H = await _load_ac_signal(raw_path, args.signal, args.step, state)
     data = _run(
         compute_resonances,
         freqs,
