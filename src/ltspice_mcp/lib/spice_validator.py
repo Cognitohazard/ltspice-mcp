@@ -26,7 +26,13 @@ from typing import Literal
 
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, lex, tokenize_body
-from ltspice_mcp.lib.spice_lex_views import ELEMENT_SPECS, InstanceLine, MeasCard, SubcktCard
+from ltspice_mcp.lib.spice_lex_views import (
+    ELEMENT_SPECS,
+    InstanceLine,
+    MeasCard,
+    SubcktCard,
+    body_has_stray_kv_remnant,
+)
 
 # Analysis directives that LTspice accepts. Used by validate_netlist to
 # match ``.meas <kind>`` against the active analysis and detect duplicates.
@@ -300,6 +306,25 @@ def validate_netlist_arity(
                         ),
                     }
                 )
+
+        # A behavioral expression with whitespace around its operators
+        # (``V = V(a) + V(b)``) leaves orphan tokens after the first key=value:
+        # the lexer re-joins only glued forms (``V=V(a)+V(b)``). Flag the
+        # remnant so it is not silently dropped on read or corrupted by a
+        # value-edit that only rewrites the first key=value span.
+        if body_has_stray_kv_remnant(card.body):
+            issues.append(
+                {
+                    "line": card.line_start,
+                    "directive": directive,
+                    "message": (
+                        f"{inst.ref}: value expression is not fully parsed — "
+                        "tokens after the first key=value are orphaned. Wrap the "
+                        "expression in braces (e.g. V={...}) so it reads and "
+                        "edits as a single value."
+                    ),
+                }
+            )
 
     return issues
 

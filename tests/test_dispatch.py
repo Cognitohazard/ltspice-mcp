@@ -98,8 +98,6 @@ class TestToolProfiles:
             "set_component_value",
             "parameter",
             "edit_directive",
-            "configure_sweep",
-            "configure_montecarlo",
             "load_library",
             "unload_library",
             "list_libraries",
@@ -107,6 +105,27 @@ class TestToolProfiles:
         _, handlers = get_tools_for_profile("agentic")
         present = filtered_out & set(handlers.keys())
         assert not present, f"Tools that should be filtered out are present: {present}"
+
+    def test_sweep_montecarlo_reachable_in_agentic(self):
+        """Sweep and Monte Carlo must be runnable end to end in the agentic
+        profile. run_sweep/run_montecarlo consume a config_id that ONLY
+        configure_sweep/configure_montecarlo produce, so the config builders
+        have to ship in the same profile as the runners — otherwise every
+        config_id is rejected and the runners are structurally dead. Monte
+        Carlo perturbation + N-run aggregation and the batch-sweep route are
+        not something an agent reproduces with native file edits (unlike a
+        plain LTspice .step), so they belong in the agent-facing profile."""
+        _, handlers = get_tools_for_profile("agentic")
+        names = set(handlers.keys())
+        required = {
+            "configure_sweep",
+            "run_sweep",
+            "configure_montecarlo",
+            "run_montecarlo",
+            "batch_results",
+        }
+        missing = required - names
+        assert not missing, f"Sweep/MC chain broken in agentic, missing: {missing}"
 
     def test_schematic_construction_writes_in_agentic(self):
         """The schematic-construction writes stay in agentic: geometry-aware
@@ -256,7 +275,7 @@ _TOOL_REVERSAL: dict[str, str] = {
     "connect": "remove_wire op",
     # Self-inverse standalone edits (re-invoke with the prior value/state).
     "set_component_value": "re-set to prior value",
-    "parameter": "re-set to prior value",
+    "parameter": "re-set to prior value, or delete=true to undo an added param",
     "edit_directive": "action=add <-> action=remove",
     # Recovery hatch — reset_schematic IS the inverse mechanism for .asc edits.
     "reset_schematic": "reverts to the pre-edit snapshot (it is the undo)",

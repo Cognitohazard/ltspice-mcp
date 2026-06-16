@@ -738,6 +738,15 @@ class ParameterInput(ToolInput):
     value: str | None = Field(
         default=None, description="Parameter value (required when name is specified)"
     )
+    delete: bool = Field(
+        default=False,
+        description=(
+            "Delete the named .PARAM (the inverse of setting one). Requires "
+            "``name`` and is mutually exclusive with ``value``. Matches by name, "
+            "so a just-added parameter can be removed even after the value/case "
+            "was reformatted on write."
+        ),
+    )
     format: Literal["json", "text"] | None = Field(
         default=None,
         description="Response format: 'json' for structured data, 'text' for human-readable",
@@ -1622,7 +1631,11 @@ async def _set_component_value_asc(
 
 @registry.tool(
     name="parameter",
-    description="Read or write .PARAM directive values in a circuit file.",
+    description=(
+        "Read, write, or delete .PARAM directive values in a circuit file. "
+        "Pass ``delete=true`` with ``name`` to remove a parameter (the inverse "
+        "of setting one)."
+    ),
     input_model=ParameterInput,
     annotations=types.ToolAnnotations(
         readOnlyHint=False,
@@ -1645,11 +1658,13 @@ async def handle_parameter(args: ParameterInput, state: SessionState):
     """Get or set .PARAM directive values.
 
     Modes:
-      - no args         → list every .PARAM in the file
-      - name only       → read a single parameter's value
-      - name and value  → set a parameter (creates it if missing)
+      - no args          → list every .PARAM in the file
+      - name only        → read a single parameter's value
+      - name and value   → set a parameter (creates it if missing)
+      - name and delete  → remove the parameter (matched by name)
 
-    Providing value without name is an error. Works on .cir/.net and .asc.
+    Providing value without name is an error, as is delete without name or
+    delete together with value. Works on .cir/.net and .asc.
     """
     file_path = safe_path(args.path, state)
     fmt = args.format
@@ -1662,6 +1677,19 @@ async def handle_parameter(args: ParameterInput, state: SessionState):
 
     if param_value is not None and param_name is None:
         raise NetlistError("'value' requires 'name' — cannot set a parameter without a name")
+
+    if args.delete:
+        if param_name is None:
+            raise NetlistError("'delete' requires 'name' — which parameter to remove")
+        if param_value is not None:
+            raise NetlistError("Pass either 'value' (to set) or 'delete' (to remove), not both")
+        async with _editing(file_path, state) as editor:
+            removed = _remove_parameter(editor, param_name)
+        if not removed:
+            raise NetlistError(
+                f"Parameter '{param_name}' not found in {file_path.name}; nothing to delete."
+            )
+        return format_response(f"Deleted .PARAM {param_name}", {"parameters": {}}, fmt)
 
     if param_name is not None and param_value is not None:
         async with _editing(file_path, state) as editor:
@@ -1869,6 +1897,77 @@ async def handle_edit_directive(
             raise NetlistError(f"Invalid action '{action}'. Must be 'add' or 'remove'.")
 
     return text_response(result)
+
+
+def _param_text_without(text: str, name: str) -> str | None:
+    """``text`` (a ``.param`` directive) with parameter ``name`` removed.
+
+    Returns the rebuilt directive, ``""`` if removing ``name`` leaves it with no
+    parameters (caller should drop the whole directive), or ``None`` if ``name``
+    is not one of its parameters. A ``.param`` line may define several
+    parameters (``.param A=1 B=2``); only ``name``'s ``key=value`` is dropped so
+    the siblings survive. The directive head's original case (``.param`` /
+    ``.PARAM``) is preserved.
+    """
+    toks = tokenize_body(text)
+    if not toks:
+        return None
+    target = name.lower()
+    kvs = [t for t in toks if t.kind == TokenKind.KEY_VALUE]
+    if not any(t.key and t.key.lower() == target for t in kvs):
+        return None
+    kept = [t for t in kvs if not (t.key and t.key.lower() == target)]
+    if not kept:
+        return ""
+    return toks[0].text + " " + " ".join(f"{t.key}={t.value}" for t in kept)
+
+
+def _remove_parameter(editor, name: str) -> bool:
+    """Remove parameter ``name`` from its ``.param`` directive, returning whether
+    it was removed.
+
+    Only ``name``'s ``key=value`` is dropped: sibling parameters that share the
+    same ``.param`` line (``.param A=1 B=2``) are preserved, and the directive
+    itself is removed only when ``name`` was its sole parameter. Matched
+    case-insensitively by name, so a parameter is still removable after the
+    editor reformatted its value/case or appended a batch comment on write. This
+    is the inverse of setting a parameter.
+    """
+    directives = getattr(editor, "directives", None)
+    if directives is not None:
+        # AscEditor: typed Text records.
+        for idx, d in enumerate(directives):
+            text = getattr(d, "text", None)
+            if getattr(d, "type", None) != TextTypeEnum.DIRECTIVE or not isinstance(text, str):
+                continue
+            if not text.strip().lower().startswith(".param"):
+                continue
+            rebuilt = _param_text_without(text, name)
+            if rebuilt is None:
+                continue
+            if rebuilt == "":
+                del directives[idx]
+            else:
+                d.text = rebuilt  # Text is a mutable dataclass; keeps coord/size/etc.
+            return True
+        return False
+
+    # SpiceEditor (.cir/.net): raw line list.
+    netlist = getattr(editor, "netlist", None)
+    if not isinstance(netlist, list):
+        return False
+    for idx, line in enumerate(netlist):
+        if not isinstance(line, str) or not line.strip().lower().startswith(".param"):
+            continue
+        rebuilt = _param_text_without(line, name)
+        if rebuilt is None:
+            continue
+        if rebuilt == "":
+            del netlist[idx]
+        else:
+            netlist[idx] = rebuilt + ("\n" if line.endswith("\n") else "")
+        return True
+    return False
 
 
 def _remove_exact_directive(editor, instruction: str) -> bool:
@@ -3702,34 +3801,37 @@ def _component_signature(comp: dict) -> str:
     return f"{value} | {attr_str}"
 
 
-def _components_and_directives(path: Path) -> tuple[dict[str, str], set[str]]:
-    """Return (components, directive_lines) for a circuit file in one read.
+def _components_and_directives(path: Path) -> tuple[dict[str, str], set[str], str | None]:
+    """Return (components, directive_lines, parse_error) for a circuit file.
 
     Reuses ``services.extract_{asc,netlist}_info`` so unparseable component
     values, AscEditor dispatch, and directive collection all flow through the
-    canonical path. No second disk read.
+    canonical path. No second disk read. ``parse_error`` is None on success,
+    or a short message when the file could not be parsed — so the diff can
+    flag an unreadable file rather than treat it as an empty circuit (which
+    would report every component of the other file as a removal).
     """
     if _is_asc(path):
         try:
             ed = _make_editor(path)
-        except Exception:
-            return {}, set()
+        except Exception as e:
+            return {}, set(), f"{path.name} could not be parsed ({e})"
         assert isinstance(ed, AscEditor)
         info = services.extract_asc_info(ed, path)
         components = {comp["reference"]: _component_signature(comp) for comp in info["components"]}
         directives = {d.strip() for d in info.get("directives", []) if d.strip().startswith(".")}
-        return components, directives
+        return components, directives, None
     try:
         info = services.extract_netlist_info(path)
-    except Exception:
-        return {}, set()
+    except Exception as e:
+        return {}, set(), f"{path.name} could not be parsed ({e})"
     components = {comp["reference"]: _component_signature(comp) for comp in info["components"]}
     directives = {
         line.strip()
         for line in info.get("content", "").splitlines()
         if line.strip().startswith(".")
     }
-    return components, directives
+    return components, directives, None
 
 
 @registry.tool(
@@ -3751,8 +3853,9 @@ async def handle_diff_circuit(args: DiffCircuitInput, state: SessionState) -> ty
     path_a = safe_path(args.path_a, state)
     path_b = safe_path(args.path_b, state)
 
-    a, da = _components_and_directives(path_a)
-    b, db = _components_and_directives(path_b)
+    a, da, err_a = _components_and_directives(path_a)
+    b, db, err_b = _components_and_directives(path_b)
+    parse_errors = [m for m in (err_a, err_b) if m]
 
     added = sorted(set(b) - set(a))
     removed = sorted(set(a) - set(b))
@@ -3796,9 +3899,18 @@ async def handle_diff_circuit(args: DiffCircuitInput, state: SessionState) -> ty
         "components_changed": changed,
         "directives_added": directive_added,
         "directives_removed": directive_removed,
+        "warnings": parse_errors,
     }
 
     lines = [f"Diff: {path_a.name} -> {path_b.name}"]
+    if parse_errors:
+        lines.append(
+            "WARNING: a file could not be parsed; the diff below treats it as "
+            "empty, so its components/directives appear as added/removed. Fix "
+            "the file before trusting this comparison:"
+        )
+        for m in parse_errors:
+            lines.append(f"  ! {m}")
     if added:
         lines.append("Components added:")
         for r in added:

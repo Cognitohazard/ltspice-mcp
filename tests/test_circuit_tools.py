@@ -184,6 +184,27 @@ class TestListComponents:
         assert "V=if(3.5*V(vp)>10" in text
         assert "<unparseable>" not in text
 
+    async def test_b_source_operator_after_call_reads_intact(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """An unbraced behavioural value with an operator after a V() call
+        (``V=V(in)*2``) is a valid LTspice/ngspice form. It used to read back
+        as ``<unparseable>`` because the lexer left the ``*2`` as a stray
+        token; the whole expression must now round-trip on read."""
+        cir = work_dir / "bmul.cir"
+        cir.write_text(
+            "* operator-after-call B-source\n"
+            "V1 in 0 1\n"
+            "B1 out 0 V=V(in)*2\n"
+            "R1 out 0 1k\n"
+            ".op\n"
+            ".end\n"
+        )
+        result = await handle_list_components({"path": cir.name, "reference": "B1"}, state_no_sim)
+        text = result.content[0].text
+        assert "V=V(in)*2" in text
+        assert "<unparseable>" not in text
+
 
 @pytest.mark.asyncio
 class TestReadCircuitDegrades:
@@ -271,6 +292,85 @@ class TestParameter:
         text = cir.read_text()
         assert "; my note" in text
         assert "Batch instruction" not in text
+
+    async def test_add_then_delete_param_round_trips(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # Undoing an accidentally-added parameter: delete must match by name
+        # even though spicelib reformatted the line on write.
+        cir = work_dir / "delparam.cir"
+        cir.write_text("* del\nR1 in 0 1k\n.END\n")
+        await handle_parameter({"path": cir.name, "name": "Gain", "value": "3"}, state_no_sim)
+        assert "gain" in cir.read_text().lower()
+
+        result = await handle_parameter(
+            {"path": cir.name, "name": "Gain", "delete": True}, state_no_sim
+        )
+        assert "Deleted" in result.content[0].text
+        assert "gain" not in cir.read_text().lower()
+
+    async def test_delete_one_of_several_params_on_a_line_keeps_siblings(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A .param line can define several parameters; deleting one must not
+        # take its siblings down with it (regression — whole-line removal did).
+        cir = work_dir / "multi.cir"
+        cir.write_text("* m\nR1 in 0 1k\n.param A=1 B=2 C=3\n.END\n")
+
+        # Delete the FIRST parameter on the line.
+        await handle_parameter({"path": cir.name, "name": "A", "delete": True}, state_no_sim)
+        keys = {
+            k.lower()
+            for k in (await handle_parameter({"path": cir.name}, state_no_sim)).structuredContent[
+                "parameters"
+            ]
+        }
+        assert keys == {"b", "c"}, keys
+
+        # Delete a NON-first parameter (the whole-line approach reported 'not found').
+        await handle_parameter({"path": cir.name, "name": "C", "delete": True}, state_no_sim)
+        keys2 = {
+            k.lower()
+            for k in (await handle_parameter({"path": cir.name}, state_no_sim)).structuredContent[
+                "parameters"
+            ]
+        }
+        assert keys2 == {"b"}, keys2
+
+    async def test_delete_one_of_several_params_on_asc_directive_keeps_siblings(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        asc = work_dir / "multi.asc"
+        asc.write_text("Version 4\nSHEET 1 880 680\nTEXT 0 0 Left 2 !.param A=1 B=2\n")
+        await handle_parameter({"path": asc.name, "name": "A", "delete": True}, state_no_sim)
+        keys = {
+            k.lower()
+            for k in (await handle_parameter({"path": asc.name}, state_no_sim)).structuredContent[
+                "parameters"
+            ]
+        }
+        assert keys == {"b"}, keys
+
+    async def test_delete_missing_param_raises(self, state_no_sim: SessionState, work_dir: Path):
+        cir = work_dir / "nodel.cir"
+        cir.write_text("* x\nR1 in 0 1k\n.END\n")
+        with pytest.raises(NetlistError, match="not found"):
+            await handle_parameter(
+                {"path": cir.name, "name": "Nope", "delete": True}, state_no_sim
+            )
+
+    async def test_delete_requires_name_and_excludes_value(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        cir = work_dir / "guard.cir"
+        cir.write_text("* x\nR1 in 0 1k\n.PARAM Gain=3\n.END\n")
+        with pytest.raises(NetlistError, match="'delete' requires 'name'"):
+            await handle_parameter({"path": cir.name, "delete": True}, state_no_sim)
+        with pytest.raises(NetlistError, match="not both"):
+            await handle_parameter(
+                {"path": cir.name, "name": "Gain", "value": "5", "delete": True},
+                state_no_sim,
+            )
 
 
 @pytest.mark.asyncio
@@ -929,6 +1029,29 @@ class TestDiffCircuit:
         assert not any(d.strip().lower() == ".end" for d in data["directives_removed"])
         assert data["directives_removed"] == []
 
+    async def test_unparseable_file_surfaces_warning_not_wholesale_removal(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A corrupt .asc (AscEditor raises because it has no VERSION line) used
+        # to be treated as an empty circuit, so the diff reported every real
+        # component as removed with no signal that the file was unreadable. The
+        # parse failure must be surfaced as a warning.
+        good = work_dir / "good.asc"
+        good.write_text(
+            "Version 4\nSHEET 1 880 680\n"
+            "SYMBOL res 100 100 R0\nSYMATTR InstName R1\nSYMATTR Value 1k\n"
+        )
+        broken = work_dir / "broken.asc"
+        broken.write_text("this is not a schematic file at all\n")
+        result = await handle_diff_circuit(
+            {"path_a": good.name, "path_b": broken.name}, state_no_sim
+        )
+        data = result.structuredContent
+        assert data is not None
+        assert data["warnings"], "a parse failure must be reported, not silently ignored"
+        assert any("broken.asc" in w for w in data["warnings"])
+        assert "WARNING" in result.content[0].text
+
 
 class TestSourceWaveformValuesAccepted:
     """``set_component_value(V1, "PULSE(...)")`` was rejected as
@@ -1001,6 +1124,21 @@ class TestBSourcePrefixPreserved:
         with pytest.raises(NetlistError, match="V=expr"):
             apply_value_to_instance(b1, "10")
 
+    def test_operator_after_call_value_round_trips_without_orphan(self) -> None:
+        # Editing ``V=V(in)*2`` used to rewrite only the ``V=V(in)`` span and
+        # leave the ``*2`` behind, silently corrupting the card. The whole
+        # expression must be replaced.
+        out = self._run("B1 out 0 V=V(in)*2\n", "B1", "{V(in)*3}")
+        assert out.strip() == "B1 out 0 V={V(in)*3}"
+
+    def test_spaced_operator_expression_refused_not_corrupted(self) -> None:
+        # The whitespace-around-operators form can't be re-joined
+        # unambiguously, so editing it must refuse rather than leave orphans.
+        cards = lex("B1 out 0 V = V(a) + V(b)\n").cards
+        b1 = next(c for c in cards if c.kind == "instance" and c.name == "B1")
+        with pytest.raises(NetlistError, match="not fully parseable"):
+            apply_value_to_instance(b1, "{V(a)+V(b)}")
+
 
 class TestControlledSourceGainReplacement:
     """``set_component_value(E1, "20")`` used to overwrite the
@@ -1027,3 +1165,35 @@ class TestControlledSourceGainReplacement:
     def test_f_source_with_control_ref_change(self) -> None:
         out = self._run("F1 out 0 V_sense 2\n", "F1", "V_new 5")
         assert out.strip() == "F1 out 0 V_new 5"
+
+
+class TestModelNameElementsEditable:
+    """A diode and the controlled switches carry a trailing model name, the
+    same card shape as M/Q/J. ``set_component_value`` used to raise
+    ``Unsupported element prefix`` for them; it must swap the model name."""
+
+    def _run(self, body: str, ref: str, value: str) -> str:
+        cards = lex(body).cards
+        instance = next(c for c in cards if c.kind == "instance" and c.name == ref)
+        apply_value_to_instance(instance, value)
+        return emit(cards)
+
+    def test_diode_model_swapped(self) -> None:
+        out = self._run("D1 a k 1N4148\n", "D1", "1N5817")
+        assert out.strip() == "D1 a k 1N5817"
+
+    def test_voltage_switch_model_swapped(self) -> None:
+        out = self._run("S1 n+ n- nc+ nc- SW1\n", "S1", "SW2")
+        assert out.strip() == "S1 n+ n- nc+ nc- SW2"
+
+    def test_current_switch_model_swapped(self) -> None:
+        out = self._run("W1 n+ n- Vsense ISW1\n", "W1", "ISW2")
+        assert out.strip() == "W1 n+ n- Vsense ISW2"
+
+    def test_unsupported_prefix_offers_escape_hatch(self) -> None:
+        # A still-unsupported prefix should point the user at editing the card
+        # directly, not raise a bare "Unsupported element prefix".
+        cards = lex("O1 a b c d TLINE\n").cards
+        o1 = next(c for c in cards if c.kind == "instance" and c.name == "O1")
+        with pytest.raises(NetlistError, match="Edit the card directly"):
+            apply_value_to_instance(o1, "TLINE2")

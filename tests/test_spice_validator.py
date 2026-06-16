@@ -150,6 +150,20 @@ class TestElementArity:
         issues = self._arity("B1 fb 0 V={V(in)*0.5+1}\n.end")
         assert all("B1" not in str(i["message"]) for i in issues)
 
+    def test_spaced_operator_expression_flagged_as_unparseable(self):
+        # ``V = V(a) + V(b)`` (operators surrounded by whitespace) leaves orphan
+        # tokens the lexer can't re-join; previously this passed validation and
+        # both reads and edits silently dropped the tail. It must be flagged.
+        issues = self._arity("B1 out 0 V = V(a) + V(b)\n.end")
+        assert any(
+            "B1" in str(i["message"]) and "not fully parsed" in str(i["message"]) for i in issues
+        )
+
+    def test_glued_operator_expression_passes(self):
+        # The glued forms now tokenize as one value, so they are valid.
+        issues = self._arity("B1 out 0 V=V(in)*2\n.end")
+        assert all("B1" not in str(i["message"]) for i in issues)
+
     def test_passive_with_one_node_flagged(self):
         # R1 a 1k  — only one positional node, needs 2.
         issues = self._arity("R1 a 1k\n.end")
