@@ -58,17 +58,27 @@ class SweepParameter(StrictModel):
     type: Literal["component", "parameter"] = Field(
         description="'component' for ref values, 'parameter' for .PARAM"
     )
-    values: list[float] | None = Field(
+    values: list[float | str] | None = Field(
         default=None,
         description=(
             "Explicit discrete sweep values, e.g. [1000, 2200, 4700] for E-series "
-            "resistors. Mutually exclusive with start/stop/step/points."
+            "resistors. Accepts plain numbers or SPICE notation strings, e.g. "
+            "['1k', '2.2k', '4.7k']. Mutually exclusive with start/stop/step/points."
         ),
     )
-    start: float | None = Field(default=None, description="Start value of sweep range")
-    stop: float | None = Field(default=None, description="End value of sweep range")
-    step: float | None = Field(
-        default=None, description="Step size (mutually exclusive with points)"
+    start: float | str | None = Field(
+        default=None,
+        description="Start value of sweep range (plain number or SPICE notation, e.g. '1k')",
+    )
+    stop: float | str | None = Field(
+        default=None,
+        description="End value of sweep range (plain number or SPICE notation, e.g. '10k')",
+    )
+    step: float | str | None = Field(
+        default=None,
+        description=(
+            "Step size, plain number or SPICE notation, e.g. '1k' (mutually exclusive with points)"
+        ),
     )
     points: int | None = Field(
         default=None, description="Number of points (mutually exclusive with step)"
@@ -224,7 +234,11 @@ class ConfigureMonteCarloInput(ToolInput):
     netlist: str = Field(description="Path to the netlist file (.cir, .net, .asc)")
     tolerances: list[MonteCarloTolerance] = Field(
         default_factory=list,
-        description="R/C/L (and V/I type-level) component tolerance specifications.",
+        description=(
+            "R/C/L (and V/I type-level) component tolerance specifications. A "
+            "ref-named entry (e.g. 'R1') sets a per-component tolerance; a "
+            "type-named entry (e.g. 'R' or 'resistors') sets a type-level tolerance."
+        ),
     )
     model_tolerances: list[MonteCarloModelTolerance] = Field(
         default_factory=list,
@@ -333,6 +347,24 @@ def _spec_from_input(tol: float, dist: str, kind: str) -> ToleranceSpec:
         distribution=normalized,  # type: ignore[arg-type]
         kind=kind,  # type: ignore[arg-type]
     )
+
+
+def _normalize_sweep_value(raw: float | str, name: str, field: str) -> float:
+    """Coerce a sweep value to float, parsing SPICE notation strings.
+
+    Plain numbers pass through unchanged; strings like '10k' or '4.7k' are
+    parsed the same way the rest of the surface (set_component_value, filters)
+    interprets component values. Raises BatchJobError on an unparseable token.
+    """
+    if isinstance(raw, str):
+        try:
+            return parse_spice_value(raw)
+        except (ValueError, TypeError) as e:
+            raise BatchJobError(
+                f"Parameter '{name}': {field} value {raw!r} is not a number or "
+                f"valid SPICE notation (e.g. '10k', '4.7k', '159n'): {e}"
+            ) from e
+    return float(raw)
 
 
 def _resolve_mc_ref(ref: str) -> tuple[str, bool]:
@@ -461,7 +493,11 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
             if len(param.values) == 0:
                 raise BatchJobError(f"Parameter '{name}': 'values' must be a non-empty list")
             dimensions.append(
-                SweepDimension(type=param_type, name=name, values=[float(v) for v in param.values])
+                SweepDimension(
+                    type=param_type,
+                    name=name,
+                    values=[_normalize_sweep_value(v, name, "values") for v in param.values],
+                )
             )
             continue
 
@@ -469,8 +505,8 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
             raise BatchJobError(
                 f"Parameter '{name}': start and stop are required (or provide 'values')"
             )
-        start = float(param.start)
-        stop = float(param.stop)
+        start = _normalize_sweep_value(param.start, name, "start")
+        stop = _normalize_sweep_value(param.stop, name, "stop")
         step = param.step
         points = param.points
         scale = param.scale
@@ -489,7 +525,7 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
             )
 
         if step is not None:
-            step = float(step)
+            step = _normalize_sweep_value(step, name, "step")
             if step <= 0:
                 raise BatchJobError(f"Parameter '{name}': step must be > 0, got {step}")
         if points is not None:
@@ -824,8 +860,8 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
         f"Config ID: {config_id}\n"
         f"Netlist: {netlist_path}\n"
         f"Runs: {num_runs}\n"
-        f"Type tolerances: {type_summary}\n"
-        f"Component overrides: {component_summary}\n"
+        f"Type-level tolerances (type names e.g. R/resistors): {type_summary}\n"
+        f"Per-component tolerances (refs e.g. R1): {component_summary}\n"
         f".MODEL process variation: {model_summary}\n"
         f"Mismatch (Pelgrom): {mismatch_summary}\n"
         f".PARAM perturbation: {param_summary}\n"

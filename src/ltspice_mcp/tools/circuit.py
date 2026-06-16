@@ -682,7 +682,15 @@ Editor = AscEditor | SpiceEditor
 
 
 class CreateNetlistInput(ToolInput):
-    name: str = Field(description="File name without extension")
+    name: str = Field(
+        description=(
+            "File name without extension (.cir is appended). May include a "
+            "relative subpath, e.g. 'work/rc/rc_lowpass' — it is resolved "
+            "under the server working directory and parent directories are "
+            "created automatically. Must stay within an allowed path ('..' "
+            "is rejected)."
+        )
+    )
     content: str = Field(description="Complete SPICE netlist content")
     overwrite: bool = Field(
         default=False,
@@ -727,6 +735,16 @@ class SetComponentValueInput(ToolInput):
     values: dict[str, str] | None = Field(
         default=None,
         description="Batch mode: {reference: value} dict (e.g., {'R1': '10k', 'C1': '100n'})",
+    )
+    nodes: list[str] | None = Field(
+        default=None,
+        description=(
+            "Single mode only: rewrite the component's node connectivity to this "
+            "ordered list (e.g. ['in', 'out', '0']) — the fix for a wrong or "
+            "typo'd connection. Requires 'reference'; .cir/.net only (on a .asc, "
+            "wire pins with connect). Not combined with 'value'/'values' — set the "
+            "value in a separate call."
+        ),
     )
 
 
@@ -1494,7 +1512,11 @@ async def _list_components_netlist(
 
 @registry.tool(
     name="set_component_value",
-    description="Set component value(s) in a circuit file. Supports single or batch mode.",
+    description=(
+        "Set component value(s) in a circuit file (single or batch mode), or "
+        "rewrite one component's node connectivity ('nodes', single mode, "
+        ".cir/.net only). A no-op value write is reported as unchanged."
+    ),
     input_model=SetComponentValueInput,
     annotations=types.ToolAnnotations(
         readOnlyHint=False,
@@ -1525,6 +1547,22 @@ async def handle_set_component_value(
     reference = args.reference
     value = args.value
 
+    if args.nodes is not None:
+        if values_dict is not None or value is not None:
+            raise NetlistError(
+                "'nodes' rewires connectivity on its own — set the value in a "
+                "separate call (with 'reference'+'value')."
+            )
+        if reference is None:
+            raise NetlistError("'nodes' requires 'reference' (the component to rewire)")
+        if _is_asc(file_path):
+            raise NetlistError(
+                "Node connectivity on a .asc schematic is set by wiring, not a node "
+                "list — use connect to wire pins (and trace_net to inspect a net). "
+                "'nodes' applies to .cir/.net only."
+            )
+        return await _set_component_nodes_netlist(file_path, reference, args.nodes, state)
+
     single_mode_args = reference is not None or value is not None
     if values_dict is not None and single_mode_args:
         raise NetlistError(
@@ -1549,6 +1587,11 @@ async def handle_set_component_value(
     if _is_asc(file_path):
         return await _set_component_value_asc(file_path, pairs, state)
     return await _set_component_value_netlist(file_path, pairs, state)
+
+
+def _unchanged_suffix(old: str, new: str) -> str:
+    """Mark a no-op value write so it doesn't read like a real edit."""
+    return " (unchanged — value already set)" if old == new else ""
 
 
 async def _set_component_value_netlist(
@@ -1584,7 +1627,10 @@ async def _set_component_value_netlist(
         changes: list[str] = []
         for ref, val in pairs:
             applied = apply_value_to_instance(refs_to_card[ref.lower()], val)
-            changes.append(f"{applied.reference}: {applied.old_summary} -> {applied.new_summary}")
+            suffix = _unchanged_suffix(applied.old_summary, applied.new_summary)
+            changes.append(
+                f"{applied.reference}: {applied.old_summary} -> {applied.new_summary}{suffix}"
+            )
 
         write_cards(cards, file_path)
         state.editors.invalidate(file_path)
@@ -1592,6 +1638,46 @@ async def _set_component_value_netlist(
     if len(pairs) == 1:
         return text_response(f"Set {changes[0]}")
     return text_response(f"Updated {len(pairs)} component(s):\n" + "\n".join(changes))
+
+
+async def _set_component_nodes_netlist(
+    file_path: Path,
+    reference: str,
+    new_nodes: list[str],
+    state: SessionState,
+) -> types.CallToolResult:
+    """Rewrite a component's node connectivity in a .cir/.net.
+
+    Edits only the node-token span via the typed lexer view, leaving the
+    value/model/params tail byte-for-byte — the fix for a mis-wired or
+    typo'd net that the value path can't touch.
+    """
+    from ltspice_mcp.lib.encoding import read_spice_text
+    from ltspice_mcp.lib.spice_lex import lex, write_cards
+    from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
+
+    async with _get_edit_lock(file_path):
+        cards = lex(read_spice_text(file_path)).cards
+        refs_to_card = instances_by_ref(cards)
+        if reference.lower() not in refs_to_card:
+            available = [c.name for c in refs_to_card.values() if c.name]
+            raise NetlistError(
+                f"Component not found: {reference!r}. "
+                f"Available: {_format_available_refs(available)}"
+            )
+        view = InstanceLine.from_card(refs_to_card[reference.lower()])
+        old_nodes = list(view.nodes)
+        try:
+            view.set_nodes(new_nodes)
+        except ValueError as exc:
+            raise NetlistError(str(exc)) from exc
+
+        write_cards(cards, file_path)
+        state.editors.invalidate(file_path)
+
+    return text_response(
+        f"Rewired {reference}: [{' '.join(old_nodes)}] -> [{' '.join(new_nodes)}]"
+    )
 
 
 async def _set_component_value_asc(
@@ -1622,7 +1708,8 @@ async def _set_component_value_asc(
         for ref, val in pairs:
             old_value = editor.get_component_value(ref)
             _apply_component_value(editor, ref, val)
-            changes.append(f"{ref}: {old_value} -> {val}")
+            suffix = _unchanged_suffix(str(old_value), str(val))
+            changes.append(f"{ref}: {old_value} -> {val}{suffix}")
 
     if len(pairs) == 1:
         return text_response(f"Set {changes[0]}")
@@ -2309,7 +2396,6 @@ async def handle_set_component_attribute(
             "pins": {"type": "array", "items": PIN_SCHEMA},
             "bounding_box": BBOX_SCHEMA,
             "warnings": {"type": "array", "items": {"type": "string"}},
-            "validation_warnings": VALIDATION_WARNINGS_SCHEMA,
         },
     },
 )
@@ -2356,11 +2442,11 @@ async def handle_add_component(
             value=value,
             attributes=args.attributes,
         )
-        # add_component adds no wires or labels, so the only *new* advisory it
-        # can raise is a floating pin on the component it just placed.
-        validation_warnings = _scope_floating_pin_warnings(
-            _post_op_warnings(editor), reference, keep_other_kinds=False
-        )
+        # add_component adds no wires or labels, so every pin of the just-placed
+        # component is floating by construction — a 100%-noise advisory. Leave
+        # floating-pin reporting to connect (a pin still floating after wiring is
+        # actionable) and validate_netlist (the end-of-build gate); the pin
+        # positions are already in this response.
 
     result = f"Added {reference} ({symbol}) at ({x},{y})"
     if value is not None:
@@ -2404,11 +2490,6 @@ async def handle_add_component(
     }
     if warnings:
         data["warnings"] = warnings
-    if validation_warnings:
-        data["validation_warnings"] = validation_warnings
-    extra_lines = _validation_warnings_lines(validation_warnings)
-    if extra_lines:
-        result += "\n" + "\n".join(extra_lines)
 
     return format_response(result, data, args.format)
 
@@ -3182,7 +3263,14 @@ def _plan_connect_route(
 
 
 class CreateSchematicInput(ToolInput):
-    name: str = Field(description="File name without the .asc extension")
+    name: str = Field(
+        description=(
+            "File name without the .asc extension. May include a relative "
+            "subpath, e.g. 'work/divider' — it is resolved under the server "
+            "working directory and parent directories are created "
+            "automatically. Must stay within an allowed path ('..' is rejected)."
+        )
+    )
     width: int = Field(
         default=880,
         description="Sheet width (LTspice grid units). 880 matches LTspice's default.",

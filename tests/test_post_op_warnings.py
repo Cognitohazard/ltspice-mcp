@@ -273,9 +273,13 @@ class TestApplySchematicOpsValidation:
 
 
 class TestAddComponentValidation:
-    async def test_freshly_added_pins_flagged_floating(
+    async def test_freshly_added_pins_not_flagged_floating(
         self, asc_state: SessionState, asc_file: Path
     ) -> None:
+        # A just-placed component has every pin floating by construction, so a
+        # floating-pin advisory here is 100% noise. add_component must NOT emit
+        # it — that reporting belongs to connect (a pin still floating after
+        # wiring is actionable) and validate_netlist (the end-of-build gate).
         result = await handle_add_component(
             AddComponentInput(
                 path="Draft1.asc",
@@ -288,12 +292,7 @@ class TestAddComponentValidation:
         )
         data = result.structuredContent
         assert data is not None
-        warnings = data.get("validation_warnings", [])
-        # The new R_new at (400,400) has both pins isolated.
-        new_floating = [
-            w for w in warnings if w.get("kind") == "floating_pin" and w.get("ref") == "R_new"
-        ]
-        assert len(new_floating) >= 2
+        assert "validation_warnings" not in data
 
 
 # ---------------------------------------------------------------------------

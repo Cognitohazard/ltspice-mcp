@@ -98,18 +98,34 @@ def attach_suggestions_to_failure(
     log_path: Path | None,
     libraries: LibraryManager,
 ) -> str:
-    """Append a suggestions block to ``error_msg`` and mutate ``data['suggestions']``.
+    """Append model-resolution help to ``error_msg`` and mutate ``data``.
 
-    Returns the (possibly-unchanged) error message. Called on simulation
-    failure paths where the log already has the error context inline — saves
-    callers from re-implementing the 'read-log / extract / format / attach'
-    sequence at every failure site.
+    Two complementary layers, both keyed off the unresolved model/subcircuit
+    refs in the log: fuzzy matches against loaded user libraries (when any),
+    and a library-independent recovery hint pointing at find_model's built-in
+    search — which fires even with no library loaded, the common case stock
+    parts fail in. Returns the (possibly-unchanged) error message. Called on
+    simulation failure paths where the log already has the error context
+    inline, so callers don't re-implement read-log / extract / format / attach.
     """
-    suggestions = extract_model_suggestions(log_path, libraries)
-    if not suggestions:
+    if log_path is None or not log_path.exists():
         return error_msg
-    data["suggestions"] = suggestions
-    return f"{error_msg}\n{format_suggestion_block(suggestions)}"
+    refs = extract_missing_refs(log_path)
+    if not refs:
+        return error_msg
+    block = ""
+    suggestions = _suggestions_for_refs(refs, libraries)
+    if suggestions:
+        data["suggestions"] = suggestions
+        block += "\n" + format_suggestion_block(suggestions)
+    ref_list = ", ".join(refs)
+    block += (
+        f"\n\nUnresolved model/subcircuit(s): {ref_list}. Stock parts are not "
+        "auto-included in the run. For each, call "
+        'find_model(name="<ref>", include_builtin=true), add the returned '
+        ".include directive to the netlist, and rerun."
+    )
+    return f"{error_msg}{block}"
 
 
 def resolve_job(job_id: str, state: SessionState) -> SimulationJob | BatchJob:

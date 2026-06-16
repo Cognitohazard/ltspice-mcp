@@ -31,6 +31,12 @@ class TestExtractMissingRefs:
         log.write_text('Can\'t find definition of model "NMOS_3v3"\n')
         assert extract_missing_refs(log) == ["NMOS_3v3"]
 
+    def test_ngspice_undefined_model_unquoted(self, tmp_path: Path):
+        # ngspice phrases an unresolved model reference differently (no quotes).
+        log = tmp_path / "ngspice.log"
+        log.write_text("Error: undefined model 2n2222\n")
+        assert extract_missing_refs(log) == ["2n2222"]
+
     def test_unknown_subcircuit_last_token(self, tmp_path: Path):
         log = tmp_path / "missing_subckt.log"
         log.write_text("Fatal Error: Unknown subcircuit called in: xu1 n004 n001 vcc 0 lm741\n")

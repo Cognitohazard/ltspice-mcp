@@ -17,7 +17,7 @@ from ltspice_mcp.lib.library_parser import (
     ModelEntry,
     parse_library_file,
 )
-from ltspice_mcp.lib.wsl import is_wsl
+from ltspice_mcp.lib.wsl import is_wsl, to_windows_path
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,36 @@ _SPICE_LIB_SUFFIXES = frozenset(
 
 
 _WORD_TOK = re.compile(r"[A-Za-z]+|[0-9]+")
+
+
+# Connection-order templates keyed by the SPICE device token of a .MODEL card.
+# A .MODEL gives the model parameters but not how the part is wired; the device
+# token dictates node order, and getting it wrong silently simulates the wrong
+# circuit. ``<name>`` is the model name the instance references. Keys are the
+# uppercased device token as the lexer reports it.
+_DEVICE_USAGE: dict[str, str] = {
+    "VDMOS": "Mxxx D G S <name>",
+    "NMOS": "Mxxx D G S B <name>",
+    "PMOS": "Mxxx D G S B <name>",
+    "NPN": "Qxxx C B E <name>",
+    "PNP": "Qxxx C B E <name>",
+    "D": "Dxxx anode cathode <name>",
+    "NJF": "Jxxx D G S <name>",
+    "PJF": "Jxxx D G S <name>",
+}
+
+
+def _device_usage(device_type: str, name: str) -> str:
+    """Return the connection-order string for a known .MODEL device token.
+
+    Empty string when the device token is unknown or absent (so callers can
+    omit the field rather than emit a misleading order). ``<name>`` in the
+    template is replaced with the actual model name.
+    """
+    template = _DEVICE_USAGE.get(device_type.upper())
+    if not template:
+        return ""
+    return template.replace("<name>", name)
 
 
 def _part_aware_score(query_lower: str, candidate_lower: str) -> float:
@@ -526,8 +556,15 @@ class LibraryManager:
         Returns:
             Formatted model info dict
         """
-        # Generate .include directive using native path
-        include_directive = f".include {model.source_path}"
+        # The .include directive is handed to the simulator, so it must use the
+        # path form the simulator understands. On WSL the libraries live on the
+        # Windows filesystem but are discovered as ``/mnt/c/...`` Linux paths;
+        # LTspice.exe runs Windows-side and rejects those, and the runner only
+        # translates the netlist file it launches — never .include bodies. So
+        # convert to a Windows path here. ``source_path`` below stays native for
+        # filesystem access from this process.
+        dir_path = to_windows_path(model.source_path) if is_wsl() else str(model.source_path)
+        include_directive = f".include {dir_path}"
 
         info = {
             "name": model.name,
@@ -537,6 +574,15 @@ class LibraryManager:
             "ports": model.ports,
             "params": model.params,
         }
+
+        # For .MODEL devices, surface the parsed device token and its
+        # connection order — a .MODEL conveys parameters but not node order,
+        # and wiring the part in the wrong order simulates silently wrong.
+        if model.device_type:
+            info["device_type"] = model.device_type
+            usage = _device_usage(model.device_type, model.name)
+            if usage:
+                info["usage"] = usage
 
         if full:
             info["raw_text"] = model.raw_text
