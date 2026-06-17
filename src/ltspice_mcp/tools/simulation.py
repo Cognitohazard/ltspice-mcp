@@ -365,23 +365,8 @@ async def _wait_for_completion(
         await mcp_log("info", f"Simulation completed: {job.netlist.name} ({duration:.1f}s)")
         return _format_success_response(job.job_id, summary, fmt)
     elif job.status == "failed":
-        error_msg = job.error or "Unknown error"
         await mcp_log("error", f"Simulation failed: {job.netlist.name} — {job.error or 'unknown'}")
-        # error_msg, not job.error: the schema types error as a string, so a
-        # None here would break schema-validating clients.
-        data = {"job_id": job.job_id, "status": "failed", "duration": duration, "error": error_msg}
-        if job.log_file and job.log_file.exists():
-            log_excerpt = extract_error_context(job.log_file, max_lines=20)
-            error_msg = f"{error_msg}\n\nLog excerpt:\n{log_excerpt}"
-            error_msg = services.attach_suggestions_to_failure(
-                error_msg, data, job.log_file, state.libraries
-            )
-        files_note = _attach_result_files(data, job)
-        return format_response(
-            f"Simulation failed\nJob ID: {job.job_id}\nDuration: {duration:.2f}s\n\n{error_msg}{files_note}",
-            data,
-            fmt,
-        )
+        return _failed_response(job, duration, state, fmt)
     elif job.status == "cancelled":
         data = {"job_id": job.job_id, "status": "cancelled"}
         return format_response(f"Simulation cancelled\nJob ID: {job.job_id}", data, fmt)
@@ -389,6 +374,33 @@ async def _wait_for_completion(
         # Unexpected status
         data = {"job_id": job.job_id, "status": job.status}
         return format_response(f"Simulation ended with unexpected status: {job.status}", data, fmt)
+
+
+def _failed_response(job, duration: float, state: SessionState, fmt: str | None):
+    """Build the response for a failed job — shared by run_simulation and check_job.
+
+    Surfaces the error with its log excerpt (appended only if ``job.error`` doesn't
+    already carry one — sim_runner usually embeds it), adds the model-resolution
+    recovery hint, mirrors the augmented message into the structured ``error``
+    field so structured and text clients see the same guidance, and appends the
+    result-file footer.
+    """
+    error_msg = job.error or "Unknown error"
+    data = {"job_id": job.job_id, "status": "failed", "duration": duration, "error": error_msg}
+    if job.log_file and job.log_file.exists():
+        if "Log excerpt:" not in error_msg:
+            excerpt = extract_error_context(job.log_file, max_lines=20)
+            error_msg = f"{error_msg}\n\nLog excerpt:\n{excerpt}"
+        error_msg = services.attach_suggestions_to_failure(
+            error_msg, data, job.log_file, state.libraries
+        )
+        data["error"] = error_msg
+    files_note = _attach_result_files(data, job)
+    return format_response(
+        f"Simulation failed\nJob ID: {job.job_id}\nDuration: {duration:.2f}s\n\n{error_msg}{files_note}",
+        data,
+        fmt,
+    )
 
 
 def _format_success_response(job_id: str, summary: dict, fmt: str | None = None):
@@ -600,20 +612,7 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
             )
             or 0
         )
-        error_msg = job.error or "Unknown error"
-        data = {"job_id": job_id, "status": "failed", "duration": duration, "error": error_msg}
-        if job.log_file and job.log_file.exists():
-            log_excerpt = extract_error_context(job.log_file, max_lines=20)
-            error_msg = f"{error_msg}\n\nLog excerpt:\n{log_excerpt}"
-            error_msg = services.attach_suggestions_to_failure(
-                error_msg, data, job.log_file, state.libraries
-            )
-        files_note = _attach_result_files(data, job)
-        return format_response(
-            f"Simulation failed\nJob ID: {job_id}\nDuration: {duration:.2f}s\n\n{error_msg}{files_note}",
-            data,
-            fmt,
-        )
+        return _failed_response(job, duration, state, fmt)
     elif job.status == "timeout":
         duration = (
             services.job_duration_seconds(

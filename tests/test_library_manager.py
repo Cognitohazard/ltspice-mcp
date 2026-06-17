@@ -338,6 +338,27 @@ class TestIncludeDirectiveWslPath:
         # source_path stays native for in-process filesystem access.
         assert info["source_path"] == str(p)
 
+    def test_include_path_with_space_is_quoted(
+        self, monkeypatch, empty_manager: LibraryManager, tmp_path: Path
+    ):
+        # Built-in libraries commonly live under a path with a space (Program
+        # Files, or the LTspice AppData dir). An unquoted .include is parsed only
+        # up to the first space, so the directive must quote the path.
+        p = tmp_path / "win.lib"
+        p.write_text(".MODEL 2N2222 NPN(BF=200)\n")
+        empty_manager.load_library(p)
+        monkeypatch.setattr("ltspice_mcp.lib.library_manager.is_wsl", lambda: True)
+        monkeypatch.setattr(
+            "ltspice_mcp.lib.library_manager.to_windows_path",
+            lambda native: r"C:\Program Files\ADI\LTspice\lib\cmp\standard.bjt",
+        )
+        info = empty_manager.get_model_info("2N2222", include_builtin=False)
+        assert info is not None
+        assert (
+            info["include_directive"]
+            == r'.include "C:\Program Files\ADI\LTspice\lib\cmp\standard.bjt"'
+        )
+
 
 class TestModelDeviceUsage:
     def test_npn_model_reports_device_type_and_usage(
