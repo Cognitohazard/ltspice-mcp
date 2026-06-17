@@ -564,7 +564,10 @@ class LibraryManager:
         # convert to a Windows path here. ``source_path`` below stays native for
         # filesystem access from this process.
         dir_path = to_windows_path(model.source_path) if is_wsl() else str(model.source_path)
-        include_directive = f".include {dir_path}"
+        # Always quote: built-in libraries commonly live under a path with a space
+        # (e.g. ``C:\Program Files\...`` or ``C:\Users\...\AppData\Local\LTspice``),
+        # and an unquoted .include is parsed only up to the first space.
+        include_directive = f'.include "{dir_path}"'
 
         info = {
             "name": model.name,

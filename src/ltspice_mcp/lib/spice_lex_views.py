@@ -312,14 +312,16 @@ ELEMENT_SPECS: dict[str, ElementSpec] = {
 
 _DEFAULT_ELEMENT_SPEC = ElementSpec(default_kind="model", min_nodes=0)
 
-# EXACT terminal count per element class, for node-connectivity editing only
-# (set_nodes). Unlike ElementSpec.min_nodes (a sanity floor), these are the
-# precise node counts, so the node-token span can be taken as the FIRST N
-# positional tokens — which is the only way to leave a multi-token value tail
-# (e.g. ``PULSE(...)`` on a source, where the generic last-positional-is-the-slot
-# model wrongly counts ``PULSE`` as a node) byte-for-byte intact. Classes with a
-# variable or ambiguous terminal count (MOSFET 3-vs-4 bulk, subcircuit X, mutual
-# inductance K) are omitted: set_nodes refuses them rather than risk corruption.
+# EXACT terminal count per element class, for node-connectivity editing
+# (set_nodes) and value/node splitting. Only classes whose node count is GENUINELY
+# fixed are listed: for these the FIRST N positional tokens are always the nodes,
+# so the node span can be rewritten (or the value tail split off, e.g. a source's
+# ``PULSE(...)``) without parsing the rest of the line. Variable/ambiguous classes
+# are deliberately ABSENT so set_nodes refuses them rather than corrupt a valid
+# form: BJT/JFET (Q/J) take an optional 4th substrate node; controlled sources
+# (E/G) have POLY/TABLE forms with variable control-node arity; MOSFET (M, 3-vs-4
+# bulk + trailing area/off), subcircuit (X), and mutual inductance (K) are all
+# variable too. (D stays: a diode is always 2 nodes, with any area/off trailing.)
 _EXACT_NODE_COUNT: dict[str, int] = {
     "R": 2,
     "C": 2,
@@ -329,11 +331,22 @@ _EXACT_NODE_COUNT: dict[str, int] = {
     "D": 2,
     "F": 2,
     "H": 2,
-    "Q": 3,
-    "J": 3,
-    "E": 4,
-    "G": 4,
 }
+
+
+def _exact_node_span(positional: list[Token], exact: int | None) -> tuple[int, int] | None:
+    """Body span of the FIRST ``exact`` positional tokens — the editable node
+    region of a genuinely fixed-arity element. ``None`` when the arity is unknown,
+    there are too few tokens, or an offset is synthesized. Computed independently
+    of the per-kind ``nodes`` parse so it stays correct for a model-kind element
+    in the table (e.g. a diode whose trailing area token would otherwise be
+    miscounted as a node)."""
+    if exact is None or exact < 1 or len(positional) < exact:
+        return None
+    head = positional[:exact]
+    if any(t.body_offset < 0 for t in head):
+        return None
+    return (head[0].body_offset, head[-1].body_end)
 
 
 @dataclass
@@ -393,6 +406,10 @@ class InstanceLine:
 
         spec = ELEMENT_SPECS.get(prefix, _DEFAULT_ELEMENT_SPEC)
         kind = spec.kind_for(has_kv=first_kv is not None)
+        # Exact terminal count for genuinely fixed-arity classes; drives both the
+        # value/node split below and the node-edit span. ``None`` for everything
+        # else (node editing then refuses it).
+        exact = _EXACT_NODE_COUNT.get(prefix)
         model: str | None = None
         value: str | None = None
         model_token: Token | None = None
@@ -407,14 +424,32 @@ class InstanceLine:
         elif kind == "none":
             # K mutual-inductance — positional tokens are refs, not nodes.
             nodes_tokens = positional
-        else:
-            # "model" or "value": last positional is the slot.
-            model_token = positional[-1]
-            slot_text = model_token.text.strip('"')
-            if kind == "value":
-                value = slot_text
+        elif kind == "value":
+            # Value-bearing element. The value may be MULTI-token: a source
+            # function spec like ``PULSE(0 5 ...)`` lexes as ``PULSE`` + ``(...)``,
+            # and a ``V1 a 0 DC 5 AC 1`` form is several tokens — so split on the
+            # element's EXACT terminal count, not "last token is the value".
+            # Reconstruct the value text from the body span so original spacing
+            # (``PULSE(...)`` with no gap) survives.
+            if exact is not None and len(positional) > exact:
+                nodes_tokens = positional[:exact]
+                value_tokens = positional[exact:]
+                model_token = value_tokens[-1]
+                if all(t.body_offset >= 0 for t in value_tokens):
+                    value = card.body[
+                        value_tokens[0].body_offset : value_tokens[-1].body_end
+                    ].strip()
+                else:
+                    value = " ".join(t.text for t in value_tokens)
             else:
-                model = slot_text
+                model_token = positional[-1]
+                value = model_token.text.strip('"')
+                nodes_tokens = positional[:-1]
+        else:
+            # "model": the model/subckt name is always a single trailing token;
+            # everything before it is a node.
+            model_token = positional[-1]
+            model = model_token.text.strip('"')
             nodes_tokens = positional[:-1]
 
         nodes = [t.text for t in nodes_tokens]
@@ -444,17 +479,11 @@ class InstanceLine:
                 nodes = [t.text for t in positional]
                 value = params[value_param_key]
 
-        # Node-edit span: the FIRST N positional tokens, N = the element's EXACT
-        # terminal count. Only set for fixed-arity classes whose multi-token
-        # value/model tail must stay untouched; set_nodes refuses the rest.
-        exact_nodes = _EXACT_NODE_COUNT.get(prefix)
-        node_span: tuple[int, int] | None = None
-        if (
-            exact_nodes is not None
-            and len(positional) >= exact_nodes
-            and all(t.body_offset >= 0 for t in positional[:exact_nodes])
-        ):
-            node_span = (positional[0].body_offset, positional[exact_nodes - 1].body_end)
+        # Node-edit span (set_nodes): the first N positional tokens for a
+        # fixed-arity element. Computed from the exact count, not the per-kind
+        # nodes parse, so it stays correct for a model-kind table entry (a diode
+        # with a trailing area token).
+        node_span = _exact_node_span(positional, exact)
 
         return cls(
             card=card,
@@ -488,10 +517,11 @@ class InstanceLine:
 
         Replaces only the leading node-token span, leaving the value/model/params
         tail byte-for-byte — a canonical re-render would risk mangling multi-token
-        source specs (e.g. ``PULSE(...)``). Supported only for fixed-arity element
-        classes (see ``_EXACT_NODE_COUNT``); a rewire must keep the terminal
-        count. Variable/ambiguous classes (MOSFET bulk, subcircuit, mutual
-        inductance) raise — edit those cards directly.
+        source specs (e.g. ``PULSE(...)``). Supported only for genuinely fixed-arity
+        classes (see ``_EXACT_NODE_COUNT``); a rewire must keep the terminal count.
+        Variable/ambiguous classes raise — BJT/JFET (optional substrate node),
+        controlled sources (POLY/TABLE forms), MOSFET (bulk + area/off), subcircuit,
+        and mutual inductance — edit those cards directly.
         """
         prefix = self.ref[:1].upper()
         exact = _EXACT_NODE_COUNT.get(prefix)

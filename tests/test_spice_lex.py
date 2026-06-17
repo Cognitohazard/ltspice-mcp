@@ -987,13 +987,45 @@ class TestInstanceLine:
         assert view.value == "1m"
 
     def test_cccs_positional_gain(self) -> None:
-        # F1 out 0 V1 10 — F has 2 nodes + ref + gain.
+        # F1 out 0 V1 10 — CCCS: 2 nodes + controlling-source ref + gain.
         card = lex("F1 out 0 V1 10\n").cards[0]
         view = InstanceLine.from_card(card)
         assert view.ref == "F1"
-        # InstanceLine doesn't distinguish nodes from source-refs; it
-        # records all positional-but-the-last as nodes.
-        assert view.nodes == ["out", "0", "V1"]
+        # The terminals split on the element's exact node count (2 for F/H), so
+        # the controlling-source ref (V1) is part of the value spec, not a node.
+        assert view.nodes == ["out", "0"]
+        assert view.value == "V1 10"
+
+    def test_source_function_spec_value_not_truncated(self) -> None:
+        # A multi-token source spec must surface whole: the generic
+        # last-token-is-the-value rule lexes ``PULSE(...)`` as ``PULSE`` + ``(...)``
+        # and would drop the function name from the value projection.
+        card = lex("V1 a 0 PULSE(0 5 0 1n 1n 1m 2m)\n").cards[0]
+        view = InstanceLine.from_card(card)
+        assert view.nodes == ["a", "0"]
+        assert view.value == "PULSE(0 5 0 1n 1n 1m 2m)"
+        assert view.display_value() == "PULSE(0 5 0 1n 1n 1m 2m)"
+
+    def test_set_nodes_refuses_variable_arity_bjt(self) -> None:
+        # A BJT may carry an optional 4th substrate node, so its terminal count
+        # is not fixed — node editing must refuse it rather than rewrite a
+        # hardcoded 3 and silently leave the substrate (or worse) in place.
+        for body in ("Q1 c b e NPNMOD\n", "Q1 c b e sub NPNMOD\n"):
+            view = InstanceLine.from_card(lex(body).cards[0])
+            with pytest.raises(ValueError, match="not supported"):
+                view.set_nodes(["x", "y", "z"])
+
+    def test_set_nodes_refuses_controlled_source(self) -> None:
+        # E/G have POLY/TABLE forms with variable control-node arity; refuse.
+        view = InstanceLine.from_card(lex("E1 out 0 in 0 10\n").cards[0])
+        with pytest.raises(ValueError, match="not supported"):
+            view.set_nodes(["a", "b", "c", "d"])
+
+    def test_controlled_source_plain_value_still_parsed(self) -> None:
+        # Removing E/G from the editable set must not change their value/node
+        # projection: a plain VCVS still reads as 4 nodes + a single gain.
+        view = InstanceLine.from_card(lex("E1 out 0 in 0 10\n").cards[0])
+        assert view.nodes == ["out", "0", "in", "0"]
         assert view.value == "10"
 
     def test_vcvs_set_value_replaces_gain(self) -> None:

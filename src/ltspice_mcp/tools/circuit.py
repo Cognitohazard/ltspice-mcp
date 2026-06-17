@@ -1666,7 +1666,10 @@ async def _set_component_nodes_netlist(
                 f"Available: {_format_available_refs(available)}"
             )
         view = InstanceLine.from_card(refs_to_card[reference.lower()])
-        old_nodes = list(view.nodes)
+        # The real terminals are the leading positional tokens; for a source with
+        # a function spec the generic view also lists later tokens (e.g. PULSE) as
+        # pseudo-nodes, so slice to the rewrite arity for an accurate before/after.
+        old_nodes = view.nodes[: len(new_nodes)]
         try:
             view.set_nodes(new_nodes)
         except ValueError as exc:
