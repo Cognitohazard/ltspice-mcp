@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from mcp.types import TextContent
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.state import SessionState
@@ -42,6 +43,13 @@ from ltspice_mcp.tools.circuit import (
     handle_trace_net,
     handle_validate_netlist,
 )
+
+
+def _result_text(result) -> str:
+    """Extract text from a tool result's first content block, asserting it is text."""
+    item = result.content[0]
+    assert isinstance(item, TextContent)
+    return item.text
 
 
 def _copy_file(src: Path, dst: Path) -> None:
@@ -95,7 +103,7 @@ FLAG 100 0 0
 class TestReadAscCircuit:
     async def test_reads_components(self, asc_state: SessionState, asc_file: Path):
         result = await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
-        text = result.content[0].text
+        text = _result_text(result)
         assert "C1" in text
         assert "R1" in text
         assert "V1" in text
@@ -105,7 +113,7 @@ class TestReadAscCircuit:
 
     async def test_list_components_asc(self, asc_state: SessionState, asc_file: Path):
         result = await handle_list_components({"path": asc_file.name}, asc_state)
-        text = result.content[0].text
+        text = _result_text(result)
         assert "C1" in text
         assert "R1" in text
 
@@ -116,7 +124,7 @@ class TestGetSymbolInfo:
         result = await handle_symbol_info(
             SymbolInfoInput(symbol="res", x=0, y=0, rotation="R0"), asc_state
         )
-        text = result.content[0].text
+        text = _result_text(result)
         assert "res" in text
         assert "Pins" in text
 
@@ -131,7 +139,7 @@ class TestGetComponentInfo:
         result = await handle_component_info(
             ComponentInfoInput(path=asc_file.name, reference="R1"), asc_state
         )
-        text = result.content[0].text
+        text = _result_text(result)
         assert "R1" in text
         assert "1k" in text
         assert "Pins:" in text
@@ -157,7 +165,7 @@ class TestRemoveComponent:
         result = await handle_remove_component(
             RemoveComponentInput(path=asc_file.name, reference="C1"), asc_state
         )
-        assert "Removed C1" in result.content[0].text
+        assert "Removed C1" in _result_text(result)
         # Confirm not present anymore
         read = await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
         comp_refs = [c["reference"] for c in read.structuredContent["components"]]
@@ -177,14 +185,14 @@ class TestMoveComponent:
             MoveComponentInput(path=asc_file.name, reference="R1", x=300, y=200),
             asc_state,
         )
-        assert "Moved R1" in result.content[0].text
+        assert "Moved R1" in _result_text(result)
 
     async def test_move_with_rotation(self, asc_state: SessionState, asc_file: Path):
         result = await handle_move_component(
             MoveComponentInput(path=asc_file.name, reference="R1", x=300, y=200, rotation="R180"),
             asc_state,
         )
-        assert "R180" in result.content[0].text
+        assert "R180" in _result_text(result)
 
     async def test_keep_rotation(self, asc_state: SessionState, asc_file: Path):
         # Omit rotation to exercise the "keep current" branch
@@ -192,7 +200,7 @@ class TestMoveComponent:
             MoveComponentInput(path=asc_file.name, reference="R1", x=400, y=400),
             asc_state,
         )
-        assert "R1" in result.content[0].text
+        assert "R1" in _result_text(result)
 
 
 @pytest.mark.asyncio
@@ -204,7 +212,7 @@ class TestSetComponentAttribute:
             ),
             asc_state,
         )
-        assert "SpiceLine" in result.content[0].text
+        assert "SpiceLine" in _result_text(result)
 
 
 @pytest.mark.asyncio
@@ -250,7 +258,7 @@ class TestAddComponent:
             ),
             asc_state,
         )
-        text = result.content[0].text
+        text = _result_text(result)
         assert "Added R2" in text
         assert "2k" in text
         assert result.structuredContent["reference"] == "R2"
@@ -271,14 +279,14 @@ class TestAddNetLabel:
             NetLabelInput(path=asc_file.name, net="VCC", x=100, y=100),
             asc_state,
         )
-        assert "VCC" in result.content[0].text
+        assert "VCC" in _result_text(result)
 
     async def test_add_ground(self, asc_state: SessionState, asc_file: Path):
         result = await handle_add_net_label(
             NetLabelInput(path=asc_file.name, net="0", x=200, y=400),
             asc_state,
         )
-        assert "ground" in result.content[0].text
+        assert "ground" in _result_text(result)
 
     async def test_missing_xy_and_pin(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="Either pin or both"):
@@ -290,7 +298,7 @@ class TestAddNetLabel:
             NetLabelInput(path=asc_file.name, net="filtered", x=208, y=128, action="remove"),
             asc_state,
         )
-        assert "Removed" in result.content[0].text
+        assert "Removed" in _result_text(result)
 
     async def test_remove_nonexistent(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="No"):
@@ -305,7 +313,7 @@ class TestAddNetLabel:
             NetLabelInput(path=asc_file.name, net="filtered", x=400, y=400),
             asc_state,
         )
-        assert "Warning" in result.content[0].text
+        assert "Warning" in _result_text(result)
 
 
 @pytest.mark.asyncio
@@ -324,7 +332,7 @@ class TestEditDirectiveCommentKind:
             ),
             asc_state,
         )
-        assert "Test note" in result.content[0].text
+        assert "Test note" in _result_text(result)
 
     async def test_add_directive_honors_placement(self, asc_state: SessionState, asc_file: Path):
         """x/y/size on the .asc DIRECTIVE branch must place the directive at
@@ -342,7 +350,7 @@ class TestEditDirectiveCommentKind:
             ),
             asc_state,
         )
-        assert "Added directive" in result.content[0].text
+        assert "Added directive" in _result_text(result)
         content = _read_bytes(asc_file)
         # LTspice TEXT record: "TEXT <x> <y> <align> <size> !<directive>"
         assert b"!.tran 5m" in content
@@ -674,7 +682,7 @@ class TestConnectPersistsWires:
             ConnectInput(path="wire_persist.asc", from_pin="R1.2", to_pin="R2.1"),
             asc_state,
         )
-        assert "Connected R1.2 to R2.1" in result.content[0].text
+        assert "Connected R1.2 to R2.1" in _result_text(result)
         sc = result.structuredContent
         assert sc is not None
         assert sc["wire_count"] == 1
@@ -895,7 +903,7 @@ class TestEditingAscRollback:
         # Cache eviction means a fresh read doesn't see R_uncommitted.
         monkeypatch.undo()
         result = await handle_list_components({"path": asc_file.name}, asc_state)
-        assert "R_uncommitted" not in result.content[0].text
+        assert "R_uncommitted" not in _result_text(result)
 
 
 @pytest.mark.asyncio
@@ -980,7 +988,7 @@ class TestAtomicAscSave:
         # The component must NOT be visible — cache was evicted, fresh
         # read from disk shows the pre-failure state.
         result = await handle_list_components({"path": asc_file.name}, asc_state)
-        assert "R_uncommitted" not in result.content[0].text
+        assert "R_uncommitted" not in _result_text(result)
 
 
 # Relocated regression coverage from a retired test module.
@@ -1017,7 +1025,7 @@ class TestSetAttributeAllowlist:
             ),
             asc_state,
         )
-        assert "SpiceLine" in result.content[0].text
+        assert "SpiceLine" in _result_text(result)
 
 
 # Relocated regression coverage from a retired test module.
@@ -1030,7 +1038,7 @@ class TestFloatingLabelWarning:
             NetLabelInput(path=asc_file.name, net="VCC_floating", x=10, y=10),
             asc_state,
         )
-        assert "floating" in result.content[0].text.lower()
+        assert "floating" in _result_text(result).lower()
 
 
 # Relocated regression coverage from a retired test module.
@@ -1113,7 +1121,7 @@ class TestRemoveComponentNoFalseOrphans:
             asc_state,
         )
         # The remaining R1's wires shouldn't be flagged as orphans.
-        assert "orphaned" not in result.content[0].text
+        assert "orphaned" not in _result_text(result)
 
 
 # Relocated regression coverage from a retired test module.
@@ -1157,7 +1165,7 @@ class TestApplySchematicOps:
             ),
             asc_state,
         )
-        text = result.content[0].text
+        text = _result_text(result)
         data = result.structuredContent
         assert data["applied_count"] == 3
         assert data["failed_count"] == 0
@@ -1198,7 +1206,7 @@ class TestApplySchematicOps:
         data = result.structuredContent
         assert data["saved"] is False
         assert data["failed_count"] == 1
-        assert "Transaction aborted" in result.content[0].text
+        assert "Transaction aborted" in _result_text(result)
 
         # Verify the file actually doesn't have R1 — load and check.
         from ltspice_mcp.tools.circuit import (
