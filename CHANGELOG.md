@@ -8,6 +8,8 @@ tool-surface changes.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-16
+
 ### Added
 
 - `validate_netlist` rejects empty / whitespace-only netlists (error) and
@@ -126,6 +128,14 @@ tool-surface changes.
 - `diff_circuit` no longer reports a component or directive as changed when the
   only difference is the micro prefix's rendering (`1u` vs `1µ`); a real
   magnitude change (`1u` vs `2u`) is still reported.
+
+### Security
+
+- Dependency upgrades for published advisories: `cryptography` 46.0.7 →
+  49.0.0 (GHSA-537c-gmf6-5ccf), `python-multipart` 0.0.27 → 0.0.32
+  (CVE-2026-53538, CVE-2026-53539, CVE-2026-53540), and `starlette` 1.2.1 →
+  1.3.1 (CVE-2026-54282, CVE-2026-54283). All three arrive transitively via
+  the MCP SDK's HTTP transport, which this stdio server does not use.
 
 ## [0.2.0] - 2026-06-10
 
