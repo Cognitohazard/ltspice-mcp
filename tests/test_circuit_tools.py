@@ -228,6 +228,17 @@ class TestReadCircuitDegrades:
         assert "R1" in refs
         assert "B1" in refs
 
+    async def test_source_function_spec_value_intact(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A PULSE/SIN/PWL source value must read back whole, not truncated to the
+        # parenthesised args with the function name dropped.
+        cir = work_dir / "pulse.cir"
+        cir.write_text("* p\nV1 in 0 PULSE(0 5 0 1n 1n 1m 2m)\nR1 in 0 1k\n.END\n")
+        result = await handle_read_circuit({"path": cir.name, "format": "json"}, state_no_sim)
+        comps = {c["reference"]: c["value"] for c in result.structuredContent["components"]}
+        assert comps["V1"] == "PULSE(0 5 0 1n 1n 1m 2m)"
+
 
 @pytest.mark.asyncio
 class TestParameter:
@@ -1221,12 +1232,17 @@ class TestSetComponentNodes:
         # byte-for-byte, never mangle a multi-token source spec like PULSE(...).
         cir = work_dir / "src.cir"
         cir.write_text("* src\nV1 a 0 PULSE(0 5 0 1n 1n 1m 2m)\nR1 a 0 1k\n.END\n")
-        await handle_set_component_value(
+        result = await handle_set_component_value(
             {"path": cir.name, "reference": "V1", "nodes": ["in", "0"]},
             state_no_sim,
         )
         text = cir.read_text()
         assert "V1 in 0 PULSE(0 5 0 1n 1n 1m 2m)" in text
+        # The before/after message reports the real terminals only — the source
+        # function token (PULSE) must not show up as a pseudo-node.
+        msg = result.content[0].text
+        assert "PULSE" not in msg
+        assert "[a 0] -> [in 0]" in msg
 
     async def test_rewire_rejects_too_few_nodes(self, state_no_sim: SessionState, work_dir: Path):
         cir = work_dir / "few.cir"
@@ -1234,6 +1250,19 @@ class TestSetComponentNodes:
         with pytest.raises(NetlistError, match="2 node"):
             await handle_set_component_value(
                 {"path": cir.name, "reference": "R1", "nodes": ["in"]},
+                state_no_sim,
+            )
+
+    async def test_nodes_refused_on_variable_arity_device(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A BJT's terminal count isn't fixed (optional substrate node), so node
+        # editing must refuse it rather than rewrite a wrong, hardcoded count.
+        cir = work_dir / "bjt.cir"
+        cir.write_text("* bjt\nQ1 c b e NPNMOD\nVCC c 0 5\n.op\n.END\n")
+        with pytest.raises(NetlistError, match="edit the card directly"):
+            await handle_set_component_value(
+                {"path": cir.name, "reference": "Q1", "nodes": ["x", "y", "z"]},
                 state_no_sim,
             )
 

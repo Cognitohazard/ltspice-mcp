@@ -97,6 +97,28 @@ class TestCheckJob:
         # The human-readable footer points the caller at the full artifacts.
         assert "Result files:" in result.content[0].text
 
+    async def test_failed_missing_model_hint_in_text_and_structured(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A missing-model failure surfaces the find_model recovery hint in BOTH
+        # the text and the structured 'error' field, and the log excerpt appears
+        # once (job.error already carries it — the branch must not duplicate it).
+        log = work_dir / "mm.log"
+        log.write_text('Error on line 2 : q1 c b e 2n2222 Undefined model "2n2222"\n')
+        job = _make_job(state_no_sim, status="failed", log_file=log)
+        job.error = (
+            'Simulation failed (no output generated)\n\nLog excerpt:\nUndefined model "2n2222"'
+        )
+        result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
+        text = result.content[0].text
+        data = result.structuredContent
+        assert data is not None
+        for blob in (text, data["error"]):
+            assert "find_model" in blob
+            assert "include_builtin=true" in blob
+            assert "2n2222" in blob
+        assert text.count("Log excerpt:") == 1
+
     async def test_cancelled(self, state_no_sim: SessionState):
         _make_job(state_no_sim, status="cancelled")
         result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
