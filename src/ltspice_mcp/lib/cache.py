@@ -3,9 +3,12 @@
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
 
 
-class FileCache[T]:
+class FileCache(Generic[T]):
     """Generic cache for file-derived data with mtime-based invalidation.
 
     The cache stores values keyed by file path and automatically invalidates
