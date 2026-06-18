@@ -313,15 +313,10 @@ async def run():
         # ----------------------------------------------------------
         # Step 11: Get a prompt
         # ----------------------------------------------------------
-        step(11, "Get filter design prompt")
+        step(11, "Get the characterize-filter prompt")
         r = await session.get_prompt(
-            "filter_design",
-            {
-                "filter_type": "lowpass",
-                "target_frequency": "1kHz",
-                "order": "2",
-                "topology": "Sallen-Key",
-            },
+            "characterize_filter",
+            {"path": "sallen_key_lpf.cir"},
         )
         msg = r.messages[0]
         prompt_text = msg.content if isinstance(msg.content, str) else msg.content.text  # type: ignore[union-attr]

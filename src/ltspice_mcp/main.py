@@ -12,7 +12,7 @@ from io import TextIOWrapper
 import anyio
 from mcp.server.stdio import stdio_server
 
-from ltspice_mcp.server import server
+from ltspice_mcp.server import register_init_options, server
 
 
 def main():
@@ -71,8 +71,8 @@ async def _run(real_stdin_fd: int):
     real_stdin = anyio.wrap_file(TextIOWrapper(real_stdin_file, encoding="utf-8"))
 
     async with stdio_server(stdin=real_stdin) as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options(),
-        )
+        # Share the init options with the lifespan so it can rewrite the
+        # instructions to name the detected simulators (see server.py).
+        init_options = server.create_initialization_options()
+        register_init_options(init_options)
+        await server.run(read_stream, write_stream, init_options)
