@@ -8,6 +8,14 @@ tool-surface changes.
 
 ## [Unreleased]
 
+### Changed
+
+- Lowered the minimum Python from 3.13 to 3.11. The two 3.12+/3.13-only
+  constructs (PEP 695 generic syntax, `tomllib`) are replaced or already
+  available on 3.11, so 3.11 and 3.12 users can now install. CI (and the
+  release gate) now runs the full test suite on 3.11, 3.12, and 3.13, so the
+  advertised floor is proven on every push.
+
 ## [0.2.1] - 2026-06-16
 
 ### Added
