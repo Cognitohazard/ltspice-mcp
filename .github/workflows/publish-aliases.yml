@@ -1,0 +1,54 @@
+name: Publish aliases to PyPI
+
+# Thin alias packages (circuit-mcp, ngspice-mcp) under packaging/aliases/.
+# Manual only: these are publish-once and change rarely, so they must NOT ride
+# the tag-triggered canonical release (publish.yml). skip-existing makes re-runs
+# idempotent — to ship a new alias version, bump its version in its pyproject
+# and re-run; unchanged aliases are skipped instead of failing on a duplicate.
+#
+# Uses PyPI Trusted Publishing (OIDC), same mechanism as publish.yml. Each alias
+# is a separate PyPI project and needs its own pending/trusted publisher (owner
+# cognitohazard, repo ltspice-mcp, workflow publish-aliases.yml, env pypi).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        alias:
+          - circuit-mcp
+          - ngspice-mcp
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Build ${{ matrix.alias }}
+        working-directory: packaging/aliases/${{ matrix.alias }}
+        run: uv build --out-dir dist
+
+      - name: Verify metadata
+        run: uvx twine check --strict packaging/aliases/${{ matrix.alias }}/dist/*
+
+      # Pinned to the v1.14.0 commit SHA (privileged OIDC step — must not follow
+      # a mutable ref). Matches publish.yml; Dependabot bumps both together.
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0
+        with:
+          packages-dir: packaging/aliases/${{ matrix.alias }}/dist
+          skip-existing: true
