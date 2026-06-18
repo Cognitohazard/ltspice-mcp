@@ -1,0 +1,22 @@
+{
+  "name": "ltspice-mcp",
+  "owner": {
+    "name": "cognitohazard",
+    "url": "https://github.com/cognitohazard"
+  },
+  "metadata": {
+    "description": "Circuit simulation (LTspice/ngspice) and LTspice .asc schematic editing for Claude Code.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "ltspice-mcp",
+      "source": ".",
+      "version": "0.1.0",
+      "author": {
+        "name": "cognitohazard"
+      },
+      "description": "LTspice/ngspice circuit simulation and .asc schematic editing as MCP tools. Requires uv and a simulator (LTspice or ngspice) on the host; the server is fetched from PyPI via uvx on first use."
+    }
+  ]
+}

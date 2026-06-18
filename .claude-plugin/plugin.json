@@ -1,0 +1,18 @@
+{
+  "name": "ltspice-mcp",
+  "version": "0.1.0",
+  "description": "LTspice/ngspice circuit simulation and LTspice .asc schematic editing, exposed as MCP tools. Tracks the latest ltspice-mcp release on PyPI.",
+  "author": {
+    "name": "cognitohazard"
+  },
+  "homepage": "https://github.com/cognitohazard/ltspice-mcp",
+  "repository": "https://github.com/cognitohazard/ltspice-mcp",
+  "license": "GPL-3.0-or-later",
+  "keywords": ["ltspice", "ngspice", "spice", "circuit", "simulation", "eda", "schematic"],
+  "mcpServers": {
+    "ltspice": {
+      "command": "uvx",
+      "args": ["ltspice-mcp"]
+    }
+  }
+}

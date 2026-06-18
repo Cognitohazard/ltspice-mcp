@@ -34,6 +34,15 @@ That's the setup. Python 3.11+ required. Verify with `ltspice-mcp --help`.
 
 Claude Desktop config lives at `~/Library/Application Support/Claude/` (macOS), `%APPDATA%\Claude\` (Windows), or `~/.config/Claude/` (Linux). Cursor, Windsurf, Gemini CLI, Continue, Cline, Zed and others take the same JSON snippet in their respective config files. Web clients (claude.ai, ChatGPT) need a stdio→HTTP bridge such as [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy) — only expose this server on a network you fully control, since it writes files and spawns processes inside `allowed_paths`.
 
+### Install as a Claude Code plugin or Desktop Extension
+
+Two lower-friction routes that wrap the same PyPI package:
+
+- **Claude Code plugin** — `/plugin marketplace add cognitohazard/ltspice-mcp`, then `/plugin install ltspice-mcp`. Registers the server (via `uvx`) and bundles the LTspice/ngspice skills. To test against a local checkout instead, `/plugin marketplace add .`.
+- **Claude Desktop extension** — build the `.mcpb` in [`packaging/mcpb/`](packaging/mcpb/) and drag it onto Claude Desktop for a one-click install with a native folder picker for your circuits directory.
+
+Both wrap the server; they still need `uv` and a simulator on the host — they do not bundle LTspice or ngspice.
+
 ## Using it
 
 Once connected, you ask for circuit work in plain language. The assistant chooses the tools; the server runs the simulator and measures the results.
@@ -125,6 +134,8 @@ Simulation output is automatically redirected to a Windows temp directory: LTspi
 | `agentic` | 39 | LLM agents with native file access (Read/Edit/Write) |
 
 The `agentic` profile drops netlist-editing wrappers and library session management — work a capable agent does through direct file edits — and keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, and the `.asc` geometry tools. The `skills/` directory (`skills/ltspice/SKILL.md`, `skills/ngspice/SKILL.md`) contains the domain knowledge that pairs with it: copy the relevant skill into your client's persistent-instructions location.
+
+**Where it runs.** The server shells out to a local LTspice/ngspice and reads circuit files from disk, so it must run where the simulator and the files are. Two setups work: a local MCP host (Claude Desktop, Claude Code, Cursor, Gemini CLI, Codex, …) on your own machine, or a browser-based cloud agent whose sandbox can install ngspice and register the server (verified with Claude). LTspice is local-only (a Windows app); ngspice is open-source and works in either place. Consumer web chat with no sandbox has no simulator and no file access, so it can't run this server directly; bridge it to a machine you control (e.g. [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy)) if you want that UI.
 
 ## Under the hood: the tool-level loop
 
