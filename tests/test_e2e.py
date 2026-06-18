@@ -128,7 +128,49 @@ class TestServerLifecycle:
             assert caps is not None
             assert caps.tools is not None
             assert caps.resources is not None
-            # prompts capability removed (domain knowledge belongs in the client)
+            assert caps.prompts is not None  # workflow-starter prompts
+
+    async def test_initialize_reports_package_version_and_active_simulator(self, tmp_path):
+        # A real handshake must carry the ltspice-mcp package version (not the
+        # mcp SDK version), and instructions naming the detected simulators.
+        from importlib.metadata import version as pkg_version
+
+        params = _server_params(tmp_path)
+        async with (
+            stdio_client(params) as (read_stream, write_stream),
+            ClientSession(read_stream, write_stream) as session,
+        ):
+            init = await session.initialize()
+            assert init.serverInfo.version == pkg_version("ltspice-mcp")
+            # Detection is disabled in this harness -> the no-simulator line.
+            assert init.instructions is not None
+            assert "No SPICE simulator detected" in init.instructions
+
+    async def test_server_name_override_via_env(self, tmp_path):
+        # The alias packages (circuit-mcp/ngspice-mcp) set LTSPICE_MCP_SERVER_NAME
+        # so the handshake identifies as the alias, not the canonical name.
+        params = _server_params(tmp_path)
+        assert params.env is not None
+        params.env["LTSPICE_MCP_SERVER_NAME"] = "circuit-mcp"
+        async with (
+            stdio_client(params) as (read_stream, write_stream),
+            ClientSession(read_stream, write_stream) as session,
+        ):
+            init = await session.initialize()
+            assert init.serverInfo.name == "circuit-mcp"
+
+    async def test_prompts_list_and_get(self, tmp_path):
+        from mcp import types as mcp_types
+
+        async with mcp_session(tmp_path) as session:
+            listed = await session.list_prompts()
+            names = {p.name for p in listed.prompts}
+            assert {"characterize_filter", "run_and_plot", "step_response"} <= names
+            got = await session.get_prompt("characterize_filter", {"path": "rc.cir"})
+            assert got.messages
+            content = got.messages[0].content
+            assert isinstance(content, mcp_types.TextContent)
+            assert "rc.cir" in content.text
 
     async def test_list_tools_contains_all_modules(self, tmp_path):
         """Every module's tools appear in the dispatch table."""

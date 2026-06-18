@@ -16,6 +16,7 @@ from ltspice_mcp.server import (
     SERVER_INSTRUCTIONS,
     _configure_asc_editor,
     _get_error_hint,
+    build_instructions,
     call_tool,
     list_resources,
     list_tools,
@@ -60,6 +61,41 @@ class TestServerInstructions:
         assert "completed" in text
         # must name only tools present in BOTH profiles (create_netlist is full-only)
         assert "create_netlist" not in text
+
+
+class _LT:
+    pass
+
+
+class _NG:
+    pass
+
+
+class TestBuildInstructions:
+    """The runtime-prepended line must name the actually-detected simulators."""
+
+    def test_includes_static_body(self):
+        assert SERVER_INSTRUCTIONS in build_instructions({"ngspice": _NG}, _NG)
+
+    def test_none_detected(self):
+        text = build_instructions({}, None)
+        assert "No SPICE simulator detected" in text
+
+    def test_ngspice_only_notes_ltspice_absence(self):
+        text = build_instructions({"ngspice": _NG}, _NG)
+        assert "Active simulator: ngspice." in text
+        assert "(LTspice not detected.)" in text
+        assert "(default)" not in text  # no default marker for a single engine
+
+    def test_ltspice_only(self):
+        text = build_instructions({"ltspice": _LT}, _LT)
+        assert "Active simulator: LTspice." in text
+        assert "LTspice not detected" not in text
+
+    def test_both_marks_default(self):
+        text = build_instructions({"ltspice": _LT, "ngspice": _NG}, _LT)
+        assert "Active simulators: LTspice (default), ngspice." in text
+        assert "LTspice not detected" not in text
 
 
 class TestConfigureAscEditor:
