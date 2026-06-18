@@ -8,8 +8,30 @@ tool-surface changes.
 
 ## [Unreleased]
 
+### Added
+
+- MCP prompts (workflow starters a host surfaces as slash-commands):
+  `characterize_filter`, `run_and_plot`, and `step_response`. Each emits the
+  canonical tool pipeline for that task with the circuit path filled in.
+
 ### Changed
 
+- The MCP handshake now reports the `ltspice-mcp` package version in
+  `serverInfo.version` instead of the MCP SDK's version.
+- `serverInfo.name` can be overridden with the `LTSPICE_MCP_SERVER_NAME`
+  environment variable (defaults to `ltspice-mcp`), so alias launchers can
+  self-identify in the handshake.
+- The server instructions now open with a line naming the simulators actually
+  detected at startup (e.g. "Active simulator: ngspice (LTspice not detected).")
+  so a client without LTspice no longer reads the LTspice-centric name as a
+  degraded state. The instructions also now point to `plot_waveform` for
+  visualization.
+- Reworded the "symbols unavailable" startup log so it reads as informational —
+  it disables only `.asc` schematic graphics editing and leaves SPICE
+  simulation and netlist editing unaffected.
+- `signal_stats` and `get_waveform` descriptions say "SPICE's adaptive
+  timestep" rather than "LTspice's", since the behavior is generic to ngspice
+  too.
 - Lowered the minimum Python from 3.13 to 3.11. The two 3.12+/3.13-only
   constructs (PEP 695 generic syntax, `tomllib`) are replaced or already
   available on 3.11, so 3.11 and 3.12 users can now install. CI (and the

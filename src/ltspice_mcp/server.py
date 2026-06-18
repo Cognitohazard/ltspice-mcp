@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import sys
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
@@ -11,8 +12,10 @@ from typing import NamedTuple
 from mcp import types
 from mcp.server.lowlevel import Server
 from mcp.server.lowlevel.helper_types import ReadResourceContents
+from mcp.server.models import InitializationOptions
 from pydantic import AnyUrl, ValidationError
 
+from ltspice_mcp import __version__, prompts
 from ltspice_mcp import errors as _err
 from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
@@ -31,6 +34,16 @@ from ltspice_mcp.state import SessionState
 _CIRCUIT_PATH_KEYS: tuple[str, ...] = ("path", "netlist")
 
 logger = logging.getLogger(__name__)
+
+# Set by main.py to the InitializationOptions passed to server.run(), so the
+# lifespan can rewrite its instructions once simulators are detected.
+_dynamic_init_options: InitializationOptions | None = None
+
+
+def register_init_options(opts: InitializationOptions) -> None:
+    """Hand the live initialize options to the lifespan for instruction rewrite."""
+    global _dynamic_init_options
+    _dynamic_init_options = opts
 
 
 def _get_state(server_: Server) -> SessionState:
@@ -130,8 +143,9 @@ def _configure_asc_editor(config: ServerConfig, available: dict) -> None:
             logger.info(f"AscEditor WSL library paths: {lib_paths}")
             return
         logger.info(
-            "No LTspice symbol library found on WSL — .asc schematic editing disabled. "
-            "Set [schematic] symbol_paths in ltspice-mcp.toml or "
+            ".asc schematic graphics editing unavailable on WSL (no LTspice symbol "
+            "library found); SPICE simulation and netlist editing are unaffected. "
+            "To enable it, set [schematic] symbol_paths in ltspice-mcp.toml or "
             "LTSPICE_MCP_SYMBOL_PATHS env var."
         )
         return
@@ -139,7 +153,10 @@ def _configure_asc_editor(config: ServerConfig, available: dict) -> None:
     # 3. Windows native (or Linux with Wine) — needs the detected LTspice class
     ltspice_cls = available.get("ltspice")
     if ltspice_cls is None:
-        logger.info("No LTspice symbols available — .asc schematic editing disabled")
+        logger.info(
+            ".asc schematic graphics editing unavailable (no LTspice symbol library "
+            "found); SPICE simulation and netlist editing are unaffected"
+        )
         return
 
     try:
@@ -287,8 +304,16 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 
     state = SessionState.create(config, available, diagnostics)
 
+    # Rewrite the initialize instructions to name the actually-detected
+    # simulators. main.py stashes the InitializationOptions it passed to
+    # server.run() here; lifespan startup completes before the initialize
+    # request is answered, and that request reads the same object, so the
+    # client sees the dynamic line. Falls back to the static text if unset.
+    if _dynamic_init_options is not None:
+        _dynamic_init_options.instructions = build_instructions(available, state.default_simulator)
+
     logger.info("=== LTSpice MCP Server Starting ===")
-    logger.info("Server name: ltspice-mcp")
+    logger.info(f"Server name: {server.name}")
     logger.info(f"Config source: {config_source}")
     logger.info(f"Working directory: {state.working_dir}")
     logger.info(f"Tool profile: {config.tool_profile} ({len(state.tool_defs)} tools)")
@@ -353,18 +378,56 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 # "completed can be degenerate" line warns the consuming LLM not to
 # equate a completed run with a correct result.
 SERVER_INSTRUCTIONS = """\
-LTspice-MCP simulates SPICE circuits (LTspice and ngspice) and edits LTspice .asc schematics.
+LTspice-MCP simulates SPICE circuits and edits LTspice .asc schematics.
 
 Prefer the netlist path by default — fewer steps, more reliable: author a .cir/.net netlist, validate_netlist, then run_simulation and the analysis tools. Build or edit .asc schematics only when the task is about schematic graphics/layout, or the user asks. Build .asc with create_schematic/add_component/connect plus apply_schematic_ops for the rest.
 
-Match the analysis tool to the run type or it errors: bode_metrics/resonance/stability_metrics need a .AC run; signal_stats/edge_metrics/timing_between/periodic_metrics/pulse_response need .tran; operating_point needs .op. Scalar results come from .meas directives (failures in failed_measurements); read sweep/Monte-Carlo runs via batch_results or job_id+run_index, aggregates via measurement_stats.
+Match the analysis tool to the run type or it errors: bode_metrics/resonance/stability_metrics need a .AC run; signal_stats/edge_metrics/timing_between/periodic_metrics/pulse_response need .tran; operating_point needs .op. Scalar results come from .meas directives (failures in failed_measurements); read sweep/Monte-Carlo runs via batch_results or job_id+run_index, aggregates via measurement_stats. To visualize a waveform use plot_waveform (get_waveform for the raw numbers) — do not generate plots externally.
 
 A run can report "completed" yet be degenerate (coerced value, skipped .meas) — check the returned warnings/errors and the `observations` list, don't assume success means correct. `observations` reads the RESULT and does not re-run netlist topology analysis; it surfaces facts worth weighing (the simulator's own error lines, requested .meas/.four that weren't produced, extreme/non-finite node values, and scans that were skipped) — they are facts for you to judge, not a verdict; an empty list means nothing tripped a check, NOT that the result is verified. validate_netlist is the pre-flight gate: topology faults like a floating or capacitive-island node are caught there, not by observations, but it won't catch value typos or undefined models (resolved at run time).
 
 Build or edit .asc with the schematic tools, never by hand — hand-writing the file forfeits connect's orthogonal routing and its pin-collision/junction checks. Pin names and coordinates are symbol-specific (a resistor's are A/B, not 1/2) — read them from add_component/symbol_info. Wire signal nets with connect (orthogonal segments only; waypoints for bends; route outside component bodies); put a ground flag at each ground pin with an apply_schematic_ops add_net_label op (net="0", pin=...); do NOT net-label signal nets — wire them. Ack-only mutations (move/remove a component, set an attribute, add/remove a net label, remove a wire) are apply_schematic_ops ops, not standalone tools; tools that return info you act on (add_component pin geometry, connect routing) are standalone. For a multi-step build use apply_schematic_ops (one transaction). The full schematic-layout playbook (tier alignment, mirror/diff-pair orientations, bus routing) is the ltspice://guide resource.
 """
 
-server = Server("ltspice-mcp", instructions=SERVER_INSTRUCTIONS)
+# Friendly display names for the detected-simulator line prepended to the
+# instructions at runtime (registry keys are lowercase).
+_SIM_DISPLAY = {"ltspice": "LTspice", "ngspice": "ngspice", "qspice": "QSPICE", "xyce": "Xyce"}
+
+
+def build_instructions(available: dict[str, type], default: type | None) -> str:
+    """Prepend a line naming the actually-detected simulators to the static guide.
+
+    The server is named for LTspice, so a client that only has ngspice would
+    otherwise read the LTspice-centric name and the "symbols disabled" log as
+    degradation. Stating the active engine up front removes that ambiguity.
+    """
+    if not available:
+        active = (
+            "No SPICE simulator detected — simulation tools will error until one is "
+            "configured; netlist authoring/validation and .asc editing still work "
+            "(see server_status)."
+        )
+    else:
+
+        def disp(name: str) -> str:
+            return _SIM_DISPLAY.get(name, name)
+
+        if len(available) == 1:
+            active = f"Active simulator: {disp(next(iter(available)))}."
+        else:
+            default_name = next((n for n, c in available.items() if c is default), None)
+            parts = [f"{disp(n)} (default)" if n == default_name else disp(n) for n in available]
+            active = f"Active simulators: {', '.join(parts)}."
+        if "ltspice" not in available:
+            active += " (LTspice not detected.)"
+    return f"{active}\n\n{SERVER_INSTRUCTIONS}"
+
+
+# The name is overridable so the thin alias packages (circuit-mcp, ngspice-mcp)
+# can self-identify in the handshake; it defaults to the canonical id. The env
+# var must be set before this module is imported. See packaging/aliases/.
+_SERVER_NAME = os.environ.get("LTSPICE_MCP_SERVER_NAME", "ltspice-mcp")
+server = Server(_SERVER_NAME, version=__version__, instructions=SERVER_INSTRUCTIONS)
 server.lifespan = server_lifespan
 
 
@@ -519,3 +582,15 @@ async def read_resource(uri: AnyUrl) -> Iterable[ReadResourceContents]:
                 )
             )
     return converted
+
+
+@server.list_prompts()
+async def list_prompts() -> list[types.Prompt]:
+    """Return the workflow-starter prompts (registering this advertises the capability)."""
+    return prompts.list_prompts()
+
+
+@server.get_prompt()
+async def get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptResult:
+    """Return a prompt's messages with its arguments interpolated."""
+    return prompts.get_prompt(name, arguments)
