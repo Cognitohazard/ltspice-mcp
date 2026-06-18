@@ -1,0 +1,3 @@
+server/__pycache__/
+*.pyc
+*.mcpb

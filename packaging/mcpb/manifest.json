@@ -1,0 +1,44 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "ltspice-mcp",
+  "version": "0.1.0",
+  "description": "LTspice/ngspice circuit simulation and LTspice .asc schematic editing as MCP tools.",
+  "author": {
+    "name": "cognitohazard",
+    "url": "https://github.com/cognitohazard/ltspice-mcp"
+  },
+  "homepage": "https://github.com/cognitohazard/ltspice-mcp",
+  "license": "GPL-3.0-or-later",
+  "server": {
+    "type": "uv",
+    "entry_point": "server/run.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "server/run.py"],
+      "env": {
+        "LTSPICE_MCP_ALLOWED_PATHS": "${user_config.allowed_paths}",
+        "LTSPICE_MCP_SIMULATOR_EXE": "${user_config.simulator_exe}"
+      }
+    }
+  },
+  "user_config": {
+    "allowed_paths": {
+      "type": "directory",
+      "title": "Circuits directory",
+      "description": "The folder the server may read and write. Your .asc / .cir / .net files live here.",
+      "default": "${HOME}/Documents",
+      "required": true
+    },
+    "simulator_exe": {
+      "type": "file",
+      "title": "Simulator executable (optional)",
+      "description": "Path to LTspice or ngspice. Leave blank to auto-detect, which works on most native macOS/Windows installs.",
+      "required": false,
+      "default": ""
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"]
+  }
+}

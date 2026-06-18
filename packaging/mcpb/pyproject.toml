@@ -1,0 +1,16 @@
+# Dependency manifest for the type="uv" Desktop Extension bundle. The host runs
+# `uv run --directory <bundle> server/run.py`; uv reads this file, installs
+# ltspice-mcp (and its per-platform numpy/scipy wheels) into an on-demand
+# environment, then runs the entry point. Dependencies are resolved per host
+# rather than vendored, so the bundle stays OS/ABI-independent.
+#
+# package = false: this is just a dependency set for `uv run`, not a buildable
+# package, so uv installs the dependencies without trying to build this project.
+[project]
+name = "ltspice-mcp-desktop-extension"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["ltspice-mcp"]
+
+[tool.uv]
+package = false

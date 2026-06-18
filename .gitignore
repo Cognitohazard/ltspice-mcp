@@ -33,3 +33,6 @@ ltspice-mcp.toml
 # Checked-in test fixtures are intentional inputs, not runtime artifacts —
 # never ignore them (recorded real .raw/.log decks back the regression suite).
 !tests/fixtures/**
+
+# packaged Desktop Extensions (build artifacts)
+*.mcpb
