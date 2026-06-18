@@ -13,6 +13,11 @@ tool-surface changes.
 - MCP prompts (workflow starters a host surfaces as slash-commands):
   `characterize_filter`, `run_and_plot`, and `step_response`. Each emits the
   canonical tool pipeline for that task with the circuit path filled in.
+- Distribution as a Claude Code plugin (`.claude-plugin/`) and a Claude
+  Desktop extension (`packaging/mcpb/`). Both wrap the published package via
+  `uv` (the plugin runs `uvx`; the extension is a `type: "uv"` bundle) and so
+  require `uv` and a simulator (LTspice or ngspice) on the host rather than
+  bundling either.
 
 ### Changed
 
