@@ -490,11 +490,15 @@ class TestRunSimulationStubbed:
             )
             job = next(iter(state_with_sim.jobs.values()))
             # The watchdog is event-driven: once done_event is set inside
-            # the deadline, it exits and discards itself — no timer remains
-            # that could fire later, so there is nothing to sleep for.
+            # the deadline, it exits and its done-callback deregisters it.
+            # How many event-loop turns that callback chain needs varies by
+            # Python version (asyncio.wait_for was reworked in 3.12), so wait
+            # for the deregistration rather than assuming a fixed turn count.
             from ltspice_mcp.tools import simulation as simulation_module
 
-            for _ in range(3):
+            for _ in range(1000):
+                if not simulation_module._timeout_watchdogs:
+                    break
                 await asyncio.sleep(0)
             assert not simulation_module._timeout_watchdogs
         assert job.status == "completed"

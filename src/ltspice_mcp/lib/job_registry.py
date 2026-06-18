@@ -20,6 +20,7 @@ import logging
 from collections.abc import Iterator, MutableMapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypeVar
 
 from ltspice_mcp.lib.job_lifecycle import recover, transition
 from ltspice_mcp.lib.job_types import (
@@ -31,6 +32,10 @@ from ltspice_mcp.lib.job_types import (
 from ltspice_mcp.lib.observability import emit_job_event
 
 logger = logging.getLogger(__name__)
+
+# Bound to the union job type so the typed views and per-type eviction stay
+# scoped to one job class at a time.
+J = TypeVar("J", bound=SimulationJob | BatchJob)
 
 # Maximum finished jobs to retain per job type (single-sim, batch).
 _MAX_FINISHED_JOBS = 200
@@ -57,7 +62,7 @@ def _has_valid_raw(path: Path | None) -> bool:
     return header.startswith(_RAW_HEADER_ASCII) or header.startswith(_RAW_HEADER_UTF16)
 
 
-class _TypedJobView[J: SimulationJob | BatchJob](MutableMapping[str, J]):
+class _TypedJobView(MutableMapping[str, J]):
     """Permanent typed access layer over the union job store.
 
     This is the type-scoped surface of the registry: per-type eviction caps,
@@ -171,7 +176,7 @@ class JobRegistry:
         self.persist_job(job)
         emit_job_event("submitted", job, total_runs=job.total_runs)
 
-    def _evict_from[J: SimulationJob | BatchJob](self, jobs_view: MutableMapping[str, J]) -> None:
+    def _evict_from(self, jobs_view: MutableMapping[str, J]) -> None:
         """Evict oldest terminal jobs of one job type when over the limit.
 
         ``jobs_view`` is a typed view over the union store, so the cap is

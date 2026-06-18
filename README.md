@@ -30,7 +30,7 @@ claude mcp add -s project ltspice -- ltspice-mcp
 
 3. Have LTspice or ngspice installed. Both are auto-detected on Windows, Linux, and macOS; on WSL the LTspice path must be set explicitly ([WSL notes](#configuration)). Circuit editing works with no simulator at all.
 
-That's the setup. Python 3.13+ required. Verify with `ltspice-mcp --help`.
+That's the setup. Python 3.11+ required. Verify with `ltspice-mcp --help`.
 
 Claude Desktop config lives at `~/Library/Application Support/Claude/` (macOS), `%APPDATA%\Claude\` (Windows), or `~/.config/Claude/` (Linux). Cursor, Windsurf, Gemini CLI, Continue, Cline, Zed and others take the same JSON snippet in their respective config files. Web clients (claude.ai, ChatGPT) need a stdio→HTTP bridge such as [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy) — only expose this server on a network you fully control, since it writes files and spawns processes inside `allowed_paths`.
 

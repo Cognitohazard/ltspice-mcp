@@ -13,6 +13,14 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Prove every supported interpreter, floor to ceiling. The async
+        # deadline test is version-sensitive (asyncio internals shifted in
+        # 3.12), so a floor-only runtime failure must not reach PyPI under
+        # Requires-Python >= 3.11.
+        python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -22,6 +30,9 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+
+      - name: Pin Python ${{ matrix.python }}
+        run: uv python pin "${{ matrix.python }}"
 
       - name: Lint
         run: uv run ruff check src/ tests/
