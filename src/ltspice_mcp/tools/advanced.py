@@ -438,7 +438,12 @@ def _netlist_component_refs(netlist_path) -> set[str]:
     name="configure_sweep",
     description=(
         "Configure a multi-parameter sweep for a netlist and return a config_id "
-        "for later execution."
+        "for later execution. Dimensions combine as a full cross-product, so this "
+        "also covers deterministic worst-case corner analysis (give each component "
+        "a two-value [low, high] set — N parts yields 2^N corners that bound the "
+        "true extremes, which random Monte Carlo cannot guarantee) and sensitivity "
+        "analysis (sweep one part at a time across its tolerance to rank impact). "
+        "Use configure_montecarlo instead for statistical yield/spread."
     ),
     input_model=ConfigureSweepInput,
     annotations=types.ToolAnnotations(
@@ -650,8 +655,7 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
     )
 
     default_simulator = state.default_simulator
-    if default_simulator is None:
-        raise BatchJobError("No simulator available. Check server status.")
+    assert default_simulator is not None  # guaranteed by require_simulator above
     # Runner first, then register + create_task with no await between —
     # submit-ordering rule, see the concurrency contract in tools/_base.py.
     runner = state.runners.get_sweep_runner(
@@ -927,8 +931,7 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
     )
 
     default_simulator = state.default_simulator
-    if default_simulator is None:
-        raise BatchJobError("No simulator available. Check server status.")
+    assert default_simulator is not None  # guaranteed by require_simulator above
     # Runner first, then register + create_task with no await between —
     # submit-ordering rule, see the concurrency contract in tools/_base.py.
     runner = state.runners.get_mc_runner(

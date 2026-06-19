@@ -31,6 +31,14 @@ tool-surface changes.
   so a client without LTspice no longer reads the LTspice-centric name as a
   degraded state. The instructions also now point to `plot_waveform` for
   visualization.
+- When no simulator is detected, the instructions, every "no simulator" tool
+  error (run / sweep / Monte Carlo / batch), and `server_status` now give a
+  platform-appropriate way to get one (install ngspice, or point
+  `LTSPICE_MCP_SIMULATOR_EXE` at an existing binary), note that the server must
+  be restarted to re-detect, and tell the agent to ask the user if it cannot
+  install — instead of the prior dead-end "check server status". When ngspice
+  is present but LTspice is not, the instructions now say `.asc` schematic
+  editing is unavailable while simulation and analysis run unaffected.
 - Reworded the "symbols unavailable" startup log so it reads as informational —
   it disables only `.asc` schematic graphics editing and leaves SPICE
   simulation and netlist editing unaffected.
