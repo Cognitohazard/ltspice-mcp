@@ -381,7 +381,10 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
     meas_errors: list[MeasErrorEntry] = []
 
     try:
-        content = log_path.read_text()
+        # errors="replace": LTspice logs often carry cp1252 bytes (µ/°/±); a
+        # strict read would drop all diagnostics for that log (matches the other
+        # log reads in this module).
+        content = log_path.read_text(errors="replace")
     except Exception:
         return {"warnings": warnings, "errors": errors, "meas_errors": meas_errors}
 
@@ -534,7 +537,8 @@ def extract_error_context(log_file: Path, max_lines: int = 20) -> str:
         return "(Log file not found)"
 
     try:
-        content = log_file.read_text()
+        # errors="replace": tolerate cp1252 bytes in the log (see above).
+        content = log_file.read_text(errors="replace")
         lines = [line.rstrip() for line in content.splitlines()]
 
         if not lines:

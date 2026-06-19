@@ -187,6 +187,39 @@ class TestParseAsyFile:
         assert info.bbox.x2 == 10
         assert info.bbox.y2 == 10
 
+    def test_cp1252_encoded_description(self, tmp_path: Path):
+        """Regression: real LTspice vendor symbols carry cp1252 bytes (µ/°/±/©)
+        in description fields. A strict-UTF-8 read raised UnicodeDecodeError,
+        which escaped add_component as an opaque "Internal error". The parser
+        must decode them (via the shared encoding fallback)."""
+        p = tmp_path / "vendor.asy"
+        # 0xB5 is "µ" in cp1252; encode the whole file as cp1252 (not UTF-8).
+        text = (
+            "Version 4\n"
+            "SymbolType CELL\n"
+            "PIN 0 0 NONE 0\nPINATTR PinName A\nPINATTR SpiceOrder 1\n"
+            "SYMATTR Description 5µV precision amp, ±0.1°\n"
+        )
+        p.write_bytes(text.encode("cp1252"))
+        info = parse_asy_file(p)
+        assert "µV" in info.description
+        assert info.pins[0].name == "A"
+
+    def test_get_symbol_info_returns_none_on_unparseable(self, tmp_path: Path, monkeypatch):
+        """A malformed/binary .asy must degrade to None, not crash the caller."""
+        from ltspice_mcp.lib import symbol_geometry as sg
+
+        bad = tmp_path / "bad.asy"
+        bad.write_bytes(b"\x00\x01\x02 not a symbol \xff\xfe")
+        monkeypatch.setattr(sg, "_find_asy_file", lambda _s: bad)
+
+        def _boom(_p):
+            raise ValueError("simulated parse failure")
+
+        monkeypatch.setattr(sg, "parse_asy_file", _boom)
+        sg._symbol_cache.pop("bad_xyz", None)
+        assert sg.get_symbol_info("bad_xyz") is None
+
 
 # ---------------------------------------------------------------------------
 # compute_placed_geometry

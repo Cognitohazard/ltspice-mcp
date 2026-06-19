@@ -13,6 +13,7 @@ from ltspice_mcp.tools.circuit import (
     CircuitReadInput,
     ComponentInfoInput,
     ConnectInput,
+    CreateSchematicInput,
     DiffCircuitInput,
     EditDirectiveInput,
     MoveComponentInput,
@@ -31,6 +32,7 @@ from ltspice_mcp.tools.circuit import (
     handle_apply_schematic_ops,
     handle_component_info,
     handle_connect,
+    handle_create_schematic,
     handle_diff_circuit,
     handle_edit_directive,
     handle_list_components,
@@ -1172,6 +1174,30 @@ class TestApplySchematicOps:
         assert data["saved"] is True
         assert "All changes saved." in text
 
+    async def test_accepts_format_param(self, asc_state: SessionState):
+        # Regression: apply_schematic_ops used to reject the `format` field that
+        # nearly every other tool accepts, raising a validation error. It must
+        # accept and honor it like the rest.
+        import json
+
+        await handle_create_schematic(CreateSchematicInput(name="fmt_demo"), asc_state)
+        op1 = {"op": "add_component", "reference": "R1", "symbol": "res", "x": 0, "y": 0}
+        as_json = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(path="fmt_demo.asc", ops=[op1], format="json"),  # type: ignore[arg-type]
+            asc_state,
+        )
+        assert as_json.structuredContent["applied_count"] == 1
+        # json format → the text body IS the JSON payload, not the human summary.
+        assert json.loads(_result_text(as_json))["applied_count"] == 1
+        op2 = {"op": "add_component", "reference": "R2", "symbol": "res", "x": 100, "y": 0}
+        text_only = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(path="fmt_demo.asc", ops=[op2], format="text"),  # type: ignore[arg-type]
+            asc_state,
+        )
+        # text format → human-readable summary body, structured payload still present.
+        assert text_only.structuredContent["applied_count"] == 1
+        assert "apply_schematic_ops on fmt_demo.asc" in _result_text(text_only)
+
     async def test_stop_on_error_aborts(self, asc_state: SessionState, work_dir: Path):
         from ltspice_mcp.tools.circuit import (
             CreateSchematicInput,
@@ -1941,3 +1967,109 @@ class TestValidateNetlistAscTopology:
             if i["severity"] == "error" and "short" in i["message"].lower()
         ]
         assert shorts == [], data["issues"]
+
+
+def _real_symbol_dir() -> str | None:
+    """Locate the real LTspice .asy library (NOT the test fixtures), or None.
+
+    Every other test in this module runs against the tiny fabricated fixture
+    .asy files registered by the ``asc_symbols`` fixture. That means a
+    regression that only manifests against the *real* LTspice symbol library —
+    e.g. an add_component that throws on a real symbol, or a pin-geometry drift
+    between fixtures and reality — is invisible to the whole suite. This finds
+    the actual library so the smoke test below runs wherever LTspice symbols
+    are installed (dev boxes, WSL) and skips cleanly on bare CI.
+    """
+    import os
+
+    from ltspice_mcp.lib.wsl import get_ltspice_lib_paths, is_wsl
+
+    candidates: list[str] = []
+    env = os.environ.get("LTSPICE_MCP_SYMBOL_PATHS")
+    if env:
+        candidates.extend(env.split(os.pathsep))
+    if is_wsl():
+        candidates.extend(get_ltspice_lib_paths())
+    for c in candidates:
+        if (Path(c) / "res.asy").is_file():
+            return c
+    return None
+
+
+_REAL_SYM = _real_symbol_dir()
+
+
+@pytest.mark.skipif(_REAL_SYM is None, reason="real LTspice symbol library not installed")
+@pytest.mark.asyncio
+class TestAddComponentRealSymbols:
+    """add_component against the REAL LTspice symbol library, not the fixtures.
+
+    The fixture .asy files are minimal hand-written stand-ins; this exercises
+    the actual symbol parse → SchematicComponent build → .asc save → reopen
+    round-trip that the rest of the suite never touches.
+    """
+
+    @pytest.fixture
+    def real_state(self, state_no_sim: SessionState, work_dir: Path):
+        from spicelib import AscEditor
+
+        from ltspice_mcp.lib import symbol_geometry
+
+        saved_paths = AscEditor.custom_lib_paths
+        saved_cache = AscEditor.symbol_cache
+        saved_geo = dict(symbol_geometry._symbol_cache)
+        AscEditor.custom_lib_paths = [_REAL_SYM]  # type: ignore[list-item]
+        AscEditor.symbol_cache = {}
+        symbol_geometry._symbol_cache.clear()
+        try:
+            yield state_no_sim
+        finally:
+            AscEditor.custom_lib_paths = saved_paths
+            AscEditor.symbol_cache = saved_cache
+            symbol_geometry._symbol_cache.clear()
+            symbol_geometry._symbol_cache.update(saved_geo)
+
+    async def test_add_real_symbols_round_trip(self, real_state: SessionState):
+        await handle_create_schematic(
+            CreateSchematicInput(name="real", overwrite=True), real_state
+        )
+        for ref, sym, x, y, val in [
+            ("R1", "res", 100, 100, "1k"),
+            ("C1", "cap", 300, 100, "1n"),
+            ("M1", "nmos", 500, 100, "NMOS1"),
+        ]:
+            result = await handle_add_component(
+                AddComponentInput(path="real.asc", reference=ref, symbol=sym, x=x, y=y, value=val),
+                real_state,
+            )
+            assert f"Added {ref}" in _result_text(result)
+            # Geometry comes from parsing the real .asy; empty pins = a broken parse.
+            assert result.structuredContent["pins"]
+
+    async def test_real_resistor_pins_are_a_b(self, real_state: SessionState):
+        # The fixture res uses numeric pins 1/2; the real LTspice res uses A/B.
+        # Guards against the suite silently drifting onto fabricated geometry.
+        result = await handle_symbol_info(
+            SymbolInfoInput(symbol="res", x=0, y=0, rotation="R0"), real_state
+        )
+        names = {p["name"] for p in result.structuredContent["absolute_pins"]}
+        assert names == {"A", "B"}
+
+    async def test_apply_ops_add_real_symbol(self, real_state: SessionState):
+        await handle_create_schematic(
+            CreateSchematicInput(name="real2", overwrite=True), real_state
+        )
+        op = {
+            "op": "add_component",
+            "reference": "R1",
+            "symbol": "res",
+            "x": 100,
+            "y": 100,
+            "value": "1k",
+        }
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(path="real2.asc", ops=[op]),  # type: ignore[arg-type]
+            real_state,
+        )
+        assert result.structuredContent["applied_count"] == 1
+        assert result.structuredContent["failed_count"] == 0

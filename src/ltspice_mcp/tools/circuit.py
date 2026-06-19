@@ -9,6 +9,7 @@ and raise NetlistError if given a non-.asc file.
 import asyncio
 import bisect
 import contextlib
+import importlib
 import io
 import re
 from collections.abc import AsyncIterator, Callable
@@ -30,6 +31,22 @@ from spicelib.editor.base_schematic import (
     Text,
     TextTypeEnum,
 )
+
+# The concrete class to instantiate for a from-scratch .asc component.
+# spicelib 1.6 introduced ``AscComponent`` (the type its own .asc parser
+# builds) and turned ``Component.attributes`` into a lazy property that raises
+# ``NotImplementedError`` for a bare ``SchematicComponent`` whose attribute
+# store is still empty — so building one from scratch detonates on first
+# attribute access. ``AscComponent`` implements the contract; on spicelib < 1.6
+# (no ``AscComponent``) the plain ``SchematicComponent`` already works.
+# Resolved dynamically because the symbol does not exist on the pinned (<1.6)
+# spicelib, so a static import would not type-check.
+try:
+    _SchematicComponentClass: type = importlib.import_module(
+        "spicelib.editor.asc_editor"
+    ).AscComponent
+except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned range)
+    _SchematicComponentClass = SchematicComponent
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import atomic_write_bytes, atomic_write_text, services
@@ -83,7 +100,7 @@ def _create_component(
     Wraps the fragile pattern of constructing a blank SchematicComponent
     then manually setting .reference, .symbol, .position, .rotation.
     """
-    comp = SchematicComponent(editor, "")
+    comp = _SchematicComponentClass(editor, "")
     comp.reference = reference
     comp.symbol = symbol  # pyright: ignore[reportAttributeAccessIssue]
     comp.position = Point(x, y)
@@ -2538,7 +2555,11 @@ async def handle_export_netlist(
     if not net_path.exists():
         raise NetlistError("Export failed: .net file not created")
 
-    content = net_path.read_text()
+    # Encoding-robust read: an exported .net can carry cp1252 bytes (µ/°/±) in a
+    # comment, which a strict-UTF-8 read would choke on.
+    from ltspice_mcp.lib.encoding import read_spice_text
+
+    content = read_spice_text(net_path)
     current_lines = content.splitlines()
 
     result = f"=== {net_path.name} ===\n\n{content}"
@@ -4438,6 +4459,10 @@ class ApplySchematicOpsInput(ToolInput):
             "did succeed — set false only when failures are recoverable."
         ),
     )
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
 
 
 def _resolve_op_xy(
@@ -4763,4 +4788,4 @@ async def handle_apply_schematic_ops(
     if validation_warnings:
         data["validation_warnings"] = validation_warnings
     summary_lines.extend(_validation_warnings_lines(validation_warnings))
-    return format_response("\n".join(summary_lines), data, None)
+    return format_response("\n".join(summary_lines), data, args.format)
