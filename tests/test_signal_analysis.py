@@ -301,6 +301,36 @@ class TestAnalyzeEdge:
         with pytest.raises(ValueError, match="No edge detected"):
             analyze_edge(t, y)
 
+    def test_full_pulse_no_false_direction_warning(self):
+        # Regression: a window capturing a FULL pulse (rise to 12 then fall to
+        # ~0) has its leading/trailing 10% on near-equal rails, so the
+        # endpoint-derived direction is meaningless. With edge="rising"
+        # explicitly requested and a clean rising edge present, analyze_edge
+        # must NOT warn "window shows falling transition" — that endpoint
+        # heuristic is a false positive here. (The net |end-start| is tiny vs
+        # the peak-to-peak swing, which is what flags the full pulse.)
+        t = np.linspace(0, 10e-3, 4001)
+        y = np.piecewise(
+            t,
+            [
+                t < 3e-3,
+                (t >= 3e-3) & (t < 4e-3),
+                (t >= 4e-3) & (t < 7e-3),
+                (t >= 7e-3) & (t < 8e-3),
+                t >= 8e-3,
+            ],
+            [
+                0.5,
+                lambda tt: 0.5 + (12.0 - 0.5) * (tt - 3e-3) / 1e-3,
+                12.0,
+                lambda tt: 12.0 - 12.0 * (tt - 7e-3) / 1e-3,
+                0.0,
+            ],
+        )
+        result = analyze_edge(t, y, edge="rising", low_level=0.0, high_level=12.0)
+        assert result["edge_direction"] == "rising"
+        assert not any("falling transition" in w for w in result["warnings"])
+
     def test_edge_index_out_of_range(self):
         t = np.linspace(0, 1, 1001)
         y = np.where(t < 0.5, 0.0, 1.0)
