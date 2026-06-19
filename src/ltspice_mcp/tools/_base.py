@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict
 
 from ltspice_mcp.errors import SimulationError
 from ltspice_mcp.lib.pathutil import resolve_safe_path
+from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
@@ -578,10 +579,7 @@ def pagination_metadata(total: int, offset: int, limit: int) -> dict[str, Any]:
 def require_simulator(state: SessionState) -> None:
     """Raise SimulationError if no simulator is available."""
     if state.default_simulator is None:
-        raise SimulationError(
-            "No simulator available. Check server status.\n\n"
-            f"Available simulators: {list(state.available_simulators.keys())}"
-        )
+        raise SimulationError(no_simulator_message())
 
 
 def resolve_netlist_path(netlist_str: str, state: SessionState) -> Path:

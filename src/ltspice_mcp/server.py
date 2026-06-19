@@ -22,7 +22,7 @@ from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
 from ltspice_mcp.lib.mcp_logging import mcp_log, set_log_fn
 from ltspice_mcp.lib.pathutil import resolve_safe_path
-from ltspice_mcp.lib.simulator import detect_simulators
+from ltspice_mcp.lib.simulator import detect_simulators, no_simulator_message
 from ltspice_mcp.resources import (
     get_resource_templates,
     get_static_resources,
@@ -402,11 +402,7 @@ def build_instructions(available: dict[str, type], default: type | None) -> str:
     degradation. Stating the active engine up front removes that ambiguity.
     """
     if not available:
-        active = (
-            "No SPICE simulator detected — simulation tools will error until one is "
-            "configured; netlist authoring/validation and .asc editing still work "
-            "(see server_status)."
-        )
+        active = no_simulator_message()
     else:
 
         def disp(name: str) -> str:
@@ -419,7 +415,10 @@ def build_instructions(available: dict[str, type], default: type | None) -> str:
             parts = [f"{disp(n)} (default)" if n == default_name else disp(n) for n in available]
             active = f"Active simulators: {', '.join(parts)}."
         if "ltspice" not in available:
-            active += " (LTspice not detected.)"
+            active += (
+                " (LTspice not detected, so .asc schematic editing is unavailable; "
+                "simulation and analysis run on the active engine and are unaffected.)"
+            )
     return f"{active}\n\n{SERVER_INSTRUCTIONS}"
 
 

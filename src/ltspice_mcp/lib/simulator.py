@@ -2,6 +2,7 @@
 
 import logging
 import os
+import platform
 from pathlib import Path
 
 from spicelib.simulators.ltspice_simulator import LTspice
@@ -252,6 +253,42 @@ def detect_simulators(
         logger.info(f"Total simulators detected: {len(available)}")
 
     return available
+
+
+def install_hint() -> str:
+    """Platform-appropriate one-liner for getting a simulator onto this host.
+
+    Backs the no-simulator startup instructions and the run-time "no simulator"
+    error so a host with neither LTspice nor ngspice (a cloud sandbox, a fresh
+    CI runner) gives the agent a concrete next step instead of a dead end.
+    """
+    if is_wsl():
+        return (
+            "install ngspice in this WSL distro (`sudo apt-get install -y ngspice`), "
+            "or set LTSPICE_MCP_SIMULATOR_EXE to a Windows LTspice.exe path"
+        )
+    system = platform.system()
+    if system == "Darwin":
+        return "install ngspice (`brew install ngspice`) or LTspice"
+    if system == "Windows":
+        return "install LTspice (Analog Devices) or ngspice and add it to PATH"
+    return "install ngspice (`sudo apt-get install -y ngspice`, or your distro's package manager)"
+
+
+def no_simulator_message() -> str:
+    """Actionable 'no simulator detected' text shared by instructions and errors.
+
+    Detection runs once at startup, so a simulator installed into a running
+    sandbox is not picked up until the server is restarted — say so, or the
+    agent installs ngspice and then loops on the same error.
+    """
+    return (
+        f"No SPICE simulator detected. To run simulations, {install_hint()}, then "
+        "restart (reconnect) this MCP server so it re-detects — detection happens "
+        "at startup, so a just-installed simulator is invisible until then. If you "
+        "cannot install one, tell the user. Netlist authoring/validation and .asc "
+        "editing work without a simulator."
+    )
 
 
 def _resolve_enabled_names(

@@ -286,7 +286,7 @@ class TestCancelJob:
 
     async def test_no_simulator(self, state_no_sim: SessionState):
         _make_job(state_no_sim, status="running")
-        with pytest.raises(SimulationError, match="No simulator"):
+        with pytest.raises(SimulationError, match="No SPICE simulator"):
             await handle_cancel_job(CancelJobInput(job_id="j1"), state_no_sim)
 
 

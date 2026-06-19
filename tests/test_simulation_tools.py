@@ -12,7 +12,7 @@ from ltspice_mcp.tools.simulation import RunSimulationInput, handle_run_simulati
 @pytest.mark.asyncio
 class TestSimulationWithoutSimulator:
     async def test_run_raises_no_simulator(self, state_no_sim: SessionState, sample_netlist: Path):
-        with pytest.raises(SimulationError, match="No simulator"):
+        with pytest.raises(SimulationError, match="No SPICE simulator"):
             await handle_run_simulation(
                 RunSimulationInput(netlist=sample_netlist.name), state_no_sim
             )

@@ -312,7 +312,7 @@ class TestRunSweep:
             state_no_sim,
         )
         config_id = next(iter(state_no_sim.sweep_configs.keys()))
-        with pytest.raises(SimulationError, match="No simulator"):
+        with pytest.raises(SimulationError, match="No SPICE simulator"):
             await handle_run_sweep(RunBatchInput(config_id=config_id), state_no_sim)
 
     async def test_cancel_during_output_folder_resolve_leaves_no_job(
@@ -422,7 +422,7 @@ class TestRunMonteCarlo:
             state_no_sim,
         )
         config_id = next(iter(state_no_sim.mc_configs.keys()))
-        with pytest.raises(SimulationError, match="No simulator"):
+        with pytest.raises(SimulationError, match="No SPICE simulator"):
             await handle_run_montecarlo(RunBatchInput(config_id=config_id), state_no_sim)
 
 

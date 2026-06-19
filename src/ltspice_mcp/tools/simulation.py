@@ -14,6 +14,7 @@ from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.log_parser import extract_error_context, parse_success_summary
 from ltspice_mcp.lib.mcp_logging import mcp_log
 from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
+from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.state import (
     NON_TERMINAL_LIVE_STATUSES,
     BatchJob,
@@ -130,7 +131,7 @@ async def _get_or_create_runner(state: SessionState) -> SimulationRunner:
     """Get or create a SimulationRunner via the centralized RunnerManager."""
     default_simulator = state.default_simulator
     if default_simulator is None:
-        raise SimulationError("No simulator available. Check server status.")
+        raise SimulationError(no_simulator_message())
     return state.runners.get_sim_runner(
         loop=asyncio.get_running_loop(),
         simulator_class=default_simulator,
