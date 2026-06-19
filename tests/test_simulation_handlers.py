@@ -599,3 +599,57 @@ class TestCheckJobBatchVisibility:
         result = await handle_check_job(CheckJobInput(status="all"), state_with_sim)
         ids = [j["job_id"] for j in result.structuredContent["jobs"]]
         assert "sweep_y" in ids
+
+
+@pytest.mark.asyncio
+class TestResolveOutputFolder:
+    """Simulation artifacts must not flood the project root — but a netlist with
+    a relative local include must stay put so the simulator can resolve it."""
+
+    @staticmethod
+    def _force_non_wsl(monkeypatch):
+        from ltspice_mcp.lib import wsl
+
+        monkeypatch.setattr(wsl, "is_wsl", lambda: False)
+
+    async def test_self_contained_routes_to_sidecar(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        # No includes → safe to relocate → tidy .ltspice-mcp/runs sidecar.
+        from ltspice_mcp.tools._base import resolve_output_folder
+
+        self._force_non_wsl(monkeypatch)
+        nl = work_dir / "sc.cir"
+        nl.write_text("* sc\nR1 in 0 1k\nV1 in 0 1\n.op\n.end\n")
+        out = await resolve_output_folder(state_no_sim, nl)
+        assert out == work_dir / ".ltspice-mcp" / "runs"
+        assert out.is_dir()
+        assert out in state_no_sim.config.allowed_paths
+
+    async def test_relative_local_include_stays_in_working_dir(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        # A relative .include pointing at a sibling file can't be relocated —
+        # the simulator would resolve it against the moved netlist's dir.
+        from ltspice_mcp.tools._base import resolve_output_folder
+
+        self._force_non_wsl(monkeypatch)
+        (work_dir / "models").mkdir()
+        (work_dir / "models" / "r.lib").write_text(".subckt RMOD a b\nR1 a b 1k\n.ends\n")
+        nl = work_dir / "wl.cir"
+        nl.write_text("* wl\nX1 in 0 RMOD\nV1 in 0 1\n.include models/r.lib\n.op\n.end\n")
+        out = await resolve_output_folder(state_no_sim, nl)
+        assert out == work_dir
+
+    async def test_libpath_name_still_sidecars(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        # A bare .lib NAME (resolved via the simulator's lib path, no local file)
+        # survives relocation, so it still gets the sidecar.
+        from ltspice_mcp.tools._base import resolve_output_folder
+
+        self._force_non_wsl(monkeypatch)
+        nl = work_dir / "lp.cir"
+        nl.write_text("* lp\nM1 d g s b NMOS\nV1 d 0 1\n.lib LTC.lib\n.op\n.end\n")
+        out = await resolve_output_folder(state_no_sim, nl)
+        assert out == work_dir / ".ltspice-mcp" / "runs"
