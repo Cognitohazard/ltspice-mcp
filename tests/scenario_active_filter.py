@@ -295,18 +295,18 @@ async def run():
         step(10, "Browse resources")
         from pydantic import AnyUrl
 
-        r = await session.read_resource(AnyUrl("ltspice://config"))
+        r = await session.read_resource(AnyUrl("spice://config"))
         config = json.loads(r.contents[0].text)  # type: ignore[union-attr]
         print(
             f"  Config: working_dir={config['working_dir']}, "
             f"simulators={config['detected_simulators']}"
         )
 
-        r = await session.read_resource(AnyUrl("ltspice://netlists/"))
+        r = await session.read_resource(AnyUrl("spice://netlists/"))
         netlists = json.loads(r.contents[0].text)  # type: ignore[union-attr]
         print(f"  Netlists: {[n['name'] for n in netlists['netlists']]}")
 
-        r = await session.read_resource(AnyUrl("ltspice://results/"))
+        r = await session.read_resource(AnyUrl("spice://results/"))
         results = json.loads(r.contents[0].text)  # type: ignore[union-attr]
         print(f"  Jobs: {results['count']}")
 

@@ -90,25 +90,25 @@ def get_static_resources() -> list[types.Resource]:
     return [
         types.Resource(
             name="netlists",
-            uri=AnyUrl("ltspice://netlists/"),
+            uri=AnyUrl("spice://netlists/"),
             description="List of netlist files in the working directory",
             mimeType="application/json",
         ),
         types.Resource(
             name="results",
-            uri=AnyUrl("ltspice://results/"),
+            uri=AnyUrl("spice://results/"),
             description="List of all simulation jobs and their status",
             mimeType="application/json",
         ),
         types.Resource(
             name="models",
-            uri=AnyUrl("ltspice://models/"),
+            uri=AnyUrl("spice://models/"),
             description="User-loaded SPICE model libraries and their models",
             mimeType="application/json",
         ),
         types.Resource(
             name="config",
-            uri=AnyUrl("ltspice://config"),
+            uri=AnyUrl("spice://config"),
             description="Server configuration and detected simulators",
             mimeType="application/json",
         ),
@@ -124,7 +124,7 @@ def get_static_resources() -> list[types.Resource]:
         ),
         types.Resource(
             name="recent",
-            uri=AnyUrl("ltspice://recent"),
+            uri=AnyUrl("spice://recent"),
             description=(
                 "Recently-edited circuit files with persisted-job summary counts. "
                 "Surfaces work from prior sessions, including interrupted jobs."
@@ -133,12 +133,13 @@ def get_static_resources() -> list[types.Resource]:
         ),
         types.Resource(
             name="guide",
-            uri=AnyUrl("ltspice://guide"),
+            uri=AnyUrl("spice://guide"),
             mimeType="text/markdown",
             description=(
-                "LTspice authoring & schematic guide: SPICE/LTspice syntax, value "
+                "SPICE authoring & schematic guide (LTspice + ngspice): syntax, value "
                 "notation (M=milli), waveform sources, .meas, behavioral sources, "
-                "convergence, and the schematic-layout playbook (wiring, tiers, "
+                "convergence, per-engine specifics with an LTspice-vs-ngspice "
+                "differences table, and the schematic-layout playbook (wiring, tiers, "
                 "mirror/diff-pair orientations)."
             ),
         ),
@@ -150,19 +151,19 @@ def get_resource_templates() -> list[types.ResourceTemplate]:
     return [
         types.ResourceTemplate(
             name="netlist_content",
-            uriTemplate="ltspice://netlists/{filename}",
+            uriTemplate="spice://netlists/{filename}",
             description="Full text content of a specific netlist file",
             mimeType="text/plain",
         ),
         types.ResourceTemplate(
             name="job_signals",
-            uriTemplate="ltspice://results/{job_id}/signals",
+            uriTemplate="spice://results/{job_id}/signals",
             description="List of signal/trace names in a simulation result",
             mimeType="application/json",
         ),
         types.ResourceTemplate(
             name="job_measurements",
-            uriTemplate="ltspice://results/{job_id}/measurements",
+            uriTemplate="spice://results/{job_id}/measurements",
             description="SPICE .MEAS measurement results for a simulation",
             mimeType="application/json",
         ),
@@ -216,10 +217,10 @@ def _read_plot_widget(
 @lru_cache(maxsize=1)
 def _guide_text() -> str:
     """Read the packaged guide once; it is immutable for the process lifetime."""
-    return (files("ltspice_mcp") / "assets" / "ltspice_guide.md").read_text("utf-8")
+    return (files("ltspice_mcp") / "assets" / "spice_guide.md").read_text("utf-8")
 
 
-@_router.route("ltspice://guide")
+@_router.route("spice://guide")
 def _read_guide(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
@@ -228,7 +229,7 @@ def _read_guide(
     return _make_result(uri_str, _guide_text(), mime="text/markdown")
 
 
-@_router.route("ltspice://config")
+@_router.route("spice://config")
 def _read_config(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
@@ -252,7 +253,7 @@ def _read_config(
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
-@_router.route("ltspice://netlists/")
+@_router.route("spice://netlists/")
 def _read_netlists_list(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
@@ -260,7 +261,7 @@ def _read_netlists_list(
     del params
     working_dir = state.working_dir
     netlists = [
-        {"name": f.name, "uri": f"ltspice://netlists/{f.name}"}
+        {"name": f.name, "uri": f"spice://netlists/{f.name}"}
         for f in working_dir.iterdir()
         if f.is_file() and f.suffix.lower() in NETLIST_EXTENSIONS
     ]
@@ -269,7 +270,7 @@ def _read_netlists_list(
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
-@_router.route("ltspice://netlists/{filename}")
+@_router.route("spice://netlists/{filename}")
 def _read_netlist_content(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
@@ -283,7 +284,7 @@ def _read_netlist_content(
     return _make_result(uri_str, text, mime="text/plain")
 
 
-@_router.route("ltspice://results/")
+@_router.route("spice://results/")
 def _read_results_list(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
@@ -324,7 +325,7 @@ def _read_results_list(
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
-@_router.route("ltspice://results/{job_id}/signals")
+@_router.route("spice://results/{job_id}/signals")
 def _read_signals(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
@@ -335,7 +336,7 @@ def _read_signals(
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
-@_router.route("ltspice://results/{job_id}/measurements")
+@_router.route("spice://results/{job_id}/measurements")
 def _read_measurements(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
@@ -348,7 +349,7 @@ def _read_measurements(
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
-@_router.route("ltspice://recent")
+@_router.route("spice://recent")
 def _read_recent(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
@@ -366,7 +367,7 @@ def _read_recent(
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
-@_router.route("ltspice://models/")
+@_router.route("spice://models/")
 def _read_models(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
