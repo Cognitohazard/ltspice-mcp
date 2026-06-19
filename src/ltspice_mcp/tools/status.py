@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import Field
 
 from ltspice_mcp.lib import services
+from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     RO_ANNOTATIONS,
@@ -76,6 +77,7 @@ async def handle_server_status(args: ServerStatusInput, state: SessionState):
             simulators_data[name] = sim_info
     else:
         lines.append("  No simulators detected (server running in degraded mode)")
+        lines.append(f"  {no_simulator_message()}")
 
     lines.append(
         f"\nDefault simulator: {state.default_simulator.__name__ if state.default_simulator else 'None'}"
