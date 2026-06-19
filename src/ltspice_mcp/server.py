@@ -514,8 +514,13 @@ async def call_tool(name: str, arguments: dict | None):
             raise type(e)(f"{e}\n\n{hint}") from None
         raise
     except Exception as e:
+        # Surface the actual exception type + message in the response. A bare
+        # "check server logs" is a dead end for an MCP client: the traceback
+        # lands on the server's stderr, which the calling agent/user can't
+        # reach. The concrete cause (e.g. "KeyError: 'PinName'") is what makes
+        # an unexpected failure diagnosable. Full traceback still goes to logs.
         logger.exception(f"Unexpected error in tool {name}")
-        raise RuntimeError(f"Internal error in {name}. Check server logs for details.") from e
+        raise RuntimeError(f"Internal error in {name}: {type(e).__name__}: {e}") from e
 
 
 @server.list_resources()

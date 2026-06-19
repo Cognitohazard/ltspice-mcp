@@ -702,7 +702,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7,<3.0" },
     { name = "rapidfuzz", specifier = ">=3.0,<4.0" },
     { name = "scipy", specifier = ">=1.12,<2.0" },
-    { name = "spicelib", specifier = ">=1.4.9,<2.0" },
+    { name = "spicelib", specifier = ">=1.4.9,<1.6" },
     { name = "tomlkit", specifier = ">=0.14.0,<1.0" },
 ]
 
