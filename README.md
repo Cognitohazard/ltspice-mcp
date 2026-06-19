@@ -181,7 +181,7 @@ and gets back scalars, not a plot:
 
 (abridged — the full response also includes passband bounds and transition bandwidth)
 
-Off-target → `set_component_value`, re-run, re-measure. Long simulations return a job ID instead of blocking; `check_job`/`cancel_job` manage them. Job metadata persists in per-circuit sidecars (`{dir}/.ltspice-mcp/jobs/` — add `.ltspice-mcp/` to your `.gitignore`), and MCP resources (`ltspice://results/...`, `ltspice://netlists/...`, `ltspice://config`) expose jobs, signals, measurements, and config for browsing.
+Off-target → `set_component_value`, re-run, re-measure. Long simulations return a job ID instead of blocking; `check_job`/`cancel_job` manage them. Job metadata persists in per-circuit sidecars (`{dir}/.ltspice-mcp/jobs/` — add `.ltspice-mcp/` to your `.gitignore`), and MCP resources (`spice://results/...`, `spice://netlists/...`, `spice://config`) expose jobs, signals, measurements, and config for browsing.
 
 <details>
 <summary><strong>All 47 tools</strong></summary>

@@ -128,7 +128,7 @@ async def test_resource_read_served_off_loop(
     concurrent light request.
 
     Drives the real router seam — ``server.read_resource`` over the
-    ``ltspice://results/{job}/signals`` route, with the parse patched to
+    ``spice://results/{job}/signals`` route, with the parse patched to
     take SLOW_OP_SECONDS — concurrently with ``server_status``.
     """
     raw_path = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
@@ -141,7 +141,7 @@ async def test_resource_read_served_off_loop(
         # Keep this wrapper: create_task needs a true coroutine, and the
         # SDK's read_resource is typed as returning a plain Awaitable.
         async def _read_signals_resource():
-            return await read_resource(AnyUrl("ltspice://results/resjob/signals"))
+            return await read_resource(AnyUrl("spice://results/resjob/signals"))
 
         heavy = asyncio.create_task(_read_signals_resource())
         # One loop tick: the read task starts and hands the router to a worker.

@@ -21,6 +21,17 @@ tool-surface changes.
 
 ### Changed
 
+- **Breaking:** MCP resource URIs moved from the `ltspice://` scheme to
+  `spice://` (`spice://results/...`, `spice://netlists/...`, `spice://config`,
+  `spice://guide`, etc.). These resources are engine-agnostic, so the scheme no
+  longer implies LTspice. Clients discover resources via `resources/list` and
+  the URI templates, so this only affects anything that hard-coded the old
+  scheme. The MCP Apps widget keeps its spec-mandated `ui://` URI.
+- Generalized the `spice://guide` resource to cover both engines: it now carries
+  engine-neutral SPICE fundamentals plus separate **LTspice-Specific** and
+  **ngspice-Specific** sections (ngspice `.control` scripting, `.save`, XSPICE,
+  control-loop Monte Carlo, expression parsers) and an LTspice-vs-ngspice
+  differences table. The per-engine Claude Code skills stay engine-specific.
 - The MCP handshake now reports the `ltspice-mcp` package version in
   `serverInfo.version` instead of the MCP SDK's version.
 - `serverInfo.name` can be overridden with the `LTSPICE_MCP_SERVER_NAME`

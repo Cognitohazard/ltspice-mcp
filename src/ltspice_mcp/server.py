@@ -386,7 +386,7 @@ Match the analysis tool to the run type or it errors: bode_metrics/resonance/sta
 
 A run can report "completed" yet be degenerate (coerced value, skipped .meas) — check the returned warnings/errors and the `observations` list, don't assume success means correct. `observations` reads the RESULT and does not re-run netlist topology analysis; it surfaces facts worth weighing (the simulator's own error lines, requested .meas/.four that weren't produced, extreme/non-finite node values, and scans that were skipped) — they are facts for you to judge, not a verdict; an empty list means nothing tripped a check, NOT that the result is verified. validate_netlist is the pre-flight gate: topology faults like a floating or capacitive-island node are caught there, not by observations, but it won't catch value typos or undefined models (resolved at run time).
 
-Build or edit .asc with the schematic tools, never by hand — hand-writing the file forfeits connect's orthogonal routing and its pin-collision/junction checks. Pin names and coordinates are symbol-specific (a resistor's are A/B, not 1/2) — read them from add_component/symbol_info. Wire signal nets with connect (orthogonal segments only; waypoints for bends; route outside component bodies); put a ground flag at each ground pin with an apply_schematic_ops add_net_label op (net="0", pin=...); do NOT net-label signal nets — wire them. Ack-only mutations (move/remove a component, set an attribute, add/remove a net label, remove a wire) are apply_schematic_ops ops, not standalone tools; tools that return info you act on (add_component pin geometry, connect routing) are standalone. For a multi-step build use apply_schematic_ops (one transaction). The full schematic-layout playbook (tier alignment, mirror/diff-pair orientations, bus routing) is the ltspice://guide resource.
+Build or edit .asc with the schematic tools, never by hand — hand-writing the file forfeits connect's orthogonal routing and its pin-collision/junction checks. Pin names and coordinates are symbol-specific (a resistor's are A/B, not 1/2) — read them from add_component/symbol_info. Wire signal nets with connect (orthogonal segments only; waypoints for bends; route outside component bodies); put a ground flag at each ground pin with an apply_schematic_ops add_net_label op (net="0", pin=...); do NOT net-label signal nets — wire them. Ack-only mutations (move/remove a component, set an attribute, add/remove a net label, remove a wire) are apply_schematic_ops ops, not standalone tools; tools that return info you act on (add_component pin geometry, connect routing) are standalone. For a multi-step build use apply_schematic_ops (one transaction). The full schematic-layout playbook (tier alignment, mirror/diff-pair orientations, bus routing) is the spice://guide resource.
 """
 
 # Friendly display names for the detected-simulator line prepended to the
@@ -539,7 +539,7 @@ async def read_resource(uri: AnyUrl) -> Iterable[ReadResourceContents]:
     SDK's ReadResourceContents format (which uses .content instead of .text).
 
     Args:
-        uri: Resource URI to read (ltspice://...)
+        uri: Resource URI to read (spice://...)
 
     Returns:
         Iterable of ReadResourceContents entries

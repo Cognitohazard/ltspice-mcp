@@ -164,12 +164,9 @@ class TestToolNamesInErrorStrings:
     #   ltspice_mcp   — package name, appears in module paths and log
     #                   prefixes
     #   ltspice_event — log-record extra key used by observability
-    #   ltspice_guide — packaged asset filename (ltspice_guide.md), served by
-    #                   the ltspice://guide resource
     _NON_TOOL_TOKENS: ClassVar[set[str]] = {
         "ltspice_mcp",
         "ltspice_event",
-        "ltspice_guide",
     }
 
     def test_every_ltspice_name_in_strings_is_registered(self) -> None:

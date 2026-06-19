@@ -3298,7 +3298,7 @@ class CreateSchematicInput(ToolInput):
         " Prefer apply_schematic_ops for multi-step builds (one transaction); "
         "wire signal nets with connect and ground via add_net_label flags at "
         "pins — don't hand-edit the .asc. Full layout guidance: the "
-        "ltspice://guide resource."
+        "spice://guide resource."
     ),
     input_model=CreateSchematicInput,
     annotations=types.ToolAnnotations(
@@ -3327,7 +3327,7 @@ async def handle_create_schematic(
         ) from e
     return text_response(
         f"Created schematic: {target_path}\n  Sheet: {args.width} x {args.height}"
-        "\n\nLayout checklist (full playbook: ltspice://guide):"
+        "\n\nLayout checklist (full playbook: spice://guide):"
         "\n- Wire signal nets with connect — orthogonal only, waypoints for bends, "
         "route outside component bodies."
         '\n- Ground: add_net_label(net="0", pin="Ref.pin") at each ground pin; '
