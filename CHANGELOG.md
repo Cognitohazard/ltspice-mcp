@@ -62,6 +62,58 @@ tool-surface changes.
   release gate) now runs the full test suite on 3.11, 3.12, and 3.13, so the
   advertised floor is proven on every push.
 
+### Fixed
+
+- `add_component` (and `apply_schematic_ops` add-component) no longer fail with
+  an opaque "Internal error" on two real-world cases:
+  - **Vendor symbols with non-ASCII descriptions.** Hundreds of LTspice's
+    bundled `.asy` symbols (op-amps, comparators, ADC/DAC, …) carry cp1252 bytes
+    (`µ`/`°`/`±`/`©`) in their description fields. The symbol parser read them as
+    strict UTF-8 and raised `UnicodeDecodeError`; it now uses the shared
+    encoding fallback (BOM/UTF-16/cp1252), and any still-unparseable `.asy`
+    degrades to "symbol unavailable" instead of crashing the tool. The same
+    strict-UTF-8 hazard on the sibling reads was closed too: `export_netlist`'s
+    `.net` read and the two `.log` reads that lacked the tolerant decode the rest
+    of the log parser already used.
+  - **spicelib 1.6.** spicelib 1.6 made `Component.attributes` a lazy property
+    that raises for a from-scratch component built as a bare
+    `SchematicComponent`; construction now uses `AscComponent` (the type
+    spicelib's own parser builds) when present. The dependency is also capped to
+    the tested range (see below), so a default install keeps working today.
+- Simulation artifacts no longer flood the working directory. Runs that
+  previously dropped their `.raw`/`.log`/`.db`/`.op.raw`/netlist files directly
+  into the project root (the non-WSL-Linux and WSL-on-`/mnt/` cases) now write
+  to a single `.ltspice-mcp/runs` sidecar alongside the job metadata — one tidy
+  place to find or delete them (a 30-run Monte Carlo alone emits ~180 files).
+  The sidecar stays on the working dir's own filesystem, so a Windows-native
+  (`/mnt/`) working dir keeps LTspice's `.db`/`.MEAS` support. A netlist that
+  pulls in a sibling file via a *relative* `.include`/`.lib` keeps its artifacts
+  beside the netlist (a relocated copy couldn't resolve the dependency);
+  self-contained and lib-path/absolute-include decks get the sidecar.
+- Unexpected tool errors now report the actual exception type and message
+  (e.g. `Internal error in foo: KeyError: 'bar'`) instead of the dead-end
+  "Check server logs for details" — the server's stderr traceback isn't
+  reachable from an MCP client, so the concrete cause is what makes a failure
+  diagnosable. The full traceback still goes to the logs.
+- `edge_metrics` no longer emits a spurious "window shows falling transition"
+  warning when an explicit `edge` direction is requested over a window that
+  captures a full pulse (rise *and* fall). The endpoint-derived direction is
+  meaningless there; the requested direction is honored and a genuinely absent
+  edge still raises a clear error.
+
+### Changed
+
+- `apply_schematic_ops` now accepts the `format` parameter (`"json"`/`"text"`)
+  that the other structured tools take, instead of rejecting it with a
+  validation error.
+- Capped `spicelib` to `>=1.4.9,<1.6` (the tested range). spicelib 1.6
+  refactored the editor model — most visibly, `.PARAM` values now come back
+  typed rather than as strings — which the parameter read/edit path doesn't yet
+  handle. Without a ceiling, an unpinned install (`uvx ltspice-mcp`) resolved to
+  the newest release and shipped an untested spicelib. The component-
+  construction half of 1.6 support already landed (`AscComponent`); the cap
+  lifts once the parameter path is migrated.
+
 ## [0.2.1] - 2026-06-16
 
 ### Added
