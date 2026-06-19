@@ -320,6 +320,13 @@ _AUTO_LEVEL_VARIANCE_THRESHOLD = 0.10
 _FULL_PULSE_DELTA_FRACTION = 0.10
 
 
+def _is_full_pulse(pk_pk: float, abs_delta: float) -> bool:
+    """True if the net step is tiny vs the window's peak-to-peak swing — i.e. the
+    window captured a full pulse (rise AND fall), not one monotonic edge, so its
+    endpoint-derived direction/levels are meaningless."""
+    return pk_pk > _LEVEL_EPSILON and abs_delta < _FULL_PULSE_DELTA_FRACTION * pk_pk
+
+
 def analyze_edge(
     t: np.ndarray,
     y: np.ndarray,
@@ -412,7 +419,15 @@ def analyze_edge(
         direction = detected_direction
     else:
         direction = edge
-        if direction != detected_direction:
+        # The endpoint-derived direction is only meaningful for a single
+        # monotonic edge. When the window captures a full pulse (rise AND fall),
+        # the net |end-start| is tiny vs the peak-to-peak swing, start/end land
+        # on the same rail, and detected_direction is noise — don't contradict
+        # an explicitly requested edge with it. The requested direction is
+        # honored below; if that edge truly isn't present, the crossing search
+        # raises a clear "No <dir> edge found" error.
+        full_pulse = _is_full_pulse(float(np.ptp(y)), abs_delta)
+        if direction != detected_direction and not full_pulse:
             warnings.append(
                 f"Requested {edge} edge but window shows {detected_direction} "
                 f"transition (start={start_level:.6g}, end={end_level:.6g})"
@@ -582,8 +597,8 @@ def analyze_pulse_response(
     # judges. Only on the auto-level path; explicit levels mean the caller
     # deliberately chose the baseline.
     if initial_value is None and final_value is None:
-        y_pk_pk = float(np.max(y) - np.min(y))
-        if y_pk_pk > _LEVEL_EPSILON and abs_delta < _FULL_PULSE_DELTA_FRACTION * y_pk_pk:
+        y_pk_pk = float(np.ptp(y))
+        if _is_full_pulse(y_pk_pk, abs_delta):
             # The net step is a near-zero baseline, so overshoot/undershoot/
             # settling divide by ~0 and are *undefined*, not merely suspect. The
             # code names the observable condition (net step small vs the window's
