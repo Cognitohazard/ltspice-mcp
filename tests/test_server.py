@@ -80,11 +80,15 @@ class TestBuildInstructions:
     def test_none_detected(self):
         text = build_instructions({}, None)
         assert "No SPICE simulator detected" in text
+        # actionable, not a dead end: how to get a simulator + the restart caveat
+        assert "ngspice" in text
+        assert "restart" in text
 
     def test_ngspice_only_notes_ltspice_absence(self):
         text = build_instructions({"ngspice": _NG}, _NG)
         assert "Active simulator: ngspice." in text
-        assert "(LTspice not detected.)" in text
+        assert "LTspice not detected" in text
+        assert ".asc schematic editing is unavailable" in text
         assert "(default)" not in text  # no default marker for a single engine
 
     def test_ltspice_only(self):
