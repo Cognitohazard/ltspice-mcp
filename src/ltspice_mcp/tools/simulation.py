@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import Literal
 
 from mcp import types
@@ -127,7 +128,9 @@ class CancelJobInput(ToolInput):
     job_id: str = Field(description="Job ID of the running simulation to cancel")
 
 
-async def _get_or_create_runner(state: SessionState) -> SimulationRunner:
+async def _get_or_create_runner(
+    state: SessionState, netlist_path: Path | None = None
+) -> SimulationRunner:
     """Get or create a SimulationRunner via the centralized RunnerManager."""
     default_simulator = state.default_simulator
     if default_simulator is None:
@@ -135,7 +138,7 @@ async def _get_or_create_runner(state: SessionState) -> SimulationRunner:
     return state.runners.get_sim_runner(
         loop=asyncio.get_running_loop(),
         simulator_class=default_simulator,
-        output_folder=await resolve_output_folder(state),
+        output_folder=await resolve_output_folder(state, netlist_path),
         max_parallel=state.config.max_parallel_sims,
     )
 
@@ -201,7 +204,7 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     )
     # Runner first, then register + create_task with no await between —
     # submit-ordering rule, see the concurrency contract in tools/_base.py.
-    runner = await _get_or_create_runner(state)
+    runner = await _get_or_create_runner(state, netlist_path)
     state.add_job(job)
     job.task = asyncio.create_task(runner.start_simulation(netlist_path, job, state))
     await mcp_log(
