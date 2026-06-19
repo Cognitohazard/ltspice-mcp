@@ -12,6 +12,7 @@ from pathlib import Path
 
 from spicelib import AscEditor
 
+from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.geometry import BBox
 
 logger = logging.getLogger(__name__)
@@ -212,8 +213,15 @@ def _find_asy_file(symbol: str) -> Path | None:
 
 
 def parse_asy_file(asy_path: Path) -> SymbolInfo:
-    """Parse a .asy symbol file to extract pins, bounding box, and description."""
-    lines = asy_path.read_text().splitlines()
+    """Parse a .asy symbol file to extract pins, bounding box, and description.
+
+    Reads via ``read_spice_text`` (BOM/UTF-16/cp1252 fallback), NOT a bare
+    UTF-8 ``read_text``: hundreds of real LTspice vendor symbols carry cp1252
+    bytes (``µ``/``°``/``±``/``©`` in description fields), and a strict-UTF-8
+    read raises ``UnicodeDecodeError`` on them — which previously escaped
+    ``add_component`` as an opaque "Internal error".
+    """
+    lines = read_spice_text(asy_path).splitlines()
 
     pins: list[PinInfo] = []
     description = ""
@@ -283,7 +291,15 @@ def get_symbol_info(symbol: str) -> SymbolInfo | None:
         _symbol_cache[symbol] = None
         return None
 
-    info = parse_asy_file(asy_path)
+    try:
+        info = parse_asy_file(asy_path)
+    except Exception:
+        # A malformed/binary .asy (or an unhandled encoding) must not crash the
+        # caller — callers treat None as "unusable symbol" and degrade cleanly
+        # (add_component → a clear NetlistError; overlap scan → skip it).
+        logger.warning("Failed to parse symbol file %s", asy_path, exc_info=True)
+        _symbol_cache[symbol] = None
+        return None
     _symbol_cache[symbol] = info
     return info
 
