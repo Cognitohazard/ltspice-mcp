@@ -4,6 +4,7 @@ import asyncio
 import copy
 import json
 import logging
+import re
 import types as _stdlib_types
 import typing
 from collections.abc import Callable, Mapping
@@ -717,15 +718,72 @@ def _get_linux_output_dir(working_dir: Path) -> Path:
     return out
 
 
-async def resolve_output_folder(state: SessionState) -> Path:
+# .include / .inc / .lib / .libfile <path> [extra]
+_INCLUDE_DIRECTIVE_RE = re.compile(r"^\s*\.(?:include|inc|lib|libfile)\b\s+(.+)$", re.IGNORECASE)
+
+
+def _first_path_token(rest: str) -> str:
+    """First (possibly quoted) path token of an include/lib directive's args."""
+    rest = rest.strip()
+    if rest[:1] in ("'", '"'):
+        end = rest.find(rest[0], 1)
+        if end != -1:
+            return rest[1:end]
+    parts = rest.split()
+    return parts[0] if parts else ""
+
+
+def _netlist_has_local_dependency(netlist_path: Path) -> bool:
+    """True if the netlist pulls in a sibling file via a *relative* .include/.lib.
+
+    Such a netlist can't be relocated to the run sidecar: a simulator resolves a
+    relative include against the (now-moved) netlist's own directory, so the
+    dependency would no longer be found. Bare library NAMES resolved via the
+    simulator's own lib path (no matching local file) and absolute paths both
+    survive relocation and don't count.
+    """
+    from ltspice_mcp.lib.encoding import read_spice_text
+
+    try:
+        text = read_spice_text(netlist_path)
+    except OSError:
+        return True  # unreadable — be conservative, keep it in place
+    base = netlist_path.parent
+    for line in text.splitlines():
+        m = _INCLUDE_DIRECTIVE_RE.match(line)
+        if not m:
+            continue
+        tok = _first_path_token(m.group(1))
+        if not tok:
+            continue
+        # Absolute (POSIX, Windows drive, or UNC) paths survive relocation.
+        if Path(tok).is_absolute() or re.match(r"^[A-Za-z]:[\\/]", tok) or tok.startswith("\\\\"):
+            continue
+        if (base / tok).exists():
+            return True
+    return False
+
+
+async def resolve_output_folder(state: SessionState, netlist_path: Path | None = None) -> Path:
     """Determine the output folder for simulation files.
 
     On WSL, if the working dir is on the Linux filesystem (not /mnt/):
     - LTspice → Windows-native temp dir (SQLite .db writes fail on UNC paths)
     - Other simulators → ``/tmp/ltspice-mcp`` (avoids cluttering the project root)
 
-    On non-WSL Linux or when the working dir is already on /mnt/,
-    returns the working dir as-is.
+    Otherwise (non-WSL Linux, or a WSL working dir already on /mnt/), output
+    goes to ``{working_dir}/.ltspice-mcp/runs`` — a single tidy sidecar next to
+    the per-circuit job metadata, instead of scattering .raw/.log/.db/.op.raw
+    files across the project root. It stays on the same filesystem as the
+    working dir, so LTspice's .db writes keep working for a /mnt/ working dir.
+
+    Exception: output stays in the working dir when ``netlist_path`` is omitted,
+    or when it pulls in a sibling file via a relative ``.include``/``.lib``.
+    spicelib relocates the run netlist into the output folder, and a simulator
+    resolves a relative include against that moved netlist's directory — so
+    sidecar-ing a netlist with local dependencies would break the run.
+    Self-contained netlists (and ones using only absolute or lib-path-resolved
+    includes) get the sidecar.
 
     Also adds the output dir to allowed_paths so analysis tools can read
     the result files via safe_path().
@@ -755,4 +813,20 @@ async def resolve_output_folder(state: SessionState) -> Path:
                 state.config.allowed_paths.append(out)
             return out
 
-    return state.working_dir
+    # A netlist with relative local includes must run from its own dir so the
+    # simulator can resolve them (see docstring). Keep those in the working dir;
+    # also stay there when no netlist was supplied — can't confirm it's safe to
+    # relocate.
+    if netlist_path is None or _netlist_has_local_dependency(netlist_path):
+        return state.working_dir
+
+    # Keep simulation artifacts out of the project root: a single
+    # ``.ltspice-mcp/runs`` sidecar (alongside ``.ltspice-mcp/jobs``) is far
+    # easier to find and clean than dozens of files dumped in the CWD — a
+    # 30-run Monte Carlo alone emits ~180. Same filesystem as working_dir, so
+    # a /mnt/ (Windows-native) working dir keeps .db/.MEAS support.
+    runs = state.working_dir / ".ltspice-mcp" / "runs"
+    runs.mkdir(parents=True, exist_ok=True)
+    if runs not in state.config.allowed_paths:
+        state.config.allowed_paths.append(runs)
+    return runs

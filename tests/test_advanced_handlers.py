@@ -335,7 +335,7 @@ class TestRunSweep:
 
         entered = asyncio.Event()
 
-        async def hanging_resolve(state):
+        async def hanging_resolve(state, netlist_path=None):
             entered.set()
             await asyncio.Event().wait()  # suspend until cancelled
 
