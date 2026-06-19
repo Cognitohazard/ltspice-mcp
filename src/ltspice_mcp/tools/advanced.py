@@ -661,7 +661,7 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
     runner = state.runners.get_sweep_runner(
         loop=asyncio.get_running_loop(),
         simulator_class=default_simulator,
-        output_folder=await resolve_output_folder(state),
+        output_folder=await resolve_output_folder(state, config.netlist),
         max_parallel=max_parallel or state.config.max_parallel_sims,
     )
     state.add_batch_job(batch_job)
@@ -937,7 +937,7 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
     runner = state.runners.get_mc_runner(
         loop=asyncio.get_running_loop(),
         simulator_class=default_simulator,
-        output_folder=await resolve_output_folder(state),
+        output_folder=await resolve_output_folder(state, config.netlist),
         max_parallel=max_parallel or state.config.max_parallel_sims,
     )
     state.add_batch_job(batch_job)
