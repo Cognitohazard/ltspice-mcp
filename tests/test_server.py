@@ -238,13 +238,13 @@ class TestServerDispatch:
             patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)),
             pytest.raises(ValueError, match="Unknown"),
         ):
-            await read_resource(AnyUrl("ltspice://nonexistent"))
+            await read_resource(AnyUrl("spice://nonexistent"))
 
     async def test_read_resource_valid(self, state_no_sim: SessionState):
         from pydantic import AnyUrl
 
         with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)):
-            result = await read_resource(AnyUrl("ltspice://config"))
+            result = await read_resource(AnyUrl("spice://config"))
             result = list(result)
             assert len(result) > 0
 

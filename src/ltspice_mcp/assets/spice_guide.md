@@ -1,5 +1,11 @@
 
-# LTspice Circuit Simulation Guide
+# SPICE Circuit Simulation Guide
+
+Covers both engines. **SPICE Fundamentals** applies to both; then read
+**LTspice-Specific** or **ngspice-Specific** depending on the active simulator
+(the server names it in its instructions). The engines differ in inline-comment
+character, behavioral-source conditionals, MOSFET bulk handling, parameter
+sweeps, and Monte Carlo — see the differences table at the end.
 
 ## SPICE Fundamentals
 
@@ -14,7 +20,8 @@
 
 - `.END` must be last line. No statements after it.
 - `+` at start of line continues previous statement.
-- Comments: `*` (full line) or `;` (inline).
+- Comments: `*` (full line). Inline comment is `;` in LTspice, `$` in ngspice
+  (`;` is not an inline comment in ngspice).
 
 ### Component Syntax
 
@@ -316,3 +323,256 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 - **`*!LTspice: <directive>`**: Treated as a directive, not a comment — despite `*` prefix.
 - **Area multipliers**: Undocumented `m=<value>` works on R, Q, J in addition to documented devices.
 - Capacitor multiplier: `x<number>` instead of `m=<number>` (e.g., `x2`).
+
+---
+
+## ngspice-Specific
+
+ngspice shares the **SPICE Fundamentals** above, with these deltas:
+
+- Inline comment is `$`, not `;`.
+- MOSFETs need 4 terminals (`M1 d g s b`) — the bulk is **not** auto-connected
+  to the source (LTspice auto-connects it).
+- No `startup` keyword on `.tran`.
+- No native `.step`. Run parametric sweeps through `configure_sweep` +
+  `run_sweep` (one netlist per value); a `.step` line handed to `run_simulation`
+  is rejected with a pointer to `configure_sweep`.
+- `GND` is not ground unless tied to `0` or declared `.global GND` — otherwise
+  it floats silently.
+- Extra `.meas` types: `MIN_AT`, `MAX_AT`, `DERIV`, `param='expr'`,
+  `par('expr')`. `.meas ... FIND` takes `V(out)` (no `mag()` wrapper).
+- `.meas` does NOT work in batch mode combined with `-r rawfile` — data streams
+  to disk and is unavailable for analysis. Use a `.control` block instead.
+
+### Parameters and Expressions
+
+```spice
+.param Rval=10k
+.param fc={1/(2*pi*Rval*Cval)}
+.param combined='Rval + 10'
+.func myfn(x) {x*2}
+```
+
+- Expressions in braces `{expr}` or single quotes `'expr'` — both work.
+- Expressions without delimiters work only when spaces are absent:
+  `.param c=a+123` OK, `.param c = a + 123` FAILS silently (assigns first token).
+- Self-referential params fail silently: `.param x = {x+3}` does not work.
+- Parameter names must start with alpha; may contain `! # $ % [ ] _`. Cannot use
+  reserved words: `time`, `temper`, `hertz`, `not`, `and`, `or`, `div`, `mod`,
+  `sqr`, `sqrt`, `sin`, `cos`, `exp`, `ln`, `log`, `log10`, `arctan`, `abs`,
+  `pwr`, `defined`.
+
+**Three separate expression parsers exist in ngspice** — a known source of
+confusion:
+1. **Front-end** (`.param`, brace expressions) — evaluated at netlist expansion.
+2. **B source / behavioral** — evaluated during simulation (no braces).
+3. **`.control` block** — operates on its own vectors/variables.
+
+Braces `{...}` are "compile-time"; bare expressions in B sources are "run-time".
+
+**Operator precedence (.param expressions):**
+
+| Op | Prec | Description |
+|-|-|-|
+| `!` | 1 | unary NOT |
+| `**`, `^` | 2 | power |
+| `*` | 3 | multiply |
+| `/`, `%`, `\` | 3 | divide, modulo, integer divide |
+| `+`, `-` | 4 | add, subtract |
+| `==`, `!=`/`<>` | 5 | equality |
+| `<=`, `>=`, `<`, `>` | 5 | comparison |
+| `&&` | 6 | boolean AND |
+| `\|\|` | 7 | boolean OR |
+| `c ? x : y` | 8 | ternary |
+
+**`^` behavior depends on compatibility mode:**
+- Default (`hs` compat): `x^y` = `pow(fabs(x), y)` for x>0; rounds y for x<0; 0 for x=0.
+- LTspice compat (`lt`): `x^y` = `pow(x, y)` if y is close to integer; else 0 for x<0.
+
+**Built-in functions (.param):**
+- Trig: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `arctan`
+- Hyperbolic: `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`
+- Exp/log: `exp`, `ln`, `log` (base e), `log10`
+- Power: `sqrt`, `pow(x,y)`, `pwr(x,y)` (= `pow(fabs(x),y)`)
+- Rounding: `nint` (nearest, half to even), `int` (toward 0), `floor`, `ceil`
+- Selection: `min`, `max`, `sgn`
+- Conditional: `ternary_fcn(x,y,z)` (= `x ? y : z`)
+- **Statistical:** `gauss(nom,rvar,sigma)`, `agauss(nom,avar,sigma)`,
+  `unif(nom,rvar)`, `aunif(nom,avar)`, `limit(nom,avar)`
+- Special: `var(name)` (interpreter variable), `vec(name)` (vector value)
+
+### Behavioral Sources (B sources)
+
+```spice
+B1 out 0 V=<expression>
+B2 out 0 I=<expression> [tc1=x] [tc2=x] [temp=x]
+```
+
+**Conditional:** ternary `cond ? true : false` — NOT `IF()` (that is LTspice).
+Put a space before `?` so the parser does not confuse it with other tokens.
+Nested ternaries need explicit parentheses.
+
+**Functions (B source context):** `cos`, `sin`, `tan`, `acos`, `asin`, `atan`,
+`cosh`, `sinh`, `acosh`, `asinh`, `atanh`, `exp`, `ln`, `log`, `log10`, `abs`,
+`sqrt`, `u` (unit step), `u2` (ramp 0-1), `uramp`, `floor`, `ceil`, `min`, `max`,
+`pow`, `**`, `pwr`, `^`, `i(device)`.
+
+**Special variables:** `time` (transient), `temper` (circuit temp in C), `hertz`
+(AC frequency). `time` is zero during AC; `hertz` is zero during transient.
+
+**Piecewise linear in B source:**
+```spice
+Bdio 1 0 I = pwl(v(A), 0,0, 33,10m, 100,33m, 200,50m)
+```
+x values must be monotonically increasing — non-monotonic stops execution. Can
+use `time` or expressions as the independent variable.
+
+**Gotchas:**
+- `exp()` is internally capped at argument=14 — beyond that it becomes linear.
+- `log`/`ln`/`sqrt` of negatives use `fabs()` automatically — no error.
+- Division by zero or `log(0)` causes an error.
+
+### Subcircuits
+
+```spice
+.subckt myfilter in out rval=100k cval=100nF
+R1 in p1 {2*rval}
+C1 p1 0 {cval}
+.ends myfilter
+
+X1 input output myfilter rval=1k cval=1n
+```
+
+- Parameters on the `.subckt` line do NOT need a `params:` keyword — just
+  `name=value` after the nodes.
+- `.lib <filename> <section>` requires a section name. **Omitting the section
+  silently loads nothing** (no error). For unconditional inclusion use
+  `.include`.
+- `.param` inside subcircuits is local scope (masks globals). Nesting to 10 levels.
+- Subcircuit and model names are global — must be unique across the netlist.
+
+### .save Directive
+
+```spice
+.save V(out) I(Vin)               $ save only these signals
+.save @m1[id] @m1[gm]             $ save internal device parameters
+.save all @m2[vdsat]              $ save defaults PLUS extras
+```
+
+- Without `.save`, all node voltages and source currents are saved (huge files).
+- Adding even ONE `.save` line drops all defaults — only listed signals saved.
+- `.save @r1[i]` for resistor current (not available via `I()` syntax).
+
+### .control / .endc Blocks
+
+ngspice has a built-in scripting language for post-simulation analysis:
+
+```spice
+.control
+run                               $ execute the simulation
+let vmax = maximum(V(out))        $ create a vector
+set filename = "results.csv"      $ create a string variable
+write $filename V(out) I(Vin)     $ save to a rawfile
+wrdata output.txt V(out)          $ save as CSV-like text
+.endc
+```
+
+**Variables vs vectors — a critical distinction:**
+- `set` creates string/shell variables: `set myvar = "hello"` — access `$myvar`.
+- `let` creates numeric vectors: `let x = 2*pi` — access `$&x` to get a number.
+- `$&param` dereferences a circuit `.param` into a control variable.
+
+**Control structures:** `while`/`end`, `repeat`/`end`, `foreach`/`end`,
+`if`/`else`/`end`, `dowhile`, `break [n]`, `continue [n]`, `label`, `goto`.
+`foreach` values are space-separated (no commas).
+
+**Key commands:** `run`, `plot`, `print`, `let`, `set`, `write`, `wrdata`,
+`alter`, `altermod`, `echo`, `meas`, `linearize`, `fft`, `define`, `source`.
+
+### Monte Carlo
+
+ngspice has **no `.mc` directive**. Monte Carlo is done via `.control` loops:
+
+```spice
+.control
+let mc_runs = 100
+let run = 1
+dowhile run <= mc_runs
+  alter c1 = unif(1e-09, 0.1)
+  alter r1 = gauss(10k, 0.05, 3)
+  tran 1u 1m
+  $ ... store/process results ...
+  let run = run + 1
+end
+.endc
+```
+
+**Random functions:** `sunif(0)` (uniform in [-1,1]), `sgauss(0)` (Gaussian
+mean=0 stddev=1). Set the seed with `.options seed=<value>` or `seed=random`.
+
+The `.param` statistical functions (`gauss`/`agauss`/`unif`/`aunif`/`limit`)
+require multiple ngspice runs (each run re-evaluates); `.control` loops with
+`alter` vary within a single run.
+
+### .options Flags
+
+**General:**
+
+| Flag | Effect |
+|-|-|
+| `SEED=val\|random` | Random number seed |
+| `TEMP=x` | Operating temperature (default 27C) |
+| `TNOM=x` | Nominal temperature (default 27C) |
+| `SAVECURRENTS` | Auto-save all device terminal currents |
+| `KLU` | KLU matrix solver (faster for large MOS circuits) |
+| `INTERP` | Interpolate output to a fixed TSTEP grid |
+
+**Convergence:** `RELTOL` (0.001), `ABSTOL` (1e-12), `VNTOL` (1e-6), `GMIN`
+(1e-12), `ITL1` (100, DC iterations), `ITL4` (10, transient iterations),
+`METHOD` (`trap` or `gear`), `MAXORD` (2; Gear max 2-6), `TRTOL` (7),
+`XMU` (0.5; reduce slightly to suppress ringing).
+
+**Matrix conditioning:**
+```spice
+.options rshunt=1e12              $ resistor from every node to ground
+.options rseries=1e-4            $ series resistor on every inductor
+.options cshunt=1e-13            $ capacitor from every node to ground
+```
+Use `rshunt` for "no DC path to ground" errors, `rseries` when inductors across
+voltage sources fail OP, `cshunt` for oscillation/noise. `AUTOSTOP` halts the
+transient once all `.meas` conditions are satisfied.
+
+### XSPICE
+
+Mixed-signal simulation with code models (requires an XSPICE-enabled build):
+
+```spice
+A1 [in] [out] lut1
+.model lut1 d_lut(rise_delay=1n fall_delay=2n input_load=0.5p
++ table_values="0110")
+```
+
+Digital device types: `d_and`, `d_or`, `d_nand`, `d_nor`, `d_xor`,
+`d_inverter`, `d_buffer`, `d_flop`, `d_latch`, `d_lut`, etc. Digital nodes use
+`[name]` bracket syntax for buses.
+
+### Key Differences: LTspice vs ngspice
+
+| Aspect | LTspice | ngspice |
+|-|-|-|
+| Inline comment | `;` | `$` |
+| B-source conditional | `IF(c,a,b)` | ternary `c ? a : b` |
+| `^` operator | XOR (power is `**`) | power |
+| MOSFET bulk | auto-connected to source | required 4th terminal |
+| `GND` node | alias for `0` | floats unless tied to `0`/`.global` |
+| `.tran startup` | supported | not supported |
+| Parameter sweep | `.step` | `configure_sweep`/`run_sweep` (no `.step`) |
+| Monte Carlo | `.step` + `mc()` | `.control` loop with `alter` |
+| Post-processing | — | `.control` scripting (`let`/`plot`/`write`/`fft`) |
+| Default saving | saves all | `.save` (one line drops defaults; `.save all` keeps) |
+| `.raw` format | mixed precision | all doubles |
+| Unicode mu | replaces `u` with µ | preserves `u` |
+
+Other ngspice notes: no A-devices (use XSPICE for mixed-signal); `.func` cannot
+be recursive (causes a hang, not an error); `.backanno` is needed for current
+probing in post-processing.

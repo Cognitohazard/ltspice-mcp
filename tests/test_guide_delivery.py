@@ -3,12 +3,10 @@
 The guidance must reach the consuming LLM without relying on a client-side
 skill being installed: an always-on floor (server instructions + tool
 descriptions), a just-in-time checklist (create_schematic result), and the
-single-sourced ``ltspice://guide`` resource.
+single-sourced ``spice://guide`` resource.
 """
 
-import re
 from importlib.resources import files
-from pathlib import Path
 
 from ltspice_mcp.server import SERVER_INSTRUCTIONS
 from ltspice_mcp.state import SessionState
@@ -17,7 +15,7 @@ from ltspice_mcp.tools.circuit import (
     handle_create_schematic,
 )
 
-_SKILL_MD = Path(__file__).resolve().parents[1] / "skills" / "ltspice" / "SKILL.md"
+_GUIDE_ASSET = files("ltspice_mcp") / "assets" / "spice_guide.md"
 
 
 class TestServerInstructionsFloor:
@@ -25,7 +23,7 @@ class TestServerInstructionsFloor:
         # Always-on floor: the schematic build doctrine survives even when no
         # client-side skill is installed.
         assert "apply_schematic_ops" in SERVER_INSTRUCTIONS
-        assert "ltspice://guide" in SERVER_INSTRUCTIONS
+        assert "spice://guide" in SERVER_INSTRUCTIONS
         assert "do NOT net-label" in SERVER_INSTRUCTIONS
 
 
@@ -36,19 +34,27 @@ class TestCreateSchematicChecklist:
         )
         text = result.content[0].text  # type: ignore[union-attr]
         assert "Layout checklist" in text
-        assert "ltspice://guide" in text
+        assert "spice://guide" in text
 
 
-class TestGuideDriftGuard:
-    def test_asset_mirrors_skill_body(self):
-        # The packaged guide asset and skills/ltspice/SKILL.md are MIRRORED:
-        # the asset is the SKILL.md body (everything after the YAML
-        # frontmatter). Keep them in sync — edit SKILL.md and re-copy the body
-        # into the asset whenever the guidance changes.
-        skill_src = _SKILL_MD.read_text("utf-8")
-        frontmatter = re.match(r"^---\n.*?\n---\n", skill_src, re.DOTALL)
-        assert frontmatter is not None, "SKILL.md is missing its YAML frontmatter"
-        skill_body = skill_src[frontmatter.end() :]
+class TestGuideIsEngineGeneral:
+    """The packaged guide is the union of both engines (the per-engine skills
+    stay engine-specific). These are coverage checks, not a byte-mirror — the
+    guide is hand-authored, so its per-engine sections duplicate the skills'
+    and can drift; the anchors below flag a section that went missing.
+    """
 
-        asset = (files("ltspice_mcp") / "assets" / "ltspice_guide.md").read_text("utf-8")
-        assert asset.strip() == skill_body.strip()
+    def test_covers_both_engines_and_fundamentals(self):
+        guide = _GUIDE_ASSET.read_text("utf-8")
+        assert "# SPICE Circuit Simulation Guide" in guide
+        assert "## SPICE Fundamentals" in guide
+        assert "## LTspice-Specific" in guide
+        assert "## ngspice-Specific" in guide
+        assert "LTspice vs ngspice" in guide  # the differences table
+
+    def test_includes_each_engines_distinctive_sections(self):
+        guide = _GUIDE_ASSET.read_text("utf-8")
+        ltspice_anchors = ("### .asc Schematics", "### Other LTspice Quirks")
+        ngspice_anchors = ("### .control / .endc Blocks", "### XSPICE", "### .save Directive")
+        for anchor in ltspice_anchors + ngspice_anchors:
+            assert anchor in guide, f"guide is missing section: {anchor}"

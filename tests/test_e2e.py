@@ -613,9 +613,9 @@ class TestResources:
                 "plot_widget",
                 "guide",
             }
-            assert str(resources["config"].uri) == "ltspice://config"
-            assert str(resources["recent"].uri) == "ltspice://recent"
-            assert str(resources["guide"].uri) == "ltspice://guide"
+            assert str(resources["config"].uri) == "spice://config"
+            assert str(resources["recent"].uri) == "spice://recent"
+            assert str(resources["guide"].uri) == "spice://guide"
 
     async def test_list_resource_templates_returns_three(self, tmp_path):
         async with mcp_session(tmp_path) as session:
@@ -634,7 +634,7 @@ class TestResources:
 
     async def test_read_config_resource_has_correct_fields(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("ltspice://config"))
+            result = await session.read_resource(AnyUrl("spice://config"))
             data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
             assert data["working_dir"] == str(tmp_path)
             assert isinstance(data["allowed_paths"], list)
@@ -648,7 +648,7 @@ class TestResources:
         (tmp_path / "circuit.cir").write_text("* Test\nR1 a b 1k\n.END\n")
         (tmp_path / "notes.txt").write_text("not a netlist")
         async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("ltspice://netlists/"))
+            result = await session.read_resource(AnyUrl("spice://netlists/"))
             data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
             names = [n["name"] for n in data["netlists"]]
             assert "circuit.cir" in names
@@ -660,19 +660,19 @@ class TestResources:
         netlist_text = "* My Circuit\nR1 a b 1k\nC1 b 0 10n\n.END\n"
         (tmp_path / "mycirc.cir").write_text(netlist_text)
         async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("ltspice://netlists/mycirc.cir"))
+            result = await session.read_resource(AnyUrl("spice://netlists/mycirc.cir"))
             content = result.contents[0].text  # type: ignore[union-attr]
             assert content == netlist_text
 
     async def test_read_results_empty(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("ltspice://results/"))
+            result = await session.read_resource(AnyUrl("spice://results/"))
             data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
             assert data == {"count": 0, "jobs": []}
 
     async def test_read_models_empty(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("ltspice://models/"))
+            result = await session.read_resource(AnyUrl("spice://models/"))
             data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
             assert data["libraries"] == []
 
