@@ -100,6 +100,12 @@ tool-surface changes.
   captures a full pulse (rise *and* fall). The endpoint-derived direction is
   meaningless there; the requested direction is honored and a genuinely absent
   edge still raises a clear error.
+- `export_waveform` CSVs are no longer corrupted on Windows. The atomic writer
+  opened text files without disabling newline translation, so `csv.writer`'s
+  `\r\n` line terminators were doubled to `\r\r\n` — a blank row between every
+  data row. The writer now opens text mode with `newline=""`, which also gives
+  every text artifact consistent `\n` endings cross-platform. (Latent on Linux,
+  which does no newline translation.)
 
 ### Changed
 

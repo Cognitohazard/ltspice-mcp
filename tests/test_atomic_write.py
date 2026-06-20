@@ -147,6 +147,29 @@ class TestAtomicWriteContextManager:
             f.write("café")
         assert path.read_bytes() == "café".encode("latin-1")
 
+    def test_text_mode_disables_newline_translation(self, tmp_path: Path) -> None:
+        """Text mode must open with ``newline=""`` (and binary must omit it).
+
+        ``csv.writer`` emits its own ``\\r\\n``; without this, text mode doubles
+        it to ``\\r\\r\\n`` on Windows (blank rows in exported CSVs). Linux never
+        translates newlines, so the contract is asserted at the open boundary
+        rather than via written bytes — a behavior test could not catch a
+        regression on the only platform CI runs.
+        """
+        with (
+            patch("ltspice_mcp.lib.os.fdopen", wraps=os.fdopen) as fdopen,
+            atomic_write(tmp_path / "text.txt") as f,
+        ):
+            f.write("a\nb\n")
+        assert fdopen.call_args.kwargs.get("newline") == ""
+
+        with (
+            patch("ltspice_mcp.lib.os.fdopen", wraps=os.fdopen) as fdopen,
+            atomic_write(tmp_path / "data.bin", mode="wb") as bf,
+        ):
+            bf.write(b"\x00")
+        assert "newline" not in fdopen.call_args.kwargs
+
 
 # ---------------------------------------------------------------------------
 # Durability — fsync must be called in the right order when durable=True
