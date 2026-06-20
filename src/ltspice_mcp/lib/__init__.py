@@ -191,6 +191,10 @@ def atomic_write(
         open_kwargs: dict[str, Any] = {}
         if not binary:
             open_kwargs["encoding"] = encoding
+            # Disable newline translation: csv.writer emits its own \r\n, which
+            # text mode would double to \r\r\n on Windows; plain-text callers get
+            # consistent \n endings cross-platform.
+            open_kwargs["newline"] = ""
         with os.fdopen(fd, mode, **open_kwargs) as f:
             yield f
             f.flush()
