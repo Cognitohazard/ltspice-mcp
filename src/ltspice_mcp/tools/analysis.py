@@ -1635,14 +1635,17 @@ def _format_measurements(
 
 @registry.tool(
     name="operating_point",
-    description=("Read DC operating point data showing all node voltages and branch currents."),
+    description=(
+        "Read DC operating point data: all node voltages, branch currents, and any "
+        "saved device internals (ngspice @dev[param] like gm/gds/vth/id)."
+    ),
     input_model=OperatingPointInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full", "agentic"),
     output_model=OperatingPointOutput,
 )
 async def handle_operating_point(args: OperatingPointInput, state: SessionState):
-    """Read DC operating point data (all node voltages and branch currents)."""
+    """Read DC operating point data (node voltages, branch currents, device internals)."""
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     fmt = args.format
     raw = await services.load_raw(raw_path, state)

@@ -559,13 +559,11 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
     # Compute total runs: product of each dimension's point count, and capture
     # the resolved value list per dimension so the response can enumerate them
     # (log vs linear spacing is otherwise unverifiable without running).
-    dim_sizes: list[int] = []
-    dim_values: list[tuple[str, list[float]]] = []
-    for dim in dimensions:
-        values = dim.resolved_values()
-        dim_sizes.append(len(values))
-        dim_values.append((dim.name, values))
-
+    # Cap the cross-product BEFORE materializing any value list. count() sizes
+    # each dimension without building it, so a fat dimension (points=1e9, or a
+    # tiny step over a wide range) is rejected here instead of OOMing the server
+    # inside resolved_values()'s np.linspace/np.arange.
+    dim_sizes = [dim.count() for dim in dimensions]
     total_runs = prod(dim_sizes) if dim_sizes else 0
     if total_runs > MAX_BATCH_RUNS:
         raise BatchJobError(
@@ -573,6 +571,11 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
             f"({' x '.join(str(s) for s in dim_sizes)}). Narrow a dimension or split "
             "the sweep — each run is a separate simulator process."
         )
+
+    # Safe to materialize now: the cross-product is within the cap.
+    dim_values: list[tuple[str, list[float]]] = [
+        (dim.name, dim.resolved_values()) for dim in dimensions
+    ]
 
     config = SweepConfig(netlist=netlist_path, dimensions=dimensions)
     config_id = generate_config_id("sweep")

@@ -37,7 +37,10 @@ tool-surface changes.
 - Sweep cross-products are now capped at 10000 runs, matching the existing Monte
   Carlo cap. A multi-axis sweep (e.g. 5×5×16×100) previously spawned tens of
   thousands of cold simulator processes silently; it's now refused at
-  `configure_sweep` with the offending dimension sizes.
+  `configure_sweep` with the offending dimension sizes. The cap is computed from
+  each dimension's *count* before any value list is built, so a single fat
+  dimension (`points=1e9`, or a tiny `step` over a wide range) is rejected
+  without `np.linspace`/`np.arange` allocating a multi-GB array first.
 - **Breaking:** MCP resource URIs moved from the `ltspice://` scheme to
   `spice://` (`spice://results/...`, `spice://netlists/...`, `spice://config`,
   `spice://guide`, etc.). These resources are engine-agnostic, so the scheme no
