@@ -97,6 +97,10 @@ tool-surface changes.
     `SchematicComponent`; construction now uses `AscComponent` (the type
     spicelib's own parser builds) when present. The dependency is also capped to
     the tested range (see below), so a default install keeps working today.
+- The parsed-result cache is now bounded (LRU, 32 entries). It was unbounded, so
+  a long-lived session querying many circuits pinned every `.raw` it ever parsed
+  (each potentially multi-MB) in memory. The editor cache stays unbounded by
+  design — it can hold unsaved in-memory edits that eviction would drop.
 - A netlist with a relative `.include`/`.lib` now also keeps its run in the
   working dir on WSL with a Linux-filesystem working dir — that branch relocates
   artifacts off the UNC path, but previously did so before the local-dependency
