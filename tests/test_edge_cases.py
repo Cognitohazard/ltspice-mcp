@@ -591,12 +591,17 @@ class TestConfigTomlValidation:
         assert cfg.default_timeout == 300.0
 
     def test_zero_max_parallel_rejected(self, tmp_path, monkeypatch):
+        from ltspice_mcp.config import ServerConfig
+
         cfg = self._load(tmp_path, "[simulation]\nmax_parallel = 0\n", monkeypatch)
-        assert cfg.max_parallel_sims == 4
+        # Invalid value rejected -> the (core-aware) default applies.
+        assert cfg.max_parallel_sims == ServerConfig().max_parallel_sims
 
     def test_negative_max_parallel_rejected(self, tmp_path, monkeypatch):
+        from ltspice_mcp.config import ServerConfig
+
         cfg = self._load(tmp_path, "[simulation]\nmax_parallel = -1\n", monkeypatch)
-        assert cfg.max_parallel_sims == 4
+        assert cfg.max_parallel_sims == ServerConfig().max_parallel_sims
 
     def test_invalid_log_level_rejected(self, tmp_path, monkeypatch):
         cfg = self._load(tmp_path, '[logging]\nlevel = "SUPERDEBUG"\n', monkeypatch)

@@ -116,8 +116,14 @@ class ServerConfig:
     allowed_paths: list[Path] = field(default_factory=list)
     """Sandbox paths. Defaults to [working_dir] if empty."""
 
-    max_parallel_sims: int = 4
-    """Maximum concurrent simulations."""
+    max_parallel_sims: int = field(default_factory=lambda: min(os.cpu_count() or 4, 8))
+    """Maximum concurrent simulations.
+
+    Defaults to the host core count capped at 8 (a 64-core box otherwise sat at
+    4). The cap keeps parallel cold simulator processes from thrashing memory/IO;
+    raise it via ``[simulation] max_parallel`` or ``LTSPICE_MCP_MAX_PARALLEL`` (to
+    128) when the box can take it.
+    """
 
     default_timeout: float = 300.0
     """Simulation timeout in seconds."""
