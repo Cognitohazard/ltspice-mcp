@@ -79,8 +79,10 @@ class RunSimulationInput(ToolInput):
     timeout: float | None = Field(
         default=None,
         description=(
-            "Timeout in seconds. Simulations exceeding 30s run asynchronously unless "
-            "wait=true (which enforces a 600s hard cap — the run is killed at the cap)."
+            "Timeout in seconds (defaults to the server's configured default, 300s). "
+            "Simulations exceeding 30s run asynchronously unless wait=true. With "
+            "wait=true the effective limit is min(this timeout, 600s): 600s is a hard "
+            "ceiling, not a floor — pass a larger timeout to use the full 600s."
         ),
     )
     wait: bool = Field(
