@@ -59,6 +59,24 @@ class TestConfigureSweep:
         assert "Total simulations:" in text
         assert len(state_no_sim.sweep_configs) == 1
 
+    async def test_rejects_oversized_cross_product(
+        self, state_no_sim: SessionState, sample_netlist: Path
+    ):
+        # A cross-product over the cap must be refused up front, not spawned as
+        # tens of thousands of cold simulator processes. 101 x 101 = 10201 > cap.
+        with pytest.raises(BatchJobError, match="over the 10000 cap"):
+            await handle_configure_sweep(
+                ConfigureSweepInput(
+                    netlist=sample_netlist.name,
+                    parameters=[
+                        SweepParameter(name="R1", type="component", start=0, stop=100, step=1),
+                        SweepParameter(name="R2", type="component", start=0, stop=100, step=1),
+                    ],
+                ),
+                state_no_sim,
+            )
+        assert len(state_no_sim.sweep_configs) == 0
+
     async def test_values_list(self, state_no_sim: SessionState, sample_netlist: Path):
         # F5: an explicit discrete value list (e.g. E-series) — previously
         # impossible through configure_sweep, which only generated linear/log

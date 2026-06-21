@@ -30,6 +30,14 @@ tool-surface changes.
 
 ### Changed
 
+- `max_parallel_sims` now defaults to the host core count capped at 8 (was a
+  flat 4, so a many-core box was throttled out of the box). Still overridable via
+  `[simulation] max_parallel` / `LTSPICE_MCP_MAX_PARALLEL` up to 128; the cap
+  keeps parallel cold simulator processes from thrashing memory/IO.
+- Sweep cross-products are now capped at 10000 runs, matching the existing Monte
+  Carlo cap. A multi-axis sweep (e.g. 5×5×16×100) previously spawned tens of
+  thousands of cold simulator processes silently; it's now refused at
+  `configure_sweep` with the offending dimension sizes.
 - **Breaking:** MCP resource URIs moved from the `ltspice://` scheme to
   `spice://` (`spice://results/...`, `spice://netlists/...`, `spice://config`,
   `spice://guide`, etc.). These resources are engine-agnostic, so the scheme no
