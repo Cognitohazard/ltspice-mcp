@@ -106,6 +106,10 @@ tool-surface changes.
   data row. The writer now opens text mode with `newline=""`, which also gives
   every text artifact consistent `\n` endings cross-platform. (Latent on Linux,
   which does no newline translation.)
+- `export_waveform` / `plot_waveform` no longer double-nest their sidecar when
+  the source `.raw` already lives inside a `.ltspice-mcp/` tree (a job-run raw
+  passed by path landed at `…/.ltspice-mcp/runs/.ltspice-mcp/waveforms/`). The
+  artifact now goes into the existing tree (`…/runs/<job>/waveforms/`).
 
 ### Changed
 
