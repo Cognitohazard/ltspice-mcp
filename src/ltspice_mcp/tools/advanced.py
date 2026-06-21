@@ -45,6 +45,12 @@ from ltspice_mcp.tools._base import (
 
 logger = logging.getLogger(__name__)
 
+# Upper bound on a single batch job's run count, shared by sweeps and Monte
+# Carlo. A sweep cross-product (e.g. 5x5x16x100) can silently balloon into tens
+# of thousands of cold simulator processes; refuse it up front like Monte Carlo
+# already does, rather than spawning until the machine falls over.
+MAX_BATCH_RUNS = 10_000
+
 
 class SweepParameter(StrictModel):
     """Nested sweep parameter definition.
@@ -561,6 +567,12 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
         dim_values.append((dim.name, values))
 
     total_runs = prod(dim_sizes) if dim_sizes else 0
+    if total_runs > MAX_BATCH_RUNS:
+        raise BatchJobError(
+            f"Sweep cross-product is {total_runs} runs, over the {MAX_BATCH_RUNS} cap "
+            f"({' x '.join(str(s) for s in dim_sizes)}). Narrow a dimension or split "
+            "the sweep — each run is a separate simulator process."
+        )
 
     config = SweepConfig(netlist=netlist_path, dimensions=dimensions)
     config_id = generate_config_id("sweep")
@@ -729,8 +741,8 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
             "mismatch, or param_tolerances)."
         )
 
-    if num_runs < 1 or num_runs > 10_000:
-        raise BatchJobError(f"num_runs must be 1-10000, got {num_runs}")
+    if num_runs < 1 or num_runs > MAX_BATCH_RUNS:
+        raise BatchJobError(f"num_runs must be 1-{MAX_BATCH_RUNS}, got {num_runs}")
 
     type_tolerances: dict[str, tuple[float, str]] = {}
     component_overrides: dict[str, tuple[float, str]] = {}
