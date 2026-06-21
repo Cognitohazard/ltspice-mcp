@@ -365,6 +365,20 @@ class TestValidateSignal:
         raw = self._raw(["time", "v(x1.mid)", "v(out)"])
         assert services.validate_signal(raw, "V(X1:mid)") == "v(x1.mid)"
 
+    def test_device_param_shorthand_resolves_each_wrap(self):
+        # 'dev.param' resolves to whichever form ngspice actually wrote:
+        # bare @m1[gm], v-wrapped v(@m1[vth]), or i-wrapped i(@m1[id]).
+        raw = self._raw(["@m1[gm]", "v(@m1[vth])", "i(@m1[id])"])
+        assert services.validate_signal(raw, "m1.gm") == "@m1[gm]"
+        assert services.validate_signal(raw, "M1.VTH") == "v(@m1[vth])"
+        assert services.validate_signal(raw, "m1.id") == "i(@m1[id])"
+
+    def test_device_param_not_saved_hints_save(self):
+        # A dev.param that isn't in the raw points at the missing .save.
+        raw = self._raw(["@m1[gm]"])
+        with pytest.raises(ResultError, match=r"\.save @m1\[gds\]"):
+            services.validate_signal(raw, "m1.gds")
+
 
 class TestNgspicePreflightWarnings:
     """services.ngspice_preflight_warnings — shared single-run + sweep/MC check."""
