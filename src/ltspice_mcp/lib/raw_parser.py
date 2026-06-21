@@ -214,7 +214,7 @@ _OP_CURRENT_RE = re.compile(r"^I[A-Z]?\(", re.IGNORECASE)
 
 
 def extract_operating_point(raw: RawRead, step: int = 0) -> OperatingPointOutput:
-    """Extract DC operating point data (all node voltages and branch currents).
+    """Extract DC operating point data (node voltages, branch currents, device internals).
 
     Works best with Operating Point (.OP) simulations, but can extract
     first-point values from any simulation type. ``step`` selects which
