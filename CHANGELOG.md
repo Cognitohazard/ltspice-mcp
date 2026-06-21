@@ -10,6 +10,15 @@ tool-surface changes.
 
 ### Added
 
+- Device internals (small-signal / model parameters like `gm`, `gds`, `vth`,
+  `id`) are now first-class. ngspice writes them as `@dev[param]` traces when
+  `.save`d, but they were silently dropped or mislabeled. Now: `operating_point`
+  surfaces them in a `device_internals` bucket; and on a `.dc`/`.tran` sweep the
+  by-name readers (`query_value`/`signal_stats`/`export_waveform`) accept a
+  uniform `dev.param` shorthand (e.g. `m1.gm`) that resolves to whichever wrapped
+  form the raw holds (`@m1[gm]` / `v(@m1[vth])` / `i(@m1[id])`). This is the
+  gm/ID characterization read. A `dev.param` that isn't in the raw now hints at
+  the missing `.save`.
 - MCP prompts (workflow starters a host surfaces as slash-commands):
   `characterize_filter`, `run_and_plot`, and `step_response`. Each emits the
   canonical tool pipeline for that task with the circuit path filled in.

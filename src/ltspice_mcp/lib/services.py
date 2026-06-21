@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -400,6 +401,16 @@ def validate_signal(raw: RawRead, signal: str) -> str:
         candidates.append(sig_lower.replace(":", "."))
     if "." in sig_lower:
         candidates.append(sig_lower.replace(".", ":"))
+
+    # Device-internal small-signal / model parameters. ngspice writes these as
+    # @dev[param] depending on the quantity: bare (@m1[gm]), v-wrapped
+    # (v(@m1[vth])), or i-wrapped (i(@m1[id])). Accept a uniform 'dev.param'
+    # shorthand (e.g. 'm1.gm') and resolve to whichever form the raw contains.
+    dev_param = re.fullmatch(r"([a-z]\w*)\.([a-z]\w*)", sig_lower)
+    if dev_param:
+        dev, param = dev_param.group(1), dev_param.group(2)
+        candidates += [f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"]
+
     for cand in candidates:
         if cand in by_lower:
             return by_lower[cand]
@@ -418,6 +429,11 @@ def validate_signal(raw: RawRead, signal: str) -> str:
         "v(onoise)" in trace_lo or "v(inoise)" in trace_lo
     ):
         hint = " (LTspice names noise signals 'V(onoise)'/'V(inoise)')"
+    elif dev_param:
+        hint = (
+            f" (if '{signal}' is a device internal, ngspice only writes it after "
+            f"'.save @{dev_param.group(1)}[{dev_param.group(2)}]' is added to the deck)"
+        )
     raise ResultError(f"Signal '{signal}' not found.{hint} Available signals: {available}")
 
 

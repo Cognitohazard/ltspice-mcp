@@ -183,6 +183,76 @@ async def test_subckt_macromodel_op_full_stack(ngspice_state: SessionState, work
     assert vout == pytest.approx(2.0, abs=1e-2), osc["voltages"]
 
 
+async def test_mosfet_op_surfaces_device_internals(ngspice_state: SessionState, work_dir: Path):
+    # The absence test for the dropped/mislabeled device internals. A MOSFET in
+    # saturation with .save @m1[...] must surface gm/gds/id/vth in the new
+    # device_internals bucket — NOT dropped, and vth NOT mislabeled as a node
+    # voltage. Runs the full real stack so it would have caught the original bug.
+    net = _write(
+        work_dir,
+        "mosop.cir",
+        "* nmos operating point\n"
+        "Vd d 0 1.8\n"
+        "Vg g 0 1.2\n"
+        "M1 d g 0 0 NM L=1u W=10u\n"
+        ".model NM NMOS (LEVEL=1 VTO=0.5 KP=120u)\n"
+        ".save @m1[id] @m1[gm] @m1[gds] @m1[vth]\n"
+        ".op\n"
+        ".end\n",
+    )
+    res = await handle_run_simulation(RunSimulationInput(netlist=net, wait=True), ngspice_state)
+    sc = res.structuredContent
+    assert sc is not None
+    assert sc["status"] == "completed"
+
+    op = await handle_operating_point(OperatingPointInput(raw_file=sc["raw_file"]), ngspice_state)
+    osc = op.structuredContent
+    assert osc is not None
+    internals = osc["device_internals"]
+    # Internals are present (not dropped) and keyed by their @-name.
+    assert any("[gm]" in k.lower() for k in internals), internals
+    assert any("[id]" in k.lower() for k in internals), internals
+    gm = next(v for k, v in internals.items() if "[gm]" in k.lower())
+    idd = next(v for k, v in internals.items() if "[id]" in k.lower())
+    # Saturated NMOS: positive transconductance and drain current (ground truth).
+    assert gm > 0, internals
+    assert idd > 0, internals
+    # vth is a parameter, never a node voltage — it must NOT be in voltages.
+    assert not any("@" in k for k in osc["voltages"]), osc["voltages"]
+
+
+async def test_mosfet_dc_sweep_internal_reachable_by_shorthand(
+    ngspice_state: SessionState, work_dir: Path
+):
+    # The headline idiom, end to end: a .dc sweep with .save @m1[gm] makes gm a
+    # trace with an axis, reachable by the 'dev.param' shorthand through
+    # query_value — the gm/ID-style read the tool now supports first-class.
+    net = _write(
+        work_dir,
+        "mosdc.cir",
+        "* nmos gm vs vgs\n"
+        "Vd d 0 1.8\n"
+        "Vg g 0 0\n"
+        "M1 d g 0 0 NM L=1u W=10u\n"
+        ".model NM NMOS (LEVEL=1 VTO=0.5 KP=120u)\n"
+        ".save @m1[gm]\n"
+        ".dc Vg 0 1.8 0.01\n"
+        ".end\n",
+    )
+    res = await handle_run_simulation(RunSimulationInput(netlist=net, wait=True), ngspice_state)
+    sc = res.structuredContent
+    assert sc is not None
+    assert sc["status"] == "completed"
+
+    qv = await handle_query_value(
+        QueryValueInput(raw_file=sc["raw_file"], signal="m1.gm", at="1.2"), ngspice_state
+    )
+    qsc = qv.structuredContent
+    assert qsc is not None
+    # Above threshold (VTO=0.5), gm at Vgs=1.2 is strictly positive.
+    assert qsc["value"] > 0, qsc
+
+
 async def test_no_phantom_circuit_measurement(ngspice_state: SessionState, work_dir: Path):
     # A deck with NO .meas must not yield a fabricated 'circuit' measurement
     # scraped from ngspice's 'Circuit: <title>' echo line. Locks the fix

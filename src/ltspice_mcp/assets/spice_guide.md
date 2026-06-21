@@ -462,6 +462,12 @@ X1 input output myfilter rval=1k cval=1n
 - Without `.save`, all node voltages and source currents are saved (huge files).
 - Adding even ONE `.save` line drops all defaults — only listed signals saved.
 - `.save @r1[i]` for resistor current (not available via `I()` syntax).
+- Saved device internals (`@m1[gm]`, `v(@m1[vth])`, `i(@m1[id])`, …) are surfaced
+  by `operating_point` in a `device_internals` bucket (a bare `.op`), and on a
+  `.dc`/`.tran` sweep are readable by the `dev.param` shorthand — `query_value`/
+  `signal_stats`/`export_waveform` accept `m1.gm` and resolve it to the actual
+  trace. This is the gm/ID idiom: `.dc Vg …` + `.save @m1[gm] @m1[id]`, then read
+  `m1.gm`/`m1.id` per sweep point.
 
 ### .control / .endc Blocks
 
