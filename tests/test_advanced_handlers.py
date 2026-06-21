@@ -77,6 +77,30 @@ class TestConfigureSweep:
             )
         assert len(state_no_sim.sweep_configs) == 0
 
+    async def test_oversized_points_rejected_without_materializing(
+        self, state_no_sim: SessionState, sample_netlist: Path, monkeypatch
+    ):
+        # points=1e9 must be refused by the cap, NOT materialized — np.linspace
+        # would allocate ~8 GB and OOM the server. Sentinel: blow up if the
+        # allocator is reached, proving the cap fires on count() first.
+        import ltspice_mcp.lib.sweep_utils as su
+
+        def boom(*a, **k):
+            raise AssertionError("materialized the range before the cap check")
+
+        monkeypatch.setattr(su, "generate_sweep_range", boom)
+        with pytest.raises(BatchJobError, match="over the 10000 cap"):
+            await handle_configure_sweep(
+                ConfigureSweepInput(
+                    netlist=sample_netlist.name,
+                    parameters=[
+                        SweepParameter(name="R1", type="component", start=0, stop=1, points=10**9)
+                    ],
+                ),
+                state_no_sim,
+            )
+        assert len(state_no_sim.sweep_configs) == 0
+
     async def test_values_list(self, state_no_sim: SessionState, sample_netlist: Path):
         # F5: an explicit discrete value list (e.g. E-series) — previously
         # impossible through configure_sweep, which only generated linear/log
