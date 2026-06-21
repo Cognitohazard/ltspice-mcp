@@ -44,6 +44,7 @@ class OperatingPointOutput(_OperatingPointStepMeta):
 
     voltages: dict[str, float]
     currents: dict[str, float]
+    device_internals: dict[str, float]
 
 
 # Smallest positive normal float — floor for magnitude before log10 to avoid -inf
@@ -224,19 +225,30 @@ def extract_operating_point(raw: RawRead, step: int = 0) -> OperatingPointOutput
         step: Step index for stepped .OP / .DC runs.
 
     Returns:
-        Dictionary with 'voltages' and 'currents' dicts mapping trace names to values.
-        All values are Python float.
+        Dictionary with 'voltages', 'currents', and 'device_internals' dicts
+        mapping trace names to values. All values are Python float.
     """
     trace_names = raw.get_trace_names()
 
     voltages = {}
     currents = {}
+    device_internals = {}
 
     for trace in trace_names:
         wave = raw.get_wave(trace, step=step)
         if len(wave) == 0:
             continue
         value = float(wave[0])
+
+        # ngspice writes device small-signal / model parameters as @dev[param]
+        # — bare (@m1[gm]), or wrapped as v(@m1[vth]) / i(@m1[id]) depending on
+        # the quantity. These are model state, not a node voltage or branch
+        # current, so the '@' marker takes precedence over the V(/I( wrapping:
+        # otherwise v(@m1[vth]) is mislabeled a node voltage and bare @m1[gm]
+        # falls through both buckets and is dropped entirely.
+        if "@" in trace:
+            device_internals[trace] = value
+            continue
 
         # SPICE node names are case-insensitive; spicelib may return either case.
         trace_upper = trace.upper()
@@ -245,7 +257,11 @@ def extract_operating_point(raw: RawRead, step: int = 0) -> OperatingPointOutput
         elif _OP_CURRENT_RE.match(trace):
             currents[trace] = value
 
-    return {"voltages": voltages, "currents": currents}
+    return {
+        "voltages": voltages,
+        "currents": currents,
+        "device_internals": device_internals,
+    }
 
 
 def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -> dict:

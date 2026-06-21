@@ -1715,6 +1715,13 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
         for name, value in op_data["currents"].items():
             lines.append(f"  {name} = {value:.6g}")
 
+    if op_data.get("device_internals"):
+        if op_data["voltages"] or op_data["currents"]:
+            lines.append("")
+        lines.append("Device Internals (@dev[param], e.g. gm/gds/vth/id):")
+        for name, value in op_data["device_internals"].items():
+            lines.append(f"  {name} = {value:.6g}")
+
     return format_response("\n".join(lines), op_data, fmt)
 
 

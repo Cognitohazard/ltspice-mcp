@@ -53,3 +53,38 @@ def test_operating_point_classifies_device_terminal_currents():
     assert set(result["currents"]) == {"Ic(Q1)", "Ib(Q1)", "Ie(Q1)", "I(RC)"}
     assert result["voltages"]["V(c)"] == 5.0
     assert result["currents"]["Ic(Q1)"] == 1e-3
+
+
+def test_operating_point_classifies_device_internals():
+    """Device small-signal / model parameters (@dev[param]) get their own bucket.
+
+    Covers the absence-class gap: every .op fixture was pure V()/I(), so the
+    classifier never saw ngspice's device internals. A bare '@m1[gm]' fell
+    through both buckets (dropped), and a v-wrapped 'v(@m1[vth])' was filed
+    under node voltages (mislabeled). The '@' marker must win over the V(/I(
+    wrapping.
+    """
+    raw = _FakeRaw(
+        {
+            "V(d)": 1.8,
+            "I(Vd)": 5.9e-4,
+            "@m1[gm]": 1.58e-3,
+            "@m1[gds]": 3.2e-6,
+            "v(@m1[vth])": 0.4,
+            "i(@m1[id])": 5.9e-4,
+        }
+    )
+
+    result = extract_operating_point(cast(RawRead, raw))
+
+    assert set(result["voltages"]) == {"V(d)"}
+    assert set(result["currents"]) == {"I(Vd)"}
+    assert set(result["device_internals"]) == {
+        "@m1[gm]",
+        "@m1[gds]",
+        "v(@m1[vth])",
+        "i(@m1[id])",
+    }
+    # The mislabel regression: vth is a parameter, not a node voltage.
+    assert "v(@m1[vth])" not in result["voltages"]
+    assert result["device_internals"]["@m1[gm]"] == 1.58e-3
