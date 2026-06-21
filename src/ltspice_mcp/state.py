@@ -38,6 +38,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Cap on parsed-result (RawRead) cache entries. Each can pin a multi-MB raw, so
+# a long-lived session querying many circuits must not retain them all; LRU
+# eviction past this just re-parses on the next access.
+RESULT_CACHE_MAXSIZE = 32
+
 # Re-export the job-type surface so existing
 # ``from ltspice_mcp.state import SimulationJob`` imports keep working.
 __all__ = [
@@ -137,8 +142,12 @@ class SessionState:
             config=config,
             available_simulators=available,
             default_simulator=default,
+            # Editors are unbounded: they may hold unsaved in-memory edits that
+            # eviction would drop. Results are immutable parsed RawReads, safe to
+            # LRU-evict so a long session over many circuits doesn't grow without
+            # bound (each can pin a multi-MB raw).
             editors=FileCache(),
-            results=FileCache(),
+            results=FileCache(maxsize=RESULT_CACHE_MAXSIZE),
             libraries=LibraryManager(available),
             runners=RunnerManager(),
             working_dir=config.working_dir,
