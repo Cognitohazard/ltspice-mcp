@@ -97,6 +97,10 @@ tool-surface changes.
     `SchematicComponent`; construction now uses `AscComponent` (the type
     spicelib's own parser builds) when present. The dependency is also capped to
     the tested range (see below), so a default install keeps working today.
+- A netlist with a relative `.include`/`.lib` now also keeps its run in the
+  working dir on WSL with a Linux-filesystem working dir — that branch relocates
+  artifacts off the UNC path, but previously did so before the local-dependency
+  check, orphaning the include. Self-contained decks still relocate.
 - Simulation artifacts no longer flood the working directory. Runs that
   previously dropped their `.raw`/`.log`/`.db`/`.op.raw`/netlist files directly
   into the project root (the non-WSL-Linux and WSL-on-`/mnt/` cases) now write
