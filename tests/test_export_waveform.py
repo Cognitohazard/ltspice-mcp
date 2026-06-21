@@ -350,6 +350,25 @@ class TestDestination:
         assert "step_index" not in header
         assert len(rows) == data["row_count"] > 0
 
+    async def test_in_tree_raw_reuses_existing_sidecar(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A raw already inside a .ltspice-mcp/ tree (e.g. a job-run raw passed by
+        # path) must not get a second nested sidecar
+        # (…/runs/jx/.ltspice-mcp/waveforms/…); the subdir goes into the
+        # existing tree.
+        raw_dir = work_dir / ".ltspice-mcp" / "runs" / "jx"
+        raw_dir.mkdir(parents=True)
+        raw = stage_recorded_fixture(raw_dir, "ltspice_tran_rc")
+
+        data = await _export(state_no_sim, raw_file=str(raw), signals=["V(out)"])
+        out = Path(data["path"])
+        assert (raw_dir / "waveforms") in out.parents
+        assert ".ltspice-mcp" not in out.relative_to(raw_dir).parts
+        header, rows = _read_csv(out)
+        assert header == ["time_s", "V(out)"]
+        assert len(rows) == data["row_count"] > 0
+
     async def test_symlinked_sidecar_refused(self, state_no_sim: SessionState, work_dir: Path):
         # A symlinked .ltspice-mcp/ must not redirect the export outside the
         # circuit directory (server-artifact paths skip safe_path).
