@@ -732,6 +732,14 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
 
 _DEFAULT_WAVEFORM_BUCKETS = 200
 
+# Each bucket carries ~8 scalar fields, so it serializes far heavier than a
+# single raw sample. max_points_returned is sized for one-value-per-point
+# arrays; clamping buckets to it lets the documented max overflow the MCP
+# response budget (forcing overflow-to-file at the tool's own ceiling). Cap
+# buckets well below that — 2000 buckets is a generous overview and stays
+# comfortably inside the budget.
+_MAX_WAVEFORM_BUCKETS = 2000
+
 
 def _busiest_bucket(buckets: list[dict]) -> int | None:
     """Index of the bucket with the largest peak-to-peak (a where-to-look fact)."""
@@ -799,8 +807,8 @@ class GetWaveformInput(ToolInput):
         ge=1,
         description=(
             "Number of equal-time envelope buckets (overview resolution). Defaults "
-            "to 200; capped at the server's max_points_returned ceiling and at the "
-            "sample count."
+            "to 200; capped at 2000 (and at the server's max_points_returned ceiling "
+            "and the sample count)."
         ),
     )
     format: Literal["json", "text"] | None = Field(
@@ -899,7 +907,7 @@ async def handle_get_waveform(args: GetWaveformInput, state: SessionState):
         axis, wave, args.t_start, args.t_end, allow_descending=_axis_may_descend(sim_type_raw)
     )
 
-    ceiling = state.config.max_points_returned
+    ceiling = min(state.config.max_points_returned, _MAX_WAVEFORM_BUCKETS)
     requested = args.buckets if args.buckets is not None else _DEFAULT_WAVEFORM_BUCKETS
     n_buckets = max(1, min(requested, ceiling))
 
@@ -2779,10 +2787,32 @@ def _parse_freq(s: str, name: str = "frequency") -> float:
     return v
 
 
+def _split_ratio(signal: str) -> tuple[str, str] | None:
+    """Split a transfer-function ratio ``A/B`` into ``(A, B)``, or None if it
+    isn't a ratio.
+
+    Only a single ``/`` is supported — a two-signal quotient such as
+    ``V(out)/V(mid)``. SPICE node names don't contain ``/``, so the operator is
+    unambiguous. A ``/`` that doesn't yield exactly two non-empty operands is a
+    malformed ratio, not a plain signal, so it raises.
+    """
+    if "/" not in signal:
+        return None
+    parts = [p.strip() for p in signal.split("/")]
+    if len(parts) != 2 or not all(parts):
+        raise ResultError(f"Ratio signal must be exactly 'A/B' (two signals); got {signal!r}.")
+    return parts[0], parts[1]
+
+
 async def _load_ac_signal(
     raw_file: str | Path, signal: str, step: int, state: SessionState
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load (freqs, H) for an AC signal. Rejects transient data.
+
+    ``signal`` may be a single trace (``V(out)``) or a transfer-function ratio
+    of two traces (``V(out)/V(mid)``), in which case the two complex AC waves
+    are divided element-wise — the way to express an inter-stage gain, loop
+    gain, or PSRR that the simulator never stores as its own trace.
 
     A ``Path`` is treated as an already-resolved, trusted artifact (a job run's
     raw, resolved via the read-model) and loaded directly; a ``str`` is untrusted
@@ -2796,10 +2826,35 @@ async def _load_ac_signal(
             f"This tool requires AC analysis data; got {sim_type!r}. "
             "Use signal_stats (transient) or run a .AC sweep first."
         )
-    signal = services.validate_signal(raw, signal)
     services.validate_step(raw, step)
     axis = np.asarray(raw.get_axis(step=step))
-    wave = np.asarray(raw.get_wave(signal, step=step))
+
+    ratio = _split_ratio(signal)
+    if ratio is not None:
+        num_name = services.validate_signal(raw, ratio[0])
+        den_name = services.validate_signal(raw, ratio[1])
+        num = np.asarray(raw.get_wave(num_name, step=step))
+        den = np.asarray(raw.get_wave(den_name, step=step))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            wave = num / den
+        # A null (or non-finite) denominator makes the ratio singular at those
+        # bins — a genuine pole of the requested transfer function.
+        # prepare_ac_arrays would silently drop them and analyze the rest,
+        # hiding the pole and skewing every metric. Surface the singularity
+        # (which frequencies, how many) instead of fabricating clean numbers.
+        singular = ~np.isfinite(wave)
+        if singular.any():
+            axis_real = np.real(axis)
+            example = float(axis_real[int(np.argmax(singular))])
+            raise ResultError(
+                f"Ratio {ratio[0]}/{ratio[1]} is singular at {int(singular.sum())} of "
+                f"{singular.size} frequencies — the denominator {den_name} is ~0 there "
+                f"(e.g. {example:.6g} Hz), so the transfer function has a pole. Narrow "
+                f"the frequency window to exclude the null, or pick a denominator that "
+                f"does not cross zero."
+            )
+    else:
+        wave = np.asarray(raw.get_wave(services.validate_signal(raw, signal), step=step))
     try:
         return prepare_ac_arrays(axis, wave)
     except ValueError as e:
@@ -3309,7 +3364,14 @@ class BodeMetricsInput(ToolInput):
         default=0,
         description="0-based run to analyze when ``job_id`` is given (default 0).",
     )
-    signal: str = Field(description="Signal name (e.g. 'V(out)')")
+    signal: str = Field(
+        description=(
+            "Signal to analyze: a single trace (e.g. 'V(out)') or a "
+            "transfer-function ratio of two traces (e.g. 'V(out)/V(mid)'), which "
+            "divides the two complex AC waves — the way to express an inter-stage "
+            "gain, loop gain, or PSRR the simulator doesn't store as its own trace."
+        )
+    )
     mode: BodeMode = Field(
         description=(
             "Which view of the AC response to compute:\n"
