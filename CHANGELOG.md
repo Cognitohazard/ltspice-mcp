@@ -19,6 +19,29 @@ tool-surface changes.
   form the raw holds (`@m1[gm]` / `v(@m1[vth])` / `i(@m1[id])`). This is the
   gm/ID characterization read. A `dev.param` that isn't in the raw now hints at
   the missing `.save`.
+- `validate_netlist` and `export_netlist` now warn when a `.meas`, output
+  directive, or behavioral source references `V(name)`/`I(name)` for a node or
+  device the netlist doesn't define — the common case being a schematic net that
+  was wired but never labeled (so it exports as `N00x` while a `.meas V(vref)`
+  still asks for `vref` and silently resolves to nothing), plus plain typos. The
+  known-name set is deliberately over-approximated, so the check only fires on a
+  genuinely-absent name; hierarchical refs (`V(X1:out)`) and expression fragments
+  (`V(a*2)`) are left alone. `validate_netlist` runs it on `.cir`/`.net`;
+  `export_netlist` runs it on the exported netlist (where an `.asc`'s final net
+  names and its directives sit together).
+- `bode_metrics` accepts a transfer-function ratio as its `signal` —
+  `V(out)/V(mid)` divides the two complex AC traces before any mode runs, so
+  inter-stage gain, loop gain, and PSRR (which the simulator never stores as a
+  single trace) are analyzable directly instead of via a deck-side behavioral
+  node. Restricted to a single two-signal quotient; all four modes and
+  `all_steps` work on the ratio. A denominator that nulls (the ratio is
+  singular — a genuine pole) is reported with the offending frequencies rather
+  than silently dropped, so a hidden pole can't skew the metrics.
+- `apply_schematic_ops` gained a `dry_run` flag: it validates the whole batch
+  against an in-memory copy and reports per-op results without writing the file.
+  Every op is attempted (errors don't stop the run), so one bad op surfaces all
+  problems at once instead of rolling back a good batch — check the plan, then
+  resubmit the corrected ops with `dry_run=false`.
 - MCP prompts (workflow starters a host surfaces as slash-commands):
   `characterize_filter`, `run_and_plot`, and `step_response`. Each emits the
   canonical tool pipeline for that task with the circuit path filled in.
@@ -84,6 +107,29 @@ tool-surface changes.
 
 ### Fixed
 
+- Schematic guidance no longer tells you to leave every signal net unlabeled.
+  `connect` wires pins but assigns no net name, so an unlabeled net exports as
+  `N001`/`N002`/… — silently breaking any `.meas V(vref)`, `.param` expression,
+  or behavioral `B`-source that references the net by name. The `create_schematic`
+  checklist, its tool description, and the `spice://guide` "Named nets" section now
+  state the rule: wire-only is fine for nets you never name, but label any net a
+  directive references by name with `add_net_label`.
+- A cancelled or timed-out simulation now has its partial output reclaimed
+  instead of stranded on disk. A timed-out LTspice run can keep its `.raw`
+  open and reach several GB; previously that file (and the run netlist/log)
+  was left behind forever. The runner now deletes the run's artifacts when the
+  killed process's completion callback fires (the point at which the file
+  handle is released). Cleanup is gated to the killed statuses, so a completed
+  run's good output is never removed.
+- `get_waveform` overview buckets are capped at 2000 (was the
+  `max_points_returned` ceiling, which is sized for one-value-per-point arrays).
+  Each bucket carries ~8 scalar fields, so requesting the old maximum serialized
+  past the MCP response budget and spilled to a file at the tool's own
+  documented limit. The default (200) is unchanged.
+- Clarified the `run_simulation` `timeout` help: with `wait=true` the effective
+  limit is `min(timeout, 600s)` — 600s is a hard ceiling, not a floor — so the
+  default 300s timeout is what bounds a `wait=true` run unless a larger timeout
+  is passed.
 - `add_component` (and `apply_schematic_ops` add-component) no longer fail with
   an opaque "Internal error" on two real-world cases:
   - **Vendor symbols with non-ASCII descriptions.** Hundreds of LTspice's
