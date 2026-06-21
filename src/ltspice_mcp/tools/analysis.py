@@ -360,12 +360,17 @@ def _resolve_artifact_dest(
     if out_dir:
         dest_anchor = safe_path(out_dir, state)
         out_path = (dest_anchor / filename).resolve()
-    elif job_id:
-        dest_anchor = services.resolve_job(job_id, state).netlist.parent
-        out_path = (dest_anchor / SIDECAR_DIRNAME / subdir / filename).resolve()
     else:
-        dest_anchor = safe_path(raw_file, state).parent  # type: ignore[arg-type]
-        out_path = (dest_anchor / SIDECAR_DIRNAME / subdir / filename).resolve()
+        if job_id:
+            dest_anchor = services.resolve_job(job_id, state).netlist.parent
+        else:
+            dest_anchor = safe_path(raw_file, state).parent  # type: ignore[arg-type]
+        # Sidecar next to the anchor — but if the anchor is already inside a
+        # .ltspice-mcp/ tree (e.g. a job-run raw passed by path), write the
+        # subdir there directly rather than nesting another sidecar
+        # (…/.ltspice-mcp/runs/.ltspice-mcp/waveforms/…).
+        rel = subdir if SIDECAR_DIRNAME in dest_anchor.parts else f"{SIDECAR_DIRNAME}/{subdir}"
+        out_path = (dest_anchor / rel / filename).resolve()
     if not out_path.is_relative_to(dest_anchor.resolve()):
         raise ResultError(
             f"Refusing to write the {artifact} outside the destination directory "
