@@ -307,6 +307,7 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 - **One ground per pin**: Each component's ground connection gets its own `add_net_label` op at the pin's coordinates — do not share ground flags between components.
 - **Do not use `connect` with `net:0`** when multiple ground labels exist — the tool errors on ambiguous net references. Place ground flags directly at pin coordinates with an `add_net_label` op (`net="0", pin="M3.S"`) — no wire needed when the flag is on the pin.
 - **Named nets (VDD, outp, etc.)**: Use a single label per unique net name. Connect components to it via `connect` with `net:NAME` or waypoints.
+- **Label any net you reference by name in a directive.** `connect` wires pins but assigns no name — at export an unlabeled net becomes `N001`, `N002`, …. So a `.meas V(vref)`, a `.param` expression using `V(x)`, or a behavioral `B`-source referencing `V(name)` silently breaks unless that exact net carries an `add_net_label`. Rule of thumb: wire-only is fine for nets you never name; **label any net a directive mentions by name.**
 
 **Sources:**
 - **Voltage source polarity**: `+` pin is at the top (smaller y), `-` at bottom. For VDD sources, `+` connects to the supply rail, `-` to ground.
