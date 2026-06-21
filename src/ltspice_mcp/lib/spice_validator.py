@@ -583,6 +583,97 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
     return issues
 
 
+# A clean node/device identifier inside V(...)/I(...): letters, digits,
+# underscore, and the LTspice '!' net suffix. Anything else (operators,
+# braces, a ':' or '.' hierarchy separator) marks an expression fragment or a
+# hierarchical reference we deliberately don't adjudicate.
+_PLAIN_REF_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_!]*")
+
+
+def _known_names(cards: list[SpiceCard]) -> set[str]:
+    """Over-approximate the set of names a directive may reference.
+
+    Every positional token of every instance card (terminals, model names,
+    values, the ref itself), every ``.SUBCKT`` port, ``.GLOBAL`` node, and
+    ground — all lowercased. Deliberately a superset: a name appearing
+    anywhere at element level is treated as defined, so the dangling-reference
+    pass can only fire on a name that is genuinely absent, never on one it
+    failed to classify.
+    """
+    known: set[str] = set(_GROUND_NODES)
+    known |= _scan_global_nodes(cards)
+    for card in cards:
+        if card.kind == "subckt":
+            try:
+                sub = SubcktCard.from_card(card)
+            except SpiceLexError:
+                continue
+            known.add(sub.name.lower())
+            known.update(p.lower() for p in sub.ports)
+        elif card.kind == "instance":
+            try:
+                inst = InstanceLine.from_card(card)
+            except SpiceLexError:
+                continue
+            known.add(inst.ref.lower())
+            terminals, rest = _instance_terminals(inst)
+            known.update(t.lower() for t in terminals)
+            known.update(r.lower() for r in rest)
+    return known
+
+
+def validate_netlist_directive_refs(cards: list[SpiceCard]) -> list[dict[str, object]]:
+    """Flag ``V(...)``/``I(...)`` references to names that exist nowhere.
+
+    A ``.meas``, output directive, or behavioral source that names a node no
+    element connects to — the classic case being a schematic net wired but
+    never labeled, so it exports as ``N00x`` while the directive still asks for
+    ``V(vref)`` and silently resolves to nothing. Matching is
+    case-insensitive; hierarchical refs (``V(X1:out)``) and expression
+    fragments (``V(a*2)``) are left alone. Each genuinely-missing name is
+    reported once. The caller attaches severity.
+    """
+    cards = drop_title_card(cards)
+    known = _known_names(cards)
+
+    issues: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for card in cards:
+        # .meas is its own kind; .print/.plot/.save/.four are "directive";
+        # B/E/G behavioral sources are "instance" — all can name nodes.
+        if card.kind not in ("instance", "directive", "meas"):
+            continue
+        # .func defines a formal-parameter expression; its V(formal) is not a node.
+        if card.kind == "directive" and card.body.lstrip().lower().startswith(".func"):
+            continue
+        for probe in _PROBE_REF_RE.finditer(card.body):
+            kind = probe.group(0)[0].upper()  # 'V' or 'I'
+            for part in probe.group(1).split(","):
+                name = part.strip()
+                if not name or not _PLAIN_REF_RE.fullmatch(name):
+                    continue
+                key = name.lower()
+                if key in known or key in seen:
+                    continue
+                seen.add(key)
+                issues.append(
+                    {
+                        "line": card.line_start,
+                        "directive": _card_directive(card),
+                        "message": (
+                            f"References {kind}({name}) but no node or device named "
+                            f"'{name}' exists in the netlist."
+                        ),
+                        "suggestion": (
+                            "Check the name for a typo; if it is a schematic net that "
+                            "was wired but not labeled, add a net label so the name "
+                            "survives export (an unlabeled net becomes N00x)."
+                        ),
+                    }
+                )
+    return issues
+
+
 class _DSU:
     """Minimal union-find over node names for DC-reachability grouping."""
 
