@@ -33,6 +33,7 @@ from ltspice_mcp.tools.analysis import (
     SimulationSummaryInput,
     StabilityMetricsInput,
     TimingBetweenInput,
+    _split_ratio,
     handle_bode_metrics,
     handle_edge_metrics,
     handle_filter_metrics,
@@ -884,6 +885,91 @@ class TestGainAtTool:
                 ),
                 state_no_sim,
             )
+
+
+def _ac_ratio_raw(state: SessionState, work_dir: Path, *, fc: float = 1000.0, points: int = 400):
+    """AC raw with V(out)=2*H_lpf and a flat V(mid)=2.0, so V(out)/V(mid)=H_lpf.
+
+    The 2x factor only cancels if the ratio is actually divided — analyzing
+    V(out) alone would read +6 dB in the passband."""
+    raw_file = work_dir / "ac_ratio.raw"
+    freqs = np.logspace(0, 6, points)
+    s = 1j * 2 * np.pi * freqs
+    wc = 2 * np.pi * fc
+    h = wc / (s + wc)
+    raw = _make_raw_mock(
+        plotname="AC Analysis",
+        trace_names=["frequency", "V(out)", "V(mid)"],
+        waves={"frequency": freqs, "V(out)": 2.0 * h, "V(mid)": np.full_like(h, 2.0)},
+        axis=freqs,
+    )
+    _inject_raw_mock(state, raw_file, raw)
+    return raw_file
+
+
+@pytest.mark.asyncio
+class TestBodeRatioSignal:
+    async def test_ratio_divides_two_traces(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = _ac_ratio_raw(state_no_sim, work_dir)
+        result = await handle_gain_at(
+            GainAtInput(raw_file=raw_file.name, signal="V(out)/V(mid)", frequencies=["1", "1k"]),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc is not None
+        # The 2x cancels: deep passband is 0 dB (not +6 dB), and fc is -3 dB.
+        assert sc["points"][0]["magnitude_db"] == pytest.approx(0.0, abs=0.2)
+        assert sc["points"][1]["magnitude_db"] == pytest.approx(-3.0, abs=0.2)
+
+    async def test_ratio_missing_operand_errors(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = _ac_ratio_raw(state_no_sim, work_dir)
+        with pytest.raises(ResultError, match="not found"):
+            await handle_gain_at(
+                GainAtInput(raw_file=raw_file.name, signal="V(out)/V(nope)", frequencies=["1k"]),
+                state_no_sim,
+            )
+
+    async def test_ratio_singular_denominator_reported(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # V(mid) crosses zero at one bin -> the ratio is singular there. It must
+        # be reported, not silently dropped (which would hide a pole and skew
+        # the metrics computed over the gapped sweep).
+        raw_file = work_dir / "ac_singular.raw"
+        freqs = np.logspace(0, 6, 400)
+        mid = (freqs - freqs[200]).astype(complex)  # exact zero at index 200
+        raw = _make_raw_mock(
+            plotname="AC Analysis",
+            trace_names=["frequency", "V(out)", "V(mid)"],
+            waves={
+                "frequency": freqs,
+                "V(out)": np.ones_like(freqs, dtype=complex),
+                "V(mid)": mid,
+            },
+            axis=freqs,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        with pytest.raises(ResultError, match="singular"):
+            await handle_gain_at(
+                GainAtInput(raw_file=raw_file.name, signal="V(out)/V(mid)", frequencies=["1k"]),
+                state_no_sim,
+            )
+
+
+class TestSplitRatio:
+    def test_plain_signal_is_not_ratio(self):
+        assert _split_ratio("V(out)") is None
+
+    def test_two_operand_ratio(self):
+        assert _split_ratio("V(out)/V(mid)") == ("V(out)", "V(mid)")
+
+    def test_three_operands_rejected(self):
+        with pytest.raises(ResultError, match="exactly 'A/B'"):
+            _split_ratio("V(a)/V(b)/V(c)")
+
+    def test_empty_operand_rejected(self):
+        with pytest.raises(ResultError, match="exactly 'A/B'"):
+            _split_ratio("V(out)/")
 
 
 @pytest.mark.asyncio
