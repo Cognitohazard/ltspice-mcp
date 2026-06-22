@@ -9,6 +9,7 @@ from ltspice_mcp.lib.batch_results import (
     get_progress_snapshot,
 )
 from ltspice_mcp.state import BatchJob
+from tests.conftest import FIXTURES_DIR
 
 
 def _make_run(params: dict, raw_file: str = "") -> dict:
@@ -163,6 +164,47 @@ class TestComputeBatchStatsAt:
         assert sliced["runs"][1]["value"] == 6.0
         assert sliced["stats"]["max_across_runs"] == 10.0
         assert sliced["stats"]["min_across_runs"] == 6.0
+
+    def test_at_handles_descending_sweep_axis(self, tmp_path: Path):
+        # A DC/param sweep can run high->low (.dc V1 5 0 -0.1). The ``at=``
+        # slice must pick the sample at that axis value, not silently
+        # mis-index because searchsorted assumes ascending order. Axis
+        # [3,2,1,0]: a naive searchsorted lands past the end and returns the
+        # value at 0.0 (=0.0) instead of the value at 2.0 (=20.0).
+        run0 = tmp_path / "desc.raw"
+        self._write_transient_raw(run0, [3.0, 2.0, 1.0, 0.0], {"V(out)": [30.0, 20.0, 10.0, 0.0]})
+        runs = {0: _make_run({"R": 1000.0}, raw_file=str(run0))}
+        sliced = compute_batch_stats(runs, "V(out)", at=2.0)
+        assert sliced["runs"][0]["value"] == 20.0
+
+    def test_inner_step_sweep_is_surfaced_not_silently_collapsed(self):
+        # A run whose raw carries its own .step sweep is read at step 0 only.
+        # Dropping the other steps silently would be invisible wrong data, so
+        # the run index is surfaced for the caller to handle per-step.
+        stepped = FIXTURES_DIR / "ltspice_step_tran.raw"
+        runs = {0: _make_run({"R": 1000.0}, raw_file=str(stepped))}
+        result = compute_batch_stats(runs, "V(out)")
+        assert result["step_collapsed_runs"] == [0]
+
+    def test_step_detection_failure_is_surfaced_not_swallowed(self, tmp_path: Path, monkeypatch):
+        # If step metadata can't be read, step 0 is still returned — but the run
+        # must be flagged, not silently treated as single-step (which would
+        # recreate the silent step-0 reduction this guard exists to remove).
+        import ltspice_mcp.lib.batch_results as br
+
+        run0 = tmp_path / "ok.raw"
+        self._write_transient_raw(run0, [0.0, 1.0, 2.0, 3.0], {"V(out)": [0.0, 5.0, 10.0, 5.0]})
+
+        def boom(self):
+            raise RuntimeError("unreadable step metadata")
+
+        monkeypatch.setattr(br.RawRead, "get_steps", boom)
+        runs = {0: _make_run({"R": 1000.0}, raw_file=str(run0))}
+        result = compute_batch_stats(runs, "V(out)")
+        assert result["step_unknown_runs"] == [0]
+        assert result["step_collapsed_runs"] == []
+        # The data we COULD read (step 0) is still returned, not dropped.
+        assert result["run_count"] == 1
 
     def test_constant_waveform_run_keeps_peak_mean_min_shape(self, tmp_path: Path):
         # Row shape is decided by an explicit point-query flag, NOT by whether
