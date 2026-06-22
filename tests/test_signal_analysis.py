@@ -17,6 +17,7 @@ from ltspice_mcp.lib.signal_analysis import (
     analyze_edge,
     analyze_periodic,
     analyze_pulse_response,
+    analyze_thd,
     analyze_timing_between,
     compute_measurement_stats,
     compute_signal_stats,
@@ -574,6 +575,17 @@ class TestAnalyzeTimingBetween:
 
 
 class TestAnalyzePeriodic:
+    def test_bimodal_edge_spacing_warns(self):
+        # Ringing/glitches near the threshold add extra crossings, so some
+        # periods are far shorter than the mean. The frequency would read ~2x;
+        # surface the uneven spacing rather than silently report it.
+        t = np.linspace(0, 1.2, 12001)
+        y = np.zeros_like(t)
+        for c in (0.05, 0.1, 0.5, 0.55, 1.0, 1.05):  # pairs -> short,long,short...
+            y[(t >= c) & (t < c + 0.01)] = 1.0
+        result = analyze_periodic(t, y, threshold=0.5)
+        assert any("edge spacing" in w.lower() for w in result["warnings"])
+
     def test_square_wave_50_duty(self):
         freq = 1000.0
         period = 1.0 / freq
@@ -658,8 +670,8 @@ class TestComputeMeasurementStats:
         assert entry["max"] == 1100.0
         assert entry["mean"] == pytest.approx(1000.0)
         assert entry["median"] == 1000.0
-        assert entry["best_step_index"] == 2  # min at index 2
-        assert entry["worst_step_index"] == 1  # max at index 1
+        assert entry["min_step_index"] == 2  # min at index 2
+        assert entry["max_step_index"] == 1  # max at index 1
 
     def test_with_failures(self):
         meas = {"fc": [1000.0, None, 900.0, None, 1100.0]}
@@ -667,8 +679,8 @@ class TestComputeMeasurementStats:
         entry = result["fc"]
         assert entry["valid_count"] == 3
         assert entry["failure_count"] == 2
-        assert entry["best_step_index"] == 2
-        assert entry["worst_step_index"] == 4
+        assert entry["min_step_index"] == 2
+        assert entry["max_step_index"] == 4
 
     def test_all_failures(self):
         meas = {"fc": [None, None, None]}
@@ -965,3 +977,91 @@ class TestStatEnvelope:
         # The spike survives decimation — envelope keeps raw extrema, never averages
         # a narrow spike away.
         assert max(b["max"] for b in env["buckets"]) == pytest.approx(7.0)
+
+
+# ---------------------------------------------------------------------------
+# analyze_thd
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyzeThd:
+    """THD/THD+N from a windowed FFT. Coherent sampling makes the synthetic
+    cases exact, so the assertions can be tight."""
+
+    def test_coherent_sampling_is_exact(self):
+        f0, fs = 1000.0, 200_000.0
+        t = np.arange(0.0, 0.02, 1.0 / fs)  # 20 full cycles
+        y = (
+            np.sin(2 * np.pi * f0 * t)
+            + 0.1 * np.sin(2 * np.pi * 2 * f0 * t)
+            + 0.05 * np.sin(2 * np.pi * 3 * f0 * t)
+        )
+        r = analyze_thd(t, y, fundamental=f0, n_harmonics=5)
+        assert r["coherent"] is True
+        assert r["fundamental_source"] == "given"
+        assert r["fundamental_hz"] == pytest.approx(f0, rel=1e-6)
+        assert r["thd_ratio"] == pytest.approx(math.sqrt(0.1**2 + 0.05**2), rel=1e-3)
+        by_n = {h["n"]: h for h in r["harmonics"]}
+        assert by_n[2]["db_rel"] == pytest.approx(20 * math.log10(0.1), abs=0.05)
+        assert by_n[3]["db_rel"] == pytest.approx(20 * math.log10(0.05), abs=0.05)
+        # No higher harmonics present -> they read as ~ -inf / negligible.
+        assert by_n[4]["magnitude"] < 1e-6
+
+    def test_autodetect_fundamental_and_few_cycle_warning(self):
+        f0, fs = 500.0, 100_000.0
+        t = np.arange(0.0, 0.004, 1.0 / fs)  # 2 cycles -> few-cycle warning
+        y = np.sin(2 * np.pi * f0 * t) + 0.2 * np.sin(2 * np.pi * 2 * f0 * t)
+        r = analyze_thd(t, y, n_harmonics=3)
+        assert r["fundamental_source"] == "detected"
+        assert r["fundamental_hz"] == pytest.approx(f0, rel=0.05)
+        assert any("auto-detected" in w for w in r["warnings"])
+        assert any("cycle" in w for w in r["warnings"])
+
+    def test_hann_window_flags_leakage_and_stays_close(self):
+        f0, fs = 1000.0, 200_000.0
+        t = np.arange(0.0, 0.0205, 1.0 / fs)  # non-integer cycles
+        y = np.sin(2 * np.pi * f0 * t) + 0.1 * np.sin(2 * np.pi * 2 * f0 * t)
+        r = analyze_thd(t, y, fundamental=f0, window="hann", n_harmonics=3)
+        assert r["coherent"] is False
+        assert any("leakage" in w.lower() for w in r["warnings"])
+        # Hann + peak-search still recovers THD within a few percent.
+        assert r["thd_ratio"] == pytest.approx(0.1, rel=0.05)
+
+    def test_sub_one_cycle_window_refused(self):
+        f0, fs = 1000.0, 200_000.0
+        t = np.arange(0.0, 0.0005, 1.0 / fs)  # half a cycle
+        y = np.sin(2 * np.pi * f0 * t)
+        with pytest.raises(ValueError, match="cycles"):
+            analyze_thd(t, y, fundamental=f0)
+
+    def test_autodetect_many_cycles_stays_accurate(self):
+        # Regression: a coarse argmax fundamental (resolution ~1/span) made the
+        # coherent window a non-integer number of cycles and THD wrong by ~2x.
+        # Sub-bin (parabolic) refinement keeps auto-detect accurate.
+        f0, fs = 1000.0, 200_000.0
+        t = np.arange(0.0, 0.0173, 1.0 / fs)  # 17.3 cycles — non-integer span
+        y = np.sin(2 * np.pi * f0 * t) + 0.1 * np.sin(2 * np.pi * 2 * f0 * t)
+        r = analyze_thd(t, y, n_harmonics=3)  # auto-detect
+        assert r["fundamental_source"] == "detected"
+        assert r["fundamental_hz"] == pytest.approx(1000.0, rel=0.01)
+        assert r["thd_ratio"] == pytest.approx(0.1, rel=0.1)
+
+    def test_imprecise_fundamental_downgrades_and_warns(self):
+        # A given fundamental that doesn't divide the window into integer cycles
+        # spreads the tone across bins; the coherent/exact claim must drop and a
+        # leakage warning must fire rather than report a wrong THD as exact.
+        f0, fs = 1000.0, 200_000.0
+        t = np.arange(0.0, 0.02, 1.0 / fs)
+        y = np.sin(2 * np.pi * f0 * t) + 0.1 * np.sin(2 * np.pi * 2 * f0 * t)
+        r = analyze_thd(t, y, fundamental=1037.0, n_harmonics=3)  # wrong fundamental
+        assert r["coherent"] is False
+        assert any("did not land" in w or "leakage" in w.lower() for w in r["warnings"])
+
+    def test_downsample_resample_warns_aliasing(self):
+        # When the FFT-length cap forces n_fft below the window's sample count we
+        # down-sample, and content above the new Nyquist folds in. Surface it.
+        f0, fs = 100.0, 100_000.0
+        t = np.arange(0.0, 0.1, 1.0 / fs)  # 10000 samples, 10 cycles
+        y = np.sin(2 * np.pi * f0 * t)
+        r = analyze_thd(t, y, fundamental=f0, n_harmonics=3, max_fft=512)
+        assert any("alias" in w.lower() for w in r["warnings"])

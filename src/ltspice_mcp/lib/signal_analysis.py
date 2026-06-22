@@ -13,7 +13,7 @@ rejects AC analysis before calling in.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 import numpy as np
 from scipy.signal import find_peaks
@@ -163,8 +163,8 @@ class MeasurementStatsEntry(TypedDict):
     std: float | None
     p10: float | None
     p90: float | None
-    best_step_index: int | None
-    worst_step_index: int | None
+    min_step_index: int | None
+    max_step_index: int | None
     histogram: list[HistogramBin]
 
 
@@ -807,6 +807,19 @@ def analyze_periodic(
     period_std = float(np.std(periods, ddof=0)) if len(periods) > 1 else 0.0
     frequency = 1.0 / period_mean if period_mean > 0 else float("nan")
 
+    # Ringing or glitches near the threshold add extra crossings per cycle, so
+    # the edge count — and thus the reported frequency — can be ~2x the true
+    # switching rate. When some periods are far shorter than the mean the spacing
+    # is bimodal; surface that rather than auto-correct (the user retargets the
+    # threshold or windows past the transient).
+    if len(periods) >= 3 and period_mean > 0 and float(np.min(periods)) < 0.5 * period_mean:
+        warnings.append(
+            f"Uneven edge spacing (shortest period {float(np.min(periods)):.3g}s vs mean "
+            f"{period_mean:.3g}s): ringing or glitches near the threshold may be adding "
+            "crossings, so frequency/duty may be ~2x the true switching rate. Set an "
+            "explicit threshold away from the ring, or window past the startup transient."
+        )
+
     duty_cycles: list[float] = []
     high_widths: list[float] = []
     low_widths: list[float] = []
@@ -858,6 +871,289 @@ def analyze_periodic(
         "num_falling_edges": len(falling),
         "num_periods_measured": len(periods),
         "threshold_used": float(thresh),
+        "warnings": warnings,
+    }
+
+
+class HarmonicEntry(TypedDict):
+    """One harmonic in :func:`analyze_thd`."""
+
+    n: int
+    frequency: float
+    magnitude: float
+    db_rel: float
+
+
+class ThdOutput(TypedDict):
+    """Return shape of :func:`analyze_thd`.
+
+    ``signal`` is not set by :func:`analyze_thd` itself — the tool layer adds it
+    before returning — but it is declared here so the published output schema
+    covers every key the ``thd`` tool emits.
+    """
+
+    signal: NotRequired[str]
+    fundamental_hz: float
+    fundamental_source: Literal["given", "detected"]
+    thd_ratio: float
+    thd_pct: float
+    thd_db: float
+    thd_n_ratio: float
+    thd_n_pct: float
+    harmonics: list[HarmonicEntry]
+    n_harmonics_used: int
+    window: str
+    coherent: bool
+    n_cycles: float
+    n_fft: int
+    fs_hz: float
+    warnings: list[str]
+
+
+def _next_pow2(n: int) -> int:
+    return 1 << max(1, n - 1).bit_length()
+
+
+def _detect_fundamental(t: np.ndarray, y: np.ndarray) -> float | None:
+    """Fundamental frequency: the largest non-DC bin of a uniform-resample FFT,
+    refined to sub-bin accuracy by quadratic interpolation around the peak.
+
+    A bare argmax resolves the fundamental only to ~1/span Hz; the downstream
+    coherent window built from it would then be a non-integer number of cycles
+    and leak. Parabolic interpolation of the three bins around the peak pins the
+    fundamental far more precisely, so the coherent path stays coherent.
+    """
+    n = _next_pow2(len(t))
+    dt = (float(t[-1]) - float(t[0])) / n
+    if dt <= 0:
+        return None
+    tu = np.linspace(float(t[0]), float(t[-1]), n, endpoint=False)
+    yu = np.interp(tu, t, y)
+    yu = yu - yu.mean()
+    # Hann-window the detection FFT: a rectangular window leaks badly on a
+    # non-integer-cycle record, biasing the parabolic peak fit; Hann's smooth
+    # main lobe makes log-magnitude parabolic interpolation accurate to ~0.1%.
+    spec = np.abs(np.fft.rfft(yu * np.hanning(n)))
+    if spec.size < 2:
+        return None
+    freqs = np.fft.rfftfreq(n, d=dt)
+    k = int(np.argmax(spec[1:]) + 1)
+    bin_hz = float(freqs[1])
+    if 1 <= k < spec.size - 1:
+        # Quadratic interpolation on log-magnitude (Smith) for the sub-bin peak.
+        a, b, c = (float(np.log(spec[k + d] + 1e-300)) for d in (-1, 0, 1))
+        denom = a - 2.0 * b + c
+        delta = 0.5 * (a - c) / denom if denom != 0 else 0.0
+        delta = float(np.clip(delta, -0.5, 0.5))
+        return (k + delta) * bin_hz
+    return float(freqs[k])
+
+
+def analyze_thd(
+    t: np.ndarray,
+    y: np.ndarray,
+    *,
+    fundamental: float | None = None,
+    n_harmonics: int = 7,
+    window: Literal["coherent", "hann"] = "coherent",
+    max_fft: int = 1 << 18,
+) -> ThdOutput:
+    """Total harmonic distortion of a periodic transient signal via FFT.
+
+    Defaults to COHERENT sampling: the record is trimmed to an integer number of
+    fundamental periods and a rectangular window is used, so every harmonic lands
+    exactly on an FFT bin — no spectral leakage, THD is exact. ``window='hann'``
+    instead analyzes the full window with a Hann taper (use when the fundamental
+    can't fit an integer number of cycles); the result is then approximate and a
+    leakage warning is emitted.
+
+    Every condition the number depends on is surfaced: the fundamental (and
+    whether it was given or detected), the window kind, whether sampling was
+    coherent, the cycles analyzed, the FFT length and sample rate, and the
+    per-harmonic levels. THD = sqrt(Σ harmonic²) / fundamental; THD+N folds in
+    all non-fundamental energy (noise included). SPICE's non-uniform timestep is
+    resampled onto a uniform grid first (reported as ``fs_hz``).
+    """
+    if t.shape != y.shape:
+        raise ValueError(f"t/y length mismatch: {t.size} vs {y.size}")
+    if t.size < 8:
+        raise ValueError(f"Need at least 8 samples for an FFT; got {t.size}")
+    if not 1 <= n_harmonics <= 50:
+        raise ValueError(f"n_harmonics must be 1..50; got {n_harmonics}")
+    if window not in ("coherent", "hann"):
+        raise ValueError(f"window must be 'coherent' or 'hann'; got {window!r}")
+
+    warnings: list[str] = []
+    span = float(t[-1]) - float(t[0])
+    if span <= 0:
+        raise ValueError("Time window has zero span.")
+
+    if fundamental is not None:
+        if fundamental <= 0:
+            raise ValueError(f"fundamental must be > 0; got {fundamental}")
+        f0 = float(fundamental)
+        f0_source: Literal["given", "detected"] = "given"
+    else:
+        det = _detect_fundamental(t, y)
+        if det is None or det <= 0:
+            raise ValueError(
+                "Could not detect a fundamental frequency; pass fundamental= "
+                "(the signal may be aperiodic or too short)."
+            )
+        f0 = det
+        f0_source = "detected"
+        warnings.append(
+            f"Fundamental auto-detected as {f0:g} Hz (largest FFT bin); pass "
+            "fundamental= if that is wrong."
+        )
+
+    cycles_avail = f0 * span
+
+    n_cyc = 0  # set in the coherent branch; the coherence guard only reads it there
+    if window == "coherent":
+        n_cyc = int(np.floor(cycles_avail + 1e-9))
+        if n_cyc < 1:
+            raise ValueError(
+                f"Window spans {cycles_avail:.3g} fundamental cycles (< 1); cannot "
+                "sample coherently. Widen [t_start, t_end] or use window='hann'."
+            )
+        t_end = float(t[0]) + n_cyc / f0
+        n_fft = min(_next_pow2(max(t.size, 4 * n_harmonics * n_cyc + 1)), max_fft)
+        tu = np.linspace(float(t[0]), t_end, n_fft, endpoint=False)
+        win = np.ones(n_fft)
+        coherent = True
+        n_cycles = float(n_cyc)
+        window_label = "coherent (rectangular)"
+        fs = n_fft / (n_cyc / f0)
+    else:
+        n_fft = min(_next_pow2(t.size), max_fft)
+        tu = np.linspace(float(t[0]), float(t[-1]), n_fft, endpoint=False)
+        win = np.hanning(n_fft)
+        coherent = False
+        n_cycles = cycles_avail
+        window_label = "hann"
+        fs = n_fft / span
+        warnings.append(
+            "Hann window: harmonics may straddle bins (spectral leakage), so THD "
+            "is approximate. Use window='coherent' for an exact result."
+        )
+
+    # np.interp is plain linear interpolation with no anti-alias filter. It only
+    # ADDS points (no folding) while up-sampling, but if the FFT-length cap
+    # forced n_fft below the window's own sample count we are DOWN-sampling, and
+    # content above the new Nyquist folds into low bins and corrupts THD/THD+N.
+    # Surface that rather than return a silently-aliased number.
+    if n_fft < t.size:
+        warnings.append(
+            f"Resampled to {n_fft} points from {t.size} samples (FFT length cap "
+            f"{max_fft}); content above the resample Nyquist may alias into the "
+            "spectrum. Raise max_fft or narrow the window."
+        )
+
+    yu = np.interp(tu, t, y)
+    yu = yu - yu.mean()
+    spec = np.abs(np.fft.rfft(yu * win))
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / fs)
+    nyq = fs / 2.0
+
+    # Coherent sampling is only exact if the fundamental truly landed on its bin
+    # (n_cyc). An imprecise f0 (e.g. auto-detected) makes the window a
+    # non-integer number of cycles, spreading the fundamental into neighbouring
+    # bins — single-bin reads are then wrong while still claiming exactness.
+    # Detect that leakage and degrade to the leakage-tolerant peak-search
+    # measurement (below) with a warning, instead of reporting a wrong THD as
+    # coherent/exact.
+    if coherent and 1 <= n_cyc < spec.size - 1:
+        leak = max(float(spec[n_cyc - 1]), float(spec[n_cyc + 1]))
+        peak_bin = n_cyc - 1 + int(np.argmax(spec[n_cyc - 1 : n_cyc + 2]))
+        if peak_bin != n_cyc or (spec[n_cyc] > 0 and leak > 0.05 * float(spec[n_cyc])):
+            coherent = False
+            window_label = "near-coherent (residual leakage)"
+            warnings.append(
+                "Fundamental did not land exactly on an FFT bin (window is not an "
+                "integer number of cycles — e.g. an imprecise fundamental); THD is "
+                "approximate. Pass a precise fundamental= for an exact result."
+            )
+
+    def _bin_mag(target: float) -> tuple[float, float]:
+        """(magnitude, frequency) near ``target`` Hz. Exact bin for coherent
+        sampling; for a Hann window the energy spreads across the main lobe, so
+        root-sum-square the ±2-bin lobe (the same width for every harmonic, so
+        the THD ratio stays consistent) and report the peak bin's frequency."""
+        k = round(target / fs * n_fft)
+        if k <= 0 or k >= spec.size:
+            return 0.0, target
+        if coherent:
+            return float(spec[k]), float(freqs[k])
+        lo = max(1, k - 2)
+        hi = min(spec.size, k + 3)
+        seg = spec[lo:hi]
+        j = lo + int(np.argmax(seg))
+        return float(np.sqrt(np.sum(seg**2))), float(freqs[j])
+
+    fund_mag, fund_freq = _bin_mag(f0)
+    if fund_mag <= 0:
+        raise ValueError(
+            f"Fundamental at {f0:g} Hz has zero magnitude in the spectrum; the "
+            "signal may be DC or the fundamental is wrong."
+        )
+
+    harmonics: list[HarmonicEntry] = []
+    dropped = 0
+    sum_sq = 0.0
+    for h in range(2, n_harmonics + 1):
+        fh = h * f0
+        if fh >= nyq:
+            dropped += 1
+            continue
+        mag, fr = _bin_mag(fh)
+        sum_sq += mag * mag
+        harmonics.append(
+            {
+                "n": h,
+                "frequency": fr,
+                "magnitude": mag,
+                "db_rel": float(20.0 * np.log10(mag / fund_mag)) if mag > 0 else float("-inf"),
+            }
+        )
+    if dropped:
+        warnings.append(
+            f"{dropped} requested harmonic(s) lie above Nyquist ({nyq:g} Hz) and "
+            "were dropped; raise the sample density or lower n_harmonics."
+        )
+
+    thd_ratio = float(np.sqrt(sum_sq) / fund_mag)
+
+    # THD+N: every non-DC, non-fundamental bin's energy relative to the
+    # fundamental (Hann gets a ±2-bin guard around the fundamental for leakage).
+    k_fund = round(f0 / fs * n_fft)
+    mask = np.ones(spec.size, dtype=bool)
+    mask[0] = False
+    guard = 0 if coherent else 2
+    mask[max(1, k_fund - guard) : k_fund + guard + 1] = False  # slice clamps past the end
+    thd_n_ratio = float(np.sqrt(np.sum(spec[mask] ** 2)) / fund_mag)
+
+    if n_cycles < 3:
+        warnings.append(
+            f"Only {n_cycles:.3g} fundamental cycle(s) in the window; few-cycle "
+            "estimates are unreliable — widen the window."
+        )
+
+    return {
+        "fundamental_hz": fund_freq,
+        "fundamental_source": f0_source,
+        "thd_ratio": thd_ratio,
+        "thd_pct": thd_ratio * 100.0,
+        "thd_db": float(20.0 * np.log10(thd_ratio)) if thd_ratio > 0 else float("-inf"),
+        "thd_n_ratio": thd_n_ratio,
+        "thd_n_pct": thd_n_ratio * 100.0,
+        "harmonics": harmonics,
+        "n_harmonics_used": len(harmonics),
+        "window": window_label,
+        "coherent": coherent,
+        "n_cycles": n_cycles,
+        "n_fft": n_fft,
+        "fs_hz": float(fs),
         "warnings": warnings,
     }
 
@@ -1078,8 +1374,8 @@ def compute_measurement_stats(
                 "std": None,
                 "p10": None,
                 "p90": None,
-                "best_step_index": None,
-                "worst_step_index": None,
+                "min_step_index": None,
+                "max_step_index": None,
                 "histogram": [],
             }
             continue
@@ -1088,19 +1384,22 @@ def compute_measurement_stats(
         e_min = float(np.min(arr))
         e_max = float(np.max(arr))
 
-        best_step: int | None = None
-        worst_step: int | None = None
-        best_val: float | None = None
-        worst_val: float | None = None
+        # Neutral min/max, not best/worst: whether higher or lower is better is
+        # the metric's polarity, which the aggregator can't know — the caller
+        # judges. (Mirrors batch_results' max_case_run/min_case_run.)
+        min_step: int | None = None
+        max_step: int | None = None
+        min_val: float | None = None
+        max_val: float | None = None
         for i, v in enumerate(values):
             if v is None:
                 continue
-            if best_val is None or v < best_val:
-                best_val = v
-                best_step = i
-            if worst_val is None or v > worst_val:
-                worst_val = v
-                worst_step = i
+            if min_val is None or v < min_val:
+                min_val = v
+                min_step = i
+            if max_val is None or v > max_val:
+                max_val = v
+                max_step = i
 
         histogram: list[HistogramBin] = []
         if histogram_bins > 0 and valid_count >= 2 and e_min < e_max:
@@ -1125,8 +1424,8 @@ def compute_measurement_stats(
             "std": float(np.std(arr, ddof=0)),
             "p10": float(np.percentile(arr, 10)),
             "p90": float(np.percentile(arr, 90)),
-            "best_step_index": best_step,
-            "worst_step_index": worst_step,
+            "min_step_index": min_step,
+            "max_step_index": max_step,
             "histogram": histogram,
         }
 
