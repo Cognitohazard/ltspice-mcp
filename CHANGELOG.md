@@ -107,6 +107,28 @@ tool-surface changes.
 
 ### Fixed
 
+- The batch result reader no longer silently returns the wrong sample on a
+  descending sweep axis. A `.dc V1 5 0 -0.1` (or any high→low parameter sweep)
+  produces a descending axis, but the `at=` slice used a binary search that
+  assumes ascending order — so asking for the value at one axis point could
+  return the value at another. The axis and its wave are now flipped to ascending
+  before the search; ascending sweeps are unaffected, and the per-run work stays
+  allocation-free.
+- `batch_results` now surfaces, rather than silently drops, per-step data it
+  cannot aggregate. A run whose `.raw` carries its own `.step` sweep is read at
+  step 0 only; those runs are now reported in `step_collapsed_runs` with a note
+  pointing at `get_waveform`/`query_value` (`job_id`, `run_index`, `step=<n>`) for
+  the remaining steps. If step metadata can't be read at all, the run is reported
+  in `step_unknown_runs` instead of being silently assumed single-step — step 0 is
+  still returned, so the readable data is never dropped.
+- `configure_sweep` now warns when a parameter axis is named `temp`/`temperature`:
+  it is emitted as `.param temp=…`, which does not set the simulation temperature
+  (SPICE controls that via `.temp`, `.options temp`, or `.step temp`), so a
+  "temperature sweep" would otherwise run silently at a single temperature.
+- `batch_results`' `raw=true` mode is now documented honestly: it returns per-run
+  *reduced* rows (a single `value`, or peak/mean/min), not raw sample vectors. For
+  the actual samples (e.g. a gm/ID table) use `export_waveform`/`get_waveform` with
+  `job_id`+`run_index`.
 - Schematic guidance no longer tells you to leave every signal net unlabeled.
   `connect` wires pins but assigns no net name, so an unlabeled net exports as
   `N001`/`N002`/… — silently breaking any `.meas V(vref)`, `.param` expression,
