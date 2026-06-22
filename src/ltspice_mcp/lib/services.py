@@ -613,6 +613,13 @@ def job_duration_seconds(
     return delta
 
 
+def _copy_present(out: dict, src: dict, *keys: str) -> None:
+    """Copy each key from src to out when it holds a truthy value (skip empty)."""
+    for k in keys:
+        if src.get(k):
+            out[k] = src[k]
+
+
 async def get_batch_signal_data(
     batch_job: BatchJob,
     signal: str,
@@ -694,6 +701,7 @@ async def get_batch_signal_data(
             "offset": offset,
             "limit": limit,
         }
+        _copy_present(out_raw, page_stats, "step_collapsed_runs", "step_unknown_runs")
         if convergence:
             out_raw["convergence_warnings"] = convergence
         return out_raw
@@ -718,6 +726,7 @@ async def get_batch_signal_data(
         "max_case_run": batch_stats["max_case_run"],
         "min_case_run": batch_stats["min_case_run"],
     }
+    _copy_present(out, batch_stats, "step_collapsed_runs", "step_unknown_runs")
     if convergence:
         out["convergence_warnings"] = convergence
     return out

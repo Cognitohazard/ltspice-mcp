@@ -300,7 +300,13 @@ class GetBatchResultsInput(ToolInput):
         default=50, description="Max raw data rows to return (server caps at 50; page with offset)"
     )
     raw: bool = Field(
-        default=False, description="Return per-run raw data instead of aggregate stats"
+        default=False,
+        description=(
+            "Return per-run reduced rows (a single ``value``, or peak/mean/min) "
+            "instead of cross-run aggregates. These are still reductions, NOT the "
+            "raw sample vectors — for actual samples (e.g. a gm/ID table) use "
+            "export_waveform or get_waveform with job_id+run_index."
+        ),
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
@@ -603,6 +609,13 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
                 + ", ".join(f"{v:g}" for v in values[-2:])
             )
         lines.append(f"  {name}: [{preview}]")
+    for dim in dimensions:
+        if dim.type == "parameter" and dim.name.strip().lower() in ("temp", "temperature"):
+            lines.append(
+                f"\n⚠ '{dim.name}' is emitted as a .param, which does not set the "
+                "simulation temperature. SPICE controls temperature via .temp, "
+                ".options temp, or .step temp — use one of those for a temperature sweep."
+            )
     for warn in _ngspice_preflight_warnings(netlist_path, state):
         lines.append(f"\n⚠ {warn}")
     lines.append(f"\nUse run_sweep('{config_id}') to execute")
@@ -1162,6 +1175,36 @@ def _format_batch_status_text(data: dict) -> str:
     raise BatchJobError(f"Batch job {data['job_id']} has unexpected status: {status}")
 
 
+def _run_preview(runs: list[int]) -> str:
+    preview = ", ".join(f"#{r}" for r in runs[:8])
+    if len(runs) > 8:
+        preview += f", … (+{len(runs) - 8} more)"
+    return preview
+
+
+def _step_collapse_lines(data: dict) -> list[str]:
+    """Trailing lines (blank separator + note) for runs read at step 0 only —
+    either a confirmed inner .step sweep or one whose step metadata couldn't be
+    read (so dropped steps can't be ruled out). Both are surfaced; neither is
+    silently assumed single-step. Empty list when neither applies."""
+    parts: list[str] = []
+    collapsed = data.get("step_collapsed_runs")
+    if collapsed:
+        parts.append(
+            f"⚠ {len(collapsed)} run(s) contain an inner .step sweep; only step 0 was "
+            f"read ({_run_preview(collapsed)}). Read another step of a run with "
+            "get_waveform/query_value using job_id, run_index, and step=<n>."
+        )
+    unknown = data.get("step_unknown_runs")
+    if unknown:
+        parts.append(
+            f"⚠ {len(unknown)} run(s) had unreadable step metadata; only step 0 was read "
+            f"({_run_preview(unknown)}), so dropped steps can't be ruled out. Re-check "
+            "with get_waveform/query_value using job_id, run_index, and step=<n>."
+        )
+    return ["", *parts] if parts else []
+
+
 def _format_batch_aggregate_text(data: dict, batch_job: BatchJob) -> str:
     """Format aggregate batch signal statistics."""
     stats = data["stats"]
@@ -1205,6 +1248,8 @@ def _format_batch_aggregate_text(data: dict, batch_job: BatchJob) -> str:
         )
         lines.append(f"Lowest-peak run:  #{min_run} ({params_str})")
 
+    lines += _step_collapse_lines(data)
+
     return "\n".join(lines)
 
 
@@ -1237,6 +1282,8 @@ def _format_batch_raw_text(data: dict) -> str:
         lines.append(
             f"{run_idx:<6} {_fmt_col(peak)} {_fmt_col(mean)} {_fmt_col(low)}  {params_str}"
         )
+
+    lines += _step_collapse_lines(data)
 
     pagination = data["pagination"]
     if pagination["has_more"]:

@@ -59,6 +59,20 @@ class TestConfigureSweep:
         assert "Total simulations:" in text
         assert len(state_no_sim.sweep_configs) == 1
 
+    async def test_temp_param_axis_warns(self, state_no_sim: SessionState, sample_netlist: Path):
+        # A parameter sweep named "temp" emits ``.param temp=...``, which does
+        # NOT set the simulation temperature — warn so a "temperature sweep"
+        # that silently runs at one temperature is caught up front.
+        result = await handle_configure_sweep(
+            ConfigureSweepInput(
+                netlist=sample_netlist.name,
+                parameters=[SweepParameter(name="temp", type="parameter", values=[-40, 27, 85])],
+            ),
+            state_no_sim,
+        )
+        text = result.content[0].text
+        assert ".temp" in text and "does not set the simulation temperature" in text
+
     async def test_rejects_oversized_cross_product(
         self, state_no_sim: SessionState, sample_netlist: Path
     ):

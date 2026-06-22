@@ -27,6 +27,7 @@ from ltspice_mcp.tools.analysis import (
     handle_query_value,
     handle_simulation_summary,
 )
+from tests.conftest import FIXTURES_DIR
 
 
 def _inject_raw(state: SessionState, path: Path, raw: MagicMock) -> None:
@@ -337,6 +338,24 @@ class TestGetWaveformJobRun:
         assert sc["buckets"]  # non-empty envelope
         # Run 1's wave peaks at 2.0 * 2.0 = 4.0; run 0 would peak at 2.0.
         assert max(b["max"] for b in sc["buckets"]) == 4.0
+
+    async def test_step_collapse_recovery_shape_works(self, state_no_sim: SessionState):
+        # The batch step-collapse warning tells users to recover per-step data
+        # with get_waveform(job_id, run_index, step=<n>). That advertised shape
+        # must actually reach a distinct inner step — not silently re-read step 0.
+        stepped = FIXTURES_DIR / "ltspice_step_tran.raw"
+        _batch(state_no_sim, {0: {"raw_file": str(stepped), "params": {}}})
+        res0 = await handle_get_waveform(
+            GetWaveformInput(job_id="b1", run_index=0, signal="V(out)", step=0), state_no_sim
+        )
+        res1 = await handle_get_waveform(
+            GetWaveformInput(job_id="b1", run_index=0, signal="V(out)", step=1), state_no_sim
+        )
+        assert res0.structuredContent and res1.structuredContent
+        assert res0.structuredContent["buckets"] and res1.structuredContent["buckets"]
+        # Distinct steps return distinct envelopes — the step index reaches real
+        # per-step data, so the warning's recovery path is honest.
+        assert res0.structuredContent["buckets"] != res1.structuredContent["buckets"]
 
     async def test_raw_file_and_job_id_mutually_exclusive(self, state_no_sim: SessionState):
         with pytest.raises(ResultError, match="exactly one"):
