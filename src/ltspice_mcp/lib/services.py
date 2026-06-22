@@ -406,7 +406,10 @@ def validate_signal(raw: RawRead, signal: str) -> str:
     # @dev[param] depending on the quantity: bare (@m1[gm]), v-wrapped
     # (v(@m1[vth])), or i-wrapped (i(@m1[id])). Accept a uniform 'dev.param'
     # shorthand (e.g. 'm1.gm') and resolve to whichever form the raw contains.
-    dev_param = re.fullmatch(r"([a-z]\w*)\.([a-z]\w*)", sig_lower)
+    # 'dev.param' shorthand (e.g. 'm1.gm'), including a flattened subcircuit-
+    # hierarchical device path ('m.x1.mn.gm'): everything before the LAST dot is
+    # the device, the last segment is the parameter.
+    dev_param = re.fullmatch(r"([a-z][\w.]*)\.([a-z]\w*)", sig_lower)
     if dev_param:
         dev, param = dev_param.group(1), dev_param.group(2)
         candidates += [f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"]
@@ -414,6 +417,21 @@ def validate_signal(raw: RawRead, signal: str) -> str:
     for cand in candidates:
         if cand in by_lower:
             return by_lower[cand]
+
+    # Hierarchical path that drops the device-type letter, e.g. 'x1.mn.gm' for
+    # ngspice's '@m.x1.mn[gm]'. Match a unique @<path>[param] whose device path
+    # ends with the requested segments; refuse if ambiguous — never guess.
+    if dev_param:
+        dev, param = dev_param.group(1), dev_param.group(2)
+        suffix = "." + dev
+        wrapped = re.compile(r"^[vi]?\(?@(.+)\[" + re.escape(param) + r"\]\)?$")
+        hits = [
+            orig
+            for low, orig in by_lower.items()
+            if (m := wrapped.match(low)) and (m.group(1) == dev or m.group(1).endswith(suffix))
+        ]
+        if len(hits) == 1:
+            return hits[0]
 
     available = ", ".join(trace_names[:10])
     if len(trace_names) > 10:
@@ -429,10 +447,12 @@ def validate_signal(raw: RawRead, signal: str) -> str:
         "v(onoise)" in trace_lo or "v(inoise)" in trace_lo
     ):
         hint = " (LTspice names noise signals 'V(onoise)'/'V(inoise)')"
-    elif dev_param:
+    elif dev_param or "@" in sig_lo:
+        save_target = f"@{dev_param.group(1)}[{dev_param.group(2)}]" if dev_param else signal
         hint = (
-            f" (if '{signal}' is a device internal, ngspice only writes it after "
-            f"'.save @{dev_param.group(1)}[{dev_param.group(2)}]' is added to the deck)"
+            f" Device internals are written only when explicitly saved — add "
+            f"'.save {save_target}' to the deck and re-run with ngspice (LTspice "
+            f"'.op' does not export @dev[param] internals)."
         )
     raise ResultError(f"Signal '{signal}' not found.{hint} Available signals: {available}")
 

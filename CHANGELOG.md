@@ -50,6 +50,31 @@ tool-surface changes.
   `uv` (the plugin runs `uvx`; the extension is a `type: "uv"` bundle) and so
   require `uv` and a simulator (LTspice or ngspice) on the host rather than
   bundling either.
+- `thd` tool: total harmonic distortion (THD and THD+N) of a periodic transient
+  signal computed by FFT — no `.four` directive needed, and works on any
+  simulator. Defaults to coherent sampling (the record is trimmed to a whole
+  number of fundamental cycles and a rectangular window is used) so harmonics
+  land exactly on FFT bins and the result is exact; `window="hann"` is the
+  approximate fallback. The fundamental is auto-detected (sub-bin accurate) or
+  given. Every condition the number depends on is surfaced — the fundamental and
+  whether it was given or detected, the window kind, cycles analyzed, FFT length,
+  sample rate, per-harmonic levels — and the tool warns rather than lying when a
+  window turns out non-coherent or the FFT-length cap forces a down-sampling that
+  could alias.
+- `noise_integral` tool: integrates a `.noise` spectral density to a total RMS
+  over a band as `sqrt(∫ density² df)` (the amplitude-density convention shared
+  by LTspice's `V(onoise)` and ngspice's `onoise_spectrum`). Reports the band
+  actually integrated and the sample count; handles a high→low sweep. Noise
+  figure / SNR are left to the caller (they need the source resistance and a
+  reference level).
+- `operating_point` gained a `device=` filter that returns just one device's
+  internals and terminal currents (e.g. `device="M1"` → `@m1[...]` plus
+  `Id/Ig/Is(M1)`) in a single call, refusing an unknown device with the list of
+  devices present. Every returned value now carries its SI unit in a `units` map
+  where the simulator declared the trace type.
+- `query_value` and `export_waveform` now attach SI units derived from the
+  simulator's declared trace type (`query_value` returns a `unit`; the CSV's
+  value columns are unchanged but the DC x-column is named — see Changed).
 
 ### Changed
 
@@ -104,6 +129,18 @@ tool-surface changes.
   available on 3.11, so 3.11 and 3.12 users can now install. CI (and the
   release gate) now runs the full test suite on 3.11, 3.12, and 3.13, so the
   advertised floor is proven on every push.
+- **Breaking:** `measurement_stats` renamed its `best_step_index` /
+  `worst_step_index` fields to `min_step_index` / `max_step_index`. "Best" and
+  "worst" implied a verdict the tool can't justify — whether a low or high value
+  is "best" depends on what was measured — so the fields now name the plain fact
+  (the step index where the min / max value occurred). No alias is kept (this is
+  a pre-1.0 clean break); the structured `outputSchema` advertises the new names.
+- `query_value` and the `export_waveform` CSV now label a `.dc` sweep axis by
+  its swept variable (e.g. `Vin` / a `Vin_V` CSV header) instead of a misleading
+  `t=` / a bare `sweep` column.
+- The "device internal not found" hint is now imperative and fires for a bare
+  `@dev[param]` request too: it tells you to add `.save @dev[param]` and re-run
+  with ngspice, rather than passively noting the value exists elsewhere.
 
 ### Fixed
 
@@ -129,6 +166,22 @@ tool-surface changes.
   *reduced* rows (a single `value`, or peak/mean/min), not raw sample vectors. For
   the actual samples (e.g. a gm/ID table) use `export_waveform`/`get_waveform` with
   `job_id`+`run_index`.
+- `query_value` (raw and job-run modes) and the step-by-axis-value lookup now
+  resolve the nearest point correctly on a descending sweep axis. They share the
+  same binary-search resolver as the batch reader, which was ascending-only — so
+  a high→low `.dc`/`.step` lookup could land on the wrong point. The direction
+  handling now lives in that one resolver.
+- `operating_point` now carries the simulator's "unrecognized variable" warning:
+  a `.save`d `@dev[param]` the device class doesn't have (a typo, or an
+  unsupported parameter) is written to the raw as a real-looking `0.0`, which was
+  indistinguishable from a true zero. The log warning that says it's bogus is now
+  surfaced alongside the value.
+- `validate_netlist`'s dangling-reference check no longer false-flags simulator
+  reserved traces (`onoise`/`inoise`/`time`/`frequency`/…) or probe references
+  inside `.meas` / output directives as undefined nodes.
+- `periodic_metrics` warns when edge spacing is strongly bimodal — the signature
+  of a frequency/duty reading that is off by ~2x because alternate edges were
+  miscounted.
 - Schematic guidance no longer tells you to leave every signal net unlabeled.
   `connect` wires pins but assigns no net name, so an unlabeled net exports as
   `N001`/`N002`/… — silently breaking any `.meas V(vref)`, `.param` expression,

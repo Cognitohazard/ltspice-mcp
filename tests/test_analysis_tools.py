@@ -18,11 +18,13 @@ from ltspice_mcp.state import BatchJob, SessionState
 from ltspice_mcp.tools.analysis import (
     BodeMetricsInput,
     EdgeMetricsInput,
+    ExportWaveformInput,
     FilterMetricsInput,
     FindCrossingInput,
     GainAtInput,
     GetWaveformInput,
     MeasurementStatsInput,
+    NoiseIntegralInput,
     OperatingPointInput,
     PeriodicMetricsInput,
     PulseResponseInput,
@@ -32,15 +34,20 @@ from ltspice_mcp.tools.analysis import (
     SignalStatsInput,
     SimulationSummaryInput,
     StabilityMetricsInput,
+    ThdInput,
     TimingBetweenInput,
+    _filter_operating_point,
     _split_ratio,
+    _trace_device,
     handle_bode_metrics,
     handle_edge_metrics,
+    handle_export_waveform,
     handle_filter_metrics,
     handle_find_crossing,
     handle_gain_at,
     handle_get_waveform,
     handle_measurement_stats,
+    handle_noise_integral,
     handle_operating_point,
     handle_periodic_metrics,
     handle_pulse_response,
@@ -50,6 +57,7 @@ from ltspice_mcp.tools.analysis import (
     handle_signal_stats,
     handle_simulation_summary,
     handle_stability_metrics,
+    handle_thd,
     handle_timing_between,
 )
 from ltspice_mcp.tools.circuit import (
@@ -315,6 +323,18 @@ class TestQueryValue:
         assert "Magnitude:" in result.content[0].text
 
 
+def test_has_active_device_detects_transistor_currents():
+    # The empty-internals note fires only when an M/Q/J/D device is present
+    # (its branch current appears), so RC circuits stay note-free. Sync test,
+    # kept out of the asyncio-marked class so pytest-asyncio doesn't flag it.
+    from ltspice_mcp.tools.analysis import _has_active_device
+
+    assert _has_active_device({"Id(M1)": 1e-3, "V(out)": 5.0})
+    assert _has_active_device({"Ic(Q2)": 1e-3})
+    assert not _has_active_device({"I(R1)": 1e-3, "I(V1)": 2e-3})
+    assert not _has_active_device({})
+
+
 @pytest.mark.asyncio
 class TestGetOperatingPoint:
     async def test_basic(self, state_no_sim: SessionState, work_dir: Path):
@@ -335,6 +355,52 @@ class TestGetOperatingPoint:
         text = result.content[0].text
         assert "V(out)" in text
         assert "I(R1)" in text
+
+    async def test_dc_sweep_at_reads_chosen_point(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # at= reads the full bias snapshot at a chosen .dc sweep value (nearest),
+        # not the sweep's first point.
+        raw_file = work_dir / "dc.raw"
+        raw = _make_raw_mock(
+            plotname="DC transfer characteristic",
+            trace_names=["v-sweep", "V(out)", "I(R1)"],
+            waves={
+                "v-sweep": np.array([0.0, 1.0, 2.0, 3.0]),
+                "V(out)": np.array([10.0, 20.0, 30.0, 40.0]),
+                "I(R1)": np.array([0.1, 0.2, 0.3, 0.4]),
+            },
+            axis=np.array([0.0, 1.0, 2.0, 3.0]),
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_operating_point(
+            OperatingPointInput(raw_file=raw_file.name, at="2.0"), state_no_sim
+        )
+        sc = result.structuredContent
+        assert sc is not None
+        assert sc["voltages"]["V(out)"] == 30.0
+        assert sc["currents"]["I(R1)"] == pytest.approx(0.3)
+        assert sc["sweep_value"] == 2.0
+
+    async def test_carries_unrecognized_save_warning(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A .save'd @-param the model doesn't expose is written as a fake 0.0;
+        # the simulator's unrecognized-variable warning (in the .log) must be
+        # carried so the 0.0 isn't mistaken for a real gds=0/cgd=0.
+        raw_file = work_dir / "op.raw"
+        (work_dir / "op.log").write_text("Warning: unrecognized variable @m1[bogus]\n")
+        raw = _make_raw_mock(
+            plotname="Operating Point",
+            trace_names=["V(out)", "v(@m1[bogus])"],
+            waves={"V(out)": np.array([1.5]), "v(@m1[bogus])": np.array([0.0])},
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_operating_point(
+            OperatingPointInput(raw_file=raw_file.name), state_no_sim
+        )
+        warnings = (result.structuredContent or {}).get("warnings") or []
+        assert any("unrecognized" in w.lower() for w in warnings)
 
     async def test_rejects_ac_raw(self, state_no_sim: SessionState, work_dir: Path):
         """``extract_operating_point`` reads ``wave[0]`` for every trace.
@@ -2334,3 +2400,173 @@ class TestSignalStatsAnalysisTypeRobustness:
             await handle_signal_stats(
                 SignalStatsInput(raw_file=raw.name, signal="V(hot)"), state_no_sim
             )
+
+
+class TestTraceDeviceFilter:
+    """Pure helpers behind operating_point's device= filter."""
+
+    def test_trace_device_owner(self):
+        assert _trace_device("@m1[gm]") == "m1"
+        assert _trace_device("v(@m1[vth])") == "m1"
+        assert _trace_device("i(@m1[id])") == "m1"
+        assert _trace_device("Id(M1)") == "m1"
+        assert _trace_device("Ic(Q2)") == "q2"
+        assert _trace_device("I(R1)") == "r1"
+        assert _trace_device("V(out)") is None
+
+    def test_filter_narrows_to_device(self):
+        op = {
+            "voltages": {"V(d)": 1.8, "V(g)": 0.9},
+            "currents": {"Id(M1)": 1e-3, "I(R1)": 2e-3},
+            "device_internals": {"@m1[gm]": 1e-3, "@m2[gm]": 2e-3},
+        }
+        assert _filter_operating_point(op, "M1") is True
+        assert op["currents"] == {"Id(M1)": 1e-3}
+        assert op["device_internals"] == {"@m1[gm]": 1e-3}
+        # Node voltages are not device-scoped -> dropped from the focused view.
+        assert op["voltages"] == {}
+
+    def test_filter_matches_subcircuit_path_suffix(self):
+        op = {"voltages": {}, "currents": {}, "device_internals": {"@m.x1.mn[gm]": 5.0}}
+        assert _filter_operating_point(op, "mn") is True
+        assert op["device_internals"] == {"@m.x1.mn[gm]": 5.0}
+
+    def test_filter_no_match_reports_false(self):
+        op = {"voltages": {}, "currents": {"Id(M1)": 1.0}, "device_internals": {}}
+        assert _filter_operating_point(op, "Q9") is False
+
+
+@pytest.mark.asyncio
+class TestOperatingPointDeviceAndUnits:
+    """device= narrows to one device's internals + terminal currents (2c); every
+    value carries its unit where derivable (2a)."""
+
+    def _op_raw(self, state: SessionState, work_dir: Path) -> Path:
+        raw_file = work_dir / "op_dev.raw"
+        raw = _make_raw_mock(
+            plotname="Operating Point",
+            trace_names=["V(d)", "V(g)", "Id(M1)", "Ig(M1)", "I(R1)", "@m1[gm]", "@m2[gm]"],
+            waves={
+                "V(d)": np.array([1.8]),
+                "V(g)": np.array([0.9]),
+                "Id(M1)": np.array([1e-3]),
+                "Ig(M1)": np.array([0.0]),
+                "I(R1)": np.array([2e-3]),
+                "@m1[gm]": np.array([1.5e-3]),
+                "@m2[gm]": np.array([2.5e-3]),
+            },
+            axis=np.array([0.0]),
+        )
+        _inject_raw_mock(state, raw_file, raw)
+        return raw_file
+
+    async def test_units_on_full_readout(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = self._op_raw(state_no_sim, work_dir)
+        res = await handle_operating_point(
+            OperatingPointInput(raw_file=raw_file.name), state_no_sim
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        assert sc["units"]["V(d)"] == "V"
+        assert sc["units"]["Id(M1)"] == "A"
+        # A device-internal parameter gets no guessed unit.
+        assert "@m1[gm]" not in sc["units"]
+
+    async def test_device_filter_focuses_one_device(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw_file = self._op_raw(state_no_sim, work_dir)
+        res = await handle_operating_point(
+            OperatingPointInput(raw_file=raw_file.name, device="M1"), state_no_sim
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        assert sc["device"] == "M1"
+        assert set(sc["currents"]) == {"Id(M1)", "Ig(M1)"}
+        assert set(sc["device_internals"]) == {"@m1[gm]"}
+        assert sc["voltages"] == {}
+        assert sc["units"]["Id(M1)"] == "A"
+
+    async def test_unknown_device_lists_present_ones(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw_file = self._op_raw(state_no_sim, work_dir)
+        with pytest.raises(ResultError, match="Devices present"):
+            await handle_operating_point(
+                OperatingPointInput(raw_file=raw_file.name, device="Q9"), state_no_sim
+            )
+
+
+@pytest.mark.asyncio
+class TestQueryValueDcLabelAndUnit:
+    async def test_dc_sweep_labels_swept_axis_and_carries_unit(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = _stage_recorded(work_dir, "ltspice_dc_div")
+        res = await handle_query_value(
+            QueryValueInput(raw_file=str(raw), signal="V(out)", at="2"), state_no_sim
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        assert sc["unit"] == "V"
+        text = res.content[0].text  # type: ignore[union-attr]
+        # The DC sweep axis is the swept variable, not time.
+        assert " at t=" not in text
+
+
+@pytest.mark.asyncio
+class TestNoiseIntegralHandler:
+    async def test_real_noise_fixture(self, state_no_sim: SessionState, work_dir: Path):
+        raw = _stage_recorded(work_dir, "ltspice_noise_rc")
+        res = await handle_noise_integral(
+            NoiseIntegralInput(raw_file=str(raw), signal="V(onoise)"), state_no_sim
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        assert sc["total_rms"] > 0
+        assert sc["n_points"] > 1
+        assert sc["unit"] == "V"
+        assert "Hz" in sc["density_unit"]
+
+    async def test_rejects_transient_raw(self, state_no_sim: SessionState, work_dir: Path):
+        raw = _stage_recorded(work_dir, "ltspice_tran_rc")
+        with pytest.raises(ResultError, match="noise"):
+            await handle_noise_integral(NoiseIntegralInput(raw_file=str(raw)), state_no_sim)
+
+
+@pytest.mark.asyncio
+class TestExportDcHeader:
+    async def test_dc_x_header_names_swept_axis(self, state_no_sim: SessionState, work_dir: Path):
+        raw = _stage_recorded(work_dir, "ltspice_dc_div")
+        res = await handle_export_waveform(
+            ExportWaveformInput(raw_file=str(raw), signals=["V(out)"]), state_no_sim
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        # The x-column is the named swept variable, not the bare "sweep".
+        assert sc["columns"][0] != "sweep"
+        assert sc["columns"][0].lower() not in ("time_s", "freq_hz")
+
+
+@pytest.mark.asyncio
+class TestThdHandler:
+    async def test_thd_on_synthetic_periodic_raw(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "thd.raw"
+        f0, fs = 1000.0, 200_000.0
+        t = np.arange(0.0, 0.02, 1.0 / fs)
+        y = np.sin(2 * np.pi * f0 * t) + 0.1 * np.sin(2 * np.pi * 2 * f0 * t)
+        raw = _make_raw_mock(
+            plotname="Transient Analysis",
+            trace_names=["time", "V(out)"],
+            waves={"time": t, "V(out)": y},
+            axis=t,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        res = await handle_thd(
+            ThdInput(raw_file=raw_file.name, signal="V(out)", fundamental="1k", n_harmonics=3),
+            state_no_sim,
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        assert sc["thd_ratio"] == pytest.approx(0.1, rel=1e-2)
+        assert sc["coherent"] is True

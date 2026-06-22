@@ -295,7 +295,9 @@ class TestOtherAnalysisTypes:
         data = await _export(state_no_sim, raw_file=str(raw), signals=["V(out)"])
         assert data["analysis_type"] == "dc"
         header, rows = _read_csv(Path(data["path"]))
-        assert header == ["sweep", "V(out)"]
+        # The DC x-column names the swept variable (V1) + its unit, not a bare
+        # "sweep" — the recorded fixture sweeps source V1 (a voltage).
+        assert header == ["V1_V", "V(out)"]
         assert len(rows) == data["row_count"]
 
     async def test_noise_accepted(self, state_no_sim: SessionState, work_dir: Path):
