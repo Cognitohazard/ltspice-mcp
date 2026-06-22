@@ -547,6 +547,14 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
                     name = part.strip()
                     if name:
                         suppressed.add(name.lower())
+        elif card.kind in ("directive", "meas"):
+            # A node that exists only to be probed by a .meas/.print/.plot/.save
+            # is intentional, not dangling — suppress it like instance probe refs.
+            for probe in _PROBE_REF_RE.finditer(card.body):
+                for part in probe.group(1).split(","):
+                    name = part.strip()
+                    if name:
+                        suppressed.add(name.lower())
 
     issues: list[dict[str, object]] = []
     for scope, nodes in occurrences.items():
@@ -590,6 +598,25 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
 _PLAIN_REF_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_!]*")
 
 
+# Names a directive may legitimately reference as V(...)/I(...) that are NOT
+# circuit nodes: the simulator synthesizes them. ngspice/LTspice .noise outputs
+# (V(onoise)/V(inoise) and their spectra/totals) and the sweep axes. Without
+# these the directive-ref check false-flags a correct noise or transient deck.
+_RESERVED_TRACES = frozenset(
+    {
+        "onoise",
+        "inoise",
+        "onoise_total",
+        "inoise_total",
+        "onoise_spectrum",
+        "inoise_spectrum",
+        "time",
+        "frequency",
+        "freq",
+    }
+)
+
+
 def _known_names(cards: list[SpiceCard]) -> set[str]:
     """Over-approximate the set of names a directive may reference.
 
@@ -600,7 +627,7 @@ def _known_names(cards: list[SpiceCard]) -> set[str]:
     pass can only fire on a name that is genuinely absent, never on one it
     failed to classify.
     """
-    known: set[str] = set(_GROUND_NODES)
+    known: set[str] = set(_GROUND_NODES) | set(_RESERVED_TRACES)
     known |= _scan_global_nodes(cards)
     for card in cards:
         if card.kind == "subckt":

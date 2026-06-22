@@ -232,6 +232,14 @@ class TestDanglingNodes:
     def _dangling(self, text: str):
         return validate_netlist_dangling_nodes(lex(text + "\n").cards)
 
+    def test_meas_probe_node_not_flagged_dangling(self):
+        # ``tp`` connects to only one element terminal, but a .meas probes it —
+        # an intentional probe point, not a dangling node.
+        issues = self._dangling(
+            "V1 in 0 1\nR1 in mid 1k\nR2 mid tp 1k\n.meas tran vtp FIND V(tp) AT 1u"
+        )
+        assert not any("tp" in str(i["message"]) for i in issues)
+
     def test_single_connection_node_warned_with_element_named(self):
         issues = self._dangling("V1 in 0 1\nR1 in out 1k\n.tran 1m\n.end")
         assert len(issues) == 1
@@ -361,6 +369,21 @@ class TestDirectiveRefs:
 
     def _refs(self, text: str):
         return validate_netlist_directive_refs(lex(text + "\n").cards)
+
+    def test_reserved_noise_traces_not_flagged(self):
+        # V(onoise)/V(inoise) are simulator-synthesized .noise outputs, not nodes
+        # — a correct noise deck must not trip the directive-ref check.
+        deck = (
+            "vin in 0 ac 1\n"
+            "r1 in out 1k\n"
+            ".noise V(out) vin dec 10 1 1meg\n"
+            ".meas noise ntot INTEG V(onoise)\n"
+            ".print noise V(inoise)"
+        )
+        issues = self._refs(deck)
+        assert not any(
+            "onoise" in str(i["message"]) or "inoise" in str(i["message"]) for i in issues
+        )
 
     def test_meas_references_missing_net_flagged(self):
         # vref is named only in the .meas — no element connects to it.

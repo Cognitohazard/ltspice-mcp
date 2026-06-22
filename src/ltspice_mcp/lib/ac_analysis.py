@@ -1333,3 +1333,84 @@ def compute_resonances(
         "num_peaks_detected": len(selected),
         "warnings": warnings,
     }
+
+
+class NoiseIntegralOutput(TypedDict):
+    """Return shape of :func:`integrate_noise`."""
+
+    total_rms: float
+    f_start_used: float
+    f_end_used: float
+    n_points: int
+    warnings: list[str]
+
+
+def integrate_noise(
+    freqs: np.ndarray,
+    density: np.ndarray,
+    f_start: float | None,
+    f_end: float | None,
+) -> NoiseIntegralOutput:
+    """Integrate a noise spectral density to a total RMS over ``[f_start, f_end]``.
+
+    SPICE noise raws store *amplitude* spectral density (V/√Hz or A/√Hz) — this
+    holds for both LTspice (``V(onoise)``/``V(inoise)``) and ngspice
+    (``onoise_spectrum``/``inoise_spectrum``). The total RMS noise in a band is
+    therefore ``sqrt(∫ density² df)``: square the density, integrate over
+    frequency, take the root. (Same operation LTspice runs when you Ctrl-click a
+    ``V(onoise)`` trace label.)
+
+    A ``.noise`` sweep may be stored high→low (the codebase treats noise axes as
+    possibly descending); the axis is flipped to ascending first so the integral
+    is over increasing frequency. Returns the band actually integrated (clipped
+    to the data) and the sample count, so a band that fell partly outside the
+    sweep is visible rather than silently truncated. Noise figure / SNR are
+    deliberately not computed — they need the source resistance and a reference
+    level the caller supplies.
+    """
+    if freqs.shape != density.shape:
+        raise ValueError(f"freq/density length mismatch: {freqs.size} vs {density.size}")
+    if freqs.size < 2:
+        raise ValueError(f"Need at least 2 frequency points to integrate; got {freqs.size}")
+    # Density is a real, non-negative magnitude; the integral squares it so a
+    # real array needs no |.|. Only a complex-stored trace must be reduced to
+    # its magnitude first (avoids copying the common real case).
+    if np.iscomplexobj(density):
+        density = np.abs(density)
+    # A descending sweep (e.g. high→low .noise) is legitimate; flip axis + density
+    # together so searchsorted/trapezoid see ascending frequency. Reject only a
+    # genuinely non-monotonic axis (corruption), mirroring window_and_clean.
+    if float(freqs[0]) > float(freqs[-1]):
+        freqs = freqs[::-1]
+        density = density[::-1]
+    if np.any(np.diff(freqs) < 0):
+        raise ValueError("Frequency axis is not monotonic; cannot integrate noise.")
+    warnings: list[str] = []
+
+    lo = float(freqs[0]) if f_start is None else f_start
+    hi = float(freqs[-1]) if f_end is None else f_end
+    if lo >= hi:
+        raise ValueError(f"f_start ({lo:g}) must be < f_end ({hi:g})")
+    if f_start is not None and f_start < freqs[0]:
+        warnings.append(f"f_start {f_start:g} Hz is below the sweep; clipped to {freqs[0]:g} Hz.")
+    if f_end is not None and f_end > freqs[-1]:
+        warnings.append(f"f_end {f_end:g} Hz is above the sweep; clipped to {freqs[-1]:g} Hz.")
+
+    i0 = int(np.searchsorted(freqs, lo, side="left"))
+    i1 = int(np.searchsorted(freqs, hi, side="right"))
+    fb = freqs[i0:i1]
+    db = density[i0:i1]
+    if fb.size < 2:
+        raise ValueError(
+            f"Band [{lo:g}, {hi:g}] Hz selects {fb.size} of {freqs.size} points; "
+            f"need at least 2. Sweep spans [{freqs[0]:g}, {freqs[-1]:g}] Hz."
+        )
+
+    total_rms = float(np.sqrt(np.trapezoid(db * db, fb)))
+    return {
+        "total_rms": total_rms,
+        "f_start_used": float(fb[0]),
+        "f_end_used": float(fb[-1]),
+        "n_points": int(fb.size),
+        "warnings": warnings,
+    }
