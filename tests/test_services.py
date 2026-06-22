@@ -360,6 +360,26 @@ class TestValidateSignal:
         raw = self._raw(["frequency", "v(onoise)", "v(inoise)"])
         assert services.validate_signal(raw, "onoise_spectrum") == "v(onoise)"
 
+    def test_dev_param_hierarchical_multi_dot(self):
+        # A subckt-flattened device path: m.x1.mn.gm -> @m.x1.mn[gm], including
+        # the v()/i() wrapped forms.
+        raw = self._raw(["@m.x1.mn[gm]", "v(@m.x1.mn[vth])", "i(@m.x1.mn[id])"])
+        assert services.validate_signal(raw, "m.x1.mn.gm") == "@m.x1.mn[gm]"
+        assert services.validate_signal(raw, "m.x1.mn.vth") == "v(@m.x1.mn[vth])"
+        assert services.validate_signal(raw, "m.x1.mn.id") == "i(@m.x1.mn[id])"
+
+    def test_dev_param_hierarchical_without_device_letter_unique(self):
+        # Dropping the leading device-type letter (x1.mn.gm) resolves when the
+        # suffix is unique.
+        raw = self._raw(["@m.x1.mn[gm]"])
+        assert services.validate_signal(raw, "x1.mn.gm") == "@m.x1.mn[gm]"
+
+    def test_dev_param_hierarchical_ambiguous_refused(self):
+        # Two devices share the .mn suffix — refuse rather than guess.
+        raw = self._raw(["@m.x1.mn[gm]", "@m.x2.mn[gm]"])
+        with pytest.raises(ResultError, match="not found"):
+            services.validate_signal(raw, "mn.gm")
+
     def test_hierarchical_colon_resolves_to_dot(self):
         # LTspice V(X1:mid) <-> ngspice v(x1.mid)
         raw = self._raw(["time", "v(x1.mid)", "v(out)"])
