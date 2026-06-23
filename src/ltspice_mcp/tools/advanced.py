@@ -45,6 +45,12 @@ from ltspice_mcp.tools._base import (
 
 logger = logging.getLogger(__name__)
 
+# Upper bound on a single batch job's run count, shared by sweeps and Monte
+# Carlo. A sweep cross-product (e.g. 5x5x16x100) can silently balloon into tens
+# of thousands of cold simulator processes; refuse it up front like Monte Carlo
+# already does, rather than spawning until the machine falls over.
+MAX_BATCH_RUNS = 10_000
+
 
 class SweepParameter(StrictModel):
     """Nested sweep parameter definition.
@@ -294,7 +300,13 @@ class GetBatchResultsInput(ToolInput):
         default=50, description="Max raw data rows to return (server caps at 50; page with offset)"
     )
     raw: bool = Field(
-        default=False, description="Return per-run raw data instead of aggregate stats"
+        default=False,
+        description=(
+            "Return per-run reduced rows (a single ``value``, or peak/mean/min) "
+            "instead of cross-run aggregates. These are still reductions, NOT the "
+            "raw sample vectors — for actual samples (e.g. a gm/ID table) use "
+            "export_waveform or get_waveform with job_id+run_index."
+        ),
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
@@ -443,7 +455,10 @@ def _netlist_component_refs(netlist_path) -> set[str]:
         "a two-value [low, high] set — N parts yields 2^N corners that bound the "
         "true extremes, which random Monte Carlo cannot guarantee) and sensitivity "
         "analysis (sweep one part at a time across its tolerance to rank impact). "
-        "Use configure_montecarlo instead for statistical yield/spread."
+        "Use configure_montecarlo instead for statistical yield/spread. NOT for a "
+        "bias sweep: a native `.dc Vds Vgs` (e.g. a gm/ID characterization) goes "
+        "in one deck + run_simulation + export_waveform, not here — this is for "
+        "per-value SEPARATE runs (corners, L/W, .lib model swaps)."
     ),
     input_model=ConfigureSweepInput,
     annotations=types.ToolAnnotations(
@@ -553,14 +568,23 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
     # Compute total runs: product of each dimension's point count, and capture
     # the resolved value list per dimension so the response can enumerate them
     # (log vs linear spacing is otherwise unverifiable without running).
-    dim_sizes: list[int] = []
-    dim_values: list[tuple[str, list[float]]] = []
-    for dim in dimensions:
-        values = dim.resolved_values()
-        dim_sizes.append(len(values))
-        dim_values.append((dim.name, values))
-
+    # Cap the cross-product BEFORE materializing any value list. count() sizes
+    # each dimension without building it, so a fat dimension (points=1e9, or a
+    # tiny step over a wide range) is rejected here instead of OOMing the server
+    # inside resolved_values()'s np.linspace/np.arange.
+    dim_sizes = [dim.count() for dim in dimensions]
     total_runs = prod(dim_sizes) if dim_sizes else 0
+    if total_runs > MAX_BATCH_RUNS:
+        raise BatchJobError(
+            f"Sweep cross-product is {total_runs} runs, over the {MAX_BATCH_RUNS} cap "
+            f"({' x '.join(str(s) for s in dim_sizes)}). Narrow a dimension or split "
+            "the sweep — each run is a separate simulator process."
+        )
+
+    # Safe to materialize now: the cross-product is within the cap.
+    dim_values: list[tuple[str, list[float]]] = [
+        (dim.name, dim.resolved_values()) for dim in dimensions
+    ]
 
     config = SweepConfig(netlist=netlist_path, dimensions=dimensions)
     config_id = generate_config_id("sweep")
@@ -588,6 +612,13 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
                 + ", ".join(f"{v:g}" for v in values[-2:])
             )
         lines.append(f"  {name}: [{preview}]")
+    for dim in dimensions:
+        if dim.type == "parameter" and dim.name.strip().lower() in ("temp", "temperature"):
+            lines.append(
+                f"\n⚠ '{dim.name}' is emitted as a .param, which does not set the "
+                "simulation temperature. SPICE controls temperature via .temp, "
+                ".options temp, or .step temp — use one of those for a temperature sweep."
+            )
     for warn in _ngspice_preflight_warnings(netlist_path, state):
         lines.append(f"\n⚠ {warn}")
     lines.append(f"\nUse run_sweep('{config_id}') to execute")
@@ -729,8 +760,8 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
             "mismatch, or param_tolerances)."
         )
 
-    if num_runs < 1 or num_runs > 10_000:
-        raise BatchJobError(f"num_runs must be 1-10000, got {num_runs}")
+    if num_runs < 1 or num_runs > MAX_BATCH_RUNS:
+        raise BatchJobError(f"num_runs must be 1-{MAX_BATCH_RUNS}, got {num_runs}")
 
     type_tolerances: dict[str, tuple[float, str]] = {}
     component_overrides: dict[str, tuple[float, str]] = {}
@@ -1147,6 +1178,36 @@ def _format_batch_status_text(data: dict) -> str:
     raise BatchJobError(f"Batch job {data['job_id']} has unexpected status: {status}")
 
 
+def _run_preview(runs: list[int]) -> str:
+    preview = ", ".join(f"#{r}" for r in runs[:8])
+    if len(runs) > 8:
+        preview += f", … (+{len(runs) - 8} more)"
+    return preview
+
+
+def _step_collapse_lines(data: dict) -> list[str]:
+    """Trailing lines (blank separator + note) for runs read at step 0 only —
+    either a confirmed inner .step sweep or one whose step metadata couldn't be
+    read (so dropped steps can't be ruled out). Both are surfaced; neither is
+    silently assumed single-step. Empty list when neither applies."""
+    parts: list[str] = []
+    collapsed = data.get("step_collapsed_runs")
+    if collapsed:
+        parts.append(
+            f"⚠ {len(collapsed)} run(s) contain an inner .step sweep; only step 0 was "
+            f"read ({_run_preview(collapsed)}). Read another step of a run with "
+            "get_waveform/query_value using job_id, run_index, and step=<n>."
+        )
+    unknown = data.get("step_unknown_runs")
+    if unknown:
+        parts.append(
+            f"⚠ {len(unknown)} run(s) had unreadable step metadata; only step 0 was read "
+            f"({_run_preview(unknown)}), so dropped steps can't be ruled out. Re-check "
+            "with get_waveform/query_value using job_id, run_index, and step=<n>."
+        )
+    return ["", *parts] if parts else []
+
+
 def _format_batch_aggregate_text(data: dict, batch_job: BatchJob) -> str:
     """Format aggregate batch signal statistics."""
     stats = data["stats"]
@@ -1190,6 +1251,8 @@ def _format_batch_aggregate_text(data: dict, batch_job: BatchJob) -> str:
         )
         lines.append(f"Lowest-peak run:  #{min_run} ({params_str})")
 
+    lines += _step_collapse_lines(data)
+
     return "\n".join(lines)
 
 
@@ -1222,6 +1285,8 @@ def _format_batch_raw_text(data: dict) -> str:
         lines.append(
             f"{run_idx:<6} {_fmt_col(peak)} {_fmt_col(mean)} {_fmt_col(low)}  {params_str}"
         )
+
+    lines += _step_collapse_lines(data)
 
     pagination = data["pagination"]
     if pagination["has_more"]:

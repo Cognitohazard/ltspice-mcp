@@ -1,6 +1,7 @@
 """Generic file cache with (mtime, size)-based invalidation."""
 
 import threading
+from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
 from typing import Generic, TypeVar
@@ -37,12 +38,20 @@ class FileCache(Generic[T]):
     The locks make the *table* safe, not the values — mutable editor
     instances are loop-only; see the concurrency contract in tools/_base.py.
 
+    Eviction — unbounded by default. Pass ``maxsize`` for least-recently-used
+    eviction once the entry count exceeds it: use it for caches of immutable,
+    re-derivable values (parsed ``RawRead`` results) so a long-lived session
+    querying many circuits doesn't grow without bound. Do NOT bound a cache of
+    mutable editors with unsaved in-memory edits — evicting one would silently
+    drop the edits.
+
     Type parameter T is the type of cached value.
     """
 
-    def __init__(self) -> None:
-        """Initialize an empty cache."""
-        self._entries: dict[Path, tuple[tuple[int, int], T]] = {}
+    def __init__(self, maxsize: int | None = None) -> None:
+        """Initialize an empty cache (``maxsize=None`` is unbounded)."""
+        self._entries: OrderedDict[Path, tuple[tuple[int, int], T]] = OrderedDict()
+        self._maxsize = maxsize
         self._lock = threading.Lock()
         # Per-path single-flight locks. Pruned together with their cache
         # entries (invalidate/clear), so the map is bounded by the live
@@ -81,12 +90,15 @@ class FileCache(Generic[T]):
             # the leader's parse finds the freshly stored entry here.
             with self._lock:
                 entry = self._entries.get(path)
-            if entry is not None and entry[0] == stamp:
-                return entry[1]
+                if entry is not None and entry[0] == stamp:
+                    self._entries.move_to_end(path)  # mark most-recently-used
+                    return entry[1]
 
             value = factory(path)
             with self._lock:
                 self._entries[path] = (stamp, value)
+                self._entries.move_to_end(path)
+                self._evict_locked()
             return value
 
     def peek(self, path: Path) -> T | None:
@@ -104,6 +116,7 @@ class FileCache(Generic[T]):
         with self._lock:
             entry = self._entries.get(path)
             if entry is not None and entry[0] == stamp:
+                self._entries.move_to_end(path)  # a peek hit is a use
                 return entry[1]
         return None
 
@@ -121,6 +134,20 @@ class FileCache(Generic[T]):
             stamp = (0, -1)
         with self._lock:
             self._entries[path] = (stamp, value)
+            self._entries.move_to_end(path)
+            self._evict_locked()
+
+    def _evict_locked(self) -> None:
+        """Drop least-recently-used entries past ``maxsize``. Call under ``_lock``.
+
+        Prunes the evicted path's single-flight lock too (same benign-race
+        semantics as ``invalidate``).
+        """
+        if self._maxsize is None:
+            return
+        while len(self._entries) > self._maxsize:
+            old_path, _ = self._entries.popitem(last=False)
+            self._key_locks.pop(old_path, None)
 
     def invalidate(self, path: Path) -> None:
         """Remove a specific entry from cache.

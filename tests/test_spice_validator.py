@@ -11,6 +11,7 @@ from ltspice_mcp.lib.spice_validator import (
     validate_netlist_arity,
     validate_netlist_bias_topology,
     validate_netlist_dangling_nodes,
+    validate_netlist_directive_refs,
 )
 
 
@@ -231,6 +232,14 @@ class TestDanglingNodes:
     def _dangling(self, text: str):
         return validate_netlist_dangling_nodes(lex(text + "\n").cards)
 
+    def test_meas_probe_node_not_flagged_dangling(self):
+        # ``tp`` connects to only one element terminal, but a .meas probes it —
+        # an intentional probe point, not a dangling node.
+        issues = self._dangling(
+            "V1 in 0 1\nR1 in mid 1k\nR2 mid tp 1k\n.meas tran vtp FIND V(tp) AT 1u"
+        )
+        assert not any("tp" in str(i["message"]) for i in issues)
+
     def test_single_connection_node_warned_with_element_named(self):
         issues = self._dangling("V1 in 0 1\nR1 in out 1k\n.tran 1m\n.end")
         assert len(issues) == 1
@@ -351,6 +360,92 @@ class TestDanglingNodes:
         # token is counted, and every token vetoes a warning on its name.
         issues = self._dangling("A1 in out xgate\nV1 in 0 1\nR1 out 0 1k\n.end")
         assert issues == []
+
+
+class TestDirectiveRefs:
+    """A V(...)/I(...) reference to a name no element defines is flagged —
+    the wired-but-unlabeled-net case and plain typos. Over-approximation of
+    the known set means it can only fire on a genuinely-absent name."""
+
+    def _refs(self, text: str):
+        return validate_netlist_directive_refs(lex(text + "\n").cards)
+
+    def test_reserved_noise_traces_not_flagged(self):
+        # V(onoise)/V(inoise) are simulator-synthesized .noise outputs, not nodes
+        # — a correct noise deck must not trip the directive-ref check.
+        deck = (
+            "vin in 0 ac 1\n"
+            "r1 in out 1k\n"
+            ".noise V(out) vin dec 10 1 1meg\n"
+            ".meas noise ntot INTEG V(onoise)\n"
+            ".print noise V(inoise)"
+        )
+        issues = self._refs(deck)
+        assert not any(
+            "onoise" in str(i["message"]) or "inoise" in str(i["message"]) for i in issues
+        )
+
+    def test_meas_references_missing_net_flagged(self):
+        # vref is named only in the .meas — no element connects to it.
+        issues = self._refs(
+            "V1 in 0 1\nR1 in out 1k\nR2 out 0 1k\n.meas tran v FIND V(vref)\n.end"
+        )
+        assert len(issues) == 1
+        assert "'vref'" in str(issues[0]["message"])
+        assert "V(vref)" in str(issues[0]["message"])
+
+    def test_meas_references_existing_net_clean(self):
+        issues = self._refs("V1 in 0 1\nR1 in out 1k\nR2 out 0 1k\n.meas tran v FIND V(out)\n.end")
+        assert issues == []
+
+    def test_device_current_to_missing_device_flagged(self):
+        issues = self._refs("V1 in 0 1\nR1 in 0 1k\n.meas tran i FIND I(Rx)\n.end")
+        assert len(issues) == 1
+        assert "I(Rx)" in str(issues[0]["message"])
+
+    def test_device_current_to_existing_device_clean(self):
+        issues = self._refs("V1 in 0 1\nR1 in 0 1k\n.meas tran i FIND I(R1)\n.end")
+        assert issues == []
+
+    def test_ground_and_numeric_nodes_clean(self):
+        issues = self._refs("V1 1 0 1\nR1 1 0 1k\n.print tran V(0) V(1)\n.end")
+        assert issues == []
+
+    def test_differential_probe_each_side_checked(self):
+        # 'out' exists, 'nope' does not — only the missing side flags.
+        issues = self._refs(
+            "V1 in 0 1\nR1 in out 1k\nR2 out 0 1k\n.meas tran d FIND V(out,nope)\n"
+        )
+        assert len(issues) == 1
+        assert "'nope'" in str(issues[0]["message"])
+
+    def test_behavioral_source_reference_checked(self):
+        issues = self._refs("V1 in 0 1\nR1 in 0 1k\nB1 out 0 V=V(missing)*2\nR2 out 0 1k\n")
+        names = {str(i["message"]) for i in issues}
+        assert any("'missing'" in m for m in names)
+
+    def test_hierarchical_ref_not_adjudicated(self):
+        # X1:out is a subckt-internal reference — left alone (no false flag).
+        issues = self._refs(
+            "X1 in out amp\nR1 in 0 1k\nR2 out 0 1k\n.meas tran v FIND V(X1:mid)\n"
+        )
+        assert issues == []
+
+    def test_expression_fragment_not_flagged(self):
+        # V(a*2) is not a clean identifier — skip rather than misparse.
+        issues = self._refs("V1 in 0 1\nR1 in 0 1k\nB1 o 0 V=V(in*2)\nR2 o 0 1k\n")
+        assert issues == []
+
+    def test_func_formal_param_not_flagged(self):
+        # The formal 'x' inside a .func is not a node.
+        issues = self._refs("V1 in 0 1\nR1 in 0 1k\n.func dbl(x) {V(x)*2}\n")
+        assert issues == []
+
+    def test_each_missing_name_reported_once(self):
+        issues = self._refs(
+            "V1 in 0 1\nR1 in 0 1k\n.meas tran a FIND V(zz)\n.meas tran b FIND V(zz)\n"
+        )
+        assert len(issues) == 1
 
 
 class TestBiasTopology:

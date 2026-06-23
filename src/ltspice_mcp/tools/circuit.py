@@ -64,6 +64,7 @@ from ltspice_mcp.lib.spice_validator import (
     validate_netlist_arity,
     validate_netlist_bias_topology,
     validate_netlist_dangling_nodes,
+    validate_netlist_directive_refs,
 )
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, get_symbol_info
 from ltspice_mcp.state import SessionState
@@ -2578,6 +2579,24 @@ async def handle_export_netlist(
 
     _previous_exports[asc_path] = current_lines
 
+    # Dangling-reference check: a .meas / behavioral source naming a net that
+    # isn't in the exported netlist — the common case being a schematic net
+    # wired but never labeled, now auto-named N00x. This is the one place the
+    # export's final net names and the directives sit together (the .asc itself
+    # can't be checked — connectivity lives in wires/flags).
+    try:
+        ref_issues = validate_netlist_directive_refs(lex(content).cards)
+    except SpiceLexError:
+        ref_issues = []
+    if ref_issues:
+        result += "\n\n--- Warnings: directives reference nets not in the netlist ---"
+        for issue in ref_issues:
+            result += f"\n- {issue['message']}"
+        result += (
+            "\n  Likely schematic nets wired but not labeled (an unlabeled net exports "
+            "as N00x). Add a net label so the name survives, or fix the typo."
+        )
+
     return text_response(result)
 
 
@@ -3317,9 +3336,9 @@ class CreateSchematicInput(ToolInput):
         "Tip: prefer ``create_netlist`` + .cir for design iteration; "
         "use this only when a visual schematic is the deliverable."
         " Prefer apply_schematic_ops for multi-step builds (one transaction); "
-        "wire signal nets with connect and ground via add_net_label flags at "
-        "pins — don't hand-edit the .asc. Full layout guidance: the "
-        "spice://guide resource."
+        "wire signal nets with connect; label grounds — and any net a "
+        ".meas/B-source references by name — via add_net_label flags at pins. "
+        "Don't hand-edit the .asc. Full layout guidance: the spice://guide resource."
     ),
     input_model=CreateSchematicInput,
     annotations=types.ToolAnnotations(
@@ -3353,8 +3372,11 @@ async def handle_create_schematic(
         "route outside component bodies."
         '\n- Ground: add_net_label(net="0", pin="Ref.pin") at each ground pin; '
         "don't wire to a shared ground flag."
-        "\n- Don't net-label signal nets — wire them."
-        "\n- Multi-step build: use apply_schematic_ops (one transaction)."
+        "\n- Wire signal nets (don't label them) — BUT label any net you reference "
+        "by name in a .meas/.param/B-source (e.g. V(vref)) with add_net_label, or it "
+        "exports as N00x and the reference silently breaks."
+        "\n- Multi-step build: use apply_schematic_ops (one transaction; dry_run=true "
+        "to validate without saving)."
         "\n- Matched devices (diff pairs/mirrors) share a y-tier; get pin coords "
         "from symbol_info."
     )
@@ -3862,6 +3884,14 @@ async def handle_validate_netlist(
         # cannot see.
         for bias_issue in validate_netlist_bias_topology(lint_cards):
             issues.append({"severity": "warning", **bias_issue})
+        # Dangling-reference pass: a .meas / output directive / behavioral
+        # source naming a node or device the netlist never defines (a typo, or
+        # a net referenced by name that was wired but never labeled). Warning
+        # only. Skipped on .asc — its element connectivity lives in wires/flags
+        # this directive text can't see, so every ref would false-positive;
+        # export_netlist runs this pass on the exported .net instead.
+        for ref_issue in validate_netlist_directive_refs(lint_cards):
+            issues.append({"severity": "warning", **ref_issue})
 
     # .asc schematic-graph checks (named-net shorts, floating pins, dangling
     # labels) — the directive lint above only sees embedded SPICE text, so the
@@ -4459,6 +4489,17 @@ class ApplySchematicOpsInput(ToolInput):
             "did succeed — set false only when failures are recoverable."
         ),
     )
+    dry_run: bool = Field(
+        default=False,
+        description=(
+            "When true, validate the whole batch against an in-memory copy and "
+            "report per-op results WITHOUT writing the file — nothing is saved and "
+            "the on-disk schematic is untouched. Every op is attempted (errors "
+            "don't stop the run) so a single bad op surfaces all problems at once "
+            "instead of rolling back a good batch. Use it to check a plan, then "
+            "resubmit the corrected ops with dry_run=false."
+        ),
+    )
     format: Literal["json", "text"] | None = Field(
         default=None,
         description="Response format: 'json' for structured data, 'text' for human-readable",
@@ -4687,6 +4728,7 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
             "applied_count": {"type": "integer"},
             "failed_count": {"type": "integer"},
             "saved": {"type": "boolean"},
+            "dry_run": {"type": "boolean"},
             "results": {
                 "type": "array",
                 "items": {
@@ -4724,7 +4766,9 @@ async def handle_apply_schematic_ops(
     validation_warnings: list[dict] = []
     async with _get_edit_lock(asc_path):
         editor = _get_asc_editor(asc_path, state)
-        _snapshot_asc(asc_path, state)
+        # A dry run makes no on-disk mutation, so the reset snapshot is moot.
+        if not args.dry_run:
+            _snapshot_asc(asc_path, state)
         try:
             for i, op in enumerate(args.ops):
                 entry: dict[str, object] = {"index": i, "op": op.op, "ok": True, "error": None}
@@ -4737,14 +4781,21 @@ async def handle_apply_schematic_ops(
                     entry["error"] = str(e)
                     failed += 1
                     results.append(entry)
-                    if args.stop_on_error:
+                    # In a dry run, attempt every op so all problems surface at once.
+                    if args.stop_on_error and not args.dry_run:
                         abort_reason = f"op #{i} ({op.op}) failed: {e}"
                         break
                     else:
                         continue
                 results.append(entry)
 
-            if args.stop_on_error and failed:
+            if args.dry_run:
+                # Validate-only: surface the would-be warnings but save nothing
+                # and discard the in-memory mutations (evict so the next caller
+                # re-reads the untouched file from disk).
+                validation_warnings = _post_op_warnings(editor)
+                state.editors.invalidate(asc_path)
+            elif args.stop_on_error and failed:
                 # Evict from cache so the next caller re-reads from disk; the
                 # in-memory mutations on ``editor`` are discarded with the
                 # local reference once this scope exits.
@@ -4764,8 +4815,14 @@ async def handle_apply_schematic_ops(
             state.editors.invalidate(asc_path)
             raise
 
-    summary_lines = [f"apply_schematic_ops on {asc_path.name}: {applied} ok, {failed} failed"]
-    if abort_reason:
+    header = "apply_schematic_ops (dry run)" if args.dry_run else "apply_schematic_ops"
+    summary_lines = [f"{header} on {asc_path.name}: {applied} ok, {failed} failed"]
+    if args.dry_run:
+        summary_lines.append(
+            "Dry run — nothing saved; the schematic is untouched. "
+            "Resubmit with dry_run=false to apply."
+        )
+    elif abort_reason:
         summary_lines.append(f"Transaction aborted — {abort_reason}")
         summary_lines.append("No changes were saved.")
     elif saved:
@@ -4783,6 +4840,7 @@ async def handle_apply_schematic_ops(
         "applied_count": applied,
         "failed_count": failed,
         "saved": saved,
+        "dry_run": args.dry_run,
         "results": results,
     }
     if validation_warnings:

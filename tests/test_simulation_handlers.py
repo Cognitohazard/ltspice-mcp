@@ -612,6 +612,15 @@ class TestResolveOutputFolder:
 
         monkeypatch.setattr(wsl, "is_wsl", lambda: False)
 
+    @staticmethod
+    def _force_wsl_linux_fs(monkeypatch):
+        # WSL with a working dir on the Linux filesystem (not /mnt/) — the branch
+        # that relocates artifacts off the UNC path.
+        from ltspice_mcp.lib import wsl
+
+        monkeypatch.setattr(wsl, "is_wsl", lambda: True)
+        monkeypatch.setattr(wsl, "is_windows_native_path", lambda p: False)
+
     async def test_self_contained_routes_to_sidecar(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch
     ):
@@ -640,6 +649,34 @@ class TestResolveOutputFolder:
         nl.write_text("* wl\nX1 in 0 RMOD\nV1 in 0 1\n.include models/r.lib\n.op\n.end\n")
         out = await resolve_output_folder(state_no_sim, nl)
         assert out == work_dir
+
+    async def test_wsl_linux_fs_local_include_stays_in_working_dir(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        # On WSL Linux-fs the deck would normally relocate off the UNC path, but a
+        # relative include must veto that too — else the moved deck can't find it.
+        from ltspice_mcp.tools._base import resolve_output_folder
+
+        self._force_wsl_linux_fs(monkeypatch)
+        (work_dir / "models").mkdir()
+        (work_dir / "models" / "r.lib").write_text(".subckt RMOD a b\nR1 a b 1k\n.ends\n")
+        nl = work_dir / "wl.cir"
+        nl.write_text("* wl\nX1 in 0 RMOD\nV1 in 0 1\n.include models/r.lib\n.op\n.end\n")
+        out = await resolve_output_folder(state_no_sim, nl)
+        assert out == work_dir
+
+    async def test_wsl_linux_fs_self_contained_relocates(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        # A self-contained deck still relocates off the UNC path on WSL Linux-fs.
+        from ltspice_mcp.tools._base import resolve_output_folder
+
+        self._force_wsl_linux_fs(monkeypatch)
+        nl = work_dir / "sc.cir"
+        nl.write_text("* sc\nR1 in 0 1k\nV1 in 0 1\n.op\n.end\n")
+        out = await resolve_output_folder(state_no_sim, nl)
+        assert out != work_dir
+        assert out != work_dir / ".ltspice-mcp" / "runs"
 
     async def test_libpath_name_still_sidecars(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch

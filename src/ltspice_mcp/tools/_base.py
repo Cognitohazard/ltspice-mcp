@@ -777,13 +777,14 @@ async def resolve_output_folder(state: SessionState, netlist_path: Path | None =
     files across the project root. It stays on the same filesystem as the
     working dir, so LTspice's .db writes keep working for a /mnt/ working dir.
 
-    Exception: output stays in the working dir when ``netlist_path`` is omitted,
-    or when it pulls in a sibling file via a relative ``.include``/``.lib``.
-    spicelib relocates the run netlist into the output folder, and a simulator
-    resolves a relative include against that moved netlist's directory — so
-    sidecar-ing a netlist with local dependencies would break the run.
-    Self-contained netlists (and ones using only absolute or lib-path-resolved
-    includes) get the sidecar.
+    Exception (overrides BOTH the sidecar and the WSL relocation above): output
+    stays in the working dir when ``netlist_path`` is omitted, or when it pulls
+    in a sibling file via a relative ``.include``/``.lib``. spicelib relocates
+    the run netlist into the output folder, and a simulator resolves a relative
+    include against that moved netlist's directory — so relocating a netlist with
+    local dependencies would break the run. Self-contained netlists (and ones
+    using only absolute or lib-path-resolved includes) get the sidecar (or the
+    WSL temp dir).
 
     Also adds the output dir to allowed_paths so analysis tools can read
     the result files via safe_path().
@@ -797,7 +798,15 @@ async def resolve_output_folder(state: SessionState, netlist_path: Path | None =
 
     from ltspice_mcp.lib.wsl import get_windows_output_dir, is_windows_native_path, is_wsl
 
-    if is_wsl() and not is_windows_native_path(state.working_dir):
+    # A netlist with relative local includes must run from its own dir so the
+    # simulator can resolve them — relocating it (to the sidecar OR the WSL
+    # temp/Windows dir) would orphan the include. Compute this once and let it
+    # veto every relocation branch below. For LTspice on a Linux-fs working dir
+    # this keeps the deck on a UNC path (so .db/.MEAS may degrade), but a
+    # resolvable include beats a simulation that can't start at all.
+    has_local_dep = netlist_path is not None and _netlist_has_local_dependency(netlist_path)
+
+    if is_wsl() and not is_windows_native_path(state.working_dir) and not has_local_dep:
         sim_cls = state.default_simulator
         is_ltspice = sim_cls is not None and issubclass(sim_cls, LTspice)
         if is_ltspice:
@@ -813,11 +822,9 @@ async def resolve_output_folder(state: SessionState, netlist_path: Path | None =
                 state.config.allowed_paths.append(out)
             return out
 
-    # A netlist with relative local includes must run from its own dir so the
-    # simulator can resolve them (see docstring). Keep those in the working dir;
-    # also stay there when no netlist was supplied — can't confirm it's safe to
-    # relocate.
-    if netlist_path is None or _netlist_has_local_dependency(netlist_path):
+    # Keep local-dependency decks in the working dir; also stay there when no
+    # netlist was supplied — can't confirm it's safe to relocate.
+    if netlist_path is None or has_local_dep:
         return state.working_dir
 
     # Keep simulation artifacts out of the project root: a single

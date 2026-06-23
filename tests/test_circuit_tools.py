@@ -860,6 +860,7 @@ class TestValidateNetlist:
         cir = work_dir / "b.cir"
         cir.write_text(
             "* b-source\n"
+            "V1 vp 0 1\n"
             "B1 amp 0 V = if(3.5*V(vp)>10, 10, if(3.5*V(vp)<-10, -10, 3.5*V(vp)))\n"
             "R1 amp 0 1k\n"
             ".tran 0 1m\n.end\n"

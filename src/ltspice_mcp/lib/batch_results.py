@@ -64,6 +64,12 @@ def compute_batch_stats(
     """
     per_run_summaries = []
     peak_values: list[float] = []
+    # Runs whose raw carries an inner .step sweep: we read only step 0, so the
+    # other steps are dropped. Surface them rather than silently collapse.
+    step_collapsed: list[int] = []
+    # Runs whose step metadata couldn't be read at all: step 0 is still returned,
+    # but dropped steps can't be ruled out — surface separately, never swallow.
+    step_unknown: list[int] = []
 
     for run_index in sorted(run_results.keys()):
         run = run_results[run_index]
@@ -75,6 +81,17 @@ def compute_batch_stats(
 
         try:
             raw = RawRead(raw_path, traces_to_read=signal, dialect=dialect)
+            try:
+                n_inner_steps = len(raw.get_steps())
+            except Exception:
+                # Step metadata unreadable: we still read step 0 below, but can't
+                # tell whether other steps were dropped. Surface that rather than
+                # silently assuming a single step — the failure mode this guard
+                # exists to remove.
+                step_unknown.append(run_index)
+            else:
+                if n_inner_steps > 1:
+                    step_collapsed.append(run_index)
             wave = raw.get_wave(signal, step=0)
 
             # AC (complex): use magnitude; transient: use raw values
@@ -108,6 +125,13 @@ def compute_batch_stats(
                     axis = np.real(axis)
                 if axis.size == 0:
                     continue
+                # A DC/param sweep axis may run high->low (e.g. ``.dc V1 5 0
+                # -0.1``). searchsorted assumes ascending order, so flip axis
+                # and wave together (both views, no copy) when descending —
+                # otherwise the slice silently returns the wrong sample.
+                if axis.size > 1 and axis[0] > axis[-1]:
+                    axis = axis[::-1]
+                    wave = wave[::-1]
                 # SPICE sweep axes are monotonic; binary-search beats
                 # ``argmin(abs(axis - at))`` which materializes a full
                 # diff array per run (multi-MB for long transients).
@@ -175,6 +199,8 @@ def compute_batch_stats(
         "at": at,
         "run_count": len(per_run_summaries),
         "runs": per_run_summaries,
+        "step_collapsed_runs": step_collapsed,
+        "step_unknown_runs": step_unknown,
         "stats": stats,
         # Neutral naming: "worst"/"best" would assume larger-peak = worse,
         # which has no inherent meaning for an arbitrary signal (e.g. a

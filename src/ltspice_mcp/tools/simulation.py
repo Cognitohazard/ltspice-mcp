@@ -79,8 +79,10 @@ class RunSimulationInput(ToolInput):
     timeout: float | None = Field(
         default=None,
         description=(
-            "Timeout in seconds. Simulations exceeding 30s run asynchronously unless "
-            "wait=true (which enforces a 600s hard cap — the run is killed at the cap)."
+            "Timeout in seconds (defaults to the server's configured default, 300s). "
+            "Simulations exceeding 30s run asynchronously unless wait=true. With "
+            "wait=true the effective limit is min(this timeout, 600s): 600s is a hard "
+            "ceiling, not a floor — pass a larger timeout to use the full 600s."
         ),
     )
     wait: bool = Field(
@@ -146,7 +148,9 @@ async def _get_or_create_runner(
 @registry.tool(
     name="run_simulation",
     description=(
-        "Run a SPICE simulation on a netlist file. "
+        "Run a SPICE simulation on a netlist file. Sets the right batch flags, "
+        "handles the ngspice headerless-raw dialect, routes the raw/log "
+        "artifacts, and parses the results — so you never hand-parse a rawfile. "
         "Automatically runs synchronously for short simulations (<=30s timeout) "
         "or asynchronously for longer ones. Use wait=true to force synchronous execution. "
         "Returns raw/log file paths and simulation summary on completion, "

@@ -29,10 +29,17 @@ from ltspice_mcp.lib.result_observations import surface_observations
 
 
 class _OperatingPointStepMeta(TypedDict, total=False):
-    """Optional step metadata populated by the tool layer."""
+    """Optional metadata populated by the tool layer."""
 
     step: int
     step_count: int
+    # SI unit per trace name (only entries the simulator typed); see ``trace_unit``.
+    units: dict[str, str]
+    # Echoed when a ``device=`` filter narrowed the result to one device.
+    device: str
+    # Nearest sweep value read when ``at=`` selects a .dc point.
+    sweep_value: float
+    warnings: list[str]
 
 
 class OperatingPointOutput(_OperatingPointStepMeta):
@@ -44,6 +51,7 @@ class OperatingPointOutput(_OperatingPointStepMeta):
 
     voltages: dict[str, float]
     currents: dict[str, float]
+    device_internals: dict[str, float]
 
 
 # Smallest positive normal float — floor for magnitude before log10 to avoid -inf
@@ -135,18 +143,94 @@ def real_axis(axis: np.ndarray) -> np.ndarray:
     return np.real(axis) if np.iscomplexobj(axis) else axis
 
 
-def nearest_index(axis: np.ndarray, target: float) -> int:
-    """Return the axis index nearest to ``target`` (binary search, O(log N)).
-
-    SPICE sweep axes are monotonic so ``np.searchsorted`` finds the bracket
-    in one call; the closer-of-pair check picks the better neighbour.
-    """
+def _nearest_ascending(axis: np.ndarray, target: float) -> int:
+    """Index in an ascending axis nearest ``target`` (binary search + closer-of-pair)."""
     ins = int(np.searchsorted(axis, target))
     if ins == 0:
         return 0
     if ins >= len(axis):
         return len(axis) - 1
     return ins - 1 if abs(axis[ins - 1] - target) < abs(axis[ins] - target) else ins
+
+
+def nearest_index(axis: np.ndarray, target: float) -> int:
+    """Return the axis index nearest to ``target`` (binary search, O(log N)).
+
+    SPICE sweep axes are monotonic but may run high->low (e.g. ``.dc Vg 1.8 0
+    -0.01``). ``np.searchsorted`` assumes ascending order, so on a descending
+    axis the bracket is found on the reversed view and the index mapped back —
+    otherwise every lookup lands at an endpoint and silently returns the wrong
+    sample. This is the one place all three readers (query_value in raw and
+    job-run modes, step_get) resolve a sweep point, so the direction handling
+    lives here, not in each caller.
+    """
+    n = len(axis)
+    if n == 0:
+        return 0
+    if n > 1 and axis[0] > axis[-1]:
+        return n - 1 - _nearest_ascending(axis[::-1], target)
+    return _nearest_ascending(axis, target)
+
+
+# whattype is spicelib's verbatim per-trace ``var_type`` from the raw header's
+# variable list (the simulator's own declaration). Map the known SPICE types to
+# an SI unit; an unknown type yields None rather than a wrong guess. The raw
+# trace name is always shown regardless — this only *adds* a unit when the
+# simulator stated the type, so it never invents one from a parameter name.
+_WHATTYPE_UNIT = {
+    "voltage": "V",
+    "current": "A",
+    "device_current": "A",
+    "time": "s",
+    "frequency": "Hz",
+    "hertz": "Hz",
+    "admittance": "S",
+    "capacitance": "F",
+}
+
+
+def whattype_unit(whattype: str | None) -> str | None:
+    """SI unit for a spicelib ``whattype`` string, or None if it is not a
+    known SPICE type. Pure string lookup — no raw access."""
+    if not whattype:
+        return None
+    return _WHATTYPE_UNIT.get(whattype.strip().lower())
+
+
+def trace_unit(raw: RawRead, name: str) -> str | None:
+    """SI unit for a trace: the simulator's declared ``whattype`` if it maps to
+    a known SPICE type, else the ``V(``/``I(`` name prefix, else None.
+
+    Deliberately never guesses a unit from a device-internal parameter name
+    (e.g. it won't claim ``@m1[gm]`` is siemens unless the simulator typed the
+    trace as ``admittance``) — that would be a vendor catalog, not a relay.
+    """
+    with contextlib.suppress(Exception):
+        unit = whattype_unit(getattr(raw.get_trace(name), "whattype", None))
+        if unit:
+            return unit
+    low = name.lstrip().lower()
+    if low.startswith("v("):
+        return "V"
+    if low.startswith("i") and "(" in low:
+        return "A"
+    return None
+
+
+def dc_axis_name(raw: RawRead) -> tuple[str | None, str | None]:
+    """``(name, SI unit)`` of a .dc sweep's swept-variable axis (trace 0).
+
+    Returns ``(None, None)`` if the axis name is unavailable. The unit comes from
+    the axis's declared ``whattype``. Lets the readers label a .dc sweep by its
+    swept variable (e.g. ``Vin`` / ``Vin_V``) instead of a generic ``t``/``sweep``
+    tag — the one place that introspection lives, shared by the text and CSV paths.
+    """
+    with contextlib.suppress(Exception):
+        ax = raw.get_trace(0)
+        name = getattr(ax, "name", None)
+        if name:
+            return str(name), whattype_unit(getattr(ax, "whattype", None))
+    return None, None
 
 
 def sample_to_dict(sample: complex | float | np.generic) -> dict[str, float]:
@@ -212,8 +296,10 @@ def query_point_value(raw: RawRead, trace_name: str, target_x: float, step: int 
 _OP_CURRENT_RE = re.compile(r"^I[A-Z]?\(", re.IGNORECASE)
 
 
-def extract_operating_point(raw: RawRead, step: int = 0) -> OperatingPointOutput:
-    """Extract DC operating point data (all node voltages and branch currents).
+def extract_operating_point(
+    raw: RawRead, step: int = 0, point_index: int = 0
+) -> OperatingPointOutput:
+    """Extract DC operating point data (node voltages, branch currents, device internals).
 
     Works best with Operating Point (.OP) simulations, but can extract
     first-point values from any simulation type. ``step`` selects which
@@ -224,19 +310,32 @@ def extract_operating_point(raw: RawRead, step: int = 0) -> OperatingPointOutput
         step: Step index for stepped .OP / .DC runs.
 
     Returns:
-        Dictionary with 'voltages' and 'currents' dicts mapping trace names to values.
-        All values are Python float.
+        Dictionary with 'voltages', 'currents', and 'device_internals' dicts
+        mapping trace names to values. All values are Python float.
     """
     trace_names = raw.get_trace_names()
 
     voltages = {}
     currents = {}
+    device_internals = {}
 
     for trace in trace_names:
         wave = raw.get_wave(trace, step=step)
         if len(wave) == 0:
             continue
-        value = float(wave[0])
+        # point_index selects a sweep point for a .dc raw (all traces share the
+        # axis); clamp so a stray index can't IndexError. Default 0 = .op bias.
+        value = float(wave[min(point_index, len(wave) - 1)])
+
+        # ngspice writes device small-signal / model parameters as @dev[param]
+        # — bare (@m1[gm]), or wrapped as v(@m1[vth]) / i(@m1[id]) depending on
+        # the quantity. These are model state, not a node voltage or branch
+        # current, so the '@' marker takes precedence over the V(/I( wrapping:
+        # otherwise v(@m1[vth]) is mislabeled a node voltage and bare @m1[gm]
+        # falls through both buckets and is dropped entirely.
+        if "@" in trace:
+            device_internals[trace] = value
+            continue
 
         # SPICE node names are case-insensitive; spicelib may return either case.
         trace_upper = trace.upper()
@@ -245,7 +344,11 @@ def extract_operating_point(raw: RawRead, step: int = 0) -> OperatingPointOutput
         elif _OP_CURRENT_RE.match(trace):
             currents[trace] = value
 
-    return {"voltages": voltages, "currents": currents}
+    return {
+        "voltages": voltages,
+        "currents": currents,
+        "device_internals": device_internals,
+    }
 
 
 def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -> dict:

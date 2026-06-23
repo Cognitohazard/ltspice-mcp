@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -400,9 +401,37 @@ def validate_signal(raw: RawRead, signal: str) -> str:
         candidates.append(sig_lower.replace(":", "."))
     if "." in sig_lower:
         candidates.append(sig_lower.replace(".", ":"))
+
+    # Device-internal small-signal / model parameters. ngspice writes these as
+    # @dev[param] depending on the quantity: bare (@m1[gm]), v-wrapped
+    # (v(@m1[vth])), or i-wrapped (i(@m1[id])). Accept a uniform 'dev.param'
+    # shorthand (e.g. 'm1.gm') and resolve to whichever form the raw contains.
+    # 'dev.param' shorthand (e.g. 'm1.gm'), including a flattened subcircuit-
+    # hierarchical device path ('m.x1.mn.gm'): everything before the LAST dot is
+    # the device, the last segment is the parameter.
+    dev_param = re.fullmatch(r"([a-z][\w.]*)\.([a-z]\w*)", sig_lower)
+    if dev_param:
+        dev, param = dev_param.group(1), dev_param.group(2)
+        candidates += [f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"]
+
     for cand in candidates:
         if cand in by_lower:
             return by_lower[cand]
+
+    # Hierarchical path that drops the device-type letter, e.g. 'x1.mn.gm' for
+    # ngspice's '@m.x1.mn[gm]'. Match a unique @<path>[param] whose device path
+    # ends with the requested segments; refuse if ambiguous — never guess.
+    if dev_param:
+        dev, param = dev_param.group(1), dev_param.group(2)
+        suffix = "." + dev
+        wrapped = re.compile(r"^[vi]?\(?@(.+)\[" + re.escape(param) + r"\]\)?$")
+        hits = [
+            orig
+            for low, orig in by_lower.items()
+            if (m := wrapped.match(low)) and (m.group(1) == dev or m.group(1).endswith(suffix))
+        ]
+        if len(hits) == 1:
+            return hits[0]
 
     available = ", ".join(trace_names[:10])
     if len(trace_names) > 10:
@@ -418,6 +447,13 @@ def validate_signal(raw: RawRead, signal: str) -> str:
         "v(onoise)" in trace_lo or "v(inoise)" in trace_lo
     ):
         hint = " (LTspice names noise signals 'V(onoise)'/'V(inoise)')"
+    elif dev_param or "@" in sig_lo:
+        save_target = f"@{dev_param.group(1)}[{dev_param.group(2)}]" if dev_param else signal
+        hint = (
+            f" Device internals are written only when explicitly saved — add "
+            f"'.save {save_target}' to the deck and re-run with ngspice (LTspice "
+            f"'.op' does not export @dev[param] internals)."
+        )
     raise ResultError(f"Signal '{signal}' not found.{hint} Available signals: {available}")
 
 
@@ -597,6 +633,13 @@ def job_duration_seconds(
     return delta
 
 
+def _copy_present(out: dict, src: dict, *keys: str) -> None:
+    """Copy each key from src to out when it holds a truthy value (skip empty)."""
+    for k in keys:
+        if src.get(k):
+            out[k] = src[k]
+
+
 async def get_batch_signal_data(
     batch_job: BatchJob,
     signal: str,
@@ -678,6 +721,7 @@ async def get_batch_signal_data(
             "offset": offset,
             "limit": limit,
         }
+        _copy_present(out_raw, page_stats, "step_collapsed_runs", "step_unknown_runs")
         if convergence:
             out_raw["convergence_warnings"] = convergence
         return out_raw
@@ -702,6 +746,7 @@ async def get_batch_signal_data(
         "max_case_run": batch_stats["max_case_run"],
         "min_case_run": batch_stats["min_case_run"],
     }
+    _copy_present(out, batch_stats, "step_collapsed_runs", "step_unknown_runs")
     if convergence:
         out["convergence_warnings"] = convergence
     return out

@@ -10,6 +10,38 @@ tool-surface changes.
 
 ### Added
 
+- Device internals (small-signal / model parameters like `gm`, `gds`, `vth`,
+  `id`) are now first-class. ngspice writes them as `@dev[param]` traces when
+  `.save`d, but they were silently dropped or mislabeled. Now: `operating_point`
+  surfaces them in a `device_internals` bucket; and on a `.dc`/`.tran` sweep the
+  by-name readers (`query_value`/`signal_stats`/`export_waveform`) accept a
+  uniform `dev.param` shorthand (e.g. `m1.gm`) that resolves to whichever wrapped
+  form the raw holds (`@m1[gm]` / `v(@m1[vth])` / `i(@m1[id])`). This is the
+  gm/ID characterization read. A `dev.param` that isn't in the raw now hints at
+  the missing `.save`.
+- `validate_netlist` and `export_netlist` now warn when a `.meas`, output
+  directive, or behavioral source references `V(name)`/`I(name)` for a node or
+  device the netlist doesn't define — the common case being a schematic net that
+  was wired but never labeled (so it exports as `N00x` while a `.meas V(vref)`
+  still asks for `vref` and silently resolves to nothing), plus plain typos. The
+  known-name set is deliberately over-approximated, so the check only fires on a
+  genuinely-absent name; hierarchical refs (`V(X1:out)`) and expression fragments
+  (`V(a*2)`) are left alone. `validate_netlist` runs it on `.cir`/`.net`;
+  `export_netlist` runs it on the exported netlist (where an `.asc`'s final net
+  names and its directives sit together).
+- `bode_metrics` accepts a transfer-function ratio as its `signal` —
+  `V(out)/V(mid)` divides the two complex AC traces before any mode runs, so
+  inter-stage gain, loop gain, and PSRR (which the simulator never stores as a
+  single trace) are analyzable directly instead of via a deck-side behavioral
+  node. Restricted to a single two-signal quotient; all four modes and
+  `all_steps` work on the ratio. A denominator that nulls (the ratio is
+  singular — a genuine pole) is reported with the offending frequencies rather
+  than silently dropped, so a hidden pole can't skew the metrics.
+- `apply_schematic_ops` gained a `dry_run` flag: it validates the whole batch
+  against an in-memory copy and reports per-op results without writing the file.
+  Every op is attempted (errors don't stop the run), so one bad op surfaces all
+  problems at once instead of rolling back a good batch — check the plan, then
+  resubmit the corrected ops with `dry_run=false`.
 - MCP prompts (workflow starters a host surfaces as slash-commands):
   `characterize_filter`, `run_and_plot`, and `step_response`. Each emits the
   canonical tool pipeline for that task with the circuit path filled in.
@@ -18,9 +50,45 @@ tool-surface changes.
   `uv` (the plugin runs `uvx`; the extension is a `type: "uv"` bundle) and so
   require `uv` and a simulator (LTspice or ngspice) on the host rather than
   bundling either.
+- `thd` tool: total harmonic distortion (THD and THD+N) of a periodic transient
+  signal computed by FFT — no `.four` directive needed, and works on any
+  simulator. Defaults to coherent sampling (the record is trimmed to a whole
+  number of fundamental cycles and a rectangular window is used) so harmonics
+  land exactly on FFT bins and the result is exact; `window="hann"` is the
+  approximate fallback. The fundamental is auto-detected (sub-bin accurate) or
+  given. Every condition the number depends on is surfaced — the fundamental and
+  whether it was given or detected, the window kind, cycles analyzed, FFT length,
+  sample rate, per-harmonic levels — and the tool warns rather than lying when a
+  window turns out non-coherent or the FFT-length cap forces a down-sampling that
+  could alias.
+- `noise_integral` tool: integrates a `.noise` spectral density to a total RMS
+  over a band as `sqrt(∫ density² df)` (the amplitude-density convention shared
+  by LTspice's `V(onoise)` and ngspice's `onoise_spectrum`). Reports the band
+  actually integrated and the sample count; handles a high→low sweep. Noise
+  figure / SNR are left to the caller (they need the source resistance and a
+  reference level).
+- `operating_point` gained a `device=` filter that returns just one device's
+  internals and terminal currents (e.g. `device="M1"` → `@m1[...]` plus
+  `Id/Ig/Is(M1)`) in a single call, refusing an unknown device with the list of
+  devices present. Every returned value now carries its SI unit in a `units` map
+  where the simulator declared the trace type.
+- `query_value` and `export_waveform` now attach SI units derived from the
+  simulator's declared trace type (`query_value` returns a `unit`; the CSV's
+  value columns are unchanged but the DC x-column is named — see Changed).
 
 ### Changed
 
+- `max_parallel_sims` now defaults to the host core count capped at 8 (was a
+  flat 4, so a many-core box was throttled out of the box). Still overridable via
+  `[simulation] max_parallel` / `LTSPICE_MCP_MAX_PARALLEL` up to 128; the cap
+  keeps parallel cold simulator processes from thrashing memory/IO.
+- Sweep cross-products are now capped at 10000 runs, matching the existing Monte
+  Carlo cap. A multi-axis sweep (e.g. 5×5×16×100) previously spawned tens of
+  thousands of cold simulator processes silently; it's now refused at
+  `configure_sweep` with the offending dimension sizes. The cap is computed from
+  each dimension's *count* before any value list is built, so a single fat
+  dimension (`points=1e9`, or a tiny `step` over a wide range) is rejected
+  without `np.linspace`/`np.arange` allocating a multi-GB array first.
 - **Breaking:** MCP resource URIs moved from the `ltspice://` scheme to
   `spice://` (`spice://results/...`, `spice://netlists/...`, `spice://config`,
   `spice://guide`, etc.). These resources are engine-agnostic, so the scheme no
@@ -61,9 +129,82 @@ tool-surface changes.
   available on 3.11, so 3.11 and 3.12 users can now install. CI (and the
   release gate) now runs the full test suite on 3.11, 3.12, and 3.13, so the
   advertised floor is proven on every push.
+- **Breaking:** `measurement_stats` renamed its `best_step_index` /
+  `worst_step_index` fields to `min_step_index` / `max_step_index`. "Best" and
+  "worst" implied a verdict the tool can't justify — whether a low or high value
+  is "best" depends on what was measured — so the fields now name the plain fact
+  (the step index where the min / max value occurred). No alias is kept (this is
+  a pre-1.0 clean break); the structured `outputSchema` advertises the new names.
+- `query_value` and the `export_waveform` CSV now label a `.dc` sweep axis by
+  its swept variable (e.g. `Vin` / a `Vin_V` CSV header) instead of a misleading
+  `t=` / a bare `sweep` column.
+- The "device internal not found" hint is now imperative and fires for a bare
+  `@dev[param]` request too: it tells you to add `.save @dev[param]` and re-run
+  with ngspice, rather than passively noting the value exists elsewhere.
 
 ### Fixed
 
+- The batch result reader no longer silently returns the wrong sample on a
+  descending sweep axis. A `.dc V1 5 0 -0.1` (or any high→low parameter sweep)
+  produces a descending axis, but the `at=` slice used a binary search that
+  assumes ascending order — so asking for the value at one axis point could
+  return the value at another. The axis and its wave are now flipped to ascending
+  before the search; ascending sweeps are unaffected, and the per-run work stays
+  allocation-free.
+- `batch_results` now surfaces, rather than silently drops, per-step data it
+  cannot aggregate. A run whose `.raw` carries its own `.step` sweep is read at
+  step 0 only; those runs are now reported in `step_collapsed_runs` with a note
+  pointing at `get_waveform`/`query_value` (`job_id`, `run_index`, `step=<n>`) for
+  the remaining steps. If step metadata can't be read at all, the run is reported
+  in `step_unknown_runs` instead of being silently assumed single-step — step 0 is
+  still returned, so the readable data is never dropped.
+- `configure_sweep` now warns when a parameter axis is named `temp`/`temperature`:
+  it is emitted as `.param temp=…`, which does not set the simulation temperature
+  (SPICE controls that via `.temp`, `.options temp`, or `.step temp`), so a
+  "temperature sweep" would otherwise run silently at a single temperature.
+- `batch_results`' `raw=true` mode is now documented honestly: it returns per-run
+  *reduced* rows (a single `value`, or peak/mean/min), not raw sample vectors. For
+  the actual samples (e.g. a gm/ID table) use `export_waveform`/`get_waveform` with
+  `job_id`+`run_index`.
+- `query_value` (raw and job-run modes) and the step-by-axis-value lookup now
+  resolve the nearest point correctly on a descending sweep axis. They share the
+  same binary-search resolver as the batch reader, which was ascending-only — so
+  a high→low `.dc`/`.step` lookup could land on the wrong point. The direction
+  handling now lives in that one resolver.
+- `operating_point` now carries the simulator's "unrecognized variable" warning:
+  a `.save`d `@dev[param]` the device class doesn't have (a typo, or an
+  unsupported parameter) is written to the raw as a real-looking `0.0`, which was
+  indistinguishable from a true zero. The log warning that says it's bogus is now
+  surfaced alongside the value.
+- `validate_netlist`'s dangling-reference check no longer false-flags simulator
+  reserved traces (`onoise`/`inoise`/`time`/`frequency`/…) or probe references
+  inside `.meas` / output directives as undefined nodes.
+- `periodic_metrics` warns when edge spacing is strongly bimodal — the signature
+  of a frequency/duty reading that is off by ~2x because alternate edges were
+  miscounted.
+- Schematic guidance no longer tells you to leave every signal net unlabeled.
+  `connect` wires pins but assigns no net name, so an unlabeled net exports as
+  `N001`/`N002`/… — silently breaking any `.meas V(vref)`, `.param` expression,
+  or behavioral `B`-source that references the net by name. The `create_schematic`
+  checklist, its tool description, and the `spice://guide` "Named nets" section now
+  state the rule: wire-only is fine for nets you never name, but label any net a
+  directive references by name with `add_net_label`.
+- A cancelled or timed-out simulation now has its partial output reclaimed
+  instead of stranded on disk. A timed-out LTspice run can keep its `.raw`
+  open and reach several GB; previously that file (and the run netlist/log)
+  was left behind forever. The runner now deletes the run's artifacts when the
+  killed process's completion callback fires (the point at which the file
+  handle is released). Cleanup is gated to the killed statuses, so a completed
+  run's good output is never removed.
+- `get_waveform` overview buckets are capped at 2000 (was the
+  `max_points_returned` ceiling, which is sized for one-value-per-point arrays).
+  Each bucket carries ~8 scalar fields, so requesting the old maximum serialized
+  past the MCP response budget and spilled to a file at the tool's own
+  documented limit. The default (200) is unchanged.
+- Clarified the `run_simulation` `timeout` help: with `wait=true` the effective
+  limit is `min(timeout, 600s)` — 600s is a hard ceiling, not a floor — so the
+  default 300s timeout is what bounds a `wait=true` run unless a larger timeout
+  is passed.
 - `add_component` (and `apply_schematic_ops` add-component) no longer fail with
   an opaque "Internal error" on two real-world cases:
   - **Vendor symbols with non-ASCII descriptions.** Hundreds of LTspice's
@@ -80,6 +221,14 @@ tool-surface changes.
     `SchematicComponent`; construction now uses `AscComponent` (the type
     spicelib's own parser builds) when present. The dependency is also capped to
     the tested range (see below), so a default install keeps working today.
+- The parsed-result cache is now bounded (LRU, 32 entries). It was unbounded, so
+  a long-lived session querying many circuits pinned every `.raw` it ever parsed
+  (each potentially multi-MB) in memory. The editor cache stays unbounded by
+  design — it can hold unsaved in-memory edits that eviction would drop.
+- A netlist with a relative `.include`/`.lib` now also keeps its run in the
+  working dir on WSL with a Linux-filesystem working dir — that branch relocates
+  artifacts off the UNC path, but previously did so before the local-dependency
+  check, orphaning the include. Self-contained decks still relocate.
 - Simulation artifacts no longer flood the working directory. Runs that
   previously dropped their `.raw`/`.log`/`.db`/`.op.raw`/netlist files directly
   into the project root (the non-WSL-Linux and WSL-on-`/mnt/` cases) now write
