@@ -1572,7 +1572,7 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
             )
         from ltspice_mcp.tools.circuit import StepGetInput, handle_step_get
 
-        return await handle_step_get(
+        result = await handle_step_get(
             StepGetInput(
                 raw_file=step_raw,
                 axis=args.step_axis,
@@ -1583,6 +1583,13 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
             ),
             state,
         )
+        # The stepped read returns a fake 0.0 for an unrecognized @-param and a
+        # real-looking value from a failed solve just like the direct path, so it
+        # gets the same diagnostic relay. The handler resolved the signal name
+        # into structuredContent; reuse it for the per-signal filter.
+        step_raw_path = safe_path(step_raw, state)
+        resolved = (result.structuredContent or {}).get("signal") or args.signal
+        return await _relay_diagnostics_into(result, step_raw_path, resolved, args.format)
 
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     signal = args.signal
@@ -1653,7 +1660,8 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
     out = {"signal": signal, **result_data}
     if value_unit:
         out["unit"] = value_unit
-    return format_response("\n".join(lines), out, fmt)
+    result = format_response("\n".join(lines), out, fmt)
+    return await _relay_diagnostics_into(result, raw_path, signal, fmt)
 
 
 def _format_measurements(
@@ -1781,22 +1789,101 @@ def _operating_point_units(raw, op_data: dict) -> dict[str, str]:
     return units
 
 
-def _unrecognized_save_warnings(raw_path: Path) -> list[str]:
-    """Log warnings about ``.save``'d variables the simulator didn't recognize.
+# Canonical SPICE solve-failure phrases. When the log carries one, the whole
+# numeric solve is suspect — it taints every value read, not one trace — so a
+# read tool relays it regardless of which signal was asked for. (The convergence
+# entry is "no convergence", not bare "convergence", so a benign "convergence
+# achieved" line doesn't trip it.)
+_SOLVE_FAILURE_PHRASES = (
+    "singular matrix",
+    "no convergence",
+    "time step too small",
+    "timestep too small",
+    "gmin stepping failed",
+    "source stepping failed",
+    "iteration limit reached",
+)
 
-    A typo'd or unsupported ``@dev[param]`` is written to the raw as a
-    real-looking ``0.0`` trace; the only signal that it's bogus is the
-    simulator's unrecognized-variable warning, which lives in the .log.
+
+def _read_log_warnings(raw_path: Path) -> tuple[list[str], list[str]]:
+    """``(unrecognized-variable warnings, run-level solve-failure lines)`` from
+    the sibling ``.log``.
+
+    The first is per-signal: a typo'd or unsupported ``.save``'d ``@dev[param]``
+    is written to the raw as a real-looking ``0.0`` trace, and the only tell
+    that it's bogus is the simulator's unrecognized-variable warning. The second
+    is run-wide: a singular/non-converged solve taints every value, so a read
+    relays it whatever trace was asked for.
     """
     log_path = raw_path.with_suffix(".log")
     if not log_path.exists():
-        return []
+        return [], []
     diags = extract_log_diagnostics(log_path)
-    return [
+    unrecognized = [
         w
         for w in diags["warnings"]
         if "unrecognized" in w.lower() or "can't find" in w.lower() or "@" in w
     ]
+    solve_failures = [
+        line
+        for line in (*diags["warnings"], *diags["errors"])
+        if any(p in line.lower() for p in _SOLVE_FAILURE_PHRASES)
+    ]
+    return unrecognized, solve_failures
+
+
+async def _query_log_warnings(raw_path: Path, signal: str) -> list[str]:
+    """Final warning strings for a single-value read: the signal-filtered
+    unrecognized-variable message (only when the queried trace IS the bogus one,
+    matched by its ``@dev[param]`` token or the resolved name) plus any run-level
+    solve-failure lines. Shared by both query_value paths."""
+    unrecognized, solve_failures = await asyncio.to_thread(_read_log_warnings, raw_path)
+    sig_l = signal.lower()
+    at_match = re.search(r"@[\w.]+\[[^\]]*\]", sig_l)
+    at_token = at_match.group(0) if at_match else None
+    sig_warns = [
+        w
+        for w in unrecognized
+        if sig_l in w.lower() or (at_token is not None and at_token in w.lower())
+    ]
+    warnings: list[str] = []
+    if sig_warns:
+        warnings.append(
+            f"Queried {signal!r}, but the simulator did not recognize it (see log) "
+            "— this value is not a real result: " + "; ".join(sig_warns)
+        )
+    warnings.extend(solve_failures)
+    return warnings
+
+
+async def _relay_diagnostics_into(
+    result: types.CallToolResult, raw_path: Path, signal: str, fmt: str | None
+) -> types.CallToolResult:
+    """Append the simulator's log diagnostics to an already-built query_value
+    result, whichever internal path produced it (direct ``at`` or ``step_axis``).
+
+    Keeps the structuredContent ``warnings`` list and the text in sync: for
+    ``fmt="json"`` the text is a JSON snapshot of structuredContent, so it is
+    re-dumped; otherwise the warnings are appended as ``⚠`` lines.
+    """
+    warnings = await _query_log_warnings(raw_path, signal)
+    if not warnings:
+        return result
+    sc = result.structuredContent
+    if isinstance(sc, dict):
+        existing = sc.get("warnings")
+        sc["warnings"] = [*existing, *warnings] if isinstance(existing, list) else list(warnings)
+    if fmt == "json":
+        if isinstance(sc, dict) and result.content:
+            block = result.content[0]
+            if isinstance(block, types.TextContent):
+                block.text = json.dumps(sc, indent=2)
+    else:
+        for block in result.content:
+            if isinstance(block, types.TextContent):
+                block.text += "\n" + "\n".join(f"⚠ {w}" for w in warnings)
+                break
+    return result
 
 
 @registry.tool(
@@ -1894,13 +1981,16 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     # Unit per trace, only where the simulator declared the type (2a).
     op_data["units"] = _operating_point_units(raw, op_data)
 
-    # Carry the simulator's unrecognized-variable diagnostic: a .save'd @-param
-    # the model doesn't expose (a typo, or one that device class lacks) is
-    # written as a real-looking 0.0 trace — indistinguishable from a true 0
-    # without the log warning that says it's bogus.
-    save_warnings = await asyncio.to_thread(_unrecognized_save_warnings, raw_path)
-    if save_warnings:
-        op_data.setdefault("warnings", []).extend(save_warnings)
+    # Carry the simulator's own diagnostics. An unrecognized .save'd @-param
+    # (a typo, or one that device class lacks) is written as a real-looking 0.0
+    # trace — indistinguishable from a true 0 without the log warning that says
+    # it's bogus. A solve failure (singular/non-converged) taints every value
+    # here, so it's relayed too. operating_point returns every trace, so the
+    # full unrecognized list is relevant.
+    unrecognized, solve_failures = await asyncio.to_thread(_read_log_warnings, raw_path)
+    relayed = [*unrecognized, *solve_failures]
+    if relayed:
+        op_data.setdefault("warnings", []).extend(relayed)
 
     # LTspice .op exports no @dev[param] small-signal table, so device_internals
     # is empty even for a circuit full of transistors. When active devices are
@@ -1975,7 +2065,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
             lines.append("")
         lines.append(f"⚠ {internals_note}")
 
-    for w in save_warnings:
+    for w in relayed:
         lines.append(f"⚠ {w}")
 
     return format_response("\n".join(lines), op_data, fmt)
