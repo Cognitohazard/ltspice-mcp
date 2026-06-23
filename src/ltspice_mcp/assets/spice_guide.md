@@ -113,6 +113,39 @@ PWL file=<filename>
 
 ---
 
+## Reading device internals (gm/ID characterization)
+
+The small-signal / model parameters of a MOSFET/BJT/diode (gm, gds, gmbs, vth,
+vdsat, gm/ID, the capacitances) come back from this server as **named numbers** —
+no rawfile parsing, no `.control`/`wrdata` block. Requires ngspice (LTspice's
+`.op` does not export `@dev[param]` internals). Recipe:
+
+1. **Write a plain deck** with a native bias sweep and a `.save` of the internals
+   you want:
+   ```spice
+   M1 d g 0 0 nch L=0.18u W=2u
+   Vd d 0 1.8
+   Vg g 0 0.9
+   .dc Vg 0 1.8 0.01      ; sweep the gate
+   .save @m1[gm] @m1[gds] @m1[vth] @m1[id]
+   .lib /path/to/models.lib
+   .end
+   ```
+2. **Run it**: `run_simulation` (sets batch flags, handles the headerless-raw
+   dialect, routes artifacts).
+3. **Read it back**:
+   - whole internal set across the sweep, one CSV → `export_waveform(signals=['m1.gm','m1.gds','m1.id'])` — this IS the gm/ID table.
+   - one value at a chosen bias → `query_value(signal='m1.gm', at=...)`.
+   - the full bias snapshot of one device at a point → `operating_point(device='M1')`.
+
+Address an internal by the `m1.gm` shorthand or its literal `@m1[gm]` name; the
+tools resolve the bare / `v()` / `i()` wrapping, and a subcircuit path like
+`x1.m1.gm`, for you. Values carry SI units where ngspice declares the trace type.
+Do NOT reach for `configure_sweep` here — a native `.dc Vds Vgs` is one deck, not
+N separate runs.
+
+---
+
 ## LTspice-Specific
 
 ### Parameters and Expressions
@@ -307,6 +340,7 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 - **One ground per pin**: Each component's ground connection gets its own `add_net_label` op at the pin's coordinates — do not share ground flags between components.
 - **Do not use `connect` with `net:0`** when multiple ground labels exist — the tool errors on ambiguous net references. Place ground flags directly at pin coordinates with an `add_net_label` op (`net="0", pin="M3.S"`) — no wire needed when the flag is on the pin.
 - **Named nets (VDD, outp, etc.)**: Use a single label per unique net name. Connect components to it via `connect` with `net:NAME` or waypoints.
+- **Label any net you reference by name in a directive.** `connect` wires pins but assigns no name — at export an unlabeled net becomes `N001`, `N002`, …. So a `.meas V(vref)`, a `.param` expression using `V(x)`, or a behavioral `B`-source referencing `V(name)` silently breaks unless that exact net carries an `add_net_label`. Rule of thumb: wire-only is fine for nets you never name; **label any net a directive mentions by name.**
 
 **Sources:**
 - **Voltage source polarity**: `+` pin is at the top (smaller y), `-` at bottom. For VDD sources, `+` connects to the supply rail, `-` to ground.
@@ -341,8 +375,12 @@ ngspice shares the **SPICE Fundamentals** above, with these deltas:
   it floats silently.
 - Extra `.meas` types: `MIN_AT`, `MAX_AT`, `DERIV`, `param='expr'`,
   `par('expr')`. `.meas ... FIND` takes `V(out)` (no `mag()` wrapper).
-- `.meas` does NOT work in batch mode combined with `-r rawfile` — data streams
-  to disk and is unavailable for analysis. Use a `.control` block instead.
+- `.meas` does NOT work in batch mode combined with `-r rawfile` — the data
+  streams to disk and the `.meas` scalars are unavailable. But for named signals
+  and device internals you do NOT need a `.control` block: `.save` them and read
+  the raw back with run_simulation + export_waveform / query_value /
+  operating_point. Reserve `.control` / `wrdata` for in-engine computation you
+  genuinely can't express as a saved signal.
 
 ### Parameters and Expressions
 
@@ -462,6 +500,12 @@ X1 input output myfilter rval=1k cval=1n
 - Without `.save`, all node voltages and source currents are saved (huge files).
 - Adding even ONE `.save` line drops all defaults — only listed signals saved.
 - `.save @r1[i]` for resistor current (not available via `I()` syntax).
+- Saved device internals (`@m1[gm]`, `v(@m1[vth])`, `i(@m1[id])`, …) are surfaced
+  by `operating_point` in a `device_internals` bucket (a bare `.op`), and on a
+  `.dc`/`.tran` sweep are readable by the `dev.param` shorthand — `query_value`/
+  `signal_stats`/`export_waveform` accept `m1.gm` and resolve it to the actual
+  trace. This is the gm/ID idiom: `.dc Vg …` + `.save @m1[gm] @m1[id]`, then read
+  `m1.gm`/`m1.id` per sweep point.
 
 ### .control / .endc Blocks
 

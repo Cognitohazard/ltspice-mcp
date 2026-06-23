@@ -247,3 +247,45 @@ class TestFileCache:
         # Missing: stat failure also reads as a miss.
         p.unlink()
         assert cache.peek(p) is None
+
+    def test_unbounded_by_default_keeps_all(self, tmp_path: Path):
+        cache: FileCache[str] = FileCache()
+        for i in range(50):
+            p = tmp_path / f"f{i}"
+            p.write_text(str(i))
+            cache.get(p, lambda path: path.read_text())
+        assert len(cache) == 50
+
+    def test_maxsize_evicts_least_recently_used(self, tmp_path: Path):
+        cache: FileCache[str] = FileCache(maxsize=2)
+        calls: dict[str, int] = {}
+
+        def factory(p: Path) -> str:
+            calls[p.name] = calls.get(p.name, 0) + 1
+            return p.read_text()
+
+        a, b, c = (tmp_path / n for n in ("a", "b", "c"))
+        for f in (a, b, c):
+            f.write_text(f.name)
+
+        cache.get(a, factory)  # [a]
+        cache.get(b, factory)  # [a, b]
+        cache.get(c, factory)  # over cap -> evict a -> [b, c]
+        assert len(cache) == 2
+        assert a not in cache and b in cache and c in cache
+
+        cache.get(a, factory)  # a was evicted -> factory runs again
+        assert calls["a"] == 2
+        assert calls["b"] == 1 and calls["c"] == 1
+
+    def test_get_hit_refreshes_recency(self, tmp_path: Path):
+        cache: FileCache[str] = FileCache(maxsize=2)
+        a, b, c = (tmp_path / n for n in ("a", "b", "c"))
+        for f in (a, b, c):
+            f.write_text(f.name)
+
+        cache.get(a, lambda p: p.read_text())  # [a]
+        cache.get(b, lambda p: p.read_text())  # [a, b]
+        cache.get(a, lambda p: p.read_text())  # touch a -> b is now LRU
+        cache.get(c, lambda p: p.read_text())  # evict b -> [a, c]
+        assert a in cache and c in cache and b not in cache

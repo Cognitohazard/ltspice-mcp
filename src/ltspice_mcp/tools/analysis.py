@@ -6,7 +6,8 @@ return derived metrics. Organized by what the tool answers:
     Scalar summaries:
         signal_stats        — mean/RMS/pk-pk/etc for one signal
         query_value         — value at a specific time/frequency
-        operating_point     — DC node voltages + branch currents
+        operating_point     — DC node voltages, branch currents, per-device
+                              internals (gm/gds/vth/…); device= scopes to one
 
     Waveform metrics (transient only, reject AC):
         edge_metrics        — rise/fall time + slew rate
@@ -28,9 +29,10 @@ import contextlib
 import csv
 import json
 import math
+import re
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 import numpy as np
 from mcp import types
@@ -53,13 +55,18 @@ from ltspice_mcp.lib.ac_analysis import (
     compute_stability_metrics,
     find_crossings_any_quantity,
     gain_at_frequencies,
+    integrate_noise,
     prepare_ac_arrays,
     unwrap_phase_safe,
 )
 from ltspice_mcp.lib.ac_structure import AcStructureResult, analyze_ac_structure
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.job_store import SIDECAR_DIRNAME
-from ltspice_mcp.lib.log_parser import parse_measurements, parse_step_iterations
+from ltspice_mcp.lib.log_parser import (
+    extract_log_diagnostics,
+    parse_measurements,
+    parse_step_iterations,
+)
 from ltspice_mcp.lib.plot_html import (
     WIDGET_RESOURCE_URI,
     WIDGET_SPEC_META_KEY,
@@ -69,24 +76,30 @@ from ltspice_mcp.lib.raw_parser import (
     OperatingPointOutput,
     build_simulation_summary,
     compute_ac_bandwidth_metrics,
+    dc_axis_name,
     detect_sim_type,
     extract_operating_point,
     get_step_count,
     is_ac_analysis,
     is_dc_analysis,
     is_noise_analysis,
+    nearest_index,
     query_point_value,
+    real_axis,
     safe_magnitude_db,
+    trace_unit,
 )
 from ltspice_mcp.lib.signal_analysis import (
     EdgeMetricsOutput,
     MeasurementStatsEntry,
     PeriodicMetricsOutput,
     PulseResponseOutput,
+    ThdOutput,
     TimingBetweenOutput,
     analyze_edge,
     analyze_periodic,
     analyze_pulse_response,
+    analyze_thd,
     analyze_timing_between,
     compute_measurement_stats,
     compute_signal_stats,
@@ -278,7 +291,13 @@ class SignalStatsInput(ToolInput):
         default=0,
         description="0-based run to analyze when ``job_id`` is given (default 0).",
     )
-    signal: str = Field(description="Signal/trace name (e.g., 'V(out)', 'I(R1)').")
+    signal: str = Field(
+        description=(
+            "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device-internal "
+            "shorthand for an ngspice .save'd parameter: 'm1.gm' / 'm1.vth' "
+            "(resolves to '@m1[gm]', incl. subcircuit paths like 'x1.m1.gm')."
+        )
+    )
     step: int = Field(default=0, description="Step index for .step directives")
     t_start: str | None = Field(
         default=None,
@@ -396,7 +415,13 @@ class QueryValueInput(ToolInput):
         default=0,
         description="0-based run to analyze when ``job_id`` is given (default 0).",
     )
-    signal: str = Field(description="Signal/trace name (e.g., 'V(out)', 'I(R1)').")
+    signal: str = Field(
+        description=(
+            "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device-internal "
+            "shorthand for an ngspice .save'd parameter: 'm1.gm' / 'm1.vth' "
+            "(resolves to '@m1[gm]', incl. subcircuit paths like 'x1.m1.gm')."
+        )
+    )
     at: str | None = Field(
         default=None,
         description=(
@@ -450,6 +475,25 @@ class OperatingPointInput(ToolInput):
             "Step index for stepped .OP runs (e.g. ``.step temp ...`` + ``.op``). "
             "Default 0 returns the first step. Out-of-range values raise a "
             "structured error rather than silently returning the wrong step."
+        ),
+    )
+    at: str | None = Field(
+        default=None,
+        description=(
+            "For a .dc sweep raw: the sweep-axis VALUE to read the full bias "
+            "snapshot at (SPICE notation, e.g. '2.5', '1.2'). Nearest point is "
+            "used. Default reads the sweep's first point; ignored for plain .op "
+            "runs (no sweep axis)."
+        ),
+    )
+    device: str | None = Field(
+        default=None,
+        description=(
+            "Narrow the result to one device: its saved internals (@dev[param]) "
+            "and its terminal currents (e.g. Id/Ig/Is(M1)), each typed with its "
+            "unit. Pass the reference exactly as it appears in the trace name "
+            "(e.g. 'M1', 'Q2', or a subcircuit path 'x1.mn'). Default returns "
+            "the whole circuit."
         ),
     )
     format: Literal["json", "text"] | None = Field(
@@ -732,6 +776,14 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
 
 _DEFAULT_WAVEFORM_BUCKETS = 200
 
+# Each bucket carries ~8 scalar fields, so it serializes far heavier than a
+# single raw sample. max_points_returned is sized for one-value-per-point
+# arrays; clamping buckets to it lets the documented max overflow the MCP
+# response budget (forcing overflow-to-file at the tool's own ceiling). Cap
+# buckets well below that — 2000 buckets is a generous overview and stays
+# comfortably inside the budget.
+_MAX_WAVEFORM_BUCKETS = 2000
+
 
 def _busiest_bucket(buckets: list[dict]) -> int | None:
     """Index of the bucket with the largest peak-to-peak (a where-to-look fact)."""
@@ -781,7 +833,13 @@ class GetWaveformInput(ToolInput):
         default=0,
         description="0-based run to read when ``job_id`` is given (default 0).",
     )
-    signal: str = Field(description="Signal/trace name (e.g., 'V(out)', 'I(R1)').")
+    signal: str = Field(
+        description=(
+            "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device-internal "
+            "shorthand for an ngspice .save'd parameter: 'm1.gm' / 'm1.vth' "
+            "(resolves to '@m1[gm]', incl. subcircuit paths like 'x1.m1.gm')."
+        )
+    )
     step: int = Field(default=0, description="Step index for .step directives.")
     t_start: str | None = Field(
         default=None,
@@ -799,8 +857,8 @@ class GetWaveformInput(ToolInput):
         ge=1,
         description=(
             "Number of equal-time envelope buckets (overview resolution). Defaults "
-            "to 200; capped at the server's max_points_returned ceiling and at the "
-            "sample count."
+            "to 200; capped at 2000 (and at the server's max_points_returned ceiling "
+            "and the sample count)."
         ),
     )
     format: Literal["json", "text"] | None = Field(
@@ -899,7 +957,7 @@ async def handle_get_waveform(args: GetWaveformInput, state: SessionState):
         axis, wave, args.t_start, args.t_end, allow_descending=_axis_may_descend(sim_type_raw)
     )
 
-    ceiling = state.config.max_points_returned
+    ceiling = min(state.config.max_points_returned, _MAX_WAVEFORM_BUCKETS)
     requested = args.buckets if args.buckets is not None else _DEFAULT_WAVEFORM_BUCKETS
     n_buckets = max(1, min(requested, ceiling))
 
@@ -990,6 +1048,19 @@ _X_HEADER = {
 }
 
 
+def _csv_x_header(raw, analysis_type: str) -> str:
+    """X-column header. Transient/AC/noise are fixed (time_s/freq_Hz); a .dc
+    sweep names the swept variable from the raw (e.g. ``Vin_V``) instead of a
+    bare ``sweep`` so the column is self-describing."""
+    if analysis_type != "dc":
+        return _X_HEADER[analysis_type]
+    name, unit = dc_axis_name(raw)
+    if name:
+        base = re.sub(r"[^0-9A-Za-z]+", "_", name).strip("_") or "sweep"
+        return f"{base}_{unit}" if unit else base
+    return "sweep"
+
+
 def _window_indices(axis: np.ndarray, ts: float | None, te: float | None) -> tuple[int, int]:
     """``[lo, hi)`` sample indices for the ``[ts, te]`` window on a real axis.
 
@@ -1066,7 +1137,7 @@ def _build_and_write(
     response building off worker threads).
     """
     stepped = n_steps > 1
-    x_header = _X_HEADER[analysis_type]
+    x_header = _csv_x_header(raw, analysis_type)
 
     # Per-step .step parameter values for the step_value column. spicelib's
     # get_steps() carries only integers, not the name=value map, so recover it
@@ -1187,7 +1258,10 @@ class ExportWaveformInput(ToolInput):
     signals: list[str] | Literal["all"] = Field(
         default="all",
         description=(
-            "Trace names to export (e.g. ['V(out)', 'I(R1)']) or 'all' for every non-axis trace."
+            "Trace names to export (e.g. ['V(out)', 'I(R1)']) or 'all' for every "
+            "non-axis trace. Device internals work too, by name or shorthand "
+            "(e.g. ['m1.gm', 'm1.gds', 'm1.id']) — across a `.dc` sweep with "
+            "`.save @m1[…]` this is the gm/ID-table read, one CSV."
         ),
     )
     t_start: str | None = Field(
@@ -1422,6 +1496,17 @@ async def handle_export_waveform(args: ExportWaveformInput, state: SessionState)
     return format_response("\n".join(lines), data, fmt)
 
 
+def _query_x_label(raw, sim_type: str) -> str:
+    """Axis label for query_value text: ``f`` for AC, ``t`` for transient, and
+    the swept variable's own name for a .dc sweep (not a misleading ``t``)."""
+    if is_ac_analysis(sim_type):
+        return "f"
+    if is_dc_analysis(sim_type):
+        name, _ = dc_axis_name(raw)
+        return name or "x"
+    return "t"
+
+
 @registry.tool(
     name="query_value",
     description=(
@@ -1434,7 +1519,9 @@ async def handle_export_waveform(args: ExportWaveformInput, state: SessionState)
         "``magnitude_linear`` alongside ``magnitude_db``/``phase_deg``.\n\n"
         "To query a run of a completed sweep/MC job, pass ``job_id`` + "
         "``run_index`` instead of ``raw_file`` — the run is analyzed like any "
-        "standalone raw."
+        "standalone raw.\n\n"
+        "This is one signal at one point (``signal=``). For many signals, or a "
+        "whole waveform over a window, use export_waveform (``signals=``)."
     ),
     input_model=QueryValueInput,
     annotations=RO_ANNOTATIONS,
@@ -1447,6 +1534,7 @@ async def handle_export_waveform(args: ExportWaveformInput, state: SessionState)
             "requested_x": {"type": "number"},
             "actual_x": {"type": "number"},
             "value": {"type": "number"},
+            "unit": {"type": "string"},
             "magnitude_db": {"type": "number"},
             "magnitude_linear": {"type": "number"},
             "phase_deg": {"type": "number"},
@@ -1541,7 +1629,9 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
         raise ResultError(f"Failed to query value: {e}") from e
 
     sim_type = detect_sim_type(raw)
-    x_unit = "f" if is_ac_analysis(sim_type) else "t"
+    x_unit = _query_x_label(raw, sim_type)
+    value_unit = trace_unit(raw, signal)
+    unit_suffix = f" {value_unit}" if value_unit else ""
 
     if "magnitude_db" in result_data:
         lines = [
@@ -1557,10 +1647,13 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
             f"Signal: {signal} at {x_unit}={result_data['requested_x']:.6g}",
             f"Requested: {result_data['requested_x']:.6g}",
             f"Nearest point: {result_data['actual_x']:.6g}",
-            f"Value: {result_data['value']:.6g}",
+            f"Value: {result_data['value']:.6g}{unit_suffix}",
         ]
 
-    return format_response("\n".join(lines), {"signal": signal, **result_data}, fmt)
+    out = {"signal": signal, **result_data}
+    if value_unit:
+        out["unit"] = value_unit
+    return format_response("\n".join(lines), out, fmt)
 
 
 def _format_measurements(
@@ -1633,16 +1726,95 @@ def _format_measurements(
     return "\n".join(lines)
 
 
+def _has_active_device(currents: dict[str, float]) -> bool:
+    """True if any branch-current name belongs to an M/Q/J/D device — the ones
+    with small-signal internals (gm/gds/vth/...) — e.g. ``Id(M1)``, ``Ic(Q2)``."""
+    for name in currents:
+        lp = name.find("(")
+        if lp != -1 and lp + 1 < len(name) and name[lp + 1].lower() in "mqjd":
+            return True
+    return False
+
+
+_OP_INTERNAL_DEV_RE = re.compile(r"@([\w.]+)\[")
+_OP_TERMINAL_CUR_RE = re.compile(r"^i[a-z]?\(([^)]+)\)$")
+
+
+def _trace_device(name: str) -> str | None:
+    """The device a .op trace belongs to: the ``@<dev>[...]`` internal owner, or
+    the ``X(<dev>)`` terminal-current owner. None for plain node voltages."""
+    low = name.lower()
+    m = _OP_INTERNAL_DEV_RE.search(low)
+    if m:
+        return m.group(1)
+    m = _OP_TERMINAL_CUR_RE.match(low)
+    return m.group(1) if m else None
+
+
+def _filter_operating_point(op_data: dict, device: str) -> bool:
+    """Narrow ``op_data`` (in place) to one device's internals + terminal
+    currents. Returns whether anything matched. A subcircuit-qualified trace
+    (``@m.x1.mn[gm]``) matches a bare ``mn`` request via path suffix, mirroring
+    ``services.validate_signal``'s hierarchical resolver."""
+    want = device.strip().lower()
+    suffix = "." + want
+    matched = False
+    for bucket in ("voltages", "currents", "device_internals"):
+        kept = {}
+        for name, value in op_data.get(bucket, {}).items():
+            owner = _trace_device(name)
+            if owner is not None and (owner == want or owner.endswith(suffix)):
+                kept[name] = value
+                matched = True
+        op_data[bucket] = kept
+    return matched
+
+
+def _operating_point_units(raw, op_data: dict) -> dict[str, str]:
+    """SI unit per returned trace name, only where the simulator typed it."""
+    units: dict[str, str] = {}
+    for bucket in ("voltages", "currents", "device_internals"):
+        for name in op_data.get(bucket, {}):
+            unit = trace_unit(raw, name)
+            if unit:
+                units[name] = unit
+    return units
+
+
+def _unrecognized_save_warnings(raw_path: Path) -> list[str]:
+    """Log warnings about ``.save``'d variables the simulator didn't recognize.
+
+    A typo'd or unsupported ``@dev[param]`` is written to the raw as a
+    real-looking ``0.0`` trace; the only signal that it's bogus is the
+    simulator's unrecognized-variable warning, which lives in the .log.
+    """
+    log_path = raw_path.with_suffix(".log")
+    if not log_path.exists():
+        return []
+    diags = extract_log_diagnostics(log_path)
+    return [
+        w
+        for w in diags["warnings"]
+        if "unrecognized" in w.lower() or "can't find" in w.lower() or "@" in w
+    ]
+
+
 @registry.tool(
     name="operating_point",
-    description=("Read DC operating point data showing all node voltages and branch currents."),
+    description=(
+        "Read DC operating point data: all node voltages, branch currents, and any "
+        "saved device internals (ngspice @dev[param] like gm/gds/vth/id). Each value "
+        "carries its SI unit where the simulator declared the type (see ``units``). "
+        "Pass device='M1' to get just one device's internals + terminal currents in "
+        "a single call."
+    ),
     input_model=OperatingPointInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full", "agentic"),
     output_model=OperatingPointOutput,
 )
 async def handle_operating_point(args: OperatingPointInput, state: SessionState):
-    """Read DC operating point data (all node voltages and branch currents)."""
+    """Read DC operating point data (node voltages, branch currents, device internals)."""
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     fmt = args.format
     raw = await services.load_raw(raw_path, state)
@@ -1673,27 +1845,104 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     op_step_count = services.get_step_count(raw)
     op_data: dict
 
+    is_dc = "transfer" in sim_lower or "dc" in sim_lower.split()
+
+    # For a .dc sweep, at=<value> reads the full bias snapshot at a chosen sweep
+    # point (nearest) instead of the sweep's first point.
+    point_index = 0
+    sweep_value: float | None = None
+    if args.at is not None:
+        try:
+            at_value = parse_spice_value(args.at)
+        except Exception as e:
+            raise ResultError(f"Invalid 'at' value {args.at!r}: {e}", show_hint=False) from e
+        axis = real_axis(np.asarray(raw.get_axis(step=args.step)))
+        if axis.size > 1:
+            point_index = nearest_index(axis, at_value)
+            sweep_value = float(axis[point_index])
+
     try:
-        op_data = dict(extract_operating_point(raw, step=args.step))
+        op_data = dict(extract_operating_point(raw, step=args.step, point_index=point_index))
     except Exception as e:
         raise ResultError(f"Failed to extract operating point: {e}") from e
 
     op_data["step"] = args.step
     op_data["step_count"] = op_step_count
 
-    # A DC sweep raw has no single "operating point": point 0 is just the
-    # sweep's starting value (e.g. V1=0). Flag it so an all-zeros / start-of-
-    # sweep result isn't mistaken for a degenerate circuit.
+    # device= narrows to one device's internals + terminal currents (2c). Refuse
+    # with the list of devices present rather than returning a misleading empty
+    # result when nothing matches. ``available_devs`` is gathered before the
+    # filter, which empties the buckets in place.
+    if args.device is not None:
+        available_devs = sorted(
+            {
+                d
+                for bucket in ("currents", "device_internals")
+                for name in op_data.get(bucket, {})
+                if (d := _trace_device(name)) is not None
+            }
+        )
+        if not _filter_operating_point(op_data, args.device):
+            dev_list = ", ".join(available_devs) if available_devs else "none found"
+            raise ResultError(
+                f"No internals or terminal currents for device {args.device!r} "
+                f"in this result. Devices present: {dev_list}.",
+                show_hint=False,
+            )
+        op_data["device"] = args.device
+
+    # Unit per trace, only where the simulator declared the type (2a).
+    op_data["units"] = _operating_point_units(raw, op_data)
+
+    # Carry the simulator's unrecognized-variable diagnostic: a .save'd @-param
+    # the model doesn't expose (a typo, or one that device class lacks) is
+    # written as a real-looking 0.0 trace — indistinguishable from a true 0
+    # without the log warning that says it's bogus.
+    save_warnings = await asyncio.to_thread(_unrecognized_save_warnings, raw_path)
+    if save_warnings:
+        op_data.setdefault("warnings", []).extend(save_warnings)
+
+    # LTspice .op exports no @dev[param] small-signal table, so device_internals
+    # is empty even for a circuit full of transistors. When active devices are
+    # present (their branch currents appear) but no internals were captured, say
+    # why — otherwise the empty bucket reads as "this circuit has none" instead
+    # of "this simulator doesn't export them". ngspice does, after .save @dev[param].
+    if not op_data.get("device_internals") and _has_active_device(op_data.get("currents", {})):
+        internals_note = (
+            "Device internals (gm/gds/vth/id) are empty: LTspice .op does not export "
+            "them. Re-run with ngspice and add .save @dev[param] (e.g. .save @m1[gm]) "
+            "to capture small-signal parameters."
+        )
+        op_data.setdefault("warnings", []).append(internals_note)
+    else:
+        internals_note = None
+
+    # A DC sweep raw has no single "operating point". With at=, report which
+    # sweep point was read; otherwise flag that point 0 is just the start bias.
     dc_sweep_note: str | None = None
-    if "transfer" in sim_lower or "dc" in sim_lower.split():
+    if is_dc and sweep_value is not None:
+        op_data["sweep_value"] = sweep_value
+        dc_sweep_note = (
+            f"DC sweep bias at sweep value {sweep_value:.6g} (nearest requested point)."
+        )
+        op_data.setdefault("warnings", []).append(dc_sweep_note)
+    elif is_dc:
         dc_sweep_note = (
             "This is a DC sweep raw; the values are sweep point "
             f"{args.step} (the sweep's starting bias), not a chosen operating "
-            "point. Use query_value at a specific sweep value, or run a .OP."
+            "point. Pass at=<sweep value> to read the bias at a specific point, "
+            "or run a .OP."
         )
         op_data.setdefault("warnings", []).append(dc_sweep_note)
 
-    lines = ["DC Operating Point", ""]
+    units = op_data["units"]
+
+    def _u(name: str) -> str:
+        u = units.get(name)
+        return f" {u}" if u else ""
+
+    title = f"Operating Point — device {args.device}" if args.device else "DC Operating Point"
+    lines = [title, ""]
     if dc_sweep_note:
         lines.append(f"⚠ {dc_sweep_note}")
         lines.append("")
@@ -1707,13 +1956,27 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     if op_data["voltages"]:
         lines.append("Node Voltages:")
         for name, value in op_data["voltages"].items():
-            lines.append(f"  {name} = {value:.6g}")
+            lines.append(f"  {name} = {value:.6g}{_u(name)}")
         lines.append("")
 
     if op_data["currents"]:
         lines.append("Branch Currents:")
         for name, value in op_data["currents"].items():
-            lines.append(f"  {name} = {value:.6g}")
+            lines.append(f"  {name} = {value:.6g}{_u(name)}")
+
+    if op_data.get("device_internals"):
+        if op_data["voltages"] or op_data["currents"]:
+            lines.append("")
+        lines.append("Device Internals (@dev[param], e.g. gm/gds/vth/id):")
+        for name, value in op_data["device_internals"].items():
+            lines.append(f"  {name} = {value:.6g}{_u(name)}")
+    elif internals_note:
+        if op_data["voltages"] or op_data["currents"]:
+            lines.append("")
+        lines.append(f"⚠ {internals_note}")
+
+    for w in save_warnings:
+        lines.append(f"⚠ {w}")
 
     return format_response("\n".join(lines), op_data, fmt)
 
@@ -2152,6 +2415,9 @@ class MeasurementStatsResponseEntry(MeasurementStatsEntry):
 
 class MeasurementStatsResponse(TypedDict):
     stats: dict[str, MeasurementStatsResponseEntry]
+    # Present only for a multi-run batch (job_id): per-run {run_index, params} in
+    # the order the value lists use, so min_step_index/max_step_index name a corner.
+    per_run: NotRequired[list[dict[str, Any]]]
 
 
 # ---------------------------------------------------------------------------
@@ -2435,6 +2701,201 @@ async def handle_periodic_metrics(args: PeriodicMetricsInput, state: SessionStat
     return format_response("\n".join(lines), data, args.format)
 
 
+class ThdInput(ToolInput):
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to .raw transient result. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Analyze a run of a completed sweep/MC (or single) job instead of a "
+            "raw_file path; pair with ``run_index``."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to analyze when ``job_id`` is given (default 0).",
+    )
+    signal: str = Field(description="Signal to analyze (e.g. 'V(out)').")
+    step: int = Field(default=0, description="Step index for .step sweeps")
+    t_start: str | None = Field(
+        default=None,
+        description="Window start (SPICE notation) — skip the startup transient before measuring.",
+    )
+    t_end: str | None = Field(default=None, description="Window end in SPICE notation.")
+    fundamental: str | None = Field(
+        default=None,
+        description=(
+            "Fundamental frequency in SPICE notation (e.g. '1k'). Omit to "
+            "auto-detect (largest FFT bin); pass it for an exact coherent result."
+        ),
+    )
+    n_harmonics: int = Field(
+        default=7, description="Harmonics 2..n folded into THD (1..50, default 7)."
+    )
+    window: Literal["coherent", "hann"] = Field(
+        default="coherent",
+        description=(
+            "'coherent' trims to whole fundamental cycles + rectangular window "
+            "(exact, no leakage); 'hann' analyzes the full window with a Hann "
+            "taper (approximate — use when cycles can't be made integer)."
+        ),
+    )
+    format: FormatField = Field(default=None, description="'json' or 'text'")
+
+
+@registry.tool(
+    name="thd",
+    description=(
+        "Total harmonic distortion (THD and THD+N) of a periodic transient "
+        "signal via FFT — works on any .tran result without a ``.four`` "
+        "directive in the deck, and on any simulator. Defaults to COHERENT "
+        "sampling (record trimmed to whole fundamental cycles, rectangular "
+        "window) so harmonics land exactly on bins and THD is exact; "
+        "window='hann' is the approximate fallback. Surfaces every condition "
+        "the number depends on: the fundamental (given vs auto-detected), "
+        "window kind, cycles analyzed, FFT length, sample rate, and per-harmonic "
+        "levels. For LTspice's own ``.four`` result instead, see "
+        "simulation_summary's Fourier section."
+    ),
+    input_model=ThdInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_model=ThdOutput,
+)
+async def handle_thd(args: ThdInput, state: SessionState):
+    axis, wave = await _load_real_signal(
+        args.raw_file, args.signal, args.step, state, job_id=args.job_id, run_index=args.run_index
+    )
+    t, y, _ = _window(axis, wave, args.t_start, args.t_end)
+    f0 = _parse_time(args.fundamental, "fundamental")
+    data = _run(
+        analyze_thd,
+        t,
+        y,
+        fundamental=f0,
+        n_harmonics=args.n_harmonics,
+        window=args.window,
+    )
+    data["signal"] = args.signal
+
+    lines = [
+        f"THD: {args.signal}",
+        "",
+        f"Fundamental: {data['fundamental_hz']:.6g} Hz ({data['fundamental_source']})",
+        f"THD:    {data['thd_pct']:.4g} %  ({data['thd_db']:.2f} dB, ratio {data['thd_ratio']:.4g})",
+        f"THD+N:  {data['thd_n_pct']:.4g} %  (ratio {data['thd_n_ratio']:.4g})",
+        f"Window: {data['window']}, {data['n_cycles']:.4g} cycle(s), "
+        f"{data['n_fft']}-pt FFT @ {data['fs_hz']:.6g} Hz",
+        "",
+        "Harmonics (relative to fundamental):",
+    ]
+    for h in data["harmonics"]:
+        lines.append(f"  {h['n']}x ({h['frequency']:.6g} Hz): {h['db_rel']:.1f} dB")
+    lines += _warning_lines(data["warnings"])
+    return format_response("\n".join(lines), data, args.format)
+
+
+class NoiseIntegralInput(ToolInput):
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to .raw .noise result. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Integrate a run of a completed sweep/MC (or single) job instead of a "
+            "raw_file path; pair with ``run_index``."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to read when ``job_id`` is given (default 0).",
+    )
+    signal: str | None = Field(
+        default=None,
+        description=(
+            "Noise-density trace to integrate: 'V(onoise)'/'V(inoise)' (LTspice) "
+            "or 'onoise_spectrum'/'inoise_spectrum' (ngspice). Default integrates "
+            "the output noise (onoise)."
+        ),
+    )
+    f_start: str | None = Field(
+        default=None,
+        description="Band start in SPICE notation (e.g. '20'); default = sweep start.",
+    )
+    f_end: str | None = Field(
+        default=None, description="Band end (e.g. '20k'); default = sweep end."
+    )
+    step: int = Field(default=0, description="Step index for .step sweeps")
+    format: FormatField = Field(default=None, description="'json' or 'text'")
+
+
+@registry.tool(
+    name="noise_integral",
+    description=(
+        "Integrate a .noise spectral density to a total RMS noise over a band. "
+        "SPICE stores amplitude density (V/√Hz or A/√Hz) for both LTspice and "
+        "ngspice, so total = sqrt(∫ density² df) — the same value LTspice shows "
+        "when you Ctrl-click a V(onoise) label. Reports the band actually "
+        "integrated and the sample count. Noise figure / SNR are left to you "
+        "(they need the source resistance and a reference level)."
+    ),
+    input_model=NoiseIntegralInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "signal": {"type": "string"},
+            "unit": {"type": "string"},
+            "density_unit": {"type": "string"},
+            "total_rms": {"type": "number"},
+            "f_start_used": {"type": "number"},
+            "f_end_used": {"type": "number"},
+            "n_points": {"type": "integer"},
+            "warnings": {"type": "array", "items": {"type": "string"}},
+        },
+    },
+)
+async def handle_noise_integral(args: NoiseIntegralInput, state: SessionState):
+    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
+    raw = await services.load_raw(raw_path, state)
+    sim_type = detect_sim_type(raw)
+    if not is_noise_analysis(sim_type):
+        raise ResultError(
+            f"noise_integral needs a .noise result; got {sim_type!r}. Run a noise "
+            "analysis (LTspice .noise / ngspice noise) first.",
+            show_hint=False,
+        )
+    services.validate_step(raw, args.step)
+    signal = services.validate_signal(raw, args.signal or "onoise")
+    freqs = real_axis(np.asarray(raw.get_axis(step=args.step)))
+    density = np.asarray(raw.get_wave(signal, step=args.step))
+    f_lo = _parse_time(args.f_start, "f_start")
+    f_hi = _parse_time(args.f_end, "f_end")
+    data = _run(integrate_noise, freqs, density, f_lo, f_hi)
+
+    unit = trace_unit(raw, signal)
+    data["signal"] = signal
+    data["unit"] = unit or ""
+    data["density_unit"] = f"{unit}/√Hz" if unit else "amplitude/√Hz"
+    total_str = f"{data['total_rms']:.6g}" + (f" {unit}" if unit else "")
+    lines = [
+        f"Integrated noise: {signal}",
+        "",
+        f"Band: [{data['f_start_used']:.6g}, {data['f_end_used']:.6g}] Hz, "
+        f"{data['n_points']} points",
+        f"Total RMS: {total_str}",
+        f"Density unit: {data['density_unit']}; total = sqrt(∫ density² df).",
+        "Noise figure / SNR are not computed — they need the source resistance and",
+        "reference level only you have.",
+    ]
+    lines += _warning_lines(data["warnings"])
+    return format_response("\n".join(lines), data, args.format)
+
+
 class _MeasSamples(TypedDict):
     """Per-name accumulator used inside :func:`_aggregate_job_measurements`."""
 
@@ -2493,7 +2954,7 @@ def _apply_when_axis_swap(
 
 def _aggregate_job_measurements(
     batch_job: BatchJob,
-) -> tuple[dict[str, list[float | None]], int, dict[str, AggregatedField], list[str]]:
+) -> tuple[dict[str, list[float | None]], int, dict[str, AggregatedField], list[str], list[dict]]:
     """Walk every completed run's .log and concatenate ``.MEAS`` results.
 
     The MC engine emits one log per run; this reconciles by collecting
@@ -2522,6 +2983,9 @@ def _aggregate_job_measurements(
     diagnostics: list[str] = []
     seen_diagnostics: set[str] = set()
     runs_processed = 0
+    # Per-run corner map, in the SAME order as every value list below — so a
+    # min_step_index/max_step_index dereferences straight to the run's params.
+    per_run: list[dict] = []
     for run_index in sorted(batch_job.run_results.keys()):
         run = batch_job.run_results[run_index]
         log_path_str = run.get("log_file")
@@ -2534,6 +2998,7 @@ def _aggregate_job_measurements(
             # over partial runs is the documented behaviour.
             continue
         runs_processed += 1
+        per_run.append({"run_index": run_index, "params": dict(run.get("params") or {})})
         # parse_measurements only populates errors/warnings on its
         # no-measurements branch, so this collects exactly the lines that
         # explain an absence. Deduplicated: every run of a batch typically
@@ -2570,7 +3035,7 @@ def _aggregate_job_measurements(
     at_map: dict[str, list[float | None]] = {n: b["ats"] for n, b in samples.items()}
     axis_map = _apply_when_axis_swap(flat_values, at_map)
 
-    return flat_values, runs_processed, axis_map, diagnostics
+    return flat_values, runs_processed, axis_map, diagnostics, per_run
 
 
 def _aggregate_log_measurements(
@@ -2629,7 +3094,7 @@ def _aggregate_log_measurements(
         "worst-case rise time?' or 'how does gain vary as R sweeps 1k..10k?'. "
         "Inputs the .log file produced by the run.\n\n"
         "Returns per-measurement: min, max, mean, median, std, p10, p90, "
-        "best_step_index (argmin) and worst_step_index (argmax), failure "
+        "min_step_index (argmin) and max_step_index (argmax), failure "
         "count, and an optional histogram (set histogram_bins=0 to skip).\n\n"
         "Accepts any job id: a sweep/MC batch aggregates across its runs; a "
         "single-simulation job aggregates its own log (one value per step "
@@ -2661,10 +3126,11 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
         raise ResultError("Provide either ``log_file`` or ``job_id``.")
 
     axis_map: dict[str, AggregatedField] = {}
+    per_run: list[dict] = []
     if args.job_id is not None:
         job = services.resolve_job(args.job_id, state)
         if isinstance(job, BatchJob):
-            flat_values, run_count, axis_map, run_diags = _aggregate_job_measurements(job)
+            flat_values, run_count, axis_map, run_diags, per_run = _aggregate_job_measurements(job)
             if not flat_values:
                 if run_count == 0:
                     raise ResultError(
@@ -2734,12 +3200,25 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
             )
             lines.append(
                 f"  p10={entry['p10']:.6g}  p90={entry['p90']:.6g}  "
-                f"argmin step={entry['best_step_index']}  "
-                f"argmax step={entry['worst_step_index']}"
+                f"argmin step={entry['min_step_index']}  "
+                f"argmax step={entry['max_step_index']}"
             )
+            # Echo the corner (swept params) at the min/max run so the indices
+            # aren't a bare position the caller must cross-reference by hand.
+            for label, idx in (("min", entry["min_step_index"]), ("max", entry["max_step_index"])):
+                if (
+                    per_run
+                    and isinstance(idx, int)
+                    and 0 <= idx < len(per_run)
+                    and per_run[idx]["params"]
+                ):
+                    lines.append(f"  {label} @ {per_run[idx]['params']}")
         lines.append("")
 
-    return format_response("\n".join(lines).rstrip(), {"stats": stats}, args.format)
+    payload: dict = {"stats": stats}
+    if per_run:
+        payload["per_run"] = per_run
+    return format_response("\n".join(lines).rstrip(), payload, args.format)
 
 
 # ---------------------------------------------------------------------------
@@ -2769,10 +3248,32 @@ def _parse_freq(s: str, name: str = "frequency") -> float:
     return v
 
 
+def _split_ratio(signal: str) -> tuple[str, str] | None:
+    """Split a transfer-function ratio ``A/B`` into ``(A, B)``, or None if it
+    isn't a ratio.
+
+    Only a single ``/`` is supported — a two-signal quotient such as
+    ``V(out)/V(mid)``. SPICE node names don't contain ``/``, so the operator is
+    unambiguous. A ``/`` that doesn't yield exactly two non-empty operands is a
+    malformed ratio, not a plain signal, so it raises.
+    """
+    if "/" not in signal:
+        return None
+    parts = [p.strip() for p in signal.split("/")]
+    if len(parts) != 2 or not all(parts):
+        raise ResultError(f"Ratio signal must be exactly 'A/B' (two signals); got {signal!r}.")
+    return parts[0], parts[1]
+
+
 async def _load_ac_signal(
     raw_file: str | Path, signal: str, step: int, state: SessionState
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load (freqs, H) for an AC signal. Rejects transient data.
+
+    ``signal`` may be a single trace (``V(out)``) or a transfer-function ratio
+    of two traces (``V(out)/V(mid)``), in which case the two complex AC waves
+    are divided element-wise — the way to express an inter-stage gain, loop
+    gain, or PSRR that the simulator never stores as its own trace.
 
     A ``Path`` is treated as an already-resolved, trusted artifact (a job run's
     raw, resolved via the read-model) and loaded directly; a ``str`` is untrusted
@@ -2786,10 +3287,35 @@ async def _load_ac_signal(
             f"This tool requires AC analysis data; got {sim_type!r}. "
             "Use signal_stats (transient) or run a .AC sweep first."
         )
-    signal = services.validate_signal(raw, signal)
     services.validate_step(raw, step)
     axis = np.asarray(raw.get_axis(step=step))
-    wave = np.asarray(raw.get_wave(signal, step=step))
+
+    ratio = _split_ratio(signal)
+    if ratio is not None:
+        num_name = services.validate_signal(raw, ratio[0])
+        den_name = services.validate_signal(raw, ratio[1])
+        num = np.asarray(raw.get_wave(num_name, step=step))
+        den = np.asarray(raw.get_wave(den_name, step=step))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            wave = num / den
+        # A null (or non-finite) denominator makes the ratio singular at those
+        # bins — a genuine pole of the requested transfer function.
+        # prepare_ac_arrays would silently drop them and analyze the rest,
+        # hiding the pole and skewing every metric. Surface the singularity
+        # (which frequencies, how many) instead of fabricating clean numbers.
+        singular = ~np.isfinite(wave)
+        if singular.any():
+            axis_real = np.real(axis)
+            example = float(axis_real[int(np.argmax(singular))])
+            raise ResultError(
+                f"Ratio {ratio[0]}/{ratio[1]} is singular at {int(singular.sum())} of "
+                f"{singular.size} frequencies — the denominator {den_name} is ~0 there "
+                f"(e.g. {example:.6g} Hz), so the transfer function has a pole. Narrow "
+                f"the frequency window to exclude the null, or pick a denominator that "
+                f"does not cross zero."
+            )
+    else:
+        wave = np.asarray(raw.get_wave(services.validate_signal(raw, signal), step=step))
     try:
         return prepare_ac_arrays(axis, wave)
     except ValueError as e:
@@ -3299,7 +3825,14 @@ class BodeMetricsInput(ToolInput):
         default=0,
         description="0-based run to analyze when ``job_id`` is given (default 0).",
     )
-    signal: str = Field(description="Signal name (e.g. 'V(out)')")
+    signal: str = Field(
+        description=(
+            "Signal to analyze: a single trace (e.g. 'V(out)') or a "
+            "transfer-function ratio of two traces (e.g. 'V(out)/V(mid)'), which "
+            "divides the two complex AC waves — the way to express an inter-stage "
+            "gain, loop gain, or PSRR the simulator doesn't store as its own trace."
+        )
+    )
     mode: BodeMode = Field(
         description=(
             "Which view of the AC response to compute:\n"
@@ -3837,7 +4370,14 @@ def _union_panel(
     longest = max(len(s[0]) for s in series)
     if n_rows * longest > _PLOT_MAX_CELLS:
         raise _plot_cells_exceeded(n_rows, longest)
-    union = series[0][0] if len(series) == 1 else np.unique(np.concatenate([s[0] for s in series]))
+    # When every series already shares one x vector (the common case: several
+    # signals from a single run), use it directly. np.unique would collapse
+    # legitimately-repeated timepoints (solver restarts emit duplicate x), which
+    # then makes each series look mismatched and wrongly flags the panel as
+    # step-axis-unioned even though there is no .step sweep.
+    first_x = series[0][0]
+    all_same = all(len(s[0]) == len(first_x) and np.array_equal(s[0], first_x) for s in series)
+    union = first_x if all_same else np.unique(np.concatenate([s[0] for s in series]))
     if n_rows * len(union) > _PLOT_MAX_CELLS:
         raise _plot_cells_exceeded(n_rows, len(union))
     data: list[list[float | None]] = [_to_json_floats(union)]

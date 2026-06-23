@@ -107,8 +107,24 @@ class TestJobAggregation:
         assert entry["mean"] == pytest.approx(sum(VFINAL) / 3)
         assert entry["median"] == pytest.approx(VFINAL[1])
         # Largest R -> slowest charge -> smallest V(out) at 0.9 ms.
-        assert entry["best_step_index"] == 2
-        assert entry["worst_step_index"] == 0
+        assert entry["min_step_index"] == 2
+        assert entry["max_step_index"] == 0
+
+    async def test_per_run_table_maps_index_to_corner(self, state_no_sim: SessionState):
+        # The per-run table lets min_step_index/max_step_index name the swept
+        # corner instead of being a bare position the caller cross-references.
+        _make_sweep_batch(state_no_sim)
+        result = await handle_measurement_stats(
+            MeasurementStatsInput(job_id="sweep1"), state_no_sim
+        )
+        sc = result.structuredContent
+        assert sc is not None
+        per_run = sc["per_run"]
+        assert [r["run_index"] for r in per_run] == [0, 1, 2]
+        assert [r["params"]["R1"] for r in per_run] == RUN_PARAMS
+        entry = sc["stats"]["vfinal"]
+        assert per_run[entry["min_step_index"]]["params"]["R1"] == RUN_PARAMS[2]
+        assert per_run[entry["max_step_index"]]["params"]["R1"] == RUN_PARAMS[0]
 
     async def test_when_style_swaps_to_at_axis(self, state_no_sim: SessionState):
         _make_sweep_batch(state_no_sim)
@@ -123,8 +139,8 @@ class TestJobAggregation:
         assert entry["max"] == pytest.approx(TCROSS_AT[2])
         assert entry["mean"] == pytest.approx(sum(TCROSS_AT) / 3)
         assert entry["median"] == pytest.approx(TCROSS_AT[1])
-        assert entry["best_step_index"] == 0
-        assert entry["worst_step_index"] == 2
+        assert entry["min_step_index"] == 0
+        assert entry["max_step_index"] == 2
         # Physics cross-check: crossing time tracks R*C*ln(2) (within the
         # 1 us source rise time + solver step).
         for t, r in zip(TCROSS_AT, RUN_PARAMS, strict=True):

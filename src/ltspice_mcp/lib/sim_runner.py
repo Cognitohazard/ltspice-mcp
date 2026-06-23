@@ -27,6 +27,13 @@ def generate_job_id() -> str:
     return generate_id("sim")
 
 
+# Terminal statuses reached by killing a live simulator (vs. a clean finish).
+# A run ended this way leaves a partial output behind — a timed-out LTspice
+# .raw can reach several GB — which must be reclaimed, unlike a completed run's
+# artifacts which the user still reads.
+_KILLED_STATUSES = ("cancelled", "timeout")
+
+
 class SimulationRunner(RunnerBase):
     """Runs one spicelib simulation per job; bridges callbacks to asyncio.
 
@@ -164,6 +171,13 @@ class SimulationRunner(RunnerBase):
             return
         if job.status in TERMINAL_STATUSES:
             logger.debug("Job %s already in terminal state: %s", job_id, job.status)
+            self._runners.pop(job_id, None)
+            # This callback fires when the simulator process finally exits, so
+            # a killed run's file handle is now released and its partial output
+            # is safe to delete. Without this, a cancelled/timed-out run strands
+            # its (possibly multi-GB) partial .raw on disk forever.
+            if job.status in _KILLED_STATUSES:
+                self._remove_run_artifacts(job_id)
             return
 
         job.completed_at = now()
@@ -242,6 +256,26 @@ class SimulationRunner(RunnerBase):
             await asyncio.to_thread(self._terminate_processes, job_id, runner)
         finally:
             self._runners.pop(job_id, None)
+
+    def _remove_run_artifacts(self, job_id: str) -> None:
+        """Best-effort removal of a job's on-disk run artifacts.
+
+        The run netlist, .raw, .log and .exe.log all share the ``{job_id}``
+        stem in the output folder (run_filename is ``{job_id}{ext}``), and the
+        job_id is unique, so a glob on that stem reclaims exactly this run's
+        files and nothing else. Errors are swallowed — a still-locked or
+        already-gone file must not break completion handling.
+        """
+        try:
+            stale = list(self.output_folder.glob(f"{job_id}.*"))
+        except OSError as e:
+            logger.debug("Could not list artifacts for %s: %s", job_id, e)
+            return
+        for path in stale:
+            try:
+                path.unlink()
+            except OSError as e:
+                logger.debug("Could not remove stale artifact %s: %s", path, e)
 
     def _terminate_processes(self, job_id: str, runner: SimRunner | None) -> None:
         """Blocking process termination (runs in a worker thread).

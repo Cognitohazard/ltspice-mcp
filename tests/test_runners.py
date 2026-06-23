@@ -151,6 +151,47 @@ class TestSimulationRunnerHandleCompletion:
         assert job.raw_file is None
         assert job.error is not None and "no output" in job.error
 
+    def test_killed_job_callback_removes_partial_artifacts(
+        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A timed-out/cancelled run's late callback fires once the process
+        exits; its partial artifacts (possibly multi-GB) must be reclaimed,
+        not stranded on disk."""
+        job = _make_job(state_no_sim, work_dir, status="timeout")
+        artifacts = [
+            work_dir / f"{job.job_id}.cir",
+            work_dir / f"{job.job_id}.raw",
+            work_dir / f"{job.job_id}.log",
+            work_dir / f"{job.job_id}.exe.log",
+        ]
+        for path in artifacts:
+            path.write_text("partial")
+        # An unrelated job's file must survive — the glob is stem-scoped.
+        bystander = work_dir / "sim_other.raw"
+        bystander.write_text("keep me")
+
+        sim_runner._handle_completion(
+            job.job_id,
+            str(work_dir / f"{job.job_id}.raw"),
+            str(work_dir / f"{job.job_id}.log"),
+            state_no_sim,
+        )
+
+        assert job.status == "timeout"  # status untouched
+        assert all(not p.exists() for p in artifacts)
+        assert bystander.exists()
+
+    def test_completed_job_double_callback_keeps_artifacts(
+        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        """Cleanup is gated to killed statuses: a stray second callback on an
+        already-completed job must NOT delete its good output."""
+        job = _make_job(state_no_sim, work_dir, status="completed")
+        raw = work_dir / f"{job.job_id}.raw"
+        raw.write_text("good output")
+        sim_runner._handle_completion(job.job_id, str(raw), "", state_no_sim)
+        assert raw.exists()
+
 
 class TestSimulationRunnerCancel:
     @pytest.mark.asyncio
