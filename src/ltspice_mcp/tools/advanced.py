@@ -455,7 +455,10 @@ def _netlist_component_refs(netlist_path) -> set[str]:
         "a two-value [low, high] set — N parts yields 2^N corners that bound the "
         "true extremes, which random Monte Carlo cannot guarantee) and sensitivity "
         "analysis (sweep one part at a time across its tolerance to rank impact). "
-        "Use configure_montecarlo instead for statistical yield/spread."
+        "Use configure_montecarlo instead for statistical yield/spread. NOT for a "
+        "bias sweep: a native `.dc Vds Vgs` (e.g. a gm/ID characterization) goes "
+        "in one deck + run_simulation + export_waveform, not here — this is for "
+        "per-value SEPARATE runs (corners, L/W, .lib model swaps)."
     ),
     input_model=ConfigureSweepInput,
     annotations=types.ToolAnnotations(
