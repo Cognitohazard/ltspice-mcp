@@ -20,6 +20,7 @@ from ltspice_mcp.lib.ac_analysis import (
     detect_crossings,
     find_crossings_any_quantity,
     gain_at_frequencies,
+    integrate_noise,
     log_interp,
     log_interp_complex,
     magnitude_db,
@@ -736,3 +737,69 @@ class TestGainAtPhaseUnwrappedOmitted:
         points, _ = gain_at_frequencies(freqs, H, [100.0, 1e4], include_unwrapped_phase=True)
         for p in points:
             assert "phase_deg_unwrapped" in p
+
+
+# ---------------------------------------------------------------------------
+# integrate_noise
+# ---------------------------------------------------------------------------
+
+
+class TestIntegrateNoise:
+    """Total RMS noise = sqrt(∫ density² df) (amplitude-density convention,
+    shared by LTspice and ngspice)."""
+
+    def test_flat_density_matches_closed_form(self):
+        # Flat density D over [a, b]: sqrt(∫ D² df) = D·sqrt(b - a).
+        freqs = np.linspace(1.0, 1001.0, 2001)
+        d = 2e-9
+        density = np.full_like(freqs, d)
+        r = integrate_noise(freqs, density, None, None)
+        assert r["total_rms"] == pytest.approx(d * math.sqrt(1000.0), rel=1e-4)
+        assert r["n_points"] == 2001
+        assert r["f_start_used"] == pytest.approx(1.0)
+        assert r["f_end_used"] == pytest.approx(1001.0)
+        assert r["warnings"] == []
+
+    def test_band_subset(self):
+        freqs = np.linspace(0.0, 1000.0, 1001)  # 1 Hz spacing
+        density = np.full_like(freqs, 1e-9)
+        r = integrate_noise(freqs, density, 100.0, 200.0)
+        assert r["total_rms"] == pytest.approx(1e-9 * math.sqrt(100.0), rel=1e-3)
+        assert r["f_start_used"] == pytest.approx(100.0)
+        assert r["f_end_used"] == pytest.approx(200.0)
+
+    def test_out_of_range_band_clips_and_warns(self):
+        freqs = np.linspace(10.0, 1000.0, 100)
+        density = np.full_like(freqs, 1e-9)
+        r = integrate_noise(freqs, density, 1.0, 5000.0)
+        assert any("clip" in w.lower() for w in r["warnings"])
+        assert r["f_start_used"] == pytest.approx(10.0)
+        assert r["f_end_used"] == pytest.approx(1000.0)
+
+    def test_inverted_band_rejected(self):
+        freqs = np.linspace(1.0, 100.0, 50)
+        with pytest.raises(ValueError, match="must be <"):
+            integrate_noise(freqs, np.ones_like(freqs), 50.0, 10.0)
+
+    def test_descending_sweep_normalized(self):
+        # A high->low .noise sweep must be flipped to ascending, not rejected.
+        freqs = np.linspace(1000.0, 1.0, 2001)  # descending
+        d = 2e-9
+        density = np.full_like(freqs, d)
+        r = integrate_noise(freqs, density, None, None)
+        assert r["total_rms"] == pytest.approx(d * math.sqrt(999.0), rel=1e-4)
+        assert r["f_start_used"] == pytest.approx(1.0)
+        assert r["f_end_used"] == pytest.approx(1000.0)
+
+    def test_descending_sweep_with_band(self):
+        freqs = np.linspace(1000.0, 1.0, 1000)  # descending, ~1 Hz spacing
+        density = np.full_like(freqs, 1e-9)
+        r = integrate_noise(freqs, density, 100.0, 200.0)
+        assert r["f_start_used"] == pytest.approx(100.0, abs=2.0)
+        assert r["f_end_used"] == pytest.approx(200.0, abs=2.0)
+        assert r["total_rms"] == pytest.approx(1e-9 * math.sqrt(100.0), rel=0.02)
+
+    def test_non_monotonic_axis_rejected(self):
+        freqs = np.array([1.0, 5.0, 3.0, 10.0])
+        with pytest.raises(ValueError, match="monotonic"):
+            integrate_noise(freqs, np.ones_like(freqs), None, None)

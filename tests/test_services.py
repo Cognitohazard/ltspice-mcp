@@ -360,10 +360,44 @@ class TestValidateSignal:
         raw = self._raw(["frequency", "v(onoise)", "v(inoise)"])
         assert services.validate_signal(raw, "onoise_spectrum") == "v(onoise)"
 
+    def test_dev_param_hierarchical_multi_dot(self):
+        # A subckt-flattened device path: m.x1.mn.gm -> @m.x1.mn[gm], including
+        # the v()/i() wrapped forms.
+        raw = self._raw(["@m.x1.mn[gm]", "v(@m.x1.mn[vth])", "i(@m.x1.mn[id])"])
+        assert services.validate_signal(raw, "m.x1.mn.gm") == "@m.x1.mn[gm]"
+        assert services.validate_signal(raw, "m.x1.mn.vth") == "v(@m.x1.mn[vth])"
+        assert services.validate_signal(raw, "m.x1.mn.id") == "i(@m.x1.mn[id])"
+
+    def test_dev_param_hierarchical_without_device_letter_unique(self):
+        # Dropping the leading device-type letter (x1.mn.gm) resolves when the
+        # suffix is unique.
+        raw = self._raw(["@m.x1.mn[gm]"])
+        assert services.validate_signal(raw, "x1.mn.gm") == "@m.x1.mn[gm]"
+
+    def test_dev_param_hierarchical_ambiguous_refused(self):
+        # Two devices share the .mn suffix — refuse rather than guess.
+        raw = self._raw(["@m.x1.mn[gm]", "@m.x2.mn[gm]"])
+        with pytest.raises(ResultError, match="not found"):
+            services.validate_signal(raw, "mn.gm")
+
     def test_hierarchical_colon_resolves_to_dot(self):
         # LTspice V(X1:mid) <-> ngspice v(x1.mid)
         raw = self._raw(["time", "v(x1.mid)", "v(out)"])
         assert services.validate_signal(raw, "V(X1:mid)") == "v(x1.mid)"
+
+    def test_device_param_shorthand_resolves_each_wrap(self):
+        # 'dev.param' resolves to whichever form ngspice actually wrote:
+        # bare @m1[gm], v-wrapped v(@m1[vth]), or i-wrapped i(@m1[id]).
+        raw = self._raw(["@m1[gm]", "v(@m1[vth])", "i(@m1[id])"])
+        assert services.validate_signal(raw, "m1.gm") == "@m1[gm]"
+        assert services.validate_signal(raw, "M1.VTH") == "v(@m1[vth])"
+        assert services.validate_signal(raw, "m1.id") == "i(@m1[id])"
+
+    def test_device_param_not_saved_hints_save(self):
+        # A dev.param that isn't in the raw points at the missing .save.
+        raw = self._raw(["@m1[gm]"])
+        with pytest.raises(ResultError, match=r"\.save @m1\[gds\]"):
+            services.validate_signal(raw, "m1.gds")
 
 
 class TestNgspicePreflightWarnings:

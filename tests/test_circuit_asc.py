@@ -1288,6 +1288,58 @@ class TestApplySchematicOps:
         assert data["failed_count"] == 1
         assert data["saved"] is True
 
+    async def test_dry_run_validates_without_saving(self, asc_state: SessionState, work_dir: Path):
+        from ltspice_mcp.tools.circuit import (
+            CircuitReadInput,
+            CreateSchematicInput,
+            handle_create_schematic,
+            handle_read_circuit,
+        )
+
+        await handle_create_schematic(CreateSchematicInput(name="batch_dry"), asc_state)
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="batch_dry.asc",
+                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
+                    {
+                        "op": "add_component",
+                        "reference": "R1",
+                        "symbol": "res",
+                        "x": 100,
+                        "y": 100,
+                    },
+                    {
+                        "op": "add_component",
+                        "reference": "X1",
+                        "symbol": "definitely_not_a_symbol",
+                        "x": 200,
+                        "y": 100,
+                    },
+                    {
+                        "op": "add_component",
+                        "reference": "C1",
+                        "symbol": "cap",
+                        "x": 300,
+                        "y": 100,
+                    },
+                ],
+                dry_run=True,
+            ),
+            asc_state,
+        )
+        data = result.structuredContent
+        # Every op is attempted in a dry run (the bad op does not stop it).
+        assert data["applied_count"] == 2
+        assert data["failed_count"] == 1
+        assert data["saved"] is False
+        assert data["dry_run"] is True
+        assert "Dry run" in _result_text(result)
+
+        # The file must be untouched — none of the would-be ops persisted.
+        read = await handle_read_circuit(CircuitReadInput(path="batch_dry.asc"), asc_state)
+        refs = {c["reference"] for c in read.structuredContent.get("components", [])}
+        assert refs == set()
+
 
 @pytest.mark.asyncio
 class TestRemoveWireAndNetLabelOps:

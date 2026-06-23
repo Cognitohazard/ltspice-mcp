@@ -1,9 +1,11 @@
 """Unit tests for configuration loading."""
 
+import os
 from pathlib import Path
 
 import pytest
 
+import ltspice_mcp.config as config_module
 from ltspice_mcp.config import ServerConfig, generate_default_config
 
 
@@ -14,9 +16,19 @@ class TestServerConfig:
         config = ServerConfig()
         assert config.simulator is None
         assert config.simulator_exe is None
-        assert config.max_parallel_sims == 4
+        assert config.max_parallel_sims == min(os.cpu_count() or 4, 8)
         assert config.default_timeout == 300.0
         assert config.log_level == "INFO"
+
+    def test_max_parallel_defaults_to_capped_core_count(self, monkeypatch: pytest.MonkeyPatch):
+        # Core-aware default: use the host's cores, but cap so a many-core box
+        # doesn't spawn dozens of cold simulator processes.
+        monkeypatch.setattr(config_module.os, "cpu_count", lambda: 64)
+        assert ServerConfig().max_parallel_sims == 8
+        monkeypatch.setattr(config_module.os, "cpu_count", lambda: 2)
+        assert ServerConfig().max_parallel_sims == 2
+        monkeypatch.setattr(config_module.os, "cpu_count", lambda: None)
+        assert ServerConfig().max_parallel_sims == 4
 
     def test_allowed_paths_defaults_to_working_dir(self):
         config = ServerConfig()

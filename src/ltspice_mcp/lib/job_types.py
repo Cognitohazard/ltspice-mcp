@@ -92,6 +92,23 @@ class SweepDimension:
             )
         return generate_sweep_range(self.start, self.stop, self.step, self.points, self.scale)
 
+    def count(self) -> int:
+        """Number of values this dimension yields, WITHOUT materializing them.
+
+        Lets a sweep be capped before ``resolved_values()`` allocates a huge
+        range (e.g. ``points=1e9``). Validates the same conditions.
+        """
+        from ltspice_mcp.lib.sweep_utils import sweep_range_count
+
+        if self.values is not None:
+            return len(self.values)
+        if self.start is None or self.stop is None:
+            raise ValueError(
+                f"Sweep dimension '{self.name}' has neither explicit values nor a "
+                "start/stop range."
+            )
+        return sweep_range_count(self.start, self.stop, self.step, self.points, self.scale)
+
 
 @dataclass
 class SweepConfig:
