@@ -133,7 +133,7 @@ class TestTraceUnit:
             def get_trace(self, name):  # simulator gives no type info
                 raise KeyError(name)
 
-        raw = _NoTraceRaw()
+        raw = cast(RawRead, _NoTraceRaw())
         assert trace_unit(raw, "V(out)") == "V"
         assert trace_unit(raw, "Id(M1)") == "A"
         assert trace_unit(raw, "I(R1)") == "A"
@@ -150,4 +150,4 @@ class TestTraceUnit:
 
         # The simulator typed @m1[gm] as an admittance -> relay S, don't fall
         # through to "no unit".
-        assert trace_unit(_TypedRaw(), "@m1[gm]") == "S"
+        assert trace_unit(cast(RawRead, _TypedRaw()), "@m1[gm]") == "S"
