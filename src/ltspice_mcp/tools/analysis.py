@@ -6,7 +6,8 @@ return derived metrics. Organized by what the tool answers:
     Scalar summaries:
         signal_stats        — mean/RMS/pk-pk/etc for one signal
         query_value         — value at a specific time/frequency
-        operating_point     — DC node voltages + branch currents
+        operating_point     — DC node voltages, branch currents, per-device
+                              internals (gm/gds/vth/…); device= scopes to one
 
     Waveform metrics (transient only, reject AC):
         edge_metrics        — rise/fall time + slew rate
@@ -290,7 +291,13 @@ class SignalStatsInput(ToolInput):
         default=0,
         description="0-based run to analyze when ``job_id`` is given (default 0).",
     )
-    signal: str = Field(description="Signal/trace name (e.g., 'V(out)', 'I(R1)').")
+    signal: str = Field(
+        description=(
+            "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device-internal "
+            "shorthand for an ngspice .save'd parameter: 'm1.gm' / 'm1.vth' "
+            "(resolves to '@m1[gm]', incl. subcircuit paths like 'x1.m1.gm')."
+        )
+    )
     step: int = Field(default=0, description="Step index for .step directives")
     t_start: str | None = Field(
         default=None,
@@ -408,7 +415,13 @@ class QueryValueInput(ToolInput):
         default=0,
         description="0-based run to analyze when ``job_id`` is given (default 0).",
     )
-    signal: str = Field(description="Signal/trace name (e.g., 'V(out)', 'I(R1)').")
+    signal: str = Field(
+        description=(
+            "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device-internal "
+            "shorthand for an ngspice .save'd parameter: 'm1.gm' / 'm1.vth' "
+            "(resolves to '@m1[gm]', incl. subcircuit paths like 'x1.m1.gm')."
+        )
+    )
     at: str | None = Field(
         default=None,
         description=(
@@ -820,7 +833,13 @@ class GetWaveformInput(ToolInput):
         default=0,
         description="0-based run to read when ``job_id`` is given (default 0).",
     )
-    signal: str = Field(description="Signal/trace name (e.g., 'V(out)', 'I(R1)').")
+    signal: str = Field(
+        description=(
+            "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device-internal "
+            "shorthand for an ngspice .save'd parameter: 'm1.gm' / 'm1.vth' "
+            "(resolves to '@m1[gm]', incl. subcircuit paths like 'x1.m1.gm')."
+        )
+    )
     step: int = Field(default=0, description="Step index for .step directives.")
     t_start: str | None = Field(
         default=None,
@@ -1239,7 +1258,10 @@ class ExportWaveformInput(ToolInput):
     signals: list[str] | Literal["all"] = Field(
         default="all",
         description=(
-            "Trace names to export (e.g. ['V(out)', 'I(R1)']) or 'all' for every non-axis trace."
+            "Trace names to export (e.g. ['V(out)', 'I(R1)']) or 'all' for every "
+            "non-axis trace. Device internals work too, by name or shorthand "
+            "(e.g. ['m1.gm', 'm1.gds', 'm1.id']) — across a `.dc` sweep with "
+            "`.save @m1[…]` this is the gm/ID-table read, one CSV."
         ),
     )
     t_start: str | None = Field(
