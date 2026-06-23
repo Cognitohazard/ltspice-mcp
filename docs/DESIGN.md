@@ -407,9 +407,14 @@ profile so they never point at unavailable tools.
 
 ## Backend: spicelib
 
-`spicelib` (>= 1.4.9) is the core Python library for SPICE automation,
-by Nuno Brum. PyLTSpice is a thin re-export wrapper over spicelib that
-adds nothing — we depend on `spicelib` directly.
+`spicelib` (>= 1.4.9, < 1.6) is the core Python library for SPICE
+automation, by Nuno Brum. PyLTSpice is a thin re-export wrapper over
+spicelib that adds nothing — we depend on `spicelib` directly. The
+ceiling is deliberate: spicelib 1.6 retypes `.PARAM` values (`float_unit`)
+and refactored the component model, which breaks the parameter and
+`diff_circuit` paths. See the pin comment in `pyproject.toml` and
+`.claude/plans/spicelib_dependency_2026_06_18.md`; lift only on a forcing
+function, not for features.
 
 All four simulators share the same base `Simulator` ABC:
 
