@@ -227,6 +227,13 @@ X1 input output myfilter rval=1k cval=1n
 - Adding even ONE `.save` line drops all defaults — only listed signals are saved.
 - To keep defaults plus extras: `.save all @m2[vdsat]`
 - `.save @r1[i]` for resistor current (not available via `I()` syntax).
+- **Read internals back as named numbers** (no rawfile parsing, no `.control`):
+  on a `.dc`/`.tran` sweep, `export_waveform(signals=['m1.gm','m1.id'])` gives the
+  gm/ID table in one CSV; `query_value(signal='m1.gm', at=...)` reads one point;
+  `operating_point(device='M1')` gives the bias snapshot of one device. Address
+  an internal by the `m1.gm` shorthand or the literal `@m1[gm]` (the tools resolve
+  the `v()`/`i()` wrapping and subcircuit paths). This `.dc` + `.save` + read flow
+  is the gm/ID-characterization idiom — see the `spice://guide` resource.
 
 ### .control / .endc Blocks
 

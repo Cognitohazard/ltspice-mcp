@@ -113,6 +113,39 @@ PWL file=<filename>
 
 ---
 
+## Reading device internals (gm/ID characterization)
+
+The small-signal / model parameters of a MOSFET/BJT/diode (gm, gds, gmbs, vth,
+vdsat, gm/ID, the capacitances) come back from this server as **named numbers** —
+no rawfile parsing, no `.control`/`wrdata` block. Requires ngspice (LTspice's
+`.op` does not export `@dev[param]` internals). Recipe:
+
+1. **Write a plain deck** with a native bias sweep and a `.save` of the internals
+   you want:
+   ```spice
+   M1 d g 0 0 nch L=0.18u W=2u
+   Vd d 0 1.8
+   Vg g 0 0.9
+   .dc Vg 0 1.8 0.01      ; sweep the gate
+   .save @m1[gm] @m1[gds] @m1[vth] @m1[id]
+   .lib /path/to/models.lib
+   .end
+   ```
+2. **Run it**: `run_simulation` (sets batch flags, handles the headerless-raw
+   dialect, routes artifacts).
+3. **Read it back**:
+   - whole internal set across the sweep, one CSV → `export_waveform(signals=['m1.gm','m1.gds','m1.id'])` — this IS the gm/ID table.
+   - one value at a chosen bias → `query_value(signal='m1.gm', at=...)`.
+   - the full bias snapshot of one device at a point → `operating_point(device='M1')`.
+
+Address an internal by the `m1.gm` shorthand or its literal `@m1[gm]` name; the
+tools resolve the bare / `v()` / `i()` wrapping, and a subcircuit path like
+`x1.m1.gm`, for you. Values carry SI units where ngspice declares the trace type.
+Do NOT reach for `configure_sweep` here — a native `.dc Vds Vgs` is one deck, not
+N separate runs.
+
+---
+
 ## LTspice-Specific
 
 ### Parameters and Expressions
@@ -342,8 +375,12 @@ ngspice shares the **SPICE Fundamentals** above, with these deltas:
   it floats silently.
 - Extra `.meas` types: `MIN_AT`, `MAX_AT`, `DERIV`, `param='expr'`,
   `par('expr')`. `.meas ... FIND` takes `V(out)` (no `mag()` wrapper).
-- `.meas` does NOT work in batch mode combined with `-r rawfile` — data streams
-  to disk and is unavailable for analysis. Use a `.control` block instead.
+- `.meas` does NOT work in batch mode combined with `-r rawfile` — the data
+  streams to disk and the `.meas` scalars are unavailable. But for named signals
+  and device internals you do NOT need a `.control` block: `.save` them and read
+  the raw back with run_simulation + export_waveform / query_value /
+  operating_point. Reserve `.control` / `wrdata` for in-engine computation you
+  genuinely can't express as a saved signal.
 
 ### Parameters and Expressions
 
