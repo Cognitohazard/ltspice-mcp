@@ -1653,6 +1653,33 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
     out = {"signal": signal, **result_data}
     if value_unit:
         out["unit"] = value_unit
+
+    # Relay the simulator's own diagnostics so a single value isn't trusted
+    # blindly. Per-signal: an unrecognized .save'd @-param is written to the raw
+    # as a real-looking 0.0; relay only the warning that names THIS trace, not
+    # the whole unrecognized list. Run-wide: a singular/non-converged solve
+    # taints every value, so relay it regardless of which trace was queried.
+    unrecognized, solve_failures = await asyncio.to_thread(_read_log_warnings, raw_path)
+    sig_l = signal.lower()
+    at_match = re.search(r"@[\w.]+\[[^\]]*\]", sig_l)
+    at_token = at_match.group(0) if at_match else None
+    sig_warns = [
+        w
+        for w in unrecognized
+        if sig_l in w.lower() or (at_token is not None and at_token in w.lower())
+    ]
+    warnings: list[str] = []
+    if sig_warns:
+        warnings.append(
+            f"Queried {signal!r}, but the simulator did not recognize it (see log) "
+            "— this value is not a real result: " + "; ".join(sig_warns)
+        )
+    warnings.extend(solve_failures)
+    if warnings:
+        out["warnings"] = warnings
+        lines.append("")
+        lines.extend(f"⚠ {w}" for w in warnings)
+
     return format_response("\n".join(lines), out, fmt)
 
 
@@ -1781,22 +1808,47 @@ def _operating_point_units(raw, op_data: dict) -> dict[str, str]:
     return units
 
 
-def _unrecognized_save_warnings(raw_path: Path) -> list[str]:
-    """Log warnings about ``.save``'d variables the simulator didn't recognize.
+# Canonical SPICE solve-failure phrases. When the log carries one, the whole
+# numeric solve is suspect — it taints every value read, not one trace — so a
+# read tool relays it regardless of which signal was asked for. (The convergence
+# entry is "no convergence", not bare "convergence", so a benign "convergence
+# achieved" line doesn't trip it.)
+_SOLVE_FAILURE_PHRASES = (
+    "singular matrix",
+    "no convergence",
+    "time step too small",
+    "timestep too small",
+    "gmin stepping failed",
+    "source stepping failed",
+    "iteration limit reached",
+)
 
-    A typo'd or unsupported ``@dev[param]`` is written to the raw as a
-    real-looking ``0.0`` trace; the only signal that it's bogus is the
-    simulator's unrecognized-variable warning, which lives in the .log.
+
+def _read_log_warnings(raw_path: Path) -> tuple[list[str], list[str]]:
+    """``(unrecognized-variable warnings, run-level solve-failure lines)`` from
+    the sibling ``.log``.
+
+    The first is per-signal: a typo'd or unsupported ``.save``'d ``@dev[param]``
+    is written to the raw as a real-looking ``0.0`` trace, and the only tell
+    that it's bogus is the simulator's unrecognized-variable warning. The second
+    is run-wide: a singular/non-converged solve taints every value, so a read
+    relays it whatever trace was asked for.
     """
     log_path = raw_path.with_suffix(".log")
     if not log_path.exists():
-        return []
+        return [], []
     diags = extract_log_diagnostics(log_path)
-    return [
+    unrecognized = [
         w
         for w in diags["warnings"]
         if "unrecognized" in w.lower() or "can't find" in w.lower() or "@" in w
     ]
+    solve_failures = [
+        line
+        for line in (*diags["warnings"], *diags["errors"])
+        if any(p in line.lower() for p in _SOLVE_FAILURE_PHRASES)
+    ]
+    return unrecognized, solve_failures
 
 
 @registry.tool(
@@ -1894,13 +1946,15 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     # Unit per trace, only where the simulator declared the type (2a).
     op_data["units"] = _operating_point_units(raw, op_data)
 
-    # Carry the simulator's unrecognized-variable diagnostic: a .save'd @-param
-    # the model doesn't expose (a typo, or one that device class lacks) is
-    # written as a real-looking 0.0 trace — indistinguishable from a true 0
-    # without the log warning that says it's bogus.
-    save_warnings = await asyncio.to_thread(_unrecognized_save_warnings, raw_path)
-    if save_warnings:
-        op_data.setdefault("warnings", []).extend(save_warnings)
+    # Carry the simulator's own diagnostics. An unrecognized .save'd @-param
+    # (a typo, or one that device class lacks) is written as a real-looking 0.0
+    # trace — indistinguishable from a true 0 without the log warning that says
+    # it's bogus. A solve failure (singular/non-converged) taints every value
+    # here, so it's relayed too. operating_point returns every trace, so the
+    # full unrecognized list is relevant.
+    unrecognized, solve_failures = await asyncio.to_thread(_read_log_warnings, raw_path)
+    if unrecognized or solve_failures:
+        op_data.setdefault("warnings", []).extend([*unrecognized, *solve_failures])
 
     # LTspice .op exports no @dev[param] small-signal table, so device_internals
     # is empty even for a circuit full of transistors. When active devices are
@@ -1975,7 +2029,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
             lines.append("")
         lines.append(f"⚠ {internals_note}")
 
-    for w in save_warnings:
+    for w in (*unrecognized, *solve_failures):
         lines.append(f"⚠ {w}")
 
     return format_response("\n".join(lines), op_data, fmt)
