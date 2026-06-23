@@ -2,7 +2,7 @@
 
 > **Work in progress.** Core functionality is usable but expect rough edges and breaking changes.
 
-An MCP server that connects LLM assistants (Claude, and any other MCP client) to real circuit simulation: LTspice and ngspice, plus direct editing of LTspice `.asc` schematics. Simulation results come back as structured numbers — cutoff frequencies, overshoot, phase margin, rise times — so the assistant can design, verify, and iterate on circuits in the same files you open in LTspice. Built on [spicelib](https://github.com/nunobrum/spicelib).
+An MCP server that connects LLM assistants (Claude, and any other MCP client) to real circuit simulation: LTspice and ngspice, plus direct editing of LTspice `.asc` schematics. Simulation results come back as structured numbers — cutoff frequencies, overshoot, phase margin, rise times, and per-device small-signal internals (gm, gds, vth, …) read back **by name** — so the assistant can design, verify, and iterate on circuits in the same files you open in LTspice, without ever hand-parsing a rawfile. Built on [spicelib](https://github.com/nunobrum/spicelib).
 
 ## Quick start
 
@@ -56,6 +56,7 @@ Other requests that work the same way:
 - *"What's the overshoot and settling time of this regulator's step response?"* — runs a transient analysis and measures both from the waveform, plus rise time, ringing frequency, and the final value.
 - *"Run a 200-run Monte Carlo with 5% resistors and tell me the output spread."* — perturbs components per run, simulates the batch, and reports mean, sigma, and worst-case values per measurement.
 - *"Sweep the load from 100 Ω to 10 kΩ and find where efficiency drops."* — parameter sweep with per-run results.
+- *"Characterize this NMOS: gm and gm/ID vs VGS."* — writes a `.dc Vgs` deck with `.save @m1[gm] @m1[id]`, runs it on ngspice, and returns the gm/ID table as one CSV (no `.control` block, no rawfile parsing).
 - *"Build this differential pair as a schematic I can open in LTspice."* — places and wires the components into a real `.asc`, with orthogonal routing and pin-collision checks.
 - *"Is this loop stable?"* — AC analysis of the loop gain; reports phase and gain margin at every crossover, not just the first.
 
@@ -69,7 +70,7 @@ Everything operates on ordinary LTspice and SPICE files, so the work passes back
 
 ## What it does
 
-**Simulation and measurement.** Runs LTspice or ngspice and parses the binary output directly. Measurements are computed server-side and returned as numbers: time-domain (rise/fall, overshoot, settling, delay, period/duty/jitter, RMS), frequency-domain (filter cutoffs and roll-off, gain and phase at any frequency, stability margins, resonance peaks with Q), DC operating points, and `.MEAS` directive results including the ones that failed.
+**Simulation and measurement.** Runs LTspice or ngspice and parses the binary output directly. Measurements are computed server-side and returned as numbers: time-domain (rise/fall, overshoot, settling, delay, period/duty/jitter, RMS, THD), frequency-domain (filter cutoffs and roll-off, gain and phase at any frequency, stability margins, resonance peaks with Q, integrated noise), DC operating points, and `.MEAS` directive results including the ones that failed. With ngspice, per-device small-signal internals (`gm`, `gds`, `vth`, …) are returned by name too — `.save` them and read the set across a `.dc` sweep as a gm/ID table with `export_waveform`, or a single bias point with `operating_point` (address them as `m1.gm` / `@m1[gm]`, no rawfile parsing).
 
 **Schematic and netlist editing.** Creates and edits real LTspice `.asc` files — place components, wire pins, label nets — with validation before anything is written: wiring that would collide with a pin, overlap a junction, or run diagonally is refused, and every edit returns warnings about floating pins or dangling labels. A session's edits can be reverted. Plain netlists (`.cir`/`.net`) get the same operations at text level, plus a static validation pass that catches malformed cards before a simulation is spent.
 
@@ -207,15 +208,15 @@ Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempot
 | `reset_schematic` | Revert an `.asc` to its pre-edit snapshot from this session |
 | `diff_circuit` | Structural diff between two circuit files |
 | `apply_schematic_ops` | Apply many `.asc` edits in one transaction; home for the ack-only mutation ops (`move_component`, `remove_component`, `set_component_attribute`, `add_net_label`, `remove_net_label`, `remove_wire`) |
-| `run_simulation` | Run a simulation — sync for short runs, async (job ID) for long ones |
+| `run_simulation` | Run a simulation — sync for short runs, async (job ID) for long ones; sets batch flags, handles the ngspice headerless-raw dialect, routes raw/log artifacts, surfaces convergence/timeout errors (no hand-parsing a rawfile) |
 | `check_job` | Check a job's status by ID, or list all jobs |
 | `cancel_job` | Cancel a running simulation or batch; kills the simulator process(es) |
 | `signal_stats` | Min, max, mean, RMS, peak-to-peak (dB/phase for AC) |
 | `get_waveform` | Decimated min/max stat-envelope of a signal over a window — see the shape, then re-request a narrower window to zoom |
-| `export_waveform` | Full-fidelity CSV egress of one or more signals to disk (all analysis types; tidy/long for `.step`); returns the path to compute on yourself |
+| `export_waveform` | Full-fidelity CSV egress of one or more signals to disk (all analysis types; tidy/long for `.step`); accepts device internals (`m1.gm`/`@m1[gm]`) — across a `.dc` sweep this is the gm/ID-table read; returns the path to compute on yourself |
 | `plot_waveform` | Interactive HTML chart (transient / DC / Bode dual-panel with `ac_structure` corner + non-minimum-phase markers / noise / `.step` overlay) written next to the circuit and opened in your browser; for seeing shape, not measuring |
-| `query_value` | Signal value at a specific time/frequency; `step_axis`+`step_value` picks a `.step` run |
-| `operating_point` | DC operating point: all node voltages and branch currents |
+| `query_value` | Signal value at a specific time/frequency (or a device internal, `m1.gm`/`@m1[gm]`); `step_axis`+`step_value` picks a `.step` run |
+| `operating_point` | DC operating point: all node voltages, branch currents, and per-device internals (gm/gds/vth/…, ngspice) addressable as `m1.gm`/`@m1[gm]`; `device=` scopes to one device |
 | `simulation_summary` | Full summary: simulation type, signals, measurements, warnings |
 | `edge_metrics` | Rise/fall time and slew rate for one transient edge |
 | `pulse_response` | Overshoot, undershoot, settling time for a step response |
