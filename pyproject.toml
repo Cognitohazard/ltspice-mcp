@@ -37,7 +37,7 @@ dependencies = [
     # component — is already handled in code via AscComponent.) Without a ceiling
     # a plain `uvx ltspice-mcp` resolves to the newest in range and ships an
     # untested spicelib to users. Lift once the parameter path is migrated.
-    "spicelib>=1.4.9,<1.7",
+    "spicelib>=1.4.9,<1.6",
     "tomlkit>=0.14.0,<1.0",
 ]
 
