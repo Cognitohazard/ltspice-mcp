@@ -322,6 +322,83 @@ class TestQueryValue:
         )
         assert "Magnitude:" in result.content[0].text
 
+    async def test_queried_bogus_param_warns(self, state_no_sim: SessionState, work_dir: Path):
+        # A queried @-param the model doesn't expose is a fake 0.0; the
+        # simulator's unrecognized-variable warning must be relayed on the
+        # single-value read so the 0.0 isn't trusted.
+        raw_file = work_dir / "q.raw"
+        (work_dir / "q.log").write_text("Warning: unrecognized variable @m1[bogus]\n")
+        raw = _make_raw_mock(
+            trace_names=["time", "V(out)", "v(@m1[bogus])"],
+            waves={
+                "time": np.linspace(0, 1, 10),
+                "V(out)": np.linspace(0, 1, 10),
+                "v(@m1[bogus])": np.zeros(10),
+            },
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_query_value(
+            QueryValueInput(raw_file=raw_file.name, signal="v(@m1[bogus])", at="0.5"),
+            state_no_sim,
+        )
+        warnings = (result.structuredContent or {}).get("warnings") or []
+        assert any("did not recognize" in w for w in warnings)
+
+    async def test_unrecognized_not_relayed_for_other_signal(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # Signal-filtered, not a dump: querying a healthy trace must NOT inherit
+        # an unrecognized-variable warning about a different (@-param) trace.
+        raw_file = work_dir / "q2.raw"
+        (work_dir / "q2.log").write_text("Warning: unrecognized variable @m1[bogus]\n")
+        raw = _make_raw_mock(
+            trace_names=["time", "V(out)", "v(@m1[bogus])"],
+            waves={
+                "time": np.linspace(0, 1, 10),
+                "V(out)": np.linspace(0, 1, 10),
+                "v(@m1[bogus])": np.zeros(10),
+            },
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_query_value(
+            QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="0.5"),
+            state_no_sim,
+        )
+        warnings = (result.structuredContent or {}).get("warnings") or []
+        assert not any("did not recognize" in w for w in warnings)
+
+    async def test_solve_failure_taints_any_read(self, state_no_sim: SessionState, work_dir: Path):
+        # A non-converged solve taints every value; a query of an otherwise
+        # healthy trace must still surface the run-level failure.
+        raw_file = work_dir / "q3.raw"
+        (work_dir / "q3.log").write_text("Warning: singular matrix: check nodes\n")
+        raw = _make_raw_mock(
+            trace_names=["time", "V(out)"],
+            waves={"time": np.linspace(0, 1, 10), "V(out)": np.linspace(0, 1, 10)},
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_query_value(
+            QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="0.5"),
+            state_no_sim,
+        )
+        warnings = (result.structuredContent or {}).get("warnings") or []
+        assert any("singular matrix" in w.lower() for w in warnings)
+
+    async def test_clean_read_has_no_warnings(self, state_no_sim: SessionState, work_dir: Path):
+        # No false positives: a healthy trace with a clean log carries no warnings.
+        raw_file = work_dir / "q4.raw"
+        (work_dir / "q4.log").write_text("Total elapsed time: 0.1 seconds.\n")
+        raw = _make_raw_mock(
+            trace_names=["time", "V(out)"],
+            waves={"time": np.linspace(0, 1, 10), "V(out)": np.linspace(0, 1, 10)},
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_query_value(
+            QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="0.5"),
+            state_no_sim,
+        )
+        assert not (result.structuredContent or {}).get("warnings")
+
 
 def test_has_active_device_detects_transistor_currents():
     # The empty-internals note fires only when an M/Q/J/D device is present
@@ -401,6 +478,23 @@ class TestGetOperatingPoint:
         )
         warnings = (result.structuredContent or {}).get("warnings") or []
         assert any("unrecognized" in w.lower() for w in warnings)
+
+    async def test_carries_solve_failure(self, state_no_sim: SessionState, work_dir: Path):
+        # A non-converged/singular solve taints the whole bias snapshot; the
+        # log's failure line is relayed onto the operating-point read.
+        raw_file = work_dir / "opsf.raw"
+        (work_dir / "opsf.log").write_text("Warning: singular matrix: check node x\n")
+        raw = _make_raw_mock(
+            plotname="Operating Point",
+            trace_names=["V(out)"],
+            waves={"V(out)": np.array([1.5])},
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_operating_point(
+            OperatingPointInput(raw_file=raw_file.name), state_no_sim
+        )
+        warnings = (result.structuredContent or {}).get("warnings") or []
+        assert any("singular matrix" in w.lower() for w in warnings)
 
     async def test_rejects_ac_raw(self, state_no_sim: SessionState, work_dir: Path):
         """``extract_operating_point`` reads ``wave[0]`` for every trace.
@@ -1520,6 +1614,77 @@ class TestQueryValueStepAbsorb:
             await handle_query_value(
                 QueryValueInput(raw_file="qstep3.raw", signal="V(out)"), state_no_sim
             )
+
+    async def test_step_axis_relays_unrecognized_param(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # The stepped read path must relay the unrecognized-variable warning too:
+        # a bogus @-param is a fake 0.0 here just like on the direct at= path.
+        raw = MagicMock()
+        raw.get_raw_property.return_value = "Transient Analysis"
+        raw.get_trace_names.return_value = ["time", "v(@m1[bogus])"]
+        raw.get_steps.return_value = [{"Rval": 500.0}, {"Rval": 1000.0}]
+        raw.get_axis.return_value = np.array([0.0, 1.0])
+        raw.get_wave = lambda name, step=0: np.array([0.0, 0.0])
+        path = work_dir / "qsw1.raw"
+        (work_dir / "qsw1.log").write_text("Warning: unrecognized variable @m1[bogus]\n")
+        _inject_raw(state_no_sim, path, raw)
+        res = await handle_query_value(
+            QueryValueInput(
+                raw_file="qsw1.raw",
+                signal="v(@m1[bogus])",
+                step_axis="Rval",
+                step_value="1000",
+            ),
+            state_no_sim,
+        )
+        warnings = (res.structuredContent or {}).get("warnings") or []
+        assert any("did not recognize" in w for w in warnings)
+
+    async def test_step_axis_relays_solve_failure(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A failed solve taints the whole run; the stepped read must surface it.
+        raw = MagicMock()
+        raw.get_raw_property.return_value = "Transient Analysis"
+        raw.get_trace_names.return_value = ["time", "V(out)"]
+        raw.get_steps.return_value = [{"Rval": 500.0}, {"Rval": 1000.0}]
+        raw.get_axis.return_value = np.array([0.0, 1.0])
+        raw.get_wave = lambda name, step=0: np.array([1.0, 2.0])
+        path = work_dir / "qsw2.raw"
+        (work_dir / "qsw2.log").write_text("Warning: singular matrix: check node x\n")
+        _inject_raw(state_no_sim, path, raw)
+        res = await handle_query_value(
+            QueryValueInput(
+                raw_file="qsw2.raw", signal="V(out)", step_axis="Rval", step_value="1000"
+            ),
+            state_no_sim,
+        )
+        warnings = (res.structuredContent or {}).get("warnings") or []
+        assert any("singular matrix" in w.lower() for w in warnings)
+
+    async def test_step_axis_clean_no_diagnostic_relay(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # No false positives: a clean log adds no unrecognized/solve-failure relay
+        # (the step lookup's own 'No at given' note is unrelated and allowed).
+        raw = MagicMock()
+        raw.get_raw_property.return_value = "Transient Analysis"
+        raw.get_trace_names.return_value = ["time", "V(out)"]
+        raw.get_steps.return_value = [{"Rval": 500.0}, {"Rval": 1000.0}]
+        raw.get_axis.return_value = np.array([0.0, 1.0])
+        raw.get_wave = lambda name, step=0: np.array([1.0, 2.0])
+        path = work_dir / "qsw3.raw"
+        (work_dir / "qsw3.log").write_text("Total elapsed time: 0.1 seconds.\n")
+        _inject_raw(state_no_sim, path, raw)
+        res = await handle_query_value(
+            QueryValueInput(
+                raw_file="qsw3.raw", signal="V(out)", step_axis="Rval", step_value="1000"
+            ),
+            state_no_sim,
+        )
+        warnings = (res.structuredContent or {}).get("warnings") or []
+        assert not any("did not recognize" in w or "singular" in w.lower() for w in warnings)
 
 
 @pytest.mark.asyncio
