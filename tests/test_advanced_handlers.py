@@ -59,6 +59,62 @@ class TestConfigureSweep:
         assert "Total simulations:" in text
         assert len(state_no_sim.sweep_configs) == 1
 
+    async def test_temp_param_axis_warns(self, state_no_sim: SessionState, sample_netlist: Path):
+        # A parameter sweep named "temp" emits ``.param temp=...``, which does
+        # NOT set the simulation temperature — warn so a "temperature sweep"
+        # that silently runs at one temperature is caught up front.
+        result = await handle_configure_sweep(
+            ConfigureSweepInput(
+                netlist=sample_netlist.name,
+                parameters=[SweepParameter(name="temp", type="parameter", values=[-40, 27, 85])],
+            ),
+            state_no_sim,
+        )
+        text = result.content[0].text
+        assert ".temp" in text and "does not set the simulation temperature" in text
+
+    async def test_rejects_oversized_cross_product(
+        self, state_no_sim: SessionState, sample_netlist: Path
+    ):
+        # A cross-product over the cap must be refused up front, not spawned as
+        # tens of thousands of cold simulator processes. 101 x 101 = 10201 > cap.
+        with pytest.raises(BatchJobError, match="over the 10000 cap"):
+            await handle_configure_sweep(
+                ConfigureSweepInput(
+                    netlist=sample_netlist.name,
+                    parameters=[
+                        SweepParameter(name="R1", type="component", start=0, stop=100, step=1),
+                        SweepParameter(name="R2", type="component", start=0, stop=100, step=1),
+                    ],
+                ),
+                state_no_sim,
+            )
+        assert len(state_no_sim.sweep_configs) == 0
+
+    async def test_oversized_points_rejected_without_materializing(
+        self, state_no_sim: SessionState, sample_netlist: Path, monkeypatch
+    ):
+        # points=1e9 must be refused by the cap, NOT materialized — np.linspace
+        # would allocate ~8 GB and OOM the server. Sentinel: blow up if the
+        # allocator is reached, proving the cap fires on count() first.
+        import ltspice_mcp.lib.sweep_utils as su
+
+        def boom(*a, **k):
+            raise AssertionError("materialized the range before the cap check")
+
+        monkeypatch.setattr(su, "generate_sweep_range", boom)
+        with pytest.raises(BatchJobError, match="over the 10000 cap"):
+            await handle_configure_sweep(
+                ConfigureSweepInput(
+                    netlist=sample_netlist.name,
+                    parameters=[
+                        SweepParameter(name="R1", type="component", start=0, stop=1, points=10**9)
+                    ],
+                ),
+                state_no_sim,
+            )
+        assert len(state_no_sim.sweep_configs) == 0
+
     async def test_values_list(self, state_no_sim: SessionState, sample_netlist: Path):
         # F5: an explicit discrete value list (e.g. E-series) — previously
         # impossible through configure_sweep, which only generated linear/log

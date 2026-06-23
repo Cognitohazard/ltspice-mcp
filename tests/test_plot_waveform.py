@@ -74,6 +74,16 @@ class TestUnionPanel:
         assert panel["data"][0] == [0.0, 1.0, 2.0]
         assert len(panel["series"]) == 2
 
+    def test_shared_x_with_duplicate_timepoints_not_unioned(self):
+        # Solver restarts emit duplicate x samples. np.unique would collapse
+        # them, making each series look mismatched and wrongly flagging a
+        # single-run multi-signal panel as step-axis-unioned. The shared axis
+        # must be used verbatim, dups and all.
+        x = np.array([0.0, 1.0, 1.0, 2.0, 3.0])
+        panel, unioned = _union_panel([(x, x * 2, "a"), (x, x * 3, "b")], "linear", "t", "v")
+        assert unioned is False
+        assert len(panel["data"][0]) == len(x)
+
     def test_differing_x_padded_with_nulls(self):
         panel, unioned = _union_panel(
             [
