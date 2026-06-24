@@ -16,6 +16,7 @@ from mcp import types
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.state import BatchJob, SessionState
 from ltspice_mcp.tools.analysis import (
+    AcStructureInput,
     BodeMetricsInput,
     EdgeMetricsInput,
     ExportWaveformInput,
@@ -39,6 +40,7 @@ from ltspice_mcp.tools.analysis import (
     _filter_operating_point,
     _split_ratio,
     _trace_device,
+    handle_ac_structure,
     handle_bode_metrics,
     handle_edge_metrics,
     handle_export_waveform,
@@ -371,7 +373,7 @@ class TestQueryValue:
         # A non-converged solve taints every value; a query of an otherwise
         # healthy trace must still surface the run-level failure.
         raw_file = work_dir / "q3.raw"
-        (work_dir / "q3.log").write_text("Warning: singular matrix: check nodes\n")
+        (work_dir / "q3.log").write_text("gmin stepping failed\n")
         raw = _make_raw_mock(
             trace_names=["time", "V(out)"],
             waves={"time": np.linspace(0, 1, 10), "V(out)": np.linspace(0, 1, 10)},
@@ -382,7 +384,7 @@ class TestQueryValue:
             state_no_sim,
         )
         warnings = (result.structuredContent or {}).get("warnings") or []
-        assert any("singular matrix" in w.lower() for w in warnings)
+        assert any("gmin stepping" in w.lower() for w in warnings)
 
     async def test_clean_read_has_no_warnings(self, state_no_sim: SessionState, work_dir: Path):
         # No false positives: a healthy trace with a clean log carries no warnings.
@@ -483,7 +485,7 @@ class TestGetOperatingPoint:
         # A non-converged/singular solve taints the whole bias snapshot; the
         # log's failure line is relayed onto the operating-point read.
         raw_file = work_dir / "opsf.raw"
-        (work_dir / "opsf.log").write_text("Warning: singular matrix: check node x\n")
+        (work_dir / "opsf.log").write_text("gmin stepping failed\n")
         raw = _make_raw_mock(
             plotname="Operating Point",
             trace_names=["V(out)"],
@@ -494,7 +496,7 @@ class TestGetOperatingPoint:
             OperatingPointInput(raw_file=raw_file.name), state_no_sim
         )
         warnings = (result.structuredContent or {}).get("warnings") or []
-        assert any("singular matrix" in w.lower() for w in warnings)
+        assert any("gmin stepping" in w.lower() for w in warnings)
 
     async def test_rejects_ac_raw(self, state_no_sim: SessionState, work_dir: Path):
         """``extract_operating_point`` reads ``wave[0]`` for every trace.
@@ -1652,7 +1654,7 @@ class TestQueryValueStepAbsorb:
         raw.get_axis.return_value = np.array([0.0, 1.0])
         raw.get_wave = lambda name, step=0: np.array([1.0, 2.0])
         path = work_dir / "qsw2.raw"
-        (work_dir / "qsw2.log").write_text("Warning: singular matrix: check node x\n")
+        (work_dir / "qsw2.log").write_text("gmin stepping failed\n")
         _inject_raw(state_no_sim, path, raw)
         res = await handle_query_value(
             QueryValueInput(
@@ -1661,7 +1663,7 @@ class TestQueryValueStepAbsorb:
             state_no_sim,
         )
         warnings = (res.structuredContent or {}).get("warnings") or []
-        assert any("singular matrix" in w.lower() for w in warnings)
+        assert any("gmin stepping" in w.lower() for w in warnings)
 
     async def test_step_axis_clean_no_diagnostic_relay(
         self, state_no_sim: SessionState, work_dir: Path
@@ -2735,3 +2737,182 @@ class TestThdHandler:
         assert sc is not None
         assert sc["thd_ratio"] == pytest.approx(0.1, rel=1e-2)
         assert sc["coherent"] is True
+
+
+def _ac_response_raw(signal: str, h: np.ndarray, freqs: np.ndarray) -> MagicMock:
+    """An AC raw mock carrying one complex response under ``signal``."""
+    return _make_raw_mock(
+        plotname="AC Analysis",
+        trace_names=["frequency", signal],
+        waves={"frequency": freqs, signal: h},
+        axis=freqs,
+    )
+
+
+async def _assert_relays_solve_failure(
+    state: SessionState, work_dir: Path, name: str, raw: MagicMock, handler, inp_factory
+) -> None:
+    """Drive ``handler`` against a raw whose sibling .log reports a singular
+    matrix, and assert the failure surfaces in the rendered result. Covers the
+    structural guarantee that every raw-reading metric tool relays a run-level
+    solve failure — a new tool that forgets the relay fails here."""
+    raw_file = work_dir / f"{name}.raw"
+    _inject_raw_mock(state, raw_file, raw)
+    (work_dir / f"{name}.log").write_text("gmin stepping failed\n")
+    result = await handler(inp_factory(raw_file.name), state)
+    assert "gmin stepping" in result.content[0].text.lower(), (
+        f"{name} did not relay the run-level solve failure"
+    )
+
+
+@pytest.mark.asyncio
+class TestSolveFailureRelayCoverage:
+    """Every raw-reading metric tool relays a completed-but-failed solve."""
+
+    async def test_transient_tools(self, state_no_sim: SessionState, work_dir: Path):
+        t_step, y_step = _step_waveform()
+        t_sq, y_sq = _square_wave(freq=1000.0, duty=0.5, periods=10)
+        fs = 200000.0
+        t_sin = np.arange(0.0, 0.02, 1.0 / fs)
+        y_sin = np.sin(2 * np.pi * 1000.0 * t_sin) + 0.1 * np.sin(2 * np.pi * 2000.0 * t_sin)
+
+        cases = [
+            (
+                "ss",
+                _make_raw_mock(),
+                handle_signal_stats,
+                lambda n: SignalStatsInput(raw_file=n, signal="V(out)"),
+            ),
+            (
+                "edge",
+                _make_raw_mock(waves={"time": t_step, "V(out)": y_step}, axis=t_step),
+                handle_edge_metrics,
+                lambda n: EdgeMetricsInput(raw_file=n, signal="V(out)"),
+            ),
+            (
+                "pulse",
+                _make_raw_mock(waves={"time": t_step, "V(out)": y_step}, axis=t_step),
+                handle_pulse_response,
+                lambda n: PulseResponseInput(
+                    raw_file=n, signal="V(out)", initial_value=0.0, final_value=1.0
+                ),
+            ),
+            (
+                "timing",
+                _make_raw_mock(
+                    trace_names=["time", "V(in)", "V(out)"],
+                    waves={"time": t_step, "V(in)": y_step, "V(out)": y_step},
+                    axis=t_step,
+                ),
+                handle_timing_between,
+                lambda n: TimingBetweenInput(raw_file=n, signal_a="V(in)", signal_b="V(out)"),
+            ),
+            (
+                "periodic",
+                _make_raw_mock(
+                    trace_names=["time", "V(clk)"], waves={"time": t_sq, "V(clk)": y_sq}, axis=t_sq
+                ),
+                handle_periodic_metrics,
+                lambda n: PeriodicMetricsInput(raw_file=n, signal="V(clk)"),
+            ),
+            (
+                "thd",
+                _make_raw_mock(waves={"time": t_sin, "V(out)": y_sin}, axis=t_sin),
+                handle_thd,
+                lambda n: ThdInput(raw_file=n, signal="V(out)", fundamental="1k", n_harmonics=3),
+            ),
+        ]
+        for name, raw, handler, factory in cases:
+            await _assert_relays_solve_failure(state_no_sim, work_dir, name, raw, handler, factory)
+
+    async def test_ac_tools(self, state_no_sim: SessionState, work_dir: Path):
+        freqs = np.logspace(0, 6, 200)
+        s = 2j * np.pi * freqs
+        lpf = 1.0 / (1 + s / (2 * np.pi * 1000))
+        loop = 1000.0 / ((1 + s / (2 * np.pi * 1000)) * (1 + s / (2 * np.pi * 100000)))
+        w0 = 2 * np.pi * 1000
+        peak = (w0 * w0) / (s * s + (w0 / 10.0) * s + w0 * w0)
+
+        cases = [
+            (
+                "stab",
+                _ac_response_raw("V(loop)", loop, freqs),
+                handle_stability_metrics,
+                lambda n: StabilityMetricsInput(raw_file=n, signal="V(loop)"),
+            ),
+            (
+                "reson",
+                _ac_response_raw("V(out)", peak, freqs),
+                handle_resonance,
+                lambda n: ResonanceInput(raw_file=n, signal="V(out)"),
+            ),
+            (
+                "acstruct",
+                _ac_response_raw("V(out)", lpf, freqs),
+                handle_ac_structure,
+                lambda n: AcStructureInput(raw_file=n, signal="V(out)"),
+            ),
+            (
+                "bode1",
+                _ac_response_raw("V(out)", lpf, freqs),
+                handle_bode_metrics,
+                lambda n: BodeMetricsInput(
+                    raw_file=n, signal="V(out)", mode="point", frequencies=["1k"]
+                ),
+            ),
+        ]
+        for name, raw, handler, factory in cases:
+            await _assert_relays_solve_failure(state_no_sim, work_dir, name, raw, handler, factory)
+
+    async def test_bode_all_steps(self, state_no_sim: SessionState, work_dir: Path):
+        await _assert_relays_solve_failure(
+            state_no_sim,
+            work_dir,
+            "bodeall",
+            _stepped_ac_raw([500.0, 5000.0]),
+            handle_bode_metrics,
+            lambda n: BodeMetricsInput(
+                raw_file=n,
+                signal="V(out)",
+                mode="crossing",
+                quantity="magnitude_db",
+                level=-3.0103,
+                all_steps=True,
+            ),
+        )
+
+    async def test_recovered_singular_matrix_not_flagged(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A transient can recover from a singular matrix via gmin/source stepping
+        # and still produce a valid raw, so a bare warning-level "singular matrix"
+        # must NOT be promoted to a run-wide failure — that would be a false
+        # accusation on a good run. Only terminal phrases taint the read.
+        raw_file = work_dir / "recov.raw"
+        (work_dir / "recov.log").write_text("Warning: singular matrix:  check nodes out and 0\n")
+        raw = _make_raw_mock(
+            trace_names=["time", "V(out)"],
+            waves={"time": np.linspace(0, 1, 10), "V(out)": np.linspace(0, 1, 10)},
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_query_value(
+            QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="0.5"), state_no_sim
+        )
+        warnings = (result.structuredContent or {}).get("warnings") or []
+        assert not any("singular" in w.lower() for w in warnings)
+
+    async def test_degenerate_raise_names_solve_failure(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # When a failed solve leaves data degenerate enough that the metric itself
+        # raises (a flat waveform has no edge), the error must name the solve
+        # failure from the log instead of only the generic "no edge" message.
+        raw_file = work_dir / "flat.raw"
+        t = np.linspace(0, 1e-3, 1000)
+        raw = _make_raw_mock(waves={"time": t, "V(out)": np.ones_like(t)}, axis=t)
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        (work_dir / "flat.log").write_text("gmin stepping failed\n")
+        with pytest.raises(ResultError, match="gmin stepping"):
+            await handle_edge_metrics(
+                EdgeMetricsInput(raw_file=raw_file.name, signal="V(out)"), state_no_sim
+            )
