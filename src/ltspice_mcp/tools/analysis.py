@@ -1594,7 +1594,10 @@ def _query_x_label(raw, sim_type: str) -> str:
         "``run_index`` instead of ``raw_file`` — the run is analyzed like any "
         "standalone raw.\n\n"
         "This is one signal at one point (``signal=``). For many signals, or a "
-        "whole waveform over a window, use export_waveform (``signals=``)."
+        "whole waveform over a window, use export_waveform (``signals=``).\n\n"
+        "If the run hit a run-level solve failure (singular matrix / "
+        "non-convergence), that simulator line is relayed into ``warnings`` — the "
+        "value is still returned, but the whole solve is suspect, so read it."
     ),
     input_model=QueryValueInput,
     annotations=RO_ANNOTATIONS,
@@ -1996,7 +1999,10 @@ async def _finish_metric(
         "saved device internals (ngspice @dev[param] like gm/gds/vth/id). Each value "
         "carries its SI unit where the simulator declared the type (see ``units``). "
         "Pass device='M1' to get just one device's internals + terminal currents in "
-        "a single call."
+        "a single call.\n\n"
+        "A run-level solve failure (singular matrix / non-convergence) taints every "
+        "value here; that simulator line is relayed into ``warnings`` — read it "
+        "before trusting the bias point."
     ),
     input_model=OperatingPointInput,
     annotations=RO_ANNOTATIONS,
@@ -2095,20 +2101,29 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     if relayed:
         op_data.setdefault("warnings", []).extend(relayed)
 
-    # LTspice .op exports no @dev[param] small-signal table, so device_internals
-    # is empty even for a circuit full of transistors. When active devices are
-    # present (their branch currents appear) but no internals were captured, say
-    # why — otherwise the empty bucket reads as "this circuit has none" instead
-    # of "this simulator doesn't export them". ngspice does, after .save @dev[param].
-    if not op_data.get("device_internals") and _has_active_device(op_data.get("currents", {})):
+    # device_internals is empty either because the simulator exports no
+    # @dev[param] table at all (LTspice/QSPICE/Xyce) or because an ngspice deck
+    # didn't .save them — say so, otherwise the empty bucket reads as "this
+    # circuit has none". The remedy is identical in both cases (run on ngspice
+    # and .save the internals), so the note is simulator-agnostic: branching on
+    # the producer and getting it wrong (e.g. from the session default on a
+    # cross-simulator raw read) would misadvise. Gate so passive circuits stay
+    # note-free: fire when an M/Q/J/D terminal current proves a device is present
+    # (LTspice exposes those), or when the run is ngspice — whose bare .op shows
+    # no device traces, so a saved-nothing run is indistinguishable from a
+    # passive one. raw_dialect only gates here, never picks the wording, and is
+    # reliable for that: an ngspice raw loads only in an ngspice session.
+    internals_note: str | None = None
+    if not op_data.get("device_internals") and (
+        _has_active_device(op_data.get("currents", {})) or state.raw_dialect == "ngspice"
+    ):
         internals_note = (
-            "Device internals (gm/gds/vth/id) are empty: LTspice .op does not export "
-            "them. Re-run with ngspice and add .save @dev[param] (e.g. .save @m1[gm]) "
-            "to capture small-signal parameters."
+            "No small-signal device internals (gm/gds/vth, @dev[param]) in this run. "
+            "They are an ngspice feature, captured only for the parameters a deck "
+            "explicitly .save's — to get them, run on ngspice with e.g. "
+            "'.save all @m1[gm] @m1[gds] @m1[id]'."
         )
         op_data.setdefault("warnings", []).append(internals_note)
-    else:
-        internals_note = None
 
     # A DC sweep raw has no single "operating point". With at=, report which
     # sweep point was read; otherwise flag that point 0 is just the start bias.

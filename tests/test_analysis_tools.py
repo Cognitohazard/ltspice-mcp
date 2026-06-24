@@ -403,9 +403,9 @@ class TestQueryValue:
 
 
 def test_has_active_device_detects_transistor_currents():
-    # The empty-internals note fires only when an M/Q/J/D device is present
-    # (its branch current appears), so RC circuits stay note-free. Sync test,
-    # kept out of the asyncio-marked class so pytest-asyncio doesn't flag it.
+    # _has_active_device is one arm of the empty-internals note's gate (the other
+    # is an ngspice run); an RC circuit trips neither, so it stays note-free. Sync
+    # test, kept out of the asyncio-marked class so pytest-asyncio doesn't flag it.
     from ltspice_mcp.tools.analysis import _has_active_device
 
     assert _has_active_device({"Id(M1)": 1e-3, "V(out)": 5.0})
@@ -2375,6 +2375,96 @@ class TestDcRejectedByTransientTools:
         raw = _stage_recorded(work_dir, "ltspice_dc_div")
         with pytest.raises(ResultError, match="transient"):
             await handler(input_factory(raw.name), state_no_sim)
+
+
+@pytest.mark.asyncio
+class TestOperatingPointInternalsHint:
+    """When device_internals is empty, operating_point appends ONE simulator-
+    agnostic recovery note (run on ngspice + .save the @dev[param] internals) —
+    it never branches on the producing simulator, which the session default can
+    get wrong on a cross-simulator raw read. It is gated so passive circuits
+    stay note-free: it fires when an M/Q/J/D terminal current proves a device is
+    present, OR when the run is ngspice (whose bare .op exposes no device traces,
+    so a saved-nothing run is indistinguishable from a passive one)."""
+
+    async def test_active_device_terminal_current_fires_hint(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # LTspice-style .op: a device terminal current (Id(M1)) proves a device is
+        # present, but no @dev[param] table was exported → the note fires.
+        assert state_no_sim.raw_dialect is None  # no simulator → LTspice semantics
+        p = work_dir / "lt_op.raw"
+        _inject_raw_mock(
+            state_no_sim,
+            p,
+            _make_raw_mock(
+                plotname="Operating Point",
+                trace_names=["V(d)", "Id(M1)"],
+                waves={"V(d)": np.array([0.9]), "Id(M1)": np.array([1e-4])},
+            ),
+        )
+        res = await handle_operating_point(OperatingPointInput(raw_file=p.name), state_no_sim)
+        warnings = res.structuredContent.get("warnings", [])
+        assert any("run on ngspice" in w and ".save all @m1[gm]" in w for w in warnings), warnings
+
+    async def test_bare_ngspice_op_fires_hint_via_dialect(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A bare ngspice .op shows no device traces at all (no terminal currents),
+        # so active-device detection can't fire — the ngspice dialect gate must.
+        state_no_sim.default_simulator = type("NGspiceSimulator", (), {})
+        assert state_no_sim.raw_dialect == "ngspice"
+        p = work_dir / "ng_op.raw"
+        _inject_raw_mock(
+            state_no_sim,
+            p,
+            _make_raw_mock(
+                plotname="Operating Point",
+                trace_names=["V(d)"],
+                waves={"V(d)": np.array([0.9])},
+            ),
+        )
+        res = await handle_operating_point(OperatingPointInput(raw_file=p.name), state_no_sim)
+        warnings = res.structuredContent.get("warnings", [])
+        assert any(".save all @m1[gm]" in w for w in warnings), warnings
+
+    async def test_passive_op_emits_no_hint(self, state_no_sim: SessionState, work_dir: Path):
+        # No active-device terminal current and not ngspice → passive, stays
+        # note-free (a bare .op on an RC bias point must not nag about internals).
+        assert state_no_sim.raw_dialect is None
+        p = work_dir / "rc_op.raw"
+        _inject_raw_mock(
+            state_no_sim,
+            p,
+            _make_raw_mock(
+                plotname="Operating Point",
+                trace_names=["V(out)", "I(R1)"],
+                waves={"V(out)": np.array([0.5]), "I(R1)": np.array([1e-4])},
+            ),
+        )
+        res = await handle_operating_point(OperatingPointInput(raw_file=p.name), state_no_sim)
+        warnings = res.structuredContent.get("warnings", [])
+        assert not any("device internals" in w.lower() for w in warnings), warnings
+
+    async def test_saved_internals_emit_no_recovery_hint(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # When internals ARE present, the note doesn't fire.
+        state_no_sim.default_simulator = type("NGspiceSimulator", (), {})
+        p = work_dir / "ng_op_saved.raw"
+        _inject_raw_mock(
+            state_no_sim,
+            p,
+            _make_raw_mock(
+                plotname="Operating Point",
+                trace_names=["V(d)", "@m1[gm]"],
+                waves={"V(d)": np.array([0.9]), "@m1[gm]": np.array([2e-3])},
+            ),
+        )
+        res = await handle_operating_point(OperatingPointInput(raw_file=p.name), state_no_sim)
+        warnings = res.structuredContent.get("warnings", [])
+        assert not any("device internals" in w.lower() for w in warnings), warnings
+        assert res.structuredContent["device_internals"].get("@m1[gm]") == pytest.approx(2e-3)
 
 
 @pytest.mark.asyncio
