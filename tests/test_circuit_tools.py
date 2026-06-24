@@ -1202,6 +1202,18 @@ class TestModelNameElementsEditable:
         out = self._run("W1 n+ n- Vsense ISW1\n", "W1", "ISW2")
         assert out.strip() == "W1 n+ n- Vsense ISW2"
 
+    def test_diode_with_area_factor_model_swapped(self) -> None:
+        # The diode carries a trailing area factor. The swap must replace the
+        # model and leave the area intact — it used to clobber the area "2" and
+        # leave the real model 1N4148 in place.
+        out = self._run("D1 a k 1N4148 2\n", "D1", "1N5817")
+        assert out.strip() == "D1 a k 1N5817 2"
+
+    def test_voltage_switch_with_state_model_swapped(self) -> None:
+        # The trailing ON state must survive; only the model name changes.
+        out = self._run("S1 n1 n2 nc1 nc2 MYSW ON\n", "S1", "NEWSW")
+        assert out.strip() == "S1 n1 n2 nc1 nc2 NEWSW ON"
+
     def test_unsupported_prefix_offers_escape_hatch(self) -> None:
         # A still-unsupported prefix should point the user at editing the card
         # directly, not raise a bare "Unsupported element prefix".

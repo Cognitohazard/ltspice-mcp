@@ -65,6 +65,20 @@ class TestDownsampleMinmax:
         _, ys = downsample_minmax(x, y, 1000)
         assert 900 <= len(ys) <= 1100
 
+    def test_descending_axis_not_collapsed(self):
+        # A high->low sweep (a .dc 5 0 or descending .noise) used to read
+        # x_end <= x_start and collapse to a single bucket — two points for the
+        # whole curve. It must bucket like an ascending axis and stay in
+        # descending (caller) order.
+        x = np.linspace(5.0, 0.0, 10_000)  # descending
+        y = np.sin(x) * x
+        xs, ys = downsample_minmax(x, y, 1000)
+        assert 900 <= len(ys) <= 1100  # not collapsed to 2
+        assert xs[0] > xs[-1]  # preserved descending order
+        # The spike-preservation property still holds (global extremes survive).
+        assert max(ys) == pytest.approx(float(np.max(y)), rel=1e-6)
+        assert min(ys) == pytest.approx(float(np.min(y)), rel=1e-6)
+
 
 class TestUnionPanel:
     def test_shared_x_not_unioned(self):
