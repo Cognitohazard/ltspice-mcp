@@ -2714,6 +2714,46 @@ class TestExportDcHeader:
         assert sc["columns"][0] != "sweep"
         assert sc["columns"][0].lower() not in ("time_s", "freq_hz")
 
+    @pytest.mark.parametrize(
+        ("signals", "expect_relayed"),
+        [
+            pytest.param("all", True, id="all-includes-bogus"),
+            pytest.param(["@m1[bogus]"], True, id="selected-bogus"),
+            pytest.param(["V(out)"], False, id="unrelated-not-exported"),
+        ],
+    )
+    async def test_unrecognized_save_relay_gated_on_export_set(
+        self, state_no_sim: SessionState, work_dir: Path, signals, expect_relayed
+    ):
+        # A typo'd/unsupported .save'd @dev[param] is written to the raw as a
+        # real-looking 0.0 column; the simulator's unrecognized-variable warning
+        # is the only tell it's bogus. The export relays it — at the simulator's
+        # own warning severity, not invented as an error — but ONLY when the bogus
+        # column is in the export set, else a V(out)-only CSV would falsely claim
+        # it holds a bogus column it never exported.
+        raw_file = work_dir / "exp_bogus.raw"
+        (work_dir / "exp_bogus.log").write_text("Warning: unrecognized variable @m1[bogus]\n")
+        t = np.linspace(0, 1, 100)
+        raw = _make_raw_mock(
+            trace_names=["time", "V(out)", "@m1[bogus]"],
+            waves={"time": t, "V(out)": np.sin(t), "@m1[bogus]": np.zeros(100)},
+            axis=t,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        res = await handle_export_waveform(
+            ExportWaveformInput(raw_file=raw_file.name, signals=signals), state_no_sim
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        bogus = [o for o in sc["observations"] if o["code"] == "unrecognized_save"]
+        if expect_relayed:
+            assert bogus, f"expected unrecognized relay for signals={signals!r}"
+            assert bogus[0]["severity"] == "warning"
+            assert "@m1[bogus]" in bogus[0]["detail"]
+        else:
+            assert not bogus
+            assert "@m1[bogus]" not in res.content[0].text
+
 
 @pytest.mark.asyncio
 class TestThdHandler:
@@ -2754,8 +2794,8 @@ async def _assert_relays_solve_failure(
 ) -> None:
     """Drive ``handler`` against a raw whose sibling .log reports a singular
     matrix, and assert the failure surfaces in the rendered result. Covers the
-    structural guarantee that every raw-reading metric tool relays a run-level
-    solve failure — a new tool that forgets the relay fails here."""
+    structural guarantee that every raw-reading tool (metric and egress) relays
+    a run-level solve failure — a new tool that forgets the relay fails here."""
     raw_file = work_dir / f"{name}.raw"
     _inject_raw_mock(state, raw_file, raw)
     (work_dir / f"{name}.log").write_text("gmin stepping failed\n")
@@ -2820,6 +2860,14 @@ class TestSolveFailureRelayCoverage:
                 _make_raw_mock(waves={"time": t_sin, "V(out)": y_sin}, axis=t_sin),
                 handle_thd,
                 lambda n: ThdInput(raw_file=n, signal="V(out)", fundamental="1k", n_harmonics=3),
+            ),
+            (
+                # Egress, not a metric: a run→export-only loop must still see the
+                # solve failure on the CSV it just wrote, not only on the run.
+                "export",
+                _make_raw_mock(),
+                handle_export_waveform,
+                lambda n: ExportWaveformInput(raw_file=n, signals=["V(out)"]),
             ),
         ]
         for name, raw, handler, factory in cases:
