@@ -13,6 +13,7 @@ from ltspice_mcp.tools.advanced import (
     ConfigureMonteCarloInput,
     ConfigureSweepInput,
     GetBatchResultsInput,
+    MonteCarloMismatchRule,
     MonteCarloTolerance,
     RunBatchInput,
     SweepParameter,
@@ -406,6 +407,21 @@ class TestRunSweep:
             await task
 
         assert state_no_sim.batch_jobs == {}
+
+
+class TestMonteCarloMismatchRule:
+    def test_min_wl_um2_must_be_positive(self) -> None:
+        # min_wl_um2 is the √(W·L) denominator floor; <= 0 would divide by zero
+        # (or take sqrt of a negative) in the sampler. Reject it at the boundary.
+        from pydantic import ValidationError
+
+        for bad in (0.0, -1e-3):
+            with pytest.raises(ValidationError):
+                MonteCarloMismatchRule(min_wl_um2=bad)
+
+    def test_positive_min_wl_um2_accepted(self) -> None:
+        rule = MonteCarloMismatchRule(min_wl_um2=1e-2)
+        assert rule.min_wl_um2 == 1e-2
 
 
 @pytest.mark.asyncio

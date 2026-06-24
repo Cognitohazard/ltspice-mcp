@@ -17,6 +17,47 @@ from spicelib.raw.raw_read import RawRead
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.state import BatchJob
 
+_STAT_KEYS = (
+    "max_across_runs",
+    "min_across_runs",
+    "mean_across_runs",
+    "std_across_runs",
+    "median_across_runs",
+)
+
+
+def _aggregate_peaks(
+    peak_values: list[float], per_run_summaries: list[dict]
+) -> tuple[dict, int | None, int | None]:
+    """Aggregate across-run stats over the FINITE peaks only.
+
+    A diverged-but-completed run (a normal outcome when Monte-Carlo / sweep
+    perturbation pushes a solve to a NaN/Inf sample) would otherwise NaN-poison
+    every statistic — np.max/mean over an array holding one NaN returns NaN —
+    and both np.argmax/argmin would point at that same diverged run, mislabeling
+    it as the worst AND best case. Excluding non-finite peaks keeps the aggregate
+    and the worst/best-case pointers meaningful; the per-run rows still carry the
+    non-finite values, so divergence stays visible to the caller.
+    """
+    none_stats: dict = {k: None for k in _STAT_KEYS}
+    if not peak_values:
+        return none_stats, None, None
+    peaks = np.asarray(peak_values, dtype=float)
+    finite_idx = np.flatnonzero(np.isfinite(peaks))
+    if finite_idx.size == 0:
+        return none_stats, None, None
+    fp = peaks[finite_idx]
+    stats = {
+        "max_across_runs": float(np.max(fp)),
+        "min_across_runs": float(np.min(fp)),
+        "mean_across_runs": float(np.mean(fp)),
+        "std_across_runs": float(np.std(fp)),
+        "median_across_runs": float(np.median(fp)),
+    }
+    max_case_run = per_run_summaries[int(finite_idx[np.argmax(fp)])]["run_index"]
+    min_case_run = per_run_summaries[int(finite_idx[np.argmin(fp)])]["run_index"]
+    return stats, max_case_run, min_case_run
+
 
 def compute_batch_stats(
     run_results: dict[int, dict],
@@ -171,28 +212,8 @@ def compute_batch_stats(
             # Skip runs where signal can't be read (wrong signal name, corrupt file)
             continue
 
-    # Aggregate stats across runs
-    if peak_values:
-        peaks_arr = np.array(peak_values)
-        stats = {
-            "max_across_runs": float(np.max(peaks_arr)),
-            "min_across_runs": float(np.min(peaks_arr)),
-            "mean_across_runs": float(np.mean(peaks_arr)),
-            "std_across_runs": float(np.std(peaks_arr)),
-            "median_across_runs": float(np.median(peaks_arr)),
-        }
-        max_case_run = per_run_summaries[int(np.argmax(peaks_arr))]["run_index"]
-        min_case_run = per_run_summaries[int(np.argmin(peaks_arr))]["run_index"]
-    else:
-        stats = {
-            "max_across_runs": None,
-            "min_across_runs": None,
-            "mean_across_runs": None,
-            "std_across_runs": None,
-            "median_across_runs": None,
-        }
-        max_case_run = None
-        min_case_run = None
+    # Aggregate stats across runs (non-finite peaks excluded — see _aggregate_peaks).
+    stats, max_case_run, min_case_run = _aggregate_peaks(peak_values, per_run_summaries)
 
     return {
         "signal": signal,

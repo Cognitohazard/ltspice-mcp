@@ -216,9 +216,11 @@ class MonteCarloMismatchRule(StrictModel):
     )
     min_wl_um2: float = Field(
         default=1e-3,
+        gt=0.0,
         description=(
             "Lower bound on W·L (in µm²) used when computing Pelgrom σ — "
-            "guards against div-by-zero for behaviorally-described instances."
+            "guards against div-by-zero for behaviorally-described instances. "
+            "Must be positive (it is the √(W·L) denominator floor)."
         ),
     )
 
