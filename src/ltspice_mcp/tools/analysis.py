@@ -32,7 +32,7 @@ import math
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import Any, Literal, NoReturn, NotRequired, TypedDict
 
 import numpy as np
 from mcp import types
@@ -89,6 +89,7 @@ from ltspice_mcp.lib.raw_parser import (
     safe_magnitude_db,
     trace_unit,
 )
+from ltspice_mcp.lib.result_observations import relay_observations
 from ltspice_mcp.lib.signal_analysis import (
     EdgeMetricsOutput,
     MeasurementStatsEntry,
@@ -207,12 +208,14 @@ async def _load_real_signal(
     *,
     job_id: str | None = None,
     run_index: int = 0,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Load (axis, wave) for a signal, rejecting AC/complex data.
+) -> tuple[np.ndarray, np.ndarray, Path]:
+    """Load (axis, wave, raw_path) for a signal, rejecting AC/complex data.
 
     Resolves the raw from EITHER a user ``raw_file`` OR a completed job run
     (``job_id`` + ``run_index``) via :func:`_effective_raw_path`, so a sweep /
-    Monte-Carlo run can be analyzed the same way as a standalone raw.
+    Monte-Carlo run can be analyzed the same way as a standalone raw. ``raw_path``
+    is returned so callers can relay the sibling .log's solve diagnostics without
+    re-resolving it.
     """
     raw_path = _effective_raw_path(raw_file, job_id, run_index, state)
     raw = await services.load_raw(raw_path, state)
@@ -226,7 +229,7 @@ async def _load_real_signal(
             f"Signal {signal!r} contains complex values; this tool requires "
             "real-valued transient data."
         )
-    return axis, wave
+    return axis, wave, raw_path
 
 
 def _axis_may_descend(sim_type: str) -> bool:
@@ -261,6 +264,32 @@ def _run(compute, *args, **kwargs) -> dict:
         return compute(*args, **kwargs)
     except ValueError as e:
         raise ResultError(str(e)) from e
+
+
+async def _reraise_with_solve_failure(e: ResultError, raw_path: Path) -> NoReturn:
+    """Re-raise ``e``, enriched with any terminal solve failure from the sibling
+    ``.log``. A failed-but-completed solve often leaves the data degenerate enough
+    that the metric itself raises (e.g. no detectable edge), so the generic
+    measurement error alone hides the solve failure that actually explains it."""
+    failures = await _solve_failures(raw_path)
+    if failures:
+        raise ResultError(
+            f"{e} — the simulator log reports a solve failure that likely explains "
+            f"this: {'; '.join(failures)}",
+            suggestions=e.suggestions or None,
+            show_hint=False,
+        ) from e
+    raise e
+
+
+async def _run_metric(raw_path: Path, compute, *args, **kwargs) -> dict:
+    """``_run`` for a raw-backed metric: on failure, name any terminal solve
+    failure from the sibling ``.log`` in the error so a degenerate-data raise
+    points at the bad solve instead of just the missing feature."""
+    try:
+        return _run(compute, *args, **kwargs)
+    except ResultError as e:
+        await _reraise_with_solve_failure(e, raw_path)
 
 
 # Header line for a rendered warnings block. Shared so _strip_warning_block
@@ -608,6 +637,7 @@ class SimulationSummaryInput(ToolInput):
             "mean_db": {"type": "number"},
             "min_phase": {"type": "number"},
             "max_phase": {"type": "number"},
+            "warnings": {"type": "array", "items": {"type": "string"}},
         },
     },
 )
@@ -620,6 +650,8 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
     raw = await services.load_raw(raw_path, state)
     signal = services.validate_signal(raw, signal)
     services.validate_step(raw, step)
+    # A failed-but-completed solve makes every stat below garbage; relay it.
+    solve_failures = await _solve_failures(raw_path)
 
     try:
         wave = raw.get_wave(signal, step=step)
@@ -662,7 +694,11 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
             "",
             f"Data Points: {stats['point_count']}",
         ]
-        return format_response("\n".join(lines), {"signal": signal, **stats}, fmt)
+        out = {"signal": signal, **stats}
+        if solve_failures:
+            out["warnings"] = solve_failures
+            lines += [f"⚠ {w}" for w in solve_failures]
+        return format_response("\n".join(lines), out, fmt)
 
     axis = _guarded_axis(raw, step)
     wave_real = np.asarray(wave)
@@ -771,7 +807,11 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
             f"Frequency:    {stats['freq_start_used']:.6g}..{stats['freq_end_used']:.6g} Hz"
             f"  ({stats['point_count']} samples)"
         )
-    return format_response("\n".join(lines), {"signal": signal, **stats}, fmt)
+    out = {"signal": signal, **stats}
+    if solve_failures:
+        out["warnings"] = solve_failures
+        lines += [f"⚠ {w}" for w in solve_failures]
+    return format_response("\n".join(lines), out, fmt)
 
 
 _DEFAULT_WAVEFORM_BUCKETS = 200
@@ -1789,13 +1829,16 @@ def _operating_point_units(raw, op_data: dict) -> dict[str, str]:
     return units
 
 
-# Canonical SPICE solve-failure phrases. When the log carries one, the whole
-# numeric solve is suspect — it taints every value read, not one trace — so a
-# read tool relays it regardless of which signal was asked for. (The convergence
-# entry is "no convergence", not bare "convergence", so a benign "convergence
-# achieved" line doesn't trip it.)
+# TERMINAL SPICE solve-failure phrases. When the log carries one, the solve
+# genuinely failed — it taints every value read, not one trace — so a read tool
+# relays it regardless of which signal was asked for. Deliberately terminal-only:
+# a bare "singular matrix" is NOT listed, because a transient can recover from it
+# via gmin/source stepping and still write a valid raw (log_parser classifies it
+# as non-terminal for exactly this reason). Flagging it would be a false
+# accusation on a recovered run; a genuine non-recovery still trips one of the
+# terminal phrases below (e.g. "gmin stepping failed"). ("no convergence", not
+# bare "convergence", so a benign "convergence achieved" line doesn't match.)
 _SOLVE_FAILURE_PHRASES = (
-    "singular matrix",
     "no convergence",
     "time step too small",
     "timestep too small",
@@ -1856,23 +1899,19 @@ async def _query_log_warnings(raw_path: Path, signal: str) -> list[str]:
     return warnings
 
 
-async def _relay_diagnostics_into(
-    result: types.CallToolResult, raw_path: Path, signal: str, fmt: str | None
+def _append_warnings_to_result(
+    result: types.CallToolResult, extra: list[str], fmt: str | None
 ) -> types.CallToolResult:
-    """Append the simulator's log diagnostics to an already-built query_value
-    result, whichever internal path produced it (direct ``at`` or ``step_axis``).
-
-    Keeps the structuredContent ``warnings`` list and the text in sync: for
-    ``fmt="json"`` the text is a JSON snapshot of structuredContent, so it is
-    re-dumped; otherwise the warnings are appended as ``⚠`` lines.
-    """
-    warnings = await _query_log_warnings(raw_path, signal)
-    if not warnings:
+    """Append warning strings to an already-built result, keeping the
+    structuredContent ``warnings`` list and the text in sync: for ``fmt="json"``
+    the text is a JSON snapshot of structuredContent, so it is re-dumped;
+    otherwise the warnings are appended as ``⚠`` lines."""
+    if not extra:
         return result
     sc = result.structuredContent
     if isinstance(sc, dict):
         existing = sc.get("warnings")
-        sc["warnings"] = [*existing, *warnings] if isinstance(existing, list) else list(warnings)
+        sc["warnings"] = [*existing, *extra] if isinstance(existing, list) else list(extra)
     if fmt == "json":
         if isinstance(sc, dict) and result.content:
             block = result.content[0]
@@ -1881,9 +1920,36 @@ async def _relay_diagnostics_into(
     else:
         for block in result.content:
             if isinstance(block, types.TextContent):
-                block.text += "\n" + "\n".join(f"⚠ {w}" for w in warnings)
+                block.text += "\n" + "\n".join(f"⚠ {w}" for w in extra)
                 break
     return result
+
+
+async def _relay_diagnostics_into(
+    result: types.CallToolResult, raw_path: Path, signal: str, fmt: str | None
+) -> types.CallToolResult:
+    """Append the simulator's log diagnostics to an already-built query_value
+    result, whichever internal path produced it (direct ``at`` or ``step_axis``)."""
+    return _append_warnings_to_result(result, await _query_log_warnings(raw_path, signal), fmt)
+
+
+async def _solve_failures(raw_path: Path) -> list[str]:
+    """Run-level solve-failure log lines (singular matrix / non-convergence)
+    from the sibling ``.log``. A failed-but-completed solve taints EVERY value
+    in the raw, not one trace, so any read tool relays these regardless of the
+    signal asked for. Empty when the solve finished clean or there's no ``.log``."""
+    return (await asyncio.to_thread(_read_log_warnings, raw_path))[1]
+
+
+async def _finish_metric(
+    lines: list[str], data: dict, raw_path: Path, fmt: str | None
+) -> types.CallToolResult:
+    """Standard tail for a transient/AC metric tool: relay any run-level solve
+    failure into ``data["warnings"]`` (the channel these tools surface), render
+    the warnings block, and format. Routing every metric handler through here
+    keeps the relay from being forgotten when a new tool is added."""
+    data.setdefault("warnings", []).extend(await _solve_failures(raw_path))
+    return format_response("\n".join(lines + _warning_lines(data["warnings"])), data, fmt)
 
 
 @registry.tool(
@@ -2542,11 +2608,12 @@ class MeasurementStatsResponse(TypedDict):
     output_model=EdgeMetricsResponse,
 )
 async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
-    axis, wave = await _load_real_signal(
+    axis, wave, raw_path = await _load_real_signal(
         args.raw_file, args.signal, args.step, state, job_id=args.job_id, run_index=args.run_index
     )
     t, y, _ = _window(axis, wave, args.t_start, args.t_end)
-    data = _run(
+    data = await _run_metric(
+        raw_path,
         analyze_edge,
         t,
         y,
@@ -2573,8 +2640,7 @@ async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
         f"t(high): {data['t_high_crossing']:.6g} s",
         f"t(mid): {data['t_mid_crossing']:.6g} s",
     ]
-    lines += _warning_lines(data["warnings"])
-    return format_response("\n".join(lines), data, args.format)
+    return await _finish_metric(lines, data, raw_path, args.format)
 
 
 @registry.tool(
@@ -2603,11 +2669,12 @@ async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
     output_model=PulseResponseResponse,
 )
 async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
-    axis, wave = await _load_real_signal(
+    axis, wave, raw_path = await _load_real_signal(
         args.raw_file, args.signal, args.step, state, job_id=args.job_id, run_index=args.run_index
     )
     t, y, _ = _window(axis, wave, args.t_start, args.t_end)
-    data = _run(
+    data = await _run_metric(
+        raw_path,
         analyze_pulse_response,
         t,
         y,
@@ -2643,8 +2710,7 @@ async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
     ]
     if data.get("quality"):
         lines.append(f"Quality flags: {', '.join(data['quality'])}")
-    lines += _warning_lines(data["warnings"])
-    return format_response("\n".join(lines), data, args.format)
+    return await _finish_metric(lines, data, raw_path, args.format)
 
 
 @registry.tool(
@@ -2703,7 +2769,8 @@ async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
             "Internal error: windowed axes have different lengths for the two signals"
         )
 
-    data = _run(
+    data = await _run_metric(
+        raw_path,
         analyze_timing_between,
         t_a_arr,
         ya,
@@ -2725,8 +2792,7 @@ async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
         f"t({args.signal_b}) = {data['t_b']:.6g} s @ threshold={data['threshold_b_used']:.6g}",
         f"Delay (t_b - t_a): {data['delay']:.6g} s",
     ]
-    lines += _warning_lines(data["warnings"])
-    return format_response("\n".join(lines), data, args.format)
+    return await _finish_metric(lines, data, raw_path, args.format)
 
 
 @registry.tool(
@@ -2757,11 +2823,12 @@ async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
     output_model=PeriodicMetricsResponse,
 )
 async def handle_periodic_metrics(args: PeriodicMetricsInput, state: SessionState):
-    axis, wave = await _load_real_signal(
+    axis, wave, raw_path = await _load_real_signal(
         args.raw_file, args.signal, args.step, state, job_id=args.job_id, run_index=args.run_index
     )
     t, y, _ = _window(axis, wave, args.t_start, args.t_end)
-    data = _run(
+    data = await _run_metric(
+        raw_path,
         analyze_periodic,
         t,
         y,
@@ -2787,8 +2854,7 @@ async def handle_periodic_metrics(args: PeriodicMetricsInput, state: SessionStat
         f"{data['num_falling_edges']} falling "
         f"({data['num_periods_measured']} period(s))",
     ]
-    lines += _warning_lines(data["warnings"])
-    return format_response("\n".join(lines), data, args.format)
+    return await _finish_metric(lines, data, raw_path, args.format)
 
 
 class ThdInput(ToolInput):
@@ -2855,12 +2921,13 @@ class ThdInput(ToolInput):
     output_model=ThdOutput,
 )
 async def handle_thd(args: ThdInput, state: SessionState):
-    axis, wave = await _load_real_signal(
+    axis, wave, raw_path = await _load_real_signal(
         args.raw_file, args.signal, args.step, state, job_id=args.job_id, run_index=args.run_index
     )
     t, y, _ = _window(axis, wave, args.t_start, args.t_end)
     f0 = _parse_time(args.fundamental, "fundamental")
-    data = _run(
+    data = await _run_metric(
+        raw_path,
         analyze_thd,
         t,
         y,
@@ -2883,8 +2950,7 @@ async def handle_thd(args: ThdInput, state: SessionState):
     ]
     for h in data["harmonics"]:
         lines.append(f"  {h['n']}x ({h['frequency']:.6g} Hz): {h['db_rel']:.1f} dB")
-    lines += _warning_lines(data["warnings"])
-    return format_response("\n".join(lines), data, args.format)
+    return await _finish_metric(lines, data, raw_path, args.format)
 
 
 class NoiseIntegralInput(ToolInput):
@@ -2965,7 +3031,7 @@ async def handle_noise_integral(args: NoiseIntegralInput, state: SessionState):
     density = np.asarray(raw.get_wave(signal, step=args.step))
     f_lo = _parse_time(args.f_start, "f_start")
     f_hi = _parse_time(args.f_end, "f_end")
-    data = _run(integrate_noise, freqs, density, f_lo, f_hi)
+    data = await _run_metric(raw_path, integrate_noise, freqs, density, f_lo, f_hi)
 
     unit = trace_unit(raw, signal)
     data["signal"] = signal
@@ -2982,8 +3048,7 @@ async def handle_noise_integral(args: NoiseIntegralInput, state: SessionState):
         "Noise figure / SNR are not computed — they need the source resistance and",
         "reference level only you have.",
     ]
-    lines += _warning_lines(data["warnings"])
-    return format_response("\n".join(lines), data, args.format)
+    return await _finish_metric(lines, data, raw_path, args.format)
 
 
 class _MeasSamples(TypedDict):
@@ -3788,7 +3853,8 @@ async def handle_filter_metrics(args: FilterMetricsInput, state: SessionState):
 async def handle_stability_metrics(args: StabilityMetricsInput, state: SessionState):
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     freqs, H = await _load_ac_signal(raw_path, args.signal, args.step, state)
-    data = _run(
+    data = await _run_metric(
+        raw_path,
         compute_stability_metrics,
         freqs,
         H,
@@ -3822,8 +3888,7 @@ async def handle_stability_metrics(args: StabilityMetricsInput, state: SessionSt
         lines.append(
             f"  {c['frequency_hz']:.6g} Hz ({c['direction']})  GM={m['margin_db']:+.2f} dB"
         )
-    lines += _warning_lines(data["warnings"])
-    return format_response("\n".join(lines), data, args.format)
+    return await _finish_metric(lines, data, raw_path, args.format)
 
 
 # Internal compute adapter — exposed publicly via bode_metrics(mode="slope").
@@ -4032,10 +4097,13 @@ async def handle_bode_metrics(args: BodeMetricsInput, state: SessionState):
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     run_meta = _run_meta(args.job_id, args.run_index, state)
     if not args.all_steps:
-        res = await _bode_dispatch(args, args.step, state, raw_path)
+        try:
+            res = await _bode_dispatch(args, args.step, state, raw_path)
+        except ResultError as e:
+            await _reraise_with_solve_failure(e, raw_path)
         if run_meta and res.structuredContent is not None:
             res.structuredContent.update(run_meta)
-        return res
+        return _append_warnings_to_result(res, await _solve_failures(raw_path), args.format)
 
     # all_steps: compute the metric for every step of the sweep.
     raw = await services.load_raw(raw_path, state)
@@ -4066,9 +4134,9 @@ async def handle_bode_metrics(args: BodeMetricsInput, state: SessionState):
     errored = [s for s in steps_out if "error" in s]
     if step_count and len(errored) == step_count and first_error is not None:
         # Every step failed (e.g. a non-AC raw fed to all_steps) — re-raise the
-        # ORIGINAL error so its show_hint/suggestions survive, instead of a
-        # "success" full of buried per-step errors.
-        raise first_error
+        # ORIGINAL error (its show_hint/suggestions survive), enriched with any
+        # solve failure, instead of a "success" full of buried per-step errors.
+        await _reraise_with_solve_failure(first_error, raw_path)
 
     data: dict = {
         "mode": args.mode,
@@ -4086,6 +4154,8 @@ async def handle_bode_metrics(args: BodeMetricsInput, state: SessionState):
         warnings.append(f"{w} ({_warning_coverage(idxs, step_count)})")
     if errored:
         warnings.append(f"{len(errored)} of {step_count} steps failed (see per-step 'error').")
+    # Run-level solve failure taints every step; surface it once at the top.
+    warnings.extend(await _solve_failures(raw_path))
     if warnings:
         data["warnings"] = warnings
 
@@ -4235,7 +4305,8 @@ async def handle_resonance(args: ResonanceInput, state: SessionState):
         raise ResultError(f"max_peaks must be in [1, 1000], got {args.max_peaks}")
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     freqs, H = await _load_ac_signal(raw_path, args.signal, args.step, state)
-    data = _run(
+    data = await _run_metric(
+        raw_path,
         compute_resonances,
         freqs,
         H,
@@ -4253,8 +4324,7 @@ async def handle_resonance(args: ResonanceInput, state: SessionState):
             f"  f={p['frequency_hz']:.6g} Hz  gain={p['magnitude_db']:.2f} dB  "
             f"Q={q}  BW-3dB={bw}  phase={p['phase_deg']:+.2f}°"
         )
-    lines += _warning_lines(data["warnings"])
-    return format_response("\n".join(lines), data, args.format)
+    return await _finish_metric(lines, data, raw_path, args.format)
 
 
 class AcStructureInput(ToolInput):
@@ -4325,7 +4395,7 @@ def _fmt_hz_range(f_lo: float, f_hi: float) -> str:
 async def handle_ac_structure(args: AcStructureInput, state: SessionState):
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     freqs, H = await _load_ac_signal(raw_path, args.signal, args.step, state)
-    data = _run(analyze_ac_structure, freqs, H)
+    data = await _run_metric(raw_path, analyze_ac_structure, freqs, H)
     data["signal"] = args.signal
 
     order = data["net_order"]
@@ -4373,6 +4443,9 @@ async def handle_ac_structure(args: AcStructureInput, state: SessionState):
     fit = data["fit_rel_err"]
     lines.append(
         f"Method: {data['method']}" + (f" (fit error {fit:.1e})" if fit is not None else "")
+    )
+    data.setdefault("observations", []).extend(
+        relay_observations({"errors": await _solve_failures(raw_path)})
     )
     if data["observations"]:
         lines.append("")
