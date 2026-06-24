@@ -99,6 +99,21 @@ class TestAcStructureLib:
         assert result["non_minimum_phase"] is False
         assert _has_review_obs(result)
 
+    def test_minimum_phase_short_sweep_not_flagged(self):
+        # A plain single-pole RC lowpass is minimum-phase. With a short sweep
+        # (3..6 points) the residual edge-trim floored to zero, leaving the
+        # Bode-kernel convolution ring in the residual and misreading the most
+        # basic minimum-phase response as non-minimum-phase (with a spurious
+        # transport delay).
+        for n in (3, 4, 5, 6, 7):
+            f = np.logspace(0, n - 1, n)
+            H = 1.0 / (1.0 + 1j * f / 100.0)
+            result = analyze_ac_structure(f, H)
+            assert result["non_minimum_phase"] is False, (
+                f"n={n}: residual={result['phase_residual_deg']}"
+            )
+            assert result["transport_delay_s"] is None, f"n={n}"
+
     def test_complex_zero_pair_not_mislabeled_as_pole(self):
         # A notch has a complex ZERO pair (~5 kHz) over a complex POLE pair (~2 kHz).
         # The zero pair must be labeled complex_zero_pair, never a (pole) complex_pair.

@@ -1400,6 +1400,17 @@ def integrate_noise(
     i1 = int(np.searchsorted(freqs, hi, side="right"))
     fb = freqs[i0:i1]
     db = density[i0:i1]
+    # A non-finite density sample (NaN/Inf at a singular point) would NaN-poison
+    # the whole integral; drop those samples and flag the approximation rather
+    # than return a silent NaN total.
+    finite = np.isfinite(db)
+    if not finite.all():
+        n_bad = int((~finite).sum())
+        warnings.append(
+            f"Dropped {n_bad} non-finite noise-density sample(s) in band before integrating."
+        )
+        fb = fb[finite]
+        db = db[finite]
     if fb.size < 2:
         raise ValueError(
             f"Band [{lo:g}, {hi:g}] Hz selects {fb.size} of {freqs.size} points; "

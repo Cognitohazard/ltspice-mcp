@@ -17,6 +17,7 @@ from ltspice_mcp.lib.spice_lex import (
     Token,
     TokenKind,
     emit,
+    extract_meas_name,
     iter_body,
     iter_by_kind,
     lex,
@@ -183,6 +184,16 @@ class TestTokenizeBody:
         assert toks[3].kind == TokenKind.BRACED
         assert "(" in toks[3].text and ")" in toks[3].text
 
+    def test_single_quote_inside_braces_is_opaque(self) -> None:
+        # A single-quoted string inside {...} is opaque, matching the
+        # double-quote handling and the documented contract: a brace inside the
+        # quotes must not count toward nesting. Before the fix a single quote was
+        # passed through, so the inner '}' closed the group early and the deck
+        # failed to lex.
+        toks = tokenize_body("R1 n1 n2 {'}'}")
+        assert toks[3].kind == TokenKind.BRACED
+        assert toks[3].text == "{'}'}"
+
     def test_unbalanced_brace_raises(self) -> None:
         with pytest.raises(SpiceLexError):
             tokenize_body("R1 n1 n2 {a*b")
@@ -325,6 +336,18 @@ class TestOps:
         # The two cards must be on separate lines, not glued.
         assert "1k.MODEL" not in out
         assert "1k\n.MODEL" in out
+
+    def test_inject_card_without_trailing_newline_before_end(self) -> None:
+        # The injected card's OWN text lacks a trailing newline. When it lands
+        # before .END, emit must not glue ".END" onto its last line — the
+        # predecessor guard only fixes the line before the insertion point.
+        from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end
+
+        cards = lex("R1 a b 1k\n.END\n").cards
+        inject_card_before_end(cards, ".MODEL FOO NMOS(VTO=0.7)")  # no trailing \n
+        out = emit(cards)
+        assert "NMOS(VTO=0.7).END" not in out
+        assert "NMOS(VTO=0.7)\n.END" in out
 
     def test_inject_card_before_end_predecessor_missing_newline(self) -> None:
         # Same defect can hit when .END is present but the card before
@@ -954,6 +977,59 @@ class TestInstanceLine:
         assert view.model == "MYSUB"
         assert view.params == {"W": "10u"}
 
+    def test_diode_with_area_factor(self) -> None:
+        # A diode has exactly 2 nodes; a trailing area factor follows the model.
+        # The model is the token after the nodes, not the last positional — that
+        # would mistake the area "2" for the model and clobber the real model.
+        view = InstanceLine.from_card(lex("D1 a k 1N4148 2\n").cards[0])
+        assert view.nodes == ["a", "k"]
+        assert view.model == "1N4148"
+        assert view.value == "2"  # area preserved as the value tail
+
+    def test_diode_numeric_model_name_not_regressed(self) -> None:
+        # A diode with a numerically-named model and no area: the model is the
+        # token after its 2 nodes (not parsed away as a number).
+        view = InstanceLine.from_card(lex("D1 a k 555\n").cards[0])
+        assert view.nodes == ["a", "k"]
+        assert view.model == "555"
+        assert view.value is None
+
+    def test_switch_with_on_off_state(self) -> None:
+        # A switch carries a trailing ON/OFF state after the model; the state is
+        # never the model name.
+        view = InstanceLine.from_card(lex("S1 n1 n2 nc1 nc2 MYSW ON\n").cards[0])
+        assert view.nodes == ["n1", "n2", "nc1", "nc2"]
+        assert view.model == "MYSW"
+        assert view.value == "ON"
+
+    def test_numeric_subckt_name_not_regressed(self) -> None:
+        # A subcircuit named numerically (a 555 timer, a 741 opamp) with no
+        # trailing token: the last positional is the model — the variable-arity
+        # path must not strip it as a pseudo-area.
+        view = InstanceLine.from_card(lex("X1 trig out 555\n").cards[0])
+        assert view.nodes == ["trig", "out"]
+        assert view.model == "555"
+
+    def test_diode_model_named_on_not_stripped(self) -> None:
+        # ON/OFF is a switch state only — a diode whose model is literally named
+        # ON must keep it as the model, not peel it into a value tail (the
+        # state-peel is gated on S/W).
+        cards = lex("D1 a k ON\n").cards
+        view = InstanceLine.from_card(cards[0])
+        assert view.nodes == ["a", "k"]
+        assert view.model == "ON"
+        assert view.value is None
+        view.set_model("1N4148")
+        assert emit(cards).strip() == "D1 a k 1N4148"
+
+    def test_subckt_model_named_off_not_stripped(self) -> None:
+        cards = lex("X1 a b OFF\n").cards
+        view = InstanceLine.from_card(cards[0])
+        assert view.nodes == ["a", "b"]
+        assert view.model == "OFF"
+        view.set_model("MYSUB")
+        assert emit(cards).strip() == "X1 a b MYSUB"
+
     def test_b_source_value_in_params(self) -> None:
         card = lex("B1 out 0 V={V(in)*2}\n").cards[0]
         view = InstanceLine.from_card(card)
@@ -1020,6 +1096,17 @@ class TestInstanceLine:
         view = InstanceLine.from_card(lex("E1 out 0 in 0 10\n").cards[0])
         with pytest.raises(ValueError, match="not supported"):
             view.set_nodes(["a", "b", "c", "d"])
+
+    def test_set_nodes_continuation_line_falls_back(self) -> None:
+        # When the node span crosses a continuation-line boundary it can't be
+        # patched in place; set_nodes must fall back to a canonical re-render
+        # (like set_model/set_param) instead of propagating the ValueError.
+        cards = lex("R1 in\n+ out 1k\n").cards
+        view = InstanceLine.from_card(cards[0])
+        view.set_nodes(["a", "b"])
+        re_view = InstanceLine.from_card(lex(emit(cards)).cards[0])
+        assert re_view.nodes == ["a", "b"]
+        assert re_view.value == "1k"
 
     def test_controlled_source_plain_value_still_parsed(self) -> None:
         # Removing E/G from the editable set must not change their value/node
@@ -1092,6 +1179,28 @@ class TestSubcktCard:
         out = emit(cards)
         assert "L=1u" in out
         assert "W=10u" in out
+
+
+class TestExtractMeasName:
+    def test_label_with_analysis_kind(self) -> None:
+        assert extract_meas_name(".meas tran vout FIND V(out) AT 1m") == "vout"
+
+    def test_label_without_analysis_kind(self) -> None:
+        assert extract_meas_name(".meas vout FIND V(out) AT 1m") == "vout"
+
+    def test_analysis_only_has_no_label(self) -> None:
+        # ``.meas tran`` carries no measurement label — the analysis token must
+        # not be returned as the name (it used to leak through as "tran").
+        assert extract_meas_name(".meas tran") is None
+        assert extract_meas_name(".meas ac") is None
+
+    def test_label_equal_to_analysis_kind(self) -> None:
+        # A measurement legitimately named after an analysis kind still resolves
+        # to the label after the kind.
+        assert extract_meas_name(".meas tran tran FIND V(x) AT 1m") == "tran"
+
+    def test_directive_only_returns_none(self) -> None:
+        assert extract_meas_name(".meas") is None
 
 
 class TestMeasCard:

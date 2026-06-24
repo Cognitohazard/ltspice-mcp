@@ -1321,6 +1321,13 @@ def downsample_minmax(
     """
     if len(x) == 0:
         return np.empty(0, dtype=float), np.empty(0, dtype=float)
+    # _equal_time_buckets needs an ascending axis; a high->low sweep (a .dc 5 0
+    # or descending .noise) otherwise reads x_end <= x_start and collapses to a
+    # single bucket — two output points for the whole curve. Flip to ascending,
+    # bucket, then restore the caller's axis order.
+    flipped = x.size > 1 and x[0] > x[-1]
+    if flipped:
+        x, y = x[::-1], y[::-1]
     edges, bounds, _ = _equal_time_buckets(x, max(1, target_points // 2))
     starts = bounds[:-1]
     nonempty = bounds[1:] > starts
@@ -1331,6 +1338,8 @@ def downsample_minmax(
     xs[1::2] = edges[1:][nonempty]
     ys[0::2] = np.minimum.reduceat(y, block_starts)
     ys[1::2] = np.maximum.reduceat(y, block_starts)
+    if flipped:
+        return xs[::-1], ys[::-1]
     return xs, ys
 
 

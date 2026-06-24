@@ -42,10 +42,13 @@ def resolve_safe_path(user_path: str, allowed_dirs: list[Path]) -> Path:
         base_dir = allowed_dirs[0]
         path = base_dir / path
 
-    # Resolve symlinks and normalize (strict=False allows non-existent files)
+    # Resolve symlinks and normalize (strict=False allows non-existent files).
+    # ValueError covers an embedded NUL byte ("embedded null byte"), which
+    # path.resolve raises rather than OSError — without it the raw ValueError
+    # would escape the path-security boundary.
     try:
         resolved = path.resolve(strict=False)
-    except (OSError, RuntimeError) as e:
+    except (OSError, RuntimeError, ValueError) as e:
         raise PathSecurityError(f"Failed to resolve path {user_path}: {e}") from e
 
     # Check if resolved path is within any allowed directory

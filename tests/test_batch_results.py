@@ -1,9 +1,11 @@
 """Tests for batch_results: filtering, progress, and stats."""
 
+import math
 import time
 from pathlib import Path
 
 from ltspice_mcp.lib.batch_results import (
+    _aggregate_peaks,
     compute_batch_stats,
     filter_runs_by_params,
     get_progress_snapshot,
@@ -14,6 +16,38 @@ from tests.conftest import FIXTURES_DIR
 
 def _make_run(params: dict, raw_file: str = "") -> dict:
     return {"raw_file": raw_file, "log_file": "", "params": params}
+
+
+class TestAggregatePeaks:
+    """Across-run aggregation must not be NaN-poisoned by a diverged run."""
+
+    def test_non_finite_peak_excluded(self) -> None:
+        # A diverged-but-completed run (NaN peak) must not poison the aggregate,
+        # nor make both case pointers aim at the diverged run.
+        summaries = [{"run_index": 0}, {"run_index": 1}, {"run_index": 2}]
+        stats, max_run, min_run = _aggregate_peaks([5.0, float("nan"), 9.0], summaries)
+        assert stats["max_across_runs"] == 9.0
+        assert stats["min_across_runs"] == 5.0
+        assert math.isfinite(stats["mean_across_runs"])
+        assert max_run == 2  # finite max, not the NaN run
+        assert min_run == 0
+
+    def test_inf_peak_excluded(self) -> None:
+        summaries = [{"run_index": 0}, {"run_index": 1}]
+        stats, max_run, _ = _aggregate_peaks([float("inf"), 3.0], summaries)
+        assert stats["max_across_runs"] == 3.0
+        assert max_run == 1
+
+    def test_all_non_finite_yields_none(self) -> None:
+        summaries = [{"run_index": 0}, {"run_index": 1}]
+        stats, max_run, min_run = _aggregate_peaks([float("nan"), float("inf")], summaries)
+        assert stats["max_across_runs"] is None
+        assert max_run is None and min_run is None
+
+    def test_empty_yields_none(self) -> None:
+        stats, max_run, min_run = _aggregate_peaks([], [])
+        assert stats["mean_across_runs"] is None
+        assert max_run is None and min_run is None
 
 
 class TestFilterRunsByParams:

@@ -83,6 +83,11 @@ def inject_card_before_end(
         )
     new_card = real_cards[0]
     new_card.scope = scope
+    # Guard the new card's OWN trailing newline: when it lands before a .END,
+    # emit would otherwise glue ".END" onto the injected card's last line (the
+    # predecessor guard below only fixes the line before the insertion point).
+    if new_card.raw_lines and not new_card.raw_lines[-1].endswith("\n"):
+        new_card.raw_lines = [*new_card.raw_lines[:-1], new_card.raw_lines[-1] + "\n"]
     # Find the top-level .END (scope=()) and insert before it.
     for i, c in enumerate(cards):
         if c.kind == "end" and c.scope == ():
