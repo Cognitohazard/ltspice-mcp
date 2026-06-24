@@ -167,6 +167,7 @@ Rules for any field that rates/flags/classifies a result (consumer is an LLM; ra
 - **Severity is only relayed** — attach one only when the simulator already assigned it.
 - **`status` ≠ trust:** lifecycle `status` (set early from raw size) stays separate from the diagnostics-derived trust signal.
 - **Thresholds prefer** relay > topology > signature > relative > bare magnitude; magnitude stays advisory; emit a null/flag over a meaningless number; one constant, one meaning.
+- **`observations` vs `warnings` are two distinct channels — don't merge them.** `observations` = is the data/solve trustworthy (relayed log errors, non-finite/extreme values, coverage gaps; structured, doctrine-governed). `warnings` (on the analysis tools) = did this measurement make assumptions (clamped window, ambiguous edge, FFT-window approximation; free-text, actionable). A run-level solve failure is a data fact: read tools relay it into `observations` where they have that channel, else into their `warnings`. The metric tools lack an `observations` channel; add one (and move their solve-failure relay onto it) only when a second data-fact needs a home — never via a breaking `warnings`→`observations` migration. Full rationale in `lib/result_observations.py`.
 
 ### WSL Support
 

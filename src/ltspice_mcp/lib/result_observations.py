@@ -25,6 +25,28 @@ doctrine — surface, don't judge" in CLAUDE.md. Design rules:
 The output is ``list[Observation]`` (empty when nothing was surfaced). It rides
 on the run summary as ``summary["observations"]`` and is the curated "look here"
 layer above the always-available raw ``warnings``/``errors`` lists.
+
+Two surfacing channels, deliberately kept distinct (do not merge them):
+
+- ``observations`` answer *is the underlying data/solve trustworthy?* — facts
+  about the result and the simulator's own behavior (a relayed log error, a
+  non-finite or rail-pinned value, a coverage gap). Structured, code-tagged,
+  doctrine-governed by this module.
+- ``warnings`` (on the analysis tools — ``signal_stats``, ``edge_metrics``,
+  ``bode_metrics``, ...) answer *did this measurement have to make assumptions?*
+  — per-request caveats about the measurement just performed (a clamped window,
+  an ambiguous edge, a Hann-window approximation), free-text and actionable.
+
+These answer different questions and call for different consumer responses, so a
+single value can legitimately appear in different channels across tools. A
+*run-level solve failure* (singular matrix, non-convergence) is a data/solve
+fact: it goes to ``observations`` where a tool has that channel, and otherwise
+to that tool's ``warnings`` list (the channel it already surfaces). Folding the
+two channels into one would conflate "your data is garbage" with "I approximated
+your window" and force bespoke free-text guidance into a code taxonomy. The
+metric tools simply lack an ``observations`` channel today; add one there (and
+move their solve-failure relay onto it) only when a second data-fact needs a
+home — not via a breaking ``warnings``→``observations`` migration.
 """
 
 from __future__ import annotations
