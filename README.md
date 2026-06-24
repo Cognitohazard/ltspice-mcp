@@ -45,11 +45,11 @@ Both wrap the server; they still need `uv` and a simulator on the host — they 
 
 ## Using it
 
-Once connected, you ask for circuit work in plain language. The assistant chooses the tools; the server runs the simulator and measures the results.
+Once connected, you ask for circuit work in plain language. The assistant designs the circuit and decides what to measure; the server runs the simulator, parses the binary output, and hands back the numbers. It reports what the run produced, the simulator's own warnings included, and leaves the call on whether a result is good to you and the assistant.
 
-> **"Design a 1 kHz RC low-pass filter and verify its cutoff."**
+> **"Bias this NMOS common-source stage into saturation at the target drain current and report gm/ID."**
 
-The assistant writes the netlist, validates it, runs an AC simulation, and reads the measurements back: cutoff 1000.4 Hz, −19.9 dB/decade roll-off, first-order response. If the cutoff is off-target, it changes a component value and re-runs — each iteration is a couple of seconds.
+The assistant writes the netlist — with a `.save` for M1's operating-point internals — runs a `.op` on ngspice, and reads the bias point back by name: VDS against the device's own VDSAT so you can see it's saturated, the drain current, and gm and gds straight from the solver. gm/ID, the figure analog designers size to, follows from gm and ID. If the bias is off, it trims the gate reference or W/L and re-runs, a couple of seconds per pass. (On LTspice the same `.op` returns node voltages and branch currents; per-device internals are an ngspice feature, and they have to be `.save`d to appear.)
 
 Other requests that work the same way:
 
@@ -57,8 +57,12 @@ Other requests that work the same way:
 - *"Run a 200-run Monte Carlo with 5% resistors and tell me the output spread."* — perturbs components per run, simulates the batch, and reports mean, sigma, and worst-case values per measurement.
 - *"Sweep the load from 100 Ω to 10 kΩ and find where efficiency drops."* — parameter sweep with per-run results.
 - *"Characterize this NMOS: gm and gm/ID vs VGS."* — writes a `.dc Vgs` deck with `.save @m1[gm] @m1[id]`, runs it on ngspice, and returns the gm/ID table as one CSV (no `.control` block, no rawfile parsing).
+- *"Find an N-channel power MOSFET for a low-side switch and measure the on-state drop."* — searches the loaded libraries for a part (`find_model`), drops it into a pulsed-gate transient, and reads Vds(on) and load current back from the `.meas` results.
 - *"Build this differential pair as a schematic I can open in LTspice."* — places and wires the components into a real `.asc`, with orthogonal routing and pin-collision checks.
 - *"Is this loop stable?"* — AC analysis of the loop gain; reports phase and gain margin at every crossover, not just the first.
+- *"What's the resonant frequency and Q of this series RLC?"* — runs an AC sweep and reports each peak's center frequency, Q, and −3 dB bandwidth.
+
+**The warning rides with the number it affects.** A simulator like ngspice can print "singular matrix" once, deep in a log you'd never open, then finish the run and write perfectly plausible numbers anyway — read them by hand and nothing looks off. Ask the server for one of those numbers and the buried line comes attached to it, in an `observations` field right next to the value, so the failure surfaces where you're already looking instead of where it's easy to scroll past.
 
 ### Co-design on the same files
 
