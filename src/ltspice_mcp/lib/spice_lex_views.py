@@ -333,6 +333,12 @@ _EXACT_NODE_COUNT: dict[str, int] = {
     "H": 2,
 }
 
+# A switch (S/W) carries an optional ON/OFF state token AFTER its model name.
+# It is never a model name, so it is peeled into the value tail before model
+# identification — otherwise the last-positional heuristic would mistake the
+# state for the model and clobber the real model on a set_model edit.
+_SWITCH_STATES = frozenset({"on", "off"})
+
 
 def _exact_node_span(positional: list[Token], exact: int | None) -> tuple[int, int] | None:
     """Body span of the FIRST ``exact`` positional tokens — the editable node
@@ -347,6 +353,17 @@ def _exact_node_span(positional: list[Token], exact: int | None) -> tuple[int, i
     if any(t.body_offset < 0 for t in head):
         return None
     return (head[0].body_offset, head[-1].body_end)
+
+
+def _value_from_span(card: SpiceCard, tokens: list[Token]) -> str:
+    """Reconstruct the value text spanning ``tokens`` from the card body.
+
+    Prefers the original body span (so spacing inside a multi-token spec like
+    ``PULSE(...)`` survives a round-trip) and falls back to a space-join when a
+    token is synthesized (no body offset)."""
+    if all(t.body_offset >= 0 for t in tokens):
+        return card.body[tokens[0].body_offset : tokens[-1].body_end].strip()
+    return " ".join(t.text for t in tokens)
 
 
 @dataclass
@@ -435,22 +452,44 @@ class InstanceLine:
                 nodes_tokens = positional[:exact]
                 value_tokens = positional[exact:]
                 model_token = value_tokens[-1]
-                if all(t.body_offset >= 0 for t in value_tokens):
-                    value = card.body[
-                        value_tokens[0].body_offset : value_tokens[-1].body_end
-                    ].strip()
-                else:
-                    value = " ".join(t.text for t in value_tokens)
+                value = _value_from_span(card, value_tokens)
             else:
                 model_token = positional[-1]
                 value = model_token.text.strip('"')
                 nodes_tokens = positional[:-1]
         else:
-            # "model": the model/subckt name is always a single trailing token;
-            # everything before it is a node.
-            model_token = positional[-1]
-            model = model_token.text.strip('"')
-            nodes_tokens = positional[:-1]
+            # "model": the model/subckt name, optionally followed by a trailing
+            # value the last-positional heuristic would mistake for the model:
+            #  - a diode area factor (``D1 a k 1N4148 2`` — the model is the
+            #    first positional after its fixed 2 nodes, the 2 is the area);
+            #  - a switch ON/OFF state (``S1 ... MYSW ON``).
+            # Both follow the model and are preserved as the value tail.
+            # (Variable-arity classes with a bare trailing NUMBER — e.g. a
+            # MOSFET/BJT area factor — stay on the last-positional heuristic:
+            # the trailing number is indistinguishable from a numerically-named
+            # model like a ``555`` subckt without arity we don't have.)
+            tail: list[Token] = []
+            pos = positional
+            # ON/OFF is a state ONLY for switches (S/W). For any other element a
+            # trailing ON/OFF is the model/subckt name itself (e.g. ``D1 a k ON``),
+            # so peeling it there would corrupt the parse.
+            if prefix in ("S", "W") and pos[-1].text.strip('"').lower() in _SWITCH_STATES:
+                tail = [pos[-1]]
+                pos = pos[:-1]
+            if pos:
+                # Fixed-arity (a diode) splits nodes | model | trailing area at the
+                # known node count; everything else takes the last positional as
+                # the model. (``pos`` can be empty only for a malformed bare
+                # switch state like ``S1 ON``.)
+                cut = exact if (exact is not None and len(pos) > exact) else len(pos) - 1
+                nodes_tokens = pos[:cut]
+                model_token = pos[cut]
+                model = model_token.text.strip('"')
+                tail = [*pos[cut + 1 :], *tail]
+            else:
+                nodes_tokens = []
+            if tail:
+                value = _value_from_span(card, tail)
 
         nodes = [t.text for t in nodes_tokens]
 
@@ -538,12 +577,19 @@ class InstanceLine:
         if any((not n) or n.split() != [n] for n in new_nodes):
             raise ValueError("node names must be non-empty single tokens")
         start, end = self._node_span
-        self.card.replace_span(start, end, " ".join(new_nodes))
         self.nodes = list(new_nodes)
+        self._node_span = None
+        try:
+            self.card.replace_span(start, end, " ".join(new_nodes))
+        except ValueError:
+            # The node span crosses a continuation-line boundary, so it can't be
+            # patched in place; re-render canonically instead of propagating —
+            # matching set_model/set_param's fallback.
+            self._canonical_rerender()
+            return
         # Offsets past the edit are now stale; drop cached tokens so any
         # subsequent edit on this view re-renders canonically instead of
         # writing at a wrong offset.
-        self._node_span = None
         self._model_token = None
         self._param_tokens.clear()
 
@@ -640,6 +686,10 @@ class InstanceLine:
         parts = [self.ref, *self.nodes]
         if self.model is not None:
             parts.append(self.model)
+            # A model-kind element may carry a trailing value (diode area, switch
+            # ON/OFF state) after the model name; preserve it on re-render.
+            if self.value is not None:
+                parts.append(self.value)
         elif self.value is not None and self._value_param_key is None:
             parts.append(self.value)
         for k, v in self.params.items():

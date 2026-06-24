@@ -803,3 +803,14 @@ class TestIntegrateNoise:
         freqs = np.array([1.0, 5.0, 3.0, 10.0])
         with pytest.raises(ValueError, match="monotonic"):
             integrate_noise(freqs, np.ones_like(freqs), None, None)
+
+    def test_non_finite_density_dropped_and_warned(self):
+        # A NaN density sample (a singular point) would NaN-poison the integral;
+        # it must be dropped with a warning, not returned as a silent NaN total.
+        freqs = np.linspace(1.0, 1001.0, 2001)
+        density = np.full_like(freqs, 2e-9)
+        density[1000] = np.nan
+        r = integrate_noise(freqs, density, None, None)
+        assert math.isfinite(r["total_rms"])
+        assert r["total_rms"] > 0.0
+        assert any("non-finite" in w.lower() for w in r["warnings"])

@@ -158,6 +158,18 @@ _RESID_UNIFORM_N = 4096
 # when a straight-line fit explains at least this much of the variance.
 _RESID_DELAY_R2_MIN = 0.90
 
+
+def _resid_trim(n: int) -> int:
+    """Samples to trim off each end of the gain-phase residual band.
+
+    The Bode-kernel convolution rings ~1 sample wide at each edge, so at least
+    one sample must be trimmed. ``int(n * _RESID_TRIM_FRAC)`` floors to 0 for a
+    short sweep (any n below ~7), which would leave the ring in the residual and
+    misread a plain minimum-phase response as non-minimum-phase.
+    """
+    return max(1, int(n * _RESID_TRIM_FRAC))
+
+
 # A root with imaginary part above this fraction of its magnitude is a complex
 # (conjugate-pair) root; a root with real part above this fraction is in the
 # right half-plane (non-minimum-phase).
@@ -579,7 +591,7 @@ def _min_phase_deg(freqs: np.ndarray, H: np.ndarray) -> tuple[np.ndarray, np.nda
     min_phase_deg = np.rad2deg(np.interp(x, x_uni, min_phase_uni))
 
     n = len(freqs)
-    lo = int(n * _RESID_TRIM_FRAC)
+    lo = _resid_trim(n)
     hi = n - lo
     return freqs[lo:hi], min_phase_deg[lo:hi]
 
@@ -597,7 +609,7 @@ def _gain_phase_residual(freqs: np.ndarray, H: np.ndarray) -> tuple[float, bool,
     meas_phase = unwrap_phase_safe(H)[0]
     f_mid, min_phase_mid = _min_phase_deg(freqs, H)
     n = len(freqs)
-    lo = int(n * _RESID_TRIM_FRAC)
+    lo = _resid_trim(n)
     hi = n - lo
     residual = meas_phase[lo:hi] - min_phase_mid
     residual = residual - np.mean(residual)

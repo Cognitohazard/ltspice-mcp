@@ -282,8 +282,8 @@ def _scan_balanced(body: str, start: int, opener: str, closer: str) -> int:
     n = len(body)
     while i < n:
         c = body[i]
-        if c == '"':
-            end = body.find('"', i + 1)
+        if c == '"' or c == "'":
+            end = body.find(c, i + 1)
             if end < 0:
                 raise SpiceLexError(
                     SpiceLexErrorCategory.UNTERMINATED_QUOTE,
@@ -852,8 +852,10 @@ def extract_meas_name(body: str) -> str | None:
     if len(parts) < 2:
         return None
     second = parts[1].lower()
-    if second in MEAS_ANALYSIS_TOKENS and len(parts) >= 3:
-        return parts[2]
+    if second in MEAS_ANALYSIS_TOKENS:
+        # ``.MEAS TRAN NAME ...`` — the label follows the analysis kind. A bare
+        # ``.MEAS TRAN`` carries no label (the analysis token is not the name).
+        return parts[2] if len(parts) >= 3 else None
     return parts[1]
 
 
