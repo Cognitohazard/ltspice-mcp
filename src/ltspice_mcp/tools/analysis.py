@@ -1516,6 +1516,35 @@ async def handle_export_waveform(args: ExportWaveformInput, state: SessionState)
             }
         )
 
+    # Relay the simulator's own log diagnostics — the export's observations
+    # channel is the only place a run→export-only loop sees them (the other read
+    # tools relay these, this egress path did not). A run-level solve failure
+    # (singular/non-converged) taints every exported value, so relay it whole.
+    # An unrecognized .save'd @dev[param] is written to the raw as a real-looking
+    # 0.0 column — but only the warnings naming an EXPORTED column belong on THIS
+    # CSV's observations; a warning about a variable we didn't export is a true
+    # run-log fact yet a false claim about this file, so gate it on cols.
+    unrecognized, solve_failures = await asyncio.to_thread(_read_log_warnings, raw_path)
+    # relay_observations returns the doctrine TypedDict; copy to plain dicts to
+    # match this handler's list[dict] (keeps schema-gen off the typed path).
+    observations.extend(dict(o) for o in relay_observations({"errors": solve_failures}))
+    exported_unrecognized = [
+        w for w in unrecognized if any(_unrecognized_matches(w, c) for c in cols)
+    ]
+    for w in exported_unrecognized:
+        observations.append(
+            {
+                "code": "unrecognized_save",
+                "kind": "relay",
+                "severity": "warning",
+                "detail": (
+                    "The simulator did not recognize a .save'd variable; it is written "
+                    f"to the CSV as a bogus 0.0 column (not a real result): {w}"
+                ),
+                "evidence": {"log": w},
+            }
+        )
+
     data = {
         "path": str(out_path),
         "row_count": facts["row_count"],
@@ -1528,9 +1557,13 @@ async def handle_export_waveform(args: ExportWaveformInput, state: SessionState)
         "complex_format": args.complex_format if facts["had_complex"] else None,
         "observations": observations,
     }
+    # Relay items are omitted by format_observations (they normally print in an
+    # Errors section export has none of), so surface them as ⚠ lines here too.
+    relay_lines = [f"⚠ {o.get('detail', '')}" for o in observations if o.get("kind") == "relay"]
     lines = [
         f"Exported {facts['row_count']} row(s) to {out_path}",
         f"Columns: {', '.join(facts['columns'])}",
+        *relay_lines,
         *format_observations(observations),
     ]
     return format_response("\n".join(lines), data, fmt)
@@ -1875,20 +1908,24 @@ def _read_log_warnings(raw_path: Path) -> tuple[list[str], list[str]]:
     return unrecognized, solve_failures
 
 
+def _unrecognized_matches(warning: str, signal: str) -> bool:
+    """True when an unrecognized-variable ``warning`` concerns ``signal`` — by
+    the signal's name or its ``@dev[param]`` token appearing in the warning. The
+    only tell a ``.save``'d variable is bogus is its mention in the log, so this
+    is how a read decides whether a 0.0 trace it touched is the real result."""
+    sig_l = signal.lower()
+    at_match = re.search(r"@[\w.]+\[[^\]]*\]", sig_l)
+    at_token = at_match.group(0) if at_match else None
+    return sig_l in warning.lower() or (at_token is not None and at_token in warning.lower())
+
+
 async def _query_log_warnings(raw_path: Path, signal: str) -> list[str]:
     """Final warning strings for a single-value read: the signal-filtered
     unrecognized-variable message (only when the queried trace IS the bogus one,
     matched by its ``@dev[param]`` token or the resolved name) plus any run-level
     solve-failure lines. Shared by both query_value paths."""
     unrecognized, solve_failures = await asyncio.to_thread(_read_log_warnings, raw_path)
-    sig_l = signal.lower()
-    at_match = re.search(r"@[\w.]+\[[^\]]*\]", sig_l)
-    at_token = at_match.group(0) if at_match else None
-    sig_warns = [
-        w
-        for w in unrecognized
-        if sig_l in w.lower() or (at_token is not None and at_token in w.lower())
-    ]
+    sig_warns = [w for w in unrecognized if _unrecognized_matches(w, signal)]
     warnings: list[str] = []
     if sig_warns:
         warnings.append(
