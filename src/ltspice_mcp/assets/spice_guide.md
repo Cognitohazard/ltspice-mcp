@@ -113,36 +113,45 @@ PWL file=<filename>
 
 ---
 
-## Reading device internals (gm/ID characterization)
+## Reading device operating points (gm/gds/vth, gm/ID characterization)
 
 The small-signal / model parameters of a MOSFET/BJT/diode (gm, gds, gmbs, vth,
 vdsat, gm/ID, the capacitances) come back from this server as **named numbers** —
-no rawfile parsing, no `.control`/`wrdata` block. Requires ngspice (LTspice's
-`.op` does not export `@dev[param]` internals). Recipe:
+no rawfile parsing, no `.control`/`wrdata` block. Both simulators expose them;
+they just live in different files, so pick by what you need.
 
-1. **Write a plain deck** with a native bias sweep and a `.save` of the internals
-   you want:
-   ```spice
-   M1 d g 0 0 nch L=0.18u W=2u
-   Vd d 0 1.8
-   Vg g 0 0.9
-   .dc Vg 0 1.8 0.01      ; sweep the gate
-   .save @m1[gm] @m1[gds] @m1[vth] @m1[id]
-   .lib /path/to/models.lib
-   .end
-   ```
-2. **Run it**: `run_simulation` (sets batch flags, handles the headerless-raw
-   dialect, routes artifacts).
-3. **Read it back**:
-   - whole internal set across the sweep, one CSV → `export_waveform(signals=['m1.gm','m1.gds','m1.id'])` — this IS the gm/ID table.
-   - one value at a chosen bias → `query_value(signal='m1.gm', at=...)`.
-   - the full bias snapshot of one device at a point → `operating_point(device='M1')`.
+### One device at a single bias → `operating_point` (works on LTspice)
 
-Address an internal by the `m1.gm` shorthand or its literal `@m1[gm]` name; the
+```spice
+M1 d g 0 0 nch L=0.18u W=2u
+Vd d 0 1.8
+Vg g 0 0.9
+.op
+.lib /path/to/models.lib
+.end
+```
+`run_simulation` then `operating_point(device='M1')` returns gm, gds, vth, vdsat,
+the caps and terminal currents at that bias. On **LTspice** these come from the
+log's *Semiconductor Device Operating Points* block — `run_simulation` adds
+`.options logopinfo` automatically for `.op` runs (LTspice writes the block only
+under that option, and only for `.op`). On **ngspice**, `.save @m1[gm] @m1[gds]
+@m1[vth] @m1[id]` puts them in the raw; `operating_point` reads either uniformly.
+
+### gm/ID curve vs a swept bias (the sizing table) → ngspice `.dc` + `export_waveform`
+
+```spice
+.dc Vg 0 1.8 0.01      ; sweep the gate
+.save @m1[gm] @m1[gds] @m1[vth] @m1[id]
+```
+`export_waveform(signals=['m1.gm','m1.gds','m1.id'])` is the gm/ID table; one
+value at a chosen bias → `query_value(signal='m1.gm', at=...)`. This swept form
+needs **ngspice** (LTspice's `logopinfo` is `.op`-only; for a swept gm on LTspice
+you'd differentiate the drain current, `d(Id(M1))`, instead). Don't reach for
+`configure_sweep` — a native `.dc Vds Vgs` is one deck, not N separate runs.
+
+Address an operating-point param by the `m1.gm` shorthand or its literal `@m1[gm]` name; the
 tools resolve the bare / `v()` / `i()` wrapping, and a subcircuit path like
-`x1.m1.gm`, for you. Values carry SI units where ngspice declares the trace type.
-Do NOT reach for `configure_sweep` here — a native `.dc Vds Vgs` is one deck, not
-N separate runs.
+`x1.m1.gm`, for you. Values carry SI units where the simulator declares the type.
 
 ---
 
@@ -377,7 +386,7 @@ ngspice shares the **SPICE Fundamentals** above, with these deltas:
   `par('expr')`. `.meas ... FIND` takes `V(out)` (no `mag()` wrapper).
 - `.meas` does NOT work in batch mode combined with `-r rawfile` — the data
   streams to disk and the `.meas` scalars are unavailable. But for named signals
-  and device internals you do NOT need a `.control` block: `.save` them and read
+  and device operating-point params you do NOT need a `.control` block: `.save` them and read
   the raw back with run_simulation + export_waveform / query_value /
   operating_point. Reserve `.control` / `wrdata` for in-engine computation you
   genuinely can't express as a saved signal.
@@ -493,15 +502,15 @@ X1 input output myfilter rval=1k cval=1n
 
 ```spice
 .save V(out) I(Vin)               $ save only these signals
-.save @m1[id] @m1[gm]             $ save internal device parameters
+.save @m1[id] @m1[gm]             $ save device operating-point params
 .save all @m2[vdsat]              $ save defaults PLUS extras
 ```
 
 - Without `.save`, all node voltages and source currents are saved (huge files).
 - Adding even ONE `.save` line drops all defaults — only listed signals saved.
 - `.save @r1[i]` for resistor current (not available via `I()` syntax).
-- Saved device internals (`@m1[gm]`, `v(@m1[vth])`, `i(@m1[id])`, …) are surfaced
-  by `operating_point` in a `device_internals` bucket (a bare `.op`), and on a
+- Saved device operating-point params (`@m1[gm]`, `v(@m1[vth])`, `i(@m1[id])`, …) are surfaced
+  by `operating_point` in a `device_op_points` bucket (a bare `.op`), and on a
   `.dc`/`.tran` sweep are readable by the `dev.param` shorthand — `query_value`/
   `signal_stats`/`export_waveform` accept `m1.gm` and resolve it to the actual
   trace. This is the gm/ID idiom: `.dc Vg …` + `.save @m1[gm] @m1[id]`, then read
