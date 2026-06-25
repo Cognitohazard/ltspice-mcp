@@ -281,9 +281,11 @@ def ngspice_preflight_warnings(netlist_path: Path, simulator_class: type) -> lis
     if meas_names:
         names = ", ".join(meas_names)
         warnings.append(
-            "ngspice cannot evaluate .meas in batch mode. "
+            "ngspice does not evaluate .meas in batch mode when a rawfile is set "
+            "(-b -r, this server's invocation). "
             f"The following measurements will be skipped: {names}. "
-            "Use signal_stats or query_value to compute them from the raw data."
+            "Compute them from the raw with signal_stats / query_value, or wrap the "
+            ".meas in a '.control ... run ... .endc' block for in-engine evaluation."
         )
     return warnings
 

@@ -123,7 +123,9 @@ class TestReconciliationObservations:
     def test_ngspice_batch_skip_classified(self):
         summary = {
             "measurements": {},
-            "warnings": ["ngspice cannot evaluate .meas in batch mode. skipped: vpp"],
+            "warnings": [
+                "ngspice does not evaluate .meas in batch mode when a rawfile is set (-b -r). Skipped: vpp"
+            ],
         }
         obs = reconciliation_observations(summary, {"meas": ["vpp"]})
         assert obs[0]["evidence"]["reason"] == "skipped_in_batch_mode"
