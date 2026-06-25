@@ -51,7 +51,7 @@ class OperatingPointOutput(_OperatingPointStepMeta):
 
     voltages: dict[str, float]
     currents: dict[str, float]
-    device_internals: dict[str, float]
+    device_op_points: dict[str, float]
 
 
 # Smallest positive normal float — floor for magnitude before log10 to avoid -inf
@@ -201,7 +201,7 @@ def trace_unit(raw: RawRead, name: str) -> str | None:
     """SI unit for a trace: the simulator's declared ``whattype`` if it maps to
     a known SPICE type, else the ``V(``/``I(`` name prefix, else None.
 
-    Deliberately never guesses a unit from a device-internal parameter name
+    Deliberately never guesses a unit from a device operating-point parameter name
     (e.g. it won't claim ``@m1[gm]`` is siemens unless the simulator typed the
     trace as ``admittance``) — that would be a vendor catalog, not a relay.
     """
@@ -299,7 +299,7 @@ _OP_CURRENT_RE = re.compile(r"^I[A-Z]?\(", re.IGNORECASE)
 def extract_operating_point(
     raw: RawRead, step: int = 0, point_index: int = 0
 ) -> OperatingPointOutput:
-    """Extract DC operating point data (node voltages, branch currents, device internals).
+    """Extract DC operating point data (node voltages, branch currents, device operating point).
 
     Works best with Operating Point (.OP) simulations, but can extract
     first-point values from any simulation type. ``step`` selects which
@@ -310,14 +310,14 @@ def extract_operating_point(
         step: Step index for stepped .OP / .DC runs.
 
     Returns:
-        Dictionary with 'voltages', 'currents', and 'device_internals' dicts
+        Dictionary with 'voltages', 'currents', and 'device_op_points' dicts
         mapping trace names to values. All values are Python float.
     """
     trace_names = raw.get_trace_names()
 
     voltages = {}
     currents = {}
-    device_internals = {}
+    device_op_points = {}
 
     for trace in trace_names:
         wave = raw.get_wave(trace, step=step)
@@ -334,7 +334,7 @@ def extract_operating_point(
         # otherwise v(@m1[vth]) is mislabeled a node voltage and bare @m1[gm]
         # falls through both buckets and is dropped entirely.
         if "@" in trace:
-            device_internals[trace] = value
+            device_op_points[trace] = value
             continue
 
         # SPICE node names are case-insensitive; spicelib may return either case.
@@ -347,7 +347,7 @@ def extract_operating_point(
     return {
         "voltages": voltages,
         "currents": currents,
-        "device_internals": device_internals,
+        "device_op_points": device_op_points,
     }
 
 

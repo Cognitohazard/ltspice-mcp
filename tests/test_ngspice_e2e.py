@@ -183,10 +183,10 @@ async def test_subckt_macromodel_op_full_stack(ngspice_state: SessionState, work
     assert vout == pytest.approx(2.0, abs=1e-2), osc["voltages"]
 
 
-async def test_mosfet_op_surfaces_device_internals(ngspice_state: SessionState, work_dir: Path):
+async def test_mosfet_op_surfaces_device_op_points(ngspice_state: SessionState, work_dir: Path):
     # The absence test for the dropped/mislabeled device internals. A MOSFET in
     # saturation with .save @m1[...] must surface gm/gds/id/vth in the new
-    # device_internals bucket — NOT dropped, and vth NOT mislabeled as a node
+    # device_op_points bucket — NOT dropped, and vth NOT mislabeled as a node
     # voltage. Runs the full real stack so it would have caught the original bug.
     net = _write(
         work_dir,
@@ -208,7 +208,7 @@ async def test_mosfet_op_surfaces_device_internals(ngspice_state: SessionState, 
     op = await handle_operating_point(OperatingPointInput(raw_file=sc["raw_file"]), ngspice_state)
     osc = op.structuredContent
     assert osc is not None
-    internals = osc["device_internals"]
+    internals = osc["device_op_points"]
     # Internals are present (not dropped) and keyed by their @-name.
     assert any("[gm]" in k.lower() for k in internals), internals
     assert any("[id]" in k.lower() for k in internals), internals

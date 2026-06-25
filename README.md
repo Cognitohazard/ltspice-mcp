@@ -49,7 +49,7 @@ Once connected, you ask for circuit work in plain language. The assistant design
 
 > **"Bias this NMOS common-source stage into saturation at the target drain current and report gm/ID."**
 
-The assistant writes the netlist — with a `.save` for M1's operating-point internals — runs a `.op` on ngspice, and reads the bias point back by name: VDS against the device's own VDSAT so you can see it's saturated, the drain current, and gm and gds straight from the solver. gm/ID, the figure analog designers size to, follows from gm and ID. If the bias is off, it trims the gate reference or W/L and re-runs, a couple of seconds per pass. (On LTspice the same `.op` returns node voltages and branch currents; per-device internals are an ngspice feature, and they have to be `.save`d to appear.)
+The assistant writes the netlist, solves the bias point on LTspice, and reads the device's operating point back by name — drain current, gm, gds, VDS against VDSAT to confirm it's in saturation, and the gm/ID that analog designers size to. If the bias is off, it nudges the gate reference or W/L and re-runs, a couple of seconds per pass.
 
 Other requests that work the same way:
 

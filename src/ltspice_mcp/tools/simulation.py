@@ -30,6 +30,7 @@ from ltspice_mcp.tools._base import (
     format_meas_errors,
     format_observations,
     format_response,
+    inject_logopinfo,
     registry,
     require_simulator,
     resolve_output_folder,
@@ -197,6 +198,15 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
 
     # Generate job ID and create job
     job_id = generate_job_id()
+
+    # On LTspice .op runs, add '.options logopinfo' (in a per-job sibling file)
+    # so the log carries each device's small-signal op point for operating_point
+    # to read back by name. No-op for ngspice / non-.op decks. The job_id-stamped
+    # name keeps concurrent/queued runs of the same netlist from clobbering each
+    # other; start_simulation deletes the copy once spicelib has staged the run.
+    # job.netlist stays the user's original path; only the simulator reads the copy.
+    run_path = inject_logopinfo(netlist_path, default_simulator, job_id)
+
     job = SimulationJob(
         job_id=job_id,
         netlist=netlist_path,
@@ -210,7 +220,7 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     # submit-ordering rule, see the concurrency contract in tools/_base.py.
     runner = await _get_or_create_runner(state, netlist_path)
     state.add_job(job)
-    job.task = asyncio.create_task(runner.start_simulation(netlist_path, job, state))
+    job.task = asyncio.create_task(runner.start_simulation(run_path, job, state))
     await mcp_log(
         "info", f"Simulation started: {netlist_path.name} ({default_simulator.__name__})"
     )

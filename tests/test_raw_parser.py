@@ -80,7 +80,7 @@ def test_operating_point_classifies_device_terminal_currents():
     assert result["currents"]["Ic(Q1)"] == 1e-3
 
 
-def test_operating_point_classifies_device_internals():
+def test_operating_point_classifies_device_op_points():
     """Device small-signal / model parameters (@dev[param]) get their own bucket.
 
     Covers the absence-class gap: every .op fixture was pure V()/I(), so the
@@ -104,7 +104,7 @@ def test_operating_point_classifies_device_internals():
 
     assert set(result["voltages"]) == {"V(d)"}
     assert set(result["currents"]) == {"I(Vd)"}
-    assert set(result["device_internals"]) == {
+    assert set(result["device_op_points"]) == {
         "@m1[gm]",
         "@m1[gds]",
         "v(@m1[vth])",
@@ -112,7 +112,7 @@ def test_operating_point_classifies_device_internals():
     }
     # The mislabel regression: vth is a parameter, not a node voltage.
     assert "v(@m1[vth])" not in result["voltages"]
-    assert result["device_internals"]["@m1[gm]"] == 1.58e-3
+    assert result["device_op_points"]["@m1[gm]"] == 1.58e-3
 
 
 class TestTraceUnit:

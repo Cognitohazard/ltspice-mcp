@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from spicelib.log.ltsteps import LTSpiceLogReader
+from spicelib.log.semi_dev_op_reader import opLogReader
 from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import ResultError
@@ -227,6 +228,36 @@ def read_log_text(log_path: Path) -> str:
         return log_path.read_text(errors="replace")
     except OSError:
         return ""
+
+
+def read_device_op_points(log_path: Path) -> dict[str, float]:
+    """Per-device small-signal op-point params from an LTspice ``.log``.
+
+    LTspice writes the operating point of each semiconductor (gm, gds, vth,
+    vdsat, terminal currents, junction caps) into the ``Semiconductor Device
+    Operating Points:`` block of the log — but only when the deck carries
+    ``.options logopinfo`` (and only for ``.op`` runs). ngspice exposes the
+    same data as ``@dev[param]`` raw traces instead, so this reader is for the
+    LTspice path.
+
+    Returns the flattened block keyed in the same ``@dev[param]`` form the
+    ngspice traces use (e.g. ``@m1[gm]``, lowercased), so callers can fold it
+    straight into ``device_op_points`` and address it by the ``m1.gm``
+    shorthand. Non-numeric fields (the ``Model:`` row) are dropped. Empty dict
+    when the block is absent or unparseable.
+    """
+    out: dict[str, float] = {}
+    try:
+        parsed = opLogReader(str(log_path))
+    except (OSError, ValueError):
+        return out
+    for devices in parsed.values():  # categories: 'mosfet transistors', 'diodes', …
+        for dev, params in devices.items():
+            for pname, pval in params.items():
+                if not isinstance(pval, (int, float)):
+                    continue  # skip the 'Model:' string row (opLogReader yields float | str)
+                out[f"@{dev.lower()}[{pname.lower()}]"] = float(pval)
+    return out
 
 
 def _resolve_log_text(log_path: Path | None, text: str | None) -> str:
