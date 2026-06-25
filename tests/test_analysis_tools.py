@@ -403,7 +403,7 @@ class TestQueryValue:
 
 
 def test_has_active_device_detects_transistor_currents():
-    # _has_active_device is one arm of the empty-internals note's gate (the other
+    # _has_active_device is one arm of the empty op-point note's gate (the other
     # is an ngspice run); an RC circuit trips neither, so it stays note-free. Sync
     # test, kept out of the asyncio-marked class so pytest-asyncio doesn't flag it.
     from ltspice_mcp.tools.analysis import _has_active_device
@@ -434,6 +434,45 @@ class TestGetOperatingPoint:
         text = result.content[0].text
         assert "V(out)" in text
         assert "I(R1)" in text
+
+    async def test_folds_ltspice_logopinfo_op_points(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # LTspice writes per-device op-point params to the .log (under
+        # .options logopinfo), not the raw. operating_point folds that block
+        # into device_op_points, keyed @dev[param] like ngspice's raw traces.
+        raw_file = work_dir / "op.raw"
+        (work_dir / "op.log").write_text(
+            "Semiconductor Device Operating Points:\n"
+            "                        --- MOSFET Transistors ---\n"
+            "Name:           M1\n"
+            "Model:         nch\n"
+            "Id:          9.60e-05\n"
+            "Vgs:         9.00e-01\n"
+            "Vth:         5.00e-01\n"
+            "Vdsat:       4.00e-01\n"
+            "Gm:          4.80e-04\n"
+            "Gds:         1.00e-06\n"
+        )
+        raw = _make_raw_mock(
+            plotname="Operating Point",
+            trace_names=["V(d)", "Id(M1)"],
+            waves={"V(d)": np.array([1.8]), "Id(M1)": np.array([9.6e-5])},
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_operating_point(
+            OperatingPointInput(raw_file=raw_file.name), state_no_sim
+        )
+        sc = result.structuredContent or {}
+        dop = sc.get("device_op_points") or {}
+        assert dop.get("@m1[gm]") == pytest.approx(4.8e-4)
+        assert dop.get("@m1[vth]") == pytest.approx(0.5)
+        assert "@m1[model]" not in dop  # the string Model: row is dropped
+        # device= scoping resolves the log-sourced params for one device.
+        scoped = await handle_operating_point(
+            OperatingPointInput(raw_file=raw_file.name, device="M1"), state_no_sim
+        )
+        assert (scoped.structuredContent or {}).get("device_op_points", {}).get("@m1[gm]")
 
     async def test_dc_sweep_at_reads_chosen_point(
         self, state_no_sim: SessionState, work_dir: Path
@@ -2379,8 +2418,8 @@ class TestDcRejectedByTransientTools:
 
 @pytest.mark.asyncio
 class TestOperatingPointInternalsHint:
-    """When device_internals is empty, operating_point appends ONE simulator-
-    agnostic recovery note (run on ngspice + .save the @dev[param] internals) —
+    """When device_op_points is empty, operating_point appends ONE recovery note
+    naming both paths (LTspice .options logopinfo, ngspice .save @dev[param]) —
     it never branches on the producing simulator, which the session default can
     get wrong on a cross-simulator raw read. It is gated so passive circuits
     stay note-free: it fires when an M/Q/J/D terminal current proves a device is
@@ -2405,7 +2444,9 @@ class TestOperatingPointInternalsHint:
         )
         res = await handle_operating_point(OperatingPointInput(raw_file=p.name), state_no_sim)
         warnings = res.structuredContent.get("warnings", [])
-        assert any("run on ngspice" in w and ".save all @m1[gm]" in w for w in warnings), warnings
+        # The note names both recovery paths: LTspice's .options logopinfo and
+        # ngspice's .save.
+        assert any("logopinfo" in w and ".save all @m1[gm]" in w for w in warnings), warnings
 
     async def test_bare_ngspice_op_fires_hint_via_dialect(
         self, state_no_sim: SessionState, work_dir: Path
@@ -2430,7 +2471,7 @@ class TestOperatingPointInternalsHint:
 
     async def test_passive_op_emits_no_hint(self, state_no_sim: SessionState, work_dir: Path):
         # No active-device terminal current and not ngspice → passive, stays
-        # note-free (a bare .op on an RC bias point must not nag about internals).
+        # note-free (a bare .op on an RC bias point must not nag about op points).
         assert state_no_sim.raw_dialect is None
         p = work_dir / "rc_op.raw"
         _inject_raw_mock(
@@ -2444,12 +2485,12 @@ class TestOperatingPointInternalsHint:
         )
         res = await handle_operating_point(OperatingPointInput(raw_file=p.name), state_no_sim)
         warnings = res.structuredContent.get("warnings", [])
-        assert not any("device internals" in w.lower() for w in warnings), warnings
+        assert not any("logopinfo" in w.lower() for w in warnings), warnings
 
     async def test_saved_internals_emit_no_recovery_hint(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        # When internals ARE present, the note doesn't fire.
+        # When op-point params ARE present, the note doesn't fire.
         state_no_sim.default_simulator = type("NGspiceSimulator", (), {})
         p = work_dir / "ng_op_saved.raw"
         _inject_raw_mock(
@@ -2463,8 +2504,8 @@ class TestOperatingPointInternalsHint:
         )
         res = await handle_operating_point(OperatingPointInput(raw_file=p.name), state_no_sim)
         warnings = res.structuredContent.get("warnings", [])
-        assert not any("device internals" in w.lower() for w in warnings), warnings
-        assert res.structuredContent["device_internals"].get("@m1[gm]") == pytest.approx(2e-3)
+        assert not any("logopinfo" in w.lower() for w in warnings), warnings
+        assert res.structuredContent["device_op_points"].get("@m1[gm]") == pytest.approx(2e-3)
 
 
 @pytest.mark.asyncio
@@ -2675,27 +2716,27 @@ class TestTraceDeviceFilter:
         op = {
             "voltages": {"V(d)": 1.8, "V(g)": 0.9},
             "currents": {"Id(M1)": 1e-3, "I(R1)": 2e-3},
-            "device_internals": {"@m1[gm]": 1e-3, "@m2[gm]": 2e-3},
+            "device_op_points": {"@m1[gm]": 1e-3, "@m2[gm]": 2e-3},
         }
         assert _filter_operating_point(op, "M1") is True
         assert op["currents"] == {"Id(M1)": 1e-3}
-        assert op["device_internals"] == {"@m1[gm]": 1e-3}
+        assert op["device_op_points"] == {"@m1[gm]": 1e-3}
         # Node voltages are not device-scoped -> dropped from the focused view.
         assert op["voltages"] == {}
 
     def test_filter_matches_subcircuit_path_suffix(self):
-        op = {"voltages": {}, "currents": {}, "device_internals": {"@m.x1.mn[gm]": 5.0}}
+        op = {"voltages": {}, "currents": {}, "device_op_points": {"@m.x1.mn[gm]": 5.0}}
         assert _filter_operating_point(op, "mn") is True
-        assert op["device_internals"] == {"@m.x1.mn[gm]": 5.0}
+        assert op["device_op_points"] == {"@m.x1.mn[gm]": 5.0}
 
     def test_filter_no_match_reports_false(self):
-        op = {"voltages": {}, "currents": {"Id(M1)": 1.0}, "device_internals": {}}
+        op = {"voltages": {}, "currents": {"Id(M1)": 1.0}, "device_op_points": {}}
         assert _filter_operating_point(op, "Q9") is False
 
 
 @pytest.mark.asyncio
 class TestOperatingPointDeviceAndUnits:
-    """device= narrows to one device's internals + terminal currents (2c); every
+    """device= narrows to one device's op-point params + terminal currents (2c); every
     value carries its unit where derivable (2a)."""
 
     def _op_raw(self, state: SessionState, work_dir: Path) -> Path:
@@ -2740,7 +2781,7 @@ class TestOperatingPointDeviceAndUnits:
         assert sc is not None
         assert sc["device"] == "M1"
         assert set(sc["currents"]) == {"Id(M1)", "Ig(M1)"}
-        assert set(sc["device_internals"]) == {"@m1[gm]"}
+        assert set(sc["device_op_points"]) == {"@m1[gm]"}
         assert sc["voltages"] == {}
         assert sc["units"]["Id(M1)"] == "A"
 

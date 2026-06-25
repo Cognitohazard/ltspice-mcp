@@ -7,7 +7,7 @@ return derived metrics. Organized by what the tool answers:
         signal_stats        — mean/RMS/pk-pk/etc for one signal
         query_value         — value at a specific time/frequency
         operating_point     — DC node voltages, branch currents, per-device
-                              internals (gm/gds/vth/…); device= scopes to one
+                              operating point (gm/gds/vth/…); device= scopes to one
 
     Waveform metrics (transient only, reject AC):
         edge_metrics        — rise/fall time + slew rate
@@ -66,6 +66,7 @@ from ltspice_mcp.lib.log_parser import (
     extract_log_diagnostics,
     parse_measurements,
     parse_step_iterations,
+    read_device_op_points,
 )
 from ltspice_mcp.lib.plot_html import (
     WIDGET_RESOURCE_URI,
@@ -322,7 +323,7 @@ class SignalStatsInput(ToolInput):
     )
     signal: str = Field(
         description=(
-            "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device-internal "
+            "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device operating-point "
             "shorthand for an ngspice .save'd parameter: 'm1.gm' / 'm1.vth' "
             "(resolves to '@m1[gm]', incl. subcircuit paths like 'x1.m1.gm')."
         )
@@ -446,7 +447,7 @@ class QueryValueInput(ToolInput):
     )
     signal: str = Field(
         description=(
-            "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device-internal "
+            "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device operating-point "
             "shorthand for an ngspice .save'd parameter: 'm1.gm' / 'm1.vth' "
             "(resolves to '@m1[gm]', incl. subcircuit paths like 'x1.m1.gm')."
         )
@@ -518,7 +519,7 @@ class OperatingPointInput(ToolInput):
     device: str | None = Field(
         default=None,
         description=(
-            "Narrow the result to one device: its saved internals (@dev[param]) "
+            "Narrow the result to one device: its operating-point params (@dev[param]) "
             "and its terminal currents (e.g. Id/Ig/Is(M1)), each typed with its "
             "unit. Pass the reference exactly as it appears in the trace name "
             "(e.g. 'M1', 'Q2', or a subcircuit path 'x1.mn'). Default returns "
@@ -875,7 +876,7 @@ class GetWaveformInput(ToolInput):
     )
     signal: str = Field(
         description=(
-            "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device-internal "
+            "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device operating-point "
             "shorthand for an ngspice .save'd parameter: 'm1.gm' / 'm1.vth' "
             "(resolves to '@m1[gm]', incl. subcircuit paths like 'x1.m1.gm')."
         )
@@ -1299,7 +1300,7 @@ class ExportWaveformInput(ToolInput):
         default="all",
         description=(
             "Trace names to export (e.g. ['V(out)', 'I(R1)']) or 'all' for every "
-            "non-axis trace. Device internals work too, by name or shorthand "
+            "non-axis trace. Device operating-point params work too, by name or shorthand "
             "(e.g. ['m1.gm', 'm1.gds', 'm1.id']) — across a `.dc` sweep with "
             "`.save @m1[…]` this is the gm/ID-table read, one CSV."
         ),
@@ -1812,7 +1813,7 @@ def _format_measurements(
 
 def _has_active_device(currents: dict[str, float]) -> bool:
     """True if any branch-current name belongs to an M/Q/J/D device — the ones
-    with small-signal internals (gm/gds/vth/...) — e.g. ``Id(M1)``, ``Ic(Q2)``."""
+    with a small-signal operating point (gm/gds/vth/...) — e.g. ``Id(M1)``, ``Ic(Q2)``."""
     for name in currents:
         lp = name.find("(")
         if lp != -1 and lp + 1 < len(name) and name[lp + 1].lower() in "mqjd":
@@ -1825,7 +1826,7 @@ _OP_TERMINAL_CUR_RE = re.compile(r"^i[a-z]?\(([^)]+)\)$")
 
 
 def _trace_device(name: str) -> str | None:
-    """The device a .op trace belongs to: the ``@<dev>[...]`` internal owner, or
+    """The device a .op trace belongs to: the ``@<dev>[...]`` op-point owner, or
     the ``X(<dev>)`` terminal-current owner. None for plain node voltages."""
     low = name.lower()
     m = _OP_INTERNAL_DEV_RE.search(low)
@@ -1836,14 +1837,14 @@ def _trace_device(name: str) -> str | None:
 
 
 def _filter_operating_point(op_data: dict, device: str) -> bool:
-    """Narrow ``op_data`` (in place) to one device's internals + terminal
+    """Narrow ``op_data`` (in place) to one device's operating-point params + terminal
     currents. Returns whether anything matched. A subcircuit-qualified trace
     (``@m.x1.mn[gm]``) matches a bare ``mn`` request via path suffix, mirroring
     ``services.validate_signal``'s hierarchical resolver."""
     want = device.strip().lower()
     suffix = "." + want
     matched = False
-    for bucket in ("voltages", "currents", "device_internals"):
+    for bucket in ("voltages", "currents", "device_op_points"):
         kept = {}
         for name, value in op_data.get(bucket, {}).items():
             owner = _trace_device(name)
@@ -1857,7 +1858,7 @@ def _filter_operating_point(op_data: dict, device: str) -> bool:
 def _operating_point_units(raw, op_data: dict) -> dict[str, str]:
     """SI unit per returned trace name, only where the simulator typed it."""
     units: dict[str, str] = {}
-    for bucket in ("voltages", "currents", "device_internals"):
+    for bucket in ("voltages", "currents", "device_op_points"):
         for name in op_data.get(bucket, {}):
             unit = trace_unit(raw, name)
             if unit:
@@ -1995,11 +1996,12 @@ async def _finish_metric(
 @registry.tool(
     name="operating_point",
     description=(
-        "Read DC operating point data: all node voltages, branch currents, and any "
-        "saved device internals (ngspice @dev[param] like gm/gds/vth/id). Each value "
-        "carries its SI unit where the simulator declared the type (see ``units``). "
-        "Pass device='M1' to get just one device's internals + terminal currents in "
-        "a single call.\n\n"
+        "Read DC operating point data: all node voltages, branch currents, and each "
+        "semiconductor's small-signal params (gm/gds/vth/vdsat/caps) — from LTspice's "
+        "log (run_simulation auto-adds '.options logopinfo' on .op runs) or ngspice's "
+        "@dev[param] traces, surfaced uniformly by name. Each value carries its SI unit "
+        "where the simulator declared the type (see ``units``). Pass device='M1' to get "
+        "just one device's params + terminal currents in a single call.\n\n"
         "A run-level solve failure (singular matrix / non-convergence) taints every "
         "value here; that simulator line is relayed into ``warnings`` — read it "
         "before trusting the bias point."
@@ -2010,7 +2012,7 @@ async def _finish_metric(
     output_model=OperatingPointOutput,
 )
 async def handle_operating_point(args: OperatingPointInput, state: SessionState):
-    """Read DC operating point data (node voltages, branch currents, device internals)."""
+    """Read DC operating point data (node voltages, branch currents, device operating point)."""
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     fmt = args.format
     raw = await services.load_raw(raw_path, state)
@@ -2065,7 +2067,22 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     op_data["step"] = args.step
     op_data["step_count"] = op_step_count
 
-    # device= narrows to one device's internals + terminal currents (2c). Refuse
+    # LTspice exposes per-device small-signal params (gm/gds/vth/vdsat/caps) in
+    # the .log under '.options logopinfo', not as @dev[param] raw traces the way
+    # ngspice does. Fold the log block into device_op_points — keyed in the same
+    # @dev[param] form — so they read back by name (m1.gm) on either simulator.
+    # ngspice logs never carry the block, so skip the read entirely there (its
+    # raw loads only in an ngspice session). Don't clobber a value the raw gave.
+    if state.raw_dialect != "ngspice":
+        log_op_points = await asyncio.to_thread(
+            read_device_op_points, raw_path.with_suffix(".log")
+        )
+        if log_op_points:
+            di = op_data.setdefault("device_op_points", {})
+            for key, value in log_op_points.items():
+                di.setdefault(key, value)
+
+    # device= narrows to one device's op-point params + terminal currents (2c). Refuse
     # with the list of devices present rather than returning a misleading empty
     # result when nothing matches. ``available_devs`` is gathered before the
     # filter, which empties the buckets in place.
@@ -2073,7 +2090,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
         available_devs = sorted(
             {
                 d
-                for bucket in ("currents", "device_internals")
+                for bucket in ("currents", "device_op_points")
                 for name in op_data.get(bucket, {})
                 if (d := _trace_device(name)) is not None
             }
@@ -2081,7 +2098,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
         if not _filter_operating_point(op_data, args.device):
             dev_list = ", ".join(available_devs) if available_devs else "none found"
             raise ResultError(
-                f"No internals or terminal currents for device {args.device!r} "
+                f"No operating-point params or terminal currents for device {args.device!r} "
                 f"in this result. Devices present: {dev_list}.",
                 show_hint=False,
             )
@@ -2101,29 +2118,27 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     if relayed:
         op_data.setdefault("warnings", []).extend(relayed)
 
-    # device_internals is empty either because the simulator exports no
-    # @dev[param] table at all (LTspice/QSPICE/Xyce) or because an ngspice deck
-    # didn't .save them — say so, otherwise the empty bucket reads as "this
-    # circuit has none". The remedy is identical in both cases (run on ngspice
-    # and .save the internals), so the note is simulator-agnostic: branching on
-    # the producer and getting it wrong (e.g. from the session default on a
-    # cross-simulator raw read) would misadvise. Gate so passive circuits stay
+    # device_op_points is empty because the deck didn't request the per-device
+    # small-signal params — say how to get them, otherwise the empty bucket
+    # reads as "this circuit has none". Both simulators can produce them; the
+    # remedy differs by simulator, so name both rather than risk misattributing
+    # the producer on a cross-simulator raw read. Gate so passive circuits stay
     # note-free: fire when an M/Q/J/D terminal current proves a device is present
     # (LTspice exposes those), or when the run is ngspice — whose bare .op shows
     # no device traces, so a saved-nothing run is indistinguishable from a
     # passive one. raw_dialect only gates here, never picks the wording, and is
     # reliable for that: an ngspice raw loads only in an ngspice session.
-    internals_note: str | None = None
-    if not op_data.get("device_internals") and (
+    op_point_note: str | None = None
+    if not op_data.get("device_op_points") and (
         _has_active_device(op_data.get("currents", {})) or state.raw_dialect == "ngspice"
     ):
-        internals_note = (
-            "No small-signal device internals (gm/gds/vth, @dev[param]) in this run. "
-            "They are an ngspice feature, captured only for the parameters a deck "
-            "explicitly .save's — to get them, run on ngspice with e.g. "
+        op_point_note = (
+            "No small-signal device params (gm/gds/vth/vdsat) in this run. "
+            "On LTspice add '.options logopinfo' to the deck (run_simulation adds "
+            "it automatically for .op runs); on ngspice .save them, e.g. "
             "'.save all @m1[gm] @m1[gds] @m1[id]'."
         )
-        op_data.setdefault("warnings", []).append(internals_note)
+        op_data.setdefault("warnings", []).append(op_point_note)
 
     # A DC sweep raw has no single "operating point". With at=, report which
     # sweep point was read; otherwise flag that point 0 is just the start bias.
@@ -2172,16 +2187,16 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
         for name, value in op_data["currents"].items():
             lines.append(f"  {name} = {value:.6g}{_u(name)}")
 
-    if op_data.get("device_internals"):
+    if op_data.get("device_op_points"):
         if op_data["voltages"] or op_data["currents"]:
             lines.append("")
-        lines.append("Device Internals (@dev[param], e.g. gm/gds/vth/id):")
-        for name, value in op_data["device_internals"].items():
+        lines.append("Device Operating Point (@dev[param], e.g. gm/gds/vth/id):")
+        for name, value in op_data["device_op_points"].items():
             lines.append(f"  {name} = {value:.6g}{_u(name)}")
-    elif internals_note:
+    elif op_point_note:
         if op_data["voltages"] or op_data["currents"]:
             lines.append("")
-        lines.append(f"⚠ {internals_note}")
+        lines.append(f"⚠ {op_point_note}")
 
     for w in relayed:
         lines.append(f"⚠ {w}")
