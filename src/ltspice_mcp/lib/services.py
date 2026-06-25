@@ -402,7 +402,7 @@ def validate_signal(raw: RawRead, signal: str) -> str:
     if "." in sig_lower:
         candidates.append(sig_lower.replace(".", ":"))
 
-    # Device-internal small-signal / model parameters. ngspice writes these as
+    # Device operating-point small-signal / model parameters. ngspice writes these as
     # @dev[param] depending on the quantity: bare (@m1[gm]), v-wrapped
     # (v(@m1[vth])), or i-wrapped (i(@m1[id])). Accept a uniform 'dev.param'
     # shorthand (e.g. 'm1.gm') and resolve to whichever form the raw contains.
@@ -450,9 +450,10 @@ def validate_signal(raw: RawRead, signal: str) -> str:
     elif dev_param or "@" in sig_lo:
         save_target = f"@{dev_param.group(1)}[{dev_param.group(2)}]" if dev_param else signal
         hint = (
-            f" Device internals are written only when explicitly saved — add "
-            f"'.save {save_target}' to the deck and re-run with ngspice (LTspice "
-            f"'.op' does not export @dev[param] internals)."
+            f" Per-device small-signal params (gm/gds/vth/...) come back from "
+            f"operating_point(device=...). As a raw trace (for a sweep/plot), ngspice "
+            f"needs '.save {save_target}' in the deck; LTspice writes them only to the "
+            f".log under '.options logopinfo' (operating_point reads that), not the raw."
         )
     raise ResultError(f"Signal '{signal}' not found.{hint} Available signals: {available}")
 

@@ -267,6 +267,46 @@ class TestSimulationRunnerKillWsl:
             task.cancel()
 
     @pytest.mark.asyncio
+    async def test_deletes_generated_logopinfo_run_file_after_submit(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        # A logopinfo-augmented copy is passed as the run file (not the user's
+        # netlist); spicelib stages it synchronously at submit, so start_simulation
+        # must remove the per-job copy when it returns — no litter, and the
+        # job_id-stamped name already prevents queued-run clobber.
+        runner = SimulationRunner(
+            loop=asyncio.get_running_loop(),
+            simulator_class=FakeSim,
+            output_folder=work_dir,
+            max_parallel=2,
+        )
+        monkeypatch.setattr(runner, "_build_sim_runner", lambda: MagicMock())
+        job = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_clean")
+        aug = work_dir / ".n.sim_clean.logopinfo.cir"
+        aug.write_text("* aug\n.op\n.options logopinfo\n.end\n")
+        await runner.start_simulation(aug, job, state_no_sim)
+        assert not aug.exists()
+
+    @pytest.mark.asyncio
+    async def test_never_deletes_the_users_own_netlist(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        # When no augmentation happened the run file IS job.netlist; the cleanup
+        # guard must leave it on disk.
+        runner = SimulationRunner(
+            loop=asyncio.get_running_loop(),
+            simulator_class=FakeSim,
+            output_folder=work_dir,
+            max_parallel=2,
+        )
+        monkeypatch.setattr(runner, "_build_sim_runner", lambda: MagicMock())
+        job = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_keep")
+        user = job.netlist  # work_dir / "n.cir"
+        user.write_text("* user\n.op\n.end\n")
+        await runner.start_simulation(user, job, state_no_sim)
+        assert user.exists()
+
+    @pytest.mark.asyncio
     async def test_cancel_marks_terminal_before_kill(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch
     ):

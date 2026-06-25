@@ -1,6 +1,7 @@
 """Single-job simulation wrapper: spicelib SimRunner + asyncio."""
 
 import asyncio
+import contextlib
 import logging
 from pathlib import Path
 
@@ -127,35 +128,45 @@ class SimulationRunner(RunnerBase):
         # slot frees — the missing global gate that let N>max_parallel run.
         await self._sema.acquire()
         self._slots_held.add(job_id)
-        # The job may have been cancelled / timed out while waiting here for a
-        # slot. Don't launch it: release the slot and bail. Without this the
-        # woken task would attempt an illegal <terminal>→running transition
-        # (logged as a spurious error) or — for a timed-out job — start an
-        # orphan sim the user was already told had ended.
-        if job.status in TERMINAL_STATUSES:
-            self._release_slot(job_id)
-            return
         try:
-            # Transition BEFORE submitting: ngspice can complete in <100ms,
-            # racing the callback against asyncio.to_thread's resumption.
-            # If the callback fires first and finds the job in "queued" state,
-            # the queued→completed transition is illegal.
-            transition(job, "running", state=state, simulator=job.simulator)
-            runner = await asyncio.to_thread(submit_sim)
-            if job.status not in TERMINAL_STATUSES:
-                self._runners[job_id] = runner
-                job.task = runner
-            # If terminal already (cancel raced the submit), the submitted sim's
-            # completion callback still fires _handle_completion, which releases
-            # the slot — no release here to avoid a double-free.
-        except Exception as e:
-            # Submission failed: no completion callback will fire, so release the
-            # slot here (idempotent).
-            self._release_slot(job_id)
-            logger.error("Failed to submit simulation %s: %s", job_id, e, exc_info=True)
-            if job.status not in TERMINAL_STATUSES:
-                job.error = f"Submission failed: {e}"
-                transition(job, "failed", state=state, error=job.error, phase="submission")
+            # The job may have been cancelled / timed out while waiting here for
+            # a slot. Don't launch it: release the slot and bail. Without this the
+            # woken task would attempt an illegal <terminal>→running transition
+            # (logged as a spurious error) or — for a timed-out job — start an
+            # orphan sim the user was already told had ended.
+            if job.status in TERMINAL_STATUSES:
+                self._release_slot(job_id)
+                return
+            try:
+                # Transition BEFORE submitting: ngspice can complete in <100ms,
+                # racing the callback against asyncio.to_thread's resumption.
+                # If the callback fires first and finds the job in "queued" state,
+                # the queued→completed transition is illegal.
+                transition(job, "running", state=state, simulator=job.simulator)
+                runner = await asyncio.to_thread(submit_sim)
+                if job.status not in TERMINAL_STATUSES:
+                    self._runners[job_id] = runner
+                    job.task = runner
+                # If terminal already (cancel raced the submit), the submitted
+                # sim's completion callback still fires _handle_completion, which
+                # releases the slot — no release here to avoid a double-free.
+            except Exception as e:
+                # Submission failed: no completion callback will fire, so release
+                # the slot here (idempotent).
+                self._release_slot(job_id)
+                logger.error("Failed to submit simulation %s: %s", job_id, e, exc_info=True)
+                if job.status not in TERMINAL_STATUSES:
+                    job.error = f"Submission failed: {e}"
+                    transition(job, "failed", state=state, error=job.error, phase="submission")
+        finally:
+            # A generated runnable (a logopinfo-augmented copy) was passed instead
+            # of the user's own netlist; spicelib has already staged it into the
+            # run folder by now (_prepare_sim runs synchronously inside run()), so
+            # the per-job source copy is no longer needed. The job.netlist guard
+            # plus the marker make this incapable of touching the user's file.
+            if str(netlist_path) != str(job.netlist) and ".logopinfo" in netlist_path.name:
+                with contextlib.suppress(OSError):
+                    await asyncio.to_thread(netlist_path.unlink)
 
     def _handle_completion(
         self, job_id: str, raw_file: str, log_file: str, state: SessionState
