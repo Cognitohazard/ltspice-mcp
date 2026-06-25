@@ -415,7 +415,7 @@ def _ngspice_preflight_warnings(netlist_path, state: SessionState) -> list[str]:
     """ngspice batch-mode warnings for a base netlist (.meas/.four skipped).
 
     Reuses the single-run pre-flight so the sweep/MC paths surface the same
-    "ngspice cannot evaluate .meas in batch mode" warning instead of silently
+    ".meas skipped under -b -r batch mode" warning instead of silently
     dropping measurements. A ``.step`` blocker is downgraded to a warning here
     (batch substitutes parameters per-run, so it isn't fatal at config time).
     """

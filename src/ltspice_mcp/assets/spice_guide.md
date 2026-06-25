@@ -258,7 +258,7 @@ R1 in out {mc(10k, 0.1)}         ; uniform dist, 10k +/-10%
 - `Gfarad` — default parallel conductance on capacitors (1e-12). Disable: `.options Gfarad=0`
 - `DampInductors` — default parallel resistance on inductors (ON). Disable: `.options DampInductors=0`
 - `Gfloat` — shunt conductance on floating nodes (1e-12 default)
-- Inductor coupling factor K cannot reach exactly 1.0 — max is `1-1n`
+- Inductor coupling factor K may be exactly `1.0` (the docs recommend starting at 1 to remove leakage ringing); use a value just under 1 only if `uic` on `.tran` causes trouble at K=±1
 
 ### .options Flags (LTspice-specific)
 
@@ -375,21 +375,28 @@ ngspice shares the **SPICE Fundamentals** above, with these deltas:
 
 - Inline comment is `$`, not `;`.
 - MOSFETs need 4 terminals (`M1 d g s b`) — the bulk is **not** auto-connected
-  to the source (LTspice auto-connects it).
-- No `startup` keyword on `.tran`.
+  to the source. (LTspice auto-ties bulk→source only for 3-terminal VDMOS power
+  symbols; a generic monolithic NMOS/PMOS needs the 4th node there too.)
+- No `startup` keyword on `.tran`. (`.option ramptime` is only a DC source-
+  stepping convergence aid in standard builds, not a transient soft-start — the
+  true supply-ramp needs an `XSPICE_EXP` build. Ramp a source by hand with a
+  PWL/PULSE rise instead.)
 - No native `.step`. Run parametric sweeps through `configure_sweep` +
   `run_sweep` (one netlist per value); a `.step` line handed to `run_simulation`
   is rejected with a pointer to `configure_sweep`.
-- `GND` is not ground unless tied to `0` or declared `.global GND` — otherwise
-  it floats silently.
+- `gnd` is auto-converted to ground (node `0`) by default; disable with
+  `set no_auto_gnd` if you need `gnd` to be a distinct net.
 - Extra `.meas` types: `MIN_AT`, `MAX_AT`, `DERIV`, `param='expr'`,
   `par('expr')`. `.meas ... FIND` takes `V(out)` (no `mag()` wrapper).
-- `.meas` does NOT work in batch mode combined with `-r rawfile` — the data
-  streams to disk and the `.meas` scalars are unavailable. But for named signals
-  and device operating-point params you do NOT need a `.control` block: `.save` them and read
-  the raw back with run_simulation + export_waveform / query_value /
-  operating_point. Reserve `.control` / `wrdata` for in-engine computation you
-  genuinely can't express as a saved signal.
+- `.meas` is suppressed only when batch mode (`-b`) AND a command-line `-r
+  rawfile` are combined — ngspice prints "No .measure possible in batch mode
+  (-b) with -r rawfile set!" (the invocation run_simulation uses). It is NOT a
+  blanket batch limitation: putting the `.meas` inside a `.control ... run ...
+  .endc` block, or setting `set measoutfile=<file>`, makes measurements work
+  headlessly. For named signals and device operating-point params you usually
+  need neither — `.save` them and read the raw back with run_simulation +
+  export_waveform / query_value / operating_point. Reserve `.control` / `wrdata`
+  for in-engine computation you genuinely can't express as a saved signal.
 
 ### Parameters and Expressions
 
@@ -492,9 +499,11 @@ X1 input output myfilter rval=1k cval=1n
 
 - Parameters on the `.subckt` line do NOT need a `params:` keyword — just
   `name=value` after the nodes.
-- `.lib <filename> <section>` requires a section name. **Omitting the section
-  silently loads nothing** (no error). For unconditional inclusion use
-  `.include`.
+- `.lib <filename> [section]` — the section name is **optional**. A bare `.lib
+  models.lib` loads the whole file (verified: LTspice lists it under "Files
+  loaded" and the models resolve). `.lib file section` pulls just that `.lib
+  section … .endl` block. `.lib` differs from `.include` in scope (`.lib` skips
+  global-scope circuit elements), not in whether a section is required.
 - `.param` inside subcircuits is local scope (masks globals). Nesting to 10 levels.
 - Subcircuit and model names are global — must be unique across the netlist.
 
@@ -508,7 +517,11 @@ X1 input output myfilter rval=1k cval=1n
 
 - Without `.save`, all node voltages and source currents are saved (huge files).
 - Adding even ONE `.save` line drops all defaults — only listed signals saved.
-- `.save @r1[i]` for resistor current (not available via `I()` syntax).
+- Resistor current is the internal vector `@r1[i]` (via `.save @r1[i]` or
+  `.options savecurrents`); under this path the `i(r1)` read-function does NOT
+  resolve it — `i()`/`I()` only resolve `name#branch` vectors (voltage sources,
+  and the sense source a separate `.probe I(R1)` directive inserts). This server
+  reads the `@r1[i]` form.
 - Saved device operating-point params (`@m1[gm]`, `v(@m1[vth])`, `i(@m1[id])`, …) are surfaced
   by `operating_point` in a `device_op_points` bucket (a bare `.op`), and on a
   `.dc`/`.tran` sweep are readable by the `dev.param` shorthand — `query_value`/
@@ -544,15 +557,33 @@ wrdata output.txt V(out)          $ save as CSV-like text
 
 ### Monte Carlo
 
-ngspice has **no `.mc` directive**. Monte Carlo is done via `.control` loops:
+ngspice has **no `.mc` directive**. Two idioms:
+
+**(1) Per-device statistical functions (primary, simplest).** Put `agauss`/
+`gauss`/`unif`/`aunif`/`limit` directly in a `.param` or a device/B-source value,
+in `'…'` or `{…}`. Each device card draws a fresh value at parse time:
+
+```spice
+R1 a b 'agauss(10k, 500, 3)'      $ 10k, ±500 absolute, /3 sigma
+C1 c 0 '{unif(1n, 0.1)}'          $ 1n, ±10% relative, uniform
+```
+
+These are built into the numparam frontend (no build flag) but live ONLY there,
+NOT in the nutmeg/`.control` interpreter. For a distribution, re-run the deck N
+times (set `.options seed=<value>`); `run_montecarlo` automates the N-run draw +
+aggregation.
+
+**(2) `.control` loop with `alter`** — vary within one ngspice invocation. Inside
+`.control` only `sgauss(0)` (Gaussian, mean 0, σ 1) and `sunif(0)` (uniform
+[-1,1]) are built in — scale them yourself (`agauss`/`gauss` are NOT nutmeg
+functions here unless you `define` them first):
 
 ```spice
 .control
-let mc_runs = 100
 let run = 1
-dowhile run <= mc_runs
-  alter c1 = unif(1e-09, 0.1)
-  alter r1 = gauss(10k, 0.05, 3)
+dowhile run <= 100
+  alter c1 = 1n * (1 + 0.1*sunif(0))
+  alter r1 = 10k * (1 + 0.05*sgauss(0))
   tran 1u 1m
   $ ... store/process results ...
   let run = run + 1
@@ -560,12 +591,7 @@ end
 .endc
 ```
 
-**Random functions:** `sunif(0)` (uniform in [-1,1]), `sgauss(0)` (Gaussian
-mean=0 stddev=1). Set the seed with `.options seed=<value>` or `seed=random`.
-
-The `.param` statistical functions (`gauss`/`agauss`/`unif`/`aunif`/`limit`)
-require multiple ngspice runs (each run re-evaluates); `.control` loops with
-`alter` vary within a single run.
+Set the seed with `.options seed=<value>` or `seed=random`.
 
 ### .options Flags
 
@@ -597,7 +623,10 @@ transient once all `.meas` conditions are satisfied.
 
 ### XSPICE
 
-Mixed-signal simulation with code models (requires an XSPICE-enabled build):
+Mixed-signal simulation with code models. XSPICE is enabled by default in the
+official ngspice Windows binaries (and this Linux build — verified: an `A`-device
+`gain` code model runs); only the experimental `XSPICE_EXP` extras (e.g. the
+capacitor/inductor code models and transient supply-ramping) need a custom build.
 
 ```spice
 A1 [in] [out] lut1
@@ -616,16 +645,19 @@ Digital device types: `d_and`, `d_or`, `d_nand`, `d_nor`, `d_xor`,
 | Inline comment | `;` | `$` |
 | B-source conditional | `IF(c,a,b)` | ternary `c ? a : b` |
 | `^` operator | XOR (power is `**`) | power |
-| MOSFET bulk | auto-connected to source | required 4th terminal |
-| `GND` node | alias for `0` | floats unless tied to `0`/`.global` |
-| `.tran startup` | supported | not supported |
+| MOSFET bulk | auto-tied to source only on 3-term VDMOS symbols | required 4th terminal |
+| `GND` node | alias for `0` | auto-converted to `0` (disable: `set no_auto_gnd`) |
+| `.tran startup` | supported | not supported (no transient soft-start) |
 | Parameter sweep | `.step` | `configure_sweep`/`run_sweep` (no `.step`) |
-| Monte Carlo | `.step` + `mc()` | `.control` loop with `alter` |
+| Monte Carlo | `.step` + `mc()` | `agauss`/`gauss`/`unif` on device values (primary); or `.control` `alter` loop |
 | Post-processing | — | `.control` scripting (`let`/`plot`/`write`/`fft`) |
 | Default saving | saves all | `.save` (one line drops defaults; `.save all` keeps) |
 | `.raw` format | mixed precision | all doubles |
 | Unicode mu | replaces `u` with µ | preserves `u` |
 
-Other ngspice notes: no A-devices (use XSPICE for mixed-signal); `.func` cannot
-be recursive (causes a hang, not an error); `.backanno` is needed for current
-probing in post-processing.
+Other ngspice notes: A-devices ARE the XSPICE code-model primitives (the `A`
+prefix — available in stock builds, above); `.func` cannot be recursive
+(textual expansion, so a self-reference expands without bound). `.backanno` is
+an LTspice-only directive — ngspice rejects it ("unimplemented dot command
+'.backanno'") and aborts the run; ngspice current probing uses `.options
+savecurrents` / `.probe` instead.
