@@ -127,7 +127,12 @@ class TestCheckJob:
     async def test_timeout(self, state_no_sim: SessionState):
         _make_job(state_no_sim, status="timeout")
         result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
-        assert "timed out" in result.content[0].text
+        text = result.content[0].text
+        assert "timed out" in text
+        # A timeout must name the levers to raise it (per-call arg + config
+        # knob), or the agent reads it as a dead end.
+        assert "run_simulation(timeout=" in text
+        assert "LTSPICE_MCP_TIMEOUT" in text
 
     async def test_completed_missing_files(self, state_no_sim: SessionState):
         _make_job(state_no_sim, status="completed")

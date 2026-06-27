@@ -37,10 +37,30 @@ class TestGetServerStatus:
         assert "runtime" in result.structuredContent
 
     async def test_config_file_present(self, state_no_sim: SessionState, work_dir):
-        cfg = work_dir / "ltspice-mcp.toml"
+        # Deliberately NOT working_dir/ltspice-mcp.toml: server_status must
+        # report the path config actually resolved (config_path, which honors
+        # LTSPICE_MCP_CONFIG), never a working_dir guess.
+        cfg = work_dir / "custom-config.toml"
         cfg.write_text("[simulator]\nname = 'ltspice'\n")
+        state_no_sim.config.config_path = cfg
         result = await handle_server_status(ServerStatusInput(), state_no_sim)
         assert "Config file:" in result.content[0].text
+        sc = result.structuredContent
+        # Config file path and the simulator-selection knob must reach the
+        # structured surface an agent parses, not just the human text.
+        assert sc["configuration"]["config_file"] == str(cfg)
+        assert sc["configuration"]["config_file_exists"] is True
+        assert "[simulator] default" in sc["simulator_select"]
+        assert "LTSPICE_MCP_CONFIG" in sc["simulator_select"]
+
+    async def test_persist_jobs_surfaced(self, state_no_sim: SessionState):
+        # An agent must be able to tell "persistence off" from "nothing run yet".
+        state_no_sim.config.persist_jobs = False
+        result = await handle_server_status(ServerStatusInput(), state_no_sim)
+        sc = result.structuredContent
+        assert sc["configuration"]["persist_jobs"] is False
+        assert "preload_recent_count" in sc["configuration"]
+        assert "in-memory only" in result.content[0].text
 
     async def test_no_diagnostics_clean_status(self, state_no_sim: SessionState):
         result = await handle_server_status(ServerStatusInput(format="json"), state_no_sim)
