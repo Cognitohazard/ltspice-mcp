@@ -214,6 +214,11 @@ class BatchJob:
     sweep_config: SweepConfig | None = None
     mc_config: MonteCarloConfig | None = None
     task: asyncio.Task | None = field(default=None, repr=False)
+    # Per-job '.options logopinfo' netlist copy for LTspice .op batches (so each
+    # run's log carries device op points). None when no injection was needed.
+    # Transient: the runners read it as the source deck and delete it when the
+    # batch finishes; not persisted (a restart re-derives from ``netlist``).
+    run_netlist: Path | None = field(default=None, repr=False)
     # Cached convergence-warning scan; populated lazily by
     # ``services.scan_batch_convergence`` once the job is terminal.
     # ``None`` means "not scanned yet"; an empty list means "scanned, no
