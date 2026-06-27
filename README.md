@@ -6,13 +6,22 @@ An MCP server that connects LLM assistants (Claude, and any other MCP client) to
 
 ## Quick start
 
-1. Install the server:
+In Claude Code, install the plugin:
+
+```
+/plugin marketplace add cognitohazard/ltspice-mcp
+/plugin install ltspice-mcp
+```
+
+You also need LTspice or ngspice on the host (auto-detected on Windows, Linux, and macOS; on WSL set the LTspice path explicitly — [WSL notes](#configuration)). Circuit editing works with no simulator at all. `uv` is required; the server itself is fetched from PyPI on first use.
+
+### Manual install (any MCP client)
+
+Install the server, then point your client at it:
 
 ```bash
 uv tool install ltspice-mcp     # or: pip install ltspice-mcp / pipx install ltspice-mcp
 ```
-
-2. Add it to your MCP client:
 
 ```bash
 # Claude Code
@@ -28,20 +37,11 @@ claude mcp add -s project ltspice -- ltspice-mcp
 }
 ```
 
-3. Have LTspice or ngspice installed. Both are auto-detected on Windows, Linux, and macOS; on WSL the LTspice path must be set explicitly ([WSL notes](#configuration)). Circuit editing works with no simulator at all.
-
-That's the setup. Python 3.11+ required. Verify with `ltspice-mcp --help`.
+Python 3.11+ required. Verify with `ltspice-mcp --help`. The same server is also published under two alias names — `circuit-mcp` and `ngspice-mcp` — so `uvx circuit-mcp` / `uvx ngspice-mcp` are drop-in equivalents of `uvx ltspice-mcp` if one of those names is more discoverable for you.
 
 Claude Desktop config lives at `~/Library/Application Support/Claude/` (macOS), `%APPDATA%\Claude\` (Windows), or `~/.config/Claude/` (Linux). Cursor, Windsurf, Gemini CLI, Continue, Cline, Zed and others take the same JSON snippet in their respective config files. Web clients (claude.ai, ChatGPT) need a stdio→HTTP bridge such as [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy) — only expose this server on a network you fully control, since it writes files and spawns processes inside `allowed_paths`.
 
-### Install as a Claude Code plugin or Desktop Extension
-
-Two lower-friction routes that wrap the same PyPI package:
-
-- **Claude Code plugin** — `/plugin marketplace add cognitohazard/ltspice-mcp`, then `/plugin install ltspice-mcp`. Registers the server (via `uvx`) and bundles the LTspice/ngspice skills. To test against a local checkout instead, `/plugin marketplace add .`.
-- **Claude Desktop extension** — build the `.mcpb` in [`packaging/mcpb/`](packaging/mcpb/) and drag it onto Claude Desktop for a one-click install with a native folder picker for your circuits directory.
-
-Both wrap the server; they still need `uv` and a simulator on the host — they do not bundle LTspice or ngspice.
+A **Claude Desktop extension** is also available: build the `.mcpb` in [`packaging/mcpb/`](packaging/mcpb/) and drag it onto Claude Desktop for a one-click install with a native folder picker for your circuits directory. Like the plugin, it wraps the PyPI package and needs `uv` and a simulator on the host (it does not bundle LTspice or ngspice).
 
 ## Using it
 
