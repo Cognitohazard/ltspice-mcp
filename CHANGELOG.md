@@ -8,6 +8,29 @@ tool-surface changes.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-27
+
+### Fixed
+
+- Cancelling or timing out a simulation could leave the simulator process
+  running while the job was reported as cancelled, when the run's output was not
+  in the default folder (e.g. a deck in a subdirectory). `cancel_job` now
+  resolves the runner by the job's own netlist, so it addresses the runner that
+  actually launched the job.
+
+### Changed
+
+- The default `ltspice-mcp.toml` is written lazily on the first tool call rather
+  than at server startup, so the server no longer drops a config file into every
+  directory an MCP client happens to launch it from — only ones where its tools
+  are actually used.
+- Simulation artifacts now go to a stable `.ltspice-mcp/runs` folder under the
+  working directory instead of being scattered in the project root, each named
+  per job so results stay isolated. A deck with a relative `.include`/`.lib`
+  still runs in its own directory so the include resolves, and on WSL with
+  LTspice the output is routed to a Windows-native temp directory so `.MEAS`
+  results survive (LTspice can't write its SQLite `.db` over a UNC share).
+
 ## [0.4.0] - 2026-06-27
 
 ### Added
