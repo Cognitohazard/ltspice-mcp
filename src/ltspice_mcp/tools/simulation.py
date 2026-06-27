@@ -14,6 +14,7 @@ from ltspice_mcp.lib import now, services
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.log_parser import extract_error_context, parse_success_summary
 from ltspice_mcp.lib.mcp_logging import mcp_log
+from ltspice_mcp.lib.runner_base import discard_logopinfo_netlist
 from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
 from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.state import (
@@ -218,9 +219,18 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     )
     # Runner first, then register + create_task with no await between —
     # submit-ordering rule, see the concurrency contract in tools/_base.py.
-    runner = await _get_or_create_runner(state, netlist_path)
-    state.add_job(job)
-    job.task = asyncio.create_task(runner.start_simulation(run_path, job, state))
+    # If anything raises before start_simulation arms its own cleanup (e.g.
+    # _get_or_create_runner failing on WSL cmd.exe interop or a read-only dir),
+    # delete the generated logopinfo sibling so the error path leaves no orphan.
+    started = False
+    try:
+        runner = await _get_or_create_runner(state, netlist_path)
+        state.add_job(job)
+        job.task = asyncio.create_task(runner.start_simulation(run_path, job, state))
+        started = True
+    finally:
+        if not started:
+            discard_logopinfo_netlist(run_path)
     await mcp_log(
         "info", f"Simulation started: {netlist_path.name} ({default_simulator.__name__})"
     )

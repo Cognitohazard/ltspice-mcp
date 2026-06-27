@@ -14,6 +14,7 @@ import pytest
 
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.montecarlo_runner import MonteCarloRunner
+from ltspice_mcp.lib.runner_base import discard_logopinfo_netlist
 from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
 from ltspice_mcp.lib.sweep_runner import SweepRunner
 from ltspice_mcp.state import BatchJob, MonteCarloConfig, SessionState, SimulationJob, SweepConfig
@@ -1989,3 +1990,24 @@ class TestGateRunnerOnCancel:
         # The abort is not a batch failure: cancel() owns the status.
         assert bj.status == "running"
         assert bj.error is None
+
+
+class TestDiscardLogopinfoNetlist:
+    """``discard_logopinfo_netlist`` deletes a generated '.options logopinfo'
+    copy (run in each batch runner's finally + the single-sim cleanup), and only
+    the marked copy — never the user's own deck (no marker) or a None path."""
+
+    def test_discards_marked_copy(self, work_dir: Path):
+        copy = work_dir / ".n.sweep_x.logopinfo.cir"
+        copy.write_text("* aug\n.op\n.options logopinfo\n.end\n")
+        discard_logopinfo_netlist(copy)
+        assert not copy.exists()
+
+    def test_keeps_user_netlist_without_marker(self, work_dir: Path):
+        user = work_dir / "n.cir"
+        user.write_text("* user\n.op\n.end\n")
+        discard_logopinfo_netlist(user)
+        assert user.exists()
+
+    def test_none_is_noop(self):
+        discard_logopinfo_netlist(None)  # must not raise

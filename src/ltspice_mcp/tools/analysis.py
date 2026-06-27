@@ -521,9 +521,10 @@ class OperatingPointInput(ToolInput):
         description=(
             "Narrow the result to one device: its operating-point params (@dev[param]) "
             "and its terminal currents (e.g. Id/Ig/Is(M1)), each typed with its "
-            "unit. Pass the reference exactly as it appears in the trace name "
-            "(e.g. 'M1', 'Q2', or a subcircuit path 'x1.mn'). Default returns "
-            "the whole circuit."
+            "unit. Pass the device reference (e.g. 'M1', 'Q2', or a subcircuit "
+            "path 'x1.mn'); LTspice subcircuit semiconductors are matched by "
+            "instance regardless of the log's colon-qualified name. Default "
+            "returns the whole circuit."
         ),
     )
     format: Literal["json", "text"] | None = Field(
@@ -1821,7 +1822,7 @@ def _has_active_device(currents: dict[str, float]) -> bool:
     return False
 
 
-_OP_INTERNAL_DEV_RE = re.compile(r"@([\w.]+)\[")
+_OP_INTERNAL_DEV_RE = re.compile(r"@([\w.:]+)\[")
 _OP_TERMINAL_CUR_RE = re.compile(r"^i[a-z]?\(([^)]+)\)$")
 
 
@@ -1836,19 +1837,63 @@ def _trace_device(name: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _dev_core_segments(owner: str) -> list[str]:
+    """Identity segments of a .op trace owner: split on ``.``/``:``, drop a
+    leading single-letter device-class token, and drop trailing region/
+    multiplicity index segments. ngspice uses dots (``m.x1.mn`` -> x1, mn);
+    LTspice subcircuit semiconductors use colons with a class prefix and trailing
+    indices (``q:q2:1:2`` -> q2). Both callers want exactly this normalized form."""
+    segs = [s for s in re.split(r"[.:]", owner) if s]
+    if segs and len(segs[0]) == 1 and segs[0].isalpha():
+        segs = segs[1:]
+    while len(segs) > 1 and segs[-1].isdigit():
+        segs.pop()
+    return segs
+
+
+def _dev_instance(owner: str) -> str:
+    """Reference token for the 'devices present' list: strips LTspice's class
+    prefix and trailing region/multiplicity indices from colon-form subcircuit
+    names (q:q2:1:2 -> q2). Dotted ngspice paths (m.x1.mn) and top-level refs
+    (m1) pass through unchanged."""
+    if ":" not in owner:
+        return owner
+    segs = _dev_core_segments(owner)
+    return ":".join(segs) if segs else owner
+
+
+def _device_matches(owner: str, want: str) -> bool:
+    """Whether a .op trace owner belongs to the requested device. Top-level and
+    ngspice-dotted owners match by exact name or hierarchical path suffix
+    (``m.x1.mn`` matches ``mn`` or ``x1.mn``). LTspice colon-form subcircuit
+    owners (``q:q2:1:2``) match by instance segment, ignoring the class prefix
+    and the trailing region/multiplicity indices."""
+    if owner == want:
+        return True
+    if ":" in owner:
+        segs = _dev_core_segments(owner)
+        want_parts = [p for p in re.split(r"[.:]", want) if p]
+        if not want_parts:
+            return False
+        if len(want_parts) == 1:
+            return want_parts[0] in segs
+        return segs[-len(want_parts) :] == want_parts
+    return owner.endswith("." + want)
+
+
 def _filter_operating_point(op_data: dict, device: str) -> bool:
-    """Narrow ``op_data`` (in place) to one device's operating-point params + terminal
-    currents. Returns whether anything matched. A subcircuit-qualified trace
-    (``@m.x1.mn[gm]``) matches a bare ``mn`` request via path suffix, mirroring
-    ``services.validate_signal``'s hierarchical resolver."""
+    """Narrow ``op_data`` (in place) to one device's operating-point params +
+    terminal currents. Returns whether anything matched. Handles top-level
+    devices (``m1``), ngspice subcircuit-qualified traces (``@m.x1.mn[gm]``
+    matches bare ``mn`` via path suffix), and LTspice colon-form subcircuit
+    semiconductors (``q:q2:1:2`` matches ``q2``)."""
     want = device.strip().lower()
-    suffix = "." + want
     matched = False
     for bucket in ("voltages", "currents", "device_op_points"):
         kept = {}
         for name, value in op_data.get(bucket, {}).items():
             owner = _trace_device(name)
-            if owner is not None and (owner == want or owner.endswith(suffix)):
+            if owner is not None and _device_matches(owner, want):
                 kept[name] = value
                 matched = True
         op_data[bucket] = kept
@@ -2089,7 +2134,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     if args.device is not None:
         available_devs = sorted(
             {
-                d
+                _dev_instance(d)
                 for bucket in ("currents", "device_op_points")
                 for name in op_data.get(bucket, {})
                 if (d := _trace_device(name)) is not None
@@ -2134,9 +2179,9 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     ):
         op_point_note = (
             "No small-signal device params (gm/gds/vth/vdsat) in this run. "
-            "On LTspice add '.options logopinfo' to the deck (run_simulation adds "
-            "it automatically for .op runs); on ngspice .save them, e.g. "
-            "'.save all @m1[gm] @m1[gds] @m1[id]'."
+            "On LTspice add '.options logopinfo' to the deck (run_simulation / "
+            "run_sweep / run_montecarlo add it automatically for .op runs); on "
+            "ngspice .save them, e.g. '.save all @m1[gm] @m1[gds] @m1[id]'."
         )
         op_data.setdefault("warnings", []).append(op_point_note)
 
