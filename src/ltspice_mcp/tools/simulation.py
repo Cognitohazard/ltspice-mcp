@@ -49,6 +49,17 @@ from ltspice_mcp.tools._base import (
 SYNC_TIMEOUT_THRESHOLD = 30.0
 HARD_MAX_TIMEOUT = 600.0  # 10 minutes - max for wait=true mode
 
+# Appended to both timeout messages (the sync wait path and the async check_job
+# path). A timeout is a tool-set limit, not a simulator failure, so name the
+# levers to raise it — otherwise the agent reads "timed out" as a dead end and
+# loops. One constant so the two sites can't drift.
+TIMEOUT_HINT = (
+    "\n\nThis is the configured time limit, not a simulator error. To allow more "
+    "time, pass run_simulation(timeout=<seconds>) for this run, or raise the "
+    "default via [simulation] timeout in the config file or LTSPICE_MCP_TIMEOUT "
+    "(restart required). server_status shows the current default."
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -366,7 +377,7 @@ async def _wait_for_completion(
         return format_response(
             f"Simulation timed out after {duration:.1f}s (killed by server)\n"
             f"Job ID: {job.job_id}\n"
-            f"Netlist: {job.netlist}{log_excerpt}{files_note}",
+            f"Netlist: {job.netlist}{log_excerpt}{files_note}{TIMEOUT_HINT}",
             data,
             fmt,
         )
@@ -662,7 +673,7 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
         return format_response(
             f"Simulation timed out after {duration:.1f}s (killed by server)\n"
             f"Job ID: {job_id}\n"
-            f"Netlist: {job.netlist}{log_excerpt}{files_note}",
+            f"Netlist: {job.netlist}{log_excerpt}{files_note}{TIMEOUT_HINT}",
             data,
             fmt,
         )

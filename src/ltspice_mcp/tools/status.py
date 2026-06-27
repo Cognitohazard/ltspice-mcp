@@ -41,6 +41,7 @@ class ServerStatusInput(ToolInput):
             "simulators": {"type": "object"},
             "default_simulator": {"type": ["string", "null"]},
             "requested_simulator": {"type": ["string", "null"]},
+            "simulator_select": {"type": "string"},
             "diagnostics": {"type": "array", "items": {"type": "string"}},
             "tool_profile": {"type": "string"},
             "tool_count": {"type": "integer"},
@@ -53,6 +54,23 @@ class ServerStatusInput(ToolInput):
 async def handle_server_status(args: ServerStatusInput, state: SessionState):
     """Get comprehensive server status information."""
     fmt = args.format
+
+    # config_path is the file config.load() actually resolved (honors
+    # LTSPICE_MCP_CONFIG), not a working_dir guess — telling the agent the
+    # wrong path is worse than no path.
+    config_file = state.config.config_path
+    config_file_exists = config_file.exists()
+
+    # The active simulator is config, not a per-call argument: surface the knob
+    # so an agent that needs ngspice (or any non-default) knows where to set it
+    # instead of guessing. Takes effect on server restart.
+    simulator_select = (
+        f"Set the active/default simulator in {config_file} under [simulator] default "
+        '(e.g. default = "ngspice"), or env LTSPICE_MCP_SIMULATOR=ngspice '
+        "(set LTSPICE_MCP_CONFIG to load the config file from another path); "
+        "restrict which are exposed with [simulator] enabled. "
+        "Changes take effect when the server restarts."
+    )
 
     lines = ["=== LTSpice MCP Server Status ===\n"]
 
@@ -84,6 +102,7 @@ async def handle_server_status(args: ServerStatusInput, state: SessionState):
     )
     if state.config.simulator:
         lines.append(f"Requested simulator: {state.config.simulator}")
+    lines.append(f"To switch: {simulator_select}")
 
     if state.diagnostics:
         lines.append("\n⚠ Startup diagnostics:")
@@ -100,6 +119,11 @@ async def handle_server_status(args: ServerStatusInput, state: SessionState):
     lines.append(f"  Default timeout: {state.config.default_timeout}s")
     lines.append(f"  Max points returned: {state.config.max_points_returned}")
     lines.append(f"  Log level: {state.config.log_level}")
+    lines.append(f"  Job persistence: {'on' if state.config.persist_jobs else 'off'}")
+    if not state.config.persist_jobs:
+        # Distinguish "nothing run yet" from "persistence off" — otherwise an
+        # empty `recent` looks like a fresh session, not a config choice.
+        lines.append("    (jobs are in-memory only — lost on restart; recent/preload disabled)")
 
     allowed_paths_list = [str(p) for p in state.config.allowed_paths]
     lines.append("\nSecurity (Sandbox):")
@@ -107,11 +131,10 @@ async def handle_server_status(args: ServerStatusInput, state: SessionState):
     for allowed_path in state.config.allowed_paths:
         lines.append(f"    - {allowed_path}")
 
-    config_file = state.working_dir / "ltspice-mcp.toml"
-    if config_file.exists():
+    if config_file_exists:
         lines.append(f"\n  Config file: {config_file}")
     else:
-        lines.append("\n  Config file: Not found (using defaults)")
+        lines.append(f"\n  Config file: {config_file} (not found, using defaults)")
 
     # ``state.jobs`` retains the full lifecycle (running/completed/failed/etc.)
     # so we can answer ``check_job`` lookups after the fact. The status field
@@ -135,13 +158,18 @@ async def handle_server_status(args: ServerStatusInput, state: SessionState):
         "diagnostics": list(state.diagnostics),
         "tool_profile": state.config.tool_profile,
         "tool_count": len(state.tool_defs),
+        "simulator_select": simulator_select,
         "configuration": {
             "working_directory": str(state.working_dir),
+            "config_file": str(config_file),
+            "config_file_exists": config_file_exists,
             "enabled_simulators": list(state.config.enabled_simulators),
             "max_parallel_sims": state.config.max_parallel_sims,
             "default_timeout": state.config.default_timeout,
             "max_points_returned": state.config.max_points_returned,
             "log_level": state.config.log_level,
+            "persist_jobs": state.config.persist_jobs,
+            "preload_recent_count": state.config.preload_recent_count,
         },
         "allowed_paths": allowed_paths_list,
         "runtime": {

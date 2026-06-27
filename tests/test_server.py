@@ -88,7 +88,9 @@ class TestBuildInstructions:
         text = build_instructions({"ngspice": _NG}, _NG)
         assert "Active simulator: ngspice." in text
         assert "LTspice not detected" in text
-        assert ".asc schematic editing is unavailable" in text
+        # Accurate: .asc editing depends on LTspice symbol files, not the
+        # executable — don't over-claim a flat "unavailable".
+        assert ".asc schematic editing needs LTspice symbol files" in text
         assert "(default)" not in text  # no default marker for a single engine
 
     def test_ltspice_only(self):
@@ -203,6 +205,22 @@ class TestServerDispatch:
         ):
             await call_tool("ltspice_nonexistent", {})
 
+    async def test_call_profile_filtered_tool(self, config: ServerConfig):
+        """A real tool hidden by the active profile must name the profile knob,
+        not just say 'Unknown tool' — otherwise the agent has no recovery path.
+        """
+        config.tool_profile = "agentic"  # hides the netlist-editing wrappers
+        state = SessionState.create(config, available={})
+        assert "create_netlist" not in state.tool_dispatch  # precondition
+        with (
+            patch("ltspice_mcp.server.server", _FakeServer(state)),
+            pytest.raises(ValueError, match="hidden by the active tool profile") as excinfo,
+        ):
+            await call_tool("create_netlist", {})
+        msg = str(excinfo.value)
+        assert "hidden by the active tool profile" in msg
+        assert "LTSPICE_MCP_TOOL_PROFILE" in msg
+
     async def test_call_validation_error(self, state_no_sim: SessionState):
         with (
             patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)),
@@ -213,9 +231,15 @@ class TestServerDispatch:
     async def test_call_path_security_error(self, state_no_sim: SessionState):
         with (
             patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)),
-            pytest.raises(PathSecurityError, match="Allowed paths"),
+            pytest.raises(PathSecurityError) as excinfo,
         ):
             await call_tool("read_circuit", {"path": "/etc/passwd"})
+        msg = str(excinfo.value)
+        assert "Allowed paths" in msg
+        # The agent can't self-widen the sandbox, so the message must name the
+        # knob AND the human-escalation / move-the-file fallback.
+        assert "LTSPICE_MCP_ALLOWED_PATHS" in msg
+        assert "ask the user" in msg
 
     async def test_call_ltspice_error_with_hint(self, state_no_sim: SessionState):
         with (
@@ -230,6 +254,24 @@ class TestServerDispatch:
         with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)):
             resources = await list_resources()  # type: ignore[call-arg]
             assert len(resources) > 0
+
+    async def test_read_resource_path_security_enriched(self, state_no_sim: SessionState):
+        from pydantic import AnyUrl
+
+        # The resource-read boundary must enrich a sandbox rejection with the
+        # same recovery guidance as the tool-call path (covers spice://netlists
+        # /{outside} etc.), not leak a bare "outside allowed directories".
+        boom = PathSecurityError("Path /etc/x.cir is outside allowed directories [/work]")
+        with (
+            patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)),
+            patch("ltspice_mcp.server.handle_read_resource", side_effect=boom),
+            pytest.raises(ValueError, match="outside allowed directories") as excinfo,
+        ):
+            await read_resource(AnyUrl("spice://netlists/x.cir"))
+        msg = str(excinfo.value)
+        assert "outside allowed directories" in msg
+        assert "LTSPICE_MCP_ALLOWED_PATHS" in msg
+        assert "ask the user" in msg
 
     async def test_read_resource_invalid_uri(self, state_no_sim: SessionState):
         from pydantic import AnyUrl

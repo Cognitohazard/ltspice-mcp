@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import LibraryError, PathSecurityError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.library import (
@@ -155,9 +156,21 @@ class TestFindModel:
         assert all(0.0 <= r["score"] <= 1.0 for r in data["results"])
 
     async def test_empty_returns_hint(self, state_no_sim: SessionState):
-        result = await handle_find_model(FindModelInput(name="XYZZY"), state_no_sim)
+        result = await handle_find_model(
+            FindModelInput(name="XYZZY", include_builtin=True), state_no_sim
+        )
         assert "No fuzzy matches" in result.content[0].text
+        assert "load_library" in result.content[0].text  # full profile names the tool
         assert result.structuredContent["results"] == []
+
+    async def test_empty_hint_agentic_omits_hidden_tool(self, config: ServerConfig):
+        # load_library is full-only; an agentic agent must not be told to call it.
+        config.tool_profile = "agentic"
+        state = SessionState.create(config, available={})
+        result = await handle_find_model(FindModelInput(name="XYZZY", include_builtin=True), state)
+        text = result.content[0].text
+        assert "load_library" not in text
+        assert ".lib/.include" in text
 
     async def test_exact_match_found(self, state_no_sim: SessionState, fuzzy_lib: Path):
         await handle_load_library(LoadLibraryInput(path=fuzzy_lib.name), state_no_sim)

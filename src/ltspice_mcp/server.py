@@ -266,6 +266,21 @@ def _get_error_hint(err_type: type[LTSpiceMCPError], profile: str) -> str | None
     return hint.agentic if profile == "agentic" else hint.full
 
 
+def _path_reject_guidance(state: SessionState) -> str:
+    """Recovery guidance appended to a PathSecurityError at every agent-facing
+    boundary — tool calls AND resource reads. The agent can't widen the sandbox
+    itself, so name the knob and the human-escalation/move-the-file fallback or
+    it dead-ends. One builder so the two boundaries can't drift."""
+    allowed = ", ".join(str(p) for p in state.config.allowed_paths)
+    return (
+        f"Allowed paths: {allowed}\n"
+        "To work on this file, move or copy it into one of those directories, "
+        "or ask the user to widen the sandbox: [security] allowed_paths in "
+        f"{state.config.config_path} or LTSPICE_MCP_ALLOWED_PATHS (restart "
+        "required). server_status shows the full sandbox configuration."
+    )
+
+
 @asynccontextmanager
 async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     """Initialize session state on startup, clean up on shutdown.
@@ -416,8 +431,9 @@ def build_instructions(available: dict[str, type], default: type | None) -> str:
             active = f"Active simulators: {', '.join(parts)}."
         if "ltspice" not in available:
             active += (
-                " (LTspice not detected, so .asc schematic editing is unavailable; "
-                "simulation and analysis run on the active engine and are unaffected.)"
+                " (LTspice not detected; .asc schematic editing needs LTspice "
+                "symbol files and may be unavailable — simulation and analysis "
+                "run on the active engine and are unaffected.)"
             )
     return f"{active}\n\n{SERVER_INSTRUCTIONS}"
 
@@ -461,9 +477,22 @@ async def call_tool(name: str, arguments: dict | None):
     """
     state = _get_state(server)
 
-    # Look up handler in profile-filtered dispatch table
+    # Look up handler in profile-filtered dispatch table. A tool that exists in
+    # the registry but isn't in this profile's dispatch was hidden by the active
+    # profile — say so and name the knob, or the agent loops on "Unknown tool"
+    # with no recovery path. (Local import: the registry singleton, avoids a
+    # module-load cycle; this is a rare error path so the cost is irrelevant.)
     registered = state.tool_dispatch.get(name)
     if registered is None:
+        from ltspice_mcp.tools._base import registry
+
+        if name in registry.known_names():
+            raise ValueError(
+                f"Tool '{name}' exists but is hidden by the active tool profile "
+                f"'{state.config.tool_profile}'. Change it via [tools] profile in "
+                f"{state.config.config_path} or LTSPICE_MCP_TOOL_PROFILE (restart "
+                "required); server_status lists the tools this profile exposes."
+            )
         raise ValueError(f"Unknown tool: {name}")
 
     # Set up MCP protocol logging for this request.
@@ -491,11 +520,7 @@ async def call_tool(name: str, arguments: dict | None):
         raise ValueError(f"Invalid arguments for {name}: {e}") from None
     except PathSecurityError as e:
         await mcp_log("warning", f"Path security violation in {name}: {e}")
-        allowed = ", ".join(str(p) for p in state.config.allowed_paths)
-        raise PathSecurityError(
-            f"{e}\n\nAllowed paths: {allowed}\n"
-            f"Use server_status to see full sandbox configuration."
-        ) from None
+        raise PathSecurityError(f"{e}\n\n{_path_reject_guidance(state)}") from None
     except LTSpiceMCPError as e:
         # Errors that already carry precise guidance opt out of the generic
         # per-type hint (show_hint=False) so it doesn't misdirect.
@@ -561,6 +586,10 @@ async def read_resource(uri: AnyUrl) -> Iterable[ReadResourceContents]:
         # whole router runs off the loop. It never touches loop-owned
         # mutable state (the editor cache and library sessions stay untouched).
         result = await asyncio.to_thread(handle_read_resource, str(uri), state)
+    except PathSecurityError as e:
+        # Same sandbox wall as the tool path (e.g. spice://netlists/{outside});
+        # enrich it here so every resource route gets the recovery guidance.
+        raise ValueError(f"{e}\n\n{_path_reject_guidance(state)}") from None
     except LTSpiceMCPError as e:
         raise ValueError(str(e)) from None
     except Exception as e:
