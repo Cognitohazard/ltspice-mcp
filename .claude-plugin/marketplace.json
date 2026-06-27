@@ -5,7 +5,7 @@
     "url": "https://github.com/cognitohazard"
   },
   "metadata": {
-    "description": "Circuit simulation (LTspice/ngspice) with structured results incl. per-device internals (gm/gds/vth) by name, plus LTspice .asc schematic editing, for Claude Code.",
+    "description": "Circuit simulation (LTspice/ngspice) with structured results incl. per-device operating points (gm/gds/vth) by name, plus LTspice .asc schematic editing, for Claude Code.",
     "version": "0.1.0"
   },
   "plugins": [
@@ -16,7 +16,7 @@
       "author": {
         "name": "cognitohazard"
       },
-      "description": "LTspice/ngspice circuit simulation (structured results incl. per-device internals gm/gds/vth by name, no rawfile parsing) and .asc schematic editing as MCP tools. Requires uv and a simulator (LTspice or ngspice) on the host; the server is fetched from PyPI via uvx on first use."
+      "description": "LTspice/ngspice circuit simulation (structured results incl. per-device operating points gm/gds/vth by name, no rawfile parsing) and .asc schematic editing as MCP tools. Requires uv and a simulator (LTspice or ngspice) on the host; the server is fetched from PyPI via uvx on first use."
     }
   ]
 }

@@ -8,17 +8,23 @@ tool-surface changes.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-27
+
 ### Added
 
-- Device internals (small-signal / model parameters like `gm`, `gds`, `vth`,
-  `id`) are now first-class. ngspice writes them as `@dev[param]` traces when
-  `.save`d, but they were silently dropped or mislabeled. Now: `operating_point`
-  surfaces them in a `device_internals` bucket; and on a `.dc`/`.tran` sweep the
-  by-name readers (`query_value`/`signal_stats`/`export_waveform`) accept a
-  uniform `dev.param` shorthand (e.g. `m1.gm`) that resolves to whichever wrapped
-  form the raw holds (`@m1[gm]` / `v(@m1[vth])` / `i(@m1[id])`). This is the
-  gm/ID characterization read. A `dev.param` that isn't in the raw now hints at
-  the missing `.save`.
+- Per-device small-signal operating-point parameters (`gm`, `gds`, `vth`, `id`,
+  …) are now first-class on both simulators and read back by name.
+  `operating_point` surfaces them in a `device_op_points` bucket; on a
+  `.dc`/`.tran` sweep the by-name readers
+  (`query_value`/`signal_stats`/`export_waveform`) accept a uniform `dev.param`
+  shorthand (e.g. `m1.gm`) that resolves to whichever wrapped form the raw holds
+  (`@m1[gm]` / `v(@m1[vth])` / `i(@m1[id])`) — the gm/ID characterization read.
+  On LTspice the values live in the `.log`'s operating-point block, so
+  `run_simulation` / `run_sweep` / `run_montecarlo` auto-add `.options logopinfo`
+  to `.op` decks and `operating_point` folds the block in (subcircuit devices are
+  matched by instance regardless of the log's colon-qualified name); on ngspice
+  they are `@dev[param]` traces that must be `.save`d, and a `dev.param` absent
+  from the raw hints at the missing `.save`.
 - `validate_netlist` and `export_netlist` now warn when a `.meas`, output
   directive, or behavioral source references `V(name)`/`I(name)` for a node or
   device the netlist doesn't define — the common case being a schematic net that
@@ -68,10 +74,10 @@ tool-surface changes.
   figure / SNR are left to the caller (they need the source resistance and a
   reference level).
 - `operating_point` gained a `device=` filter that returns just one device's
-  internals and terminal currents (e.g. `device="M1"` → `@m1[...]` plus
-  `Id/Ig/Is(M1)`) in a single call, refusing an unknown device with the list of
-  devices present. Every returned value now carries its SI unit in a `units` map
-  where the simulator declared the trace type.
+  operating-point params and terminal currents (e.g. `device="M1"` → `@m1[...]`
+  plus `Id/Ig/Is(M1)`) in a single call, refusing an unknown device with the list
+  of devices present. Every returned value now carries its SI unit in a `units`
+  map where the simulator declared the trace type.
 - `query_value` and `export_waveform` now attach SI units derived from the
   simulator's declared trace type (`query_value` returns a `unit`; the CSV's
   value columns are unchanged but the DC x-column is named — see Changed).
@@ -138,12 +144,24 @@ tool-surface changes.
 - `query_value` and the `export_waveform` CSV now label a `.dc` sweep axis by
   its swept variable (e.g. `Vin` / a `Vin_V` CSV header) instead of a misleading
   `t=` / a bare `sweep` column.
-- The "device internal not found" hint is now imperative and fires for a bare
-  `@dev[param]` request too: it tells you to add `.save @dev[param]` and re-run
-  with ngspice, rather than passively noting the value exists elsewhere.
+- The "device operating-point param not found" hint is now imperative and fires
+  for a bare `@dev[param]` request too: it tells you to add `.save @dev[param]`
+  and re-run with ngspice, rather than passively noting the value exists
+  elsewhere.
 
 ### Fixed
 
+- The in-tool SPICE guide and the run-time pre-flight warning gave the wrong
+  ngspice `.meas` recovery. ngspice suppresses `.meas` only under `-b` plus a
+  command-line `-r rawfile` (this server's invocation); the documented
+  workarounds were both wrong — inside a `.control` block ngspice wants the
+  dot-less `meas` command (a dotted `.meas` there errors and computes nothing),
+  and `measoutfile` is a no-op once the measurement is suppressed. Both are now
+  corrected, verified against real ngspice.
+- `validate_netlist` now flags `.backanno` when targeting ngspice — ngspice has
+  no such command and aborts the run with "unimplemented dot command
+  '.backanno'" (it is an LTspice-only schematic directive). Mirrors the existing
+  `.tran 0` ngspice-incompatibility check; an LTspice target is unaffected.
 - The batch result reader no longer silently returns the wrong sample on a
   descending sweep axis. A `.dc V1 5 0 -0.1` (or any high→low parameter sweep)
   produces a descending axis, but the `at=` slice used a binary search that
