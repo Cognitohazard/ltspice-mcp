@@ -1,15 +1,21 @@
 name: Publish aliases to PyPI
 
 # Thin alias packages (circuit-mcp, ngspice-mcp) under packaging/aliases/.
-# Manual only: these are publish-once and change rarely, so they must NOT ride
-# the tag-triggered canonical release (publish.yml). skip-existing makes re-runs
-# idempotent — to ship a new alias version, bump its version in its pyproject
-# and re-run; unchanged aliases are skipped instead of failing on a duplicate.
+# They share the canonical version (hatch-vcs reads the same git tag) and ride
+# the same `v*` release tag as publish.yml, so every release ships all three
+# packages at one version. skip-existing keeps it idempotent — an alias whose
+# version already exists on PyPI is skipped, not re-published.
+#
+# workflow_dispatch is kept for catch-up: publish a single alias whose trusted
+# publisher was registered after a release (run it against that release's tag).
 #
 # Uses PyPI Trusted Publishing (OIDC), same mechanism as publish.yml. Each alias
 # is a separate PyPI project and needs its own pending/trusted publisher (owner
 # cognitohazard, repo ltspice-mcp, workflow publish-aliases.yml, env pypi).
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       alias:
@@ -34,13 +40,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Publish every alias, or just the one chosen on dispatch. Each alias is
-        # a separate PyPI project with its own trusted publisher, so one can ship
-        # before the other's publisher is registered (e.g. circuit-mcp first).
-        alias: ${{ inputs.alias == 'all' && fromJSON('["circuit-mcp", "ngspice-mcp"]') || fromJSON(format('["{0}"]', inputs.alias)) }}
+        # On a release tag, publish every alias. On manual dispatch, publish the
+        # chosen one (default 'all'). Each alias is a separate PyPI project with
+        # its own trusted publisher, so one can ship before the other's publisher
+        # is registered (e.g. circuit-mcp first).
+        alias: ${{ (github.event_name == 'workflow_dispatch' && inputs.alias != 'all') && fromJSON(format('["{0}"]', inputs.alias)) || fromJSON('["circuit-mcp", "ngspice-mcp"]') }}
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 0  # hatch-vcs needs full history + tags to resolve the version
           persist-credentials: false
 
       - name: Install uv

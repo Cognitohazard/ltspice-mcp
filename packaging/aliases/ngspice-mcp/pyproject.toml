@@ -1,6 +1,6 @@
 [project]
 name = "ngspice-mcp"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Alias for ltspice-mcp: a SPICE circuit-simulation MCP server (LTspice/ngspice). Installs and runs ltspice-mcp."
 keywords = ["mcp", "spice", "ngspice", "ltspice", "circuit-simulation", "eda", "model-context-protocol"]
 readme = "README.md"
@@ -17,8 +17,15 @@ Issues = "https://github.com/cognitohazard/ltspice-mcp/issues"
 ngspice-mcp = "ngspice_mcp:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+# Version tracks the canonical ltspice-mcp release: derived from the repo's git
+# tag (same tag as ltspice-mcp), so all packages share one version. ``root``
+# points at the repo root three levels up from this subdir.
+[tool.hatch.version]
+source = "vcs"
+raw-options = { root = "../../.." }
 
 [tool.hatch.build.targets.wheel]
 packages = ["ngspice_mcp"]
