@@ -906,7 +906,12 @@ async def handle_cancel_job(args: CancelJobInput, state: SessionState) -> types.
             )
         await batch_runner.cancel(job, state)
     else:
-        sim_runner = await _get_or_create_runner(state)
+        # Resolve the runner via the JOB's netlist, so its output folder matches
+        # the one the job launched with. Acquiring with no netlist resolves to a
+        # different folder, which makes RunnerManager invalidate the live runner
+        # (losing the spicelib process handle) — the simulator would keep running
+        # while the job shows cancelled.
+        sim_runner = await _get_or_create_runner(state, job.netlist)
         await sim_runner.cancel(job, state)
 
     return text_response(f"Job {job_id} cancelled")

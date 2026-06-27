@@ -159,6 +159,36 @@ class TestServerLifecycle:
             init = await session.initialize()
             assert init.serverInfo.name == "circuit-mcp"
 
+    async def test_config_written_lazily_on_first_tool_call(self, tmp_path):
+        # The server boots in whatever directory the MCP client launched it
+        # from, so it must NOT drop a config file there just for starting up
+        # (that litters every unrelated project folder of plugin users). The
+        # default config appears only once a tool is actually used.
+        env = {
+            **os.environ,
+            "LTSPICE_MCP_WORKING_DIR": str(tmp_path),
+            "LTSPICE_MCP_ALLOWED_PATHS": str(tmp_path),
+            "LTSPICE_MCP_HOME": str(tmp_path),
+            "XDG_STATE_HOME": str(tmp_path),
+            "LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION": "1",
+        }
+        env.pop("LTSPICE_MCP_CONFIG", None)  # let it resolve to cwd/ltspice-mcp.toml
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "ltspice_mcp"],
+            env=env,
+            cwd=str(tmp_path),
+        )
+        config_file = tmp_path / "ltspice-mcp.toml"
+        async with (
+            stdio_client(params) as (read_stream, write_stream),
+            ClientSession(read_stream, write_stream) as session,
+        ):
+            await session.initialize()
+            assert not config_file.exists(), "startup must not write a config file"
+            await _call(session, "server_status")
+            assert config_file.exists(), "first tool call should write the default config"
+
     async def test_prompts_list_and_get(self, tmp_path):
         from mcp import types as mcp_types
 
