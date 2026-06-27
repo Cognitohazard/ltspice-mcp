@@ -46,7 +46,7 @@ jobs:
         # is registered (e.g. circuit-mcp first).
         alias: ${{ (github.event_name == 'workflow_dispatch' && inputs.alias != 'all') && fromJSON(format('["{0}"]', inputs.alias)) || fromJSON('["circuit-mcp", "ngspice-mcp"]') }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # hatch-vcs needs full history + tags to resolve the version
           persist-credentials: false
