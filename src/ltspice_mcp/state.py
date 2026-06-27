@@ -101,6 +101,8 @@ class SessionState:
     visible to the client instead of buried in the server log."""
     _touched_recent: set[Path] = field(default_factory=set, repr=False)
     """Resolved circuit paths already recorded in the recent-circuits index this session."""
+    config_write_attempted: bool = field(default=False, repr=False)
+    """Whether the lazy default-config write has been tried this session (once)."""
     asc_snapshots: dict[str, bytes] = field(default_factory=dict, repr=False)
     """Pre-first-edit byte snapshots of .asc schematics touched this session,
     keyed by resolved path string. Captured before the first in-session

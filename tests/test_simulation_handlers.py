@@ -294,6 +294,10 @@ class TestCancelJob:
         with pytest.raises(SimulationError, match="No SPICE simulator"):
             await handle_cancel_job(CancelJobInput(job_id="j1"), state_no_sim)
 
+    # Cancel routes the single-sim runner via the job's own netlist (so the output
+    # folder matches the launching runner) — asserted in test_handler_job_contract
+    # .py::test_live_single_sim_routes_to_sim_runner, the routing-contract home.
+
 
 @pytest.mark.asyncio
 class TestCancelJobBatch:
@@ -653,8 +657,10 @@ class TestCheckJobBatchVisibility:
 
 @pytest.mark.asyncio
 class TestResolveOutputFolder:
-    """Simulation artifacts must not flood the project root — but a netlist with
-    a relative local include must stay put so the simulator can resolve it."""
+    """The runner output folder is kept STABLE (one sidecar) so the cached runner,
+    cancel, and the global concurrency cap stay valid; per-job {job_id} naming keeps
+    runs isolated within it. Two overrides: a relative-include deck runs in its own
+    dir, and WSL+LTspice+Linux-fs relocates to a Windows temp dir."""
 
     @staticmethod
     def _force_non_wsl(monkeypatch):
@@ -663,18 +669,27 @@ class TestResolveOutputFolder:
         monkeypatch.setattr(wsl, "is_wsl", lambda: False)
 
     @staticmethod
-    def _force_wsl_linux_fs(monkeypatch):
-        # WSL with a working dir on the Linux filesystem (not /mnt/) — the branch
-        # that relocates artifacts off the UNC path.
+    def _force_wsl_linux_fs(monkeypatch, win_tmp: Path):
+        # WSL with the source on the Linux filesystem (not /mnt/) — the only branch
+        # that relocates output off the UNC path. Mock the Windows temp-dir resolver
+        # so no cmd.exe interop runs.
         from ltspice_mcp.lib import wsl
 
         monkeypatch.setattr(wsl, "is_wsl", lambda: True)
         monkeypatch.setattr(wsl, "is_windows_native_path", lambda p: False)
+        monkeypatch.setattr(wsl, "get_windows_output_dir", lambda: win_tmp)
 
-    async def test_self_contained_routes_to_sidecar(
+    @staticmethod
+    def _set_ltspice(state: SessionState):
+        from spicelib.simulators.ltspice_simulator import LTspice
+
+        state.default_simulator = LTspice
+
+    async def test_self_contained_uses_stable_sidecar(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch
     ):
-        # No includes → safe to relocate → tidy .ltspice-mcp/runs sidecar.
+        # A self-contained deck runs in the stable sidecar; results are isolated
+        # there by {job_id} name and found via check_job's reported path.
         from ltspice_mcp.tools._base import resolve_output_folder
 
         self._force_non_wsl(monkeypatch)
@@ -685,58 +700,94 @@ class TestResolveOutputFolder:
         assert out.is_dir()
         assert out in state_no_sim.config.allowed_paths
 
-    async def test_relative_local_include_stays_in_working_dir(
+    async def test_subdir_deck_uses_same_stable_sidecar(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch
     ):
-        # A relative .include pointing at a sibling file can't be relocated —
-        # the simulator would resolve it against the moved netlist's dir.
+        # The sidecar is working-dir-based, NOT per-deck — a deck in a subdir uses
+        # the SAME folder, so the cached runner is never invalidated by directory.
         from ltspice_mcp.tools._base import resolve_output_folder
 
         self._force_non_wsl(monkeypatch)
-        (work_dir / "models").mkdir()
-        (work_dir / "models" / "r.lib").write_text(".subckt RMOD a b\nR1 a b 1k\n.ends\n")
-        nl = work_dir / "wl.cir"
-        nl.write_text("* wl\nX1 in 0 RMOD\nV1 in 0 1\n.include models/r.lib\n.op\n.end\n")
+        sub = work_dir / "proj"
+        sub.mkdir()
+        nl = sub / "sc.cir"
+        nl.write_text("* sc\nR1 in 0 1k\nV1 in 0 1\n.op\n.end\n")
         out = await resolve_output_folder(state_no_sim, nl)
-        assert out == work_dir
+        assert out == work_dir / ".ltspice-mcp" / "runs"
 
-    async def test_wsl_linux_fs_local_include_stays_in_working_dir(
+    async def test_relative_local_include_runs_in_deck_dir(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch
     ):
-        # On WSL Linux-fs the deck would normally relocate off the UNC path, but a
-        # relative include must veto that too — else the moved deck can't find it.
+        # A relative .include can't move to the sidecar — the simulator resolves it
+        # from the staged netlist's dir, so the deck runs in its own directory.
+        # (Same rule for sweeps/MC, which call this with the same netlist.)
         from ltspice_mcp.tools._base import resolve_output_folder
 
-        self._force_wsl_linux_fs(monkeypatch)
-        (work_dir / "models").mkdir()
-        (work_dir / "models" / "r.lib").write_text(".subckt RMOD a b\nR1 a b 1k\n.ends\n")
-        nl = work_dir / "wl.cir"
+        self._force_non_wsl(monkeypatch)
+        sub = work_dir / "proj"
+        sub.mkdir()
+        (sub / "models").mkdir()
+        (sub / "models" / "r.lib").write_text(".subckt RMOD a b\nR1 a b 1k\n.ends\n")
+        nl = sub / "wl.cir"
         nl.write_text("* wl\nX1 in 0 RMOD\nV1 in 0 1\n.include models/r.lib\n.op\n.end\n")
         out = await resolve_output_folder(state_no_sim, nl)
-        assert out == work_dir
+        assert out == sub
 
-    async def test_wsl_linux_fs_self_contained_relocates(
+    async def test_no_netlist_uses_stable_sidecar(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch
     ):
-        # A self-contained deck still relocates off the UNC path on WSL Linux-fs.
         from ltspice_mcp.tools._base import resolve_output_folder
 
-        self._force_wsl_linux_fs(monkeypatch)
+        self._force_non_wsl(monkeypatch)
+        out = await resolve_output_folder(state_no_sim, None)
+        assert out == work_dir / ".ltspice-mcp" / "runs"
+
+    async def test_wsl_ltspice_linux_fs_relocates_to_win_temp(
+        self, state_no_sim: SessionState, work_dir: Path, tmp_path: Path, monkeypatch
+    ):
+        # The one case that overrides the sidecar: LTspice can't write .db over UNC.
+        from ltspice_mcp.tools._base import resolve_output_folder
+
+        win_tmp = tmp_path / "win-temp"
+        win_tmp.mkdir()
+        self._force_wsl_linux_fs(monkeypatch, win_tmp)
+        self._set_ltspice(state_no_sim)
         nl = work_dir / "sc.cir"
         nl.write_text("* sc\nR1 in 0 1k\nV1 in 0 1\n.op\n.end\n")
         out = await resolve_output_folder(state_no_sim, nl)
-        assert out != work_dir
-        assert out != work_dir / ".ltspice-mcp" / "runs"
+        assert out == win_tmp
+        assert out in state_no_sim.config.allowed_paths
 
-    async def test_libpath_name_still_sidecars(
-        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    async def test_wsl_ltspice_linux_fs_relative_include_runs_in_deck_dir(
+        self, state_no_sim: SessionState, work_dir: Path, tmp_path: Path, monkeypatch
     ):
-        # A bare .lib NAME (resolved via the simulator's lib path, no local file)
-        # survives relocation, so it still gets the sidecar.
+        # A relative include can't relocate even on WSL — runs in place, .MEAS
+        # may be lost over UNC, but a resolvable include beats a run that won't start.
         from ltspice_mcp.tools._base import resolve_output_folder
 
-        self._force_non_wsl(monkeypatch)
-        nl = work_dir / "lp.cir"
-        nl.write_text("* lp\nM1 d g s b NMOS\nV1 d 0 1\n.lib LTC.lib\n.op\n.end\n")
+        win_tmp = tmp_path / "win-temp"
+        win_tmp.mkdir()
+        self._force_wsl_linux_fs(monkeypatch, win_tmp)
+        self._set_ltspice(state_no_sim)
+        (work_dir / "models").mkdir()
+        (work_dir / "models" / "r.lib").write_text(".subckt RMOD a b\nR1 a b 1k\n.ends\n")
+        nl = work_dir / "wl.cir"
+        nl.write_text("* wl\nX1 in 0 RMOD\nV1 in 0 1\n.include models/r.lib\n.op\n.end\n")
+        out = await resolve_output_folder(state_no_sim, nl)
+        assert out == work_dir
+
+    async def test_wsl_ngspice_linux_fs_uses_sidecar(
+        self, state_no_sim: SessionState, work_dir: Path, tmp_path: Path, monkeypatch
+    ):
+        # ngspice has no UNC .db problem (native Linux binary) — stable sidecar even
+        # on WSL Linux-fs; the temp relocation is LTspice-only.
+        from ltspice_mcp.tools._base import resolve_output_folder
+
+        win_tmp = tmp_path / "win-temp"
+        win_tmp.mkdir()
+        self._force_wsl_linux_fs(monkeypatch, win_tmp)
+        state_no_sim.default_simulator = type("NgspiceLike", (), {})  # not an LTspice subclass
+        nl = work_dir / "sc.cir"
+        nl.write_text("* sc\nR1 in 0 1k\nV1 in 0 1\n.op\n.end\n")
         out = await resolve_output_folder(state_no_sim, nl)
         assert out == work_dir / ".ltspice-mcp" / "runs"

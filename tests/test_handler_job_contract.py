@@ -237,7 +237,9 @@ class TestCancelJobRoutingFork:
         ) as get_runner:
             result = await handle_cancel_job(CancelJobInput(job_id="j1"), state_with_sim)
         assert "cancelled" in _text(result).lower()
-        get_runner.assert_called_once_with(state_with_sim)
+        # Resolved via the job's own netlist so the runner's output folder matches
+        # the one the job launched with (else RunnerManager evicts the live runner).
+        get_runner.assert_called_once_with(state_with_sim, job.netlist)
         fake_runner.cancel.assert_awaited_once()
         # The exact job resolved from state.jobs reaches the runner —
         # not a re-looked-up copy, not a batch-runner detour.

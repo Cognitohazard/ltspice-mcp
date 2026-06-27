@@ -5,8 +5,7 @@ import logging
 import os
 import sys
 from collections.abc import AsyncIterator, Iterable
-from contextlib import asynccontextmanager
-from pathlib import Path
+from contextlib import asynccontextmanager, suppress
 from typing import NamedTuple
 
 from mcp import types
@@ -300,10 +299,10 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     if config_file.exists():
         config_source = str(config_file)
     else:
-        # Generate default config in CWD
-        config_file = Path.cwd() / "ltspice-mcp.toml"
-        generate_default_config(config_file)
-        config_source = f"{config_file} (generated)"
+        # No file: boot on built-in defaults. The default config is written
+        # lazily on the first tool call instead of here (see call_tool), so the
+        # server doesn't litter directories where its tools are never used.
+        config_source = f"{config_file} (defaults; written on first tool use)"
 
     logging.basicConfig(
         level=getattr(logging, config.log_level.upper()),
@@ -476,6 +475,19 @@ async def call_tool(name: str, arguments: dict | None):
     response type). Data-returning tools populate structuredContent.
     """
     state = _get_state(server)
+
+    # Write a default config the first time a tool is actually used in this
+    # directory — not at startup, which would litter every unrelated project
+    # folder of anyone who has the plugin installed. Attempted at most once per
+    # session: the flag also stops a read-only dir from rebuilding+rewriting the
+    # config doc on every call. Best-effort — a write failure must not break the
+    # tool call.
+    if not state.config_write_attempted:
+        state.config_write_attempted = True
+        cfg_path = state.config.config_path
+        if not cfg_path.exists():
+            with suppress(OSError):
+                generate_default_config(cfg_path)
 
     # Look up handler in profile-filtered dispatch table. A tool that exists in
     # the registry but isn't in this profile's dispatch was hidden by the active
