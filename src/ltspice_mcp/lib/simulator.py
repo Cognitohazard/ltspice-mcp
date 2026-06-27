@@ -365,7 +365,9 @@ def select_default_simulator(
             msg = (
                 f"Requested simulator '{config.simulator}' is not available "
                 f"(detected: {list(available.keys())}). Using '{fallback_name}' instead. "
-                f"Results will come from {fallback_name}, not {config.simulator}."
+                f"Results will come from {fallback_name}, not {config.simulator}. "
+                f"To use '{config.simulator}', {install_hint()}, then restart; "
+                "if it is installed, check it isn't excluded by [simulator] enabled."
             )
             logger.warning(msg)
             if diagnostics is not None:

@@ -522,6 +522,14 @@ class ToolRegistry:
 
         return decorator
 
+    def known_names(self) -> set[str]:
+        """All registered tool names, across every profile (for diagnostics).
+
+        Lets the dispatcher tell a profile-filtered tool (exists, hidden by the
+        active profile) apart from a genuinely unknown name.
+        """
+        return {rt.definition.name for rt in self._registered}
+
     def get_for_profile(self, profile: str) -> tuple[list[types.Tool], dict[str, RegisteredTool]]:
         """Return the tool list and dispatch map for a profile."""
         effective_profile = profile if profile in {"full", "agentic"} else "full"
@@ -618,8 +626,9 @@ def resolve_runnable_netlist(netlist_str: str, state: SessionState) -> Path:
             "convert to a netlist, and LTspice is not available "
             f"(simulators: {list(state.available_simulators.keys())}). Supply a "
             "hand-written .cir/.net to simulate with the current simulator, or "
-            "configure LTspice. (The .asc's embedded .model/.lib/analysis "
-            "directives can be reused in a .cir.)",
+            "point the server at an LTspice executable ([simulator] path in the "
+            "config file or LTSPICE_MCP_SIMULATOR_EXE) and restart. (The .asc's "
+            "embedded .model/.lib/analysis directives can be reused in a .cir.)",
             show_hint=False,
         )
     try:

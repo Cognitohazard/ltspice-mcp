@@ -244,6 +244,8 @@ class TestDetectionDiagnostics:
         assert result is NG
         assert any("not available" in d for d in diagnostics)
         assert any("ngspice" in d for d in diagnostics)
+        # Must point at how to make the requested simulator appear, not dead-end.
+        assert any("[simulator] enabled" in d for d in diagnostics)
 
     def test_available_simulator_no_diagnostic(self):
         from ltspice_mcp.lib.simulator import select_default_simulator
