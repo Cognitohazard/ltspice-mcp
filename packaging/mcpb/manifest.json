@@ -3,7 +3,7 @@
   "manifest_version": "0.4",
   "name": "ltspice-mcp",
   "version": "0.1.0",
-  "description": "LTspice/ngspice circuit simulation (structured results incl. per-device internals gm/gds/vth by name) and LTspice .asc schematic editing as MCP tools.",
+  "description": "LTspice/ngspice circuit simulation (structured results incl. per-device operating points gm/gds/vth by name) and LTspice .asc schematic editing as MCP tools.",
   "author": {
     "name": "cognitohazard",
     "url": "https://github.com/cognitohazard/ltspice-mcp"
