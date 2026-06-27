@@ -17,6 +17,7 @@ from ltspice_mcp.lib.job_types import BatchJob
 from ltspice_mcp.lib.runner_base import (
     BatchRunnerBase,
     batch_run_filename,
+    discard_logopinfo_netlist,
 )
 from ltspice_mcp.state import SessionState
 
@@ -84,7 +85,9 @@ class SweepRunner(BatchRunnerBase):
             if batch_job.sweep_config is None:
                 raise BatchJobError(f"Sweep job {batch_job.job_id} has no sweep configuration")
 
-            editor = SpiceEditor(str(batch_job.netlist))
+            # run_netlist (the '.options logopinfo' copy) is the source when set;
+            # per-run files are still named after the original deck (filenamer).
+            editor = SpiceEditor(str(batch_job.run_netlist or batch_job.netlist))
             runner = self._gated_runner_for(batch_job.job_id, cancel_event)
             stepper = _create_stepper(editor, runner)
 
@@ -143,6 +146,7 @@ class SweepRunner(BatchRunnerBase):
             self._mark_batch_failed(batch_job, state, e, kind="sweep")
         finally:
             self._cleanup(batch_job.job_id)
+            await asyncio.to_thread(discard_logopinfo_netlist, batch_job.run_netlist)
 
     def _handle_run_completion(
         self,

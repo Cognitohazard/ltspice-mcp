@@ -151,13 +151,39 @@ def _validate_tran_tstep(directive: str, simulator: str) -> ValidationError | No
     )
 
 
+def _validate_backanno(simulator: str) -> ValidationError | None:
+    """Flag ``.backanno`` when targeting ngspice.
+
+    ``.backanno`` is an LTspice schematic back-annotation directive. ngspice has
+    no such command and aborts the run with "unimplemented dot command
+    '.backanno'". Only fires for the ngspice target so a clean LTspice deck
+    stays clean.
+    """
+    if simulator != "ngspice":
+        return None
+    return ValidationError(
+        rule_name="backanno_ngspice",
+        message=(
+            "ngspice does not implement .backanno and aborts the run with "
+            "'unimplemented dot command .backanno'; it is an LTspice-only "
+            "schematic back-annotation directive."
+        ),
+        suggestion=(
+            "Remove the .backanno line when targeting ngspice — it has no ngspice "
+            "effect. (ngspice current probing uses .options savecurrents / .probe "
+            "instead.)"
+        ),
+    )
+
+
 def validate_directive(directive: str, simulator: str = "LTspice") -> ValidationError | None:
     """Check a directive against the pre-flight rules for the given simulator.
 
     Returns the first matched rule's error, or None if no rule fires.
     Empty / whitespace-only input is a no-op. Covers ``.MEAS`` function
-    blocklists and the ``.tran`` zero-step ngspice incompatibility; other
-    directives pass through unchecked.
+    blocklists, the ``.tran`` zero-step ngspice incompatibility, and the
+    ``.backanno`` ngspice incompatibility; other directives pass through
+    unchecked.
     """
     if not directive:
         return None
@@ -167,6 +193,8 @@ def validate_directive(directive: str, simulator: str = "LTspice") -> Validation
     lower = stripped.lower()
     if lower.startswith(".tran"):
         return _validate_tran_tstep(stripped, simulator)
+    if lower.split(None, 1)[0] == ".backanno":
+        return _validate_backanno(simulator)
     if not lower.startswith(".meas"):
         return None
 

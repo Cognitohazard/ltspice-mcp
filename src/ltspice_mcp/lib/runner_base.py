@@ -13,6 +13,7 @@ tracking for sim.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 import threading
@@ -30,6 +31,21 @@ from ltspice_mcp.state import SessionState
 # Trailing `_<digits>` in spicelib-generated raw/log filenames. spicelib's
 # SimRunner._run_file_name produces "<stem>_<runno><suffix>" (1-based runno).
 _RUNNO_RE = re.compile(r"_(\d+)$")
+
+# Marker embedded in the name of a generated '.options logopinfo' netlist copy
+# (built by tools._base.inject_logopinfo). All cleanup keys on it, so the
+# producer and every consumer share one constant — change the name scheme here
+# and both sides move together.
+LOGOPINFO_MARKER = ".logopinfo"
+
+
+def discard_logopinfo_netlist(path: Path | None) -> None:
+    """Delete a generated '.options logopinfo' netlist copy. No-op when ``path``
+    is None or lacks the marker, so this can only ever remove the generated copy,
+    never the user's own deck."""
+    if path is not None and LOGOPINFO_MARKER in path.name:
+        with contextlib.suppress(OSError):
+            path.unlink()
 
 
 def _parse_runno(raw_file: Path) -> int | None:

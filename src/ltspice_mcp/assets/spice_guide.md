@@ -391,12 +391,17 @@ ngspice shares the **SPICE Fundamentals** above, with these deltas:
 - `.meas` is suppressed only when batch mode (`-b`) AND a command-line `-r
   rawfile` are combined — ngspice prints "No .measure possible in batch mode
   (-b) with -r rawfile set!" (the invocation run_simulation uses). It is NOT a
-  blanket batch limitation: putting the `.meas` inside a `.control ... run ...
-  .endc` block, or setting `set measoutfile=<file>`, makes measurements work
-  headlessly. For named signals and device operating-point params you usually
-  need neither — `.save` them and read the raw back with run_simulation +
-  export_waveform / query_value / operating_point. Reserve `.control` / `wrdata`
-  for in-engine computation you genuinely can't express as a saved signal.
+  blanket batch limitation: move the measurement into a `.control ... run ...
+  .endc` block and write it as the dot-less interactive `meas` command (e.g.
+  `meas tran vmax MAX V(out)` — no leading dot; a dotted `.meas` inside
+  `.control` is not a valid ngspice command and computes nothing). The result
+  prints to the run's log. (`set measoutfile` / `.option measoutfile` does NOT
+  help here — the `-b -r` combination suppresses the measurement before any
+  output routing, so no file is written.) For named signals and device
+  operating-point params you usually need none of this — `.save` them and read
+  the raw back with run_simulation + export_waveform / query_value /
+  operating_point. Reserve `.control` / `wrdata` for in-engine computation you
+  genuinely can't express as a saved signal.
 
 ### Parameters and Expressions
 

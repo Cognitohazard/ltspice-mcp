@@ -40,6 +40,7 @@ from ltspice_mcp.lib.observability import emit_job_event
 from ltspice_mcp.lib.runner_base import (
     BatchRunnerBase,
     batch_run_filename,
+    discard_logopinfo_netlist,
 )
 from ltspice_mcp.lib.spice_lex import SpiceCard, emit, lex
 from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end as _ops_inject_card
@@ -161,9 +162,12 @@ class MonteCarloRunner(BatchRunnerBase):
             # ``SpiceEditor.netlist`` contains ``SpiceCircuit`` objects (not
             # strings) for ``.subckt`` blocks, which breaks any join over the
             # list on hierarchical netlists.
-            baseline_text = read_spice_text(batch_job.netlist)
+            # run_netlist (the '.options logopinfo' copy) is the source when set;
+            # per-run files are still named after the original deck (run_filename).
+            src_netlist = batch_job.run_netlist or batch_job.netlist
+            baseline_text = read_spice_text(src_netlist)
             baseline_cards = lex(baseline_text).cards
-            editor = SpiceEditor(str(batch_job.netlist))
+            editor = SpiceEditor(str(src_netlist))
 
             # ---- Phase 0: R/C/L tolerance resolution + nominal extraction ----
             # Walk the lexed cards instead of editor.get_components — works
@@ -450,6 +454,7 @@ class MonteCarloRunner(BatchRunnerBase):
             self._mark_batch_failed(batch_job, state, e, kind="Monte Carlo")
         finally:
             self._cleanup(batch_job.job_id)
+            await asyncio.to_thread(discard_logopinfo_netlist, batch_job.run_netlist)
 
     def _handle_run_completion(
         self,

@@ -1,7 +1,6 @@
 """Single-job simulation wrapper: spicelib SimRunner + asyncio."""
 
 import asyncio
-import contextlib
 import logging
 from pathlib import Path
 
@@ -15,7 +14,7 @@ from ltspice_mcp.lib.job_types import (
     SimulationJob,
 )
 from ltspice_mcp.lib.log_parser import extract_error_context
-from ltspice_mcp.lib.runner_base import RunnerBase
+from ltspice_mcp.lib.runner_base import RunnerBase, discard_logopinfo_netlist
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
 from ltspice_mcp.state import SessionState
@@ -162,11 +161,9 @@ class SimulationRunner(RunnerBase):
             # A generated runnable (a logopinfo-augmented copy) was passed instead
             # of the user's own netlist; spicelib has already staged it into the
             # run folder by now (_prepare_sim runs synchronously inside run()), so
-            # the per-job source copy is no longer needed. The job.netlist guard
-            # plus the marker make this incapable of touching the user's file.
-            if str(netlist_path) != str(job.netlist) and ".logopinfo" in netlist_path.name:
-                with contextlib.suppress(OSError):
-                    await asyncio.to_thread(netlist_path.unlink)
+            # the per-job source copy is no longer needed. The marker guard inside
+            # the helper makes this incapable of touching the user's file.
+            await asyncio.to_thread(discard_logopinfo_netlist, netlist_path)
 
     def _handle_completion(
         self, job_id: str, raw_file: str, log_file: str, state: SessionState

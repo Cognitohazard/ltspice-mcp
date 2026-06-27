@@ -240,10 +240,12 @@ def read_device_op_points(log_path: Path) -> dict[str, float]:
     same data as ``@dev[param]`` raw traces instead, so this reader is for the
     LTspice path.
 
-    Returns the flattened block keyed in the same ``@dev[param]`` form the
-    ngspice traces use (e.g. ``@m1[gm]``, lowercased), so callers can fold it
-    straight into ``device_op_points`` and address it by the ``m1.gm``
-    shorthand. Non-numeric fields (the ``Model:`` row) are dropped. Empty dict
+    Returns the flattened block keyed in the ``@dev[param]`` form (e.g.
+    ``@m1[gm]``, lowercased), so callers can fold it straight into
+    ``device_op_points`` and address top-level devices by the ``m1.gm``
+    shorthand. Subcircuit semiconductors keep LTspice's colon-qualified name
+    (``@q:q2:1:2[gm]``); ``operating_point(device=...)`` matches those by
+    instance. Non-numeric fields (the ``Model:`` row) are dropped. Empty dict
     when the block is absent or unparseable.
     """
     out: dict[str, float] = {}
