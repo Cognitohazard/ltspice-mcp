@@ -169,6 +169,10 @@ async def handle_find_model(args: FindModelInput, state: SessionState):
             hint = " Retry find_model with exact=false for fuzzy matches."
         elif not include_builtin:
             hint = " Try lowering cutoff or set include_builtin=true."
+        elif state.config.tool_profile == "agentic":
+            # load_library is full-only — don't point an agentic agent at a tool
+            # it can't see; it adds sources by editing .lib/.include directly.
+            hint = " Try lowering cutoff, or add .lib/.include directives for more sources."
         else:
             hint = " Try lowering cutoff or load_library to add more sources."
         reason = "No exact match" if exact else f"No fuzzy matches (cutoff={cutoff})"
