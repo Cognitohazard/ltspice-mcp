@@ -29,6 +29,12 @@ Before the first run, add a **pending publisher** on PyPI for each project name
 | Environment name | `pypi` |
 
 "Workflow name" is the file name (`publish-aliases.yml`), not the YAML `name:`.
+The "Environment name" must match the workflow's `environment:` (`pypi`); leaving
+it blank on PyPI (shown as *Any*) also works, since blank imposes no constraint.
+
+The workflow's `alias` input picks which package to publish — `all` (default),
+or a single one (`circuit-mcp` / `ngspice-mcp`) so one can ship before the
+other's trusted publisher is registered.
 
 To ship a new version of an alias later, bump its `version` in its
 `pyproject.toml` and re-run the workflow (`skip-existing` skips the unchanged

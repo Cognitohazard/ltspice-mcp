@@ -11,6 +11,15 @@ name: Publish aliases to PyPI
 # cognitohazard, repo ltspice-mcp, workflow publish-aliases.yml, env pypi).
 on:
   workflow_dispatch:
+    inputs:
+      alias:
+        description: "Which alias package to publish"
+        type: choice
+        default: all
+        options:
+          - all
+          - circuit-mcp
+          - ngspice-mcp
 
 permissions:
   contents: read
@@ -25,9 +34,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        alias:
-          - circuit-mcp
-          - ngspice-mcp
+        # Publish every alias, or just the one chosen on dispatch. Each alias is
+        # a separate PyPI project with its own trusted publisher, so one can ship
+        # before the other's publisher is registered (e.g. circuit-mcp first).
+        alias: ${{ inputs.alias == 'all' && fromJSON('["circuit-mcp", "ngspice-mcp"]') || fromJSON(format('["{0}"]', inputs.alias)) }}
     steps:
       - uses: actions/checkout@v6
         with:
