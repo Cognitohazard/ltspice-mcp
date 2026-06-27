@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict
 
 from ltspice_mcp.errors import SimulationError
 from ltspice_mcp.lib.pathutil import resolve_safe_path
+from ltspice_mcp.lib.runner_base import LOGOPINFO_MARKER
 from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.state import SessionState
 
@@ -682,7 +683,7 @@ def inject_logopinfo(netlist_path: Path, simulator: type, job_id: str) -> Path:
         augmented = data + (b"" if not data or data.endswith(b"\n") else b"\n") + line
 
     run_path = netlist_path.with_name(
-        f".{netlist_path.stem}.{job_id}.logopinfo{netlist_path.suffix}"
+        f".{netlist_path.stem}.{job_id}{LOGOPINFO_MARKER}{netlist_path.suffix}"
     )
     try:
         run_path.write_bytes(augmented)

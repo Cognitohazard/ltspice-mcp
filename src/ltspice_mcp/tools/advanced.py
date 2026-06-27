@@ -17,6 +17,7 @@ from ltspice_mcp.lib.montecarlo import (
     ParamTolerance,
     ToleranceSpec,
 )
+from ltspice_mcp.lib.runner_base import discard_logopinfo_netlist
 from ltspice_mcp.lib.spice_lex import lex
 from ltspice_mcp.lib.sweep_utils import (
     generate_batch_job_id,
@@ -35,6 +36,7 @@ from ltspice_mcp.tools._base import (
     StrictModel,
     ToolInput,
     format_response,
+    inject_logopinfo,
     pagination_metadata,
     registry,
     require_simulator,
@@ -689,16 +691,32 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
 
     default_simulator = state.default_simulator
     assert default_simulator is not None  # guaranteed by require_simulator above
+    # On LTspice .op batches, run an augmented copy carrying '.options logopinfo'
+    # so each run's log exposes per-device op points for operating_point to read
+    # back by name. No-op for ngspice / non-.op decks. The runner reads this as
+    # its source and deletes it when the batch finishes.
+    run_path = inject_logopinfo(config.netlist, default_simulator, job_id)
+    if str(run_path) != str(config.netlist):
+        batch_job.run_netlist = run_path
     # Runner first, then register + create_task with no await between —
     # submit-ordering rule, see the concurrency contract in tools/_base.py.
-    runner = state.runners.get_sweep_runner(
-        loop=asyncio.get_running_loop(),
-        simulator_class=default_simulator,
-        output_folder=await resolve_output_folder(state, config.netlist),
-        max_parallel=max_parallel or state.config.max_parallel_sims,
-    )
-    state.add_batch_job(batch_job)
-    batch_job.task = asyncio.create_task(runner.start_sweep(batch_job, state))
+    # If startup fails or is cancelled before the task is created (output-folder
+    # resolve, runner acquisition), the runner's own cleanup never runs, so
+    # delete the generated copy here. Mirrors handle_run_simulation.
+    started = False
+    try:
+        runner = state.runners.get_sweep_runner(
+            loop=asyncio.get_running_loop(),
+            simulator_class=default_simulator,
+            output_folder=await resolve_output_folder(state, config.netlist),
+            max_parallel=max_parallel or state.config.max_parallel_sims,
+        )
+        state.add_batch_job(batch_job)
+        batch_job.task = asyncio.create_task(runner.start_sweep(batch_job, state))
+        started = True
+    finally:
+        if not started:
+            discard_logopinfo_netlist(batch_job.run_netlist)
 
     logger.info(
         f"Sweep job started: job_id={job_id}, config_id={config_id}, total_runs={total_runs}"
@@ -965,16 +983,32 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
 
     default_simulator = state.default_simulator
     assert default_simulator is not None  # guaranteed by require_simulator above
+    # On LTspice .op batches, run an augmented copy carrying '.options logopinfo'
+    # so each run's log exposes per-device op points for operating_point to read
+    # back by name. No-op for ngspice / non-.op decks. The runner reads this as
+    # its source and deletes it when the batch finishes.
+    run_path = inject_logopinfo(config.netlist, default_simulator, job_id)
+    if str(run_path) != str(config.netlist):
+        batch_job.run_netlist = run_path
     # Runner first, then register + create_task with no await between —
     # submit-ordering rule, see the concurrency contract in tools/_base.py.
-    runner = state.runners.get_mc_runner(
-        loop=asyncio.get_running_loop(),
-        simulator_class=default_simulator,
-        output_folder=await resolve_output_folder(state, config.netlist),
-        max_parallel=max_parallel or state.config.max_parallel_sims,
-    )
-    state.add_batch_job(batch_job)
-    batch_job.task = asyncio.create_task(runner.start_montecarlo(batch_job, state))
+    # If startup fails or is cancelled before the task is created (output-folder
+    # resolve, runner acquisition), the runner's own cleanup never runs, so
+    # delete the generated copy here. Mirrors handle_run_simulation.
+    started = False
+    try:
+        runner = state.runners.get_mc_runner(
+            loop=asyncio.get_running_loop(),
+            simulator_class=default_simulator,
+            output_folder=await resolve_output_folder(state, config.netlist),
+            max_parallel=max_parallel or state.config.max_parallel_sims,
+        )
+        state.add_batch_job(batch_job)
+        batch_job.task = asyncio.create_task(runner.start_montecarlo(batch_job, state))
+        started = True
+    finally:
+        if not started:
+            discard_logopinfo_netlist(batch_job.run_netlist)
 
     logger.info(
         f"Monte Carlo job started: job_id={job_id}, config_id={config_id}, "

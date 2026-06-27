@@ -385,6 +385,51 @@ class TestRunSimulationStubbed:
         next(iter(state_with_sim.jobs.values())).done_event.set()
         await asyncio.sleep(0)
 
+    async def test_runner_creation_failure_deletes_logopinfo_sibling(
+        self, state_with_sim: SessionState, sample_netlist: Path
+    ):
+        # If runner creation raises after inject_logopinfo wrote the per-job
+        # copy, start_simulation never arms its own cleanup — the handler must
+        # delete the orphaned sibling on the error path and re-raise.
+        sibling = sample_netlist.with_name(
+            f".{sample_netlist.stem}.sim_x.logopinfo{sample_netlist.suffix}"
+        )
+        sibling.write_text("* aug\n.op\n.options logopinfo\n.end\n")
+        with (
+            patch("ltspice_mcp.tools.simulation.inject_logopinfo", return_value=sibling),
+            patch(
+                "ltspice_mcp.tools.simulation._get_or_create_runner",
+                side_effect=RuntimeError("boom"),
+            ),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            await handle_run_simulation(
+                RunSimulationInput(netlist=sample_netlist.name, timeout=60),
+                state_with_sim,
+            )
+        assert not sibling.exists()
+        assert state_with_sim.jobs == {}  # job never registered on the failure path
+
+    async def test_runner_creation_failure_keeps_user_netlist(
+        self, state_with_sim: SessionState, sample_netlist: Path
+    ):
+        # When no injection happened (run_path is the user's deck), the
+        # error-path cleanup must not touch it.
+        user = sample_netlist  # local binding so the existence check isn't ASYNC240
+        with (
+            patch("ltspice_mcp.tools.simulation.inject_logopinfo", side_effect=lambda p, *a: p),
+            patch(
+                "ltspice_mcp.tools.simulation._get_or_create_runner",
+                side_effect=RuntimeError("boom"),
+            ),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            await handle_run_simulation(
+                RunSimulationInput(netlist=user.name, timeout=60),
+                state_with_sim,
+            )
+        assert user.exists()
+
     async def test_async_timeout_watchdog_kills_overdue_job(
         self, state_with_sim: SessionState, sample_netlist: Path, monkeypatch
     ):

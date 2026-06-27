@@ -13,6 +13,11 @@ from spicelib.simulators.ltspice_simulator import LTspice
 
 from ltspice_mcp.lib.log_parser import read_device_op_points
 from ltspice_mcp.tools._base import inject_logopinfo
+from ltspice_mcp.tools.analysis import (
+    _dev_instance,
+    _device_matches,
+    _filter_operating_point,
+)
 
 # A trimmed real LTspice .op log (LTspice 26.x) with the logopinfo block.
 _LOG_WITH_BLOCK = """\
@@ -122,3 +127,50 @@ class TestInjectLogopinfo:
         run = inject_logopinfo(src, LTspice, "job1")
         assert run != src
         assert ".options logopinfo" in run.read_text()
+
+
+class TestSubcircuitDeviceMatching:
+    """LTspice writes subcircuit semiconductor op points with colon-separated,
+    class-prefixed, index-suffixed names (``q:q2:1:2``). The device= matcher must
+    resolve those by instance while keeping top-level and ngspice-dotted forms
+    working."""
+
+    def test_colon_name_matches_instance(self):
+        # @q:q2:1:2[gm] belongs to device Q2.
+        assert _device_matches("q:q2:1:2", "q2")
+        assert _device_matches("q:q7:3", "q7")
+        # Wrong instance does not match (prefix-substring guard).
+        assert not _device_matches("q:q2:1:2", "q20")
+
+    def test_top_level_and_dotted_unchanged(self):
+        assert _device_matches("m1", "m1")
+        assert not _device_matches("m1", "m2")
+        # ngspice subcircuit-qualified trace matches bare leaf and path suffix.
+        assert _device_matches("m.x1.mn", "mn")
+        assert _device_matches("m.x1.mn", "x1.mn")
+        assert not _device_matches("m.x1.mn", "x2.mn")
+
+    def test_dev_instance_cleans_colon_names(self):
+        assert _dev_instance("q:q2:1:2") == "q2"
+        assert _dev_instance("q:q7:3") == "q7"
+        # Dotted ngspice and top-level refs pass through.
+        assert _dev_instance("m.x1.mn") == "m.x1.mn"
+        assert _dev_instance("m1") == "m1"
+
+    def test_filter_keeps_colon_keyed_op_points(self):
+        op_data = {
+            "voltages": {},
+            "currents": {},
+            "device_op_points": {
+                "@q:q2:1:2[gm]": 1e-3,
+                "@q:q2:1:2[vbe]": 0.7,
+                "@q:q7:3[gm]": 2e-3,
+            },
+        }
+        assert _filter_operating_point(op_data, "Q2")  # case-insensitive
+        kept = op_data["device_op_points"]
+        assert set(kept) == {"@q:q2:1:2[gm]", "@q:q2:1:2[vbe]"}
+
+    def test_filter_no_match_returns_false(self):
+        op_data = {"device_op_points": {"@q:q2:1:2[gm]": 1e-3}, "voltages": {}, "currents": {}}
+        assert not _filter_operating_point(op_data, "q99")

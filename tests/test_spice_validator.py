@@ -98,6 +98,30 @@ class TestTranTstepZero:
         assert validate_directive(".tran {ts} 5m", simulator="ngspice") is None
 
 
+class TestBackanno:
+    """``.backanno`` is an LTspice-only schematic back-annotation directive;
+    ngspice aborts the run with "unimplemented dot command '.backanno'". Flagged
+    only for the ngspice target so a clean LTspice deck stays clean."""
+
+    def test_backanno_flagged_for_ngspice(self):
+        err = validate_directive(".backanno", simulator="ngspice")
+        assert err is not None
+        assert err.rule_name == "backanno_ngspice"
+        assert "backanno" in err.message.lower()
+
+    def test_backanno_allowed_for_ltspice(self):
+        assert validate_directive(".backanno") is None  # default is LTspice
+        assert validate_directive(".backanno", simulator="LTspice") is None
+
+    def test_backanno_with_trailing_arg_still_flagged(self):
+        # .backanno aborts ngspice with or without a trailing token.
+        assert validate_directive(".backanno V1", simulator="ngspice") is not None
+
+    def test_backannox_not_over_matched(self):
+        # A hypothetical '.backannoX' is a different token, not '.backanno'.
+        assert validate_directive(".backannox", simulator="ngspice") is None
+
+
 class TestEdgeCases:
     def test_empty_directive_is_no_op(self):
         assert validate_directive("") is None

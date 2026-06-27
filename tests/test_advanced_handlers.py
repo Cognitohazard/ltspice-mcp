@@ -3,6 +3,7 @@
 import asyncio
 from datetime import timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -496,6 +497,155 @@ class TestRunMonteCarlo:
         config_id = next(iter(state_no_sim.mc_configs.keys()))
         with pytest.raises(SimulationError, match="No SPICE simulator"):
             await handle_run_montecarlo(RunBatchInput(config_id=config_id), state_no_sim)
+
+
+@pytest.mark.asyncio
+class TestBatchLogopinfoInjection:
+    """LTspice .op sweep/MC batches run from a '.options logopinfo' copy so each
+    run's log carries per-device op points; the handler records that copy on the
+    BatchJob (run_netlist) and the runner reads it as the source deck."""
+
+    @staticmethod
+    async def _fake_resolve(state, netlist_path=None):
+        return Path(netlist_path).parent if netlist_path else Path(".")
+
+    async def test_sweep_sets_run_netlist(
+        self, state_no_sim: SessionState, sample_netlist: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        await handle_configure_sweep(
+            ConfigureSweepInput(
+                netlist=sample_netlist.name,
+                parameters=[
+                    SweepParameter(name="R1", type="component", start=1, stop=10, points=3)
+                ],
+            ),
+            state_no_sim,
+        )
+        config_id = next(iter(state_no_sim.sweep_configs.keys()))
+        state_no_sim.default_simulator = type("FakeSim", (), {})
+        sentinel = sample_netlist.with_name(f".x.job.logopinfo{sample_netlist.suffix}")
+        monkeypatch.setattr(advanced, "inject_logopinfo", lambda p, sim, jid: sentinel)
+        monkeypatch.setattr(advanced, "resolve_output_folder", self._fake_resolve)
+        fake_runner = MagicMock()
+        fake_runner.start_sweep = AsyncMock()
+        monkeypatch.setattr(state_no_sim.runners, "get_sweep_runner", lambda **k: fake_runner)
+
+        await handle_run_sweep(RunBatchInput(config_id=config_id), state_no_sim)
+        job = next(iter(state_no_sim.batch_jobs.values()))
+        assert job.run_netlist == sentinel
+        if job.task:
+            await job.task
+
+    async def test_montecarlo_sets_run_netlist(
+        self, state_no_sim: SessionState, sample_netlist: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        await handle_configure_montecarlo(
+            ConfigureMonteCarloInput(
+                netlist=sample_netlist.name,
+                tolerances=[MonteCarloTolerance(ref="R", tolerance=0.05)],
+                num_runs=10,
+            ),
+            state_no_sim,
+        )
+        config_id = next(iter(state_no_sim.mc_configs.keys()))
+        state_no_sim.default_simulator = type("FakeSim", (), {})
+        sentinel = sample_netlist.with_name(f".x.mcjob.logopinfo{sample_netlist.suffix}")
+        monkeypatch.setattr(advanced, "inject_logopinfo", lambda p, sim, jid: sentinel)
+        monkeypatch.setattr(advanced, "resolve_output_folder", self._fake_resolve)
+        fake_runner = MagicMock()
+        fake_runner.start_montecarlo = AsyncMock()
+        monkeypatch.setattr(state_no_sim.runners, "get_mc_runner", lambda **k: fake_runner)
+
+        await handle_run_montecarlo(RunBatchInput(config_id=config_id), state_no_sim)
+        job = next(iter(state_no_sim.batch_jobs.values()))
+        assert job.run_netlist == sentinel
+        if job.task:
+            await job.task
+
+    async def test_no_injection_leaves_run_netlist_none(
+        self, state_no_sim: SessionState, sample_netlist: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # When inject_logopinfo is a no-op (returns the original), run_netlist
+        # stays None and the runner falls back to the user's deck.
+        await handle_configure_sweep(
+            ConfigureSweepInput(
+                netlist=sample_netlist.name,
+                parameters=[
+                    SweepParameter(name="R1", type="component", start=1, stop=10, points=3)
+                ],
+            ),
+            state_no_sim,
+        )
+        config_id = next(iter(state_no_sim.sweep_configs.keys()))
+        state_no_sim.default_simulator = type("FakeSim", (), {})
+        monkeypatch.setattr(advanced, "inject_logopinfo", lambda p, sim, jid: p)
+        monkeypatch.setattr(advanced, "resolve_output_folder", self._fake_resolve)
+        fake_runner = MagicMock()
+        fake_runner.start_sweep = AsyncMock()
+        monkeypatch.setattr(state_no_sim.runners, "get_sweep_runner", lambda **k: fake_runner)
+
+        await handle_run_sweep(RunBatchInput(config_id=config_id), state_no_sim)
+        job = next(iter(state_no_sim.batch_jobs.values()))
+        assert job.run_netlist is None
+        if job.task:
+            await job.task
+
+    async def test_sweep_startup_failure_deletes_logopinfo_copy(
+        self, state_no_sim: SessionState, sample_netlist: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # If runner acquisition fails after the copy is written, the runner's
+        # finally never runs — the handler's own guard must delete the copy.
+        await handle_configure_sweep(
+            ConfigureSweepInput(
+                netlist=sample_netlist.name,
+                parameters=[
+                    SweepParameter(name="R1", type="component", start=1, stop=10, points=3)
+                ],
+            ),
+            state_no_sim,
+        )
+        config_id = next(iter(state_no_sim.sweep_configs.keys()))
+        state_no_sim.default_simulator = type("FakeSim", (), {})
+        sibling = sample_netlist.with_name(f".x.job.logopinfo{sample_netlist.suffix}")
+        sibling.write_text("* aug\n.op\n.options logopinfo\n.end\n")
+        monkeypatch.setattr(advanced, "inject_logopinfo", lambda p, sim, jid: sibling)
+        monkeypatch.setattr(advanced, "resolve_output_folder", self._fake_resolve)
+
+        def boom(**_k):
+            raise RuntimeError("runner boom")
+
+        monkeypatch.setattr(state_no_sim.runners, "get_sweep_runner", boom)
+        with pytest.raises(RuntimeError, match="runner boom"):
+            await handle_run_sweep(RunBatchInput(config_id=config_id), state_no_sim)
+        assert not sibling.exists()
+        assert state_no_sim.batch_jobs == {}
+
+    async def test_montecarlo_startup_failure_deletes_logopinfo_copy(
+        self, state_no_sim: SessionState, sample_netlist: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        await handle_configure_montecarlo(
+            ConfigureMonteCarloInput(
+                netlist=sample_netlist.name,
+                tolerances=[MonteCarloTolerance(ref="R", tolerance=0.05)],
+                num_runs=10,
+            ),
+            state_no_sim,
+        )
+        config_id = next(iter(state_no_sim.mc_configs.keys()))
+        state_no_sim.default_simulator = type("FakeSim", (), {})
+        sibling = sample_netlist.with_name(f".x.mcjob.logopinfo{sample_netlist.suffix}")
+        sibling.write_text("* aug\n.op\n.options logopinfo\n.end\n")
+        monkeypatch.setattr(advanced, "inject_logopinfo", lambda p, sim, jid: sibling)
+        monkeypatch.setattr(advanced, "resolve_output_folder", self._fake_resolve)
+
+        def boom(**_k):
+            raise RuntimeError("mc runner boom")
+
+        monkeypatch.setattr(state_no_sim.runners, "get_mc_runner", boom)
+        with pytest.raises(RuntimeError, match="mc runner boom"):
+            await handle_run_montecarlo(RunBatchInput(config_id=config_id), state_no_sim)
+        assert not sibling.exists()
+        assert state_no_sim.batch_jobs == {}
 
 
 @pytest.mark.asyncio
