@@ -8,6 +8,29 @@ tool-surface changes.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-27
+
+### Added
+
+- Config knobs and recovery actions are now named at the surface where an agent
+  hits the wall, instead of only in docs. `server_status` reports the resolved
+  config file path (honoring `LTSPICE_MCP_CONFIG`) and how to switch the active
+  simulator, plus `persist_jobs` / `preload_recent_count`. A timeout names the
+  `run_simulation(timeout=)` argument, `[simulation] timeout`, and
+  `LTSPICE_MCP_TIMEOUT`; a path rejection names `[security] allowed_paths` /
+  `LTSPICE_MCP_ALLOWED_PATHS` and the copy-into-sandbox fallback; an unknown tool
+  distinguishes a profile-hidden tool from a bad name and points at `[tools]
+  profile`; `.asc` export without LTspice names `[simulator] path` /
+  `LTSPICE_MCP_SIMULATOR_EXE`; and `find_model`'s no-match hint is profile-aware
+  so it never suggests a tool the active profile hides.
+
+### Changed
+
+- The `circuit-mcp` and `ngspice-mcp` alias packages now share the canonical
+  version (derived from the release git tag via `hatch-vcs`) and publish
+  automatically on each release tag, so all three packages ship at one matching
+  version instead of a separately-bumped alias version.
+
 ## [0.3.0] - 2026-06-27
 
 ### Added
