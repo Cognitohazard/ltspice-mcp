@@ -3864,8 +3864,12 @@ async def handle_validate_netlist(
     # few nodes (and its words don't leak into the dangling-node suppressor set).
     # .asc ``content`` is directive-only (no title line), so it keeps every card.
     lint_cards = drop_title_card(arity_cards) if asc_editor is None else arity_cards
+    # Each pass's issues take a default severity, but a pass may set its own (the
+    # behavioral-remnant check emits a warning) — setdefault lets the issue's own
+    # severity win without depending on dict-merge order.
     for arity_issue in validate_netlist_arity(lint_cards, simulator=args.target_simulator):
-        issues.append({"severity": "error", **arity_issue})
+        arity_issue.setdefault("severity", "error")
+        issues.append(arity_issue)
 
     # Dangling-node pass: a node touched by exactly one element terminal in
     # its scope. Warning only — single-connection nodes are legal in
@@ -3875,7 +3879,8 @@ async def handle_validate_netlist(
     # (floating pins are the schematic topology pass's job below).
     if asc_editor is None:
         for dangling_issue in validate_netlist_dangling_nodes(lint_cards):
-            issues.append({"severity": "warning", **dangling_issue})
+            dangling_issue.setdefault("severity", "warning")
+            issues.append(dangling_issue)
         # Bias-topology pass: a node touched by two or more terminals that
         # still has no DC path to ground (floating gate, capacitive island,
         # current-source-only node, isolated domain). Warning only — a
@@ -3883,7 +3888,8 @@ async def handle_validate_netlist(
         # non-.asc gate: schematic connectivity lives in wires this pass
         # cannot see.
         for bias_issue in validate_netlist_bias_topology(lint_cards):
-            issues.append({"severity": "warning", **bias_issue})
+            bias_issue.setdefault("severity", "warning")
+            issues.append(bias_issue)
         # Dangling-reference pass: a .meas / output directive / behavioral
         # source naming a node or device the netlist never defines (a typo, or
         # a net referenced by name that was wired but never labeled). Warning
@@ -3891,7 +3897,8 @@ async def handle_validate_netlist(
         # this directive text can't see, so every ref would false-positive;
         # export_netlist runs this pass on the exported .net instead.
         for ref_issue in validate_netlist_directive_refs(lint_cards):
-            issues.append({"severity": "warning", **ref_issue})
+            ref_issue.setdefault("severity", "warning")
+            issues.append(ref_issue)
 
     # .asc schematic-graph checks (named-net shorts, floating pins, dangling
     # labels) — the directive lint above only sees embedded SPICE text, so the
