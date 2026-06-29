@@ -335,21 +335,27 @@ def validate_netlist_arity(
                     }
                 )
 
-        # A behavioral expression with whitespace around its operators
-        # (``V = V(a) + V(b)``) leaves orphan tokens after the first key=value:
-        # the lexer re-joins only glued forms (``V=V(a)+V(b)``). Flag the
-        # remnant so it is not silently dropped on read or corrupted by a
-        # value-edit that only rewrites the first key=value span.
+        # An expression with whitespace around its operators (``V = V(a) + V(b)``)
+        # leaves orphan tokens after the first key=value: the lexer re-joins only
+        # glued forms (``V=V(a)+V(b)``). The same shape also matches a missing-
+        # operator typo (``V=V(a) V(b)``), so we cannot claim the deck runs — but
+        # a valid multi-term expression does, and the one certain consequence is
+        # that a schematic value-edit would rewrite only the first key=value span
+        # and drop the rest. Warning, not error: it would over-block a valid
+        # deck, and the edit path (set_component_value) hard-errors on it anyway.
+        # ``severity`` set here overrides the caller's default error wrap.
         if body_has_stray_kv_remnant(card.body):
             issues.append(
                 {
+                    "severity": "warning",
                     "line": card.line_start,
                     "directive": directive,
                     "message": (
-                        f"{inst.ref}: value expression is not fully parsed — "
-                        "tokens after the first key=value are orphaned. Wrap the "
-                        "expression in braces (e.g. V={...}) so it reads and "
-                        "edits as a single value."
+                        f"{inst.ref}: value expression is not fully parsed — orphan "
+                        "tokens after the first key=value. It cannot be value-edited "
+                        "via the schematic tools (only the first key=value span is "
+                        "rewritten). If this is a valid multi-term expression, wrap it "
+                        "in braces (e.g. V={...}); if a term was mistyped, fix the syntax."
                     ),
                 }
             )

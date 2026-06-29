@@ -63,6 +63,20 @@ from ltspice_mcp.lib.spice_lex import extract_meas_name
 # against intent, not an accusation — so a loose threshold is fine by design.
 _EXTREME_VALUE_SALIENCE = 1e8
 
+# Self-relative blow-up signature, for divergences that stay under the absolute
+# floor (e.g. a switching node ringing to ~1e7 V on a 12 V rail). A divergence
+# reaches a large magnitude that dwarfs the trace's own typical operating level,
+# whatever fraction of the samples it occupies — so we compare the peak to the
+# trace's median. Two gates keep it precise: the peak must clear an absolute
+# floor (so a legitimate small-signal swing — a 0→12 V step has peak ≈ 12 — is
+# never even considered), AND the ratio is large enough that only a node both
+# reaching ≥10 kV and standing ~1e5× its own median trips it. The ratio is set
+# below the cited buck's actual peak/median (~9e5 rail-dominant, ~1.8e6 idle-
+# dominant) with margin, so detection does not hinge on which regime the median
+# lands in. Doctrine: a relative signature, surfaced as a fact, not a verdict.
+_EXTREME_VALUE_FLOOR = 1e4  # below this a spike is never "diverged", whatever the ratio
+_EXTREME_VALUE_RATIO = 1e5  # peak ≥ this many × the trace's own median ⇒ blow-up signature
+
 
 class Observation(TypedDict, total=False):
     """One surfaced fact about a result.
@@ -232,7 +246,8 @@ def value_observations(value_traces: dict[str, np.ndarray]) -> list[Observation]
                 }
             )
         if finite.any():
-            peak = float(mag[finite].max())
+            finite_mag = mag[finite]
+            peak = float(finite_mag.max())
             if peak >= _EXTREME_VALUE_SALIENCE:
                 obs.append(
                     {
@@ -246,6 +261,36 @@ def value_observations(value_traces: dict[str, np.ndarray]) -> list[Observation]
                         "evidence": {"trace": name, "peak_abs": peak},
                     }
                 )
+            elif peak >= _EXTREME_VALUE_FLOOR:
+                # Self-relative blow-up: a peak past the floor that dwarfs the
+                # trace's typical level. Median over ALL finite samples (zeros
+                # included), not just nonzero — otherwise a node that idles at
+                # exactly 0 and then explodes leaves only the spike in the
+                # sample set, so center == peak and the divergence hides. A zero
+                # median (the trace is 0 for most of the run) means any peak past
+                # the floor rose from a flat baseline — itself the signature.
+                center = float(np.median(finite_mag))
+                zero_baseline = center == 0.0  # ratio → ∞; short-circuits the divide below
+                if zero_baseline or peak / center >= _EXTREME_VALUE_RATIO:
+                    if zero_baseline:
+                        detail = (
+                            f"{name} peaks at |{peak:.3g}| from a flat ~0 baseline; often a "
+                            "numerical divergence — verify the solve converged"
+                        )
+                    else:
+                        detail = (
+                            f"{name} peaks at |{peak:.3g}|, ~{peak / center:.0g}× its typical "
+                            f"magnitude (~{center:.3g}); often a numerical divergence — verify "
+                            "the solve converged"
+                        )
+                    obs.append(
+                        {
+                            "code": "extreme_value",
+                            "kind": "value",
+                            "detail": detail,
+                            "evidence": {"trace": name, "peak_abs": peak, "median_abs": center},
+                        }
+                    )
     return obs
 
 

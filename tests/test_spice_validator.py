@@ -175,14 +175,17 @@ class TestElementArity:
         issues = self._arity("B1 fb 0 V={V(in)*0.5+1}\n.end")
         assert all("B1" not in str(i["message"]) for i in issues)
 
-    def test_spaced_operator_expression_flagged_as_unparseable(self):
+    def test_spaced_operator_expression_flagged_as_warning(self):
         # ``V = V(a) + V(b)`` (operators surrounded by whitespace) leaves orphan
-        # tokens the lexer can't re-join; previously this passed validation and
-        # both reads and edits silently dropped the tail. It must be flagged.
+        # tokens the lexer can't re-join. The deck still simulates correctly —
+        # the only constraint is that a schematic value-edit would drop the
+        # tail — so it is a warning, not an error, and the message says so.
         issues = self._arity("B1 out 0 V = V(a) + V(b)\n.end")
-        assert any(
-            "B1" in str(i["message"]) and "not fully parsed" in str(i["message"]) for i in issues
-        )
+        remnant = [
+            i for i in issues if "B1" in str(i["message"]) and "value-edited" in str(i["message"])
+        ]
+        assert remnant, "spaced-operator B-source expression should be flagged"
+        assert remnant[0]["severity"] == "warning"
 
     def test_glued_operator_expression_passes(self):
         # The glued forms now tokenize as one value, so they are valid.

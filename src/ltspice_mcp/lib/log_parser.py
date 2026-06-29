@@ -772,6 +772,19 @@ _MEAS_METADATA_SUFFIXES: tuple[tuple[str, str], ...] = (
 # rather than seeing a silent absence.
 _RE_MEAS_FAILED = re.compile(r"Measurement\s+\"([^\"]+)\"\s+FAIL[''`]?ed", re.IGNORECASE)
 
+# AT/WHEN crossing line, e.g. ``tcross: V(out)=0.5  AT 0.000693147672285``.
+# spicelib's LTSpiceLogReader matches the AT clause with a literal single-space
+# `` at `` pattern (ltsteps.py — case-insensitive, but the spaces are literal),
+# so a WHEN line padded with extra whitespace (a double space, or a tab) loses
+# its crossing time: the value comes back as the trigger level with no ``at``.
+# We re-extract it here, whitespace-tolerant, and fold it in when spicelib left
+# ``at`` unset. ``.*?`` stops at the first ``=`` so the level is the value and
+# the trailing number after AT is the crossing point.
+_RE_MEAS_AT_LINE = re.compile(
+    r"^\s*(?P<name>\w+):\s+.*?=\s*\S+\s+at\s+(?P<at>[-+]?[\d.][\d.eE+-]*)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 
 _RE_FOURIER_NAN = re.compile(
     r"^(Total Harmonic Distortion|Partial Harmonic Distortion):\s*[-+]?(?:nan|inf)%?",
@@ -885,6 +898,7 @@ def parse_measurements(
     # filters them out, so without this pass they appear as a silent
     # absence — indistinguishable from a measurement that wasn't parsed.
     failed_names: list[str] = []
+    log_text = ""
     try:
         log_text = log_path.read_text(encoding="utf-8", errors="replace")
         # Preserve discovery order, drop duplicates (spicelib reports
@@ -971,11 +985,32 @@ def parse_measurements(
                 continue
         parents[name] = coerced
 
+    # AT/WHEN crossing times spicelib's single-space ` at ` pattern missed on
+    # whitespace-padded lines (see _RE_MEAS_AT_LINE): name (lowercased) → times,
+    # folded into ``at`` below when spicelib left it unset. Scanned here — past
+    # the no-measurement early return — so an empty run never pays for it.
+    # ``None`` in the type matches the invariant MeasurementEntry["at"] list.
+    at_overrides: dict[str, list[float | None]] = {}
+    for at_match in _RE_MEAS_AT_LINE.finditer(log_text):
+        try:
+            at_overrides.setdefault(at_match.group("name").lower(), []).append(
+                float(at_match.group("at"))
+            )
+        except ValueError:
+            continue
+
     measurements: dict[str, MeasurementEntry] = {}
     for name, values in parents.items():
         entry: MeasurementEntry = {"values": values}
         for meta_key, meta_val in metadata.get(name, {}).items():
             entry[meta_key] = meta_val  # type: ignore[literal-required]
+        # Backfill an AT/WHEN crossing time spicelib dropped (extra whitespace
+        # around ``AT``). Constant across steps → scalar, else list, matching
+        # the FROM/TO/at fold above.
+        if "at" not in entry:
+            override = at_overrides.get(name.lower())
+            if override:
+                entry["at"] = override[0] if all(v == override[0] for v in override) else override
         measurements[name] = entry
 
     step_count = len(next(iter(parents.values()))) if parents else 0
