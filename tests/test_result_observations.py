@@ -159,6 +159,61 @@ class TestValueObservations:
         # |3+4j| = 5, well under the salience threshold → nothing surfaced.
         assert value_observations({"V(o)": np.array([3 + 4j])}) == []
 
+    def test_self_relative_blowup_surfaced_regardless_of_median_regime(self):
+        # A diverged buck node sits under the 1e8 absolute floor but dwarfs its
+        # own operating level. Detection must not hinge on whether the median
+        # lands on the idle level or the rail, so test the rail-dominant shape
+        # (~12 V for 80% of samples, then a ring to ~11 MV) — the case that the
+        # adversarial review broke when the ratio gate was 1e6.
+        rail_dominant = np.concatenate([np.full(800, 12.0), np.full(200, 0.05), [1.09e7]])
+        obs = value_observations({"V(sw)": rail_dominant})
+        assert len(obs) == 1
+        assert obs[0]["code"] == "extreme_value"
+        assert "severity" not in obs[0]  # surfaced fact, no invented severity
+        assert obs[0]["evidence"]["peak_abs"] == pytest.approx(1.09e7)
+        # median is the rail (~12 V); ratio ≈ 9e5 still clears the 1e5 gate.
+        assert obs[0]["evidence"]["median_abs"] == pytest.approx(12.0)
+
+    def test_self_relative_blowup_caught_when_body_is_uniform(self):
+        # The motivating comment case: a trace flat at 12 V with one divergent
+        # sample. median = 12, ratio ≈ 8.3e5 ⇒ surfaced.
+        body = np.full(1000, 12.0)
+        body[-1] = 1e7
+        obs = value_observations({"V(n)": body})
+        assert len(obs) == 1
+        assert obs[0]["code"] == "extreme_value"
+
+    def test_self_relative_blowup_caught_from_zero_baseline(self):
+        # A grounded/idle node sitting at exactly 0 V that explodes late. The
+        # median over all samples is 0 (most are 0), so the ratio is undefined —
+        # a peak past the floor from a flat-zero baseline is itself the
+        # divergence signature and must surface (the >0-filter would have hidden
+        # it: dropping the zeros leaves only the spike, center == peak).
+        body = np.zeros(1000)
+        body[-1] = 1e7
+        obs = value_observations({"V(float)": body})
+        assert len(obs) == 1
+        assert obs[0]["code"] == "extreme_value"
+        assert obs[0]["evidence"]["peak_abs"] == pytest.approx(1e7)
+        assert obs[0]["evidence"]["median_abs"] == 0.0
+
+    def test_small_spike_from_zero_baseline_not_flagged(self):
+        # Same shape but a benign peak under the floor (a logic node toggling
+        # 0→3.3 V) must not trip — the magnitude gate protects it.
+        body = np.zeros(1000)
+        body[-1] = 3.3
+        assert value_observations({"V(d)": body}) == []
+
+    def test_legitimate_large_step_not_flagged(self):
+        # A clean 0→12 V step: peak 12 V is under the magnitude gate, so the
+        # ratio is never even consulted. No false positive.
+        assert value_observations({"V(out)": np.array([0.0, 6.0, 12.0])}) == []
+
+    def test_large_but_proportionate_not_flagged(self):
+        # A node genuinely operating at ~50 kV (peak above the gate) whose
+        # values are all the same order: ratio is ~1, so no blow-up signature.
+        assert value_observations({"V(hv)": np.array([4.9e4, 5.0e4, 5.1e4])}) == []
+
 
 class TestSurfaceObservations:
     def test_value_scan_off_no_value_or_coverage(self):

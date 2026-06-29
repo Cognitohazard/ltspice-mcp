@@ -396,6 +396,40 @@ class TestParseMeasurementsValid:
         assert entry.get("at") == pytest.approx(1591.5)
         assert result["step_count"] >= 1
 
+    def test_when_crossing_with_padded_at_clause_backfilled(self, tmp_path: Path):
+        # A transient WHEN line padded with a double space before AT —
+        # ``tcross: V(out)=0.5  AT 0.000693``. spicelib's ` at ` pattern is
+        # literal single-space, so it captures the trigger level (0.5) but
+        # drops the crossing time. We re-extract and backfill ``at``.
+        log = tmp_path / "when.log"
+        log.write_text(
+            "Circuit: * test\n"
+            "\n"
+            "tcross: V(out)=0.5  AT 0.000693147672285\n"
+            "Total elapsed time: 0.001 seconds.\n"
+        )
+        result = parse_measurements(log)
+        entry = result["measurements"]["tcross"]
+        # The value stays the trigger level (mirrors how AC WHEN reports it);
+        # the crossing time lands in ``at``.
+        assert entry["values"] == [0.5]
+        assert entry.get("at") == pytest.approx(0.000693147672285)
+
+    def test_window_from_to_not_misread_as_at(self, tmp_path: Path):
+        # A FROM/TO windowed measurement has no AT clause; the backfill must
+        # not invent one from the trailing TO number.
+        log = tmp_path / "rms.log"
+        log.write_text(
+            "Circuit: * test\n"
+            "\n"
+            "vrms: RMS(v(out))=1.41109 FROM 0 TO 0.001\n"
+            "Total elapsed time: 0.001 seconds.\n"
+        )
+        result = parse_measurements(log)
+        entry = result["measurements"]["vrms"]
+        assert entry.get("at") is None
+        assert entry.get("range_to") == pytest.approx(0.001)
+
 
 class TestParseMeasurementsFourierNan:
     def test_nan_thd_does_not_crash(self, tmp_path: Path):
