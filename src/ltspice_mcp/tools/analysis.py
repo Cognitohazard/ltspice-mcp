@@ -2679,6 +2679,12 @@ class MeasurementStatsResponseEntry(MeasurementStatsEntry):
     """
 
     aggregated_field: AggregatedField
+    # Present only on an n=1 read whose axis stayed on the level: the x
+    # (time/frequency) the log reported this measurement at, echoed so a
+    # single-run .meas with an AT/crossing still shows it (the variation-based
+    # swap can't fire on one sample). Neutral fact — a WHEN crossing and a
+    # FIND...AT probe point are indistinguishable at n=1, so it claims neither.
+    at: NotRequired[float]
 
 
 class MeasurementStatsResponse(TypedDict):
@@ -3221,7 +3227,14 @@ def _apply_when_axis_swap(
 
 def _aggregate_job_measurements(
     batch_job: BatchJob,
-) -> tuple[dict[str, list[float | None]], int, dict[str, AggregatedField], list[str], list[dict]]:
+) -> tuple[
+    dict[str, list[float | None]],
+    int,
+    dict[str, AggregatedField],
+    list[str],
+    list[dict],
+    dict[str, list[float | None]],
+]:
     """Walk every completed run's .log and concatenate ``.MEAS`` results.
 
     The MC engine emits one log per run; this reconciles by collecting
@@ -3234,11 +3247,12 @@ def _aggregate_job_measurements(
     detected (constant ``values``, varying ``at``) the aggregator swaps to
     the ``at`` axis automatically.
 
-    Returns ``(flat_values, run_count, axis_map, diagnostics)`` where
-    ``axis_map[name]`` is ``"value"`` or ``"at"`` describing which field was
-    aggregated, and ``diagnostics`` carries deduplicated per-run log
+    Returns ``(flat_values, run_count, axis_map, diagnostics, per_run, at_map)``
+    where ``axis_map[name]`` is ``"value"`` or ``"at"`` describing which field
+    was aggregated, ``diagnostics`` carries deduplicated per-run log
     errors/warnings explaining missing measurements (e.g. ngspice's
-    batch-mode .meas skip) so an empty aggregate can relay the cause.
+    batch-mode .meas skip) so an empty aggregate can relay the cause, and
+    ``at_map`` is the unswapped per-run crossing list per name.
     """
     if not batch_job.run_results:
         raise ResultError(
@@ -3302,12 +3316,17 @@ def _aggregate_job_measurements(
     at_map: dict[str, list[float | None]] = {n: b["ats"] for n, b in samples.items()}
     axis_map = _apply_when_axis_swap(flat_values, at_map)
 
-    return flat_values, runs_processed, axis_map, diagnostics, per_run
+    return flat_values, runs_processed, axis_map, diagnostics, per_run, at_map
 
 
 def _aggregate_log_measurements(
     log_path: Path,
-) -> tuple[dict[str, list[float | None]], dict[str, AggregatedField], str]:
+) -> tuple[
+    dict[str, list[float | None]],
+    dict[str, AggregatedField],
+    str,
+    dict[str, list[float | None]],
+]:
     """Aggregate the .MEAS results of ONE log file.
 
     The interesting case is a ``.step`` log, where each .MEAS name carries
@@ -3315,7 +3334,9 @@ def _aggregate_log_measurements(
     (honest n=1 stats). Shared by the ``log_file`` input branch and the
     single-simulation ``job_id`` branch, which read the same physical shape.
 
-    Returns ``(flat_values, axis_map, steps_label)``.
+    Returns ``(flat_values, axis_map, steps_label, at_map)`` — ``at_map`` is the
+    per-step ``at`` list per name (unswapped), so the caller can echo the
+    reported point for a single-sample read the swap can't classify.
     """
     try:
         meas_data = parse_measurements(log_path)
@@ -3350,7 +3371,7 @@ def _aggregate_log_measurements(
             at_map[name] = []
     axis_map = _apply_when_axis_swap(flat_values, at_map)
     steps_label = f"{meas_data.get('step_count', 1)} step(s)"
-    return flat_values, axis_map, steps_label
+    return flat_values, axis_map, steps_label, at_map
 
 
 @registry.tool(
@@ -3368,11 +3389,12 @@ def _aggregate_log_measurements(
         "for a .step run). WHEN-style .MEAS (constant level, varying crossing) "
         "is detected the same way on both paths and swaps to aggregating the "
         "'at' (crossing) field; the aggregated_field output says which was "
-        "used. On a plain single run there's only one value per measurement, "
-        "so stats collapse to n=1 — use simulation_summary to just read the "
-        "scalars, but note it returns the raw per-measurement shape: for a "
-        "WHEN/AT measurement the crossing time/frequency is in each entry's "
-        "'at' field, not 'values' (which holds the constant trigger level).\n\n"
+        "used. On a plain single run, stats collapse to n=1 (one value per "
+        "measurement): the headline stats are the value the simulator printed "
+        "— for a WHEN that's the trigger level — and any AT/crossing time is "
+        "returned separately in the entry's 'at' field, so a single-run WHEN/AT "
+        "read isn't lost. (simulation_summary also just reads the raw "
+        "scalars.)\n\n"
         "Works with .MEAS from any analysis type (.tran/.ac/.dc/.op) — the "
         "measurement directives themselves embed the analysis context. Pass "
         "measurement=NAME to aggregate just one; otherwise returns all "
@@ -3393,11 +3415,14 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
         raise ResultError("Provide either ``log_file`` or ``job_id``.")
 
     axis_map: dict[str, AggregatedField] = {}
+    at_map: dict[str, list[float | None]] = {}
     per_run: list[dict] = []
     if args.job_id is not None:
         job = services.resolve_job(args.job_id, state)
         if isinstance(job, BatchJob):
-            flat_values, run_count, axis_map, run_diags, per_run = _aggregate_job_measurements(job)
+            flat_values, run_count, axis_map, run_diags, per_run, at_map = (
+                _aggregate_job_measurements(job)
+            )
             if not flat_values:
                 if run_count == 0:
                     raise ResultError(
@@ -3428,9 +3453,9 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
             # ``resolve_log_file`` gates on completed status like every other
             # job-id-addressed read; the path is a trusted server artifact.
             log_path = services.resolve_log_file(args.job_id, state)
-            flat_values, axis_map, steps_label = _aggregate_log_measurements(log_path)
+            flat_values, axis_map, steps_label, at_map = _aggregate_log_measurements(log_path)
     elif args.log_file is not None:
-        flat_values, axis_map, steps_label = _aggregate_log_measurements(
+        flat_values, axis_map, steps_label, at_map = _aggregate_log_measurements(
             safe_path(args.log_file, state)
         )
     else:  # unreachable — earlier guard rejects this combination
@@ -3447,6 +3472,14 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
     # WHEN-clause crossing frequency".
     for name, entry in stats.items():
         entry["aggregated_field"] = axis_map.get(name, "value")
+        # n=1 can't trigger the variation-based WHEN swap, so a single-run .meas
+        # with an AT/crossing would report only its value. Echo the reported
+        # ``at`` too — agents use this tool to "read my .meas", and the
+        # time/frequency is often the answer they want. Neutral fact (see ``at``).
+        if entry["aggregated_field"] == "value" and entry.get("total_count") == 1:
+            crossings = [a for a in at_map.get(name, []) if a is not None]
+            if crossings:
+                entry["at"] = crossings[0]
 
     lines = [
         f"Measurement Stats ({steps_label})",
@@ -3459,6 +3492,9 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
             f"  valid {entry['valid_count']}/{entry['total_count']} "
             f"(failed {entry['failure_count']})  field={field}"
         )
+        if "at" in entry:
+            # Neutral label — must not claim WHEN-crossing vs FIND-probe (see ``at`` field).
+            lines.append(f"  at={entry['at']:.6g}  (time/freq the value was reported at)")
         if entry["valid_count"] > 0:
             lines.append(
                 f"  min={entry['min']:.6g}  max={entry['max']:.6g}  "
