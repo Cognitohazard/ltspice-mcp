@@ -8,7 +8,7 @@ classic failure mode: "lib returns key X but schema doesn't mention it"
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 import numpy as np
 import pytest
@@ -90,6 +90,37 @@ class TestNullableUnion:
 
         s = schema_from_typeddict(M)
         assert s["required"] == ["x"]
+
+    def test_not_required_field_is_optional_and_renders_its_type(self):
+        # NotRequired is the OTHER kind of optional (may be ABSENT, vs ``| None``
+        # which is present-but-null): the wrapper must be stripped to its inner
+        # type and the key dropped from ``required``. A bare ``number`` (not
+        # ``["number", "null"]``) — an absent field isn't a nullable one.
+        class M(TypedDict):
+            x: float
+            opt: NotRequired[float]
+
+        s = schema_from_typeddict(M)
+        assert s["properties"]["opt"] == {"type": "number"}
+        assert s["required"] == ["x"]
+
+    def test_inherited_not_required_field_stays_optional(self):
+        # The shape MeasurementStatsResponseEntry uses: a subclass adds a
+        # NotRequired field over a base TypedDict. This is where inherited
+        # ``__required_keys__`` historically mis-counted NotRequired as required,
+        # which would make schema-validating clients reject every response that
+        # omits the field.
+        class Base(TypedDict):
+            kept: int
+
+        class Sub(Base):
+            extra: str
+            opt: NotRequired[float]
+
+        s = schema_from_typeddict(Sub)
+        assert set(s["required"]) == {"kept", "extra"}
+        assert "opt" not in s["required"]
+        assert s["properties"]["opt"] == {"type": "number"}
 
 
 class TestContainers:

@@ -430,6 +430,15 @@ def schema_from_typeddict(td: type) -> dict[str, Any]:
         raise TypeError(f"Expected TypedDict, got {td!r}")
 
     hints = get_type_hints(td)
+    # ``__required_keys__`` is computed at class-creation time and is UNRELIABLE
+    # for ``NotRequired`` fields when the defining module uses ``from __future__
+    # import annotations``: the wrapper is stringized, so the TypedDict metaclass
+    # can't see it and wrongly counts the field as required (verified on 3.13).
+    # ``get_type_hints(..., include_extras=True)`` EVALUATES the annotation,
+    # recovering the ``NotRequired`` wrapper, so it detects optionality regardless
+    # of stringization. (``Required`` in a ``total=False`` class is the symmetric
+    # case but isn't used in this repo, so it's not special-cased.)
+    extra_hints = get_type_hints(td, include_extras=True)
     structurally_required = getattr(td, "__required_keys__", frozenset(hints))
     properties: dict[str, Any] = {}
     required: list[str] = []
@@ -438,7 +447,8 @@ def schema_from_typeddict(td: type) -> dict[str, Any]:
         # A field is required unless the key may be absent entirely
         # (NotRequired / total=False) or its type admits None.
         admits_none = _is_union(field_type) and type(None) in get_args(field_type)
-        if field_name in structurally_required and not admits_none:
+        not_required = get_origin(extra_hints.get(field_name)) is typing.NotRequired
+        if field_name in structurally_required and not admits_none and not not_required:
             required.append(field_name)
 
     schema: dict[str, Any] = {"type": "object", "properties": properties}
