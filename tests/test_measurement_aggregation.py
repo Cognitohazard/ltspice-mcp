@@ -344,6 +344,39 @@ class TestSingleSimJobAggregation:
         # The single log reads as one step, matching the log_file branch.
         assert "1 step(s)" in _text(result)
 
+    async def test_single_run_echoes_reported_at_neutrally(self, state_no_sim: SessionState):
+        # A non-stepped single run: the variation-based WHEN swap can't fire
+        # (one sample, nothing to vary), so the axis stays "value" and the stat
+        # is the value the simulator printed. The reported ``at`` must still
+        # surface — agents read this tool as "show my .meas". But at n=1 a WHEN
+        # crossing and a FIND...AT probe point are indistinguishable, so the
+        # echo is a NEUTRAL fact for BOTH and must not claim either reading.
+        # Fixture run0.log: tcross WHEN V(out)=0.5 AT 6.98e-5, vfinal FIND AT=0.9m.
+        _make_single_sim(
+            state_no_sim,
+            job_id="single_when",
+            log_file=FIXTURES_DIR / "ltspice_sweep_meas_run0.log",
+        )
+        result = await handle_measurement_stats(
+            MeasurementStatsInput(job_id="single_when"), state_no_sim
+        )
+        assert result.structuredContent is not None
+        tcross = result.structuredContent["stats"]["tcross"]
+        assert tcross["aggregated_field"] == "value"  # no axis swap at n=1
+        assert tcross["min"] == pytest.approx(0.5)  # stat is the printed value
+        assert tcross["at"] == pytest.approx(TCROSS_AT[0])  # WHEN crossing echoed
+        # vfinal is a FIND...AT in the SAME log: it gets the at echo too (the
+        # probe point is a true fact), but it must NOT be mislabeled a crossing
+        # or have its value called "the level" — that's false for a FIND.
+        vfinal = result.structuredContent["stats"]["vfinal"]
+        assert vfinal["aggregated_field"] == "value"
+        assert vfinal["min"] == pytest.approx(VFINAL[0])  # the found value, not a level
+        assert vfinal["at"] == pytest.approx(0.0009)  # the probe point, echoed neutrally
+        text = _text(result)
+        assert "at=6.98286e-05" in text
+        assert "crossing point" not in text  # no WHEN-specific claim for either
+        assert "is the level" not in text
+
     async def test_running_single_sim_is_gated_on_completion(self, state_no_sim: SessionState):
         _make_single_sim(state_no_sim, status="running")
         with pytest.raises(ResultError, match=r"Job 'single1' is not completed"):
@@ -362,14 +395,14 @@ class TestSteppedLogWhenAxis:
     instead of the per-step crossing times. Fixture: ltspice_step_when.log."""
 
     def test_stepped_log_when_swaps_to_at_axis(self):
-        flat_values, axis_map, steps_label = _aggregate_log_measurements(STEP_WHEN_LOG)
+        flat_values, axis_map, steps_label, _ = _aggregate_log_measurements(STEP_WHEN_LOG)
         # Constant level (0.5) across steps + varying crossing -> aggregate ``at``.
         assert axis_map["tcross"] == "at"
         assert flat_values["tcross"] == pytest.approx(STEP_WHEN_TCROSS_AT)
         assert "3 step(s)" in steps_label
 
     def test_stepped_log_find_stays_on_value_axis(self):
-        flat_values, axis_map, _ = _aggregate_log_measurements(STEP_WHEN_LOG)
+        flat_values, axis_map, _, _ = _aggregate_log_measurements(STEP_WHEN_LOG)
         # FIND value varies per step -> stays on the value axis.
         assert axis_map["vfinal"] == "value"
         assert flat_values["vfinal"] == pytest.approx(STEP_WHEN_VFINAL)
@@ -385,8 +418,12 @@ class TestSteppedLogWhenAxis:
         assert tcross["min"] == pytest.approx(STEP_WHEN_TCROSS_AT[0])
         assert tcross["max"] == pytest.approx(STEP_WHEN_TCROSS_AT[2])
         assert tcross["mean"] == pytest.approx(sum(STEP_WHEN_TCROSS_AT) / 3)
-        # The FIND measurement in the same log stays on the value axis.
-        assert result.structuredContent["stats"]["vfinal"]["aggregated_field"] == "value"
+        # The FIND measurement in the same log stays on the value axis. Its
+        # per-step ``at`` (probe point 0.9m) must NOT be echoed: the n=1 crossing
+        # echo is gated on total_count==1, and this is a 3-step aggregate.
+        vfinal = result.structuredContent["stats"]["vfinal"]
+        assert vfinal["aggregated_field"] == "value"
+        assert "at" not in vfinal
 
 
 @pytest.mark.asyncio
