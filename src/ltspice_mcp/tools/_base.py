@@ -397,7 +397,19 @@ def _schema_for_type(tp: Any) -> dict[str, Any]:
         return {"enum": list(args)}
     if _is_union(tp):
         return _jsontype_from_union(args)
-    if origin is list or origin is tuple:
+    if origin in (list, tuple):
+        # A fixed, heterogeneous tuple (``tuple[int, str]``) has no single
+        # ``items`` schema; rendering ``args[0]`` only would SILENTLY drop the
+        # rest, so refuse it loudly (use a TypedDict or list[...], or add
+        # prefixItems support) rather than emit a schema that lies about the
+        # shape. A list, a ``tuple[X, ...]``, and a single-type/empty tuple all
+        # map faithfully to an array of one item type.
+        if origin is tuple and len(args) > 1 and args[1] is not Ellipsis:
+            raise TypeError(
+                f"Fixed heterogeneous tuple {tp!r} has no faithful single-`items` "
+                "JSON Schema. Use a TypedDict (named fields) or list[...] for the "
+                "output model, or add prefixItems support to _schema_for_type."
+            )
         item_type = args[0] if args else Any
         return {"type": "array", "items": _schema_for_type(item_type)}
     if origin is dict:

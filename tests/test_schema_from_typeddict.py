@@ -34,7 +34,8 @@ from ltspice_mcp.lib.signal_analysis import (
     analyze_timing_between,
     window_and_clean,
 )
-from ltspice_mcp.tools._base import schema_from_typeddict
+from ltspice_mcp.tools import get_tools_for_profile
+from ltspice_mcp.tools._base import _schema_for_type, schema_from_typeddict
 
 
 class TestPrimitives:
@@ -143,6 +144,20 @@ class TestContainers:
             "type": "object",
             "additionalProperties": {"type": "integer"},
         }
+
+    def test_homogeneous_variadic_tuple_is_array(self):
+        # tuple[X, ...] maps faithfully to an array of X.
+        assert _schema_for_type(tuple[int, ...]) == {
+            "type": "array",
+            "items": {"type": "integer"},
+        }
+
+    def test_heterogeneous_tuple_raises(self):
+        # A fixed heterogeneous tuple has no single-`items` form; rendering only
+        # the first element would silently drop the rest, so it must refuse loudly
+        # rather than emit a schema that lies about the shape.
+        with pytest.raises(TypeError, match="heterogeneous tuple"):
+            _schema_for_type(tuple[int, str])
 
 
 class _NestedInner(TypedDict):
@@ -283,3 +298,42 @@ class TestSchemaMatchesActualOutput:
         result = analyze_periodic(t, y)
         schema = schema_from_typeddict(PeriodicMetricsOutput)
         assert set(result.keys()) == set(schema["properties"].keys())
+
+
+class TestRegisteredOutputSchemas:
+    """Output-schema counterpart to test_dispatch.py's inputSchema
+    required-subset-of-properties check, extended to recurse into nested objects.
+
+    Scope is deliberately narrow. For schemas built by ``schema_from_typeddict``
+    the invariant is near-tautological (``required`` is appended from the same
+    hints loop that fills ``properties``), and it does NOT catch the NotRequired
+    / stringized-annotation regression — there the field sits in BOTH sets, so
+    the subset still holds. That class is guarded by the unit tests above, which
+    reproduce the ``from __future__ import annotations`` condition. What this
+    DOES guard, across the whole published surface at once, is the hand-written
+    ``output_schema={...}`` dicts, where a required key with no matching property
+    is a real and easy mistake.
+    """
+
+    def test_required_is_subset_of_properties_for_every_tool(self):
+        def check(node: Any, path: str) -> None:
+            if isinstance(node, dict):
+                if node.get("type") == "object":
+                    props = set(node.get("properties", {}))
+                    missing = [r for r in node.get("required", []) if r not in props]
+                    assert not missing, f"{path}: required keys not in properties: {missing}"
+                for key, value in node.items():
+                    check(value, f"{path}.{key}")
+            elif isinstance(node, list):
+                for i, value in enumerate(node):
+                    check(value, f"{path}[{i}]")
+
+        # get_tools_for_profile imports the tool modules (triggering registration)
+        # and returns the published Tool defs — the same surface MCP clients see.
+        defs, _ = get_tools_for_profile("full")
+        checked = 0
+        for tool in defs:
+            if tool.outputSchema is not None:
+                checked += 1
+                check(tool.outputSchema, tool.name)
+        assert checked > 0, "no output schemas were checked — tool registration likely broken"
