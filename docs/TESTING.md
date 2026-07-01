@@ -166,5 +166,5 @@ See `CLAUDE.md` for the canonical `pytest` / `ruff` / `pyright` commands and
 - **Plain-language findings.** Shipped code, docstrings, commit messages, and
   this doc describe a bug by its actual behavior in plain technical terms — no
   internal severity codes, codenames, or pass numbers (those stay in the
-  internal backlog under `.claude/plans/`).
+  internal backlog).
 - **Tables** use minimal separators (`|-|-|`); no box-drawing characters.

@@ -412,9 +412,8 @@ automation, by Nuno Brum. PyLTSpice is a thin re-export wrapper over
 spicelib that adds nothing — we depend on `spicelib` directly. The
 ceiling is deliberate: spicelib 1.6 retypes `.PARAM` values (`float_unit`)
 and refactored the component model, which breaks the parameter and
-`diff_circuit` paths. See the pin comment in `pyproject.toml` and
-`.claude/plans/spicelib_dependency_2026_06_18.md`; lift only on a forcing
-function, not for features.
+`diff_circuit` paths. See the pin comment in `pyproject.toml`; lift only
+on a forcing function, not for features.
 
 All four simulators share the same base `Simulator` ABC:
 
@@ -445,7 +444,11 @@ Per-simulator notes:
 - **LTspice** supports `.asc` → `.net` conversion via `create_netlist()`.
   macOS LTspice has no CLI switch support. Default switches: `-Run -b`.
 - **NGspice** has a compatibility mode (`kiltpsa` default for
-  KiCad/LTspice/PSPICE). Default switches: `-b -o -r -a`. Native on Linux.
+  KiCad/LTspice/PSPICE), overridable via `[simulator] ngbehavior` (or the
+  `LTSPICE_MCP_NGBEHAVIOR` env var) — e.g. `hsa` when a sectioned
+  `.lib <file> <section>` corner select must survive, since `kiltpsa`'s
+  `lt`/`ps` tokens make ngspice read it as two plain includes and drop the
+  section. Default switches: `-b -o -r -a`. Native on Linux.
 - **QSPICE** uses `.qraw` (double precision). Windows-only, limited Wine.
 - **Xyce** supports `-syntax` and `-norun` for validation without
   simulation.

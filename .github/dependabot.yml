@@ -29,8 +29,8 @@ updates:
       # spicelib is pinned <1.6 on purpose: 1.6 retypes .PARAM values
       # (float_unit) and refactored the component model, which breaks our
       # parameter read/edit and diff_circuit paths. See the pin comment in
-      # pyproject.toml and .claude/plans/spicelib_dependency_2026_06_18.md.
-      # Allow 1.5.x patches through (security/bugfix); never auto-propose 1.6+.
+      # pyproject.toml. Allow 1.5.x patches through (security/bugfix); never
+      # auto-propose 1.6+.
       - dependency-name: "spicelib"
         update-types:
           - "version-update:semver-minor"
