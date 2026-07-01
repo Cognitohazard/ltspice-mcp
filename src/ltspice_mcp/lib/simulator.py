@@ -137,6 +137,48 @@ def _apply_simulator_exe(config: ServerConfig, diagnostics: list[str] | None = N
         return False
 
 
+# spicelib's shipped ngspice compatibility default, captured before we ever
+# override it, so an unset config can restore it. The attribute is process-wide,
+# so a prior override in the same process (re-entrant config load, embedded use)
+# would otherwise leak into a later unset config.
+_SPICELIB_DEFAULT_NGBEHAVIOR: str = getattr(NGspiceSimulator, "_compatibility_mode", "kiltpsa")
+
+
+def _apply_ngbehavior(config: ServerConfig | None) -> None:
+    """Set ngspice's compatibility mode from ``config.ngbehavior`` (see that
+    config field for why the shipped default breaks a sectioned ``.lib``).
+
+    Writes spicelib's process-wide ``NGspiceSimulator._compatibility_mode`` (the
+    ``-D ngbehavior=`` it injects on every run). Set once at startup, not per run.
+    When unset it RESETS to spicelib's captured default rather than no-opping —
+    otherwise a prior override would leak into a later re-entrant config load.
+    """
+    override = config.ngbehavior.strip().lower() if config and config.ngbehavior else ""
+    mode = override or _SPICELIB_DEFAULT_NGBEHAVIOR
+    # spicelib's public setter for the ``-D ngbehavior=`` it injects on every run.
+    NGspiceSimulator.set_compatibility_mode(mode)
+    if override and override != _SPICELIB_DEFAULT_NGBEHAVIOR:
+        logger.info("Applied ngspice ngbehavior override: %s", override)
+
+
+def current_ngbehavior() -> str | None:
+    """Return the ngbehavior string ngspice runs with (spicelib class attribute).
+
+    ``getattr`` (not attribute access) is deliberate: it reads the protected
+    ``_compatibility_mode`` without tripping pyright's reportPrivateUsage, and
+    spicelib exposes no public getter.
+    """
+    return getattr(NGspiceSimulator, "_compatibility_mode", None)
+
+
+def is_ngspice(simulator_class: type | None) -> bool:
+    """True when the simulator is ngspice — whose compat-mode / sectioned-.lib
+    quirks the ngbehavior diagnostic keys off. Checks class identity, not the
+    RawRead dialect table (a header-parsing concern), so the two can't drift.
+    """
+    return simulator_class is not None and issubclass(simulator_class, NGspiceSimulator)
+
+
 def _autodetect_wsl_ltspice(diagnostics: list[str] | None = None) -> None:
     """Register LTspice on WSL by probing standard Windows install locations.
 
@@ -224,6 +266,9 @@ def detect_simulators(
 
     # A valid explicit path takes control: when applied, skip auto-detection.
     applied = _apply_simulator_exe(config, diagnostics) if config is not None else False
+
+    # Apply the ngspice compatibility-mode override (if configured) before any run.
+    _apply_ngbehavior(config)
 
     # Resolve the candidate set: empty allowlist = every supported simulator.
     names = _resolve_enabled_names(config, diagnostics)

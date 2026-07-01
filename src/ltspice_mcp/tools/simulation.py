@@ -16,7 +16,7 @@ from ltspice_mcp.lib.log_parser import extract_error_context, parse_success_summ
 from ltspice_mcp.lib.mcp_logging import mcp_log
 from ltspice_mcp.lib.runner_base import discard_logopinfo_netlist
 from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
-from ltspice_mcp.lib.simulator import no_simulator_message
+from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice, no_simulator_message
 from ltspice_mcp.state import (
     NON_TERMINAL_LIVE_STATUSES,
     BatchJob,
@@ -433,6 +433,14 @@ def _failed_response(job, duration: float, state: SessionState, fmt: str | None)
         error_msg = services.attach_suggestions_to_failure(
             error_msg, data, job.log_file, state.libraries
         )
+        hint = services.ngbehavior_lib_hint(
+            job.netlist,
+            error_msg,
+            is_ngspice=is_ngspice(state.default_simulator),
+            current_mode=current_ngbehavior(),
+        )
+        if hint:
+            error_msg = f"{error_msg}\n\n{hint}"
         data["error"] = error_msg
     files_note = _attach_result_files(data, job)
     return format_response(

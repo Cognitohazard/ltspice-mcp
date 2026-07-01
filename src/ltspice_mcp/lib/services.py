@@ -129,6 +129,64 @@ def attach_suggestions_to_failure(
     return f"{error_msg}{block}"
 
 
+def _deck_has_sectioned_lib(netlist: Path) -> bool:
+    """True when the deck has a ``.lib <file> <section>`` directive (2+ args).
+
+    The section-selecting form of ``.lib`` — the standard PDK corner idiom — as
+    opposed to LTspice's section-less ``.lib <file>``. Lexes so an inline comment
+    or a quoted path containing spaces doesn't inflate the token count into a
+    spurious "section" (``card.body`` is comment-stripped; ``tokenize_body`` keeps
+    a quoted path as one token).
+    """
+    try:
+        from ltspice_mcp.lib.spice_lex import cards_from_path, iter_by_kind, tokenize_body
+
+        cards = cards_from_path(netlist).cards
+    except (OSError, ValueError):
+        return False
+    for card in iter_by_kind(cards, "directive"):
+        tokens = tokenize_body(card.body)
+        if len(tokens) >= 3 and tokens[0].text.lower() == ".lib":
+            return True
+    return False
+
+
+def ngbehavior_lib_hint(
+    netlist: Path,
+    log_text: str,
+    *,
+    is_ngspice: bool,
+    current_mode: str | None,
+) -> str | None:
+    """Actionable hint when ngspice's compat mode broke a sectioned ``.lib``.
+
+    Fires only when ALL of: the run used ngspice, the active ``ngbehavior`` still
+    contains ``lt`` or ``ps`` (a mode with neither parses the section fine), the
+    log reports a missing include, and the deck actually uses a sectioned ``.lib``.
+    See the ``ngbehavior`` config field for the mechanism. The deck read is last,
+    so the three cheap string checks gate it.
+    """
+    if not is_ngspice:
+        return None
+    # Both the LTspice (lt) and PSPICE (ps) compat tokens split a sectioned .lib;
+    # a mode with neither (e.g. hsa, kia) parses it correctly, so don't fire there.
+    mode = (current_mode or "").lower()
+    if "lt" not in mode and "ps" not in mode:
+        return None
+    if "could not find include file" not in log_text.lower():
+        return None
+    if not _deck_has_sectioned_lib(netlist):
+        return None
+    return (
+        "This looks like a sectioned '.lib <file> <section>' that ngspice split into "
+        "two plain includes: ngspice is running in an LTspice/PSPICE-compatibility mode "
+        f"(ngbehavior='{current_mode}'), so the corner section was read as a missing "
+        'include file. Set [simulator] ngbehavior = "hsa" in ltspice-mcp.toml (or '
+        "LTSPICE_MCP_NGBEHAVIOR=hsa) and restart the server, or add 'set ngbehavior=hsa' "
+        "to a .spiceinit in the run directory."
+    )
+
+
 def resolve_job(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
     """Look up any job by id in the union job store.
 
