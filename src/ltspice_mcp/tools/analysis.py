@@ -986,8 +986,10 @@ async def handle_get_waveform(args: GetWaveformInput, state: SessionState):
     if np.iscomplexobj(wave):
         raise ResultError(
             "get_waveform returns a real-valued (time/sweep-domain) envelope; "
-            f"signal {signal!r} is complex (AC analysis). Use bode_metrics for "
-            "magnitude/phase vs frequency, or query_value at a specific frequency.",
+            f"signal {signal!r} is complex (AC analysis). For magnitude/phase vs "
+            "frequency use bode_metrics; for the full numeric |value|(f) table in one "
+            "call use export_waveform; for peak/notch frequencies (e.g. an impedance "
+            "sweep) use resonance; or query_value at a specific frequency.",
             show_hint=False,
         )
 
@@ -2770,7 +2772,10 @@ async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
         "stimulus edge near t_start and enough tail to see settling.\n\n"
         "Returns: direction (rising/falling), initial/steady-state values, "
         "peak (absolute and pct), settling_time (to within "
-        "settling_tolerance_pct band; null if never settled in window).\n\n"
+        "settling_tolerance_pct band). settling_time is null in three cases, kept "
+        "distinct in the text and quality flags: 'never (within window)', "
+        "'undefined (full-pulse window)', and 'unknown' when the trailing window is "
+        "too noisy to trust the final value (still ringing) — pass final_value there.\n\n"
         "Definitions: overshoot is excursion BEYOND final in the step "
         "direction; undershoot is excursion beyond initial opposite the "
         "step direction. overshoot_pct = 0 means MEASURED overdamped, not "
@@ -2802,10 +2807,14 @@ async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
     )
     data["signal"] = args.signal
 
-    # overshoot/undershoot/settling are None when the window is a full pulse
-    # (metrics undefined, not authoritative). Disambiguate that from a genuine
-    # "never settled within the window" (settling_time None on a valid window).
-    undefined = "net_step_small_vs_swing" in data.get("quality", [])
+    # settling_time None has THREE distinct meanings; keep them separate so an
+    # unknown/unreliable state never reads as a definitive design failure:
+    #   - full-pulse window     → metrics undefined (net step ~0 baseline)
+    #   - trusted, never crossed → genuinely "never settled within the window"
+    #   - untrusted final value  → UNKNOWN (trailing window too noisy to anchor a band)
+    quality = data.get("quality", [])
+    undefined = "net_step_small_vs_swing" in quality
+    noisy_tail = "settling_final_value_from_noisy_tail" in quality
 
     def _pct(value: float | None) -> str:
         return "undefined (full-pulse window)" if value is None else f"{value:.3f} %"
@@ -2814,6 +2823,8 @@ async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
         settle = f"{data['settling_time']:.6g} s"
     elif undefined:
         settle = "undefined (full-pulse window)"
+    elif noisy_tail:
+        settle = "unknown (final value from a still-ringing tail; pass final_value)"
     else:
         settle = "never (within window)"
     lines = [

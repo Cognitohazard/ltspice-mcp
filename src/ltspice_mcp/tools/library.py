@@ -7,6 +7,7 @@ from pydantic import Field
 
 from ltspice_mcp.errors import LibraryError
 from ltspice_mcp.lib.mcp_logging import mcp_log
+from ltspice_mcp.lib.symbol_geometry import get_symbol_info
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     PAGINATION_SCHEMA,
@@ -175,6 +176,15 @@ async def handle_find_model(args: FindModelInput, state: SessionState):
             hint = " Try lowering cutoff, or add .lib/.include directives for more sources."
         else:
             hint = " Try lowering cutoff or load_library to add more sources."
+        # A name that resolves to a schematic SYMBOL rather than a library model
+        # (e.g. UniversalOpamp2) legitimately has no .SUBCKT/.MODEL — point the
+        # caller at symbol_info instead of leaving them to conclude it doesn't exist.
+        # get_symbol_info degrades to None on a missing/unparseable symbol.
+        if get_symbol_info(name) is not None:
+            hint += (
+                f" Note: a schematic symbol '{name}' exists (not a library model) "
+                "— use symbol_info for its pins/geometry."
+            )
         reason = "No exact match" if exact else f"No fuzzy matches (cutoff={cutoff})"
         return format_response(f"{reason} for '{name}' in {scope} libraries.{hint}", data, fmt)
 
