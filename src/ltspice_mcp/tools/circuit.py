@@ -2915,13 +2915,18 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
     """
     warnings: list[str] = []
     if net != "0":
-        # Duplicate non-ground label name: connect errors on the ambiguity.
+        # Duplicate non-ground label name. This is NOT a short: the netlist merges
+        # same-name labels into one net, which is a valid (often simpler) way to
+        # tie distant nets. The only downstream cost is that connect(net=...) can't
+        # disambiguate which label to route to — so surface that, not a scare.
         for lbl in editor.labels:
             if lbl.text == net:
                 warnings.append(
-                    f"'{net}' already exists at ({int(lbl.coord.X)},{int(lbl.coord.Y)}). "
-                    "Multiple labels with the same name will cause connect to error "
-                    "on ambiguity."
+                    f"'{net}' already labels a net at ({int(lbl.coord.X)},"
+                    f"{int(lbl.coord.Y)}); the netlist merges the two into one net "
+                    "(this is correct — a valid way to tie distant nets). Only a "
+                    f"later connect(net='{net}') is ambiguous with duplicate labels — "
+                    "connect to a component pin (Ref.Pin) instead."
                 )
                 break
         # Net-label conflict: a non-ground label on a network that already
@@ -3425,9 +3430,11 @@ async def handle_create_schematic(
         "route outside component bodies."
         '\n- Ground: add_net_label(net="0", pin="Ref.pin") at each ground pin; '
         "don't wire to a shared ground flag."
-        "\n- Wire signal nets (don't label them) — BUT label any net you reference "
-        "by name in a .meas/.param/B-source (e.g. V(vref)) with add_net_label, or it "
-        "exports as N00x and the reference silently breaks."
+        "\n- Wire nearby signal nets with connect; for distant nets, repeating a "
+        "same-name add_net_label ties them without routing — the netlist merges "
+        "same-name labels into one net (not a short). Also label any net you "
+        "reference by name in a .meas/.param/B-source (e.g. V(vref)), or it exports "
+        "as N00x and the reference silently breaks."
         "\n- Multi-step build: use apply_schematic_ops (one transaction; dry_run=true "
         "to validate without saving)."
         "\n- Matched devices (diff pairs/mirrors) share a y-tier; get pin coords "

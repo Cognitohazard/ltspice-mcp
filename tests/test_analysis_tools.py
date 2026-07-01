@@ -863,6 +863,36 @@ class TestPulseResponse:
                 state_no_sim,
             )
 
+    async def test_ringing_tail_renders_unknown_not_never(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # Still-ringing tail on the auto path: settling_time is suppressed. The
+        # tool must render it as UNKNOWN, not the definitive "never (within
+        # window)" — the two null states have different meanings.
+        raw_file = work_dir / "ring.raw"
+        t_pre = np.linspace(-0.4e-3, 0, 400, endpoint=False)
+        t_post = np.linspace(0, 2e-3, 2000)
+        zeta = 0.05
+        wn = 2 * np.pi * 1000
+        wd = wn * np.sqrt(1 - zeta**2)
+        phi = np.arctan2(np.sqrt(1 - zeta**2), zeta)
+        y_post = 1 - np.exp(-zeta * wn * t_post) / np.sqrt(1 - zeta**2) * np.sin(wd * t_post + phi)
+        t = np.concatenate([t_pre, t_post])
+        y = np.concatenate([np.zeros_like(t_pre), y_post])
+        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        # No explicit final_value -> trailing window is still ringing -> suppressed.
+        result = await handle_pulse_response(
+            PulseResponseInput(raw_file=raw_file.name, signal="V(out)"),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc["settling_time"] is None
+        assert "settling_final_value_from_noisy_tail" in sc["quality"]
+        text = result.content[0].text
+        assert "unknown" in text.lower()
+        assert "never (within window)" not in text
+
 
 # ---------------------------------------------------------------------------
 # timing_between

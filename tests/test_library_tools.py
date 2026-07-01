@@ -172,6 +172,23 @@ class TestFindModel:
         assert "load_library" not in text
         assert ".lib/.include" in text
 
+    async def test_empty_hint_points_to_symbol_when_name_is_a_symbol(
+        self, state_no_sim: SessionState, monkeypatch
+    ):
+        # A name that is a schematic SYMBOL (not a library model) legitimately has
+        # no .SUBCKT/.MODEL; find_model redirects to symbol_info rather than
+        # leaving the caller to conclude the part doesn't exist. Patch the name in
+        # library's namespace (it imports get_symbol_info at module top).
+        import ltspice_mcp.tools.library as lib_mod
+
+        monkeypatch.setattr(lib_mod, "get_symbol_info", lambda _name: {"pins": []})
+        result = await handle_find_model(
+            FindModelInput(name="UniversalOpamp2", include_builtin=True), state_no_sim
+        )
+        text = result.content[0].text
+        assert "symbol_info" in text
+        assert "UniversalOpamp2" in text
+
     async def test_exact_match_found(self, state_no_sim: SessionState, fuzzy_lib: Path):
         await handle_load_library(LoadLibraryInput(path=fuzzy_lib.name), state_no_sim)
         result = await handle_find_model(FindModelInput(name="2N3904", exact=True), state_no_sim)

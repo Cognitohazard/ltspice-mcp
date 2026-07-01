@@ -535,6 +535,28 @@ class TestAnalyzePulseResponse:
         assert "levels_bootstrapped_from_boundary" in result["quality"]
         assert result["overshoot_pct"] is not None
 
+    def test_ringing_tail_suppresses_false_settling_time(self):
+        """On a still-ringing tail the auto final-value lands on a ripple sample,
+        not the DC asymptote, so a settle band anchored to it can report a
+        definite-looking (but false) settling_time. When the trailing window is
+        too noisy to trust the final level, settling_time is suppressed rather
+        than emitted."""
+        # Heavily underdamped, cut off while still ringing (~0.5 ripple at end).
+        t, y = _second_order_step(zeta=0.05, wn=2 * math.pi * 1000, t_end=2e-3, n=2001)
+        auto = analyze_pulse_response(t, y)
+        # Trailing window is noisy -> final bootstrapped -> settling untrustworthy.
+        assert "levels_bootstrapped_from_boundary" in auto["quality"]
+        assert auto["settling_time"] is None
+        assert any("settling_time suppressed" in w for w in auto["warnings"])
+        # A distinct flag marks this as UNKNOWN, not "never settled", so the tool
+        # renderer can tell the two null states apart.
+        assert "settling_final_value_from_noisy_tail" in auto["quality"]
+        # Escape hatch: pinning final_value to the same boundary sample clears
+        # end_noisy, so the metric that WAS being emitted comes back finite —
+        # proving the auto path suppressed a real number, it didn't just fail.
+        explicit = analyze_pulse_response(t, y, initial_value=0.0, final_value=float(y[-1]))
+        assert explicit["settling_time"] is not None
+
     def test_invalid_tolerance(self):
         t, y = _linear_edge(1e-3, 2e-3, 0.0, 1.0)
         with pytest.raises(ValueError, match="must be positive"):
