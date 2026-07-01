@@ -21,6 +21,7 @@ from ltspice_mcp.tools.circuit import (
     RemoveComponentInput,
     ResetSchematicInput,
     SetComponentAttributeInput,
+    SetComponentValueInput,
     SymbolInfoInput,
     TraceNetInput,
     ValidateNetlistInput,
@@ -41,6 +42,7 @@ from ltspice_mcp.tools.circuit import (
     handle_remove_component,
     handle_reset_schematic,
     handle_set_component_attribute,
+    handle_set_component_value,
     handle_symbol_info,
     handle_trace_net,
     handle_validate_netlist,
@@ -857,6 +859,167 @@ class TestEmptyAttributeRejected:
                 asc_state,
             )
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
+
+    @pytest.mark.parametrize("bad_value", ["", "   "])
+    async def test_add_component_empty_value_rejected(
+        self, asc_state: SessionState, asc_file: Path, bad_value: str
+    ):
+        # The `value` param writes SYMATTR Value directly; an empty/whitespace
+        # value corrupts the .asc the same way an empty attribute does.
+        original = asc_file.read_bytes()  # noqa: ASYNC240
+        with pytest.raises(NetlistError, match="empty value"):
+            await handle_add_component(
+                AddComponentInput(
+                    path=asc_file.name, reference="RX", symbol="res", x=600, y=600, value=bad_value
+                ),
+                asc_state,
+            )
+        assert asc_file.read_bytes() == original  # noqa: ASYNC240
+        await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
+
+    async def test_apply_ops_add_component_empty_value_rejected(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        original = asc_file.read_bytes()  # noqa: ASYNC240
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path=asc_file.name,
+                ops=[
+                    {  # type: ignore[arg-type]
+                        "op": "add_component",
+                        "reference": "RX",
+                        "symbol": "res",
+                        "x": 600,
+                        "y": 600,
+                        "value": "",
+                    },
+                ],
+            ),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        assert data["saved"] is False
+        assert data["failed_count"] == 1
+        assert "empty value" in data["results"][0]["error"]
+        assert asc_file.read_bytes() == original  # noqa: ASYNC240
+        await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
+
+    async def test_set_component_attribute_empty_value_rejected(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        # The reported bug: set_component_attribute(Value="") wrote a 2-token
+        # "SYMATTR Value " line the parser could not read back, bricking the
+        # editor for that file. Reject up front; the .asc stays intact + readable.
+        original = asc_file.read_bytes()  # noqa: ASYNC240
+        with pytest.raises(NetlistError, match="empty value"):
+            await handle_set_component_attribute(
+                SetComponentAttributeInput(
+                    path=asc_file.name, reference="R1", attribute="Value", value=""
+                ),
+                asc_state,
+            )
+        assert asc_file.read_bytes() == original  # noqa: ASYNC240
+        await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
+
+    async def test_apply_ops_set_component_attribute_empty_value_rejected(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        original = asc_file.read_bytes()  # noqa: ASYNC240
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path=asc_file.name,
+                ops=[
+                    {  # type: ignore[arg-type]
+                        "op": "set_component_attribute",
+                        "reference": "R1",
+                        "attribute": "Value",
+                        "value": "",
+                    },
+                ],
+            ),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        assert data["saved"] is False
+        assert data["failed_count"] == 1
+        assert "empty value" in data["results"][0]["error"]
+        assert asc_file.read_bytes() == original  # noqa: ASYNC240
+        await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
+
+
+@pytest.mark.asyncio
+class TestSetComponentValueCreatesMissingValue:
+    """Regression: set_component_value on a component added without a Value slot
+    used to fail 'Component(s) not found' (the component existed). It must create
+    the Value line — symmetric with add_component(value=)."""
+
+    async def test_standalone_set_value_creates_missing_value_line(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        from spicelib import AscEditor
+
+        await handle_add_component(
+            AddComponentInput(path=asc_file.name, reference="R9", symbol="res", x=400, y=400),
+            asc_state,
+        )
+        result = await handle_set_component_value(
+            SetComponentValueInput(path=asc_file.name, reference="R9", value="22k"),
+            asc_state,
+        )
+        assert "R9" in _result_text(result)
+        assert str(AscEditor(str(asc_file)).get_component_value("R9")) == "22k"
+
+    async def test_apply_ops_set_value_after_valueless_add(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        from spicelib import AscEditor
+
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path=asc_file.name,
+                ops=[  # type: ignore[arg-type]
+                    {
+                        "op": "add_component",
+                        "reference": "R8",
+                        "symbol": "res",
+                        "x": 500,
+                        "y": 400,
+                    },
+                    {"op": "set_component_value", "reference": "R8", "value": "33k"},
+                ],
+            ),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        assert data["saved"] is True
+        assert data["failed_count"] == 0
+        assert str(AscEditor(str(asc_file)).get_component_value("R8")) == "33k"
+
+
+@pytest.mark.asyncio
+class TestCreateSchematicFormat:
+    """Regression: create_schematic rejected a `format` param its sibling tools
+    accept (schema was additionalProperties:false with no `format`)."""
+
+    async def test_format_text_accepted(self, asc_state: SessionState):
+        result = await handle_create_schematic(
+            CreateSchematicInput(name="fmt_text", format="text"), asc_state
+        )
+        assert "Created schematic" in _result_text(result)
+
+    async def test_format_json_returns_structured(self, asc_state: SessionState):
+        result = await handle_create_schematic(
+            CreateSchematicInput(name="fmt_json", width=640, height=480, format="json"),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        assert data["path"].endswith("fmt_json.asc")
+        assert data["width"] == 640
+        assert data["height"] == 480
 
 
 @pytest.mark.asyncio

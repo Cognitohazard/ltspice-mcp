@@ -654,8 +654,24 @@ def analyze_pulse_response(
             f"Signal did not settle within ±{settling_tolerance_pct}% tolerance by end of window"
         )
     else:
-        last_outside = int(outside_idx[-1])
-        settling_time = float(t[last_outside + 1] - t[0])
+        # Interpolate the settle-band crossing between the last out-of-band
+        # sample and the first in-band one rather than snapping to the in-band
+        # sample time, which lands up to a full timestep late on a coarse run
+        # (adaptive .tran can grow the step past 1τ at the flattened tail).
+        k = int(outside_idx[-1])
+        tk, tk1 = float(t[k]), float(t[k + 1])
+        y0, y1 = float(y[k]), float(y[k + 1])
+        boundary = fv + tol if y0 > fv else fv - tol
+        frac = (boundary - y0) / (y1 - y0) if y1 != y0 else 1.0
+        frac = min(max(frac, 0.0), 1.0)
+        bracket_dt = tk1 - tk
+        settling_time = tk + frac * bracket_dt - float(t[0])
+        if settling_time > 0 and bracket_dt > 0.1 * settling_time:
+            warnings.append(
+                f"settling_time interpolated across a coarse local timestep "
+                f"(Δt≈{bracket_dt / settling_time * 100:.0f}% of the settle time); "
+                "accuracy is bounded by the run's resolution near settling"
+            )
 
     # A full-pulse window makes overshoot/undershoot/settling undefined (computed
     # against a ~0 baseline) — return null, not a nonsense magnitude. peak_value /
