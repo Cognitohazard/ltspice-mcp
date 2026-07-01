@@ -2,7 +2,7 @@
 
 This module provides the line-level lexer (``lex``) and the body-level
 tokenizer (``tokenize_body``) that every netlist-touching helper in the
-codebase should build on. See ``.claude/plans/spice_lex.md``.
+codebase should build on. See ``docs/spice_lex.md``.
 
 Layer split:
 - **Layer 1** (``lex``): walks lines, classifies cards, merges

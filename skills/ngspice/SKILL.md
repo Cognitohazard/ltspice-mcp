@@ -212,6 +212,7 @@ X1 input output myfilter rval=1k cval=1n
 **Key differences from LTspice:**
 - Parameters on `.subckt` line do NOT need `params:` keyword — just `name=value` after nodes.
 - `.lib <filename> <section>` — requires a section name. **Omitting the section silently loads nothing** (no error!). For unconditional inclusion, use `.include` instead.
+  - **PDK corners under this MCP:** ngspice runs here in spicelib's default compatibility mode (`ngbehavior='kiltpsa'`), whose `lt`/`ps` tokens split a sectioned `.lib <file> <section>` into two plain includes — dropping the corner section, so it surfaces as a missing include (`could not find include file`). For standard-SPICE / PDK decks, set `[simulator] ngbehavior = "hsa"` in `ltspice-mcp.toml` (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart the server; `run_simulation` emits this hint when a failed run matches the pattern.
 - `.param` inside subcircuits is local scope (masks globals). Nesting up to 10 levels.
 - Subcircuit and model names are global — must be unique across the entire netlist.
 

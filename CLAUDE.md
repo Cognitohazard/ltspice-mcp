@@ -48,7 +48,7 @@ No Makefile. CI: `.github/workflows/publish.yml` (test + publish to PyPI on vers
 
 ## Comments, docstrings, and commit messages
 
-These are read by people outside this repo's internal process — keep internal jargon out of them. Do **not** use, in code comments, docstrings, or commit messages: severity codes (P0–P3), internal codenames for stress-test findings (e.g. J-KILL, J-MAXPAR), backlog item numbers (`open_followups` item N), or stress-test version numbers (v9/v10). Describe the actual behavior, condition, or bug in plain technical terms instead. Internal planning docs under `.claude/plans/` and the backlog may use that shorthand; shipped code and git history may not.
+These are read by people outside this repo's internal process — keep internal jargon out of them. Do **not** use, in code comments, docstrings, or commit messages: severity codes (P0–P3), internal codenames for stress-test findings (e.g. J-KILL, J-MAXPAR), backlog item numbers (`open_followups` item N), or stress-test version numbers (v9/v10). Describe the actual behavior, condition, or bug in plain technical terms instead. Internal planning docs and the backlog may use that shorthand; shipped code and git history may not.
 
 ## Architecture
 
@@ -173,7 +173,7 @@ Rules for any field that rates/flags/classifies a result (consumer is an LLM; ra
 
 On WSL, LTspice.exe runs via Windows interop (not Wine). Key adaptations:
 - `lib/ltspice_wsl.py`: `LTspiceWSL` subclass overrides `run()` to convert paths via `wslpath` instead of Wine's `Z:` prefix. Auto-selected by `lib/simulator.py` when `is_wsl()` is True.
-- `simulator_exe` in `ltspice-mcp.toml` must be set to the Windows-side path (e.g., `/mnt/c/Program Files/ADI/LTspice/LTspice.exe`) since spicelib can't auto-detect across WSL boundary.
+- `simulator.path` in `ltspice-mcp.toml` must be set to the Windows-side path (e.g., `/mnt/c/Program Files/ADI/LTspice/LTspice.exe`) since spicelib can't auto-detect across WSL boundary.
 - The simulation **runner output folder is kept stable** (one `{working_dir}/.ltspice-mcp/runs` sidecar) so the single cached runner, `cancel_job`, and the global `max_parallel` cap stay valid — a per-deck output dir would change the folder on every run in a different directory, and `RunnerManager._ensure_fresh` invalidates the whole runner cache when the folder changes (losing in-flight process handles and splitting the concurrency semaphore per directory). Each run's artifacts are uniquely named (`{job_id}.*`) so they stay isolated within that shared folder; callers find them through the result path `check_job` reports (the MCP analysis tools resolve by `job_id` and don't care about location). `resolve_output_folder` (`tools/_base.py`) has two overrides: a deck with a relative `.include`/`.lib` runs in its own dir (the simulator resolves the include from the staged netlist's dir, so it can't move — applies to single runs and sweeps/MC alike), and **WSL + LTspice + a Linux-fs source** routes to a Windows-native temp dir, because LTspice (a Windows process reaching the Linux fs over a `wsl.localhost` UNC share) can't write the SQLite `.db` behind `.MEAS` over UNC. `cancel_job` resolves the runner via the **job's own netlist** so its folder matches the launching runner.
 - LTspice requires netlist files to have an extension (`.cir`, `.net`, `.sp`). `sim_runner.py` preserves the original extension in `run_filename`.
 
@@ -182,6 +182,8 @@ On WSL, LTspice.exe runs via Windows interop (not Wine). Key adaptations:
 `ltspice-mcp.toml` in working directory (auto-generated if missing). Environment variables with `LTSPICE_MCP_` prefix override TOML values. See `config.py:ServerConfig` for all options. On WSL, set `simulator.path` to the LTspice Windows executable path.
 
 TOML sections: `[simulator]`, `[security]`, `[simulation]`, `[analysis]`, `[logging]`, `[schematic]`, `[tools]`, `[state]` (`persist_jobs`).
+
+**ngspice compatibility-mode gotcha:** spicelib runs ngspice in `kiltpsa` mode by default, whose `lt`/`ps` tokens make it read a sectioned `.lib <file> <section>` (the PDK corner-select idiom) as two plain includes and drop the section → "could not find include file". `[simulator] ngbehavior` (or `LTSPICE_MCP_NGBEHAVIOR`) overrides it (e.g. `"hsa"`), applied at startup by `lib/simulator.py:_apply_ngbehavior`; `services.ngbehavior_lib_hint` surfaces the fix on that failure. Runtime default unchanged (spicelib's).
 
 ### Tool Profiles
 
