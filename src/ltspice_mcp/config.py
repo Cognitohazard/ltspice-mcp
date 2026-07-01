@@ -110,6 +110,15 @@ class ServerConfig:
     simulator_exe: Path | None = None
     """Explicit path to simulator executable. Overrides auto-detection."""
 
+    ngbehavior: str | None = None
+    """ngspice compatibility mode (``ngbehavior``). ``None`` leaves spicelib's
+    default (``kiltpsa``), whose LTspice (``lt``) and PSPICE (``ps``) tokens each
+    make ngspice read a sectioned ``.lib <file> <section>`` (the PDK corner idiom)
+    as two plain includes, dropping the section. Set a mode with neither token
+    (e.g. ``"hsa"`` or ``"kia"``) for standard-SPICE / PDK decks. Applied at
+    startup to ``NGspiceSimulator._compatibility_mode``; ngspice-only, ignored by
+    other simulators."""
+
     working_dir: Path = field(default_factory=Path.cwd)
     """Working directory for circuit files."""
 
@@ -195,6 +204,15 @@ class ServerConfig:
                         logger.warning(
                             "config: simulator.enabled must be a list of strings; ignoring %r",
                             raw,
+                        )
+                if "ngbehavior" in toml_data["simulator"]:
+                    raw = toml_data["simulator"]["ngbehavior"]
+                    if isinstance(raw, str):
+                        if raw.strip():
+                            config_dict["ngbehavior"] = raw.strip()
+                    else:
+                        logger.warning(
+                            "config: simulator.ngbehavior must be a string; ignoring %r", raw
                         )
 
             if "security" in toml_data and "allowed_paths" in toml_data["security"]:
@@ -283,6 +301,9 @@ class ServerConfig:
 
         if env_exe := os.getenv("LTSPICE_MCP_SIMULATOR_EXE"):
             config_dict["simulator_exe"] = Path(env_exe)
+
+        if (env_ngb := os.getenv("LTSPICE_MCP_NGBEHAVIOR")) and env_ngb.strip():
+            config_dict["ngbehavior"] = env_ngb.strip()
 
         if env_wd := os.getenv("LTSPICE_MCP_WORKING_DIR"):
             config_dict["working_dir"] = Path(env_wd)
@@ -383,6 +404,12 @@ def generate_default_config(path: Path) -> None:
     sim.add(comment("Explicit path to simulator executable (overrides auto-detection)"))
     sim.add(comment("Leave empty for auto-detection"))
     sim.add("path", "")
+    sim.add(nl())
+    sim.add(comment("ngspice compatibility mode (ngbehavior). Unset = spicelib's default"))
+    sim.add(comment("'kiltpsa'; its lt (LTspice) and ps (PSPICE) tokens both break sectioned"))
+    sim.add(comment("'.lib <file> <section>' PDK corner selection. Set a mode with neither,"))
+    sim.add(comment('"hsa" or "kia", for standard-SPICE / PDK decks.'))
+    sim.add(comment('ngbehavior = "hsa"'))
     doc.add("simulator", sim)
     doc.add(nl())
 

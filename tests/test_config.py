@@ -55,6 +55,32 @@ class TestServerConfig:
         config = ServerConfig.load(toml_path)
         assert config.simulator_exe is None
 
+    def test_ngbehavior_unset_is_none(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("LTSPICE_MCP_NGBEHAVIOR", raising=False)
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text('[simulator]\ndefault = "ngspice"\n')
+        assert ServerConfig.load(toml_path).ngbehavior is None
+
+    def test_ngbehavior_from_toml(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("LTSPICE_MCP_NGBEHAVIOR", raising=False)
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text('[simulator]\nngbehavior = "kipsa"\n')
+        assert ServerConfig.load(toml_path).ngbehavior == "kipsa"
+
+    def test_ngbehavior_env_overrides_toml(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text('[simulator]\nngbehavior = "kipsa"\n')
+        monkeypatch.setenv("LTSPICE_MCP_NGBEHAVIOR", "hsa")
+        assert ServerConfig.load(toml_path).ngbehavior == "hsa"
+
+    def test_ngbehavior_non_string_toml_ignored(
+        self, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("LTSPICE_MCP_NGBEHAVIOR", raising=False)
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text("[simulator]\nngbehavior = 42\n")
+        assert ServerConfig.load(toml_path).ngbehavior is None
+
     def test_unknown_toml_section_is_ignored(self, work_dir: Path):
         """Sections the server no longer reads (e.g. the retired [plotting])
         must be silently skipped, not crash the load."""
