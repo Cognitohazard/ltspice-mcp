@@ -100,6 +100,7 @@ Works with defaults out of the box. To customize, copy `ltspice-mcp.example.toml
 [simulator]
 default = "ltspice"      # ltspice, ngspice, qspice, xyce (null = auto-detect)
 path = ""                # explicit executable path (required on WSL)
+ngbehavior = "hsa"       # ngspice compat mode; unset = spicelib default, "hsa" fixes sectioned .lib corner select
 
 [security]
 allowed_paths = ["."]    # sandbox: only these directories are accessible

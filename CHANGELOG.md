@@ -8,6 +8,58 @@ tool-surface changes.
 
 ## [Unreleased]
 
+### Added
+
+- Configurable ngspice compatibility mode: a `[simulator] ngbehavior` option
+  (and `LTSPICE_MCP_NGBEHAVIOR` env var) sets the mode spicelib passes to ngspice
+  at startup. The shipped default is unchanged. spicelib's default mode reads a
+  sectioned `.lib <file> <section>` — the standard PDK corner-select idiom — as
+  two plain includes, dropping the section so the corner isn't found; a mode
+  without the `lt`/`ps` compatibility tokens (e.g. `ngbehavior = "hsa"`) parses
+  it correctly. When an ngspice run fails with a missing-include error while the
+  deck uses a sectioned `.lib`, the run now surfaces an actionable hint naming
+  that fix.
+- `measurement_stats` now echoes the reported measurement time (the `AT` /
+  crossing value) on single-run reads, matching the aggregate-mode output.
+
+### Changed
+
+- `create_schematic` now accepts the optional `format` (`"json"`/`"text"`)
+  parameter its sibling tools take, returning structured content, instead of
+  rejecting it as an unknown field.
+
+### Fixed
+
+- The operating-point log classifier no longer reports a converged run as
+  failed. LTspice escalates the OP solve (Direct Newton → Gmin → source stepping
+  → pseudo-transient) and logs "<method> stepping failed to find operating
+  point" for each abandoned rung before a later method converges; those
+  intermediate rungs were classified as errors and echoed into every analysis
+  tool's warnings. A rung is now an error only when its own solve block never
+  converged, and detection is scoped per solve block so a converged step in a
+  stepped `.op` no longer masks a genuinely failed later step. A no-data run
+  (no success line) still classifies as an error.
+- Every `.asc` write path now refuses an empty or whitespace-only attribute
+  value up front — `add_component`'s value and attributes,
+  `set_component_attribute`, and the `apply_schematic_ops` op. An empty
+  `SYMATTR` value writes a two-token line the schematic parser cannot read
+  back, which corrupted the file.
+- `pulse_response` now interpolates the settling-band crossing between the last
+  out-of-band sample and the first in-band one instead of snapping to the
+  in-band sample time (which lands up to a full timestep late on a coarse run),
+  and warns when the local timestep near settling is coarse.
+- `set_component_value` on an `.asc` now creates the `Value` line when the
+  component exists but has none (it was added without a value), symmetric with
+  `add_component(value=)`, instead of failing "not found".
+- Transient reads now surface a `.meas WHEN` crossing time that the solver
+  dropped, and flag under-floor divergences, instead of silently omitting them
+  (`run_simulation` / `simulation_summary` / `measurement_stats`). A behavioral
+  (B-source) expression with unquoted internal spaces is now a warning, not a
+  hard error.
+- Output-schema generation stays valid for schema-checking clients:
+  `NotRequired` fields are no longer marked required under stringized
+  annotations, and heterogeneous tuples are refused (with an invariant guard).
+
 ## [0.4.1] - 2026-06-27
 
 ### Fixed

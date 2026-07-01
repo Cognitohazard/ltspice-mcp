@@ -509,6 +509,12 @@ X1 input output myfilter rval=1k cval=1n
   loaded" and the models resolve). `.lib file section` pulls just that `.lib
   section … .endl` block. `.lib` differs from `.include` in scope (`.lib` skips
   global-scope circuit elements), not in whether a section is required.
+  **Caveat — sectioned `.lib` under this server's default ngspice mode:** spicelib
+  runs ngspice in a mixed LTspice/PSPICE-compatibility mode (`ngbehavior=kiltpsa`)
+  whose `lt`/`ps` tokens split a sectioned `.lib <file> <section>` (the PDK corner
+  idiom) into two plain includes and drop the section — the run fails with "could
+  not find include file". Set `[simulator] ngbehavior = "hsa"` in `ltspice-mcp.toml`
+  (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart to parse the section correctly.
 - `.param` inside subcircuits is local scope (masks globals). Nesting to 10 levels.
 - Subcircuit and model names are global — must be unique across the netlist.
 

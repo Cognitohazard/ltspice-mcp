@@ -2,8 +2,8 @@
 
 Pins the structured ``validation_warnings`` payload returned by mutating
 .asc handlers (apply_schematic_ops, connect, add_component) and the
-text-message warnings on move_component / remove_component. See the
-`validate-before-write` doctrine in `.claude/plans/strategic_priorities.md`.
+text-message warnings on move_component / remove_component. Enforces the
+project's validate-before-write doctrine.
 """
 
 from __future__ import annotations
