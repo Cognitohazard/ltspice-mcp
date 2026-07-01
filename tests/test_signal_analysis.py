@@ -455,6 +455,37 @@ class TestAnalyzePulseResponse:
         assert result["settling_time"] is not None
         assert 0 < result["settling_time"] < 11e-3
 
+    def test_settling_time_interpolated_on_coarse_grid(self):
+        # Step 0->1 into a 1st-order RC (tau=100 ns) sampled on a coarse grid
+        # whose timestep (60 ns) is comparable to tau. The first IN-BAND sample
+        # lands a whole timestep late; interpolating the band crossing recovers
+        # the analytic settle time (tau*ln(50) for +/-2%), and the coarse local
+        # timestep is surfaced as a warning. Window starts at the step (t[0]=0),
+        # matching a real .tran run.
+        tau = 100e-9
+        t = np.arange(0.0, 2e-6, 60e-9)
+        y = 1.0 - np.exp(-t / tau)
+        result = analyze_pulse_response(
+            t, y, initial_value=0.0, final_value=1.0, settling_tolerance_pct=2.0
+        )
+        analytic = tau * math.log(50)  # ~391.2 ns
+        st = result["settling_time"]
+        assert st is not None
+        assert st == pytest.approx(analytic, rel=0.05)
+        # ... and closer than the raw first-in-band sample (a full 60 ns step late).
+        assert abs(st - analytic) < abs(420e-9 - analytic)
+        assert any("coarse" in w.lower() for w in result["warnings"])
+
+    def test_settling_time_fine_grid_no_coarse_warning(self):
+        tau = 100e-9
+        t = np.arange(0.0, 2e-6, 1e-9)
+        y = 1.0 - np.exp(-t / tau)
+        result = analyze_pulse_response(
+            t, y, initial_value=0.0, final_value=1.0, settling_tolerance_pct=2.0
+        )
+        assert result["settling_time"] == pytest.approx(tau * math.log(50), rel=0.01)
+        assert not any("coarse" in w.lower() for w in result["warnings"])
+
     def test_window_straddles_edge_falls_back_to_first_sample(self):
         """When the leading 10% straddles the input edge, the auto-detected
         initial_value is unreliable. Instead of refusing outright, the

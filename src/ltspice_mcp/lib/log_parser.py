@@ -143,11 +143,20 @@ _RE_ERROR = re.compile(r"^(?:Error|ERROR)\s*:", re.IGNORECASE)
 # ngspice may still recover from it via gmin/source stepping. Matched as a
 # case-insensitive substring, so any "Warning:" prefix is ignored without a
 # separate strip.
-_CONVERGENCE_FAILURE_PHRASES = (
+#
+# Gmin/source stepping are split out because they are ALSO the intermediate
+# rungs of LTspice's OP-solve escalation ladder: LTspice prints
+# "<method> stepping failed to find operating point" before trying the next
+# method, then a success line when one converges. They are terminal only when
+# no later success line exists (see the converged-check in
+# extract_log_diagnostics). ngspice's genuine no-data run prints no success
+# line, so those still classify as errors.
+_OP_STEPPING_FAILURE_PHRASES = (
     "gmin stepping failed",
     "source stepping failed",
-    "iteration limit reached",
 )
+# Always-terminal convergence failures — no later success rescues these.
+_CONVERGENCE_FAILURE_PHRASES = ("iteration limit reached",)
 # Bare convergence / runtime messages with no prefix.
 # These are matched anchored to the start of a (stripped) line so we don't
 # false-positive on phrases that merely *contain* one of these substrings
@@ -192,6 +201,24 @@ _RE_OP_ITERATION = re.compile(
     r"^\s*Direct Newton iteration succeeded in finding operating point",
     re.IGNORECASE,
 )
+# Terminal success line of LTspice's OP-solve escalation ladder. Any of these
+# means the bias point WAS found (possibly via a fallback method), so the
+# earlier "<method> stepping failed to find operating point" rungs are benign.
+# Covers Direct Newton / Gmin / Source stepping ("... succeeded in finding
+# operating point") and the pseudo-transient fallback ("Pseudo Transient
+# succeeded at <t>", which omits "operating point").
+_RE_OP_SOLVE_SUCCEEDED = re.compile(
+    r"succeeded in finding (?:the )?operating point"
+    r"|pseudo[- ]?transient succeeded"
+    r"|stepping succeeded",
+    re.IGNORECASE,
+)
+# Start of an OP-solve block. LTspice prints one "Direct Newton iteration ..."
+# line at the top of every operating-point solve — including each step of a
+# stepped .op — so the NEXT such line after a stepping-failure marks the next
+# solve block. Used to scope the converged-check per block: a converged step
+# must not suppress a genuinely failed later step.
+_RE_OP_SOLVE_ATTEMPT = re.compile(r"^\s*Direct Newton iteration", re.IGNORECASE)
 
 
 # Missing .MODEL — appears in log as:
@@ -386,6 +413,33 @@ def extract_missing_refs(log_path: Path) -> list[str]:
         return []
 
 
+def _op_block_recovered(lines: list[str], idx: int) -> bool:
+    """Whether the OP-solve block holding a stepping-failure at ``idx`` converged.
+
+    LTspice escalates within one solve (Direct Newton -> Gmin -> Source stepping
+    -> pseudo-transient) and prints a success line if a fallback works. Scanning
+    forward from the failure: a success before the next solve-block start means
+    this block was rescued (benign rung); reaching the next block's
+    "Direct Newton iteration" line first means this block never converged (the
+    failure is real). Scoped per block — not whole-log — so a converged step in
+    a stepped .op cannot mask a genuinely failed later step. A genuine ngspice
+    no-data run has no success line at all, so it stays classified as an error.
+    """
+    for j in range(idx + 1, len(lines)):
+        line = lines[j]
+        # Boundary check FIRST: "Direct Newton iteration succeeded ..." both
+        # starts the next block AND matches the success pattern, but that success
+        # belongs to the NEXT solve, not this one. Within a ladder that used
+        # stepping, the rescue is a pseudo-transient / stepping "succeeded" line,
+        # never a "Direct Newton iteration" line — so a Direct-Newton line here
+        # is always the next block.
+        if _RE_OP_SOLVE_ATTEMPT.match(line):
+            return False
+        if _RE_OP_SOLVE_SUCCEEDED.search(line):
+            return True
+    return False
+
+
 def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
     """Extract structured warnings and errors from an LTspice log file.
 
@@ -504,6 +558,14 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
         # terminal ones as errors (substring match, so the prefix is ignored)
         # before the generic warning rule below would downgrade a no-data run.
         stripped_lower = stripped.lower()
+        # Gmin/source stepping "failed" is an intermediate escalation rung on
+        # LTspice — drop it when THIS solve block later converged; keep it as an
+        # error otherwise (ngspice no-data run, or a step that never converged).
+        if any(phrase in stripped_lower for phrase in _OP_STEPPING_FAILURE_PHRASES):
+            if not _op_block_recovered(lines, i):
+                errors.append(stripped)
+            i += 1
+            continue
         if any(phrase in stripped_lower for phrase in _CONVERGENCE_FAILURE_PHRASES):
             errors.append(stripped)
             i += 1

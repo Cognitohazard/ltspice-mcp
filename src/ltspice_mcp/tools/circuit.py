@@ -85,6 +85,22 @@ from ltspice_mcp.tools._base import (
 )
 
 
+def _reject_empty_attr_value(reference: str, attribute: str, value: str) -> None:
+    """Refuse an empty SYMATTR value on any .asc write path.
+
+    LTspice writes ``SYMATTR <attr>`` (keyword + name, no value) for an empty
+    value; spicelib's parser then can't unpack that 2-token line on the NEXT
+    read, leaving the .asc permanently unreadable until hand-edited. Reject up
+    front rather than emit an .asc the server's own reader rejects.
+    """
+    if not value.strip():
+        raise NetlistError(
+            f"Attribute {attribute!r} on {reference!r}: an empty value writes a "
+            "2-token SYMATTR line the schematic parser cannot read back, "
+            "corrupting the .asc. Provide a non-empty value or omit the attribute."
+        )
+
+
 def _create_component(
     editor: AscEditor,
     reference: str,
@@ -107,18 +123,13 @@ def _create_component(
     comp.position = Point(x, y)
     comp.rotation = rotation
     if value is not None:
+        # An empty Value writes the same 2-token SYMATTR line that corrupts the
+        # .asc on the next read, so guard this path too (not just attributes).
+        _reject_empty_attr_value(reference, "Value", value)
         comp.attributes["Value"] = value
     if attributes:
         for attr_name, attr_val in attributes.items():
-            # Spicelib's parser fails on subsequent reads of a SYMATTR line
-            # with no value, leaving the .asc permanently unreadable until
-            # manually edited. Reject up front.
-            if attr_val == "":
-                raise NetlistError(
-                    f"Attribute {attr_name!r} on {reference!r}: empty value "
-                    "would corrupt the schematic. Omit the key to leave the "
-                    "attribute unset."
-                )
+            _reject_empty_attr_value(reference, attr_name, attr_val)
             comp.attributes[attr_name] = attr_val
     editor.add_component(comp)
 
@@ -256,6 +267,33 @@ def _validate_component_value(reference: str, value: str) -> None:
         )
 
 
+def _asc_component_value(editor, reference: str) -> str | None:
+    """Current Value of an .asc component, or ``None`` if it has no Value slot.
+
+    ``AscEditor.get_component_value`` raises for a component added without a
+    Value (e.g. ``add_component`` with no ``value=``); callers distinguish that
+    from a missing component via ``editor.components`` membership.
+    """
+    try:
+        return str(editor.get_component_value(reference))
+    except Exception:
+        return None
+
+
+def _set_or_create_value(editor, reference: str, value: str) -> None:
+    """Set the Value slot, creating the ``SYMATTR Value`` line if it has none.
+
+    ``set_component_value`` only updates an EXISTING Value slot; a component
+    added without one (``add_component`` with no ``value=``) needs the line
+    written directly via ``set_component_attribute`` — symmetric with
+    ``add_component(value=)``. Callers pre-validate the value non-empty.
+    """
+    if _asc_component_value(editor, reference) is None:
+        editor.set_component_attribute(reference, "Value", value)
+    else:
+        editor.set_component_value(reference, value)
+
+
 def _apply_component_value(editor, reference: str, value: str) -> None:
     """Set a component's value, splitting trailing ``KEY=VALUE`` tokens off.
 
@@ -276,7 +314,7 @@ def _apply_component_value(editor, reference: str, value: str) -> None:
     """
     _validate_component_value(reference, value)
     if "=" not in value:
-        editor.set_component_value(reference, value)
+        _set_or_create_value(editor, reference, value)
         return
     try:
         tokens = tokenize_body(value)
@@ -296,7 +334,7 @@ def _apply_component_value(editor, reference: str, value: str) -> None:
         # already rejected the shapes that would corrupt the netlist.
     head = " ".join(head_parts)
     if head:
-        editor.set_component_value(reference, head)
+        _set_or_create_value(editor, reference, head)
     if params:
         editor.set_component_parameters(reference, **params)
 
@@ -1713,12 +1751,11 @@ async def _set_component_value_asc(
     still gates whitespace shapes through.
     """
     async with _editing(file_path, state) as editor:
-        unknown_refs: list[str] = []
-        for ref, _ in pairs:
-            try:
-                editor.get_component_value(ref)
-            except Exception:
-                unknown_refs.append(ref)
+        # get_components() lists every component regardless of whether it has a
+        # Value slot, so a component added without one (get_component_value would
+        # raise) is still recognised as present — its Value is created below.
+        present = set(editor.get_components())
+        unknown_refs = [ref for ref, _ in pairs if ref not in present]
         if unknown_refs:
             raise NetlistError(
                 "Component(s) not found: " + ", ".join(repr(r) for r in unknown_refs)
@@ -1727,10 +1764,11 @@ async def _set_component_value_asc(
             _validate_component_value(ref, val)
         changes: list[str] = []
         for ref, val in pairs:
-            old_value = editor.get_component_value(ref)
+            old_value = _asc_component_value(editor, ref)
             _apply_component_value(editor, ref, val)
-            suffix = _unchanged_suffix(str(old_value), str(val))
-            changes.append(f"{ref}: {old_value} -> {val}{suffix}")
+            old_display = old_value if old_value is not None else "(unset)"
+            suffix = _unchanged_suffix(old_display, str(val))
+            changes.append(f"{ref}: {old_display} -> {val}{suffix}")
 
     if len(pairs) == 1:
         return text_response(f"Set {changes[0]}")
@@ -2371,6 +2409,7 @@ async def handle_set_component_attribute(
 
     if not attribute.strip():
         raise NetlistError("Attribute name must not be empty")
+    _reject_empty_attr_value(reference, attribute, value)
 
     if attribute not in _LTSPICE_ATTR_NAMES:
         canonical = _LTSPICE_ATTR_CANONICAL.get(attribute.lower())
@@ -3326,6 +3365,10 @@ class CreateSchematicInput(ToolInput):
         default=False,
         description="Overwrite an existing file at this path. Default is to refuse.",
     )
+    format: Literal["json", "text"] | None = Field(
+        default=None,
+        description="Response format: 'json' for structured data, 'text' for human-readable",
+    )
 
 
 @registry.tool(
@@ -3348,6 +3391,15 @@ class CreateSchematicInput(ToolInput):
         openWorldHint=False,
     ),
     profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Absolute path of the created .asc"},
+            "width": {"type": "integer", "description": "Sheet width (grid units)"},
+            "height": {"type": "integer", "description": "Sheet height (grid units)"},
+        },
+        "required": ["path", "width", "height"],
+    },
 )
 async def handle_create_schematic(
     args: CreateSchematicInput, state: SessionState
@@ -3365,7 +3417,8 @@ async def handle_create_schematic(
         raise NetlistError(
             f"File already exists: {target_path}. Pass overwrite=true to replace it."
         ) from e
-    return text_response(
+    data = {"path": str(target_path), "width": args.width, "height": args.height}
+    return format_response(
         f"Created schematic: {target_path}\n  Sheet: {args.width} x {args.height}"
         "\n\nLayout checklist (full playbook: spice://guide):"
         "\n- Wire signal nets with connect — orthogonal only, waypoints for bends, "
@@ -3378,7 +3431,9 @@ async def handle_create_schematic(
         "\n- Multi-step build: use apply_schematic_ops (one transaction; dry_run=true "
         "to validate without saving)."
         "\n- Matched devices (diff pairs/mirrors) share a y-tier; get pin coords "
-        "from symbol_info."
+        "from symbol_info.",
+        data,
+        args.format,
     )
 
 
@@ -4564,6 +4619,7 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
                 f"Unknown attribute {op.attribute!r}. Valid: "
                 f"{', '.join(sorted(_LTSPICE_ATTR_NAMES))}."
             )
+        _reject_empty_attr_value(op.reference, op.attribute, op.value)
         if op.reference not in editor.components:
             raise NetlistError(f"Component '{op.reference}' not found.")
         editor.set_component_attribute(op.reference, op.attribute, op.value)
