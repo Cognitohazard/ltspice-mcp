@@ -23,6 +23,13 @@ enabled = []
 #   Linux:   "" (auto-detect via Wine or PATH)
 path = ""
 
+# ngspice compatibility mode passed as `-D ngbehavior=<mode>`.
+# Leave unset to keep spicelib's default ("kiltpsa"). That default's `lt`/`ps`
+# tokens make ngspice read a sectioned `.lib <file> <section>` (the PDK corner
+# idiom) as two plain includes and drop the section — set a mode with neither
+# token (e.g. "hsa") if a sectioned .lib must parse. Only affects ngspice.
+# ngbehavior = "hsa"
+
 [security]
 # Paths accessible to the server (sandbox)
 # Default: ["."] (current working directory)

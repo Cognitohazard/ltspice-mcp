@@ -34,9 +34,10 @@ a public, multi-tenant network service. Relevant considerations:
 
 - **Filesystem access** — tool calls can read and write files under the
   configured `[security] allowed_paths`. Paths outside that sandbox are
-  rejected via `PathSecurityError`. Exposing the server over a network
-  (`--transport sse` or similar) without restricting `allowed_paths` is out
-  of scope for the default threat model.
+  rejected via `PathSecurityError`. The server only speaks stdio; exposing it
+  over a network (for example, by wrapping that transport in a network proxy)
+  without restricting `allowed_paths` is out of scope for the default threat
+  model.
 - **Simulator subprocesses** — tools spawn LTspice, ngspice, qspice, or xyce
   as child processes and read their output. A maliciously crafted netlist
   can therefore do anything the simulator binary can do on your machine.
@@ -44,7 +45,7 @@ a public, multi-tenant network service. Relevant considerations:
   treat any untrusted executable input.
 - **Dependency supply chain** — runtime dependencies are pinned in
   `uv.lock`. The `publish.yml` workflow builds and publishes to PyPI from
-  signed version tags only.
+  version tags only, via PyPI Trusted Publishing (OIDC).
 
 ## Known vulnerabilities
 
