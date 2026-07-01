@@ -94,6 +94,88 @@ class TestExtractLogDiagnostics:
         assert any("singular matrix" in w.lower() for w in result["warnings"])
         assert not any("singular matrix" in e.lower() for e in result["errors"])
 
+    def test_ltspice_op_ladder_intermediate_failure_not_error_when_converged(self, tmp_path: Path):
+        # LTspice's OP solver escalates Direct Newton -> Gmin -> Source stepping
+        # -> pseudo-transient, printing "<method> ... failed to find operating
+        # point" for each rung it abandons and a success line when one converges.
+        # The intermediate "stepping failed" rungs are benign and must NOT be
+        # relayed as errors (analysis tools echo errors[] into their warnings[]).
+        log = tmp_path / "op_ladder.log"
+        log.write_text(
+            "Direct Newton iteration failed to find operating point.\n"
+            "Gmin stepping failed to find operating point.\n"
+            "Source stepping failed to find operating point.\n"
+            "Pseudo Transient succeeded at 234.875 ms.\n"
+            "Total elapsed time: 0.5 seconds.\n"
+        )
+        result = extract_log_diagnostics(log)
+        assert result["errors"] == []
+        assert result["warnings"] == []
+
+    def test_ltspice_stepping_success_line_suppresses_earlier_failure(self, tmp_path: Path):
+        # "<method> stepping succeeded in finding operating point" also means the
+        # bias point was found, so the earlier stepping-failed rung is benign.
+        log = tmp_path / "op_gmin_ok.log"
+        log.write_text(
+            "Gmin stepping failed to find operating point.\n"
+            "Source stepping succeeded in finding operating point.\n"
+        )
+        assert extract_log_diagnostics(log)["errors"] == []
+
+    def test_stepping_failure_stays_error_without_a_success_line(self, tmp_path: Path):
+        # The ngspice no-data case: gmin/source stepping fail and nothing later
+        # converges -> still terminal, still classified as errors.
+        log = tmp_path / "op_fail.log"
+        log.write_text(
+            "Gmin stepping failed to find operating point.\n"
+            "Source stepping failed to find operating point.\n"
+        )
+        errs = " | ".join(extract_log_diagnostics(log)["errors"]).lower()
+        assert "gmin stepping failed" in errs
+        assert "source stepping failed" in errs
+
+    def test_stepped_op_converged_step_does_not_mask_later_failed_step(self, tmp_path: Path):
+        # Stepped .op: two steps converge directly, a third genuinely fails via
+        # gmin/source stepping with no recovery. The converged steps must NOT
+        # suppress the failed step (the check is scoped per solve block, not
+        # whole-log) — otherwise a partially-failed sweep looks clean.
+        log = tmp_path / "stepped_op_tail_fail.log"
+        log.write_text(
+            "Direct Newton iteration succeeded in finding operating point.\n"
+            "Direct Newton iteration succeeded in finding operating point.\n"
+            "Direct Newton iteration failed to find operating point.\n"
+            "Gmin stepping failed to find operating point.\n"
+            "Source stepping failed to find operating point.\n"
+        )
+        errs = " | ".join(extract_log_diagnostics(log)["errors"]).lower()
+        assert "gmin stepping failed" in errs
+        assert "source stepping failed" in errs
+
+    def test_stepped_op_failed_step_before_a_converged_step_still_errors(self, tmp_path: Path):
+        # Failing step FIRST, then a step that converges directly. The later
+        # step's "Direct Newton iteration succeeded" starts a new block and must
+        # not rescue the earlier failed block.
+        log = tmp_path / "stepped_op_head_fail.log"
+        log.write_text(
+            "Direct Newton iteration failed to find operating point.\n"
+            "Gmin stepping failed to find operating point.\n"
+            "Source stepping failed to find operating point.\n"
+            "Direct Newton iteration succeeded in finding operating point.\n"
+        )
+        errs = " | ".join(extract_log_diagnostics(log)["errors"]).lower()
+        assert "gmin stepping failed" in errs
+        assert "source stepping failed" in errs
+
+    def test_stepping_failure_rescued_within_block_by_stepping_success(self, tmp_path: Path):
+        # A block where gmin fails but source stepping succeeds -> benign, no error.
+        log = tmp_path / "gmin_fail_source_ok.log"
+        log.write_text(
+            "Direct Newton iteration failed to find operating point.\n"
+            "Gmin stepping failed to find operating point.\n"
+            "Source stepping succeeded in finding operating point.\n"
+        )
+        assert extract_log_diagnostics(log)["errors"] == []
+
     def test_empty_file(self, tmp_path: Path):
         log = tmp_path / "empty.log"
         log.write_text("")
