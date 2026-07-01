@@ -1807,8 +1807,9 @@ class TestAddNetLabelOpValidation:
         from ltspice_mcp.tools.circuit import CreateSchematicInput, handle_create_schematic
 
         await handle_create_schematic(CreateSchematicInput(name="lbl_dup"), asc_state)
-        # Same name on two distinct (unwired) pins: not a short, but a duplicate
-        # name that connect would later choke on — surfaced as a warning.
+        # Same name on two distinct (unwired) pins: not a short (the netlist merges
+        # same-name labels into one net) — the only cost is that a later connect
+        # can't disambiguate, which the warning states without a scare.
         res = await handle_apply_schematic_ops(
             ApplySchematicOpsInput(
                 path="lbl_dup.asc",
@@ -1828,7 +1829,10 @@ class TestAddNetLabelOpValidation:
         )
         op2 = res.structuredContent["results"][2]
         assert op2["ok"] is True
-        assert any("already exists" in w for w in op2.get("warnings", []))
+        warns = op2.get("warnings", [])
+        # Reframed: names the duplicate but says it merges correctly and only
+        # connect is ambiguous — no "short"/"will error" scare.
+        assert any("already labels a net" in w and "ambiguous" in w for w in warns)
 
 
 @pytest.mark.asyncio

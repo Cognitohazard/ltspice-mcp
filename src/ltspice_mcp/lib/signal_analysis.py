@@ -673,6 +673,27 @@ def analyze_pulse_response(
                 "accuracy is bounded by the run's resolution near settling"
             )
 
+    # A trailing window too noisy to trust as the settled rail (still ringing, or
+    # the window ends mid-transition) means the final value was bootstrapped from a
+    # single boundary sample. A settle band anchored to that sample can report a
+    # definite-looking settling_time measured against an unknown asymptote — on a
+    # ringing tail the band lands on a ripple plateau, not the DC value. Null it
+    # rather than emit that false number; overshoot/undershoot stay (bounded error
+    # vs an outright wrong "settled at T"), and an explicit final_value — which
+    # clears end_noisy — bypasses this to measure against a known asymptote.
+    if end_noisy and settling_time is not None:
+        settling_time = None
+        # Distinct flag so the renderer shows this null as UNKNOWN, not "never
+        # settled" — names the condition (final value taken from a noisy tail),
+        # not a verdict.
+        quality.append("settling_final_value_from_noisy_tail")
+        warnings.append(
+            "settling_time suppressed: the trailing window is too noisy to establish "
+            "the final value (still ringing, or the window ends mid-transition), so a "
+            "settle band anchored to it is unreliable. Pass an explicit final_value "
+            "to measure settling against a known asymptote."
+        )
+
     # A full-pulse window makes overshoot/undershoot/settling undefined (computed
     # against a ~0 baseline) — return null, not a nonsense magnitude. peak_value /
     # peak_time / levels stay valid (they're real samples). The escape hatch is
