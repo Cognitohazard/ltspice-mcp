@@ -8,6 +8,8 @@ tool-surface changes.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-30
+
 ### Added
 
 - Configurable ngspice compatibility mode: a `[simulator] ngbehavior` option
@@ -21,12 +23,25 @@ tool-surface changes.
   that fix.
 - `measurement_stats` now echoes the reported measurement time (the `AT` /
   crossing value) on single-run reads, matching the aggregate-mode output.
+- The bundled SPICE guide (`spice://guide`) gains an RF / two-port section: a
+  one-port impedance probe (with the current-source sign convention that keeps
+  `V(node)` equal to `+Zin`), reflection coefficient / return loss / VSWR, a
+  noise-figure formula, and insertion loss — each idiom verified against a real
+  ngspice run.
 
 ### Changed
 
 - `create_schematic` now accepts the optional `format` (`"json"`/`"text"`)
   parameter its sibling tools take, returning structured content, instead of
   rejecting it as an unknown field.
+- The duplicate same-name net-label warning no longer reads as a short: it now
+  states that same-name labels merge into one net (a valid way to tie distant
+  nets) and that only a later `connect(net=...)` is ambiguous; the
+  `create_schematic` checklist says the same.
+- Error messages point at the right tool: `get_waveform` on complex AC data now
+  names `export_waveform` and `resonance`, and `find_model` cross-references
+  `symbol_info` when the queried name is a schematic symbol rather than a
+  library model.
 
 ### Fixed
 
@@ -59,6 +74,11 @@ tool-surface changes.
 - Output-schema generation stays valid for schema-checking clients:
   `NotRequired` fields are no longer marked required under stringized
   annotations, and heterogeneous tuples are refused (with an invariant guard).
+- `pulse_response` no longer reports a false `settling_time` when the trailing
+  window is still ringing (the auto final-value lands on a ripple sample, so a
+  settle band anchored to it produced a definite-looking but wrong time). That
+  state now renders as `unknown` with a distinct quality flag, kept separate from
+  a genuine "never settled within the window".
 
 ## [0.4.1] - 2026-06-27
 
