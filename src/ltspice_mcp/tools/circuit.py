@@ -31,6 +31,7 @@ from spicelib.editor.base_schematic import (
     Text,
     TextTypeEnum,
 )
+from spicelib.raw.raw_read import RawRead
 
 # The concrete class to instantiate for a from-scratch .asc component.
 # spicelib 1.6 introduced ``AscComponent`` (the type its own .asc parser
@@ -75,11 +76,14 @@ from ltspice_mcp.tools._base import (
     PIN_SCHEMA,
     RO_ANNOTATIONS,
     VALIDATION_WARNINGS_SCHEMA,
+    WARNINGS_SCHEMA,
     StrictModel,
     ToolInput,
+    asc_export_lock,
     format_response,
     paginate,
     pagination_metadata,
+    path_lock,
     registry,
     safe_path,
     text_response,
@@ -142,20 +146,8 @@ _edit_locks: dict[Path, asyncio.Lock] = {}
 
 
 def _get_edit_lock(path: Path) -> asyncio.Lock:
-    """Get or create a per-file edit lock, evicting oldest unheld lock if at capacity."""
-    if path in _edit_locks:
-        # Move to end (most recently used) for LRU ordering
-        _edit_locks[path] = _edit_locks.pop(path)
-        return _edit_locks[path]
-    if len(_edit_locks) >= _MAX_EDIT_LOCKS:
-        # Evict the oldest *unheld* lock to avoid breaking mutual exclusion
-        for candidate in list(_edit_locks):
-            if not _edit_locks[candidate].locked():
-                del _edit_locks[candidate]
-                break
-        # If all locks are held, allow temporary overshoot rather than break safety
-    _edit_locks[path] = asyncio.Lock()
-    return _edit_locks[path]
+    """Get or create a per-file edit lock (shared LRU mechanism: ``path_lock``)."""
+    return path_lock(_edit_locks, path, _MAX_EDIT_LOCKS)
 
 
 # Standard LTspice SYMATTR slot names. Anything outside this set is
@@ -1278,6 +1270,9 @@ async def handle_create_netlist(
             },
             "wire_count": {"type": "integer"},
             "directives": {"type": "array", "items": {"type": "string"}},
+            # Lexer advisories for the netlist path (e.g. an unclosed .SUBCKT)
+            # surfaced by services.extract_netlist_info.
+            "warnings": WARNINGS_SCHEMA,
         },
     },
 )
@@ -1330,10 +1325,14 @@ def _format_circuit_text(file_path: Path, data: dict) -> str:
         comp_summary = "\n".join(f"{comp['reference']}  {comp['value']}" for comp in components)
     else:
         comp_summary = "(no components)"
-    return (
+    text = (
         f"=== {file_path.name} ===\n\n{data['content']}\n\n"
         f"=== Components ({len(components)}) ===\n{comp_summary}"
     )
+    warnings = data.get("warnings")
+    if warnings:
+        text += "\n\n=== Warnings ===\n" + "\n".join(f"  {w}" for w in warnings)
+    return text
 
 
 @registry.tool(
@@ -1371,6 +1370,12 @@ def _format_circuit_text(file_path: Path, data: dict) -> str:
                 },
             },
             "pagination": PAGINATION_SCHEMA,
+            # Single-reference lookup mode (``reference`` given) returns the
+            # component's value at the top level instead of a ``components``
+            # list. ``prefix`` echoes the type filter when one was applied.
+            "reference": {"type": "string"},
+            "value": {"type": "string"},
+            "prefix": {"type": "string"},
         },
     },
 )
@@ -2456,7 +2461,7 @@ async def handle_set_component_attribute(
             "rotation": {"type": "string"},
             "pins": {"type": "array", "items": PIN_SCHEMA},
             "bounding_box": BBOX_SCHEMA,
-            "warnings": {"type": "array", "items": {"type": "string"}},
+            "warnings": WARNINGS_SCHEMA,
         },
     },
 )
@@ -2490,7 +2495,7 @@ async def handle_add_component(
             raise NetlistError(
                 f"Component '{reference}' already exists. "
                 "Use set_component_value to modify it, "
-                "or remove_component to remove it first."
+                "or the remove_component op of apply_schematic_ops to remove it first."
             )
 
         _create_component(
@@ -2555,7 +2560,23 @@ async def handle_add_component(
     return format_response(result, data, args.format)
 
 
+# Last-export cache backing export_netlist's diff. Bounded like _edit_locks so
+# a long-lived session touching many .asc files can't grow it without limit.
+_MAX_PREVIOUS_EXPORTS = 64
 _previous_exports: dict[Path, list[str]] = {}
+
+
+def _record_export(asc_path: Path, lines: list[str]) -> None:
+    """Store this export's lines for the next diff, capping the cache size.
+
+    Mirrors _get_edit_lock's LRU eviction: refresh the entry to
+    most-recently-used and drop the oldest when at capacity.
+    """
+    _previous_exports.pop(asc_path, None)
+    if len(_previous_exports) >= _MAX_PREVIOUS_EXPORTS:
+        oldest = next(iter(_previous_exports))
+        del _previous_exports[oldest]
+    _previous_exports[asc_path] = lines
 
 
 @registry.tool(
@@ -2587,20 +2608,28 @@ async def handle_export_netlist(
             "Available simulators: " + str(list(state.available_simulators.keys()))
         )
 
-    try:
-        net_path = ltspice_cls.create_netlist(str(asc_path))
-        net_path = Path(net_path)
-    except Exception as e:
-        raise NetlistError(f"LTspice netlist export failed: {e}") from e
-
-    if not net_path.exists():
-        raise NetlistError("Export failed: .net file not created")
-
     # Encoding-robust read: an exported .net can carry cp1252 bytes (µ/°/±) in a
     # comment, which a strict-UTF-8 read would choke on.
     from ltspice_mcp.lib.encoding import read_spice_text
 
-    content = read_spice_text(net_path)
+    # Serialized per schematic (shared with resolve_runnable_netlist): LTspice
+    # always writes the same sidecar .net, so a concurrent export of this .asc
+    # would race on the output file. The read stays inside the critical section
+    # so it can't observe a half-written deck from a re-export.
+    async with asc_export_lock(asc_path):
+        try:
+            # create_netlist launches the LTspice binary and blocks until it
+            # exits; offload it so the shared event loop stays responsive
+            # (CLAUDE.md offload contract — it touches no cached editors).
+            net_path = await asyncio.to_thread(ltspice_cls.create_netlist, str(asc_path))
+            net_path = Path(net_path)
+        except Exception as e:
+            raise NetlistError(f"LTspice netlist export failed: {e}") from e
+
+        if not net_path.exists():
+            raise NetlistError("Export failed: .net file not created")
+
+        content = read_spice_text(net_path)
     current_lines = content.splitlines()
 
     result = f"=== {net_path.name} ===\n\n{content}"
@@ -2617,7 +2646,7 @@ async def handle_export_netlist(
             for ln in added:
                 result += f"\n+ {ln}"
 
-    _previous_exports[asc_path] = current_lines
+    _record_export(asc_path, current_lines)
 
     # Dangling-reference check: a .meas / behavioral source naming a net that
     # isn't in the exported netlist — the common case being a schematic net
@@ -2713,11 +2742,12 @@ async def handle_reset_schematic(
     output_schema={
         "type": "object",
         "properties": {
-            "name": {"type": "string"},
+            # Keys mirror SymbolInfo.to_dict(): symbol name, description,
+            # pin list, and origin/size bounding box.
+            "symbol": {"type": "string"},
             "description": {"type": "string"},
-            "bbox_width": {"type": "integer"},
-            "bbox_height": {"type": "integer"},
             "pins": {"type": "array", "items": PIN_SCHEMA},
+            "bounding_box": BBOX_SCHEMA,
             "placement": {
                 "type": "object",
                 "properties": {
@@ -2858,14 +2888,16 @@ def _resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
         ]
         if not matches:
             raise NetlistError(
-                f"Net label '{net_name}' not found in schematic. Add it with add_net_label first."
+                f"Net label '{net_name}' not found in schematic. Add it with the "
+                "add_net_label op of apply_schematic_ops first."
             )
         if len(matches) > 1:
             coords = ", ".join(f"({x},{y})" for x, y in matches)
             raise NetlistError(
                 f"Multiple '{net_name}' labels found at: {coords}. "
                 "Connect to a component pin (Ref.Pin) instead, or place the label "
-                f"at a specific pin with add_net_label(net='{net_name}', pin='<Ref.Pin>')."
+                "at a specific pin with the add_net_label op of apply_schematic_ops "
+                f"(net='{net_name}', pin='<Ref.Pin>')."
             )
         return matches[0]
 
@@ -3047,7 +3079,7 @@ class _ConnectPlan(NamedTuple):
                     "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
                 },
             },
-            "warnings": {"type": "array", "items": {"type": "string"}},
+            "warnings": WARNINGS_SCHEMA,
             "validation_warnings": VALIDATION_WARNINGS_SCHEMA,
         },
     },
@@ -3542,8 +3574,9 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
         )
         if not matches:
             raise NetlistError(
-                f"Net label '{net_name}' not found in schematic. Add it with "
-                "add_net_label first, or trace a component pin / coordinate."
+                f"Net label '{net_name}' not found in schematic. Add it with the "
+                "add_net_label op of apply_schematic_ops first, or trace a "
+                "component pin / coordinate."
             )
         x, y = matches[0]
     elif args.pin is not None:
@@ -4068,9 +4101,9 @@ def _components_and_directives(path: Path) -> tuple[dict[str, str], set[str], st
         "Structural diff between two circuit files: reports added/removed "
         "components, components whose value or attributes "
         "(Value2/SpiceLine/SpiceModel) changed, and added/removed "
-        ".PARAM/.MEAS/.MODEL directives. Use after ``set_component_value``, "
-        "``set_component_attribute`` or ``edit_directive`` to confirm that the "
-        "intended change actually landed."
+        ".PARAM/.MEAS/.MODEL directives. Use after ``set_component_value`` / "
+        "``edit_directive``, or the ``set_component_attribute`` op of "
+        "``apply_schematic_ops``, to confirm that the intended change actually landed."
     ),
     input_model=DiffCircuitInput,
     annotations=RO_ANNOTATIONS,
@@ -4219,105 +4252,91 @@ class StepGetInput(ToolInput):
     )
 
 
-# Internal compute adapter — exposed publicly via query_value(step_axis=, step_value=).
-# Operates on a SINGLE multi-step .raw (as produced by .step/.dc). An external
-# sweep job (configure_sweep/run_sweep) emits N single-point raws with no step
-# axis instead — use batch_results for those.
-async def handle_step_get(args: StepGetInput, state: SessionState) -> types.CallToolResult:
-    """Query a signal at a specific axis value of a stepped .raw result."""
-    raw_path = safe_path(args.raw_file, state)
-    raw = await services.load_raw(raw_path, state)
+def _step_get_native_axis(
+    raw: RawRead, args: StepGetInput, signal: str, target: float
+) -> types.CallToolResult:
+    """Query on the .raw's native axis (DC sweep variable / AC frequency).
 
-    try:
-        target = parse_spice_value(args.value)
-    except ValueError as e:
-        raise NetlistError(f"Invalid value {args.value!r}: {e}") from e
-
-    signal = services.validate_signal(raw, args.signal)
-
-    # Strategy: if ``axis`` matches the .raw's axis name (case-insensitive),
-    # use the axis values directly. Otherwise fall back to .step parameter
-    # lookup via spicelib's ``get_steps``.
-    raw_axis_name = ""
-    try:
-        plot = raw.get_raw_property("Plotname")
-        if plot:
-            # Plotname doesn't carry the axis name; pull from trace 0.
-            raw_axis_name = raw.get_trace_names()[0]
-    except Exception:
-        pass
-
-    axis_lower = args.axis.lower()
-    if raw_axis_name and axis_lower == raw_axis_name.lower():
-        # On the native-axis branch the queried axis IS the inner axis, so
-        # there is no second position for ``at`` to select. Silently
-        # ignoring it would return a value at ``value`` while the caller
-        # believes the ``at`` slice was applied — refuse loudly instead.
-        if args.at is not None:
-            raise NetlistError(
-                f"'at' does not apply here: {args.axis!r} is the raw file's "
-                "native axis, so the query position is 'value' itself. "
-                "'at' selects the inner-axis point only when 'axis' names a "
-                ".step parameter."
-            )
-        try:
-            axis_vals = real_axis(np.asarray(raw.get_axis(step=0))).tolist()
-        except Exception as e:
-            raise NetlistError(
-                f"Cannot read axis values: {e}. Use query_value if "
-                "the raw doesn't have an explicit axis."
-            ) from e
-        if not axis_vals:
-            raise NetlistError(f"Axis {args.axis!r} has no samples in this raw file.")
-        # nearest neighbour
-        ins = bisect.bisect_left(axis_vals, target)
-        if ins == 0:
-            idx = 0
-        elif ins == len(axis_vals):
-            idx = len(axis_vals) - 1
-        else:
-            idx = (
-                ins - 1
-                if abs(axis_vals[ins - 1] - target) <= abs(axis_vals[ins] - target)
-                else ins
-            )
-        wave = raw.get_wave(signal, step=0)
-        actual = float(axis_vals[idx])
-        # This is a continuous native axis (DC sweep variable / AC frequency),
-        # not a discrete step list: an off-grid interior request is a normal
-        # nearest-neighbour lookup, and only a request beyond the axis ends is
-        # genuinely clamped. sample_to_dict keeps complex AC samples intact
-        # (magnitude/phase) instead of float() silently dropping the imag part.
-        sample_dict = sample_to_dict(wave[idx])
-        exact = _snap_match(target, actual)
-        lo, hi = min(axis_vals[0], axis_vals[-1]), max(axis_vals[0], axis_vals[-1])
-        out_of_range = target < lo or target > hi
-        data = {
-            "signal": signal,
-            "axis": args.axis,
-            "requested_value": target,
-            "actual_value": actual,
-            "exact_match": exact,
-            **sample_dict,
-        }
-        sample_str = (
-            f"{sample_dict['value']:g}"
-            if "value" in sample_dict
-            else f"{sample_dict['magnitude_db']:.3f} dB / {sample_dict['phase_deg']:.2f}°"
+    The queried axis IS the inner axis, so this is a nearest-neighbour lookup
+    on the axis values; a request beyond the axis ends is a clamp worth flagging.
+    """
+    # On the native-axis branch the queried axis IS the inner axis, so
+    # there is no second position for ``at`` to select. Silently
+    # ignoring it would return a value at ``value`` while the caller
+    # believes the ``at`` slice was applied — refuse loudly instead.
+    if args.at is not None:
+        raise NetlistError(
+            f"'at' does not apply here: {args.axis!r} is the raw file's "
+            "native axis, so the query position is 'value' itself. "
+            "'at' selects the inner-axis point only when 'axis' names a "
+            ".step parameter."
         )
-        summary = f"{signal} at {args.axis}={actual:g}: {sample_str}"
-        if out_of_range:
-            warning = (
-                f"Requested {args.axis}={target:g} is outside the swept range "
-                f"[{lo:g}, {hi:g}]; clamped to the nearest end {actual:g}."
-            )
-            data["warnings"] = [warning]
-            summary += f"\nWarning: {warning}"
-        return format_response(summary, data, args.format)
+    try:
+        axis_vals = real_axis(np.asarray(raw.get_axis(step=0))).tolist()
+    except Exception as e:
+        raise NetlistError(
+            f"Cannot read axis values: {e}. Use query_value if "
+            "the raw doesn't have an explicit axis."
+        ) from e
+    if not axis_vals:
+        raise NetlistError(f"Axis {args.axis!r} has no samples in this raw file.")
+    # nearest neighbour
+    ins = bisect.bisect_left(axis_vals, target)
+    if ins == 0:
+        idx = 0
+    elif ins == len(axis_vals):
+        idx = len(axis_vals) - 1
+    else:
+        idx = ins - 1 if abs(axis_vals[ins - 1] - target) <= abs(axis_vals[ins] - target) else ins
+    wave = raw.get_wave(signal, step=0)
+    actual = float(axis_vals[idx])
+    # This is a continuous native axis (DC sweep variable / AC frequency),
+    # not a discrete step list: an off-grid interior request is a normal
+    # nearest-neighbour lookup, and only a request beyond the axis ends is
+    # genuinely clamped. sample_to_dict keeps complex AC samples intact
+    # (magnitude/phase) instead of float() silently dropping the imag part.
+    sample_dict = sample_to_dict(wave[idx])
+    exact = _snap_match(target, actual)
+    lo, hi = min(axis_vals[0], axis_vals[-1]), max(axis_vals[0], axis_vals[-1])
+    out_of_range = target < lo or target > hi
+    data = {
+        "signal": signal,
+        "axis": args.axis,
+        "requested_value": target,
+        "actual_value": actual,
+        "exact_match": exact,
+        **sample_dict,
+    }
+    sample_str = (
+        f"{sample_dict['value']:g}"
+        if "value" in sample_dict
+        else f"{sample_dict['magnitude_db']:.3f} dB / {sample_dict['phase_deg']:.2f}°"
+    )
+    summary = f"{signal} at {args.axis}={actual:g}: {sample_str}"
+    if out_of_range:
+        warning = (
+            f"Requested {args.axis}={target:g} is outside the swept range "
+            f"[{lo:g}, {hi:g}]; clamped to the nearest end {actual:g}."
+        )
+        data["warnings"] = [warning]
+        summary += f"\nWarning: {warning}"
+    return format_response(summary, data, args.format)
 
-    # Fallback: spicelib step lookup, falling back to .log parsing if
-    # spicelib returns nothing (which it does for ``.step param NAME``
-    # runs — the parameter map is in the log, not the .raw header).
+
+def _step_get_param_lookup(
+    raw: RawRead,
+    raw_path: Path,
+    args: StepGetInput,
+    signal: str,
+    target: float,
+    axis_lower: str,
+) -> types.CallToolResult:
+    """Query by .step parameter value, using the nearest stepped run.
+
+    Falls back to .log parsing when spicelib's ``get_steps`` returns nothing
+    (which it does for ``.step param NAME`` runs — the parameter map lives in
+    the log, not the .raw header).
+    """
     try:
         steps = list(raw.get_steps() or [])
     except Exception:
@@ -4442,6 +4461,40 @@ async def handle_step_get(args: StepGetInput, state: SessionState) -> types.Call
     for warning in warnings:
         summary += f"\nWarning: {warning}"
     return format_response(summary, data, args.format)
+
+
+# Internal compute adapter — exposed publicly via query_value(step_axis=, step_value=).
+# Operates on a SINGLE multi-step .raw (as produced by .step/.dc). An external
+# sweep job (configure_sweep/run_sweep) emits N single-point raws with no step
+# axis instead — use batch_results for those.
+async def handle_step_get(args: StepGetInput, state: SessionState) -> types.CallToolResult:
+    """Query a signal at a specific axis value of a stepped .raw result."""
+    raw_path = safe_path(args.raw_file, state)
+    raw = await services.load_raw(raw_path, state)
+
+    try:
+        target = parse_spice_value(args.value)
+    except ValueError as e:
+        raise NetlistError(f"Invalid value {args.value!r}: {e}") from e
+
+    signal = services.validate_signal(raw, args.signal)
+
+    # Strategy: if ``axis`` matches the .raw's axis name (case-insensitive),
+    # use the axis values directly. Otherwise fall back to .step parameter
+    # lookup via spicelib's ``get_steps``.
+    raw_axis_name = ""
+    try:
+        plot = raw.get_raw_property("Plotname")
+        if plot:
+            # Plotname doesn't carry the axis name; pull from trace 0.
+            raw_axis_name = raw.get_trace_names()[0]
+    except Exception:
+        pass
+
+    axis_lower = args.axis.lower()
+    if raw_axis_name and axis_lower == raw_axis_name.lower():
+        return _step_get_native_axis(raw, args, signal, target)
+    return _step_get_param_lookup(raw, raw_path, args, signal, target, axis_lower)
 
 
 # ---------------------------------------------------------------------------
@@ -4839,6 +4892,23 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
                         "op": {"type": "string"},
                         "ok": {"type": "boolean"},
                         "error": {"type": ["string", "null"]},
+                        # Per-op payload merged in on success (which keys appear
+                        # depends on the op). See _apply_op_inplace.
+                        "reference": {"type": "string"},
+                        "value": {"type": "string"},
+                        "attribute": {"type": "string"},
+                        "deleted_wires": {"type": "integer"},
+                        "warnings": WARNINGS_SCHEMA,
+                        "net": {"type": "string"},
+                        "x": {"type": "integer"},
+                        "y": {"type": "integer"},
+                        # remove_net_label / remove_wire emit a count; the
+                        # remove_directive op emits a label of what it removed.
+                        "removed": {"type": ["integer", "string"]},
+                        "from_pin": {"type": "string"},
+                        "to_pin": {"type": "string"},
+                        "wire_count": {"type": "integer"},
+                        "instruction": {"type": "string"},
                     },
                     "required": ["index", "op", "ok"],
                 },

@@ -33,7 +33,9 @@ from ltspice_mcp.state import (
 from ltspice_mcp.tools._base import (
     DEFAULT_PAGE_CAP,
     FORMAT_DESCRIPTION,
+    HINT_SCHEMA,
     PAGINATION_SCHEMA,
+    WARNINGS_SCHEMA,
     StrictModel,
     ToolInput,
     format_response,
@@ -43,7 +45,6 @@ from ltspice_mcp.tools._base import (
     require_simulator,
     resolve_output_folder,
     resolve_runnable_netlist,
-    text_response,
 )
 
 logger = logging.getLogger(__name__)
@@ -473,6 +474,27 @@ def _netlist_component_refs(netlist_path) -> set[str]:
         openWorldHint=False,
     ),
     profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "config_id": {"type": "string"},
+            "netlist": {"type": "string"},
+            "dimensions": {"type": "integer"},
+            "total_runs": {"type": "integer"},
+            "dimension_values": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "values": {"type": "array", "items": {"type": "number"}},
+                    },
+                },
+            },
+            "warnings": WARNINGS_SCHEMA,
+            "hint": HINT_SCHEMA,
+        },
+    },
 )
 async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState):
     """Configure a multi-parameter sweep and store it for later execution.
@@ -490,7 +512,7 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
     netlist_str = args.netlist
     parameters = args.parameters
 
-    netlist_path = resolve_runnable_netlist(netlist_str, state)
+    netlist_path = await resolve_runnable_netlist(netlist_str, state)
 
     if not parameters:
         raise BatchJobError("At least one parameter dimension is required")
@@ -600,6 +622,16 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
         f"dimensions={len(dimensions)}, total_runs={total_runs}"
     )
 
+    warnings: list[str] = []
+    for dim in dimensions:
+        if dim.type == "parameter" and dim.name.strip().lower() in ("temp", "temperature"):
+            warnings.append(
+                f"'{dim.name}' is emitted as a .param, which does not set the "
+                "simulation temperature. SPICE controls temperature via .temp, "
+                ".options temp, or .step temp — use one of those for a temperature sweep."
+            )
+    warnings.extend(_ngspice_preflight_warnings(netlist_path, state))
+
     lines = [
         "Sweep configured",
         f"Config ID: {config_id}",
@@ -617,17 +649,22 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
                 + ", ".join(f"{v:g}" for v in values[-2:])
             )
         lines.append(f"  {name}: [{preview}]")
-    for dim in dimensions:
-        if dim.type == "parameter" and dim.name.strip().lower() in ("temp", "temperature"):
-            lines.append(
-                f"\n⚠ '{dim.name}' is emitted as a .param, which does not set the "
-                "simulation temperature. SPICE controls temperature via .temp, "
-                ".options temp, or .step temp — use one of those for a temperature sweep."
-            )
-    for warn in _ngspice_preflight_warnings(netlist_path, state):
+    for warn in warnings:
         lines.append(f"\n⚠ {warn}")
-    lines.append(f"\nUse run_sweep('{config_id}') to execute")
-    return text_response("\n".join(lines))
+    hint = f"Use run_sweep('{config_id}') to execute"
+    lines.append(f"\n{hint}")
+
+    data: dict = {
+        "config_id": config_id,
+        "netlist": str(netlist_path),
+        "dimensions": len(dimensions),
+        "total_runs": total_runs,
+        "dimension_values": [{"name": name, "values": values} for name, values in dim_values],
+        "hint": hint,
+    }
+    if warnings:
+        data["warnings"] = warnings
+    return format_response("\n".join(lines), data)
 
 
 # ---------------------------------------------------------------------------
@@ -647,6 +684,14 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
         openWorldHint=False,
     ),
     profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "job_id": {"type": "string"},
+            "total_runs": {"type": "integer"},
+            "hint": HINT_SCHEMA,
+        },
+    },
 )
 async def handle_run_sweep(args: RunBatchInput, state: SessionState):
     """Start a previously configured parameter sweep.
@@ -723,12 +768,14 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
         f"Sweep job started: job_id={job_id}, config_id={config_id}, total_runs={total_runs}"
     )
 
-    return text_response(
+    hint = f"Use batch_results('{job_id}') to monitor progress"
+    return format_response(
         f"Sweep started\n"
         f"Job ID: {job_id}\n"
         f"Total runs: {total_runs}\n\n"
-        f"Use batch_results('{job_id}') to monitor progress\n"
-        f"Use batch_results('{job_id}', signal='...') to query results"
+        f"{hint}\n"
+        f"Use batch_results('{job_id}', signal='...') to query results",
+        {"job_id": job_id, "total_runs": total_runs, "hint": hint},
     )
 
 
@@ -749,6 +796,22 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
         openWorldHint=False,
     ),
     profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "config_id": {"type": "string"},
+            "netlist": {"type": "string"},
+            "num_runs": {"type": "integer"},
+            "seed": {"type": ["integer", "null"]},
+            "type_tolerances": {"type": "string"},
+            "component_tolerances": {"type": "string"},
+            "model_variation": {"type": "string"},
+            "mismatch": {"type": "string"},
+            "param_perturbation": {"type": "string"},
+            "warnings": WARNINGS_SCHEMA,
+            "hint": HINT_SCHEMA,
+        },
+    },
 )
 async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: SessionState):
     """Configure a Monte Carlo analysis and store it for later execution.
@@ -770,7 +833,7 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
     param_tolerances_input = args.param_tolerances
     num_runs = int(args.num_runs)
 
-    netlist_path = resolve_runnable_netlist(netlist_str, state)
+    netlist_path = await resolve_runnable_netlist(netlist_str, state)
 
     has_any_rule = bool(
         tolerances_list or model_tolerances_input or mismatch_input or param_tolerances_input
@@ -925,8 +988,24 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
     )
     for warn in warnings:
         text += f"\n⚠ {warn}\n"
-    text += f"\nUse run_montecarlo('{config_id}') to execute"
-    return text_response(text)
+    hint = f"Use run_montecarlo('{config_id}') to execute"
+    text += f"\n{hint}"
+
+    data: dict = {
+        "config_id": config_id,
+        "netlist": str(netlist_path),
+        "num_runs": num_runs,
+        "seed": args.seed,
+        "type_tolerances": type_summary,
+        "component_tolerances": component_summary,
+        "model_variation": model_summary,
+        "mismatch": mismatch_summary,
+        "param_perturbation": param_summary,
+        "hint": hint,
+    }
+    if warnings:
+        data["warnings"] = warnings
+    return format_response(text, data)
 
 
 # ---------------------------------------------------------------------------
@@ -946,6 +1025,14 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
         openWorldHint=False,
     ),
     profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "job_id": {"type": "string"},
+            "total_runs": {"type": "integer"},
+            "hint": HINT_SCHEMA,
+        },
+    },
 )
 async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
     """Start a previously configured Monte Carlo analysis.
@@ -1016,12 +1103,14 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
         f"total_runs={config.num_runs}"
     )
 
-    return text_response(
+    hint = f"Use batch_results('{job_id}') to monitor progress"
+    return format_response(
         f"Monte Carlo started\n"
         f"Job ID: {job_id}\n"
         f"Total runs: {config.num_runs}\n\n"
-        f"Use batch_results('{job_id}') to monitor progress\n"
-        f"Use batch_results('{job_id}', signal='...') to query results"
+        f"{hint}\n"
+        f"Use batch_results('{job_id}', signal='...') to query results",
+        {"job_id": job_id, "total_runs": config.num_runs, "hint": hint},
     )
 
 
@@ -1046,6 +1135,9 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
     output_schema={
         "type": "object",
         "properties": {
+            # Status-mode keys (signal omitted) — the base set is present in
+            # every status response; the running/terminal keys are conditional
+            # on the job's lifecycle state (see get_batch_status).
             "job_id": {"type": "string"},
             "job_type": {"type": "string"},
             "status": {"type": "string"},
@@ -1053,9 +1145,26 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
             "total_runs": {"type": "integer"},
             "completed_runs": {"type": "integer"},
             "failed_runs": {"type": "integer"},
+            # Running-job progress snapshot.
+            "completed": {"type": "integer"},
+            "total": {"type": "integer"},
+            "failed": {"type": "integer"},
+            "elapsed_s": {"type": "number"},
+            "eta_s": {"type": ["number", "null"]},
+            # Terminal-job summary.
+            "duration": {"type": ["number", "null"]},
+            "successful": {"type": "integer"},
+            "error": {"type": "string"},
+            # Signal-mode keys (present only when a signal is queried).
             "mode": {"type": "string", "enum": ["aggregate", "raw"]},
             "signal": {"type": "string"},
+            "at": {"type": ["number", "null"]},
             "run_count": {"type": "integer"},
+            "filtered": {"type": "boolean"},
+            "total_matching": {"type": "integer"},
+            "total_available": {"type": "integer"},
+            "offset": {"type": "integer"},
+            "limit": {"type": "integer"},
             "stats": {
                 "type": "object",
                 "properties": {
@@ -1069,6 +1178,10 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
             "max_case_run": {"type": ["integer", "null"]},
             "min_case_run": {"type": ["integer", "null"]},
             "runs": {"type": "array", "items": {"type": "object"}},
+            # Runs read at step 0 only — an inner .step sweep (collapsed) or
+            # unreadable step metadata (unknown). Present only when non-empty.
+            "step_collapsed_runs": {"type": "array", "items": {"type": "integer"}},
+            "step_unknown_runs": {"type": "array", "items": {"type": "integer"}},
             "pagination": PAGINATION_SCHEMA,
             "hint": {
                 "type": "string",

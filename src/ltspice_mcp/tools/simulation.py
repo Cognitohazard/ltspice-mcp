@@ -29,6 +29,8 @@ from ltspice_mcp.tools._base import (
     MEAS_ERRORS_SCHEMA,
     MEASUREMENTS_SCHEMA,
     OBSERVATIONS_SCHEMA,
+    SUGGESTIONS_SCHEMA,
+    WARNINGS_SCHEMA,
     ToolInput,
     format_meas_errors,
     format_observations,
@@ -75,7 +77,7 @@ _SIM_RESULT_FIELDS_SCHEMA: dict[str, dict] = {
     "raw_file": {"type": "string"},
     "log_file": {"type": "string"},
     "signals": {"type": "array", "items": {"type": "string"}},
-    "warnings": {"type": "array", "items": {"type": "string"}},
+    "warnings": WARNINGS_SCHEMA,
     "errors": {"type": "array", "items": {"type": "string"}},
     "meas_errors": MEAS_ERRORS_SCHEMA,
     "measurements": MEASUREMENTS_SCHEMA,
@@ -84,6 +86,10 @@ _SIM_RESULT_FIELDS_SCHEMA: dict[str, dict] = {
     "point_count": {"type": "integer"},
     "failed_measurements": {"type": "array", "items": {"type": "string"}},
     "observations": OBSERVATIONS_SCHEMA,
+    # Fuzzy library matches for unresolved model/subcircuit references, keyed
+    # by the missing ref (attached on failure and on completed runs whose log
+    # still reports an unresolved ref).
+    "suggestions": SUGGESTIONS_SCHEMA,
     # Optional, path-dependent: caller guidance (async referral, timeout
     # levers, batch redirect, hidden-jobs note) and the timeout log excerpt.
     "hint": HINT_SCHEMA,
@@ -207,7 +213,7 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     wait = args.wait
     fmt = args.format
 
-    netlist_path = resolve_runnable_netlist(netlist_str, state)
+    netlist_path = await resolve_runnable_netlist(netlist_str, state)
     require_simulator(state)
     default_simulator = state.default_simulator
     assert default_simulator is not None  # guaranteed by require_simulator
@@ -553,6 +559,7 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
         "fourier",
         "range",
         "failed_measurements",
+        "suggestions",
     ):
         if summary.get(key):
             data[key] = summary[key]
@@ -597,6 +604,7 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
                     "type": "object",
                     "properties": {
                         "job_id": {"type": "string"},
+                        "job_type": {"type": "string"},
                         "status": {"type": "string"},
                         "netlist": {"type": "string"},
                         "started_at": {"type": "string"},

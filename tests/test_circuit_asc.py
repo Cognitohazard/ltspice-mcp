@@ -440,7 +440,7 @@ class TestConnect:
             )
         # Guidance must reference the actual ambiguous net, not a canned example.
         msg = str(exc_info.value)
-        assert "add_net_label(net='0'" in msg
+        assert "add_net_label op of apply_schematic_ops (net='0'" in msg
         assert "M3.S" not in msg
 
     async def test_multiple_label_error_names_actual_net(
@@ -463,7 +463,7 @@ class TestConnect:
                 ),
                 asc_state,
             )
-        assert "add_net_label(net='SIG'" in str(exc_info.value)
+        assert "add_net_label op of apply_schematic_ops (net='SIG'" in str(exc_info.value)
 
     async def test_invalid_pin_format(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="Invalid pin reference"):

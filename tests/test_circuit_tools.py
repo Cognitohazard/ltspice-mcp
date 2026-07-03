@@ -114,6 +114,24 @@ class TestReadCircuit:
         with pytest.raises(PathSecurityError):
             await handle_read_circuit({"path": "/etc/passwd"}, state_no_sim)
 
+    async def test_netlist_lexer_warnings_surfaced(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A structural lexer diagnostic (here, an unclosed .SUBCKT) must reach
+        BOTH channels: the structuredContent ``warnings`` list and the text
+        summary. It used to be dropped on both."""
+        cir = work_dir / "unclosed_subckt.cir"
+        cir.write_text("* unclosed subckt\n.SUBCKT amp in out\nR1 in out 1k\n")
+
+        struct = await handle_read_circuit({"path": cir.name, "format": "json"}, state_no_sim)
+        warnings = struct.structuredContent["warnings"]
+        assert warnings
+        assert any(".SUBCKT" in w for w in warnings)
+
+        text = (await handle_read_circuit({"path": cir.name}, state_no_sim)).content[0].text
+        assert "Warnings" in text
+        assert ".SUBCKT" in text
+
 
 @pytest.mark.asyncio
 class TestListComponents:
@@ -152,6 +170,22 @@ class TestListComponents:
             {"path": sample_netlist.name, "reference": "r1"}, state_no_sim
         )
         assert "1k" in result.content[0].text
+
+    async def test_single_reference_structured_shape(
+        self, state_no_sim: SessionState, sample_netlist: Path
+    ):
+        """Single-ref lookup returns {reference, value} at the top level of
+        structuredContent (not a components list). The autouse conformance
+        hook also checks this shape against the declared output_schema."""
+        result = await handle_list_components(
+            {"path": sample_netlist.name, "reference": "R1", "format": "json"},
+            state_no_sim,
+        )
+        data = result.structuredContent
+        assert data is not None
+        assert data["reference"] == "R1"
+        assert data["value"] == "1k"
+        assert "components" not in data
 
     async def test_nonexistent_reference(self, state_no_sim: SessionState, sample_netlist: Path):
         with pytest.raises(NetlistError, match="not found"):
@@ -1328,3 +1362,38 @@ class TestCreateNetlistSubpath:
             state_no_sim,
         )
         assert (work_dir / "sub" / "dir" / "rc.cir").exists()
+
+
+class TestExportsCacheBounded:
+    """The export_netlist diff cache must not grow without bound over a long
+    session touching many .asc files."""
+
+    def test_record_export_evicts_oldest_at_capacity(self):
+        from ltspice_mcp.tools import circuit
+
+        circuit._previous_exports.clear()
+        try:
+            for i in range(circuit._MAX_PREVIOUS_EXPORTS + 5):
+                circuit._record_export(Path(f"/w/f{i}.asc"), [f"line{i}"])
+            assert len(circuit._previous_exports) == circuit._MAX_PREVIOUS_EXPORTS
+            # Oldest entries were evicted; the most recent survive.
+            assert Path("/w/f0.asc") not in circuit._previous_exports
+            assert (
+                Path(f"/w/f{circuit._MAX_PREVIOUS_EXPORTS + 4}.asc") in circuit._previous_exports
+            )
+        finally:
+            circuit._previous_exports.clear()
+
+    def test_record_export_refreshes_existing_key(self):
+        from ltspice_mcp.tools import circuit
+
+        circuit._previous_exports.clear()
+        try:
+            p = Path("/w/keep.asc")
+            circuit._record_export(p, ["v1"])
+            circuit._record_export(p, ["v2"])
+            # Re-recording the same path updates in place, not a second entry.
+            assert len(circuit._previous_exports) == 1
+            assert circuit._previous_exports[p] == ["v2"]
+        finally:
+            circuit._previous_exports.clear()

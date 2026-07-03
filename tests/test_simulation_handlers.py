@@ -271,6 +271,38 @@ class TestCheckJob:
         result = await handle_check_job(CheckJobInput(status="failed"), state_no_sim)
         assert "No jobs with status" in result.content[0].text
 
+    async def test_list_emits_job_type_per_entry(self, state_no_sim: SessionState):
+        # Each listed job carries job_type; the items schema declares it, and the
+        # autouse conformance hook validates this emission against that schema.
+        _make_job(state_no_sim, job_id="c1", status="completed")
+        result = await handle_check_job(CheckJobInput(status="all"), state_no_sim)
+        jobs = result.structuredContent["jobs"]
+        assert jobs and all("job_type" in entry for entry in jobs)
+
+
+class TestSimResultSchemaDeclarations:
+    """Schema keys must stay declared — the validator allows extra keys, so only
+    an explicit declaration pins that these documented fields don't silently
+    disappear from the tool's introspectable contract."""
+
+    def test_check_job_declares_suggestions_and_job_type(self):
+        from ltspice_mcp.tools import get_tools_for_profile
+
+        _, dispatch = get_tools_for_profile("full")
+        schema = dispatch["check_job"].definition.outputSchema
+        assert schema is not None
+        props = schema["properties"]
+        assert "suggestions" in props
+        assert "job_type" in props["jobs"]["items"]["properties"]
+
+    def test_run_simulation_declares_suggestions(self):
+        from ltspice_mcp.tools import get_tools_for_profile
+
+        _, dispatch = get_tools_for_profile("full")
+        schema = dispatch["run_simulation"].definition.outputSchema
+        assert schema is not None
+        assert "suggestions" in schema["properties"]
+
 
 class TestFormatSuccessResponse:
     def test_basic(self):
@@ -291,6 +323,45 @@ class TestFormatSuccessResponse:
         assert "V(out)" in text
         assert result.structuredContent is not None
         assert result.structuredContent["status"] == "completed"
+
+    def test_suggestions_reach_structured_content(self):
+        # Unresolved-reference fuzzy matches computed on the completed-run path
+        # must be copied into structuredContent — structured-aware clients drop
+        # the text channel, so a text-only suggestion would be lost.
+        from ltspice_mcp.tools.simulation import _format_success_response
+
+        summary = {
+            "sim_type": "Transient",
+            "duration": 1.5,
+            "step_count": 1,
+            "raw_file": "/tmp/x.raw",
+            "log_file": "/tmp/x.log",
+            "signals": ["time"],
+            "warnings": [],
+            "suggestions": {
+                "2n3905": [{"name": "2N3904", "score": 0.9, "source_path": "/libs/bjt.lib"}]
+            },
+        }
+        result = _format_success_response("j1", summary, None)
+        assert result.structuredContent is not None
+        assert result.structuredContent["suggestions"]["2n3905"][0]["name"] == "2N3904"
+
+    def test_empty_suggestions_omitted(self):
+        # Omit-when-empty: no suggestions key when there are none.
+        from ltspice_mcp.tools.simulation import _format_success_response
+
+        summary = {
+            "sim_type": "Transient",
+            "duration": 1.5,
+            "step_count": 1,
+            "raw_file": "/tmp/x.raw",
+            "log_file": "/tmp/x.log",
+            "signals": ["time"],
+            "warnings": [],
+        }
+        result = _format_success_response("j1", summary, None)
+        assert result.structuredContent is not None
+        assert "suggestions" not in result.structuredContent
 
     def test_with_many_signals(self):
         from ltspice_mcp.tools.simulation import _format_success_response

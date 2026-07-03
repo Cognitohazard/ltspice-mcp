@@ -112,6 +112,20 @@ class TestFindModelFull:
         assert "raw_text" not in data["results"][0]
 
 
+class TestFindModelSchema:
+    def test_results_item_schema_declares_raw_text(self):
+        # full=true attaches raw_text per result; the results-item schema must
+        # declare it (the validator allows extras, so only an explicit
+        # declaration keeps the field in the introspectable contract).
+        from ltspice_mcp.tools import get_tools_for_profile
+
+        _, dispatch = get_tools_for_profile("full")
+        schema = dispatch["find_model"].definition.outputSchema
+        assert schema is not None
+        item_props = schema["properties"]["results"]["items"]["properties"]
+        assert item_props.get("raw_text", {}).get("type") == "string"
+
+
 @pytest.mark.asyncio
 class TestFindModel:
     @pytest.fixture
