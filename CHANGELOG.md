@@ -8,6 +8,57 @@ tool-surface changes.
 
 ## [Unreleased]
 
+### Added
+
+- Structured responses are now self-sufficient for agents: caller-guidance that
+  previously existed only in the human-readable text channel is mirrored into
+  `structuredContent` as an optional `hint` field. Structured-aware MCP clients
+  (Claude Code included) render only `structuredContent` when present and drop
+  the text channel, so hints delivered there never reached agents. Affected
+  tools: `create_schematic` (layout checklist), `check_job` (hidden finished
+  jobs, filtered-empty listing, queued/running cancel route, timeout log
+  excerpt + remedy, interrupted, batch redirect),
+  `run_simulation` (async referral, timeout log excerpt + remedy — new
+  `log_excerpt` field on timeout paths), `find_model` (no-match retry knobs and
+  schematic-symbol referral), `batch_results` (partial-results route,
+  step-collapse recovery), `list_libraries` and `recent` (empty-state
+  referrals). `diff_circuit` adds the unparseable-file caveat to its structured
+  `warnings`.
+- The SPICE guide documents the LTspice-primary noise-figure route:
+  `NF_dB = 20*log10(V(onoise)/V(Rs))` using the per-source noise contribution
+  traces LTspice exposes in `.noise` raw files (no temperature constant or 4kT
+  term needed; verified against a reference divider at 3.0103 dB). The engine-
+  neutral `4kT·Rs` form remains as the fallback and the only route on ngspice.
+
+### Changed
+
+- The SPICE guide's named-nets rule now matches the runtime guidance: repeating
+  a same-name net label validly ties distant pins (the netlist merges same-name
+  labels into one net); with duplicate labels, `connect` should target a
+  component pin rather than `net:NAME`. `create_schematic`'s tool description
+  states the same idiom.
+- `connect`'s duplicate-label error now names the actual net in its guidance
+  instead of a canned `net='0'`/`M3.S` example.
+- The `format` parameter description documents that `'text'` is the default and
+  that structured content is identical for both formats.
+- `operating_point` always includes `warnings` (as `[]` on a clean run) instead
+  of omitting the key.
+
+### Fixed
+
+- `pulse_response` no longer reports a definite `settling_time` when the signal
+  entered the settle band only just before the window ends and the final value
+  was auto-derived from that same short tail — indistinguishable from a
+  still-ringing waveform paused on a plateau (e.g. a transmission-line
+  staircase). Requires in-band dwell of at least 1.5× the nominal trailing
+  window (the final 10% of the analyzed time span — a sampling-invariant
+  yardstick, so sparsely-sampled settled tails are not falsely suppressed) on
+  the auto-final path; suppressed results carry the
+  `settling_dwell_near_window_end` quality flag and render as "unknown", with
+  an explicit `final_value` as the escape hatch.
+- `batch_results` status text referred to a nonexistent `get_batch_results`
+  tool; it now names `batch_results`.
+
 ## [0.5.0] - 2026-06-30
 
 ### Added
