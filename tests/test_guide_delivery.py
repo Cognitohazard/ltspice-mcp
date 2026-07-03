@@ -35,6 +35,12 @@ class TestCreateSchematicChecklist:
         text = result.content[0].text  # type: ignore[union-attr]
         assert "Layout checklist" in text
         assert "spice://guide" in text
+        # Structured-aware clients show only structuredContent, so the same
+        # checklist must ride in the data channel too.
+        data = result.structuredContent
+        assert data is not None
+        assert "Layout checklist" in data["hint"]
+        assert "spice://guide" in data["hint"]
 
 
 class TestGuideIsEngineGeneral:
