@@ -118,6 +118,9 @@ class ListLibrariesInput(ToolInput):
                             "type": "object",
                             "additionalProperties": {"type": "string"},
                         },
+                        # Present only with full=true: the candidate's full
+                        # SPICE definition text (from get_model_info).
+                        "raw_text": {"type": "string"},
                     },
                 },
             },

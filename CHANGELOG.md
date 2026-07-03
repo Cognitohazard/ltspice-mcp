@@ -10,6 +10,21 @@ tool-surface changes.
 
 ### Added
 
+- `configure_sweep`, `run_sweep`, `configure_montecarlo`, and `run_montecarlo`
+  now return `structuredContent` (with an output schema) carrying the
+  load-bearing `config_id`/`job_id`, run counts, warnings, and a monitoring
+  `hint` — previously these lived only in prose, forcing agents to parse them
+  out of text. The text channel is unchanged.
+- `read_circuit` surfaces netlist-lexer warnings (e.g. an unclosed `.SUBCKT`)
+  in both the structured `warnings` field and the text rendering; previously
+  they reached neither channel.
+- `run_simulation`/`check_job` declare and attach `suggestions`
+  (model-resolution candidates for unresolved references) on completed runs as
+  well as failures — the success path previously computed them and dropped
+  them. `check_job` job listings declare `job_type`; `find_model` declares
+  `raw_text` (the `full=true` model body); `simulation_summary` declares and
+  renders `suggestions` and declares `ac_signal_used`.
+
 - Structured responses are now self-sufficient for agents: caller-guidance that
   previously existed only in the human-readable text channel is mirrored into
   `structuredContent` as an optional `hint` field. Structured-aware MCP clients
@@ -32,6 +47,30 @@ tool-surface changes.
 
 ### Changed
 
+- Auto-generated and example config files no longer write a live
+  `max_parallel = 4` key — it is now a comment documenting the real default
+  (number of CPU cores, capped at 8). The written key silently pinned every
+  auto-generated setup back to 4 concurrent simulations on multi-core hosts.
+- Output schemas now declare the full emitted shape where they had drifted:
+  `batch_results` (progress/ETA fields such as `eta_s`, `elapsed_s`,
+  signal-mode pagination fields such as `total_matching`, step-collapse and
+  `error` fields), `symbol_info` (declares the actually-emitted
+  `symbol`/`bounding_box` instead of never-emitted `name`/`bbox_width`/
+  `bbox_height`), `list_components` (single-reference mode `reference`/`value`
+  and the `prefix` filter echo), and `apply_schematic_ops` (per-op result
+  payload keys such as `wire_count` on each `results` item).
+- Error and description text that named `apply_schematic_ops` ops
+  (`add_net_label`, `remove_component`, `set_component_attribute`) as if they
+  were standalone tools now addresses them as ops of `apply_schematic_ops`.
+- README no longer claims all circuit editing is simulator-free: netlist
+  (`.cir`/`.net`) editing needs no simulator; `.asc` schematic editing needs
+  LTspice's `.asy` symbol libraries.
+- The `circuit-mcp`/`ngspice-mcp` alias packages publish only after the test
+  workflow passes (previously ungated), pin `ltspice-mcp` to exactly the
+  co-released version at build time, and wait for that version to be
+  installable from PyPI first — a published alias can no longer resolve an
+  older canonical package under a newer alias version.
+
 - The SPICE guide's named-nets rule now matches the runtime guidance: repeating
   a same-name net label validly ties distant pins (the netlist merges same-name
   labels into one net); with duplicate labels, `connect` should target a
@@ -45,6 +84,19 @@ tool-surface changes.
   of omitting the key.
 
 ### Fixed
+
+- Converting an `.asc` schematic to a runnable netlist (`run_simulation`,
+  `configure_sweep`, `configure_montecarlo`, `export_netlist`) no longer runs
+  the LTspice export subprocess on the server's event loop — it is offloaded
+  to a worker thread, so concurrent requests (including `cancel_job`) stay
+  responsive during the export. Exports of the same schematic are serialized
+  by a per-`.asc` lock: LTspice always writes the same sidecar `.net`, so
+  concurrent exports could otherwise tear the output and run the wrong deck.
+- WSL interop calls (`wslpath`, `cmd.exe` environment resolution) now carry a
+  15-second timeout; a hung Windows-interop process previously wedged server
+  startup or left a run request waiting forever.
+- The per-schematic export-diff cache is bounded (LRU, 64 schematics) instead
+  of growing without limit over a long session.
 
 - `pulse_response` no longer reports a definite `settling_time` when the signal
   entered the settle band only just before the window ends and the final value
