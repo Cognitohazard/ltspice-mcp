@@ -60,6 +60,15 @@ class TestConfigureSweep:
         assert "Config ID:" in text
         assert "Total simulations:" in text
         assert len(state_no_sim.sweep_configs) == 1
+        # Structured channel carries the load-bearing config_id (and mirrors
+        # the run_sweep referral as a hint) so a client that renders only
+        # structuredContent can still act on it.
+        sc = result.structuredContent
+        assert sc["config_id"] in state_no_sim.sweep_configs
+        assert sc["total_runs"] == 10
+        assert sc["dimensions"] == 1
+        assert sc["dimension_values"][0]["name"] == "R1"
+        assert "run_sweep" in sc["hint"]
 
     async def test_temp_param_axis_warns(self, state_no_sim: SessionState, sample_netlist: Path):
         # A parameter sweep named "temp" emits ``.param temp=...``, which does
@@ -74,6 +83,10 @@ class TestConfigureSweep:
         )
         text = result.content[0].text
         assert ".temp" in text and "does not set the simulation temperature" in text
+        # The caveat is mirrored into the structured warnings so it survives a
+        # client that drops the text channel.
+        warnings = result.structuredContent["warnings"]
+        assert any("does not set the simulation temperature" in w for w in warnings)
 
     async def test_rejects_oversized_cross_product(
         self, state_no_sim: SessionState, sample_netlist: Path
@@ -448,6 +461,13 @@ class TestConfigureMonteCarlo:
         assert "Per-component tolerances (refs e.g. R1):" in text
         assert "Type-level tolerances (type names e.g. R/resistors):" in text
         assert "override" not in text.lower()
+        # Structured channel carries config_id + run count + the run_montecarlo
+        # referral hint.
+        sc = result.structuredContent
+        assert sc["config_id"] in state_no_sim.mc_configs
+        assert sc["num_runs"] == 50
+        assert sc["seed"] is None
+        assert "run_montecarlo" in sc["hint"]
 
     async def test_empty_tolerances(self, state_no_sim: SessionState, sample_netlist: Path):
         with pytest.raises(BatchJobError, match="At least one tolerance"):
@@ -530,9 +550,13 @@ class TestBatchLogopinfoInjection:
         fake_runner.start_sweep = AsyncMock()
         monkeypatch.setattr(state_no_sim.runners, "get_sweep_runner", lambda **k: fake_runner)
 
-        await handle_run_sweep(RunBatchInput(config_id=config_id), state_no_sim)
+        result = await handle_run_sweep(RunBatchInput(config_id=config_id), state_no_sim)
         job = next(iter(state_no_sim.batch_jobs.values()))
         assert job.run_netlist == sentinel
+        # The started-job response carries the job_id (load-bearing) and the
+        # batch_results monitoring hint in structuredContent.
+        assert result.structuredContent["job_id"] == job.job_id
+        assert "batch_results" in result.structuredContent["hint"]
         if job.task:
             await job.task
 
@@ -556,9 +580,12 @@ class TestBatchLogopinfoInjection:
         fake_runner.start_montecarlo = AsyncMock()
         monkeypatch.setattr(state_no_sim.runners, "get_mc_runner", lambda **k: fake_runner)
 
-        await handle_run_montecarlo(RunBatchInput(config_id=config_id), state_no_sim)
+        result = await handle_run_montecarlo(RunBatchInput(config_id=config_id), state_no_sim)
         job = next(iter(state_no_sim.batch_jobs.values()))
         assert job.run_netlist == sentinel
+        assert result.structuredContent["job_id"] == job.job_id
+        assert result.structuredContent["total_runs"] == 10
+        assert "batch_results" in result.structuredContent["hint"]
         if job.task:
             await job.task
 

@@ -98,6 +98,28 @@ FORMAT_DESCRIPTION = (
 # contract). Sites needing a custom description inline their own dict.
 HINT_SCHEMA: dict[str, str] = {"type": "string"}
 
+# Free-text measurement caveats (see the observations-vs-warnings doctrine in
+# lib/result_observations.py).
+WARNINGS_SCHEMA: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
+
+# Fuzzy library matches for unresolved model/subcircuit references, keyed by
+# the missing ref: ``{ref: [{name, score, source_path}, ...]}`` (produced by
+# services.suggestions_from_errors / attach_suggestions_to_failure).
+SUGGESTIONS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "score": {"type": "number"},
+                "source_path": {"type": "string"},
+            },
+        },
+    },
+}
+
 PAGINATION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -645,7 +667,39 @@ def resolve_netlist_path(netlist_str: str, state: SessionState) -> Path:
     return netlist_path
 
 
-def resolve_runnable_netlist(netlist_str: str, state: SessionState) -> Path:
+def path_lock(registry: dict[Path, asyncio.Lock], path: Path, cap: int = 64) -> asyncio.Lock:
+    """Get or create a per-path lock in ``registry``, LRU-bounded at ``cap``.
+
+    Shared mechanism behind every per-file lock registry (schematic edits,
+    ``.asc`` exports): refresh recency on hit; at capacity evict the oldest
+    *unheld* lock — if all are held, overshoot temporarily rather than break
+    mutual exclusion by evicting a lock someone is inside.
+    """
+    if path in registry:
+        registry[path] = registry.pop(path)
+        return registry[path]
+    if len(registry) >= cap:
+        for candidate in list(registry):
+            if not registry[candidate].locked():
+                del registry[candidate]
+                break
+    registry[path] = asyncio.Lock()
+    return registry[path]
+
+
+# LTspice's ``create_netlist`` always writes the sidecar ``<name>.net`` next to
+# the ``.asc``, so two concurrent exports of the same schematic would race on
+# one output file (torn/partial reads of the deck). Serialize per resolved
+# ``.asc`` path; distinct schematics still export in parallel.
+_asc_export_locks: dict[Path, asyncio.Lock] = {}
+
+
+def asc_export_lock(asc_path: Path) -> asyncio.Lock:
+    """Per-``.asc`` lock serializing LTspice netlist exports of one schematic."""
+    return path_lock(_asc_export_locks, asc_path)
+
+
+async def resolve_runnable_netlist(netlist_str: str, state: SessionState) -> Path:
     """Resolve a path AND auto-export ``.asc`` → ``.net`` if needed.
 
     spicelib's ``SpiceEditor`` (used by the sweep / Monte Carlo runners)
@@ -654,6 +708,11 @@ def resolve_runnable_netlist(netlist_str: str, state: SessionState) -> Path:
     not found``. This helper detects ``.asc`` and runs the LTspice
     ``create_netlist`` exporter to produce a sidecar ``.net``, so
     callers (sweep / MC config) can store the runnable path up front.
+
+    The cheap safe_path/exists checks run inline, but the export launches the
+    LTspice binary and blocks until it exits — heavy work that would stall the
+    shared event loop, so it is offloaded via ``asyncio.to_thread``. It touches
+    no cached editors, so the offload is safe under the concurrency contract.
     """
     netlist_path = resolve_netlist_path(netlist_str, state)
     if netlist_path.suffix.lower() != ".asc":
@@ -673,14 +732,15 @@ def resolve_runnable_netlist(netlist_str: str, state: SessionState) -> Path:
             "embedded .model/.lib/analysis directives can be reused in a .cir.)",
             show_hint=False,
         )
-    try:
-        net_path = Path(ltspice_cls.create_netlist(str(netlist_path)))
-    except Exception as e:
-        raise SimulationError(
-            f"Auto-exporting {netlist_path.name} to a netlist failed: {e}"
-        ) from e
-    if not net_path.exists():
-        raise SimulationError(f"Auto-export of {netlist_path.name} produced no .net file")
+    async with asc_export_lock(netlist_path):
+        try:
+            net_path = Path(await asyncio.to_thread(ltspice_cls.create_netlist, str(netlist_path)))
+        except Exception as e:
+            raise SimulationError(
+                f"Auto-exporting {netlist_path.name} to a netlist failed: {e}"
+            ) from e
+        if not await asyncio.to_thread(net_path.exists):
+            raise SimulationError(f"Auto-export of {netlist_path.name} produced no .net file")
     return net_path
 
 

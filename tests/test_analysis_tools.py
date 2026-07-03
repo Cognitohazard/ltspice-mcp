@@ -5,6 +5,7 @@ instead drive the handlers against real recorded LTspice binary raws from
 ``tests/fixtures/`` — see those classes for what the mocks cannot cover.
 """
 
+import json
 from datetime import timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -703,6 +704,56 @@ class TestSummaryAcWithMetrics:
         text = result.content[0].text
         assert "AC Analysis" in text
 
+    async def test_ac_signal_used_when_autopicked(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """With no explicit ``signal`` on an AC raw, the auto-picked trace is
+        surfaced as ``ac_signal_used`` (declared in the output_schema, so the
+        autouse conformance hook validates the emission)."""
+        raw_file = work_dir / "ac_auto.raw"
+        freqs = np.logspace(0, 6, 100)
+        wave = 1.0 / (1 + 1j * freqs / 1000)
+        raw = _make_raw_mock(
+            plotname="AC Analysis",
+            trace_names=["frequency", "V(out)"],
+            waves={"frequency": freqs, "V(out)": wave},
+            axis=freqs,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_simulation_summary(
+            SimulationSummaryInput(raw_file=raw_file.name, format="json"),
+            state_no_sim,
+        )
+        assert result.structuredContent["ac_signal_used"] == "V(out)"
+
+
+@pytest.mark.asyncio
+class TestSummarySuggestions:
+    """When the run's errors name unresolved models, model-resolution help is
+    both attached to structuredContent (``suggestions``, declared in the
+    output_schema) and rendered into the text lines."""
+
+    async def test_suggestions_in_schema_and_text(
+        self, state_no_sim: SessionState, fake_raw: Path, monkeypatch
+    ):
+        import ltspice_mcp.tools.analysis as analysis_mod
+
+        fake = {"MYMODEL": [{"name": "MyModel", "score": 88, "source_path": "/libs/foo.lib"}]}
+        monkeypatch.setattr(
+            analysis_mod.services,
+            "suggestions_from_errors",
+            lambda errors, libraries: fake,
+        )
+        result = await handle_simulation_summary(
+            SimulationSummaryInput(raw_file=fake_raw.name), state_no_sim
+        )
+        # Structured channel carries the suggestions (validated against the
+        # declared output_schema by the autouse conformance hook).
+        assert result.structuredContent["suggestions"] == fake
+        # Text channel renders them too — no longer structured-only.
+        text = result.content[0].text
+        assert "MyModel" in text
+
 
 @pytest.mark.asyncio
 class TestQueryStepRange:
@@ -824,8 +875,11 @@ class TestEdgeMetrics:
             state_no_sim,
         )
         assert result.structuredContent is not None
-        # JSON format emits JSON text
-        assert result.content[0].text.startswith("{")
+        # JSON format emits the structured data as the text channel too — parse
+        # it and confirm it matches structuredContent (not just a leading "{").
+        parsed = json.loads(result.content[0].text)
+        assert parsed["signal"] == result.structuredContent["signal"] == "V(out)"
+        assert parsed == result.structuredContent
 
 
 # ---------------------------------------------------------------------------
