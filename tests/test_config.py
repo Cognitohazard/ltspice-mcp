@@ -122,6 +122,24 @@ class TestServerConfig:
         assert "ltspice" in content
         assert "allowed_paths" in content
 
+    def test_generated_config_does_not_pin_max_parallel(
+        self, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A freshly generated config must ship max_parallel commented out so the
+        dynamic min(CPU cores, 8) default survives. A live ``max_parallel = 4``
+        would silently cap every auto-generated install at 4."""
+        path = work_dir / "generated.toml"
+        generate_default_config(path)
+        content = path.read_text()
+        # The key appears only as a commented example, never as a live assignment.
+        assert not any(ln.strip().startswith("max_parallel") for ln in content.splitlines())
+        assert "# max_parallel" in content
+        # Loading the generated file fresh leaves the core-aware default intact.
+        monkeypatch.setattr(config_module.os, "cpu_count", lambda: 64)
+        monkeypatch.delenv("LTSPICE_MCP_MAX_PARALLEL", raising=False)
+        config = ServerConfig.load(path)
+        assert config.max_parallel_sims == 8
+
 
 class TestToolProfile:
     """Tests for tool_profile configuration."""

@@ -6,7 +6,10 @@ keywords = ["mcp", "spice", "ngspice", "ltspice", "circuit-simulation", "eda", "
 readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.11"
-dependencies = ["ltspice-mcp"]
+# Local/dev floor only: at release, publish-aliases.yml rewrites this to an
+# exact ``ltspice-mcp==<tag>`` pin (and waits for that version on PyPI), so a
+# published alias can never resolve an older canonical package.
+dependencies = ["ltspice-mcp>=0.5.0"]
 
 [project.urls]
 Homepage = "https://github.com/cognitohazard/ltspice-mcp"

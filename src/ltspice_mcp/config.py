@@ -423,8 +423,9 @@ def generate_default_config(path: Path) -> None:
 
     # Simulation section
     sim_conf = table()
-    sim_conf.add(comment("Maximum number of concurrent simulations"))
-    sim_conf.add("max_parallel", 4)
+    sim_conf.add(comment("Maximum number of concurrent simulations."))
+    sim_conf.add(comment("Default: number of CPU cores, capped at 8. Uncomment to override."))
+    sim_conf.add(comment("max_parallel = 4"))
     sim_conf.add(nl())
     sim_conf.add(comment("Default simulation timeout in seconds"))
     sim_conf.add("timeout", 300.0)

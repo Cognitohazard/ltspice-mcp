@@ -13,7 +13,7 @@ In Claude Code, install the plugin:
 /plugin install ltspice-mcp
 ```
 
-You also need LTspice or ngspice on the host (auto-detected on Windows, Linux, and macOS; on WSL set the LTspice path explicitly — [WSL notes](#configuration)). Circuit editing works with no simulator at all. `uv` is required; the server itself is fetched from PyPI on first use.
+You also need LTspice or ngspice on the host (auto-detected on Windows, Linux, and macOS; on WSL set the LTspice path explicitly — [WSL notes](#configuration)). Netlist editing (`.cir`/`.net`) works with no simulator at all; `.asc` schematic editing needs LTspice's `.asy` symbol libraries. `uv` is required; the server itself is fetched from PyPI on first use.
 
 ### Manual install (any MCP client)
 
@@ -106,7 +106,7 @@ ngbehavior = "hsa"       # ngspice compat mode; unset = spicelib default, "hsa" 
 allowed_paths = ["."]    # sandbox: only these directories are accessible
 
 [simulation]
-max_parallel = 4
+# max_parallel = 4       # default: number of CPU cores, capped at 8
 timeout = 300.0          # seconds
 
 [tools]
