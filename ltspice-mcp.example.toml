@@ -36,8 +36,9 @@ path = ""
 allowed_paths = ["."]
 
 [simulation]
-# Maximum number of concurrent simulations
-max_parallel = 4
+# Maximum number of concurrent simulations.
+# Default: number of CPU cores, capped at 8. Uncomment to override.
+# max_parallel = 4
 
 # Default simulation timeout in seconds
 timeout = 300.0
