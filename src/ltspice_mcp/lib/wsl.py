@@ -11,6 +11,10 @@ logger = logging.getLogger(__name__)
 # Process names the Windows LTspice binary may run as (current ADI vs legacy LTC).
 _LTSPICE_PROCESS_NAMES = ("LTspice.exe", "XVIIx64.exe", "scad3.exe")
 
+# One budget for every wslpath/cmd.exe/taskkill interop hop: a wedged Windows
+# process must fail the request (or fall back), not hang it forever.
+_WSL_INTEROP_TIMEOUT_S = 15
+
 # A job_id / run_filename token is server-generated and safe, but validate it
 # before splicing into a PowerShell command so a future caller can't inject.
 _SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -77,6 +81,7 @@ def to_windows_path(linux_path: Path) -> str:
             capture_output=True,
             text=True,
             check=True,
+            timeout=_WSL_INTEROP_TIMEOUT_S,
             stdin=subprocess.DEVNULL,
         )
         windows_path = result.stdout.strip()
@@ -85,6 +90,11 @@ def to_windows_path(linux_path: Path) -> str:
     except FileNotFoundError:
         # wslpath not found (should never happen in WSL, but be defensive)
         logger.warning(f"wslpath utility not found, using Linux path: {linux_path}")
+        return str(linux_path)
+    except subprocess.TimeoutExpired:
+        # A hung wslpath must not wedge the run request forever — fall back
+        # to the Linux path like any other conversion failure.
+        logger.warning(f"wslpath timed out converting {linux_path}, using Linux path")
         return str(linux_path)
     except subprocess.CalledProcessError as e:
         # Conversion failed (invalid path?)
@@ -116,6 +126,7 @@ def _resolve_win_env(var: str) -> Path | None:
             capture_output=True,
             text=True,
             check=True,
+            timeout=_WSL_INTEROP_TIMEOUT_S,
             stdin=subprocess.DEVNULL,
         )
         wsl_result = subprocess.run(
@@ -123,10 +134,13 @@ def _resolve_win_env(var: str) -> Path | None:
             capture_output=True,
             text=True,
             check=True,
+            timeout=_WSL_INTEROP_TIMEOUT_S,
             stdin=subprocess.DEVNULL,
         )
         resolved: Path | None = Path(wsl_result.stdout.strip())
     except Exception as e:
+        # Broad by design: a hung cmd.exe/wslpath (TimeoutExpired) must not
+        # wedge startup — treat any failure, timeout included, as unresolved.
         logger.debug(f"Could not resolve Windows %{var}%: {e}")
         resolved = None
     _win_env_cache[var] = resolved
@@ -318,7 +332,7 @@ def kill_windows_ltspice_by_token(token: str) -> int:
                 ["taskkill.exe", "/F", "/PID", pid],
                 capture_output=True,
                 text=True,
-                timeout=15,
+                timeout=_WSL_INTEROP_TIMEOUT_S,
                 stdin=subprocess.DEVNULL,
             )
         except (subprocess.SubprocessError, OSError) as e:
