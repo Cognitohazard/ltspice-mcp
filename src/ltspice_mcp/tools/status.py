@@ -1,7 +1,7 @@
 """Server status and diagnostics tools."""
 
 import asyncio
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -9,6 +9,8 @@ from ltspice_mcp.lib import services
 from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    FORMAT_DESCRIPTION,
+    HINT_SCHEMA,
     RO_ANNOTATIONS,
     ToolInput,
     format_response,
@@ -21,7 +23,7 @@ class ServerStatusInput(ToolInput):
 
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -188,7 +190,7 @@ class RecentInput(ToolInput):
 
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -229,21 +231,31 @@ class RecentInput(ToolInput):
                 },
             },
             "count": {"type": "integer"},
+            "hint": HINT_SCHEMA,
         },
     },
 )
 async def handle_recent(args: RecentInput, state: SessionState):
     """List recently-touched circuits with persisted job summaries."""
-    del state  # recent.json is user-global; nothing state-scoped is needed
     fmt = args.format
 
     circuits = await asyncio.to_thread(services.collect_recent_circuits)
+    data: dict[str, Any] = {"circuits": circuits, "count": len(circuits)}
 
     if not circuits:
-        text = (
-            "No recent circuits recorded yet. Use any circuit tool to add one "
-            "(e.g., run_simulation, read_circuit)."
+        # Example tools are membership-checked against the live dispatch table
+        # (read_circuit is hidden from the agentic profile) so the referral
+        # can't drift from what this session actually exposes.
+        example = (
+            "run_simulation, read_circuit"
+            if "read_circuit" in state.tool_dispatch
+            else "run_simulation, validate_netlist"
         )
+        text = (
+            f"No recent circuits recorded yet. Use any circuit tool to add one (e.g., {example})."
+        )
+        # Mirrored — see format_response's self-sufficiency contract.
+        data["hint"] = text
     else:
         lines = [f"Recent circuits ({len(circuits)}):", ""]
         for c in circuits:
@@ -266,5 +278,4 @@ async def handle_recent(args: RecentInput, state: SessionState):
                 )
         text = "\n".join(lines)
 
-    data = {"circuits": circuits, "count": len(circuits)}
     return format_response(text, data, fmt)

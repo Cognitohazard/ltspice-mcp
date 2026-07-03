@@ -109,6 +109,8 @@ To add a new tool: define it with `@registry.tool()` in the appropriate module a
 
 **Output schemas**: Tools that return `structuredContent` (via `format_response()`) declare an `output_schema` (or an `output_model` TypedDict) for client introspection. Text-only confirmation tools (`text_response()`) don't need one. Dispatcher tools that delegate to another handler (e.g. `bode_metrics`) may omit it — the sub-handler's structuredContent carries the shape. Tools with `output_schema` must return `structuredContent` on every code path — never fall back to `text_response()`.
 
+**Structured self-sufficiency**: structured-aware clients (Claude Code included) render only `structuredContent` when it is present and drop the text channel entirely, so the data dict must carry everything the caller needs to act on. Any caller-guidance in a `format_response()` text (hints, referrals, recovery steps, caveats) must be mirrored into `data` — conventionally an optional `hint` string key declared in the `output_schema`. The text channel is presentation only.
+
 ### Schematic Editing (.asc)
 
 Direct editing of LTspice `.asc` schematics is a first-class feature. All circuit tools live in **`tools/circuit.py`** — extension-based dispatch picks `AscEditor` or `SpiceEditor` automatically:
