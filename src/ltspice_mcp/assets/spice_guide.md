@@ -198,6 +198,25 @@ Rs  in n1 50            ; the source resistance whose noise sets the reference
 .noise V(out) Vin dec 20 1k 1g
 ```
 
+Two routes — pick by simulator.
+
+**LTspice (primary): per-source contribution traces.** LTspice's `.noise` raw
+exposes one trace per noise source (`V(Rs)`, `V(R2)`, …) alongside
+`V(onoise)`/`V(inoise)`. The per-source traces and `V(onoise)` are all
+output-referred (`V(inoise)` is the input-referred equivalent) and the
+contributions add in power (`V(onoise)² = Σ V(Rk)²`), so the noise figure is a
+direct trace ratio against the source resistor's own contribution — no gain
+division and no temperature constant needed:
+
+```
+NF_dB = 20*log10( V(onoise) / V(Rs) )
+```
+
+Verified on a two-resistor reference (Rs + equal series R): the power sum holds
+to numerical precision and the ratio reads 3.0103 dB (equal resistors → noise
+factor F = 2).
+
+**Engine-neutral fallback (and the only route on this ngspice build):**
 `noise_integral` (or the `inoise_spectrum` trace, the input-referred noise density
 in V/√Hz) gives the total. The noise figure is:
 
@@ -210,9 +229,9 @@ with `4*k*T = 1.657e-20` V²/Hz at the 27 °C default (`.noise` prints
 two-resistor reference (Rs + equal series R into an ideal buffer → NF = 3.01 dB).
 
 Note: this ngspice build's `.noise` exposes only `inoise_spectrum`/`onoise_spectrum`
-— **not** per-device noise vectors — so the "divide total noise by the source
-resistor's own noise trace" shortcut isn't available; use the `4kT·Rs` denominator
-above (it needs `Rs` and `T`, which is why the reference resistance is explicit).
+— **not** per-device noise vectors — so the per-source trace ratio above isn't
+available there; use the `4kT·Rs` denominator (it needs `Rs` and `T`, which is
+why the reference resistance is explicit).
 
 ### Insertion loss / S21
 
@@ -418,7 +437,7 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 - **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `apply_schematic_ops` `add_net_label` op. Never route wires to a distant ground flag.
 - **One ground per pin**: Each component's ground connection gets its own `add_net_label` op at the pin's coordinates — do not share ground flags between components.
 - **Do not use `connect` with `net:0`** when multiple ground labels exist — the tool errors on ambiguous net references. Place ground flags directly at pin coordinates with an `add_net_label` op (`net="0", pin="M3.S"`) — no wire needed when the flag is on the pin.
-- **Named nets (VDD, outp, etc.)**: Use a single label per unique net name. Connect components to it via `connect` with `net:NAME` or waypoints.
+- **Named nets (VDD, outp, etc.)**: Repeating the same label at distant pins is the idiomatic way to tie them — the netlist merges same-name labels into one net (correct, not a short), no routing needed. Wire nearby pins with `connect`. Caveat: once a name carries duplicate labels, `connect` with `net:NAME` is ambiguous — target a component pin (`Ref.Pin`) instead.
 - **Label any net you reference by name in a directive.** `connect` wires pins but assigns no name — at export an unlabeled net becomes `N001`, `N002`, …. So a `.meas V(vref)`, a `.param` expression using `V(x)`, or a behavioral `B`-source referencing `V(name)` silently breaks unless that exact net carries an `add_net_label`. Rule of thumb: wire-only is fine for nets you never name; **label any net a directive mentions by name.**
 
 **Sources:**
