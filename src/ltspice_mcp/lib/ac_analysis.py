@@ -760,11 +760,11 @@ def compute_filter_metrics(
     if pb_mask_final.any():
         pb_mag = mag_db[pb_mask_final]
         pb_span = float(np.max(pb_mag) - np.min(pb_mag))
-        # Friction F: a monotonic response (e.g. textbook LPF passband) has
-        # no actual ripple — the auto-detected passband just clips the
-        # roll-off at ``flatness_db``. Distinguish "ripple" (oscillation)
-        # from "monotonic passband variation" by checking sign changes in
-        # the first difference.
+        # A monotonic response (e.g. textbook LPF passband) has no actual
+        # ripple — the auto-detected passband just clips the roll-off at
+        # ``flatness_db``. Distinguish "ripple" (oscillation) from
+        # "monotonic passband variation" by checking sign changes in the
+        # first difference.
         if pb_mag.size >= 3:
             diffs = np.diff(pb_mag)
             sign_changes = int(np.sum(np.diff(np.sign(diffs)) != 0))

@@ -51,7 +51,7 @@ home — not via a breaking ``warnings``→``observations`` migration.
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import numpy as np
 
@@ -92,7 +92,7 @@ class Observation(TypedDict, total=False):
     kind: str
     detail: str
     severity: str
-    evidence: dict
+    evidence: dict[str, Any]
 
 
 def parse_requested_outputs(netlist_text: str) -> dict[str, list[str]]:
