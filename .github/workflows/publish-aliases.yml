@@ -31,9 +31,16 @@ permissions:
   contents: read
 
 jobs:
+  # Release gate: runs the exact same reusable checks workflow as CI and
+  # publish.yml (lint + pyright + the real-ngspice e2e tier + dependency audit),
+  # so the aliases can't publish when checks fail and the gates cannot drift.
+  checks:
+    uses: ./.github/workflows/checks.yml
+
   publish:
+    needs: checks
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25  # includes up to ~15 min waiting for the canonical upload
     environment: pypi
     permissions:
       id-token: write
@@ -56,12 +63,63 @@ jobs:
         with:
           enable-cache: true
 
+      # All three packages ship at one version per release tag; the alias's
+      # runtime dependency is pinned to exactly that version at build time (the
+      # tracked pyproject keeps only a floor, for local/dev installs). Without
+      # the pin, an alias release could legally resolve an older ltspice-mcp —
+      # new alias version, stale server code.
+      - name: Resolve release version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-].*)?$'; then
+            echo "Ref '$GITHUB_REF_NAME' is not a release tag; refusing to pin and publish." >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # The exact pin makes the alias uninstallable until the canonical package
+      # exists, so wait for it: if the canonical upload failed, the aliases must
+      # not publish at all rather than ship pointing at a version that never
+      # lands (or silently resolving an older one).
+      - name: Wait for ltspice-mcp ${{ steps.version.outputs.version }} on PyPI
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          for attempt in $(seq 1 30); do
+            if curl -fsSL "https://pypi.org/pypi/ltspice-mcp/${VERSION}/json" >/dev/null 2>&1; then
+              echo "ltspice-mcp ${VERSION} is available on PyPI."
+              exit 0
+            fi
+            echo "Attempt ${attempt}/30: ltspice-mcp ${VERSION} not on PyPI yet; retrying in 30s."
+            sleep 30
+          done
+          echo "ltspice-mcp ${VERSION} never appeared on PyPI; aborting alias publish." >&2
+          exit 1
+
+      - name: Pin ltspice-mcp dependency to ${{ steps.version.outputs.version }}
+        working-directory: packaging/aliases/${{ matrix.alias }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          sed -i "s|\"ltspice-mcp>=[^\"]*\"|\"ltspice-mcp==${VERSION}\"|" pyproject.toml
+          grep -F "ltspice-mcp==${VERSION}" pyproject.toml
+
+      # The pin edit dirties the working tree, which would make hatch-vcs derive
+      # a +dirty local version PyPI rejects — so the version is supplied
+      # explicitly instead of read from git state.
       - name: Build ${{ matrix.alias }}
         working-directory: packaging/aliases/${{ matrix.alias }}
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.version.outputs.version }}
         run: uv build --out-dir dist
 
       - name: Verify metadata
-        run: uvx twine check --strict packaging/aliases/${{ matrix.alias }}/dist/*
+        run: |
+          uvx twine check --strict packaging/aliases/${{ matrix.alias }}/dist/*
+          # The built wheel must depend on exactly the co-released canonical
+          # version — catches any regression in the pin step.
+          VERSION="${{ steps.version.outputs.version }}"
+          unzip -p packaging/aliases/${{ matrix.alias }}/dist/*.whl '*/METADATA' \
+            | grep -F "Requires-Dist: ltspice-mcp==${VERSION}"
 
       # Pinned to the v1.14.0 commit SHA (privileged OIDC step — must not follow
       # a mutable ref). Matches publish.yml; Dependabot bumps both together.
