@@ -65,7 +65,11 @@ def ngspice_state(work_dir: Path) -> SessionState:
     )
     available = detect_simulators(config)
     if "ngspice" not in available:
-        pytest.skip("ngspice detected on PATH but not usable by detect_simulators")
+        # ngspice IS on PATH (the module-level skipif already excused its genuine
+        # absence), so a detection miss here is a real contract failure — detecting
+        # an on-PATH simulator is part of the stack this tier gates. Fail loudly
+        # rather than silently darkening the whole e2e tier with a skip.
+        pytest.fail("ngspice is on PATH but detect_simulators did not report it usable")
     return SessionState.create(config, available)
 
 

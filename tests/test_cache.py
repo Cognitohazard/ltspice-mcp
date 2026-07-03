@@ -2,10 +2,39 @@
 
 import os
 import threading
-import time
 from pathlib import Path
 
 from ltspice_mcp.lib.cache import FileCache
+
+
+class _CountingLock:
+    """Per-path lock stand-in that signals when the follower reaches it.
+
+    FileCache guards its single-flight parse with ``with key_lock:`` and never
+    calls the lock any other way, so a context manager wrapping a real Lock is a
+    faithful substitute. It counts entrants and sets ``reached`` just before the
+    second ``__enter__`` blocks on the still-held lock — a deterministic "the
+    follower is now contending for the per-path lock" signal that replaces a
+    fixed sleep. Pre-seed it into ``cache._key_locks`` so ``get``'s ``setdefault``
+    hands it to both threads.
+    """
+
+    def __init__(self, reached: threading.Event) -> None:
+        self._real = threading.Lock()
+        self._reached = reached
+        self._enters = 0
+
+    def __enter__(self) -> "_CountingLock":
+        self._enters += 1
+        if self._enters == 2:
+            # The leader (first entrant) still holds the lock, so this second
+            # __enter__ is about to block — signal before we do.
+            self._reached.set()
+        self._real.acquire()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._real.release()
 
 
 class TestFileCache:
@@ -196,6 +225,10 @@ class TestFileCache:
         call_count = 0
         in_factory = threading.Event()
         release = threading.Event()
+        follower_at_lock = threading.Event()
+        # Seed the per-path lock so both threads share this instrumented one;
+        # get()'s setdefault returns it instead of building a plain Lock.
+        cache._key_locks[p] = _CountingLock(follower_at_lock)  # type: ignore[assignment]
 
         def factory(path: Path) -> str:
             nonlocal call_count
@@ -214,7 +247,9 @@ class TestFileCache:
         leader.start()
         assert in_factory.wait(timeout=5)  # leader is inside the factory
         follower.start()
-        time.sleep(0.05)  # let the follower reach (and block on) the per-path lock
+        # Deterministic precondition: the follower has reached (and is blocking
+        # on) the per-path lock the leader still holds — no timing guess.
+        assert follower_at_lock.wait(timeout=5)
         release.set()
         leader.join(timeout=5)
         follower.join(timeout=5)
