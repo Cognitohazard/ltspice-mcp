@@ -15,6 +15,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ltspice_mcp.lib.runner_base import DEFAULT_MAX_PARALLEL
+
 if TYPE_CHECKING:
     from ltspice_mcp.lib.montecarlo_runner import MonteCarloRunner
     from ltspice_mcp.lib.sim_runner import SimulationRunner
@@ -123,7 +125,7 @@ class RunnerManager:
         loop: asyncio.AbstractEventLoop,
         simulator_class: type,
         output_folder: Path,
-        max_parallel: int = 4,
+        max_parallel: int = DEFAULT_MAX_PARALLEL,
     ) -> SimulationRunner:
         """Get or create a SimulationRunner."""
         return self._get_or_create("sim", loop, simulator_class, output_folder, max_parallel)
@@ -133,7 +135,7 @@ class RunnerManager:
         loop: asyncio.AbstractEventLoop,
         simulator_class: type,
         output_folder: Path,
-        max_parallel: int = 4,
+        max_parallel: int = DEFAULT_MAX_PARALLEL,
     ) -> SweepRunner:
         """Get or create a SweepRunner."""
         return self._get_or_create("sweep", loop, simulator_class, output_folder, max_parallel)
@@ -143,7 +145,7 @@ class RunnerManager:
         loop: asyncio.AbstractEventLoop,
         simulator_class: type,
         output_folder: Path,
-        max_parallel: int = 4,
+        max_parallel: int = DEFAULT_MAX_PARALLEL,
     ) -> MonteCarloRunner:
         """Get or create a MonteCarloRunner."""
         return self._get_or_create("mc", loop, simulator_class, output_folder, max_parallel)

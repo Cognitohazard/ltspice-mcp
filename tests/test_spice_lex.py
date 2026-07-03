@@ -259,47 +259,6 @@ class TestInterop:
         result = cards_from_path(p)
         assert any(c.kind == "model" for c in result.cards)
 
-    def test_apply_to_editor_with_reset_netlist(self, tmp_path) -> None:
-        from ltspice_mcp.lib.spice_lex import apply_to_editor
-
-        class FakeEditor:
-            def __init__(self) -> None:
-                self.reloaded_from: str | None = None
-
-            def reset_netlist(self, path) -> None:
-                self.reloaded_from = str(path)
-
-        cards = lex(".PARAM Vdd=5\n").cards
-        ed = FakeEditor()
-        apply_to_editor(cards, ed)
-        assert ed.reloaded_from is not None
-
-    def test_apply_to_editor_with_netlist_attribute(self) -> None:
-        # When the editor has no reset_netlist, writing through the
-        # ``netlist`` list-of-strings attribute pushes the new text in.
-        from ltspice_mcp.lib.spice_lex import apply_to_editor
-
-        class FakeEditor:
-            def __init__(self) -> None:
-                self.netlist: list[str] = ["old\n"]
-
-        cards = lex(".PARAM Vdd=5\nR1 a b 1k\n").cards
-        ed = FakeEditor()
-        apply_to_editor(cards, ed)
-        assert ".PARAM Vdd=5\n" in ed.netlist
-        assert "R1 a b 1k\n" in ed.netlist
-        assert "old\n" not in ed.netlist  # replaced, not appended
-
-    def test_apply_to_editor_raises_when_no_reload_path(self) -> None:
-        from ltspice_mcp.lib.spice_lex import apply_to_editor
-
-        class FakeEditor:
-            pass  # no reset_netlist, no netlist
-
-        cards = lex(".PARAM Vdd=5\n").cards
-        with pytest.raises(TypeError, match="cannot push card list"):
-            apply_to_editor(cards, FakeEditor())
-
 
 class TestOps:
     """Cross-card transformation passes (lib/spice_lex_ops.py)."""

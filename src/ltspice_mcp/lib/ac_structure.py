@@ -48,6 +48,12 @@ from ltspice_mcp.lib.ac_analysis import (
 )
 from ltspice_mcp.lib.raw_parser import safe_magnitude_db
 
+# Re-exported for the tool layer: the reader's own facts carry
+# ``code``/``detail``; facts relayed from the simulator (spliced in by the
+# tool layer) additionally carry ``kind``/``severity``/``evidence`` — all
+# optional on the canonical doctrine shape, so both flavors fit.
+from ltspice_mcp.lib.result_observations import Observation
+
 # ---------------------------------------------------------------------------
 # Public result types
 # ---------------------------------------------------------------------------
@@ -71,13 +77,6 @@ class Corner(TypedDict):
     f_hi: float
     q: float | None
     merged: bool
-
-
-class Observation(TypedDict):
-    """One surfaced fact about how the structure was read (not a verdict)."""
-
-    code: str
-    detail: str
 
 
 class AcStructureResult(TypedDict):
