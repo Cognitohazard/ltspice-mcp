@@ -6,6 +6,7 @@ They exercise the full simulation pipeline: create netlist → run sim → parse
 """
 
 import asyncio
+import json
 import os
 import shutil
 from pathlib import Path
@@ -185,9 +186,13 @@ class TestJobTracking:
         assert len(ltspice_state.jobs) > 0
         job_id = next(iter(ltspice_state.jobs))
 
+        # Ran with wait=True, so the job must be terminal-completed. Pin that
+        # exact status via the structured channel rather than accepting any text
+        # that merely contains the word "status".
         result = await handle_check_job({"job_id": job_id}, ltspice_state)
-        text = _result_text(result)
-        assert "completed" in text.lower() or "status" in text.lower()
+        sc = result.structuredContent
+        assert sc is not None
+        assert sc["status"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -311,7 +316,9 @@ class TestResourcesWithResults:
 
         result = handle_read_resource("spice://results/", ltspice_state)
         text = _text(result.contents[0])
-        assert '"count": 1' in text or "simulation" in text.lower()
+        # The one simulation just run must be the only listed result.
+        data = json.loads(text)
+        assert data["count"] == 1
 
     async def test_signals_resource_for_job(self, ltspice_state: SessionState, rc_netlist: Path):
         from ltspice_mcp.resources import handle_read_resource
@@ -326,8 +333,10 @@ class TestResourcesWithResults:
         job_id = next(iter(ltspice_state.jobs))
         job = ltspice_state.jobs[job_id]
 
-        if job.status != "completed" or job.raw_file is None:
-            pytest.skip(f"Job not completed: status={job.status}")
+        # Ran with wait=True, so the job must have completed with a raw file — a
+        # skip here would silently mask a real simulation failure.
+        assert job.status == "completed", f"Job not completed: status={job.status}"
+        assert job.raw_file is not None
 
         result = handle_read_resource(f"spice://results/{job_id}/signals", ltspice_state)
         text = _text(result.contents[0])

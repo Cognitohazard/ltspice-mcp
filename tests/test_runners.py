@@ -20,6 +20,23 @@ from ltspice_mcp.lib.sweep_runner import SweepRunner
 from ltspice_mcp.state import BatchJob, MonteCarloConfig, SessionState, SimulationJob, SweepConfig
 
 
+async def _wait_for(cond, *, timeout_s: float = 5.0, interval: float = 0.01) -> None:
+    """Poll ``cond`` until it holds, failing at ``timeout_s``.
+
+    Deadline-based stand-in for a fixed ``asyncio.sleep`` before an assertion:
+    the awaited effect (a job admitted through the concurrency gate, a bridged
+    completion callback draining onto the loop) can take longer than any single
+    fixed sleep on a saturated runner, yet a real result still lands well within
+    the deadline. Modeled on ``_poll_batch_done`` in test_ngspice_e2e.py.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    while not cond():
+        if loop.time() > deadline:
+            pytest.fail(f"condition not met within {timeout_s}s")
+        await asyncio.sleep(interval)
+
+
 class FakeSim:
     """Minimal simulator stub."""
 
@@ -260,7 +277,7 @@ class TestSimulationRunnerKillWsl:
         task = asyncio.get_running_loop().create_task(
             runner.start_simulation(job.netlist, job, state_no_sim)
         )
-        await asyncio.sleep(0.05)
+        await _wait_for(lambda: len(captured) == 1)
         assert len(captured) == 1
         assert captured[0].get("exe_log") is True
         assert str(captured[0].get("run_filename", "")).startswith("sim_xlog")
@@ -355,7 +372,7 @@ class TestSimulationRunnerConcurrencyGate:
         tasks = [
             loop.create_task(runner.start_simulation(j.netlist, j, state_no_sim)) for j in jobs
         ]
-        await asyncio.sleep(0.05)
+        await _wait_for(lambda: sum(j.status == "running" for j in jobs) == 2)
         # max_parallel=2 -> exactly two launched, the third still queued.
         assert sum(j.status == "running" for j in jobs) == 2, [j.status for j in jobs]
         assert sum(j.status == "queued" for j in jobs) == 1
@@ -367,7 +384,7 @@ class TestSimulationRunnerConcurrencyGate:
         log = work_dir / "g.log"
         log.write_text("ok")
         runner._handle_completion(running.job_id, str(raw), str(log), state_no_sim)
-        await asyncio.sleep(0.05)
+        await _wait_for(lambda: sum(j.status == "queued" for j in jobs) == 0)
 
         assert running.status == "completed"
         assert sum(j.status == "queued" for j in jobs) == 0  # the waiter got admitted
@@ -411,7 +428,7 @@ class TestSimulationRunnerConcurrencyGate:
         b = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_to_b")
         ta = loop.create_task(runner.start_simulation(a.netlist, a, state_no_sim))
         tb = loop.create_task(runner.start_simulation(b.netlist, b, state_no_sim))
-        await asyncio.sleep(0.05)
+        await _wait_for(lambda: a.status == "running")
         assert a.status == "running" and b.status == "queued"
         launched_before = list(launched)
 
@@ -423,7 +440,10 @@ class TestSimulationRunnerConcurrencyGate:
         log = work_dir / "to.log"
         log.write_text("ok")
         runner._handle_completion(a.job_id, str(raw), str(log), state_no_sim)
-        await asyncio.sleep(0.05)
+        # b's queued waiter wakes when a's completion frees the slot; wait until
+        # its self-heal has run so the "stayed terminal / no orphan" checks below
+        # are meaningful rather than racing an unprocessed wake.
+        await _wait_for(lambda: tb.done())
 
         assert b.status == "timeout"  # stayed terminal
         assert b.job_id not in runner._runners  # never registered as running
@@ -445,7 +465,7 @@ class TestSimulationRunnerConcurrencyGate:
         b = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_cq_b")
         ta = loop.create_task(runner.start_simulation(a.netlist, a, state_no_sim))
         tb = loop.create_task(runner.start_simulation(b.netlist, b, state_no_sim))
-        await asyncio.sleep(0.05)
+        await _wait_for(lambda: a.status == "running")
         assert a.status == "running" and b.status == "queued"
 
         await runner.cancel(b, state_no_sim)
@@ -457,7 +477,9 @@ class TestSimulationRunnerConcurrencyGate:
         log = work_dir / "cq.log"
         log.write_text("ok")
         runner._handle_completion(a.job_id, str(raw), str(log), state_no_sim)
-        await asyncio.sleep(0.05)
+        # a's completion frees the slot and wakes b's cancelled waiter; wait for
+        # it to finish self-healing before asserting it neither ran nor launched.
+        await _wait_for(lambda: tb.done())
         assert b.status == "cancelled"  # woken task did not flip it to running
         assert launched == launched_before  # no orphan launch
 
@@ -465,7 +487,7 @@ class TestSimulationRunnerConcurrencyGate:
         # admits a fresh job.
         c = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_cq_c")
         tc = loop.create_task(runner.start_simulation(c.netlist, c, state_no_sim))
-        await asyncio.sleep(0.05)
+        await _wait_for(lambda: c.status == "running")
         assert c.status == "running"
         for t in (ta, tb, tc):
             if not t.done():
@@ -497,7 +519,7 @@ class TestSimulationRunnerConcurrencyGate:
         tb = asyncio.get_running_loop().create_task(
             runner.start_simulation(b.netlist, b, state_no_sim)
         )
-        await asyncio.sleep(0.05)
+        await _wait_for(lambda: b.status == "running")
         assert b.status == "running"
         if not tb.done():
             tb.cancel()
@@ -523,7 +545,7 @@ class TestSimulationRunnerConcurrencyGate:
         b = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_fk_b")
         ta = loop.create_task(runner.start_simulation(a.netlist, a, state_no_sim))
         tb = loop.create_task(runner.start_simulation(b.netlist, b, state_no_sim))
-        await asyncio.sleep(0.05)
+        await _wait_for(lambda: a.status == "running")
         assert a.status == "running" and b.status == "queued"
         mock_runner = runner._runners[a.job_id]
         assert isinstance(mock_runner, MagicMock)  # _gate_runner builds MagicMock runners
@@ -531,7 +553,12 @@ class TestSimulationRunnerConcurrencyGate:
         launched_before = list(launched)
 
         await runner.cancel(a, state_no_sim)
-        await asyncio.sleep(0.05)
+        # The unverified kill deliberately did NOT free the slot, so b's parked
+        # waiter has no wake event to poll for. Drain the loop instead: a
+        # regression that released the slot would schedule b's wake, which these
+        # yields would run (and b would start) before the "stayed reserved" asserts.
+        for _ in range(20):
+            await asyncio.sleep(0)
         assert a.status == "cancelled"
         # Unverified kill -> slot stays reserved -> b must NOT have started.
         assert b.status == "queued", (
@@ -545,7 +572,7 @@ class TestSimulationRunnerConcurrencyGate:
         log = work_dir / "fk.log"
         log.write_text("ok")
         runner._handle_completion(a.job_id, str(raw), str(log), state_no_sim)
-        await asyncio.sleep(0.05)
+        await _wait_for(lambda: b.status == "running")
         assert b.status == "running"
         for t in (ta, tb):
             if not t.done():
@@ -889,8 +916,9 @@ class TestMonteCarloRunnerHandlers:
 
         await mc_runner.start_montecarlo(bj, state_no_sim)
         # The per-run + completion callbacks are bridged onto the loop via
-        # call_soon_threadsafe; yield so they drain before we read results.
-        await asyncio.sleep(0.05)
+        # call_soon_threadsafe; poll until they have drained (job terminal)
+        # before we read results.
+        await _wait_for(lambda: bj.status == "completed")
 
         assert bj.status == "completed"
         assert set(bj.run_results.keys()) == {0, 1}
@@ -949,7 +977,7 @@ class TestMonteCarloRunnerHandlers:
 
         monkeypatch.setattr(mc_runner, "_build_sim_runner", build)
         await mc_runner.start_montecarlo(bj, state_no_sim)
-        await asyncio.sleep(0.05)  # let the bridged callbacks drain
+        await _wait_for(lambda: bj.status == "completed")  # let the bridged callbacks drain
 
         mc_params = bj.run_results[0]["params"]
         # Mirror the sweep handler's assertion target: the param value is a

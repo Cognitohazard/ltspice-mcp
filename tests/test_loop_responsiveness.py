@@ -47,9 +47,12 @@ async def assert_light_request_served(heavy: asyncio.Task, state: SessionState) 
         "heavy operation finished before the light request was even served — "
         "it ran inline on the event loop and stalled all other requests"
     )
-    # The light handler is ms-scale; half the slow-op duration is a generous
-    # bound that still proves it was not queued behind the full parse.
-    assert light_elapsed < SLOW_OP_SECONDS / 2
+    # If the parse ran inline on the loop, this light request would be queued
+    # behind the full SLOW_OP_SECONDS parse and take ~that long to return. Bound
+    # it well under the full blocking duration so an inline regression still
+    # fails, while leaving generous headroom above the ms-scale handler so a
+    # saturated CI runner's scheduling jitter does not false-fail.
+    assert light_elapsed < SLOW_OP_SECONDS * 0.8
     assert light.content
 
 
