@@ -382,6 +382,24 @@ def _second_order_step(
     return t, y
 
 
+# Converging reflection plateaus of the still-ringing-line fixtures: flat tail
+# at the final level, in the settle band only for that last plateau.
+_STAIRCASE_LEVELS = np.array([0.0, 5.0, 2.0, 4.5, 2.5, 4.2, 2.8, 4.109])
+
+
+def _ringing_staircase() -> tuple[np.ndarray, np.ndarray]:
+    """A still-ringing line frozen mid-oscillation: plateaus flipping every
+    5 ns through converging levels. The tail is perfectly flat at the final
+    level (defeating the trailing-noise gate) but the signal is inside the
+    ±2% settle band only for that last plateau.
+
+    Returns (t, y).
+    """
+    t = np.linspace(0, 40e-9, 2001)
+    idx = np.minimum((t // 5e-9).astype(int), len(_STAIRCASE_LEVELS) - 1)
+    return t, _STAIRCASE_LEVELS[idx]
+
+
 class TestAnalyzePulseResponse:
     def test_underdamped_overshoot_matches_analytical(self):
         # Classic 2nd-order formula: Mp = exp(-pi*zeta / sqrt(1-zeta^2)) * 100
@@ -556,6 +574,60 @@ class TestAnalyzePulseResponse:
         # proving the auto path suppressed a real number, it didn't just fail.
         explicit = analyze_pulse_response(t, y, initial_value=0.0, final_value=float(y[-1]))
         assert explicit["settling_time"] is not None
+
+    def test_flat_wrong_plateau_dwell_gate_suppresses_settling_time(self):
+        """A ringing staircase paused FLAT on its last plateau passes the
+        trailing-noise gate (end stddev ~0) yet enters the settle band only
+        just before the window ends — the auto final value comes from that
+        same short tail, so a settling_time anchored to it is
+        indistinguishable from a still-ringing line. The dwell gate nulls it."""
+        t, y = _ringing_staircase()
+        auto = analyze_pulse_response(t, y)
+        assert auto["settling_time"] is None
+        assert "settling_dwell_near_window_end" in auto["quality"]
+        assert any("final_value" in w for w in auto["warnings"])
+        # Overshoot/undershoot stay — same policy as the noisy-tail suppression.
+        assert auto["overshoot_pct"] is not None
+        assert auto["undershoot_pct"] is not None
+
+    def test_dwell_gate_escape_hatch_explicit_final_value(self):
+        """An explicit final_value pins the asymptote independently of the
+        tail, so the dwell gate does not fire and the (late but real) settle
+        against that asymptote is returned."""
+        t, y = _ringing_staircase()
+        explicit = analyze_pulse_response(t, y, final_value=4.109)
+        assert explicit["settling_time"] is not None
+        assert "settling_dwell_near_window_end" not in explicit["quality"]
+
+    def test_sparse_settled_tail_not_falsely_suppressed(self):
+        """Adaptive .tran stepping leaves a genuinely settled flat tail with
+        few samples, so the last-10%-of-SAMPLES slice can span most of the
+        window. The dwell yardstick is a time fraction, not that slice — a
+        signal settled for ~80% of the span keeps its settling_time even when
+        nearly all samples sit in the transient."""
+        t_dense = np.linspace(0.0, 0.3, 300, endpoint=False)
+        y_dense = 1.0 - np.exp(-t_dense / 0.05)
+        t_sparse = np.array([0.4, 0.55, 0.7, 0.85, 1.0])
+        y_sparse = np.ones(5)
+        t = np.concatenate([t_dense, t_sparse])
+        y = np.concatenate([y_dense, y_sparse])
+        auto = analyze_pulse_response(t, y)
+        assert auto["settling_time"] is not None
+        assert "settling_dwell_near_window_end" not in auto["quality"]
+        assert not any("settling_time suppressed" in w for w in auto["warnings"])
+
+    def test_compressed_staircase_still_suppressed(self):
+        """Waveform compression can hand the same ringing staircase over as a
+        handful of samples (one per plateau). The time-fraction yardstick
+        still fires there — a sample-derived yardstick would be zero below 20
+        samples and silently ship the false settling_time. The suppressed
+        result also must not carry the interpolation-accuracy warning, which
+        would describe a settling_time that is null in the output."""
+        t = np.arange(8) * 5e-9
+        auto = analyze_pulse_response(t, _STAIRCASE_LEVELS)
+        assert auto["settling_time"] is None
+        assert "settling_dwell_near_window_end" in auto["quality"]
+        assert not any("interpolated across a coarse" in w for w in auto["warnings"])
 
     def test_invalid_tolerance(self):
         t, y = _linear_edge(1e-3, 2e-3, 0.0, 1.0)

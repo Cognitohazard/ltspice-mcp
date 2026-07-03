@@ -319,6 +319,26 @@ _AUTO_LEVEL_VARIANCE_THRESHOLD = 0.10
 # separately so the two gates stay independently tunable.
 _FULL_PULSE_DELTA_FRACTION = 0.10
 
+# Minimum in-band dwell before the window end, in units of the NOMINAL
+# trailing-window length (10% of the analyzed time span), for an auto-derived
+# final value to support a settling_time. A tail can be perfectly flat (passing
+# the noise gate) yet be nothing more than the last plateau of a still-ringing
+# waveform; when the settle-band entry sits that close to the window end, the
+# number is unsupported. The yardstick is a time fraction, NOT the
+# last-10%-of-samples slice `_tail_windows` uses for level statistics: adaptive
+# .tran stepping makes settled flat tails sparse, so the sample slice's time
+# span can swell toward the whole window (which would suppress every genuine
+# settle) or collapse to zero on short runs (which would never suppress). A
+# time fraction is invariant to sample density. Measured bounds on uniform
+# fixtures (where the two yardsticks coincide): a ringing staircase paused on
+# its final plateau reaches ~1.25 trailing windows of dwell, while a genuine
+# auto-settle sits at ~1.8; 1.5 splits them.
+_SETTLE_MIN_DWELL_TAILS = 1.5
+
+# The nominal trailing-window fraction of the analyzed time span — the
+# time-domain twin of `_tail_windows`' last-10%-of-samples slice.
+_SETTLE_DWELL_TAIL_FRACTION = 0.10
+
 
 def _is_full_pulse(pk_pk: float, abs_delta: float) -> bool:
     """True if the net step is tiny vs the window's peak-to-peak swing — i.e. the
@@ -642,6 +662,10 @@ def analyze_pulse_response(
     outside = np.abs(y - fv) > tol
     outside_idx = np.where(outside)[0]
     settling_time: float | None
+    # Deferred until after the suppression gates: a warning describing the
+    # interpolation accuracy of a settling_time must not ship when that
+    # settling_time is nulled in the output.
+    interp_warning: str | None = None
     if len(outside_idx) == 0:
         settling_time = 0.0
         warnings.append(
@@ -667,7 +691,7 @@ def analyze_pulse_response(
         bracket_dt = tk1 - tk
         settling_time = tk + frac * bracket_dt - float(t[0])
         if settling_time > 0 and bracket_dt > 0.1 * settling_time:
-            warnings.append(
+            interp_warning = (
                 f"settling_time interpolated across a coarse local timestep "
                 f"(Δt≈{bracket_dt / settling_time * 100:.0f}% of the settle time); "
                 "accuracy is bounded by the run's resolution near settling"
@@ -694,12 +718,42 @@ def analyze_pulse_response(
             "to measure settling against a known asymptote."
         )
 
+    # A quiet tail is not enough: a still-ringing waveform paused on its last
+    # plateau has a perfectly flat trailing window (end_std ~0) yet enters the
+    # settle band only moments before the window ends — and the auto-derived
+    # final value comes from that same short tail, so band and "settled" stretch
+    # are the same few samples. Require a minimum in-band dwell before the end.
+    # Auto-final path only: an explicit final_value pins the asymptote, so a
+    # genuinely late settle against it stands. Overshoot/undershoot stay, same
+    # policy as the noisy-tail suppression above. settling_time is measured
+    # from t[0], so the dwell is the window span minus it.
+    metrics_undefined = "net_step_small_vs_swing" in quality
+    if final_value is None and settling_time is not None and not metrics_undefined:
+        span = float(t[-1] - t[0])
+        # Nominal trailing window as a time fraction — sampling-invariant where
+        # the last-10%-of-samples slice is not (see _SETTLE_MIN_DWELL_TAILS).
+        tail_len = _SETTLE_DWELL_TAIL_FRACTION * span
+        dwell = span - settling_time
+        if span > 0 and dwell < _SETTLE_MIN_DWELL_TAILS * tail_len:
+            settling_time = None
+            quality.append("settling_dwell_near_window_end")
+            warnings.append(
+                f"settling_time suppressed: the signal entered the "
+                f"±{settling_tolerance_pct}% settle band only ~{dwell / tail_len:.2g}x "
+                "the trailing window before the end, and the auto-derived final "
+                "value comes from that same short tail — indistinguishable from a "
+                "still-ringing waveform paused on a plateau. Pass an explicit "
+                "final_value, tighten t_start around the step edge, or extend "
+                "the simulation window."
+            )
+
     # A full-pulse window makes overshoot/undershoot/settling undefined (computed
     # against a ~0 baseline) — return null, not a nonsense magnitude. peak_value /
     # peak_time / levels stay valid (they're real samples). The escape hatch is
     # intact: the flag only fires on the auto-level path, so explicit
     # initial_value/final_value bypasses it and returns real metrics.
-    metrics_undefined = "net_step_small_vs_swing" in quality
+    if settling_time is not None and not metrics_undefined and interp_warning:
+        warnings.append(interp_warning)
     return {
         "direction": direction,
         "initial_value": iv,
