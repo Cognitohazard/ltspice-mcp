@@ -116,6 +116,8 @@ from ltspice_mcp.tools._base import (
     MEASUREMENTS_SCHEMA,
     OBSERVATIONS_SCHEMA,
     RO_ANNOTATIONS,
+    SUGGESTIONS_SCHEMA,
+    WARNINGS_SCHEMA,
     ToolInput,
     format_meas_errors,
     format_observations,
@@ -126,6 +128,19 @@ from ltspice_mcp.tools._base import (
 )
 
 FormatField = Literal["json", "text"] | None
+
+# ``signal`` field description shared by the transient/point analysis tools whose
+# signal argument also accepts a device operating-point shorthand for an ngspice
+# ``.save``'d parameter. Kept in one place so the three tools stay consistent.
+_OP_SIGNAL_FIELD_DESC = (
+    "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device operating-point "
+    "shorthand for an ngspice .save'd parameter: 'm1.gm' / 'm1.vth' "
+    "(resolves to '@m1[gm]', incl. subcircuit paths like 'x1.m1.gm')."
+)
+
+# Fourier harmonics shown in the simulation_summary text before it truncates to a
+# "... (N total)" line. The full list always remains in structuredContent.
+_MAX_SUMMARY_HARMONICS = 10
 
 
 # ---------------------------------------------------------------------------
@@ -322,13 +337,7 @@ class SignalStatsInput(ToolInput):
         default=0,
         description="0-based run to analyze when ``job_id`` is given (default 0).",
     )
-    signal: str = Field(
-        description=(
-            "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device operating-point "
-            "shorthand for an ngspice .save'd parameter: 'm1.gm' / 'm1.vth' "
-            "(resolves to '@m1[gm]', incl. subcircuit paths like 'x1.m1.gm')."
-        )
-    )
+    signal: str = Field(description=_OP_SIGNAL_FIELD_DESC)
     step: int = Field(default=0, description="Step index for .step directives")
     t_start: str | None = Field(
         default=None,
@@ -446,13 +455,7 @@ class QueryValueInput(ToolInput):
         default=0,
         description="0-based run to analyze when ``job_id`` is given (default 0).",
     )
-    signal: str = Field(
-        description=(
-            "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device operating-point "
-            "shorthand for an ngspice .save'd parameter: 'm1.gm' / 'm1.vth' "
-            "(resolves to '@m1[gm]', incl. subcircuit paths like 'x1.m1.gm')."
-        )
-    )
+    signal: str = Field(description=_OP_SIGNAL_FIELD_DESC)
     at: str | None = Field(
         default=None,
         description=(
@@ -640,7 +643,7 @@ class SimulationSummaryInput(ToolInput):
             "mean_db": {"type": "number"},
             "min_phase": {"type": "number"},
             "max_phase": {"type": "number"},
-            "warnings": {"type": "array", "items": {"type": "string"}},
+            "warnings": WARNINGS_SCHEMA,
         },
     },
 )
@@ -876,13 +879,7 @@ class GetWaveformInput(ToolInput):
         default=0,
         description="0-based run to read when ``job_id`` is given (default 0).",
     )
-    signal: str = Field(
-        description=(
-            "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device operating-point "
-            "shorthand for an ngspice .save'd parameter: 'm1.gm' / 'm1.vth' "
-            "(resolves to '@m1[gm]', incl. subcircuit paths like 'x1.m1.gm')."
-        )
-    )
+    signal: str = Field(description=_OP_SIGNAL_FIELD_DESC)
     step: int = Field(default=0, description="Step index for .step directives.")
     t_start: str | None = Field(
         default=None,
@@ -1627,7 +1624,7 @@ def _query_x_label(raw, sim_type: str) -> str:
             "step_index": {"type": "integer"},
             "requested_at": {"type": "number"},
             "actual_at": {"type": "number"},
-            "warnings": {"type": "array", "items": {"type": "string"}},
+            "warnings": WARNINGS_SCHEMA,
         },
     },
 )
@@ -2089,7 +2086,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
 
     services.validate_step(raw, args.step)
     op_step_count = services.get_step_count(raw)
-    op_data: dict
+    op_data: dict[str, Any]
 
     is_dc = "transfer" in sim_lower or "dc" in sim_lower.split()
 
@@ -2277,13 +2274,22 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
                 "properties": {
                     "bandwidth_3db": {"type": ["number", "null"]},
                     "unity_gain_freq": {"type": ["number", "null"]},
+                    # Present only on a multi-step run: the step index these
+                    # metrics were computed for (they are one step's answer).
+                    "step": {"type": "integer"},
                 },
             },
-            "warnings": {"type": "array", "items": {"type": "string"}},
+            "warnings": WARNINGS_SCHEMA,
             "errors": {"type": "array", "items": {"type": "string"}},
             "meas_errors": MEAS_ERRORS_SCHEMA,
             "failed_measurements": {"type": "array", "items": {"type": "string"}},
             "observations": OBSERVATIONS_SCHEMA,
+            # Model-resolution help keyed by the missing model/subcircuit ref;
+            # present only when the run's errors named unresolved refs.
+            "suggestions": SUGGESTIONS_SCHEMA,
+            # The trace ac_bandwidth_metrics was computed on when ``signal`` was
+            # omitted and one was auto-picked; absent when the caller passed one.
+            "ac_signal_used": {"type": "string"},
         },
     },
 )
@@ -2295,8 +2301,8 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
     if args.log_file is not None:
         log_path = safe_path(args.log_file, state)
     else:
-        # Friction A: every analysis call shouldn't have to plumb both
-        # ``raw_file`` and the adjacent ``.log``. Auto-derive when missing.
+        # Callers shouldn't have to pass both ``raw_file`` and the adjacent
+        # ``.log``; derive the log path from the raw path when it's not given.
         derived = raw_path.with_suffix(".log")
         if derived.exists():
             log_path = derived
@@ -2360,7 +2366,15 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
     if fmt == "json":
         return format_response("", json_data, fmt)
 
-    # Text formatting (skip when json)
+    return format_response(_format_summary_text(summary, ac_metrics), json_data, fmt)
+
+
+def _format_summary_text(summary: dict, ac_metrics: dict | None) -> str:
+    """Render the human-readable simulation summary from the computed facts.
+
+    Presentation only: everything here is already carried in the structured
+    ``json_data`` the handler returns alongside this text.
+    """
     lines = [f"Simulation Summary: {summary['sim_type']}", ""]
 
     if "time_start" in summary["range"]:
@@ -2411,12 +2425,12 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
                 lines.append(f"  Fundamental: {fourier['fundamental_frequency']:.6g} Hz")
             if fourier["harmonics"]:
                 lines.append("  Harmonics:")
-                for harm in fourier["harmonics"][:10]:
+                for harm in fourier["harmonics"][:_MAX_SUMMARY_HARMONICS]:
                     lines.append(
                         f"    {harm['number']}: {harm['frequency']:.6g} Hz, "
                         f"{harm['magnitude']:.6g}, {harm['phase']:.2f} deg"
                     )
-                if len(fourier["harmonics"]) > 10:
+                if len(fourier["harmonics"]) > _MAX_SUMMARY_HARMONICS:
                     lines.append(f"    ... ({len(fourier['harmonics'])} total)")
         lines.append("")
 
@@ -2432,6 +2446,11 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
         lines.append(f"Errors ({len(summary['errors'])}):")
         for error in summary["errors"]:
             lines.append(f"  {error}")
+        lines.append("")
+
+    suggestion_block = services.format_suggestion_block(summary.get("suggestions"))
+    if suggestion_block:
+        lines.append(suggestion_block)
         lines.append("")
 
     if "warnings" in summary:
@@ -2450,7 +2469,7 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
         lines.extend(obs_lines)
         lines.append("")
 
-    return format_response("\n".join(lines), json_data, fmt)
+    return "\n".join(lines)
 
 
 class EdgeMetricsInput(ToolInput):
@@ -3153,7 +3172,7 @@ class NoiseIntegralInput(ToolInput):
             "f_start_used": {"type": "number"},
             "f_end_used": {"type": "number"},
             "n_points": {"type": "integer"},
-            "warnings": {"type": "array", "items": {"type": "string"}},
+            "warnings": WARNINGS_SCHEMA,
         },
     },
 )
@@ -4124,7 +4143,7 @@ def _bode_output_schema() -> dict:
             "all_steps": {"type": "boolean"},
             "step_count": {"type": "integer"},
             "steps": {"type": "array", "items": step_item},
-            "warnings": {"type": "array", "items": {"type": "string"}},
+            "warnings": WARNINGS_SCHEMA,
             "run_index": {"type": "integer"},
             "params": {"type": "object"},
         },
