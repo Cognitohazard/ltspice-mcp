@@ -111,6 +111,7 @@ from ltspice_mcp.lib.signal_analysis import (
 )
 from ltspice_mcp.state import BatchJob, SessionState
 from ltspice_mcp.tools._base import (
+    FORMAT_DESCRIPTION,
     MEAS_ERRORS_SCHEMA,
     MEASUREMENTS_SCHEMA,
     OBSERVATIONS_SCHEMA,
@@ -343,7 +344,7 @@ class SignalStatsInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -479,7 +480,7 @@ class QueryValueInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -529,7 +530,7 @@ class OperatingPointInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -572,7 +573,7 @@ class SimulationSummaryInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -905,7 +906,7 @@ class GetWaveformInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -1337,7 +1338,7 @@ class ExportWaveformInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -2113,6 +2114,8 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
 
     op_data["step"] = args.step
     op_data["step_count"] = op_step_count
+    # Always present so a clean run reads as "no warnings", not a missing key.
+    op_data["warnings"] = []
 
     # LTspice exposes per-device small-signal params (gm/gds/vth/vdsat/caps) in
     # the .log under '.options logopinfo', not as @dev[param] raw traces the way
@@ -2162,8 +2165,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     # full unrecognized list is relevant.
     unrecognized, solve_failures = await asyncio.to_thread(_read_log_warnings, raw_path)
     relayed = [*unrecognized, *solve_failures]
-    if relayed:
-        op_data.setdefault("warnings", []).extend(relayed)
+    op_data["warnings"].extend(relayed)
 
     # device_op_points is empty because the deck didn't request the per-device
     # small-signal params — say how to get them, otherwise the empty bucket
@@ -2185,7 +2187,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
             "run_sweep / run_montecarlo add it automatically for .op runs); on "
             "ngspice .save them, e.g. '.save all @m1[gm] @m1[gds] @m1[id]'."
         )
-        op_data.setdefault("warnings", []).append(op_point_note)
+        op_data["warnings"].append(op_point_note)
 
     # A DC sweep raw has no single "operating point". With at=, report which
     # sweep point was read; otherwise flag that point 0 is just the start bias.
@@ -2195,7 +2197,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
         dc_sweep_note = (
             f"DC sweep bias at sweep value {sweep_value:.6g} (nearest requested point)."
         )
-        op_data.setdefault("warnings", []).append(dc_sweep_note)
+        op_data["warnings"].append(dc_sweep_note)
     elif is_dc:
         dc_sweep_note = (
             "This is a DC sweep raw; the values are sweep point "
@@ -2203,7 +2205,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
             "point. Pass at=<sweep value> to read the bias at a specific point, "
             "or run a .OP."
         )
-        op_data.setdefault("warnings", []).append(dc_sweep_note)
+        op_data["warnings"].append(dc_sweep_note)
 
     units = op_data["units"]
 
@@ -2772,10 +2774,14 @@ async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
         "stimulus edge near t_start and enough tail to see settling.\n\n"
         "Returns: direction (rising/falling), initial/steady-state values, "
         "peak (absolute and pct), settling_time (to within "
-        "settling_tolerance_pct band). settling_time is null in three cases, kept "
+        "settling_tolerance_pct band). settling_time is null in four cases, kept "
         "distinct in the text and quality flags: 'never (within window)', "
-        "'undefined (full-pulse window)', and 'unknown' when the trailing window is "
-        "too noisy to trust the final value (still ringing) — pass final_value there.\n\n"
+        "'undefined (full-pulse window)', 'unknown' when the trailing window is "
+        "too noisy to trust the final value (still ringing), and 'unknown' when "
+        "the signal entered the settle band only just before the window end (the "
+        "auto final value comes from that same short tail) — pass final_value "
+        "for either unknown, tighten t_start around the step edge, or extend "
+        "the window.\n\n"
         "Definitions: overshoot is excursion BEYOND final in the step "
         "direction; undershoot is excursion beyond initial opposite the "
         "step direction. overshoot_pct = 0 means MEASURED overdamped, not "
@@ -2807,14 +2813,16 @@ async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
     )
     data["signal"] = args.signal
 
-    # settling_time None has THREE distinct meanings; keep them separate so an
+    # settling_time None has FOUR distinct meanings; keep them separate so an
     # unknown/unreliable state never reads as a definitive design failure:
     #   - full-pulse window     → metrics undefined (net step ~0 baseline)
     #   - trusted, never crossed → genuinely "never settled within the window"
     #   - untrusted final value  → UNKNOWN (trailing window too noisy to anchor a band)
+    #   - in-band only near the end → UNKNOWN (final value from that same short tail)
     quality = data.get("quality", [])
     undefined = "net_step_small_vs_swing" in quality
     noisy_tail = "settling_final_value_from_noisy_tail" in quality
+    short_dwell = "settling_dwell_near_window_end" in quality
 
     def _pct(value: float | None) -> str:
         return "undefined (full-pulse window)" if value is None else f"{value:.3f} %"
@@ -2825,6 +2833,11 @@ async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
         settle = "undefined (full-pulse window)"
     elif noisy_tail:
         settle = "unknown (final value from a still-ringing tail; pass final_value)"
+    elif short_dwell:
+        settle = (
+            "unknown (in-band only near the window end; pass final_value, "
+            "tighten t_start, or extend the window)"
+        )
     else:
         settle = "never (within window)"
     lines = [
@@ -5062,7 +5075,7 @@ class PlotWaveformInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 

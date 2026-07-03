@@ -435,6 +435,23 @@ class TestGetOperatingPoint:
         assert "V(out)" in text
         assert "I(R1)" in text
 
+    async def test_clean_run_emits_empty_warnings(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A clean run must still carry the warnings key (as an empty list) so
+        # structured-content consumers see "no warnings", not a missing key.
+        raw_file = work_dir / "opclean.raw"
+        raw = _make_raw_mock(
+            plotname="Operating Point",
+            trace_names=["V(out)", "I(R1)"],
+            waves={"V(out)": np.array([1.5]), "I(R1)": np.array([0.001])},
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_operating_point(
+            OperatingPointInput(raw_file=raw_file.name), state_no_sim
+        )
+        assert (result.structuredContent or {})["warnings"] == []
+
     async def test_folds_ltspice_logopinfo_op_points(
         self, state_no_sim: SessionState, work_dir: Path
     ):
@@ -889,6 +906,31 @@ class TestPulseResponse:
         sc = result.structuredContent
         assert sc["settling_time"] is None
         assert "settling_final_value_from_noisy_tail" in sc["quality"]
+        text = result.content[0].text
+        assert "unknown" in text.lower()
+        assert "never (within window)" not in text
+
+    async def test_short_dwell_renders_unknown_not_never(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A ringing staircase paused flat on its last plateau: the trailing
+        # window is quiet, but the signal entered the settle band only just
+        # before the window end, so settling_time is suppressed. The tool must
+        # render this null as UNKNOWN, not the definitive "never (within
+        # window)".
+        raw_file = work_dir / "stair.raw"
+        t = np.linspace(0, 40e-9, 2001)
+        levels = np.array([0.0, 5.0, 2.0, 4.5, 2.5, 4.2, 2.8, 4.109])
+        y = levels[np.minimum((t // 5e-9).astype(int), len(levels) - 1)]
+        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_pulse_response(
+            PulseResponseInput(raw_file=raw_file.name, signal="V(out)"),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc["settling_time"] is None
+        assert "settling_dwell_near_window_end" in sc["quality"]
         text = result.content[0].text
         assert "unknown" in text.lower()
         assert "never (within window)" not in text
