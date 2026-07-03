@@ -14,6 +14,7 @@ from ltspice_mcp.errors import JobNotFoundError, ResultError, SimulationError
 from ltspice_mcp.lib import now
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
 from ltspice_mcp.tools.simulation import (
+    TIMEOUT_HINT,
     CancelJobInput,
     CheckJobInput,
     RunSimulationInput,
@@ -124,6 +125,20 @@ class TestCheckJob:
         result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
         assert "cancelled" in result.content[0].text
 
+    async def test_interrupted_mirrors_rerun_hint_into_structured(
+        self, state_no_sim: SessionState
+    ):
+        # The incomplete-results / re-run guidance lived only in the text
+        # channel; structured-content clients need it in the data dict.
+        _make_job(state_no_sim, status="interrupted")
+        result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
+        assert "was interrupted" in result.content[0].text
+        data = result.structuredContent
+        assert data is not None
+        assert data["status"] == "interrupted"
+        assert "incomplete" in data["hint"]
+        assert "re-run" in data["hint"]
+
     async def test_timeout(self, state_no_sim: SessionState):
         _make_job(state_no_sim, status="timeout")
         result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
@@ -133,6 +148,29 @@ class TestCheckJob:
         # knob), or the agent reads it as a dead end.
         assert "run_simulation(timeout=" in text
         assert "LTSPICE_MCP_TIMEOUT" in text
+        # Structured-content clients see only structuredContent, so the same
+        # guidance must ride in the data dict.
+        data = result.structuredContent
+        assert data is not None
+        assert data["hint"] == TIMEOUT_HINT.strip()
+        assert "log_excerpt" not in data  # no log file exists for this job
+
+    async def test_timeout_mirrors_excerpt_and_hint_into_structured(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        log = work_dir / "slow.log"
+        log.write_text("Analysis started\nError: time step too small\n")
+        _make_job(state_no_sim, status="timeout", log_file=log)
+        result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert "run_simulation(timeout=" in data["hint"]
+        assert "LTSPICE_MCP_TIMEOUT" in data["hint"]
+        assert "time step too small" in data["log_excerpt"]
+        # The text channel keeps its excerpt too.
+        text = result.content[0].text
+        assert "Log excerpt:" in text
+        assert "time step too small" in text
 
     async def test_completed_missing_files(self, state_no_sim: SessionState):
         _make_job(state_no_sim, status="completed")
@@ -194,6 +232,13 @@ class TestCheckJob:
         text = result.content[0].text
         assert 'status="all"' in text
         assert "are hidden" in text or "hidden" in text
+        # {jobs: [], count: 0} alone reads as "nothing exists" to a
+        # structured-content client — the hidden-jobs note must ride along.
+        data = result.structuredContent
+        assert data is not None
+        assert data["count"] == 0
+        assert "1 finished job(s)" in data["hint"]
+        assert 'status="all"' in data["hint"]
 
     async def test_check_job_empty_no_jobs_stays_minimal(self, state_no_sim: SessionState):
         # With zero jobs of any kind, the default message is the plain
@@ -202,6 +247,8 @@ class TestCheckJob:
         text = result.content[0].text
         assert "No active jobs" in text
         assert "hidden" not in text
+        assert result.structuredContent is not None
+        assert "hint" not in result.structuredContent
 
     async def test_list_filter_status(self, state_no_sim: SessionState):
         _make_job(state_no_sim, job_id="r1", status="running")
@@ -389,6 +436,13 @@ class TestRunSimulationStubbed:
         text = result.content[0].text
         assert "Job ID:" in text
         assert len(state_with_sim.jobs) == 1
+        # The check_job/cancel_job referral must ride in structuredContent —
+        # structured-content clients never see the text channel.
+        data = result.structuredContent
+        assert data is not None
+        job_id = data["job_id"]
+        assert f"check_job('{job_id}')" in data["hint"]
+        assert f"cancel_job('{job_id}')" in data["hint"]
         # Unblock the deadline watchdog the async path arms, so no task is
         # left pending at loop teardown.
         next(iter(state_with_sim.jobs.values())).done_event.set()
@@ -572,6 +626,13 @@ class TestRunSimulationStubbed:
             )
         text = result.content[0].text
         assert "timed out" in text.lower()
+        assert "run_simulation(timeout=" in text
+        # The raise-the-limit guidance must also ride in structuredContent.
+        data = result.structuredContent
+        assert data is not None
+        assert data["status"] == "timeout"
+        assert data["hint"] == TIMEOUT_HINT.strip()
+        assert "log_excerpt" not in data  # the stubbed run produced no log
 
     async def test_sync_failed(
         self, state_with_sim: SessionState, sample_netlist: Path, work_dir: Path
@@ -637,8 +698,13 @@ class TestCheckJobBatchVisibility:
         assert "mc_x" in text
         assert "montecarlo" in text
         assert "not found" not in text.lower()
-        assert result.structuredContent is not None
-        assert result.structuredContent["job_type"] == "montecarlo"
+        data = result.structuredContent
+        assert data is not None
+        assert data["job_type"] == "montecarlo"
+        # The batch_results/measurement_stats redirect must ride in
+        # structuredContent, not just the text channel.
+        assert "batch_results('mc_x')" in data["hint"]
+        assert "measurement_stats" in data["hint"]
 
     async def test_list_jobs_includes_batch(self, state_with_sim: SessionState):
         bj = BatchJob(

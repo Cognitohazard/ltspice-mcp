@@ -429,7 +429,7 @@ class TestConnect:
             )
 
     async def test_multiple_ground_labels_error(self, asc_state: SessionState, asc_file: Path):
-        with pytest.raises(NetlistError, match="Multiple '0'"):
+        with pytest.raises(NetlistError, match="Multiple '0'") as exc_info:
             await handle_connect(
                 ConnectInput(
                     path=asc_file.name,
@@ -438,6 +438,32 @@ class TestConnect:
                 ),
                 asc_state,
             )
+        # Guidance must reference the actual ambiguous net, not a canned example.
+        msg = str(exc_info.value)
+        assert "add_net_label(net='0'" in msg
+        assert "M3.S" not in msg
+
+    async def test_multiple_label_error_names_actual_net(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        # Two same-name labels on a non-ground net: the ambiguity guidance
+        # must name that net dynamically.
+        await handle_add_net_label(
+            NetLabelInput(path=asc_file.name, net="SIG", x=100, y=200), asc_state
+        )
+        await handle_add_net_label(
+            NetLabelInput(path=asc_file.name, net="SIG", x=300, y=200), asc_state
+        )
+        with pytest.raises(NetlistError, match="Multiple 'SIG'") as exc_info:
+            await handle_connect(
+                ConnectInput(
+                    path=asc_file.name,
+                    from_pin="net:filtered",
+                    to_pin="net:SIG",
+                ),
+                asc_state,
+            )
+        assert "add_net_label(net='SIG'" in str(exc_info.value)
 
     async def test_invalid_pin_format(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="Invalid pin reference"):
@@ -1020,6 +1046,11 @@ class TestCreateSchematicFormat:
         assert data["path"].endswith("fmt_json.asc")
         assert data["width"] == 640
         assert data["height"] == 480
+        # The layout checklist must reach structured-aware clients (which show
+        # only structuredContent), not just the text channel.
+        assert "Layout checklist" in data["hint"]
+        assert "add_net_label" in data["hint"]
+        assert "apply_schematic_ops" in data["hint"]
 
 
 @pytest.mark.asyncio

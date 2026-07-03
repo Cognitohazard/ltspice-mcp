@@ -1,4 +1,4 @@
-"""Tests for advanced sweep/Monte Carlo handlers (configure + get_batch_results)."""
+"""Tests for advanced sweep/Monte Carlo handlers (configure + batch_results)."""
 
 import asyncio
 from datetime import timedelta
@@ -658,18 +658,26 @@ class TestGetBatchResults:
         _make_batch(state_no_sim, status="running")
         result = await handle_batch_results(GetBatchResultsInput(job_id="b1"), state_no_sim)
         assert "running" in result.content[0].text.lower()
+        # The query-partial-results route must survive in structuredContent —
+        # structured-aware clients never see the text channel.
+        hint = result.structuredContent["hint"]
+        assert "batch_results('b1', signal=" in hint
+        assert "partial results" in hint
 
     async def test_status_completed(self, state_no_sim: SessionState):
         _make_batch(state_no_sim, status="completed", completed_runs=5, total_runs=5)
         result = await handle_batch_results(GetBatchResultsInput(job_id="b1"), state_no_sim)
         text = result.content[0].text.lower()
         assert "completed" in text
+        assert "batch_results('b1', signal=" in result.structuredContent["hint"]
 
     async def test_status_failed(self, state_no_sim: SessionState):
         bj = _make_batch(state_no_sim, status="failed")
         bj.error = "test error"
         result = await handle_batch_results(GetBatchResultsInput(job_id="b1"), state_no_sim)
         assert "failed" in result.content[0].text.lower()
+        # No follow-up route on a failed job — the hint key is omitted, not null.
+        assert "hint" not in result.structuredContent
 
     async def test_signal_no_completed_runs(self, state_no_sim: SessionState):
         _make_batch(state_no_sim, status="completed", completed_runs=0)
@@ -681,7 +689,15 @@ class TestGetBatchResults:
     async def test_status_cancelled(self, state_no_sim: SessionState):
         _make_batch(state_no_sim, status="cancelled", completed_runs=2, total_runs=10)
         result = await handle_batch_results(GetBatchResultsInput(job_id="b1"), state_no_sim)
-        assert "cancelled" in result.content[0].text.lower()
+        text = result.content[0].text
+        assert "cancelled" in text.lower()
+        # The referral must name the real tool (batch_results), and the
+        # partial-results route must also land in structuredContent.
+        assert "get_batch_results" not in text
+        assert "batch_results" in text
+        hint = result.structuredContent["hint"]
+        assert "batch_results('b1', signal=" in hint
+        assert "Partial results" in hint
 
     async def test_status_interrupted_returns_partial(self, state_no_sim: SessionState):
         # 'interrupted' is a terminal status assigned on restart recovery when
@@ -692,6 +708,41 @@ class TestGetBatchResults:
         text = result.content[0].text
         assert "interrupted" in text.lower()
         assert "3 of 8" in text
+        assert "get_batch_results" not in text
+        hint = result.structuredContent["hint"]
+        assert "batch_results('b1', signal=" in hint
+        assert "Partial results" in hint
+
+    async def test_step_collapse_hint_reaches_structured_content(self, state_no_sim: SessionState):
+        # A run whose raw carries its own .step sweep is read at step 0 only.
+        # The recovery route (get_waveform/query_value with step=<n>) must be
+        # in structuredContent, not just the text channel.
+        from tests.conftest import FIXTURES_DIR
+
+        stepped = FIXTURES_DIR / "ltspice_step_tran.raw"
+        _make_batch(
+            state_no_sim,
+            status="completed",
+            completed_runs=1,
+            total_runs=1,
+            run_results={0: {"raw_file": str(stepped), "log_file": "", "params": {"R": 1000.0}}},
+        )
+        result = await handle_batch_results(
+            GetBatchResultsInput(job_id="b1", signal="V(out)"), state_no_sim
+        )
+        sc = result.structuredContent
+        assert sc["step_collapsed_runs"] == [0]
+        hint = sc["hint"]
+        assert "step_collapsed_runs" in hint
+        assert "get_waveform/query_value" in hint
+        assert "step=<n>" in hint
+
+        # Raw (per-run) mode carries the same recovery route.
+        raw_result = await handle_batch_results(
+            GetBatchResultsInput(job_id="b1", signal="V(out)", raw=True), state_no_sim
+        )
+        raw_hint = raw_result.structuredContent["hint"]
+        assert "step=<n>" in raw_hint
 
 
 class TestFormatBatchTextHelpers:

@@ -1,12 +1,19 @@
 """Tests for ltspice_server_status tool handler."""
 
 import typing
+from pathlib import Path
 
 import pytest
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib import recent
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.status import ServerStatusInput, handle_server_status
+from ltspice_mcp.tools.status import (
+    RecentInput,
+    ServerStatusInput,
+    handle_recent,
+    handle_server_status,
+)
 
 
 @pytest.mark.asyncio
@@ -85,3 +92,40 @@ class TestGetServerStatus:
         text = result.content[0].text
         assert "Startup diagnostics" in text
         assert "Requested simulator: ltspice" in text
+
+
+@pytest.mark.asyncio
+class TestRecent:
+    @pytest.fixture
+    def recent_home(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """Redirect the user-global recent index to a per-test temp dir."""
+        home = tmp_path / "ltspice-mcp-home"
+        monkeypatch.setenv("LTSPICE_MCP_HOME", str(home))
+        return home
+
+    async def test_empty_mirrors_hint_into_structured(
+        self, state_no_sim: SessionState, recent_home: Path
+    ):
+        result = await handle_recent(RecentInput(), state_no_sim)
+        text = result.content[0].text
+        assert "No recent circuits" in text
+        sc = result.structuredContent
+        assert sc["circuits"] == []
+        assert sc["count"] == 0
+        # Structured-aware clients only see the data dict — the empty-state
+        # guidance must be mirrored there, not live only in the text channel.
+        assert sc["hint"] == text
+        assert "run_simulation" in sc["hint"]
+
+    async def test_populated_omits_hint(
+        self, state_no_sim: SessionState, recent_home: Path, tmp_path: Path
+    ):
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("* rc\n.end\n")
+        recent.touch(circuit)
+        result = await handle_recent(RecentInput(), state_no_sim)
+        sc = result.structuredContent
+        assert sc["count"] == 1
+        assert sc["circuits"][0]["path"] == str(circuit.resolve())
+        # hint is empty-state guidance only.
+        assert "hint" not in sc

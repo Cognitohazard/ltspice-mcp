@@ -162,6 +162,11 @@ class TestFindModel:
         assert "No fuzzy matches" in result.content[0].text
         assert "load_library" in result.content[0].text  # full profile names the tool
         assert result.structuredContent["results"] == []
+        # Structured-aware clients only see the data dict — the guidance must
+        # be mirrored there, with the text channel's leading space stripped.
+        hint = result.structuredContent["hint"]
+        assert "load_library" in hint
+        assert hint == hint.lstrip()
 
     async def test_empty_hint_agentic_omits_hidden_tool(self, config: ServerConfig):
         # load_library is full-only; an agentic agent must not be told to call it.
@@ -171,6 +176,9 @@ class TestFindModel:
         text = result.content[0].text
         assert "load_library" not in text
         assert ".lib/.include" in text
+        hint = result.structuredContent["hint"]
+        assert "load_library" not in hint
+        assert ".lib/.include" in hint
 
     async def test_empty_hint_points_to_symbol_when_name_is_a_symbol(
         self, state_no_sim: SessionState, monkeypatch
@@ -188,6 +196,10 @@ class TestFindModel:
         text = result.content[0].text
         assert "symbol_info" in text
         assert "UniversalOpamp2" in text
+        # The symbol referral must also reach the structured hint.
+        hint = result.structuredContent["hint"]
+        assert "symbol_info" in hint
+        assert "UniversalOpamp2" in hint
 
     async def test_exact_match_found(self, state_no_sim: SessionState, fuzzy_lib: Path):
         await handle_load_library(LoadLibraryInput(path=fuzzy_lib.name), state_no_sim)
@@ -211,6 +223,7 @@ class TestFindModel:
         assert "No exact match" in result.content[0].text
         assert "find_model" in result.content[0].text
         assert "exact=false" in result.content[0].text
+        assert "exact=false" in result.structuredContent["hint"]
 
     async def test_cutoff_filters(self, state_no_sim: SessionState, fuzzy_lib: Path):
         await handle_load_library(LoadLibraryInput(path=fuzzy_lib.name), state_no_sim)
@@ -246,6 +259,10 @@ class TestListLibraries:
         assert "No libraries" in text
         # Points the model at the built-in libraries it can still reach.
         assert "include_builtin=true" in text
+        # Structured-aware clients only see the data dict — mirror the guidance.
+        data = result.structuredContent
+        assert data["libraries"] == []
+        assert "include_builtin=true" in data["hint"]
 
     async def test_populated_simple(self, state_no_sim: SessionState, lib_file: Path):
         await handle_load_library(LoadLibraryInput(path=lib_file.name), state_no_sim)

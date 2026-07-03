@@ -10,6 +10,8 @@ from ltspice_mcp.lib.mcp_logging import mcp_log
 from ltspice_mcp.lib.symbol_geometry import get_symbol_info
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    FORMAT_DESCRIPTION,
+    HINT_SCHEMA,
     PAGINATION_SCHEMA,
     RO_ANNOTATIONS,
     ToolInput,
@@ -50,7 +52,7 @@ class FindModelInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -71,7 +73,7 @@ class ListLibrariesInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -122,6 +124,7 @@ class ListLibrariesInput(ToolInput):
             "include_builtin": {"type": "boolean"},
             "exact": {"type": "boolean"},
             "cutoff": {"type": "number"},
+            "hint": HINT_SCHEMA,
         },
     },
 )
@@ -167,15 +170,15 @@ async def handle_find_model(args: FindModelInput, state: SessionState):
 
     if not results:
         if exact:
-            hint = " Retry find_model with exact=false for fuzzy matches."
+            hint = "Retry find_model with exact=false for fuzzy matches."
         elif not include_builtin:
-            hint = " Try lowering cutoff or set include_builtin=true."
+            hint = "Try lowering cutoff or set include_builtin=true."
         elif state.config.tool_profile == "agentic":
             # load_library is full-only — don't point an agentic agent at a tool
             # it can't see; it adds sources by editing .lib/.include directly.
-            hint = " Try lowering cutoff, or add .lib/.include directives for more sources."
+            hint = "Try lowering cutoff, or add .lib/.include directives for more sources."
         else:
-            hint = " Try lowering cutoff or load_library to add more sources."
+            hint = "Try lowering cutoff or load_library to add more sources."
         # A name that resolves to a schematic SYMBOL rather than a library model
         # (e.g. UniversalOpamp2) legitimately has no .SUBCKT/.MODEL — point the
         # caller at symbol_info instead of leaving them to conclude it doesn't exist.
@@ -186,7 +189,9 @@ async def handle_find_model(args: FindModelInput, state: SessionState):
                 "— use symbol_info for its pins/geometry."
             )
         reason = "No exact match" if exact else f"No fuzzy matches (cutoff={cutoff})"
-        return format_response(f"{reason} for '{name}' in {scope} libraries.{hint}", data, fmt)
+        # Mirrored — see format_response's self-sufficiency contract.
+        data["hint"] = hint
+        return format_response(f"{reason} for '{name}' in {scope} libraries. {hint}", data, fmt)
 
     mode = "Exact match" if exact else f"Fuzzy matches (cutoff={cutoff})"
     lines = [f"{mode} for '{name}' in {scope} libraries:", ""]
@@ -320,6 +325,7 @@ async def handle_unload_library(
                 },
             },
             "pagination": PAGINATION_SCHEMA,
+            "hint": HINT_SCHEMA,
         },
     },
 )
@@ -334,12 +340,11 @@ async def handle_list_libraries(args: ListLibrariesInput, state: SessionState):
     libs = state.libraries.list_libraries()
 
     if not libs:
-        return format_response(
+        hint = (
             "No libraries loaded. Common parts live in built-in libraries — "
-            "search with find_model(name=…, include_builtin=true).",
-            {"libraries": []},
-            fmt,
+            "search with find_model(name=…, include_builtin=true)."
         )
+        return format_response(hint, {"libraries": [], "hint": hint}, fmt)
 
     # Apply path filter
     if filter_path:

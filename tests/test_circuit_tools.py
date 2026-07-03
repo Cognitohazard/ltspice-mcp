@@ -1062,6 +1062,12 @@ class TestDiffCircuit:
         assert data is not None
         assert data["warnings"], "a parse failure must be reported, not silently ignored"
         assert any("broken.asc" in w for w in data["warnings"])
+        # The interpretation caveat must ride in the structured warnings, not
+        # just the text channel — structured-aware clients never see the text.
+        assert any(
+            "broken.asc" in w and "treats it as empty" in w and "trusting" in w
+            for w in data["warnings"]
+        )
         assert "WARNING" in result.content[0].text
 
 
