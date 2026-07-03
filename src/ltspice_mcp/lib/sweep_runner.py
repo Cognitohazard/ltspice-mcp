@@ -15,6 +15,7 @@ from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_types import BatchJob
 from ltspice_mcp.lib.runner_base import (
+    DEFAULT_MAX_PARALLEL,
     BatchRunnerBase,
     batch_run_filename,
     discard_logopinfo_netlist,
@@ -54,7 +55,7 @@ class SweepRunner(BatchRunnerBase):
         loop: asyncio.AbstractEventLoop,
         simulator_class: type,
         output_folder: Path,
-        max_parallel: int = 4,
+        max_parallel: int = DEFAULT_MAX_PARALLEL,
     ):
         super().__init__(loop, simulator_class, output_folder, max_parallel)
         logger.debug(

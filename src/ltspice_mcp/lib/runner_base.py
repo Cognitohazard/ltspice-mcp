@@ -19,14 +19,16 @@ import re
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from spicelib.sim.sim_runner import SimRunner
 
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES, BatchJob
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
-from ltspice_mcp.state import SessionState
+
+if TYPE_CHECKING:
+    from ltspice_mcp.state import SessionState
 
 # Trailing `_<digits>` in spicelib-generated raw/log filenames. spicelib's
 # SimRunner._run_file_name produces "<stem>_<runno><suffix>" (1-based runno).
@@ -37,6 +39,12 @@ _RUNNO_RE = re.compile(r"_(\d+)$")
 # producer and every consumer share one constant — change the name scheme here
 # and both sides move together.
 LOGOPINFO_MARKER = ".logopinfo"
+
+# Fallback concurrency cap used when a caller doesn't pass ``max_parallel``.
+# The real cap comes from ``config.max_parallel_sims``; this default only
+# applies to direct runner construction (mostly tests). Every runner
+# constructor and the RunnerManager factory methods share this one value.
+DEFAULT_MAX_PARALLEL = 4
 
 
 def discard_logopinfo_netlist(path: Path | None) -> None:
@@ -176,7 +184,7 @@ class RunnerBase:
         loop: asyncio.AbstractEventLoop,
         simulator_class: type,
         output_folder: Path,
-        max_parallel: int = 4,
+        max_parallel: int = DEFAULT_MAX_PARALLEL,
     ):
         self.loop = loop
         self.simulator_class = simulator_class
@@ -224,7 +232,7 @@ class BatchRunnerBase(RunnerBase):
         loop: asyncio.AbstractEventLoop,
         simulator_class: type,
         output_folder: Path,
-        max_parallel: int = 4,
+        max_parallel: int = DEFAULT_MAX_PARALLEL,
     ):
         super().__init__(loop, simulator_class, output_folder, max_parallel)
         self._cancel_events: dict[str, threading.Event] = {}

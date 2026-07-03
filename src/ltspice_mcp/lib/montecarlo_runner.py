@@ -10,6 +10,7 @@ measurement_stats) can correlate measurements with the perturbed values.
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from spicelib import SpiceEditor
@@ -18,12 +19,14 @@ from ltspice_mcp.errors import BatchJobError
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import format_spice_value
 from ltspice_mcp.lib.job_lifecycle import transition
-from ltspice_mcp.lib.job_types import BatchJob
+from ltspice_mcp.lib.job_types import BatchJob, MonteCarloConfig
 from ltspice_mcp.lib.montecarlo import (
+    InstanceGeometry,
     MCSampler,
     MismatchRule,
     ModelTolerance,
     ParamTolerance,
+    ToleranceSpec,
     expand_tolerances,
     extract_model_card,
     extract_mosfet_instances,
@@ -38,6 +41,7 @@ from ltspice_mcp.lib.montecarlo import (
 )
 from ltspice_mcp.lib.observability import emit_job_event
 from ltspice_mcp.lib.runner_base import (
+    DEFAULT_MAX_PARALLEL,
     BatchRunnerBase,
     batch_run_filename,
     discard_logopinfo_netlist,
@@ -100,6 +104,286 @@ def _build_mismatch_overrides(
     return overrides
 
 
+@dataclass
+class _MCPlan:
+    """Resolved Monte Carlo perturbation plan, computed once from the baseline.
+
+    Groups the per-rule nominal values and precomputed per-run lookups so the
+    per-run perturbation pass takes explicit inputs instead of closing over the
+    setup scope. ``stable_base_params`` is a per-job cache that the per-run pass
+    may fill in lazily, so it is shared (not copied) across runs.
+    """
+
+    tol_map: dict[str, ToleranceSpec]
+    rcl_nominals: dict[str, float]
+    model_tolerances: list[ModelTolerance]
+    model_nominals: dict[str, dict[str, float]]
+    # Only populated when the config carries mismatch rules, so its truthiness
+    # doubles as the "mismatch enabled" signal.
+    mosfet_instances: list[InstanceGeometry]
+    instance_to_rule: dict[str, MismatchRule]
+    stable_base_params: dict[str, dict[str, float]]
+    param_tolerances: list[ParamTolerance]
+    param_nominals: dict[str, float]
+
+
+def _resolve_mc_plan(
+    job_id: str,
+    baseline_text: str,
+    baseline_cards: list[SpiceCard],
+    mc_config: MonteCarloConfig,
+) -> _MCPlan:
+    """Resolve the perturbation plan once from the baseline netlist.
+
+    Extracts nominal values and precomputes per-run lookups for each
+    perturbation class: R/C/L component tolerances, per-.MODEL process
+    variation, per-instance MOSFET mismatch, and .PARAM tolerances. Raises
+    ``BatchJobError`` when no rule matches anything perturbable.
+    """
+    # R/C/L tolerance resolution + nominal extraction. Walk the lexed cards
+    # instead of editor.get_components — works uniformly across flat and
+    # hierarchical netlists.
+    all_refs = [c.name for c in baseline_cards if c.kind == "instance" and c.name]
+    tol_map = expand_tolerances(
+        all_refs,
+        mc_config.type_tolerances,
+        mc_config.component_overrides,
+    )
+    baseline_inst_by_ref: dict[str, SpiceCard] = {
+        c.name.lower(): c for c in baseline_cards if c.kind == "instance" and c.name
+    }
+    rcl_nominals: dict[str, float] = {}
+    for ref in tol_map:
+        card = baseline_inst_by_ref.get(ref.lower())
+        if card is None:
+            continue
+        try:
+            inst_view = InstanceLine.from_card(card)
+        except Exception:
+            continue
+        raw_val = inst_view.value
+        if raw_val is None:
+            # M/Q/J/X have model name in the slot, no numeric value
+            continue
+        parsed = parse_value(raw_val)
+        if parsed is None:
+            # Parameter-driven values (``{RS}``) cannot be perturbed
+            # at the component level — the user has to perturb the
+            # .PARAM via ``param_tolerances`` instead. Surface this
+            # rather than silently dropping.
+            logger.warning(
+                "MC job %s: %s value %r is not a numeric literal — "
+                "skipping. To perturb parameter-driven values, add "
+                "the underlying .PARAM name to ``param_tolerances``.",
+                job_id,
+                ref,
+                raw_val,
+            )
+            continue
+        rcl_nominals[ref] = parsed
+
+    # Per-.MODEL nominals.
+    model_tolerances: list[ModelTolerance] = list(mc_config.model_tolerances or [])
+    model_nominals: dict[str, dict[str, float]] = {}
+    for mt in model_tolerances:
+        card = extract_model_card(baseline_text, mt.model_name)
+        if card is None:
+            logger.warning(
+                "MC job %s: .MODEL %s not found in netlist; ignoring rule",
+                job_id,
+                mt.model_name,
+            )
+            continue
+        model_nominals[mt.model_name] = parse_model_params(card)
+
+    # MOSFET instance geometry + per-instance caches.
+    mismatch_rules = list(mc_config.mismatch_rules or [])
+    mosfet_instances = extract_mosfet_instances(baseline_text) if mismatch_rules else []
+    # Precompute per-instance state that's stable across runs:
+    # - rule lookup (linear scan over rules → O(1) dict lookup per run)
+    # - whether the instance's model is also being process-perturbed
+    #   (those need fresh ``parse_model_params`` per run; others can
+    #   reuse the baseline parse).
+    instance_to_rule = {
+        inst.ref: rule
+        for inst in mosfet_instances
+        if (rule := find_mismatch_rule(inst.ref, mismatch_rules)) is not None
+    }
+    perturbed_models = set(model_nominals.keys())
+    stable_base_params: dict[str, dict[str, float]] = {}
+    for inst in mosfet_instances:
+        if inst.ref not in instance_to_rule:
+            continue
+        if inst.model_name in perturbed_models:
+            continue  # base will shift each run; recompute then
+        base_card = extract_model_card(baseline_text, inst.model_name)
+        if base_card is not None:
+            stable_base_params[inst.model_name] = parse_model_params(base_card)
+
+    # .PARAM nominals.
+    param_tolerances: list[ParamTolerance] = list(mc_config.param_tolerances or [])
+    param_nominals: dict[str, float] = {}
+    for pt in param_tolerances:
+        nominal = parse_param_nominal(baseline_text, pt.name)
+        if nominal is None:
+            logger.warning(
+                "MC job %s: .PARAM %s not found or non-numeric; ignoring rule",
+                job_id,
+                pt.name,
+            )
+            continue
+        param_nominals[pt.name] = nominal
+
+    # Empty-perturbation guard — give the user something actionable.
+    if not (rcl_nominals or model_nominals or mosfet_instances or param_nominals):
+        raise BatchJobError(
+            "Monte Carlo: no perturbable parameters matched the rules. "
+            "Check that R/C/L prefixes, .MODEL names, M-instance W/L params, "
+            "and .PARAM names match the netlist."
+        )
+
+    return _MCPlan(
+        tol_map=tol_map,
+        rcl_nominals=rcl_nominals,
+        model_tolerances=model_tolerances,
+        model_nominals=model_nominals,
+        mosfet_instances=mosfet_instances,
+        instance_to_rule=instance_to_rule,
+        stable_base_params=stable_base_params,
+        param_tolerances=param_tolerances,
+        param_nominals=param_nominals,
+    )
+
+
+def _perturb_run(
+    baseline_text: str,
+    plan: _MCPlan,
+    run_sampler: MCSampler,
+) -> tuple[list[str], dict[str, float]]:
+    """Apply one run's perturbations to a fresh copy of the baseline.
+
+    Re-lexes ``baseline_text`` (cheaper than deep-copying the card tree),
+    perturbs each rule class via ``run_sampler``, and returns the rewritten
+    netlist lines plus the actual perturbed values (floats) keyed by
+    ref/param. ``plan.stable_base_params`` may be filled in as a side effect.
+    """
+    run_params: dict[str, float] = {}
+
+    # Re-lex baseline text per iteration. ~0.6 ms on a 200-card netlist —
+    # measured ~2.4× faster than ``copy.deepcopy(baseline_cards)`` because
+    # the dataclass tree (raw_lines + tokens) is expensive to clone.
+    cards = lex(baseline_text).cards
+
+    # Single pass over cards to build the three lookup tables.
+    model_by_name: dict[str, SpiceCard] = {}
+    instance_by_ref: dict[str, SpiceCard] = {}
+    param_by_name: dict[str, SpiceCard] = {}
+    for c in cards:
+        if not c.name:
+            continue
+        key = c.name.lower()
+        if c.kind == "model":
+            model_by_name[key] = c
+        elif c.kind == "instance":
+            instance_by_ref[key] = c
+        elif c.kind == "param":
+            param_by_name[key] = c
+
+    # R/C/L (per-ref stream within the run sampler).
+    for ref, spec in plan.tol_map.items():
+        if ref not in plan.rcl_nominals:
+            continue
+        inst_card = instance_by_ref.get(ref.lower())
+        if inst_card is None:
+            continue
+        perturbed = run_sampler.sample(
+            plan.rcl_nominals[ref],
+            spec,
+            stream=f"rcl:{ref}",
+        )
+        formatted = format_spice_value(perturbed)
+        InstanceLine.from_card(inst_card).set_value(formatted)
+        run_params[ref] = perturbed
+
+    # Process variation (.MODEL perturbation). ``run_perturbations[model]``
+    # accumulates this run's process-level deltas so the mismatch pass can
+    # layer on top of the perturbed (not nominal) base params.
+    run_perturbations: dict[str, dict[str, float]] = {}
+    for mt in plan.model_tolerances:
+        nominals = plan.model_nominals.get(mt.model_name)
+        if not nominals:
+            continue
+        perturbations = sample_model_perturbation(
+            run_sampler, mt.model_name, nominals, mt.parameters
+        )
+        if not perturbations:
+            continue
+        model_card = model_by_name.get(mt.model_name.lower())
+        if model_card is None:
+            continue
+        model_view = ModelCard.from_card(model_card)
+        for p, v in perturbations.items():
+            model_view.set_param(p, v)
+        run_perturbations[mt.model_name] = perturbations
+        for p, v in perturbations.items():
+            run_params[f"{mt.model_name}.{p}"] = v
+
+    # Mismatch (per-instance variant models).
+    for instance in plan.mosfet_instances:
+        rule = plan.instance_to_rule.get(instance.ref)
+        if rule is None:
+            continue
+        deltas = sample_instance_mismatch(run_sampler, instance, rule)
+        if deltas["dvth"] == 0.0 and deltas["dk_over_k"] == 0.0:
+            continue
+        base_params = _resolve_base_params_from_cards(
+            instance.model_name,
+            plan.model_nominals,
+            run_perturbations,
+            plan.stable_base_params,
+            model_by_name,
+        )
+        if base_params is None:
+            continue
+        overrides = _build_mismatch_overrides(deltas, rule, base_params)
+        if not overrides:
+            continue
+        base_card = model_by_name.get(instance.model_name.lower())
+        if base_card is None:
+            continue
+        base_card_text = "".join(base_card.raw_lines)
+        variant = variant_model_name(instance.model_name, instance.ref)
+        variant_card_text = render_variant_model_card(base_card_text, variant, overrides)
+        new_card = _ops_inject_card(cards, variant_card_text)
+        if new_card.name:
+            model_by_name[new_card.name.lower()] = new_card
+        inst_card = instance_by_ref.get(instance.ref.lower())
+        if inst_card is not None:
+            InstanceLine.from_card(inst_card).set_model(variant)
+        run_params[f"{instance.ref}.dvth"] = deltas["dvth"]
+        run_params[f"{instance.ref}.dk_over_k"] = deltas["dk_over_k"]
+
+    # .PARAM perturbation.
+    for pt in plan.param_tolerances:
+        nominal = plan.param_nominals.get(pt.name)
+        if nominal is None:
+            continue
+        delta = run_sampler.sample_offset(nominal, pt.spec, stream=f"param:{pt.name}")
+        new_value = nominal + delta
+        param_card = param_by_name.get(pt.name.lower())
+        if param_card is not None:
+            ParamCard.from_card(param_card).set_value(new_value)
+        run_params[f"PARAM.{pt.name}"] = new_value
+
+    # Emit once and return the rewritten lines. SpiceEditor expects each
+    # entry to be one line ending in "\n".
+    new_text = emit(cards)
+    new_lines = new_text.splitlines(keepends=True)
+    if new_lines and not new_lines[-1].endswith("\n"):
+        new_lines[-1] = new_lines[-1] + "\n"
+    return new_lines, run_params
+
+
 class MonteCarloRunner(BatchRunnerBase):
     """Monte Carlo analysis with per-run reproducibility and actual-value tracking.
 
@@ -114,7 +398,7 @@ class MonteCarloRunner(BatchRunnerBase):
         loop: asyncio.AbstractEventLoop,
         simulator_class: type,
         output_folder: Path,
-        max_parallel: int = 4,
+        max_parallel: int = DEFAULT_MAX_PARALLEL,
     ):
         super().__init__(loop, simulator_class, output_folder, max_parallel)
         logger.debug(
@@ -169,114 +453,7 @@ class MonteCarloRunner(BatchRunnerBase):
             baseline_cards = lex(baseline_text).cards
             editor = SpiceEditor(str(src_netlist))
 
-            # ---- Phase 0: R/C/L tolerance resolution + nominal extraction ----
-            # Walk the lexed cards instead of editor.get_components — works
-            # uniformly across flat and hierarchical netlists.
-            all_refs = [c.name for c in baseline_cards if c.kind == "instance" and c.name]
-            tol_map = expand_tolerances(
-                all_refs,
-                mc_config.type_tolerances,
-                mc_config.component_overrides,
-            )
-            baseline_inst_by_ref: dict[str, SpiceCard] = {
-                c.name.lower(): c for c in baseline_cards if c.kind == "instance" and c.name
-            }
-            rcl_nominals: dict[str, float] = {}
-            unparseable_refs: list[tuple[str, str]] = []
-            for ref in tol_map:
-                card = baseline_inst_by_ref.get(ref.lower())
-                if card is None:
-                    continue
-                try:
-                    inst_view = InstanceLine.from_card(card)
-                except Exception:
-                    continue
-                raw_val = inst_view.value
-                if raw_val is None:
-                    # M/Q/J/X have model name in the slot, no numeric value
-                    continue
-                parsed = parse_value(raw_val)
-                if parsed is None:
-                    # Friction I: parameter-driven values (``{RS}``) cannot
-                    # be perturbed at the component level — the user has
-                    # to perturb the .PARAM via ``param_tolerances``
-                    # instead. Surface this rather than silently dropping.
-                    unparseable_refs.append((ref, str(raw_val)))
-                    logger.warning(
-                        "MC job %s: %s value %r is not a numeric literal — "
-                        "skipping. To perturb parameter-driven values, add "
-                        "the underlying .PARAM name to ``param_tolerances``.",
-                        batch_job.job_id,
-                        ref,
-                        raw_val,
-                    )
-                    continue
-                rcl_nominals[ref] = parsed
-
-            # ---- Phase 1 setup: per-.MODEL nominals ----
-            model_tolerances: list[ModelTolerance] = list(mc_config.model_tolerances or [])
-            model_nominals: dict[str, dict[str, float]] = {}
-            for mt in model_tolerances:
-                card = extract_model_card(baseline_text, mt.model_name)
-                if card is None:
-                    logger.warning(
-                        "MC job %s: .MODEL %s not found in netlist; ignoring rule",
-                        batch_job.job_id,
-                        mt.model_name,
-                    )
-                    continue
-                model_nominals[mt.model_name] = parse_model_params(card)
-
-            # ---- Phase 2 setup: MOSFET instance geometry + per-instance caches ----
-            mismatch_rules = list(mc_config.mismatch_rules or [])
-            mosfet_instances = extract_mosfet_instances(baseline_text) if mismatch_rules else []
-            # Precompute per-instance state that's stable across runs:
-            # - rule lookup (linear scan over rules → O(1) dict lookup per run)
-            # - whether the instance's model is also being process-perturbed
-            #   (those need fresh ``parse_model_params`` per run; others can
-            #   reuse the baseline parse).
-            instance_to_rule = {
-                inst.ref: rule
-                for inst in mosfet_instances
-                if (rule := find_mismatch_rule(inst.ref, mismatch_rules)) is not None
-            }
-            perturbed_models = set(model_nominals.keys())
-            stable_base_params: dict[str, dict[str, float]] = {}
-            for inst in mosfet_instances:
-                if inst.ref not in instance_to_rule:
-                    continue
-                if inst.model_name in perturbed_models:
-                    continue  # base will shift each run; recompute then
-                base_card = extract_model_card(baseline_text, inst.model_name)
-                if base_card is not None:
-                    stable_base_params[inst.model_name] = parse_model_params(base_card)
-
-            # ---- Phase 3 setup: .PARAM nominals ----
-            param_tolerances: list[ParamTolerance] = list(mc_config.param_tolerances or [])
-            param_nominals: dict[str, float] = {}
-            for pt in param_tolerances:
-                nominal = parse_param_nominal(baseline_text, pt.name)
-                if nominal is None:
-                    logger.warning(
-                        "MC job %s: .PARAM %s not found or non-numeric; ignoring rule",
-                        batch_job.job_id,
-                        pt.name,
-                    )
-                    continue
-                param_nominals[pt.name] = nominal
-
-            # Empty-perturbation guard — give the user something actionable.
-            if not (
-                rcl_nominals
-                or model_nominals
-                or (mosfet_instances and mismatch_rules)
-                or param_nominals
-            ):
-                raise BatchJobError(
-                    "Monte Carlo: no perturbable parameters matched the rules. "
-                    "Check that R/C/L prefixes, .MODEL names, M-instance W/L params, "
-                    "and .PARAM names match the netlist."
-                )
+            plan = _resolve_mc_plan(batch_job.job_id, baseline_text, baseline_cards, mc_config)
 
             sampler = MCSampler(seed=mc_config.seed)
 
@@ -285,10 +462,10 @@ class MonteCarloRunner(BatchRunnerBase):
                 "mismatch instances=%d, .PARAM=%d, seed=%s",
                 batch_job.job_id,
                 batch_job.total_runs,
-                len(rcl_nominals),
-                len(model_nominals),
-                len(mosfet_instances) if mismatch_rules else 0,
-                len(param_nominals),
+                len(plan.rcl_nominals),
+                len(plan.model_nominals),
+                len(plan.mosfet_instances),
+                len(plan.param_nominals),
                 mc_config.seed,
             )
 
@@ -300,128 +477,8 @@ class MonteCarloRunner(BatchRunnerBase):
                 if cancel_event.is_set():
                     break
                 runno = run_i + 1  # spicelib's runno is 1-based.
-                # Float values, like the sweep runner — the formatted SPICE
-                # string is computed separately for the netlist edit only.
-                run_params: dict[str, float] = {}
-
-                # Re-lex baseline text per iteration. ~0.6 ms on a 200-
-                # card netlist — measured ~2.4× faster than
-                # ``copy.deepcopy(baseline_cards)`` because the dataclass
-                # tree (raw_lines + tokens) is expensive to clone.
-                cards = lex(baseline_text).cards
                 run_sampler = sampler.derive(f"run{runno}")
-
-                # Single pass over cards to build the three lookup tables.
-                model_by_name: dict[str, SpiceCard] = {}
-                instance_by_ref: dict[str, SpiceCard] = {}
-                param_by_name: dict[str, SpiceCard] = {}
-                for c in cards:
-                    if not c.name:
-                        continue
-                    key = c.name.lower()
-                    if c.kind == "model":
-                        model_by_name[key] = c
-                    elif c.kind == "instance":
-                        instance_by_ref[key] = c
-                    elif c.kind == "param":
-                        param_by_name[key] = c
-
-                # ---- R/C/L (per-ref stream within the run sampler) ----
-                for ref, spec in tol_map.items():
-                    if ref not in rcl_nominals:
-                        continue
-                    inst_card = instance_by_ref.get(ref.lower())
-                    if inst_card is None:
-                        continue
-                    perturbed = run_sampler.sample(
-                        rcl_nominals[ref],
-                        spec,
-                        stream=f"rcl:{ref}",
-                    )
-                    formatted = format_spice_value(perturbed)
-                    InstanceLine.from_card(inst_card).set_value(formatted)
-                    run_params[ref] = perturbed
-
-                # ---- Phase 1: process variation (.MODEL perturbation) ----
-                # ``run_perturbations[model]`` accumulates this run's
-                # process-level deltas so Phase 2 mismatch can layer on top
-                # of the perturbed (not nominal) base params.
-                run_perturbations: dict[str, dict[str, float]] = {}
-                for mt in model_tolerances:
-                    nominals = model_nominals.get(mt.model_name)
-                    if not nominals:
-                        continue
-                    perturbations = sample_model_perturbation(
-                        run_sampler, mt.model_name, nominals, mt.parameters
-                    )
-                    if not perturbations:
-                        continue
-                    model_card = model_by_name.get(mt.model_name.lower())
-                    if model_card is None:
-                        continue
-                    model_view = ModelCard.from_card(model_card)
-                    for p, v in perturbations.items():
-                        model_view.set_param(p, v)
-                    run_perturbations[mt.model_name] = perturbations
-                    for p, v in perturbations.items():
-                        run_params[f"{mt.model_name}.{p}"] = v
-
-                # ---- Phase 2: mismatch (per-instance variant models) ----
-                for instance in mosfet_instances:
-                    rule = instance_to_rule.get(instance.ref)
-                    if rule is None:
-                        continue
-                    deltas = sample_instance_mismatch(run_sampler, instance, rule)
-                    if deltas["dvth"] == 0.0 and deltas["dk_over_k"] == 0.0:
-                        continue
-                    base_params = _resolve_base_params_from_cards(
-                        instance.model_name,
-                        model_nominals,
-                        run_perturbations,
-                        stable_base_params,
-                        model_by_name,
-                    )
-                    if base_params is None:
-                        continue
-                    overrides = _build_mismatch_overrides(deltas, rule, base_params)
-                    if not overrides:
-                        continue
-                    base_card = model_by_name.get(instance.model_name.lower())
-                    if base_card is None:
-                        continue
-                    base_card_text = "".join(base_card.raw_lines)
-                    variant = variant_model_name(instance.model_name, instance.ref)
-                    variant_card_text = render_variant_model_card(
-                        base_card_text, variant, overrides
-                    )
-                    new_card = _ops_inject_card(cards, variant_card_text)
-                    if new_card.name:
-                        model_by_name[new_card.name.lower()] = new_card
-                    inst_card = instance_by_ref.get(instance.ref.lower())
-                    if inst_card is not None:
-                        InstanceLine.from_card(inst_card).set_model(variant)
-                    run_params[f"{instance.ref}.dvth"] = deltas["dvth"]
-                    run_params[f"{instance.ref}.dk_over_k"] = deltas["dk_over_k"]
-
-                # ---- Phase 3: .PARAM perturbation ----
-                for pt in param_tolerances:
-                    nominal = param_nominals.get(pt.name)
-                    if nominal is None:
-                        continue
-                    delta = run_sampler.sample_offset(nominal, pt.spec, stream=f"param:{pt.name}")
-                    new_value = nominal + delta
-                    param_card = param_by_name.get(pt.name.lower())
-                    if param_card is not None:
-                        ParamCard.from_card(param_card).set_value(new_value)
-                    run_params[f"PARAM.{pt.name}"] = new_value
-
-                # Emit once and push the rewritten lines back into the
-                # editor. SpiceEditor expects each entry to be one line
-                # ending in "\n".
-                new_text = emit(cards)
-                new_lines = new_text.splitlines(keepends=True)
-                if new_lines and not new_lines[-1].endswith("\n"):
-                    new_lines[-1] = new_lines[-1] + "\n"
+                new_lines, run_params = _perturb_run(baseline_text, plan, run_sampler)
                 editor.netlist = new_lines
 
                 per_run_params[runno] = run_params

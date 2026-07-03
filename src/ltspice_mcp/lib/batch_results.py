@@ -144,8 +144,8 @@ def compute_batch_stats(
                 axis = np.asarray(raw.get_axis(step=0))
                 axis_size = axis.size
             except Exception:
-                # Friction J: ``.op`` raws have no axis; the wave is a single
-                # scalar. ``peak``/``mean``/``min`` collapse to one value.
+                # ``.op`` raws have no axis; the wave is a single scalar, so
+                # ``peak``/``mean``/``min`` collapse to one value.
                 axis = None  # type: ignore[assignment]
                 axis_size = 0
 
