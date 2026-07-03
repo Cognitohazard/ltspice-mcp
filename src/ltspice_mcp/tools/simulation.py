@@ -24,6 +24,8 @@ from ltspice_mcp.state import (
     SimulationJob,
 )
 from ltspice_mcp.tools._base import (
+    FORMAT_DESCRIPTION,
+    HINT_SCHEMA,
     MEAS_ERRORS_SCHEMA,
     MEASUREMENTS_SCHEMA,
     OBSERVATIONS_SCHEMA,
@@ -49,12 +51,12 @@ from ltspice_mcp.tools._base import (
 SYNC_TIMEOUT_THRESHOLD = 30.0
 HARD_MAX_TIMEOUT = 600.0  # 10 minutes - max for wait=true mode
 
-# Appended to both timeout messages (the sync wait path and the async check_job
-# path). A timeout is a tool-set limit, not a simulator failure, so name the
-# levers to raise it — otherwise the agent reads "timed out" as a dead end and
-# loops. One constant so the two sites can't drift.
+# Appended to the timed-out response (built by _timeout_response, shared by the
+# sync wait path and the async check_job path). A timeout is a tool-set limit,
+# not a simulator failure, so name the levers to raise it — otherwise the agent
+# reads "timed out" as a dead end and loops.
 TIMEOUT_HINT = (
-    "\n\nThis is the configured time limit, not a simulator error. To allow more "
+    "This is the configured time limit, not a simulator error. To allow more "
     "time, pass run_simulation(timeout=<seconds>) for this run, or raise the "
     "default via [simulation] timeout in the config file or LTSPICE_MCP_TIMEOUT "
     "(restart required). server_status shows the current default."
@@ -82,6 +84,10 @@ _SIM_RESULT_FIELDS_SCHEMA: dict[str, dict] = {
     "point_count": {"type": "integer"},
     "failed_measurements": {"type": "array", "items": {"type": "string"}},
     "observations": OBSERVATIONS_SCHEMA,
+    # Optional, path-dependent: caller guidance (async referral, timeout
+    # levers, batch redirect, hidden-jobs note) and the timeout log excerpt.
+    "hint": HINT_SCHEMA,
+    "log_excerpt": {"type": "string"},
 }
 
 
@@ -104,7 +110,7 @@ class RunSimulationInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -133,7 +139,7 @@ class CheckJobInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -272,6 +278,12 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
             "status": job.status,
             "netlist": str(netlist_path),
             "simulator": default_simulator.__name__,
+            # Structured-content clients render only structuredContent, so the
+            # follow-up referral must live in the data dict too.
+            "hint": (
+                f"Use check_job('{job_id}') to check status, check_job() to see "
+                f"all jobs, or cancel_job('{job_id}') to cancel."
+            ),
         }
         return format_response(
             f"Simulation started in background\n"
@@ -362,25 +374,7 @@ async def _wait_for_completion(
             or time.monotonic() - start_time
         )
 
-        # Extract log context if available
-        log_excerpt = ""
-        if job.log_file and job.log_file.exists():
-            log_excerpt = f"\n\nLog excerpt:\n{extract_error_context(job.log_file, max_lines=20)}"
-
-        data = {
-            "job_id": job.job_id,
-            "status": "timeout",
-            "duration": duration,
-            "netlist": str(job.netlist),
-        }
-        files_note = _attach_result_files(data, job)
-        return format_response(
-            f"Simulation timed out after {duration:.1f}s (killed by server)\n"
-            f"Job ID: {job.job_id}\n"
-            f"Netlist: {job.netlist}{log_excerpt}{files_note}{TIMEOUT_HINT}",
-            data,
-            fmt,
-        )
+        return _timeout_response(job, duration, fmt)
 
     # Simulation completed (success or failure)
     duration = time.monotonic() - start_time
@@ -413,6 +407,36 @@ async def _wait_for_completion(
         # Unexpected status
         data = {"job_id": job.job_id, "status": job.status}
         return format_response(f"Simulation ended with unexpected status: {job.status}", data, fmt)
+
+
+def _timeout_response(job, duration: float, fmt: str | None):
+    """Build the timed-out response — shared by the sync wait path and check_job.
+
+    Log excerpt and raise-the-limit guidance ride in the structured payload
+    too (see format_response's self-sufficiency contract).
+    """
+    excerpt: str | None = None
+    if job.log_file and job.log_file.exists():
+        excerpt = extract_error_context(job.log_file, max_lines=20)
+    log_excerpt = f"\n\nLog excerpt:\n{excerpt}" if excerpt else ""
+
+    data = {
+        "job_id": job.job_id,
+        "status": "timeout",
+        "duration": duration,
+        "netlist": str(job.netlist),
+        "hint": TIMEOUT_HINT,
+    }
+    if excerpt:
+        data["log_excerpt"] = excerpt
+    files_note = _attach_result_files(data, job)
+    return format_response(
+        f"Simulation timed out after {duration:.1f}s (killed by server)\n"
+        f"Job ID: {job.job_id}\n"
+        f"Netlist: {job.netlist}{log_excerpt}{files_note}\n\n{TIMEOUT_HINT}",
+        data,
+        fmt,
+    )
 
 
 def _failed_response(job, duration: float, state: SessionState, fmt: str | None):
@@ -610,6 +634,7 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
             "netlist": str(job.netlist),
             "simulator": job.simulator,
             "elapsed": elapsed,
+            "hint": f"Use cancel_job('{job_id}') to cancel.",
         }
         if job.status == "queued":
             text = (
@@ -667,24 +692,7 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
             )
             or 0
         )
-        log_excerpt = ""
-        if job.log_file and job.log_file.exists():
-            log_excerpt = f"\n\nLog excerpt:\n{extract_error_context(job.log_file, max_lines=20)}"
-
-        data = {
-            "job_id": job_id,
-            "status": "timeout",
-            "duration": duration,
-            "netlist": str(job.netlist),
-        }
-        files_note = _attach_result_files(data, job)
-        return format_response(
-            f"Simulation timed out after {duration:.1f}s (killed by server)\n"
-            f"Job ID: {job_id}\n"
-            f"Netlist: {job.netlist}{log_excerpt}{files_note}{TIMEOUT_HINT}",
-            data,
-            fmt,
-        )
+        return _timeout_response(job, duration, fmt)
     elif job.status == "cancelled":
         data = _terminal_job_data(job, "cancelled")
         dur = data.get("duration")
@@ -697,10 +705,15 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
         # valid raw survived to promote the job to 'completed'. Surface that
         # plainly instead of falling through to "unexpected status" (the
         # single-sim analogue of the batch interrupted-formatter gap).
+        data = _terminal_job_data(job, "interrupted")
+        data["hint"] = (
+            "The server stopped while this job was running, so results are "
+            "incomplete; re-run if you need them."
+        )
         return format_response(
             f"Job {job_id} was interrupted — the server stopped while it was running, "
             f"so results are incomplete; re-run if you need them.\nNetlist: {job.netlist}",
-            _terminal_job_data(job, "interrupted"),
+            data,
             fmt,
         )
     else:
@@ -754,6 +767,11 @@ def _check_batch_job(batch_job: BatchJob, fmt: str | None = None):
     # which made schema-validating MCP clients reject every batch-job poll.
     if batch_job.error is not None:
         data["error"] = batch_job.error
+    redirect = (
+        f"Use batch_results('{batch_job.job_id}') for per-run data, "
+        "or measurement_stats for aggregated .MEAS statistics."
+    )
+    data["hint"] = redirect
     text = (
         f"Batch job {batch_job.job_id} ({batch_job.job_type}): {batch_job.status}\n"
         f"Netlist: {batch_job.netlist}\n"
@@ -762,10 +780,7 @@ def _check_batch_job(batch_job: BatchJob, fmt: str | None = None):
     )
     if batch_job.error:
         text += f"\nError: {batch_job.error}"
-    text += (
-        f"\n\nUse batch_results('{batch_job.job_id}') for per-run data, "
-        "or measurement_stats for aggregated .MEAS statistics."
-    )
+    text += f"\n\n{redirect}"
     return format_response(text, data, fmt)
 
 
@@ -789,24 +804,29 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
     jobs_to_show.sort(key=lambda j: j.started_at, reverse=True)
 
     if not jobs_to_show:
+        empty_data: dict = {"jobs": [], "count": 0}
         if status_filter == "all":
             message = "No jobs found"
         elif status_filter:
             message = (
                 f"No jobs with status '{status_filter}'. Pass status=\"all\" to list every job."
             )
+            empty_data["hint"] = message
         elif all_jobs:
             # Default view shows only queued/running; terminal jobs are hidden.
             # Say so and how to widen, so a just-completed run isn't read as
-            # "nothing exists".
+            # "nothing exists". Mirrored into the data dict as a hint:
+            # structured-content clients never see the text channel, and
+            # {jobs: [], count: 0} alone reads as "nothing exists".
             message = (
                 f"No active jobs (queued/running). {len(all_jobs)} finished job(s) are "
                 'hidden — pass status="all" to list them, or a specific status '
                 "(completed, failed, timeout, cancelled, interrupted)."
             )
+            empty_data["hint"] = message
         else:
             message = "No active jobs"
-        return format_response(message, {"jobs": [], "count": 0}, fmt)
+        return format_response(message, empty_data, fmt)
 
     # Build structured data
     jobs_data = []

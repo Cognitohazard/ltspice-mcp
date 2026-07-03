@@ -61,6 +61,14 @@ def format_response(
     without cast/copy. The format param controls the text representation:
     - "json": text is JSON-formatted (for clients that parse text)
     - "text" or None: text is human-readable (default)
+
+    Self-sufficiency contract: structured-aware clients (Claude Code included)
+    render ONLY structuredContent when it is present and drop the text channel
+    entirely, so ``data`` must carry everything the caller needs to act on.
+    Any caller-guidance composed into ``text`` (hints, referrals, recovery
+    steps, caveats) must be mirrored into ``data`` — conventionally an
+    optional ``hint`` key declared in the tool's output_schema. The text
+    channel is presentation only.
     """
     # MCP SDK's CallToolResult wants a plain dict for structuredContent;
     # TypedDicts ARE plain dicts at runtime, but wrap defensively so
@@ -77,6 +85,18 @@ def format_response(
 # ---------------------------------------------------------------------------
 # Shared tool schema fragments and annotations
 # ---------------------------------------------------------------------------
+
+# Client-visible description of the shared ``format`` input param — one string,
+# reused by every tool input model that exposes the param.
+FORMAT_DESCRIPTION = (
+    "Response format: 'json' for structured data, 'text' for human-readable "
+    "(default; both carry the same structured content)"
+)
+
+# Output-schema fragment for the optional ``hint`` key: caller guidance
+# mirrored from the text channel (see format_response's self-sufficiency
+# contract). Sites needing a custom description inline their own dict.
+HINT_SCHEMA: dict[str, str] = {"type": "string"}
 
 PAGINATION_SCHEMA: dict[str, Any] = {
     "type": "object",

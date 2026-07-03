@@ -70,6 +70,7 @@ from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, get_symbol_
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     BBOX_SCHEMA,
+    FORMAT_DESCRIPTION,
     PAGINATION_SCHEMA,
     PIN_SCHEMA,
     RO_ANNOTATIONS,
@@ -758,7 +759,7 @@ class CircuitReadInput(ToolInput):
     path: str = Field(description="Path to circuit file (.cir, .net, or .asc)")
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -776,7 +777,7 @@ class ListComponentsInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -823,7 +824,7 @@ class ParameterInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -909,7 +910,7 @@ class ResetSchematicInput(ToolInput):
     path: str = Field(description="Path to .asc schematic to revert to its pre-session state")
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -931,7 +932,7 @@ class AddComponentInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -984,7 +985,7 @@ class SymbolInfoInput(ToolInput):
     rotation: Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"] = "R0"
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -993,7 +994,7 @@ class ComponentInfoInput(ToolInput):
     reference: str = Field(description="Component reference (e.g., 'M1', 'R1')")
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -2863,8 +2864,8 @@ def _resolve_pin(pin_ref: str, editor: AscEditor) -> tuple[int, int]:
             coords = ", ".join(f"({x},{y})" for x, y in matches)
             raise NetlistError(
                 f"Multiple '{net_name}' labels found at: {coords}. "
-                "Use a unique net label, connect directly to a component pin, "
-                "or place the label at a pin with add_net_label(net='0', pin='M3.S')."
+                "Connect to a component pin (Ref.Pin) instead, or place the label "
+                f"at a specific pin with add_net_label(net='{net_name}', pin='<Ref.Pin>')."
             )
         return matches[0]
 
@@ -3372,7 +3373,7 @@ class CreateSchematicInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -3385,7 +3386,10 @@ class CreateSchematicInput(ToolInput):
         "use this only when a visual schematic is the deliverable."
         " Prefer apply_schematic_ops for multi-step builds (one transaction); "
         "wire signal nets with connect; label grounds — and any net a "
-        ".meas/B-source references by name — via add_net_label flags at pins. "
+        ".meas/B-source references by name — via add_net_label flags at pins; "
+        "repeating a same-name label ties distant nets (the netlist merges them "
+        "into one net — then target pins as Ref.Pin in connect, since net:NAME "
+        "is ambiguous with duplicates). "
         "Don't hand-edit the .asc. Full layout guidance: the spice://guide resource."
     ),
     input_model=CreateSchematicInput,
@@ -3402,6 +3406,10 @@ class CreateSchematicInput(ToolInput):
             "path": {"type": "string", "description": "Absolute path of the created .asc"},
             "width": {"type": "integer", "description": "Sheet width (grid units)"},
             "height": {"type": "integer", "description": "Sheet height (grid units)"},
+            "hint": {
+                "type": "string",
+                "description": "Post-create layout checklist (wiring, labels, batch ops)",
+            },
         },
         "required": ["path", "width", "height"],
     },
@@ -3422,10 +3430,10 @@ async def handle_create_schematic(
         raise NetlistError(
             f"File already exists: {target_path}. Pass overwrite=true to replace it."
         ) from e
-    data = {"path": str(target_path), "width": args.width, "height": args.height}
-    return format_response(
-        f"Created schematic: {target_path}\n  Sheet: {args.width} x {args.height}"
-        "\n\nLayout checklist (full playbook: spice://guide):"
+    # Built once and emitted on BOTH channels: structured-aware clients show
+    # only structuredContent, so text-only guidance would be invisible to them.
+    checklist = (
+        "Layout checklist (full playbook: spice://guide):"
         "\n- Wire signal nets with connect — orthogonal only, waypoints for bends, "
         "route outside component bodies."
         '\n- Ground: add_net_label(net="0", pin="Ref.pin") at each ground pin; '
@@ -3438,7 +3446,16 @@ async def handle_create_schematic(
         "\n- Multi-step build: use apply_schematic_ops (one transaction; dry_run=true "
         "to validate without saving)."
         "\n- Matched devices (diff pairs/mirrors) share a y-tier; get pin coords "
-        "from symbol_info.",
+        "from symbol_info."
+    )
+    data = {
+        "path": str(target_path),
+        "width": args.width,
+        "height": args.height,
+        "hint": checklist,
+    }
+    return format_response(
+        f"Created schematic: {target_path}\n  Sheet: {args.width} x {args.height}\n\n{checklist}",
         data,
         args.format,
     )
@@ -3457,7 +3474,7 @@ class TraceNetInput(ToolInput):
     y: int | None = Field(default=None, description="Y coordinate (with x) to trace from")
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -3770,7 +3787,7 @@ class ValidateNetlistInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -3987,7 +4004,7 @@ class DiffCircuitInput(ToolInput):
     path_b: str = Field(description="Path to the second circuit file (.cir, .net, or .asc)")
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -4067,6 +4084,20 @@ async def handle_diff_circuit(args: DiffCircuitInput, state: SessionState) -> ty
     a, da, err_a = _components_and_directives(path_a)
     b, db, err_b = _components_and_directives(path_b)
     parse_errors = [m for m in (err_a, err_b) if m]
+    # The interpretation of a parse failure must ride in the structured
+    # warnings too — structured-aware clients never see the text channel's
+    # caveat, and without it the bogus added/removed lists look trustworthy.
+    warnings = list(parse_errors)
+    if parse_errors:
+        unparsed = " and ".join(
+            name for name, err in ((path_a.name, err_a), (path_b.name, err_b)) if err
+        )
+        warnings.insert(
+            0,
+            f"{unparsed} could not be parsed; the diff treats it as empty, so its "
+            "components/directives appear as added/removed. Fix the file before "
+            "trusting this comparison.",
+        )
 
     added = sorted(set(b) - set(a))
     removed = sorted(set(a) - set(b))
@@ -4110,7 +4141,7 @@ async def handle_diff_circuit(args: DiffCircuitInput, state: SessionState) -> ty
         "components_changed": changed,
         "directives_added": directive_added,
         "directives_removed": directive_removed,
-        "warnings": parse_errors,
+        "warnings": warnings,
     }
 
     lines = [f"Diff: {path_a.name} -> {path_b.name}"]
@@ -4184,7 +4215,7 @@ class StepGetInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -4571,7 +4602,7 @@ class ApplySchematicOpsInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 

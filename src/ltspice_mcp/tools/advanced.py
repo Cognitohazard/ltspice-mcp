@@ -32,6 +32,7 @@ from ltspice_mcp.state import (
 )
 from ltspice_mcp.tools._base import (
     DEFAULT_PAGE_CAP,
+    FORMAT_DESCRIPTION,
     PAGINATION_SCHEMA,
     StrictModel,
     ToolInput,
@@ -314,7 +315,7 @@ class GetBatchResultsInput(ToolInput):
     )
     format: Literal["json", "text"] | None = Field(
         default=None,
-        description="Response format: 'json' for structured data, 'text' for human-readable",
+        description=FORMAT_DESCRIPTION,
     )
 
 
@@ -1025,7 +1026,7 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
 
 
 # ---------------------------------------------------------------------------
-# Handler 5: get_batch_results (consolidated: status + results)
+# Handler 5: batch_results (consolidated: status + results)
 # ---------------------------------------------------------------------------
 @registry.tool(
     name="batch_results",
@@ -1069,6 +1070,13 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
             "min_case_run": {"type": ["integer", "null"]},
             "runs": {"type": "array", "items": {"type": "object"}},
             "pagination": PAGINATION_SCHEMA,
+            "hint": {
+                "type": "string",
+                "description": (
+                    "Actionable follow-up guidance (next tool call or recovery "
+                    "route). Present only when guidance applies."
+                ),
+            },
             "convergence_warnings": {
                 "type": "array",
                 "description": (
@@ -1113,6 +1121,9 @@ async def handle_batch_results(args: GetBatchResultsInput, state: SessionState):
 
     if signal is None:
         data = await services.get_batch_status(batch_job)
+        hint = _batch_status_hint(data)
+        if hint is not None:
+            data["hint"] = hint
         return format_response(_format_batch_status_text(data), data, fmt)
 
     filters = args.filters
@@ -1137,6 +1148,9 @@ async def handle_batch_results(args: GetBatchResultsInput, state: SessionState):
         at=at_value,
         dialect=state.raw_dialect,
     )
+    hint = _step_collapse_hint(data)
+    if hint is not None:
+        data["hint"] = hint
     if raw_mode:
         data["pagination"] = pagination_metadata(data["total_matching"], offset, limit)
         return format_response(_format_batch_raw_text(data), data, fmt)
@@ -1162,7 +1176,7 @@ def _format_batch_status_text(data: dict) -> str:
             f"Progress: {data['completed']}/{data['total']} runs complete{eta_str}\n"
             f"Failed: {data['failed']}\n"
             f"Netlist: {data['netlist']}\n\n"
-            f"Use batch_results('{data['job_id']}', signal='...') to query partial results"
+            f"{_batch_status_hint(data)}"
         )
     if status == "completed":
         duration = data["duration"] or 0.0
@@ -1183,9 +1197,7 @@ def _format_batch_status_text(data: dict) -> str:
                 f"convergence fallbacks (Gmin/source stepping or worse) — bias "
                 f"point may be degenerate. Run indices: {run_ids}{more}"
             )
-        return text + (
-            f"\n\nUse batch_results('{data['job_id']}', signal='V(out)') to query results"
-        )
+        return text + f"\n\n{_batch_status_hint(data)}"
     if status == "failed":
         return (
             f"Batch job {data['job_id']} failed\n"
@@ -1198,7 +1210,7 @@ def _format_batch_status_text(data: dict) -> str:
             f"Batch job {data['job_id']} was cancelled\n"
             f"Type: {data['job_type']}\n"
             f"Completed {data['completed_runs']} of {data['total_runs']} before cancellation. "
-            f"Partial results available via get_batch_results."
+            f"{_batch_status_hint(data)}"
         )
     if status == "interrupted":
         # Terminal status assigned on restart recovery when the owning server
@@ -1209,9 +1221,25 @@ def _format_batch_status_text(data: dict) -> str:
             f"Type: {data['job_type']}\n"
             f"The server stopped while this batch was running; "
             f"{data['completed_runs']} of {data['total_runs']} run(s) completed before the "
-            f"interruption. Partial results available via get_batch_results."
+            f"interruption. {_batch_status_hint(data)}"
         )
     raise BatchJobError(f"Batch job {data['job_id']} has unexpected status: {status}")
+
+
+def _batch_status_hint(data: dict) -> str | None:
+    """Follow-up route for a status response — the single source for both the
+    text channel and the mirrored data["hint"] (see format_response's
+    self-sufficiency contract). None when the status has no follow-up route
+    (e.g. failed)."""
+    job_id = data["job_id"]
+    status = data["status"]
+    if status == "running":
+        return f"Use batch_results('{job_id}', signal='...') to query partial results."
+    if status == "completed":
+        return f"Use batch_results('{job_id}', signal='V(out)') to query results."
+    if status in ("cancelled", "interrupted"):
+        return f"Partial results available via batch_results('{job_id}', signal='...')."
+    return None
 
 
 def _run_preview(runs: list[int]) -> str:
@@ -1221,27 +1249,47 @@ def _run_preview(runs: list[int]) -> str:
     return preview
 
 
+def _step_collapse_notes(data: dict) -> list[tuple[str, str]]:
+    """Per step-collapse condition, one message body rendered for both
+    channels: (sentence for data["hint"], decorated text line). Covers runs
+    read at step 0 only — either a confirmed inner .step sweep or unreadable
+    step metadata (so dropped steps can't be ruled out); neither is silently
+    assumed single-step. Empty when neither applies."""
+    notes: list[tuple[str, str]] = []
+    for key, cause, recovery in (
+        (
+            "step_collapsed_runs",
+            "contain an inner .step sweep; only step 0 was read",
+            "Read another step of a run with get_waveform/query_value using "
+            "job_id, run_index, and step=<n>.",
+        ),
+        (
+            "step_unknown_runs",
+            "had unreadable step metadata; only step 0 was read, so dropped "
+            "steps can't be ruled out",
+            "Re-check with get_waveform/query_value using job_id, run_index, and step=<n>.",
+        ),
+    ):
+        runs = data.get(key)
+        if runs:
+            notes.append(
+                (
+                    f"Runs listed in {key} {cause}. {recovery}",
+                    f"⚠ {len(runs)} run(s) {cause} ({_run_preview(runs)}). {recovery}",
+                )
+            )
+    return notes
+
+
+def _step_collapse_hint(data: dict) -> str | None:
+    hints = [hint for hint, _ in _step_collapse_notes(data)]
+    return "\n".join(hints) if hints else None
+
+
 def _step_collapse_lines(data: dict) -> list[str]:
-    """Trailing lines (blank separator + note) for runs read at step 0 only —
-    either a confirmed inner .step sweep or one whose step metadata couldn't be
-    read (so dropped steps can't be ruled out). Both are surfaced; neither is
-    silently assumed single-step. Empty list when neither applies."""
-    parts: list[str] = []
-    collapsed = data.get("step_collapsed_runs")
-    if collapsed:
-        parts.append(
-            f"⚠ {len(collapsed)} run(s) contain an inner .step sweep; only step 0 was "
-            f"read ({_run_preview(collapsed)}). Read another step of a run with "
-            "get_waveform/query_value using job_id, run_index, and step=<n>."
-        )
-    unknown = data.get("step_unknown_runs")
-    if unknown:
-        parts.append(
-            f"⚠ {len(unknown)} run(s) had unreadable step metadata; only step 0 was read "
-            f"({_run_preview(unknown)}), so dropped steps can't be ruled out. Re-check "
-            "with get_waveform/query_value using job_id, run_index, and step=<n>."
-        )
-    return ["", *parts] if parts else []
+    """Trailing lines (blank separator + notes) for the text channel."""
+    lines = [line for _, line in _step_collapse_notes(data)]
+    return ["", *lines] if lines else []
 
 
 def _format_batch_aggregate_text(data: dict, batch_job: BatchJob) -> str:
