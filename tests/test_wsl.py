@@ -103,11 +103,52 @@ class TestToWindowsPath:
             result = to_windows_path(Path("/tmp/foo"))
             assert result == "/tmp/foo"
 
+    def test_wslpath_timeout_falls_back(self):
+        # A hung wslpath must not wedge the caller forever — fall back to the
+        # Linux path like any other conversion failure.
+        import ltspice_mcp.lib.wsl as wsl_mod
+
+        wsl_mod._is_wsl_cached = True
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("wslpath", 15)):
+            assert to_windows_path(Path("/tmp/foo")) == "/tmp/foo"
+
+    def test_wslpath_passes_timeout(self):
+        import ltspice_mcp.lib.wsl as wsl_mod
+
+        wsl_mod._is_wsl_cached = True
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return MagicMock(stdout="C:\\x\n", stderr="", returncode=0)
+
+        with patch("subprocess.run", side_effect=fake_run):
+            to_windows_path(Path("/mnt/c/x"))
+        assert captured.get("timeout") == 15
+
 
 class TestResolveWinEnv:
     def test_failure_returns_none(self):
         with patch("subprocess.run", side_effect=Exception("boom")):
             assert _resolve_win_env("TEMP") is None
+
+    def test_timeout_returns_none(self):
+        # A hung cmd.exe/wslpath during startup env resolution must not wedge —
+        # TimeoutExpired resolves to None like any other failure.
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("cmd.exe", 15)):
+            assert _resolve_win_env("VAR_TIMEOUT_TEST") is None
+
+    def test_passes_timeout(self):
+        captured: list = []
+
+        def fake_run(cmd, **kwargs):
+            captured.append(kwargs.get("timeout"))
+            return MagicMock(stdout="C:\\Windows\n", stderr="", returncode=0)
+
+        with patch("subprocess.run", side_effect=fake_run):
+            _resolve_win_env("VAR_TIMEOUT_KWARG_TEST")
+        # Both the cmd.exe echo and the wslpath convert get a bounded timeout.
+        assert captured and all(t == 15 for t in captured)
 
 
 class TestGetWindowsOutputDir:
