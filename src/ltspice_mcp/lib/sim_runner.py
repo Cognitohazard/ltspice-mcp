@@ -14,7 +14,11 @@ from ltspice_mcp.lib.job_types import (
     SimulationJob,
 )
 from ltspice_mcp.lib.log_parser import extract_error_context
-from ltspice_mcp.lib.runner_base import RunnerBase, discard_logopinfo_netlist
+from ltspice_mcp.lib.runner_base import (
+    DEFAULT_MAX_PARALLEL,
+    RunnerBase,
+    discard_logopinfo_netlist,
+)
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
 from ltspice_mcp.state import SessionState
@@ -47,7 +51,7 @@ class SimulationRunner(RunnerBase):
         loop: asyncio.AbstractEventLoop,
         simulator_class: type,
         output_folder: Path,
-        max_parallel: int = 4,
+        max_parallel: int = DEFAULT_MAX_PARALLEL,
     ):
         super().__init__(loop, simulator_class, output_folder, max_parallel)
         self._runners: dict[str, SimRunner] = {}
