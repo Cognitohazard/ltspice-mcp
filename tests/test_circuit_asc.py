@@ -67,6 +67,16 @@ def _read_bytes(p: Path) -> bytes:
     return p.read_bytes()
 
 
+def _directive_anchors(content: bytes) -> list[tuple[int, int]]:
+    """(x,y) anchor of every directive (``!``) TEXT record in an .asc."""
+    out: list[tuple[int, int]] = []
+    for line in content.decode("utf-8", "replace").splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[0] == "TEXT" and "!" in line:
+            out.append((int(parts[1]), int(parts[2])))
+    return out
+
+
 # Relocated regression coverage from a retired test module.
 # Two FLAGs (aaa, bbb) on one physical wire -> named-net short; R1 placed away
 # from any wire/label -> both pins float.
@@ -114,6 +124,22 @@ class TestReadAscCircuit:
         # Net labels
         assert "filtered" in text
         assert result.structuredContent["type"] == "asc"
+
+    async def test_asc_read_carries_wiring_norm(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        # Co-design entry point: reading an inherited .asc states the wiring goal.
+        result = await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
+        assert "wiring list" in result.structuredContent["hint"]
+
+    async def test_netlist_read_has_no_wiring_norm(
+        self, asc_state: SessionState, sample_netlist: Path
+    ):
+        # The norm is .asc-only; a .cir read must not carry it.
+        result = await handle_read_circuit(
+            CircuitReadInput(path=sample_netlist.name), asc_state
+        )
+        assert "hint" not in (result.structuredContent or {})
 
     async def test_list_components_asc(self, asc_state: SessionState, asc_file: Path):
         result = await handle_list_components({"path": asc_file.name}, asc_state)
@@ -361,6 +387,62 @@ class TestEditDirectiveCommentKind:
         line = next(ln for ln in content.splitlines() if b"!.tran 5m" in ln)
         assert b"320 240" in line
         assert b" 3 " in line
+
+    async def test_stacked_directives_auto_shift(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        # Two add_directive ops without coordinates both default to (16,16);
+        # the auto-declutter must nudge the second down so no two directives
+        # share an anchor (which would render them on top of each other).
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path=asc_file.name,
+                ops=[
+                    {"op": "add_directive", "instruction": ".tran 5m"},  # type: ignore[list-item]
+                    {"op": "add_directive", "instruction": ".ac dec 100 1 1meg"},  # type: ignore[list-item]
+                ],
+            ),
+            asc_state,
+        )
+        assert not result.isError, _result_text(result)
+        anchors = _directive_anchors(_read_bytes(asc_file))
+        assert len(anchors) >= 2
+        assert len(anchors) == len(set(anchors))  # every directive anchor distinct
+
+    async def test_standalone_directives_no_coords_do_not_stack(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        # The standalone edit_directive path (no coordinates) routes through
+        # spicelib's placement, which staggers each directive below the last;
+        # repeated adds must not land on the same anchor. (.tran and .four
+        # coexist — .four is not an analysis directive that .tran replaces.)
+        for instr in (".tran 5m", ".four 1k V(out)"):
+            await handle_edit_directive(
+                EditDirectiveInput(path=asc_file.name, action="add", instruction=instr),
+                asc_state,
+            )
+        anchors = _directive_anchors(_read_bytes(asc_file))
+        assert len(anchors) >= 2
+        assert len(anchors) == len(set(anchors))  # no two directives share an anchor
+
+    async def test_stacked_directives_detected(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # A hand-authored .asc with two directives at the same anchor (bypasses
+        # the auto-shift) must surface a stacked_directive advisory.
+        from ltspice_mcp.tools.circuit import _get_asc_editor, _post_op_warnings
+
+        stacked = work_dir / "stacked.asc"
+        stacked.write_text(
+            "Version 4\nSHEET 1 880 680\n"
+            "TEXT 16 16 Left 2 !.tran 5m\n"
+            "TEXT 16 16 Left 2 !.ac dec 100 1 1meg\n"
+        )
+        warns = _post_op_warnings(_get_asc_editor(stacked, asc_state))
+        stacked_w = [w for w in warns if w["kind"] == "stacked_directive"]
+        assert len(stacked_w) == 1
+        assert stacked_w[0]["count"] == 2
+        assert (stacked_w[0]["x"], stacked_w[0]["y"]) == (16, 16)
 
     async def test_comment_rejects_directive_prefix(self, asc_state: SessionState, asc_file: Path):
         """``kind='comment'`` with an instruction that starts with
@@ -903,6 +985,26 @@ class TestEmptyAttributeRejected:
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
         await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
 
+    async def test_add_component_unknown_attribute_rejected(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        # A typo'd attribute name (Val for Value) would silently no-op at export;
+        # add_component now refuses it the same way set_component_attribute does.
+        original = asc_file.read_bytes()  # noqa: ASYNC240
+        with pytest.raises(NetlistError, match="Unknown attribute"):
+            await handle_add_component(
+                AddComponentInput(
+                    path=asc_file.name,
+                    reference="RX",
+                    symbol="res",
+                    x=600,
+                    y=600,
+                    attributes={"Val": "10k"},
+                ),
+                asc_state,
+            )
+        assert asc_file.read_bytes() == original  # noqa: ASYNC240
+
     async def test_apply_ops_add_component_empty_value_rejected(
         self, asc_state: SessionState, asc_file: Path
     ):
@@ -1051,6 +1153,8 @@ class TestCreateSchematicFormat:
         assert "Layout checklist" in data["hint"]
         assert "add_net_label" in data["hint"]
         assert "apply_schematic_ops" in data["hint"]
+        # The wiring norm is prepended so the goal precedes the mechanics.
+        assert "wiring list" in data["hint"]
 
 
 @pytest.mark.asyncio
