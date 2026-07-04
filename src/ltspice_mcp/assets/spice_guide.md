@@ -67,6 +67,8 @@ PWL file=<filename>
 - Scaling: `VALUE_SCALE_FACTOR=x`, `TIME_SCALE_FACTOR=x`
 - Trigger: `TRIGGER <expression>` — output stuck at first value when expression is false
 
+**AC small-signal stimulus:** A `.ac` sweep needs an `AC <mag> [phase]` term on a source — e.g. `V1 in 0 AC 1`. It sets the small-signal amplitude only (the transfer function is normalized to it) and is independent of any time-domain waveform, so one source can carry both: `V1 in 0 AC 1 SINE(0 1 1k)` — `AC 1` drives `.ac`, `SINE(...)` drives `.tran`. Without the `AC` term a `.ac` run has zero excitation and every node reads 0.
+
 ### Directives
 
 ```spice
@@ -422,6 +424,8 @@ C1 out 0 {C}
 
 Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M180→(x,-y). Use `symbol_info` for exact positions.
 
+**3- vs 4-terminal devices**: The basic `nmos`/`pmos` and `npn`/`pnp` symbols are 3-terminal — a MOSFET's bulk ties internally to its source, and a BJT has no separate substrate pin. When you need the body/substrate on its own net (e.g. a non-source bulk bias), use the 4-terminal variants (`nmos4`/`pmos4`, `npn4`/`pnp4`), which expose bulk/substrate as a 4th pin.
+
 #### MOSFET orientation conventions
 
 | Rotation | Gate side | D/S vertical | Typical use |
@@ -468,6 +472,7 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 
 **Models:**
 - **Model names must not collide with type keywords**: Use `NMOS_3V3` not `NMOS` for `.model` names when the symbol Value is also a MOSFET type.
+- **Diode default-model collision**: The `diode` symbol defaults its Value to `D`, which LTspice resolves to a built-in ideal diode. Adding your own `.model D D(...)` collides with that built-in — give the model a unique name (`.model MYDIODE D(...)`) and set the symbol's Value to `MYDIODE`, rather than reusing `D`.
 
 ### Other LTspice Quirks
 
