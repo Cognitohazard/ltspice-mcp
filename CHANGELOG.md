@@ -10,6 +10,28 @@ tool-surface changes.
 
 ### Added
 
+- `disturbance_response` — a transient tool for a regulated output under a
+  load/line step (LDO/PMIC), where the output returns to its own level so
+  `pulse_response` correctly nulls its step metrics. Measures droop and
+  overshoot against the pre-disturbance baseline (explicit or auto from the
+  leading window) and the recovery time back into a settle band. Reports null
+  recovery — with the reason in `warnings` — when the output never re-enters the
+  band or the band is undefined (zero baseline, no absolute band). Available in
+  both tool profiles.
+- `return_loss` — reflection metrics (Γ magnitude/phase, return loss in dB,
+  VSWR) from an AC impedance trace measured under the documented 1 A probe,
+  against a reference `z0` (default 50 Ω). Evaluates a given frequency or scans
+  for the worst match across the sweep; flags a reversed probe (negative-real
+  Zin) and reports null return loss / VSWR at the perfect-match / total-
+  reflection limits. Available in both tool profiles. (Full tool count 49 → 51,
+  agentic 41 → 43.)
+- `simulation_summary` surfaces the run temperature (`temp_c`) and nominal
+  temperature (`tnom_c`) parsed from the simulator log, so tempco, noise, and
+  leakage tasks don't have to assume 27 °C.
+- `signal_stats` emits a `constant_window` observation when a signal is constant
+  across the whole analyzed window (min == max) — a fact (e.g. a latched/
+  degenerate DC solution reads as a flat line), surfaced without a verdict.
+
 - `configure_sweep`, `run_sweep`, `configure_montecarlo`, and `run_montecarlo`
   now return `structuredContent` (with an output schema) carrying the
   load-bearing `config_id`/`job_id`, run counts, warnings, and a monitoring
@@ -47,6 +69,26 @@ tool-surface changes.
 
 ### Changed
 
+- `query_value` returns an `exact_match` flag: `false` when the requested
+  time/frequency/sweep value snapped to a different sample. On a coarse sweep
+  this matters — a `.dc temp` run silently snapping 27 → 25 °C biases a tempco
+  reading. The `at` field now documents that it addresses the run's primary
+  sweep axis (time, frequency, or the `.dc` sweep variable), and the `step_axis`
+  field documents that it is for stepped (`.step`) sweeps, not a bare `.dc`/`.ac`
+  primary axis — with the no-step error now pointing at `at` instead of a bare
+  "axis not found".
+- `set_component_value` (and the `apply_schematic_ops` `set_component_value` op)
+  warn when a GUI opamp complexity label (e.g. `Level.2`) is written to a
+  subcircuit's Value, which LTspice emits as a stray positional token → a
+  cryptic "sub-circuit name is not defined" at netlist time.
+- `get_waveform` (and the other axis-backed analysis tools) point a no-axis
+  error at the `.dc` conversion when the result is a stepped `.op` collapsed to
+  step 0, matching the hint `simulation_summary` already emits.
+- Guide (`spice://guide`): documents the two-directive `.meas` argmax idiom
+  (find the frequency/time OF a maximum), the dBΩ reading of an impedance trace
+  under the 1 A probe, the quantized/staircase egress route, and cross-links the
+  new `return_loss` tool. `ac_structure`'s `net_order` is documented as a real
+  computed order (0 or negative possible), never a sentinel.
 - Auto-generated and example config files no longer write a live
   `max_parallel = 4` key — it is now a comment documenting the real default
   (number of CPU cores, capped at 8). The written key silently pinned every

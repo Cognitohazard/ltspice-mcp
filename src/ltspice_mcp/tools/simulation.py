@@ -84,6 +84,10 @@ _SIM_RESULT_FIELDS_SCHEMA: dict[str, dict] = {
     "fourier": {"type": "array", "items": {"type": "object"}},
     "range": {"type": "object"},
     "point_count": {"type": "integer"},
+    # Ambient / nominal temperature the simulator ran at (°C), when the log
+    # records it — flows in from build_simulation_summary.
+    "temp_c": {"type": "number"},
+    "tnom_c": {"type": "number"},
     "failed_measurements": {"type": "array", "items": {"type": "string"}},
     "observations": OBSERVATIONS_SCHEMA,
     # Fuzzy library matches for unresolved model/subcircuit references, keyed

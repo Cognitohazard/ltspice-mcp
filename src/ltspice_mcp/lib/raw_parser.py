@@ -494,7 +494,26 @@ def build_simulation_summary(
     }
 
     if log_path and log_path.exists():
-        from ltspice_mcp.lib.log_parser import make_log_reader, scan_op_step_log
+        from ltspice_mcp.lib.log_parser import (
+            make_log_reader,
+            parse_temperatures,
+            read_log_text,
+            scan_op_step_log,
+        )
+
+        # Read the log buffer once and hand the text to every text parser in
+        # this block (read_log_text exists for exactly this) instead of one
+        # syscall + full decode per parser.
+        log_text = read_log_text(log_path)
+
+        # Ambient/nominal temperature is a provenance fact the simulator prints
+        # by default — surface it so temp-sensitive tasks (noise, leakage,
+        # tempco) can confirm it instead of assuming 27 °C.
+        temp_c, tnom_c = parse_temperatures(text=log_text)
+        if temp_c is not None:
+            summary["temp_c"] = temp_c
+        if tnom_c is not None:
+            summary["tnom_c"] = tnom_c
 
         log_reader: LTSpiceLogReader | None = None
         with contextlib.suppress(Exception):
@@ -532,7 +551,7 @@ def build_simulation_summary(
         # (the only signal for stepped ``.op``). Single log walk picks up
         # both.
         if step_count <= 1 and "operating" in sim_type.lower():
-            log_steps, op_iters = scan_op_step_log(log_path)
+            log_steps, op_iters = scan_op_step_log(text=log_text)
             iteration_count = max(len(log_steps), op_iters)
             if iteration_count > 1:
                 if log_steps:

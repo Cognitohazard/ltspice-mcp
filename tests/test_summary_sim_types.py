@@ -97,6 +97,11 @@ class TestTransientSummary:
         assert vfinal["values"] == [pytest.approx(LTSPICE_TRAN_RC_VFINAL, rel=1e-9)]
         assert vfinal["at"] == pytest.approx(0.9e-3, rel=1e-6)
 
+        # Simulation temperature is surfaced straight from the log so tempco /
+        # noise / leakage tasks don't have to assume 27 °C.
+        assert summary["temp_c"] == pytest.approx(27.0)
+        assert summary["tnom_c"] == pytest.approx(27.0)
+
     async def test_final_value_settles_to_source_amplitude(
         self, state_no_sim: SessionState, work_dir: Path
     ):
