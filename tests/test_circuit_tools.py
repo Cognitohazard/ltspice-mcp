@@ -1442,3 +1442,25 @@ class TestLevelLabelLint:
 
         ed = _FakeEditor({"R1": _FakeComp({})})
         assert _level_label_lint(ed, "R1", "Level.2") is None
+
+    def test_any_value_on_spicemodel_symbol_warns(self):
+        # The general case: ANY value on a SpiceModel-selected symbol (not just
+        # Level.N) becomes a stray positional token and corrupts the netlist.
+        from ltspice_mcp.tools.circuit import _level_label_lint
+
+        ed = _FakeEditor({"U1": _FakeComp({"SpiceModel": "UniversalOpamp2"})})
+        assert _level_label_lint(ed, "U1", "10k") is not None
+
+    def test_subckt_by_value_without_spicemodel_not_flagged(self):
+        # A library part that carries its subckt name IN Value (no SpiceModel)
+        # is the normal case — it must stay quiet.
+        from ltspice_mcp.tools.circuit import _level_label_lint
+
+        ed = _FakeEditor({"X1": _FakeComp({})})
+        assert _level_label_lint(ed, "X1", "LT1013") is None
+
+    def test_empty_value_not_flagged(self):
+        from ltspice_mcp.tools.circuit import _level_label_lint
+
+        ed = _FakeEditor({"U1": _FakeComp({"SpiceModel": "UniversalOpamp2"})})
+        assert _level_label_lint(ed, "U1", "") is None
