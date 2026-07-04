@@ -645,6 +645,17 @@ class TestResonance:
         r = compute_resonances(f, H)
         assert not r["peaks"]
 
+    def test_magnitude_linear_matches_db(self):
+        # |Z| in ohms under a 1 A probe (or |H| for a transfer): the native-unit
+        # magnitude that disambiguates a dBΩ peak from a dB dip.
+        f = _log_freqs(1, 5, 4000)
+        H = _biquad_resonator(f, 1000.0, 10.0)
+        peak = compute_resonances(f, H)["peaks"][0]
+        assert peak["magnitude_linear"] == pytest.approx(
+            10.0 ** (peak["magnitude_db"] / 20.0)
+        )
+        assert peak["magnitude_linear"] > 0
+
     def test_rejects_bad_prominence(self):
         f = _log_freqs(1, 5, 1000)
         H = _biquad_resonator(f, 1000.0, 5.0)
