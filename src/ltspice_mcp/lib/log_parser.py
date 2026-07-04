@@ -17,6 +17,7 @@ from spicelib.log.semi_dev_op_reader import opLogReader
 from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.spice_validator import validate_directive
 
 logger = logging.getLogger(__name__)
@@ -265,7 +266,13 @@ def read_log_text(log_path: Path) -> str:
     needs it instead of triggering one syscall per parser.
     """
     try:
-        return log_path.read_text(errors="replace")
+        # Decode through the same BOM/UTF-16/cp1252 sniffer the netlist and
+        # library reads use — modern LTspice writes UTF-16 logs, and Windows-
+        # authored logs carry cp1252 bytes (° in ".step temp=-40°", µ, ±). A
+        # plain read_text() decodes those with the platform default (UTF-8 on
+        # Linux/WSL), garbling the degree/step lines so step detection finds
+        # no temperature steps and temp/tnom parsing comes back empty.
+        return read_spice_text(log_path)
     except OSError:
         return ""
 
@@ -289,8 +296,28 @@ def read_device_op_points(log_path: Path) -> dict[str, float]:
     when the block is absent or unparseable.
     """
     out: dict[str, float] = {}
+    # opLogReader reads the file by path with spicelib's own encoding detection,
+    # which misfires on a cp1252 log carrying a high byte (° / µ / ±): it tries
+    # utf-8 first, fails on the byte, then misdetects utf-16 (ASCII-as-utf-16
+    # doesn't raise) and garbles the whole block → no device params, and
+    # operating_point wrongly reports "no small-signal device params". Normalize
+    # through our own BOM/UTF-16/cp1252 decoder to a utf-8 temp file first so the
+    # block always parses (UTF-16 logs already work, but this covers them too).
     try:
-        parsed = opLogReader(str(log_path))
+        text = read_spice_text(log_path)
+    except OSError:
+        return out
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".log", delete=False, encoding="utf-8"
+        ) as tmp:
+            tmp.write(text)
+            tmp_path = Path(tmp.name)
+        try:
+            parsed = opLogReader(str(tmp_path))
+        finally:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
     except (OSError, ValueError):
         return out
     for devices in parsed.values():  # categories: 'mosfet transistors', 'diodes', …
@@ -440,10 +467,7 @@ def missing_refs_from_text(text: str) -> list[str]:
 
 def extract_missing_refs(log_path: Path) -> list[str]:
     """Extract names of models/subcircuits that LTspice couldn't resolve."""
-    try:
-        return missing_refs_from_text(log_path.read_text(errors="replace"))
-    except OSError:
-        return []
+    return missing_refs_from_text(read_log_text(log_path))
 
 
 def _op_block_recovered(lines: list[str], idx: int) -> bool:
@@ -500,13 +524,10 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
     errors: list[str] = []
     meas_errors: list[MeasErrorEntry] = []
 
-    try:
-        # errors="replace": LTspice logs often carry cp1252 bytes (µ/°/±); a
-        # strict read would drop all diagnostics for that log (matches the other
-        # log reads in this module).
-        content = log_path.read_text(errors="replace")
-    except Exception:
-        return {"warnings": warnings, "errors": errors, "meas_errors": meas_errors}
+    # read_log_text can't raise (it swallows OSError and the decoder always
+    # falls back to errors="replace"); a missing/unreadable log yields "" here,
+    # which parses to the same empty result the old failure branch returned.
+    content = read_log_text(log_path)
 
     # Some simulators (notably ngspice) print analysis diagnostics — e.g.
     # "doAnalyses: ..." / "analysis not run" — to stdout while exiting 0 and
@@ -514,10 +535,7 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
     # stream (``exe_log=True``) into a sibling ``.exe.log``, fold its lines in
     # so the classifiers below surface them too. Quiet runs (LTspice batch)
     # leave it empty/absent, so this is a no-op there.
-    try:
-        exe_content = log_path.with_suffix(".exe.log").read_text(errors="replace")
-    except OSError:
-        exe_content = ""
+    exe_content = read_log_text(log_path.with_suffix(".exe.log"))
     if exe_content.strip():
         # Fold in only lines not already in the -o log (some builds mirror a
         # diagnostic to both streams; avoid double-reporting), separated by a
@@ -665,8 +683,10 @@ def extract_error_context(log_file: Path, max_lines: int = 20) -> str:
         return "(Log file not found)"
 
     try:
-        # errors="replace": tolerate cp1252 bytes in the log (see above).
-        content = log_file.read_text(errors="replace")
+        # Read directly (not read_log_text, which swallows OSError) so a genuine
+        # read failure reaches the except below and is reported, not hidden as an
+        # empty log. read_spice_text gives the same BOM/UTF-16/cp1252 handling.
+        content = read_spice_text(log_file)
         lines = [line.rstrip() for line in content.splitlines()]
 
         if not lines:
@@ -768,7 +788,7 @@ def parse_success_summary(
     requested: dict[str, list[str]] | None = None
     if netlist is not None:
         try:
-            requested = parse_requested_outputs(netlist.read_text(errors="replace"))
+            requested = parse_requested_outputs(read_spice_text(netlist))
         except OSError:
             requested = None
 
@@ -930,7 +950,7 @@ def make_log_reader(log_path: Path) -> LTSpiceLogReader:
         raise
     except Exception as first_err:
         try:
-            content = log_path.read_text(errors="replace")
+            content = read_spice_text(log_path)
         except OSError as e:
             raise ResultError(f"Could not parse log file: {first_err}") from e
 
@@ -995,7 +1015,7 @@ def parse_measurements(
     failed_names: list[str] = []
     log_text = ""
     try:
-        log_text = log_path.read_text(encoding="utf-8", errors="replace")
+        log_text = read_spice_text(log_path)
         # Preserve discovery order, drop duplicates (spicelib reports
         # FAIL'ed once per step, but the name is the same).
         seen: set[str] = set()
