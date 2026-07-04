@@ -220,6 +220,19 @@ _RE_OP_SOLVE_SUCCEEDED = re.compile(
 # must not suppress a genuinely failed later step.
 _RE_OP_SOLVE_ATTEMPT = re.compile(r"^\s*Direct Newton iteration", re.IGNORECASE)
 
+# Ambient / nominal temperature echoed in the log header. LTspice writes two
+# lowercase ``key = value`` lines (``temp = 27`` / ``tnom = 27``); ngspice
+# writes one combined ``Doing analysis at TEMP = 27.000000 and TNOM = ...``
+# line per analysis. The two phrasings are disjoint. ``^`` anchoring on the
+# LTspice patterns is load-bearing: it avoids matching ``.step temp=-40°``
+# step lines (they begin ``.step``) or a B-source ``temp=x`` mid-line param.
+_RE_LT_TEMP = re.compile(r"^temp\s*=\s*([-+]?\d+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
+_RE_LT_TNOM = re.compile(r"^tnom\s*=\s*([-+]?\d+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
+_RE_NG_TEMP = re.compile(
+    r"analysis at TEMP\s*=\s*([-+]?\d+(?:\.\d+)?)\s+and\s+TNOM\s*=\s*([-+]?\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+
 
 # Missing .MODEL — appears in log as:
 #   Error on line 2 : s1 n003 n001 n002 0 sw Unable to find definition of model "sw"
@@ -299,6 +312,26 @@ def _resolve_log_text(log_path: Path | None, text: str | None) -> str:
     if log_path is None:
         return ""
     return read_log_text(log_path)
+
+
+def parse_temperatures(
+    log_path: Path | None = None, *, text: str | None = None
+) -> tuple[float | None, float | None]:
+    """``(temp_c, tnom_c)`` ambient/nominal temperature from the log header.
+
+    Reads the value both LTspice (``temp = 27`` / ``tnom = 27``) and ngspice
+    (``Doing analysis at TEMP = 27.0 and TNOM = 27.0``) print by default;
+    ``None`` for either value when the log doesn't carry it. On a stepped-
+    temperature run the header value is step 0's, which is still a truthful
+    fact about the header — no attempt is made to derive a per-step temp.
+    """
+    body = _resolve_log_text(log_path, text)
+    ng = _RE_NG_TEMP.search(body)
+    if ng:
+        return float(ng.group(1)), float(ng.group(2))
+    t = _RE_LT_TEMP.search(body)
+    n = _RE_LT_TNOM.search(body)
+    return (float(t.group(1)) if t else None, float(n.group(1)) if n else None)
 
 
 def parse_step_iterations(

@@ -97,12 +97,26 @@ PWL file=<filename>
 .meas TRAN energy INTEG V(out)*I(R1)
 ```
 
+**Finding the frequency/time OF a maximum (argmax):** a single `.meas` cannot
+return the x-location of a peak — `.meas AC fpeak MAX mag(V(out))` gives the
+peak *value*, not its frequency. Use two directives (capture the peak, then
+find where the signal equals it):
+```spice
+.meas AC vpeak  MAX  mag(V(out))
+.meas AC fcenter FIND frequency WHEN mag(V(out))=vpeak
+```
+Or call `resonance` (AC) for peak frequency + Q + bandwidth in one step.
+
 **Gotchas:**
 - RISE/FALL/CROSS numbering starts at **1**, not 0.
 - If TRIG event never occurs, measurement silently fails (no error, no warning).
 - Without `TD=` parameter, TARG matches from t=0 — can hit wrong edge.
 - AC measurements use **65k point ceiling** — exceeding this silently reduces resolution.
 - WHEN/AT measurements return the crossing time (.tran) or frequency (.ac) in the result's `at` field; the headline `values` scalar is the constant target LEVEL, not the crossing point.
+- **Quantized / staircase signals** (transmission-line reflections, DAC steps):
+  read the plateau levels directly with `query_value(at=...)` per plateau, or
+  `export_waveform` for the full table — don't reconstruct levels from
+  `get_waveform` bucket statistics.
 
 ### General Pitfalls
 
