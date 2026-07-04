@@ -22,6 +22,7 @@ themselves.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from typing import Literal, TypedDict
 
@@ -517,6 +518,120 @@ def gain_at_frequencies(
         points.append(entry)
 
     return points, warnings
+
+
+# ---------------------------------------------------------------------------
+# Reflection / return loss (RF matching)
+# ---------------------------------------------------------------------------
+
+
+class ReturnLossOutput(TypedDict):
+    """One reflection-coefficient sample emitted by :func:`compute_return_loss`.
+
+    ``return_loss_db`` is ``None`` at a perfect match (``|Γ|`` → 0, RL → ∞);
+    ``vswr`` is ``None`` at a total reflection (``|Γ|`` ≥ 1, open/short, VSWR →
+    ∞). Both are surfaced as a null rather than a meaningless large number.
+    """
+
+    frequency_hz: float
+    zin_real_ohm: float
+    zin_imag_ohm: float
+    zin_mag_ohm: float
+    gamma_mag: float
+    gamma_phase_deg: float
+    return_loss_db: float | None
+    vswr: float | None
+    worst_match: bool
+    warnings: list[str]
+
+
+def compute_return_loss(
+    freqs: np.ndarray,
+    H: np.ndarray,
+    *,
+    z0: float = 50.0,
+    at_hz: float | None = None,
+) -> ReturnLossOutput:
+    """Reflection coefficient, return loss, and VSWR of an impedance trace.
+
+    ``H`` is the complex input impedance ``Zin`` at each frequency — e.g.
+    ``V(node)`` measured under the documented 1 A AC probe, where the node
+    voltage equals the driving-point impedance. With reference impedance
+    ``z0``::
+
+        Γ = (Zin - z0) / (Zin + z0)   RL_dB = -20·log10|Γ|   VSWR = (1+|Γ|)/(1-|Γ|)
+
+    With ``at_hz`` set, reports that frequency (log-axis interpolated). Without
+    it, scans the sweep and reports the WORST match — the frequency of maximum
+    ``|Γ|`` (minimum return loss).
+    """
+    if z0 <= 0:
+        raise ValueError(f"z0 (reference impedance) must be positive, got {z0}")
+
+    warnings: list[str] = []
+    if at_hz is not None:
+        # Out of range clamps to the nearest swept endpoint. Report the endpoint
+        # actually evaluated as frequency_hz — returning the unavailable request
+        # would claim the metrics were computed at a frequency that was not swept.
+        eval_hz = min(max(float(at_hz), float(freqs[0])), float(freqs[-1]))
+        if eval_hz != at_hz:
+            warnings.append(
+                f"Frequency {at_hz:g} Hz is outside the sweep range "
+                f"[{freqs[0]:g}, {freqs[-1]:g}] Hz; evaluated at the nearest "
+                f"endpoint {eval_hz:g} Hz instead."
+            )
+        zin = log_interp_complex(freqs, H, eval_hz)
+        frequency_hz = eval_hz
+        worst_match = False
+    else:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            gamma_arr = np.abs((H - z0) / (H + z0))
+        idx = int(np.argmax(gamma_arr))
+        zin = complex(H[idx])
+        frequency_hz = float(freqs[idx])
+        worst_match = True
+
+    denom = zin + z0
+    eps = 1e-12
+    if abs(denom) < eps * max(1.0, abs(zin), z0):
+        # Zin ≈ -z0 makes Γ singular — non-physical for a passive impedance
+        # under the probe idiom, so the trace/z0 is almost certainly wrong.
+        raise ValueError(
+            f"Reflection coefficient is singular at {frequency_hz:g} Hz "
+            f"(Zin ≈ -z0 = {-z0:g} Ω). The trace is likely not an impedance under the "
+            "1 A probe idiom, or z0 is wrong."
+        )
+    gamma = (zin - z0) / denom
+    gamma_mag = abs(gamma)
+
+    return_loss_db = None if gamma_mag < eps else float(-20.0 * math.log10(gamma_mag))
+    if 1.0 - gamma_mag <= eps:
+        vswr: float | None = None
+        warnings.append(
+            f"|Γ|≈{gamma_mag:.4g} (near total reflection — open or short); VSWR is unbounded."
+        )
+    else:
+        vswr = float((1.0 + gamma_mag) / (1.0 - gamma_mag))
+
+    if zin.real < 0:
+        warnings.append(
+            "Zin has a negative real part — check the probe orientation (the 1 A "
+            "source's '+' node at the DUT, ground at the far side); a reversed probe "
+            "flips the impedance sign. See spice://guide."
+        )
+
+    return {
+        "frequency_hz": frequency_hz,
+        "zin_real_ohm": float(zin.real),
+        "zin_imag_ohm": float(zin.imag),
+        "zin_mag_ohm": float(abs(zin)),
+        "gamma_mag": float(gamma_mag),
+        "gamma_phase_deg": float(np.angle(gamma, deg=True)),
+        "return_loss_db": return_loss_db,
+        "vswr": vswr,
+        "worst_match": worst_match,
+        "warnings": warnings,
+    }
 
 
 # ---------------------------------------------------------------------------

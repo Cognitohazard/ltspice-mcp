@@ -70,6 +70,36 @@ class PulseResponseOutput(TypedDict):
     warnings: list[str]
 
 
+class DisturbanceResponseOutput(TypedDict):
+    """Return shape of :func:`analyze_disturbance_response`.
+
+    Measures a regulated output's excursion from — and recovery to — its own
+    pre-disturbance baseline (LDO/PMIC load transient). Complements
+    :func:`analyze_pulse_response`, which correctly nulls its step metrics when
+    the signal returns to its starting level.
+
+    ``min_value``/``max_value`` are the raw worst-case samples over the window;
+    ``max_droop``/``max_overshoot`` are the excursions below/above ``baseline``,
+    clamped to ``>= 0`` (an LDO/PMIC positive-rail convention). ``recovery_time``
+    is ``None`` when the signal never re-enters the settle band before the window
+    ends, or when the band is undefined (see ``quality``).
+    """
+
+    baseline: float
+    baseline_source: Literal["explicit", "auto_leading_window"]
+    min_value: float
+    min_time: float
+    max_value: float
+    max_time: float
+    max_droop: float
+    max_overshoot: float
+    recovery_time: float | None
+    settle_band: float
+    settle_band_pct: float | None
+    quality: list[str]
+    warnings: list[str]
+
+
 class TimingBetweenOutput(TypedDict):
     """Return shape of :func:`analyze_timing_between`."""
 
@@ -659,43 +689,30 @@ def analyze_pulse_response(
     )
 
     tol = (settling_tolerance_pct / 100.0) * abs_delta
-    outside = np.abs(y - fv) > tol
-    outside_idx = np.where(outside)[0]
-    settling_time: float | None
+    # Shared last-band-exit crossing (interpolated between the last out-of-band
+    # sample and the first in-band one, so a coarse adaptive tail doesn't land
+    # the time a full timestep late). Same helper the disturbance-recovery time
+    # uses, so the edge handling stays single-sourced.
+    settling_time, bracket_dt = _band_exit_time(t, y, fv, tol)
     # Deferred until after the suppression gates: a warning describing the
     # interpolation accuracy of a settling_time must not ship when that
     # settling_time is nulled in the output.
     interp_warning: str | None = None
-    if len(outside_idx) == 0:
-        settling_time = 0.0
+    if settling_time == 0.0 and bracket_dt is None:
         warnings.append(
             f"Signal is already within ±{settling_tolerance_pct}% tolerance at "
             "window start; settling_time=0 (window may start after settling)"
         )
-    elif outside_idx[-1] == len(y) - 1:
-        settling_time = None
+    elif settling_time is None:
         warnings.append(
             f"Signal did not settle within ±{settling_tolerance_pct}% tolerance by end of window"
         )
-    else:
-        # Interpolate the settle-band crossing between the last out-of-band
-        # sample and the first in-band one rather than snapping to the in-band
-        # sample time, which lands up to a full timestep late on a coarse run
-        # (adaptive .tran can grow the step past 1τ at the flattened tail).
-        k = int(outside_idx[-1])
-        tk, tk1 = float(t[k]), float(t[k + 1])
-        y0, y1 = float(y[k]), float(y[k + 1])
-        boundary = fv + tol if y0 > fv else fv - tol
-        frac = (boundary - y0) / (y1 - y0) if y1 != y0 else 1.0
-        frac = min(max(frac, 0.0), 1.0)
-        bracket_dt = tk1 - tk
-        settling_time = tk + frac * bracket_dt - float(t[0])
-        if settling_time > 0 and bracket_dt > 0.1 * settling_time:
-            interp_warning = (
-                f"settling_time interpolated across a coarse local timestep "
-                f"(Δt≈{bracket_dt / settling_time * 100:.0f}% of the settle time); "
-                "accuracy is bounded by the run's resolution near settling"
-            )
+    elif settling_time > 0 and bracket_dt is not None and bracket_dt > 0.1 * settling_time:
+        interp_warning = (
+            f"settling_time interpolated across a coarse local timestep "
+            f"(Δt≈{bracket_dt / settling_time * 100:.0f}% of the settle time); "
+            "accuracy is bounded by the run's resolution near settling"
+        )
 
     # A trailing window too noisy to trust as the settled rail (still ringing, or
     # the window ends mid-transition) means the final value was bootstrapped from a
@@ -764,6 +781,140 @@ def analyze_pulse_response(
         "undershoot_pct": None if metrics_undefined else float(undershoot_pct),
         "settling_time": None if metrics_undefined else settling_time,
         "settling_tolerance_pct": float(settling_tolerance_pct),
+        "quality": quality,
+        "warnings": warnings,
+    }
+
+
+def _band_exit_time(
+    t: np.ndarray, y: np.ndarray, center: float, tol: float
+) -> tuple[float | None, float | None]:
+    """Time (from ``t[0]``) of the LAST exit from the band ``[center ± tol]``.
+
+    Interpolates the crossing between the last out-of-band sample and the first
+    in-band one (same scheme as the pulse-response settle-band crossing), so a
+    coarse adaptive tail doesn't land the time a full timestep late. Returns
+    ``(time_from_t0, bracket_dt)``; ``(0.0, None)`` when the signal never leaves
+    the band, ``(None, None)`` when it is still outside at the final sample.
+    """
+    outside_idx = np.where(np.abs(y - center) > tol)[0]
+    if len(outside_idx) == 0:
+        return 0.0, None
+    if outside_idx[-1] == len(y) - 1:
+        return None, None
+    k = int(outside_idx[-1])
+    tk, tk1 = float(t[k]), float(t[k + 1])
+    y0, y1 = float(y[k]), float(y[k + 1])
+    boundary = center + tol if y0 > center else center - tol
+    frac = (boundary - y0) / (y1 - y0) if y1 != y0 else 1.0
+    frac = min(max(frac, 0.0), 1.0)
+    bracket_dt = tk1 - tk
+    return tk + frac * bracket_dt - float(t[0]), bracket_dt
+
+
+def analyze_disturbance_response(
+    t: np.ndarray,
+    y: np.ndarray,
+    *,
+    baseline: float | None = None,
+    settle_band: float | None = None,
+    settle_band_pct: float = 2.0,
+) -> DisturbanceResponseOutput:
+    """Excursion-and-recovery metrics for a regulated output under a load step.
+
+    For an LDO/PMIC-style output that returns to its own level after a load
+    transient, :func:`analyze_pulse_response` correctly nulls its step metrics
+    (net step ≈ 0). This measures the complementary quantities: worst droop and
+    overshoot relative to the pre-disturbance ``baseline``, and the time to
+    recover to within a settle band of it.
+
+    ``baseline`` defaults to the mean of the leading 10% of samples (the
+    pre-disturbance steady state); pass it explicitly when the window does not
+    start in steady state. Recovery is measured from ``t[0]``, so the window
+    must begin at or just before the disturbance edge.
+    """
+    t = np.asarray(t, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if len(t) < 3:
+        raise ValueError("disturbance_response needs at least 3 samples in the window.")
+    if settle_band is not None and settle_band <= 0:
+        raise ValueError("settle_band must be positive.")
+    if settle_band is None and settle_band_pct <= 0:
+        raise ValueError("settle_band_pct must be positive.")
+
+    quality: list[str] = []
+    warnings: list[str] = []
+
+    if baseline is None:
+        baseline = _estimate_levels(y)[0]
+        baseline_source: Literal["explicit", "auto_leading_window"] = "auto_leading_window"
+    else:
+        baseline = float(baseline)
+        baseline_source = "explicit"
+
+    min_idx = int(np.argmin(y))
+    max_idx = int(np.argmax(y))
+    min_value = float(y[min_idx])
+    max_value = float(y[max_idx])
+    # Droop/overshoot are the one-sided excursions from baseline, clamped to
+    # >= 0 (a positive-rail LDO/PMIC convention); the raw min_value/max_value
+    # carry the unclamped fact so a negative-rail node stays readable.
+    max_droop = max(0.0, baseline - min_value)
+    max_overshoot = max(0.0, max_value - baseline)
+
+    if settle_band is not None:
+        tol = float(settle_band)
+        pct_out: float | None = None
+    else:
+        tol = (settle_band_pct / 100.0) * abs(baseline)
+        pct_out = float(settle_band_pct)
+
+    recovery_time: float | None
+    if tol <= _LEVEL_EPSILON:
+        # baseline ≈ 0 with no absolute band → the relative band collapses to a
+        # point. Emit a null over a meaningless "recovered at ~0", naming the
+        # input condition rather than inventing a band.
+        recovery_time = None
+        quality.append("recovery_band_undefined_baseline_zero")
+        warnings.append(
+            f"baseline≈{baseline:.3g} and no absolute settle_band given, so the "
+            f"±{settle_band_pct:g}% relative band is ≈0 and recovery_time is undefined. "
+            "Pass an explicit settle_band (in signal units)."
+        )
+    else:
+        recovery_time, bracket_dt = _band_exit_time(t, y, baseline, tol)
+        if recovery_time is None:
+            warnings.append(
+                f"Signal did not return to within ±{tol:.3g} of baseline by the end of "
+                "the window; recovery_time is unavailable (extend the simulation window)."
+            )
+        elif bracket_dt is None:
+            # Never left the band — no disturbance in this window. Return the
+            # (small, real) droop/overshoot rather than refusing.
+            quality.append("no_excursion_beyond_band")
+            warnings.append(
+                f"Signal stayed within ±{tol:.3g} of baseline for the whole window — no "
+                "disturbance detected. Confirm the window spans the load-step edge."
+            )
+        elif recovery_time > 0 and bracket_dt > 0.1 * recovery_time:
+            warnings.append(
+                f"recovery_time interpolated across a coarse local timestep "
+                f"(Δt≈{bracket_dt / recovery_time * 100:.0f}% of the recovery time); "
+                "accuracy is bounded by the run's resolution near recovery."
+            )
+
+    return {
+        "baseline": float(baseline),
+        "baseline_source": baseline_source,
+        "min_value": min_value,
+        "min_time": float(t[min_idx]),
+        "max_value": max_value,
+        "max_time": float(t[max_idx]),
+        "max_droop": float(max_droop),
+        "max_overshoot": float(max_overshoot),
+        "recovery_time": recovery_time,
+        "settle_band": float(tol),
+        "settle_band_pct": pct_out,
         "quality": quality,
         "warnings": warnings,
     }

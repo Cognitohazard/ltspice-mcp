@@ -157,9 +157,10 @@ tools resolve the bare / `v()` / `i()` wrapping, and a subcircuit path like
 
 ## Impedance, return loss, and noise figure (RF / two-port idioms)
 
-There are no S-parameter/return-loss/noise-figure tools — these quantities are a
-short arithmetic step from an ordinary `.ac`/`.noise` run. The idioms below are
-what to build.
+`return_loss` computes Γ / return loss / VSWR from the impedance trace in one
+call (see below). S-parameters (S21) and noise figure have no dedicated tool —
+they are a short arithmetic step from an ordinary `.ac`/`.noise` run; the idioms
+below are what to build.
 
 ### Input impedance → Z, Γ, return loss, VSWR
 
@@ -174,7 +175,9 @@ I1 0 in AC 1      ; + at ground, - at the probed node
 
 `V(in)` comes back complex: magnitude = |Zin| in ohms, phase = ∠Zin. Read it with
 `query_value` at one frequency or `export_waveform` for the full |Zin|(f) table;
-`resonance` finds the peak/notch frequency.
+`resonance` finds the peak/notch frequency. Note that a `magnitude_db` reading of
+this trace is **dBΩ**, not dBV — e.g. -10.56 dB means 0.30 Ω, not a -10.56 dB
+dip; `magnitude_linear` gives the ohms directly.
 
 **Sign convention (verified):** `I1 0 in` (+ at ground) gives `V(in) = +Zin`. The
 reversed `I1 in 0` gives `V(in) = -Zin` — the phase is flipped 180° and a naive
@@ -188,6 +191,11 @@ Then, with a reference impedance `Z0` (usually 50 Ω):
 RL_dB = -20*log10(|Γ|)              ; return loss (positive dB = better match)
 VSWR  = (1 + |Γ|) / (1 - |Γ|)
 ```
+
+The `return_loss` tool applies exactly this — pass the impedance trace and `z0`
+(default 50), and it returns Γ (mag/phase), `return_loss_db`, and `vswr` at a
+given `at` frequency, or the worst-match point across the sweep when `at` is
+omitted. It flags a negative-real Zin (a reversed probe) in its warnings.
 
 ### Noise figure from `.noise`
 
