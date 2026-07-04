@@ -1353,6 +1353,7 @@ class ResonancePeak(TypedDict):
 
     frequency_hz: float
     magnitude_db: float
+    magnitude_linear: float
     phase_deg: float
     q_factor: float | None
     bandwidth_3db_hz: float | None
@@ -1434,6 +1435,10 @@ def compute_resonances(
             {
                 "frequency_hz": f_peak,
                 "magnitude_db": peak_db,
+                # Native-unit magnitude: |Z| in ohms under a 1 A impedance probe,
+                # |H| (V/V) for a voltage transfer. Disambiguates a dBΩ peak from
+                # a dB dip for impedance work.
+                "magnitude_linear": float(10.0 ** (peak_db / 20.0)),
                 "phase_deg": float(phase_deg[idx]),
                 "q_factor": q,
                 "bandwidth_3db_hz": bw,

@@ -657,6 +657,9 @@ class SimulationSummaryInput(ToolInput):
             "t_start_used": {"type": ["number", "null"]},
             "t_end_used": {"type": ["number", "null"]},
             "duration": {"type": ["number", "null"]},
+            # Time of the min/max sample (transient only)
+            "t_min": {"type": "number"},
+            "t_max": {"type": "number"},
             # DC-sweep window metadata (axis is the swept variable, not time)
             "sweep_start_used": {"type": ["number", "null"]},
             "sweep_end_used": {"type": ["number", "null"]},
@@ -809,6 +812,8 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
             "t_start_used": core["t_start"],
             "t_end_used": core["t_end"],
             "duration": core["duration"],
+            "t_min": core["t_min"],
+            "t_max": core["t_max"],
         }
     window_note = (
         f" (window [{core['t_start']:.6g}, {core['t_end']:.6g}] s)"
@@ -1767,6 +1772,11 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
     sim_type = detect_sim_type(raw)
     x_unit = _query_x_label(raw, sim_type)
     value_unit = trace_unit(raw, signal)
+    if value_unit and is_noise_analysis(sim_type):
+        # .noise traces are amplitude spectral density (V/√Hz, A/√Hz), not the
+        # plain V/A the trace's whattype declares — match noise_integral and the
+        # raw's own "Noise Spectral Density" plotname.
+        value_unit = f"{value_unit}/√Hz"
     unit_suffix = f" {value_unit}" if value_unit else ""
 
     # The query snaps to the nearest sample; flag when that snap moved the
@@ -3282,6 +3292,11 @@ async def handle_thd(args: ThdInput, state: SessionState):
         window=args.window,
     )
     data["signal"] = args.signal
+    # Label the per-harmonic magnitudes with the signal's native unit (load_raw
+    # is cached — _load_real_signal already read this raw).
+    unit = trace_unit(await services.load_raw(raw_path, state), args.signal)
+    if unit:
+        data["unit"] = unit
 
     lines = [
         f"THD: {args.signal}",
@@ -4701,7 +4716,8 @@ async def handle_resonance(args: ResonanceInput, state: SessionState):
         q = "-" if p["q_factor"] is None else f"{p['q_factor']:.2f}"
         bw = "-" if p["bandwidth_3db_hz"] is None else f"{p['bandwidth_3db_hz']:.6g} Hz"
         lines.append(
-            f"  f={p['frequency_hz']:.6g} Hz  gain={p['magnitude_db']:.2f} dB  "
+            f"  f={p['frequency_hz']:.6g} Hz  gain={p['magnitude_db']:.2f} dB "
+            f"(|{p['magnitude_linear']:.6g}|)  "
             f"Q={q}  BW-3dB={bw}  phase={p['phase_deg']:+.2f}°"
         )
     return await _finish_metric(lines, data, raw_path, args.format)

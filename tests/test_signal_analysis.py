@@ -882,6 +882,15 @@ class TestComputeSignalStats:
         assert r["duration"] == pytest.approx(1e-3)
         assert r["num_samples"] == 1001
 
+    def test_t_min_t_max_locate_extrema(self):
+        t = np.linspace(0.0, 1.0, 11)  # 0.0, 0.1, ... 1.0
+        y = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, -2.0, 3.0, 4.0])
+        r = compute_signal_stats(t, y)
+        assert r["max"] == pytest.approx(5.0)
+        assert r["t_max"] == pytest.approx(0.5)  # index 5
+        assert r["min"] == pytest.approx(-2.0)
+        assert r["t_min"] == pytest.approx(0.8)  # index 8
+
     def test_sine_rms_is_amplitude_over_sqrt2(self):
         # Integer number of periods so window RMS equals the analytical value.
         freq = 1000.0
