@@ -145,6 +145,8 @@ class SignalStatsOutput(TypedDict):
     min: float
     max: float
     pk_pk: float
+    t_min: float
+    t_max: float
 
 
 class WaveformBucket(TypedDict):
@@ -1135,6 +1137,10 @@ class ThdOutput(TypedDict):
     """
 
     signal: NotRequired[str]
+    # Native unit of the signal (V, A, …), added by the tool layer. The
+    # per-harmonic ``magnitude`` and the fundamental amplitude are in this unit;
+    # the ratios/percentages/dB are dimensionless.
+    unit: NotRequired[str]
     fundamental_hz: float
     fundamental_source: Literal["given", "detected"]
     thd_ratio: float
@@ -1426,6 +1432,8 @@ def compute_signal_stats(
 
     y_min = float(np.min(y))
     y_max = float(np.max(y))
+    t_min = float(t[int(np.argmin(y))])
+    t_max = float(t[int(np.argmax(y))])
 
     if duration > 0 and len(t) >= 2:
         mean = float(np.trapezoid(y, t) / duration)
@@ -1452,6 +1460,8 @@ def compute_signal_stats(
         "min": y_min,
         "max": y_max,
         "pk_pk": y_max - y_min,
+        "t_min": t_min,
+        "t_max": t_max,
     }
 
 
