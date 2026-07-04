@@ -106,6 +106,30 @@ def _reject_empty_attr_value(reference: str, attribute: str, value: str) -> None
         )
 
 
+def _reject_unknown_attr(attribute: str) -> None:
+    """Refuse a SYMATTR name outside LTspice's fixed slot set.
+
+    Any name outside the known slots is dropped at netlist-export time, so a
+    typo (``Val`` for ``Value``) would silently no-op. Reject up-front with a
+    'did you mean' hint. Shared by set_component_attribute (handler + op) and
+    the add_component create path so all three refuse identically.
+    """
+    if attribute in _LTSPICE_ATTR_NAMES:
+        return
+    canonical = _LTSPICE_ATTR_CANONICAL.get(attribute.lower())
+    if canonical:
+        raise NetlistError(
+            f"Unknown attribute {attribute!r}. Did you mean {canonical!r}? "
+            "LTspice attribute names are case-sensitive."
+        )
+    raise NetlistError(
+        f"Unknown attribute {attribute!r}. LTspice silently ignores "
+        f"unrecognised SYMATTR keys at netlist time. Valid attributes: "
+        f"{', '.join(sorted(_LTSPICE_ATTR_NAMES))}. For arbitrary KEY=val "
+        "pairs, set them through 'SpiceLine' instead."
+    )
+
+
 def _create_component(
     editor: AscEditor,
     reference: str,
@@ -134,6 +158,7 @@ def _create_component(
         comp.attributes["Value"] = value
     if attributes:
         for attr_name, attr_val in attributes.items():
+            _reject_unknown_attr(attr_name)
             _reject_empty_attr_value(reference, attr_name, attr_val)
             comp.attributes[attr_name] = attr_val
     editor.add_component(comp)
@@ -156,6 +181,18 @@ def _get_edit_lock(path: Path) -> asyncio.Lock:
 # release that adds a slot is picked up without a code change here.
 _LTSPICE_ATTR_NAMES: frozenset[str] = frozenset(LTSPICE_PARAMETERS + LTSPICE_ATTRIBUTES)
 _LTSPICE_ATTR_CANONICAL: dict[str, str] = {n.lower(): n for n in _LTSPICE_ATTR_NAMES}
+
+# The wiring goal, surfaced at the two points an agent starts working on a
+# schematic (create_schematic, read_circuit on an .asc). Tagging every pin with
+# a net-label simulates correctly and needs no layout thought, so an agent with
+# nothing asking for readability defaults to it — and the result reads as a
+# wiring list, not a schematic. Stating the goal is what flips that default.
+SCHEMATIC_WIRING_NORM = (
+    "Draw wires for connections (connect) — reserve net-labels for ground, "
+    "power rails, and genuinely distant nets. Tagging every pin with a net-label "
+    "simulates correctly but reads as a wiring list, not a schematic; aim for a "
+    "layout a human can follow at a glance."
+)
 
 
 # Rotation string -> ERotation enum mapping (shared by move/add handlers)
@@ -280,30 +317,47 @@ def _asc_component_value(editor, reference: str) -> str | None:
 
 
 def _level_label_lint(editor, reference: str, value: str) -> str | None:
-    """Warn when a GUI opamp level label is written to a subcircuit's Value.
+    """Warn when a subcircuit (X) symbol's Value slot will corrupt the netlist.
 
-    Setting e.g. ``Level.2`` (a UniversalOpamp2 GUI complexity label) as the
-    Value of a subcircuit (X) symbol makes LTspice append it as a stray
-    positional token on the instance line, so the export later fails with
-    "sub-circuit name is not defined". Fires only on the dotted-level pattern,
-    gated by an OR of subcircuit signals — the InstName may be ``U1`` while the
-    netlist prefix is X (from the .asy Prefix), so the X-prefix test alone is
-    not enough. Returns the warning text, or ``None`` when it does not apply.
+    Two shapes, both ending in "sub-circuit name is not defined" at netlist
+    time because LTspice appends the Value as a stray positional token on the X
+    instance line:
+
+    - a GUI opamp complexity label (``Level.2``) written to Value; or
+    - any Value set on a symbol whose model is selected via the ``SpiceModel``
+      attribute (e.g. UniversalOpamp2), whose Value slot must stay empty.
+
+    The subcircuit gate is an OR of signals — the InstName may be ``U1`` while
+    the netlist prefix is X (from the .asy Prefix), so the X-prefix test alone
+    is not enough. A symbol that carries its subckt name IN Value (the common
+    library part, no SpiceModel) is left alone. Returns the warning text, or
+    ``None`` when neither shape applies.
     """
-    if not _LEVEL_LABEL_RE.match(value):
+    if not value.strip():
         return None
     comp = editor.components.get(reference)
     attrs = getattr(comp, "attributes", None) or {}
-    is_subckt = reference[:1].upper() == "X" or "SpiceModel" in attrs or "_SUBCKT" in attrs
+    has_spicemodel = "SpiceModel" in attrs
+    is_subckt = reference[:1].upper() == "X" or has_spicemodel or "_SUBCKT" in attrs
     if not is_subckt:
         return None
-    return (
-        f"{reference}: Value {value!r} is a GUI opamp complexity-level label, not a "
-        "subcircuit value. LTspice emits it as an extra positional token on the X "
-        "instance line, so netlisting fails with 'sub-circuit name is not defined'. "
-        "Select the level via the SpiceModel attribute (or the symbol's default), "
-        "not the Value slot."
-    )
+    if _LEVEL_LABEL_RE.match(value):
+        return (
+            f"{reference}: Value {value!r} is a GUI opamp complexity-level label, not a "
+            "subcircuit value. LTspice emits it as an extra positional token on the X "
+            "instance line, so netlisting fails with 'sub-circuit name is not defined'. "
+            "Select the level via the SpiceModel attribute (or the symbol's default), "
+            "not the Value slot."
+        )
+    if has_spicemodel:
+        return (
+            f"{reference}: this symbol's model is selected via its SpiceModel attribute, "
+            f"so its Value slot must stay empty. LTspice emits Value {value!r} as an "
+            "extra positional token on the X instance line, and netlisting fails with "
+            "'sub-circuit name is not defined'. Clear the Value; pick the model through "
+            "SpiceModel instead."
+        )
+    return None
 
 
 def _set_or_create_value(editor, reference: str, value: str) -> None:
@@ -643,6 +697,10 @@ def _post_op_warnings(editor: AscEditor) -> list[dict]:
       (in either order). Pure noise, costs nothing to drop.
     - ``dangling_label`` — a net label whose coordinate is neither on a
       wire nor at any component pin.
+    - ``stacked_directive`` — two or more directive/comment text objects at
+      the exact same anchor, rendering on top of each other. Exact-coordinate
+      match only (no font-metric guessing), so this never fires on a
+      deliberately tight-but-offset directive block.
 
     Read-only on the editor. Cheap to compute during an existing edit
     session; intended for callers to surface in their response payload.
@@ -718,6 +776,25 @@ def _post_op_warnings(editor: AscEditor) -> list[dict]:
                 "message": f"Dangling label '{lbl.text}' at ({coord[0]},{coord[1]})",
             }
         )
+
+    directive_anchor_count: dict[tuple[int, int], int] = {}
+    for d in editor.directives:
+        anchor = (int(d.coord.X), int(d.coord.Y))
+        directive_anchor_count[anchor] = directive_anchor_count.get(anchor, 0) + 1
+    for (dx, dy), count in directive_anchor_count.items():
+        if count > 1:
+            warnings.append(
+                {
+                    "kind": "stacked_directive",
+                    "x": dx,
+                    "y": dy,
+                    "count": count,
+                    "message": (
+                        f"{count} directives/comments share anchor ({dx},{dy}) — "
+                        "they render on top of each other"
+                    ),
+                }
+            )
 
     return warnings
 
@@ -1306,6 +1383,8 @@ async def handle_create_netlist(
             # Lexer advisories for the netlist path (e.g. an unclosed .SUBCKT)
             # surfaced by services.extract_netlist_info.
             "warnings": WARNINGS_SCHEMA,
+            # Wiring norm, .asc branch only (see SCHEMATIC_WIRING_NORM).
+            "hint": {"type": "string"},
         },
     },
 )
@@ -1319,6 +1398,10 @@ async def handle_read_circuit(args: CircuitReadInput, state: SessionState):
 
     if _is_asc(file_path):
         data = services.extract_asc_info(_get_asc_editor(file_path, state), file_path)
+        # Co-design entry point: the agent is picking up a schematic someone
+        # else drew, so state the wiring goal here too (create_schematic covers
+        # the greenfield path).
+        data["hint"] = SCHEMATIC_WIRING_NORM
     else:
         data = services.extract_netlist_info(file_path)
     return format_response(_format_circuit_text(file_path, data), data, fmt)
@@ -1939,6 +2022,14 @@ async def handle_parameter(args: ParameterInput, state: SessionState):
 _ASC_TEXT_DEFAULT_SIZE = 2
 """LTspice's normal font size — the fallback when a caller doesn't pick one."""
 
+_ASC_TEXT_LINE_PITCH = 16
+"""One grid cell — the downward step used to declutter exactly-stacked text.
+
+Multiple directives added without explicit coordinates all default to the same
+anchor (16,16) and render on top of each other. Nudging each new one down by a
+grid cell until its anchor is free keeps them readable. Only exact-anchor
+collisions move — no font-metric guesswork, so no false shifts."""
+
 
 def _append_asc_text(
     editor: AscEditor,
@@ -1958,13 +2049,20 @@ def _append_asc_text(
     here, so placement defaulting can't drift between them. The per-site
     ``default_x``/``default_y`` differ deliberately (comments default to the
     sheet origin; directives to (16,16)).
+
+    Auto-declutter: if the resolved anchor is already occupied by another text
+    object (the common case when several directives take the (16,16) default),
+    step it down one grid cell at a time until it's free, so stacked directives
+    don't render on top of each other.
     """
+    px = x if x is not None else default_x
+    py = y if y is not None else default_y
+    occupied = {(int(d.coord.X), int(d.coord.Y)) for d in editor.directives}
+    while (px, py) in occupied:
+        py += _ASC_TEXT_LINE_PITCH
     editor.directives.append(
         Text(
-            coord=Point(
-                x if x is not None else default_x,
-                y if y is not None else default_y,
-            ),
+            coord=Point(px, py),
             text=text,
             type=text_type,
             size=size if size is not None else _ASC_TEXT_DEFAULT_SIZE,
@@ -2458,19 +2556,7 @@ async def handle_set_component_attribute(
         raise NetlistError("Attribute name must not be empty")
     _reject_empty_attr_value(reference, attribute, value)
 
-    if attribute not in _LTSPICE_ATTR_NAMES:
-        canonical = _LTSPICE_ATTR_CANONICAL.get(attribute.lower())
-        if canonical:
-            raise NetlistError(
-                f"Unknown attribute {attribute!r}. Did you mean {canonical!r}? "
-                f"LTspice attribute names are case-sensitive."
-            )
-        raise NetlistError(
-            f"Unknown attribute {attribute!r}. LTspice silently ignores "
-            f"unrecognised SYMATTR keys at netlist time. Valid attributes: "
-            f"{', '.join(sorted(_LTSPICE_ATTR_NAMES))}. For arbitrary KEY=val "
-            "pairs, set them through 'SpiceLine' instead."
-        )
+    _reject_unknown_attr(attribute)
 
     async with _editing_asc(asc_path, state) as editor:
         _require_component(editor, reference)
@@ -3263,7 +3349,8 @@ def _plan_connect_route(
                 f"{sorted(from_labels_before)} and {to_pin} is on net "
                 f"{sorted(to_labels_before)}. Connecting them would short "
                 f"the two named nets. Pick one labelling and rewire, or "
-                f"use add_net_label to merge them deliberately."
+                f"use the apply_schematic_ops add_net_label op to merge them "
+                f"deliberately."
             )
         nets_after = _trace_nets(editor, extra_segments=segments)
         from_labels_after = _named_labels(_net_label_at(nets_after, (x1, y1)))
@@ -3453,13 +3540,15 @@ class CreateSchematicInput(ToolInput):
 @registry.tool(
     name="create_schematic",
     description=(
-        "Create an empty .asc schematic ready for incremental editing via "
-        "add_component / connect / add_net_label. "
+        "Create an empty .asc schematic ready for incremental editing via the "
+        "add_component and connect tools, plus the apply_schematic_ops "
+        "add_net_label op for ground/net flags. "
         "Tip: prefer ``create_netlist`` + .cir for design iteration; "
         "use this only when a visual schematic is the deliverable."
         " Prefer apply_schematic_ops for multi-step builds (one transaction); "
         "wire signal nets with connect; label grounds — and any net a "
-        ".meas/B-source references by name — via add_net_label flags at pins; "
+        ".meas/B-source references by name — via apply_schematic_ops add_net_label "
+        "ops at pins; "
         "repeating a same-name label ties distant nets (the netlist merges them "
         "into one net — then target pins as Ref.Pin in connect, since net:NAME "
         "is ambiguous with duplicates). "
@@ -3506,13 +3595,14 @@ async def handle_create_schematic(
     # Built once and emitted on BOTH channels: structured-aware clients show
     # only structuredContent, so text-only guidance would be invisible to them.
     checklist = (
+        f"{SCHEMATIC_WIRING_NORM}\n\n"
         "Layout checklist (full playbook: spice://guide):"
         "\n- Wire signal nets with connect — orthogonal only, waypoints for bends, "
         "route outside component bodies."
-        '\n- Ground: add_net_label(net="0", pin="Ref.pin") at each ground pin; '
-        "don't wire to a shared ground flag."
+        '\n- Ground: an apply_schematic_ops add_net_label op (net="0", pin="Ref.pin") '
+        "at each ground pin; don't wire to a shared ground flag."
         "\n- Wire nearby signal nets with connect; for distant nets, repeating a "
-        "same-name add_net_label ties them without routing — the netlist merges "
+        "same-name add_net_label op ties them without routing — the netlist merges "
         "same-name labels into one net (not a short). Also label any net you "
         "reference by name in a .meas/.param/B-source (e.g. V(vref)), or it exports "
         "as N00x and the reference silently breaks."
@@ -4761,11 +4851,7 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
         return result
 
     if isinstance(op, _OpSetComponentAttribute):
-        if op.attribute not in _LTSPICE_ATTR_NAMES:
-            raise NetlistError(
-                f"Unknown attribute {op.attribute!r}. Valid: "
-                f"{', '.join(sorted(_LTSPICE_ATTR_NAMES))}."
-            )
+        _reject_unknown_attr(op.attribute)
         _reject_empty_attr_value(op.reference, op.attribute, op.value)
         if op.reference not in editor.components:
             raise NetlistError(f"Component '{op.reference}' not found.")
