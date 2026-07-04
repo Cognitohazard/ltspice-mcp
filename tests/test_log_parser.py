@@ -14,6 +14,7 @@ from ltspice_mcp.lib.log_parser import (
     parse_measurements,
     parse_step_iterations,
     parse_success_summary,
+    parse_temperatures,
     read_log_text,
 )
 
@@ -720,3 +721,28 @@ class TestStepTempDegreeStripping:
         assert steps[0]["temp"] == -40.0
         assert steps[1]["temp"] == 27.0
         assert steps[2]["temp"] == 125.0
+
+
+class TestParseTemperatures:
+    """temp/tnom surfaced from the sim log for simulation_summary."""
+
+    def test_ltspice_form(self):
+        text = "Circuit: * test\n\ntnom = 27\ntemp = 27\nDirect Newton iteration\n"
+        assert parse_temperatures(text=text) == (27.0, 27.0)
+
+    def test_ltspice_nondefault_temp(self):
+        text = "temp = -40\ntnom = 27\n"
+        assert parse_temperatures(text=text) == (-40.0, 27.0)
+
+    def test_ngspice_combined_line(self):
+        text = "Doing analysis at TEMP = 85.000000 and TNOM = 27.000000\n"
+        assert parse_temperatures(text=text) == (85.0, 27.0)
+
+    def test_absent(self):
+        assert parse_temperatures(text="No temperature here\n") == (None, None)
+
+    def test_step_directive_not_matched(self):
+        # A `.step temp=...` line must not be read as the run temperature —
+        # the anchored ^temp match avoids the leading-dot directive form.
+        text = ".step temp=-40 85 5\nsome other line\n"
+        assert parse_temperatures(text=text) == (None, None)
