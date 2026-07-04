@@ -14,6 +14,7 @@ import pytest
 
 from ltspice_mcp.lib.signal_analysis import (
     _interp_crossings,
+    analyze_disturbance_response,
     analyze_edge,
     analyze_periodic,
     analyze_pulse_response,
@@ -1190,3 +1191,58 @@ class TestAnalyzeThd:
         y = np.sin(2 * np.pi * f0 * t)
         r = analyze_thd(t, y, fundamental=f0, n_harmonics=3, max_fft=512)
         assert any("alias" in w.lower() for w in r["warnings"])
+
+
+class TestDisturbanceResponse:
+    """LDO/PMIC load-transient metrics: droop/overshoot vs a baseline and
+    recovery time to a settle band."""
+
+    @staticmethod
+    def _dip(center=1.5e-3, half=0.5e-3, depth=0.1, base=3.3):
+        # Triangular droop from `base`, reaching base-depth at `center`,
+        # fully recovered outside [center-half, center+half].
+        t = np.linspace(0, 5e-3, 5001)
+        tri = np.clip(1 - np.abs(t - center) / half, 0, 1)
+        y = base - depth * tri
+        return t, y
+
+    def test_droop_recovery(self):
+        t, y = self._dip()
+        r = analyze_disturbance_response(t, y, settle_band_pct=1.0)
+        assert r["baseline"] == pytest.approx(3.3, abs=1e-9)
+        assert r["baseline_source"] == "auto_leading_window"
+        assert r["max_droop"] == pytest.approx(0.1, abs=2e-4)
+        assert r["max_overshoot"] == pytest.approx(0.0, abs=1e-9)
+        assert r["min_time"] == pytest.approx(1.5e-3, abs=2e-6)
+        # 1% band = 0.033; excursion re-enters just before 1.835 ms.
+        assert r["recovery_time"] == pytest.approx(1.835e-3, abs=5e-5)
+        assert not r["warnings"]
+
+    def test_explicit_baseline(self):
+        t, y = self._dip(base=3.3)
+        r = analyze_disturbance_response(t, y, baseline=3.30, settle_band=0.05)
+        assert r["baseline_source"] == "explicit"
+        assert r["settle_band"] == pytest.approx(0.05)
+
+    def test_never_recovers(self):
+        # Steps down at 1 ms and stays low → still outside the band at t_end.
+        t = np.linspace(0, 5e-3, 5001)
+        y = np.where(t < 1e-3, 3.3, 3.2)
+        r = analyze_disturbance_response(t, y, settle_band_pct=1.0)
+        assert r["recovery_time"] is None
+        assert any("never" in w.lower() or "recover" in w.lower() for w in r["warnings"])
+
+    def test_no_excursion_beyond_band(self):
+        # Tiny 5 mV dip stays inside a 1% (33 mV) band the whole time.
+        t, y = self._dip(depth=0.005)
+        r = analyze_disturbance_response(t, y, settle_band_pct=1.0)
+        assert r["recovery_time"] == 0.0
+        assert "no_excursion_beyond_band" in r["quality"]
+
+    def test_zero_baseline_undefined_band(self):
+        # Signal centered on 0 with no absolute band → band tolerance ~0.
+        t = np.linspace(0, 5e-3, 5001)
+        y = 0.01 * np.sin(2 * np.pi * 1e3 * t)
+        r = analyze_disturbance_response(t, y, baseline=0.0)
+        assert r["recovery_time"] is None
+        assert "recovery_band_undefined_baseline_zero" in r["quality"]
