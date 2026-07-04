@@ -138,8 +138,8 @@ Simulation output is automatically redirected to a Windows temp directory: LTspi
 
 | Profile | Tools | Use case |
 |-|-|-|
-| `full` (default) | 49 | Any MCP client, automation, non-agent LLMs |
-| `agentic` | 41 | LLM agents with native file access (Read/Edit/Write) |
+| `full` (default) | 51 | Any MCP client, automation, non-agent LLMs |
+| `agentic` | 43 | LLM agents with native file access (Read/Edit/Write) |
 
 The `agentic` profile drops netlist-editing wrappers and library session management — work a capable agent does through direct file edits — and keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, and the `.asc` geometry tools. The `skills/` directory (`skills/ltspice/SKILL.md`, `skills/ngspice/SKILL.md`) contains the domain knowledge that pairs with it: copy the relevant skill into your client's persistent-instructions location.
 
@@ -192,7 +192,7 @@ and gets back scalars, not a plot:
 Off-target → `set_component_value`, re-run, re-measure. Long simulations return a job ID instead of blocking; `check_job`/`cancel_job` manage them. Job metadata persists in per-circuit sidecars (`{dir}/.ltspice-mcp/jobs/` — add `.ltspice-mcp/` to your `.gitignore`), and MCP resources (`spice://results/...`, `spice://netlists/...`, `spice://config`) expose jobs, signals, measurements, and config for browsing.
 
 <details>
-<summary><strong>All 49 tools</strong></summary>
+<summary><strong>All 51 tools</strong></summary>
 
 Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`); data-returning tools declare an `outputSchema` for `structuredContent` introspection.
 
@@ -227,6 +227,7 @@ Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempot
 | `simulation_summary` | Full summary: simulation type, signals, measurements, warnings |
 | `edge_metrics` | Rise/fall time and slew rate for one transient edge |
 | `pulse_response` | Overshoot, undershoot, settling time for a step response |
+| `disturbance_response` | Droop/overshoot vs a pre-disturbance baseline and recovery time for a regulated output under a load transient (LDO/PMIC) |
 | `timing_between` | Propagation delay between two transient signals |
 | `periodic_metrics` | Period, frequency, duty cycle, jitter of an oscillating signal |
 | `thd` | Total harmonic distortion (THD/THD+N) of a periodic transient via FFT; coherent sampling for an exact result; surfaces every condition |
@@ -234,6 +235,7 @@ Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempot
 | `bode_metrics` | AC/Bode analysis by `mode`: `filter`, `slope`, `point`, `crossing`; `all_steps=true` for per-step results |
 | `stability_metrics` | Loop-gain stability: all unity-gain / -180° crossings with per-crossing margins |
 | `resonance` | AC peaks with Q factor and -3 dB bandwidth per peak |
+| `return_loss` | Reflection coefficient Γ, return loss (dB), and VSWR from an impedance trace vs a reference `z0` (worst-match scan or a single frequency) |
 | `ac_structure` | Pole/zero structure of an AC response: net order, corner ranges + Q, non-minimum-phase / RHP-zero, transport delay (facts for human review) |
 | `noise_integral` | Integrate a `.noise` spectral density to total RMS over a band (`sqrt(∫ density² df)`); reports the band and sample count |
 | `configure_sweep` | Configure a multi-parameter sweep (linear or log) |

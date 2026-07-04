@@ -15,6 +15,7 @@ from ltspice_mcp.lib.ac_analysis import (
     classify_filter,
     compute_filter_metrics,
     compute_resonances,
+    compute_return_loss,
     compute_roll_off,
     compute_stability_metrics,
     detect_crossings,
@@ -814,3 +815,77 @@ class TestIntegrateNoise:
         assert math.isfinite(r["total_rms"])
         assert r["total_rms"] > 0.0
         assert any("non-finite" in w.lower() for w in r["warnings"])
+
+
+# ---------------------------------------------------------------------------
+# compute_return_loss
+# ---------------------------------------------------------------------------
+
+
+class TestComputeReturnLoss:
+    """Reflection metrics from an impedance trace (V(node) = Zin under a 1 A probe)."""
+
+    @staticmethod
+    def _flat(zin: complex, n: int = 100):
+        f = np.logspace(6, 9, n)
+        H = np.full(n, zin, dtype=complex)
+        return f, H
+
+    def test_known_mismatch_at_freq(self):
+        # Zin=100, z0=50 → Γ=0.3333, RL=9.542 dB, VSWR=2.0
+        f, H = self._flat(100 + 0j)
+        r = compute_return_loss(f, H, z0=50.0, at_hz=1e7)
+        assert r["gamma_mag"] == pytest.approx(1 / 3, abs=1e-4)
+        assert r["return_loss_db"] == pytest.approx(9.542, abs=1e-2)
+        assert r["vswr"] == pytest.approx(2.0, abs=1e-3)
+        assert r["worst_match"] is False
+        assert r["frequency_hz"] == pytest.approx(1e7, rel=1e-3)
+
+    def test_perfect_match_null_return_loss(self):
+        f, H = self._flat(50 + 0j)
+        r = compute_return_loss(f, H, z0=50.0, at_hz=1e7)
+        assert r["gamma_mag"] == pytest.approx(0.0, abs=1e-9)
+        assert r["return_loss_db"] is None  # RL → ∞
+        assert r["vswr"] == pytest.approx(1.0, abs=1e-6)
+
+    def test_total_reflection_null_vswr(self):
+        f, H = self._flat(0 + 0j)  # dead short → Γ = -1 exactly
+        r = compute_return_loss(f, H, z0=50.0, at_hz=1e7)
+        assert r["gamma_mag"] == pytest.approx(1.0, abs=1e-9)
+        assert r["vswr"] is None  # VSWR → ∞
+        assert any("reflect" in w.lower() for w in r["warnings"])
+
+    def test_worst_match_scan(self):
+        f = np.logspace(6, 9, 101)
+        H = np.full(101, 50 + 0j)  # matched everywhere...
+        H[70] = 200 + 0j  # ...except one badly-mismatched point
+        r = compute_return_loss(f, H, z0=50.0)  # no at_hz → worst-match scan
+        assert r["worst_match"] is True
+        assert r["frequency_hz"] == pytest.approx(f[70], rel=1e-6)
+
+    def test_out_of_range_at_reports_endpoint_frequency(self):
+        # A request below/above the sweep clamps to the nearest endpoint; the
+        # reported frequency_hz must be the endpoint actually evaluated, not the
+        # unavailable request, or the metrics disagree with their claimed freq.
+        f, H = self._flat(100 + 0j)  # sweep 1e6 .. 1e9
+        below = compute_return_loss(f, H, z0=50.0, at_hz=1.0)
+        assert below["frequency_hz"] == pytest.approx(float(f[0]))
+        assert any("outside the sweep range" in w for w in below["warnings"])
+        above = compute_return_loss(f, H, z0=50.0, at_hz=1e12)
+        assert above["frequency_hz"] == pytest.approx(float(f[-1]))
+        # In-range request keeps its exact frequency, no clamp warning.
+        inrange = compute_return_loss(f, H, z0=50.0, at_hz=1e7)
+        assert inrange["frequency_hz"] == pytest.approx(1e7, rel=1e-9)
+        assert not any("outside the sweep range" in w for w in inrange["warnings"])
+
+    def test_negative_zin_flagged(self):
+        # A reversed probe reads V(node) = -Zin; use -30 (not -50, which makes
+        # Γ singular) so the negative-real-part warning is the thing under test.
+        f, H = self._flat(-30 + 0j)
+        r = compute_return_loss(f, H, z0=50.0, at_hz=1e7)
+        assert any("probe" in w.lower() for w in r["warnings"])
+
+    def test_bad_z0_raises(self):
+        f, H = self._flat(50 + 0j)
+        with pytest.raises(ValueError, match="z0"):
+            compute_return_loss(f, H, z0=0.0, at_hz=1e7)

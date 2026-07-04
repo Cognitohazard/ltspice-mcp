@@ -46,11 +46,13 @@ from ltspice_mcp.lib.ac_analysis import (
     GainAtPoint,
     Quantity,
     ResonancesOutput,
+    ReturnLossOutput,
     RollOffOutput,
     SearchDirection,
     StabilityMetricsOutput,
     compute_filter_metrics,
     compute_resonances,
+    compute_return_loss,
     compute_roll_off,
     compute_stability_metrics,
     find_crossings_any_quantity,
@@ -92,12 +94,14 @@ from ltspice_mcp.lib.raw_parser import (
 )
 from ltspice_mcp.lib.result_observations import relay_observations
 from ltspice_mcp.lib.signal_analysis import (
+    DisturbanceResponseOutput,
     EdgeMetricsOutput,
     MeasurementStatsEntry,
     PeriodicMetricsOutput,
     PulseResponseOutput,
     ThdOutput,
     TimingBetweenOutput,
+    analyze_disturbance_response,
     analyze_edge,
     analyze_periodic,
     analyze_pulse_response,
@@ -2565,6 +2569,55 @@ class PulseResponseInput(ToolInput):
     format: FormatField = Field(default=None, description="'json' or 'text'")
 
 
+class DisturbanceResponseInput(ToolInput):
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to .raw transient result file. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Analyze a specific run of a completed sweep/MC (or single) job instead "
+            "of a raw_file path; pair with ``run_index``."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to analyze when ``job_id`` is given (default 0).",
+    )
+    signal: str = Field(description="Regulated output node, e.g. 'V(vout)'")
+    step: int = Field(default=0, description="Step index for .step sweeps")
+    t_start: str | None = Field(
+        default=None,
+        description=(
+            "Window start — set it at or just before the load-step edge. recovery_time "
+            "is measured from t_start, and the baseline defaults to the mean of the "
+            "leading 10% of the window (the pre-disturbance level). Defaults to full "
+            "transient."
+        ),
+    )
+    t_end: str | None = Field(default=None, description="Window end in SPICE notation")
+    baseline: float | None = Field(
+        default=None,
+        description=(
+            "Pre-disturbance output level. Auto = mean of the leading 10% of the "
+            "window; set explicitly if the window doesn't start in steady state."
+        ),
+    )
+    settle_band: float | None = Field(
+        default=None,
+        description=(
+            "Recovery band as an absolute ± tolerance in signal units (e.g. 0.005 for "
+            "±5 mV). Overrides settle_band_pct."
+        ),
+    )
+    settle_band_pct: float = Field(
+        default=2.0,
+        description="Recovery band as percent of |baseline| when settle_band is not given (default 2%).",
+    )
+    format: FormatField = Field(default=None, description="'json' or 'text'")
+
+
 class TimingBetweenInput(ToolInput):
     raw_file: str | None = Field(
         default=None,
@@ -2678,6 +2731,10 @@ class EdgeMetricsResponse(EdgeMetricsOutput):
 
 
 class PulseResponseResponse(PulseResponseOutput):
+    signal: str
+
+
+class DisturbanceResponseResponse(DisturbanceResponseOutput):
     signal: str
 
 
@@ -2868,6 +2925,66 @@ async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
         f"Overshoot:  {_pct(data['overshoot_pct'])}",
         f"Undershoot: {_pct(data['undershoot_pct'])}",
         f"Settling time (±{data['settling_tolerance_pct']:.2f}%): {settle}",
+    ]
+    if data.get("quality"):
+        lines.append(f"Quality flags: {', '.join(data['quality'])}")
+    return await _finish_metric(lines, data, raw_path, args.format)
+
+
+@registry.tool(
+    name="disturbance_response",
+    description=(
+        "Use for a regulated output under a load/line transient (LDO/PMIC): "
+        "measures droop and overshoot relative to the pre-disturbance baseline "
+        "and the time to recover to within a settle band of it. This is the "
+        "complement of pulse_response, which correctly nulls its step metrics "
+        "when the output returns to its own level (net step ≈ 0).\n\n"
+        "Set t_start at or just before the load-step edge — recovery_time is "
+        "measured from t_start, and the baseline auto-derives from the leading "
+        "10% of the window (pass ``baseline`` explicitly otherwise). The settle "
+        "band is ``settle_band`` (absolute) or ``settle_band_pct`` of |baseline| "
+        "(default 2%).\n\n"
+        "Returns baseline, min/max excursions with their times, max_droop, "
+        "max_overshoot, and recovery_time. recovery_time is null when the output "
+        "never re-enters the band before the window ends (extend the window) or "
+        "when the band is undefined (baseline ≈ 0 with no absolute settle_band) — "
+        "the reason is in ``warnings``. min_value/max_value are the raw worst-case "
+        "samples; droop/overshoot are clamped to ≥ 0 (positive-rail convention). "
+        "Rejects AC analysis; for a single step edge that doesn't return to its "
+        "start use pulse_response."
+    ),
+    input_model=DisturbanceResponseInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_model=DisturbanceResponseResponse,
+)
+async def handle_disturbance_response(args: DisturbanceResponseInput, state: SessionState):
+    axis, wave, raw_path = await _load_real_signal(
+        args.raw_file, args.signal, args.step, state, job_id=args.job_id, run_index=args.run_index
+    )
+    t, y, _ = _window(axis, wave, args.t_start, args.t_end)
+    data = await _run_metric(
+        raw_path,
+        analyze_disturbance_response,
+        t,
+        y,
+        baseline=args.baseline,
+        settle_band=args.settle_band,
+        settle_band_pct=args.settle_band_pct,
+    )
+    data["signal"] = args.signal
+
+    rec = data["recovery_time"]
+    recovery = f"{rec:.6g} s" if rec is not None else "unavailable (see warnings)"
+    lines = [
+        f"Disturbance Response: {args.signal}",
+        "",
+        f"Baseline: {data['baseline']:.6g} ({data['baseline_source']})",
+        f"Min: {data['min_value']:.6g} at t={data['min_time']:.6g} s",
+        f"Max: {data['max_value']:.6g} at t={data['max_time']:.6g} s",
+        f"Max droop:     {data['max_droop']:.6g}",
+        f"Max overshoot: {data['max_overshoot']:.6g}",
+        f"Recovery time (±{data['settle_band']:.3g}): {recovery}",
     ]
     if data.get("quality"):
         lines.append(f"Quality flags: {', '.join(data['quality'])}")
@@ -4483,6 +4600,10 @@ def _warning_coverage(step_indices: list[int], step_count: int) -> str:
         "passband (which isn't a resonance). Tight resonances (Q > 30) "
         "need dense sampling near f_peak — log sweeps with <50 pts/decade "
         "will under-sample the peak and give inflated Q/bandwidth.\n\n"
+        "Magnitude in dB is relative to the trace's native unit: dBV for a "
+        "voltage probe, dBΩ under a 1 A impedance probe (so -10.56 dB = 0.30 Ω, "
+        "not a -10.56 dB dip). Use magnitude_linear to disambiguate; for input "
+        "impedance → Γ/return loss/VSWR see return_loss and spice://guide.\n\n"
         "For overall filter characterization use bode_metrics(mode='filter'); "
         "for stability margins use stability_metrics."
     ),
@@ -4515,6 +4636,94 @@ async def handle_resonance(args: ResonanceInput, state: SessionState):
             f"  f={p['frequency_hz']:.6g} Hz  gain={p['magnitude_db']:.2f} dB  "
             f"Q={q}  BW-3dB={bw}  phase={p['phase_deg']:+.2f}°"
         )
+    return await _finish_metric(lines, data, raw_path, args.format)
+
+
+class ReturnLossInput(ToolInput):
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to AC analysis .raw result file. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Analyze a completed job run by id instead of a raw_file path; pair "
+            "with ``run_index``."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to analyze when ``job_id`` is given (default 0).",
+    )
+    signal: str = Field(
+        description=(
+            "Input-impedance trace: the node voltage under a 1 A AC probe, where "
+            "V(node) = Zin (e.g. 'V(in)'). See spice://guide for the probe idiom "
+            "and sign convention."
+        )
+    )
+    z0: float = Field(default=50.0, description="Reference impedance in ohms (default 50).")
+    at: str | None = Field(
+        default=None,
+        description=(
+            "Frequency in SPICE notation (e.g. '100meg') to evaluate. Omit to report "
+            "the worst-match point (maximum |Γ| / minimum return loss) across the sweep."
+        ),
+    )
+    step: int = Field(default=0, description="Step index for .step sweeps")
+    format: FormatField = Field(default=None, description="'json' or 'text'")
+
+
+class ReturnLossResponse(ReturnLossOutput):
+    signal: str
+    z0_ohm: float
+
+
+@registry.tool(
+    name="return_loss",
+    description=(
+        "Reflection metrics for an input impedance from an AC sweep: reflection "
+        "coefficient Γ (magnitude + phase), return loss (dB), and VSWR against a "
+        "reference impedance z0 (default 50 Ω). Feed the impedance trace measured "
+        "under the documented 1 A AC probe, where V(node) = Zin — see "
+        "spice://guide.\n\n"
+        "Γ = (Zin - z0)/(Zin + z0);  RL_dB = -20*log10|Γ| (higher = better match); "
+        "VSWR = (1+|Γ|)/(1-|Γ|). With ``at`` set, reports that frequency "
+        "(log-interpolated); without it, reports the WORST match across the sweep "
+        "(the frequency of maximum |Γ|).\n\n"
+        "return_loss_db is null at a perfect match (|Γ|→0, RL→∞); vswr is null at "
+        "a total reflection (|Γ|≥1, open/short, VSWR→∞). A negative Zin real part "
+        "is flagged in warnings as a likely reversed probe. Needs an .AC run; for "
+        "peak/notch frequencies of the impedance itself use resonance."
+    ),
+    input_model=ReturnLossInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+    output_model=ReturnLossResponse,
+)
+async def handle_return_loss(args: ReturnLossInput, state: SessionState):
+    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
+    freqs, H = await _load_ac_signal(raw_path, args.signal, args.step, state)
+    at_hz = _parse_freq(args.at, "at") if args.at else None
+    data = await _run_metric(raw_path, compute_return_loss, freqs, H, z0=args.z0, at_hz=at_hz)
+    data["signal"] = args.signal
+    data["z0_ohm"] = args.z0
+
+    rl = data["return_loss_db"]
+    rl_str = "∞ (perfect match)" if rl is None else f"{rl:.2f} dB"
+    vswr = data["vswr"]
+    vswr_str = "∞ (open/short)" if vswr is None else f"{vswr:.3f}"
+    where = "worst match" if data["worst_match"] else "at requested frequency"
+    lines = [
+        f"Return Loss: {args.signal} (z0={args.z0:g} Ω, {where})",
+        "",
+        f"Frequency: {data['frequency_hz']:.6g} Hz",
+        f"Zin: {data['zin_real_ohm']:.4g} {data['zin_imag_ohm']:+.4g}j Ω "
+        f"(|Zin|={data['zin_mag_ohm']:.4g} Ω)",
+        f"|Γ|: {data['gamma_mag']:.4g}  ∠{data['gamma_phase_deg']:.2f}°",
+        f"Return loss: {rl_str}",
+        f"VSWR: {vswr_str}",
+    ]
     return await _finish_metric(lines, data, raw_path, args.format)
 
 
