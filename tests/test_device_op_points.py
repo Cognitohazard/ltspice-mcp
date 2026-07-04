@@ -50,6 +50,22 @@ class TestReadDeviceOpPoints:
         # The string ``Model:`` row is not a number, so it is dropped.
         assert "@m1[model]" not in params
 
+    def test_recovers_op_points_from_nonutf8_log(self, tmp_path: Path):
+        # spicelib's opLogReader misdetects a cp1252 log carrying a high byte
+        # (° / µ) and garbles the whole block → empty params (and a misleading
+        # "no small-signal device params" from operating_point). UTF-16 is the
+        # modern LTspice log format. Both must still yield the device params:
+        # we normalize through our own decoder before handing off to opLogReader.
+        body = _LOG_WITH_BLOCK.replace(
+            "Direct Newton", ".step temp=-40\xb0\nDirect Newton", 1
+        )
+        for encoding in ("cp1252", "utf-16-le"):
+            log = tmp_path / f"op_{encoding}.log"
+            log.write_bytes(body.encode(encoding))
+            params = read_device_op_points(log)
+            assert params["@m1[gm]"] == 4.8e-4, encoding
+            assert params["@m1[vth]"] == 0.5, encoding
+
     def test_no_block_returns_empty(self, tmp_path: Path):
         log = tmp_path / "plain.log"
         log.write_text("Direct Newton iteration succeeded.\nTotal elapsed time: 0.01 s.\n")
