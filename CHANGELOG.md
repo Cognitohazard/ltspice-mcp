@@ -31,6 +31,21 @@ tool-surface changes.
 - `signal_stats` emits a `constant_window` observation when a signal is constant
   across the whole analyzed window (min == max) — a fact (e.g. a latched/
   degenerate DC solution reads as a flat line), surfaced without a verdict.
+- `signal_stats` reports `t_min`/`t_max`, the time of the minimum and maximum
+  sample, so a transient droop or peak can be located in time from one call.
+- `resonance` peaks carry `magnitude_linear` alongside `magnitude_db` — |Z| in
+  ohms under the 1 A impedance probe (or |H| for a transfer function), which
+  disambiguates a dBΩ peak from a dB dip. (The tool's own description already
+  promised this field; it now returns it.)
+- Placed schematic directives auto-declutter: two directives that would land on
+  the same anchor — the common case when several are added without explicit
+  coordinates — are nudged apart so they don't render on top of each other. A
+  `stacked_directive` advisory also surfaces exact-anchor coincidences that
+  arrive by other paths (a hand-authored `.asc`, a move op).
+- `read_circuit` on an `.asc` carries the schematic-wiring norm in its `hint`
+  (draw wires; reserve net-labels for ground, rails, and genuinely distant
+  nets) — the co-design entry point, matching the norm `create_schematic`
+  already leads with.
 
 - `configure_sweep`, `run_sweep`, `configure_montecarlo`, and `run_montecarlo`
   now return `structuredContent` (with an output schema) carrying the
@@ -80,7 +95,19 @@ tool-surface changes.
 - `set_component_value` (and the `apply_schematic_ops` `set_component_value` op)
   warn when a GUI opamp complexity label (e.g. `Level.2`) is written to a
   subcircuit's Value, which LTspice emits as a stray positional token → a
-  cryptic "sub-circuit name is not defined" at netlist time.
+  cryptic "sub-circuit name is not defined" at netlist time. The warning now
+  fires on **any** Value written to a symbol whose model is chosen via
+  `SpiceModel` (e.g. `UniversalOpamp2`), not only the `Level.N` label — any
+  value there corrupts identically. A library part that carries its subckt name
+  in Value (no `SpiceModel`) is left alone.
+- `add_component` rejects an unknown attribute name (a typo like `Val` for
+  `Value`) instead of silently dropping it at export time, matching
+  `set_component_attribute`.
+- `thd` labels its per-harmonic magnitudes with the signal's native `unit`
+  (V/A); the ratios, percentages, and dB stay dimensionless.
+- Net-label guidance across `create_schematic`, its checklist hint, and the
+  `connect` conflict error now names the `apply_schematic_ops` `add_net_label`
+  op rather than implying a standalone `add_net_label` tool exists.
 - `get_waveform` (and the other axis-backed analysis tools) point a no-axis
   error at the `.dc` conversion when the result is a stepped `.op` collapsed to
   step 0, matching the hint `simulation_summary` already emits.
@@ -88,7 +115,10 @@ tool-surface changes.
   (find the frequency/time OF a maximum), the dBΩ reading of an impedance trace
   under the 1 A probe, the quantized/staircase egress route, and cross-links the
   new `return_loss` tool. `ac_structure`'s `net_order` is documented as a real
-  computed order (0 or negative possible), never a sentinel.
+  computed order (0 or negative possible), never a sentinel. Adds notes on the
+  3- vs 4-terminal transistor symbols (`nmos4`/`pnp4`/…), the diode symbol's
+  built-in default-`D` model collision, and the `AC <mag>` small-signal source
+  syntax.
 - Auto-generated and example config files no longer write a live
   `max_parallel = 4` key — it is now a comment documenting the real default
   (number of CPU cores, capped at 8). The written key silently pinned every
@@ -152,6 +182,16 @@ tool-surface changes.
   an explicit `final_value` as the escape hatch.
 - `batch_results` status text referred to a nonexistent `get_batch_results`
   tool; it now names `batch_results`.
+- Temperature-swept runs (`.step temp`) no longer report "no temperature steps"
+  on modern LTspice: the simulator log is decoded through the same
+  BOM/UTF-16/cp1252 sniffer the netlist and library readers use, instead of the
+  platform-default codec. A UTF-16 log (current LTspice) or a cp1252 degree byte
+  previously garbled the `.step`/temperature lines so the parse found nothing;
+  the same fix un-garbles simulator diagnostics (including the character shown
+  in a failed-run excerpt) and the `temp_c`/`tnom_c` passthrough on such logs.
+- `query_value` labels a `.noise` spectral-density read as `V/√Hz` (or
+  `A/√Hz`), not the plain `V` its trace type declares — matching
+  `noise_integral` and the raw's own "Noise Spectral Density" plotname.
 
 ## [0.5.0] - 2026-06-30
 
