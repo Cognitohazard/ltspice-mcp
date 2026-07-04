@@ -353,7 +353,7 @@ class TestExtractErrorContext:
         def boom(*a, **k):
             raise OSError("disk error")
 
-        monkeypatch.setattr(Path, "read_text", boom)
+        monkeypatch.setattr(Path, "read_bytes", boom)
         result = extract_error_context(log)
         assert "Error reading log file" in result
 
@@ -746,3 +746,46 @@ class TestParseTemperatures:
         # the anchored ^temp match avoids the leading-dot directive form.
         text = ".step temp=-40 85 5\nsome other line\n"
         assert parse_temperatures(text=text) == (None, None)
+
+
+class TestLogEncodingRecovery:
+    """Modern LTspice writes UTF-16 logs; Windows-authored logs carry cp1252
+    bytes. read_log_text must sniff the encoding so step/temperature parsing
+    recovers the data — a platform-default UTF-8 read garbles a UTF-16 log into
+    NUL-interleaved text and the step scan finds nothing (the "no temperature
+    steps" failure)."""
+
+    def test_utf16le_step_temp_recovered(self, tmp_path: Path):
+        log = tmp_path / "u16.log"
+        body = (
+            "LTspice 26.0 for Windows\n"
+            ".step temp=-40\n.step temp=27\n.step temp=85\n"
+            "Total elapsed time: 0.01 seconds.\n"
+        )
+        log.write_bytes(body.encode("utf-16-le"))
+        assert parse_step_iterations(log) == [
+            {"temp": -40.0},
+            {"temp": 27.0},
+            {"temp": 85.0},
+        ]
+
+    def test_utf16le_bom_temp_header_recovered(self, tmp_path: Path):
+        log = tmp_path / "u16bom.log"
+        log.write_bytes(b"\xff\xfe" + "temp = 55\ntnom = 27\n".encode("utf-16-le"))
+        assert parse_temperatures(log) == (55.0, 27.0)
+
+    def test_utf16_recovery_vs_plain_read(self, tmp_path: Path):
+        # The regression itself: the old platform-default decode misses the
+        # step; the sniffing reader recovers it.
+        log = tmp_path / "u16.log"
+        log.write_bytes(".step temp=27\n".encode("utf-16-le"))
+        assert parse_step_iterations(text=log.read_text(errors="replace")) == []
+        assert parse_step_iterations(log) == [{"temp": 27.0}]
+
+    def test_cp1252_degree_byte_in_step_value_recovered(self, tmp_path: Path):
+        # A cp1252 degree byte (0xB0) glued to a step value: a UTF-8 read turns
+        # it into U+FFFD (which the KV regex does NOT exclude, so float() fails
+        # and the step drops); cp1252 decoding yields a real ° the regex strips.
+        log = tmp_path / "cp1252.log"
+        log.write_bytes("LTspice 26.0\n.step temp=-40\xb0\n".encode("cp1252"))
+        assert parse_step_iterations(log) == [{"temp": -40.0}]
