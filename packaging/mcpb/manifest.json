@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
   "manifest_version": "0.4",
   "name": "ltspice-mcp",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "LTspice/ngspice circuit simulation (structured results incl. per-device operating points gm/gds/vth by name) and LTspice .asc schematic editing as MCP tools.",
   "author": {
     "name": "cognitohazard",

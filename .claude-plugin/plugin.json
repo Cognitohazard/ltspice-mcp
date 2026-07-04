@@ -1,6 +1,6 @@
 {
   "name": "ltspice-mcp",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "LTspice/ngspice circuit simulation with structured results — including per-device operating points (gm/gds/vth) read back by name, no rawfile parsing — plus LTspice .asc schematic editing, exposed as MCP tools. Tracks the latest ltspice-mcp release on PyPI.",
   "author": {
     "name": "cognitohazard"

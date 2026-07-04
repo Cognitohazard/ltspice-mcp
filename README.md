@@ -262,6 +262,8 @@ uv run ruff check src/ tests/  # lint
 uv run ltspice-mcp             # run the server (stdio)
 ```
 
+Release: `scripts/release.sh 0.5.1` stamps the plugin manifests, commits, and tags — one input keeps the manifest versions in lockstep with the git tag (the package version, via hatch-vcs). Push the tag to publish to PyPI.
+
 More: [docs/DESIGN.md](docs/DESIGN.md) (scope, architecture, non-goals) and [docs/spice_lex.md](docs/spice_lex.md) (SPICE parser internals).
 
 ## License
