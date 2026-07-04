@@ -193,8 +193,8 @@ TOML sections: `[simulator]`, `[security]`, `[simulation]`, `[analysis]`, `[logg
 
 | Profile | Tools | Use case |
 |-|-|-|
-| `full` (default) | All 49 | Any MCP client, automation, non-agent LLMs |
-| `agentic` | 41 | LLM agents with native file access (Read/Edit/Write) |
+| `full` (default) | All 51 | Any MCP client, automation, non-agent LLMs |
+| `agentic` | 43 | LLM agents with native file access (Read/Edit/Write) |
 
 The "agentic" profile removes 8 tools: the netlist-editing wrappers (`create_netlist`, `read_circuit`, `set_component_value`, `parameter`, `edit_directive`) and library session management (`load_library`, `unload_library`, `list_libraries`) — things capable agents do natively. It deliberately **keeps** `configure_sweep`/`configure_montecarlo`: the only producers of the `config_id` that `run_sweep`/`run_montecarlo` consume, and Monte Carlo perturbation + N-run aggregation (and the batch-sweep route) are not something an agent reproduces with native file edits the way it can a plain LTspice `.step`. It keeps simulation lifecycle, binary `.raw` parsing, batch run/results, `find_model` search, and the schematic-construction + wiring + inspection set (`create_schematic`, `add_component`, `apply_schematic_ops`, `connect`, `export_netlist`, `reset_schematic`, `symbol_info`, `component_info`, `trace_net`) — geometry-aware .asc editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match. The ack-only mutations (`move_component`, `remove_component`, `set_component_attribute`, `add_net_label`, `remove_net_label`, `remove_wire`) are `apply_schematic_ops` ops, not standalone tools (see the standalone-vs-op rule above).
 
