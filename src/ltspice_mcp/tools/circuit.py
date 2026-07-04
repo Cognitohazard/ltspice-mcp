@@ -187,6 +187,12 @@ def _parse_rotation(rotation: str) -> ERotation:
 # spicelib API (model name → ``set_component_value``; W/L → ``set_component_parameters``).
 _PARAM_TOKEN_RE = re.compile(r"(\w+)\s*=\s*([^\s=]+)")
 
+# A GUI opamp complexity-level label (e.g. ``Level.2``) that belongs in the
+# SpiceModel/level selector, NOT the Value slot. On a subcircuit (X) symbol
+# LTspice emits the Value as an extra positional token on the instance line,
+# so netlisting fails downstream with "sub-circuit name is not defined".
+_LEVEL_LABEL_RE = re.compile(r"^\s*level\.\d+\s*$", re.IGNORECASE)
+
 
 def _validate_component_value(reference: str, value: str) -> None:
     """Reject values that would corrupt the netlist line on write.
@@ -271,6 +277,33 @@ def _asc_component_value(editor, reference: str) -> str | None:
         return str(editor.get_component_value(reference))
     except Exception:
         return None
+
+
+def _level_label_lint(editor, reference: str, value: str) -> str | None:
+    """Warn when a GUI opamp level label is written to a subcircuit's Value.
+
+    Setting e.g. ``Level.2`` (a UniversalOpamp2 GUI complexity label) as the
+    Value of a subcircuit (X) symbol makes LTspice append it as a stray
+    positional token on the instance line, so the export later fails with
+    "sub-circuit name is not defined". Fires only on the dotted-level pattern,
+    gated by an OR of subcircuit signals — the InstName may be ``U1`` while the
+    netlist prefix is X (from the .asy Prefix), so the X-prefix test alone is
+    not enough. Returns the warning text, or ``None`` when it does not apply.
+    """
+    if not _LEVEL_LABEL_RE.match(value):
+        return None
+    comp = editor.components.get(reference)
+    attrs = getattr(comp, "attributes", None) or {}
+    is_subckt = reference[:1].upper() == "X" or "SpiceModel" in attrs or "_SUBCKT" in attrs
+    if not is_subckt:
+        return None
+    return (
+        f"{reference}: Value {value!r} is a GUI opamp complexity-level label, not a "
+        "subcircuit value. LTspice emits it as an extra positional token on the X "
+        "instance line, so netlisting fails with 'sub-circuit name is not defined'. "
+        "Select the level via the SpiceModel attribute (or the symbol's default), "
+        "not the Value slot."
+    )
 
 
 def _set_or_create_value(editor, reference: str, value: str) -> None:
@@ -1769,16 +1802,24 @@ async def _set_component_value_asc(
         for ref, val in pairs:
             _validate_component_value(ref, val)
         changes: list[str] = []
+        lint_warnings: list[str] = []
         for ref, val in pairs:
             old_value = _asc_component_value(editor, ref)
+            lint = _level_label_lint(editor, ref, val)
+            if lint:
+                lint_warnings.append(lint)
             _apply_component_value(editor, ref, val)
             old_display = old_value if old_value is not None else "(unset)"
             suffix = _unchanged_suffix(old_display, str(val))
             changes.append(f"{ref}: {old_display} -> {val}{suffix}")
 
     if len(pairs) == 1:
-        return text_response(f"Set {changes[0]}")
-    return text_response(f"Updated {len(pairs)} component(s):\n" + "\n".join(changes))
+        text = f"Set {changes[0]}"
+    else:
+        text = f"Updated {len(pairs)} component(s):\n" + "\n".join(changes)
+    if lint_warnings:
+        text += "\n\n" + "\n".join(f"⚠ {w}" for w in lint_warnings)
+    return text_response(text)
 
 
 @registry.tool(
@@ -4212,13 +4253,15 @@ async def handle_diff_circuit(args: DiffCircuitInput, state: SessionState) -> ty
     return format_response("\n".join(lines), data, args.format)
 
 
-def _snap_match(requested: float, actual: float, *, rtol: float = 1e-3) -> bool:
+def snap_match(requested: float, actual: float, *, rtol: float = 1e-3) -> bool:
     """True iff ``actual`` is within ``rtol`` (relative) of ``requested``.
 
-    Step axes are discrete, so a legitimate lookup lands on (or extremely
-    near) a real step value. A large gap means the request fell outside the
-    swept range and was silently clamped to the nearest endpoint — worth a
-    warning rather than presenting the clamp as a valid answer.
+    A query snaps to the nearest available sample (a discrete step value or the
+    nearest point on a sweep axis); a legitimate lookup lands on (or extremely
+    near) one. A large gap means the request fell outside the range and was
+    silently clamped to the nearest endpoint — worth flagging rather than
+    presenting the clamp as an exact answer. Shared by the step-axis lookup and
+    ``query_value``'s direct ``at`` path so their snap flags can't drift.
     """
     scale = max(abs(actual), abs(requested), 1e-30)
     return abs(requested - actual) <= rtol * scale
@@ -4296,7 +4339,7 @@ def _step_get_native_axis(
     # genuinely clamped. sample_to_dict keeps complex AC samples intact
     # (magnitude/phase) instead of float() silently dropping the imag part.
     sample_dict = sample_to_dict(wave[idx])
-    exact = _snap_match(target, actual)
+    exact = snap_match(target, actual)
     lo, hi = min(axis_vals[0], axis_vals[-1]), max(axis_vals[0], axis_vals[-1])
     out_of_range = target < lo or target > hi
     data = {
@@ -4376,9 +4419,18 @@ def _step_get_param_lookup(
                 for k in step_record:
                     if k not in available_axes:
                         available_axes.append(k)
+        if available_axes:
+            raise NetlistError(
+                f"Step axis {args.axis!r} not found in this raw file. "
+                "Available axes: " + ", ".join(available_axes)
+            )
+        # No .step parameters at all — the caller likely meant the primary sweep
+        # axis of a bare .dc/.ac sweep, which isn't a step. Point at the direct
+        # route instead of a bare "not found".
         raise NetlistError(
-            f"Step axis {args.axis!r} not found in this raw file. "
-            "Available axes: " + (", ".join(available_axes) if available_axes else "<none>")
+            f"This raw file has no .step parameters, so {args.axis!r} is not a step "
+            f"axis. If {args.axis!r} is the primary sweep variable of a bare .dc/.ac "
+            f"sweep, query it directly: query_value(at='{args.value}')."
         )
 
     assert best_actual is not None  # set in lockstep with best_idx above
@@ -4428,7 +4480,7 @@ def _step_get_param_lookup(
                 "Pass 'at' (frequency for .ac, time for .tran) to pick a point."
             )
 
-    if not _snap_match(target, best_actual):
+    if not snap_match(target, best_actual):
         warnings.append(
             f"Requested {args.axis}={target:g} but no step matches; using the "
             f"nearest step {best_actual:g}."
@@ -4440,7 +4492,7 @@ def _step_get_param_lookup(
         "axis": args.axis,
         "requested_value": target,
         "actual_value": best_actual,
-        "exact_match": _snap_match(target, best_actual),
+        "exact_match": snap_match(target, best_actual),
         "step_index": best_idx,
         **sample_dict,
     }
@@ -4701,8 +4753,12 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
     if isinstance(op, _OpSetComponentValue):
         if op.reference not in editor.components:
             raise NetlistError(f"Component '{op.reference}' not found.")
+        lint = _level_label_lint(editor, op.reference, op.value)
         _apply_component_value(editor, op.reference, op.value)
-        return {"op": "set_component_value", "reference": op.reference, "value": op.value}
+        result = {"op": "set_component_value", "reference": op.reference, "value": op.value}
+        if lint:
+            result["warnings"] = [lint]
+        return result
 
     if isinstance(op, _OpSetComponentAttribute):
         if op.attribute not in _LTSPICE_ATTR_NAMES:

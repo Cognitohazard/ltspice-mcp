@@ -19,6 +19,7 @@ from ltspice_mcp.state import BatchJob, SessionState
 from ltspice_mcp.tools.analysis import (
     AcStructureInput,
     BodeMetricsInput,
+    DisturbanceResponseInput,
     EdgeMetricsInput,
     ExportWaveformInput,
     FilterMetricsInput,
@@ -32,6 +33,7 @@ from ltspice_mcp.tools.analysis import (
     PulseResponseInput,
     QueryValueInput,
     ResonanceInput,
+    ReturnLossInput,
     RollOffInput,
     SignalStatsInput,
     SimulationSummaryInput,
@@ -43,6 +45,7 @@ from ltspice_mcp.tools.analysis import (
     _trace_device,
     handle_ac_structure,
     handle_bode_metrics,
+    handle_disturbance_response,
     handle_edge_metrics,
     handle_export_waveform,
     handle_filter_metrics,
@@ -56,6 +59,7 @@ from ltspice_mcp.tools.analysis import (
     handle_pulse_response,
     handle_query_value,
     handle_resonance,
+    handle_return_loss,
     handle_roll_off,
     handle_signal_stats,
     handle_simulation_summary,
@@ -3221,3 +3225,114 @@ class TestSolveFailureRelayCoverage:
             await handle_edge_metrics(
                 EdgeMetricsInput(raw_file=raw_file.name, signal="V(out)"), state_no_sim
             )
+
+
+@pytest.mark.asyncio
+class TestDisturbanceResponseTool:
+    async def test_load_transient_droop(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "ldo.raw"
+        t = np.linspace(0, 5e-3, 5001)
+        tri = np.clip(1 - np.abs(t - 1.5e-3) / 0.5e-3, 0, 1)
+        y = 3.3 - 0.1 * tri  # 100 mV droop, recovers by ~2 ms
+        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_disturbance_response(
+            DisturbanceResponseInput(raw_file=raw_file.name, signal="V(out)", settle_band_pct=1.0),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc["signal"] == "V(out)"
+        assert sc["baseline"] == pytest.approx(3.3, abs=1e-6)
+        assert sc["max_droop"] == pytest.approx(0.1, abs=2e-4)
+        assert sc["recovery_time"] == pytest.approx(1.835e-3, abs=5e-5)
+
+
+@pytest.mark.asyncio
+class TestReturnLossTool:
+    async def test_mismatch_at_freq(self, state_no_sim: SessionState, work_dir: Path):
+        raw_file = work_dir / "zin.raw"
+        f = np.logspace(6, 9, 200)
+        H = np.full_like(f, 100.0, dtype=complex)  # 100 Ω flat → Γ=1/3
+        raw = _make_raw_mock(
+            plotname="AC Analysis",
+            trace_names=["frequency", "V(in)"],
+            waves={"frequency": f, "V(in)": H},
+            axis=f,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_return_loss(
+            ReturnLossInput(raw_file=raw_file.name, signal="V(in)", z0=50.0, at="1e7"),
+            state_no_sim,
+        )
+        sc = result.structuredContent
+        assert sc["signal"] == "V(in)"
+        assert sc["z0_ohm"] == 50.0
+        assert sc["return_loss_db"] == pytest.approx(9.542, abs=1e-2)
+        assert sc["vswr"] == pytest.approx(2.0, abs=1e-3)
+
+
+@pytest.mark.asyncio
+class TestSignalStatsConstantObservation:
+    async def test_constant_window_emits_observation(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A latched/degenerate DC solution reads as a flat line — surface it as
+        # a fact (min == max), not a verdict.
+        raw_file = work_dir / "latched.raw"
+        t = np.linspace(0, 1e-3, 500)
+        y = np.zeros_like(t)  # min == max == 0
+        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        result = await handle_signal_stats(
+            SignalStatsInput(raw_file=raw_file.name, signal="V(out)"), state_no_sim
+        )
+        codes = [o["code"] for o in result.structuredContent.get("observations", [])]
+        assert "constant_window" in codes
+
+
+@pytest.mark.asyncio
+class TestQueryValueExactMatch:
+    async def test_snap_flags_inexact(self, state_no_sim: SessionState, work_dir: Path):
+        # Coarse axis so a between-samples request must snap.
+        raw_file = work_dir / "coarse.raw"
+        t = np.arange(0.0, 5.0, 1.0)  # 0,1,2,3,4
+        y = t * 2.0
+        raw = _make_raw_mock(waves={"time": t, "V(out)": y}, axis=t)
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        snapped = await handle_query_value(
+            QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="1.5"),
+            state_no_sim,
+        )
+        assert snapped.structuredContent["exact_match"] is False
+        exact = await handle_query_value(
+            QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="2"),
+            state_no_sim,
+        )
+        assert exact.structuredContent["exact_match"] is True
+
+
+class TestGuardedAxisSteppedOpHint:
+    """A no-axis raw that is really a stepped .op (collapsed to step 0) should
+    point the caller at the .dc conversion where they hit the wall, not just
+    say 'no axis'."""
+
+    @staticmethod
+    def _no_axis_raw():
+        raw = MagicMock()
+        raw.get_axis.side_effect = Exception("no axis in this plot")
+        return raw
+
+    def test_plain_op_points_at_operating_point(self, work_dir: Path):
+        from ltspice_mcp.tools.analysis import _guarded_axis
+
+        raw_path = work_dir / "op.raw"  # no sibling .log
+        with pytest.raises(ResultError, match="operating_point"):
+            _guarded_axis(self._no_axis_raw(), 0, raw_path)
+
+    def test_stepped_op_points_at_dc_conversion(self, work_dir: Path):
+        from ltspice_mcp.tools.analysis import _guarded_axis
+
+        raw_path = work_dir / "stepped_op.raw"
+        raw_path.with_suffix(".log").write_text(".step temp=-40\n.step temp=25\n.step temp=85\n")
+        with pytest.raises(ResultError, match=r"\.dc temp"):
+            _guarded_axis(self._no_axis_raw(), 0, raw_path)

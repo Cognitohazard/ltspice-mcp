@@ -69,6 +69,7 @@ from ltspice_mcp.lib.log_parser import (
     parse_measurements,
     parse_step_iterations,
     read_device_op_points,
+    scan_op_step_log,
 )
 from ltspice_mcp.lib.plot_html import (
     WIDGET_RESOURCE_URI,
@@ -184,20 +185,36 @@ def _reject_non_transient(raw) -> None:
         )
 
 
-def _guarded_axis(raw, step: int) -> np.ndarray:
+def _guarded_axis(raw, step: int, raw_path: Path | None = None) -> np.ndarray:
     """Real-valued sweep axis for ``step``, or a clean error for a no-axis raw.
 
     spicelib's ``get_axis`` raises when a result has no axis (e.g. an Operating
     Point run); convert that into a friendly ResultError pointing at
     ``operating_point`` rather than letting it surface as a generic internal
     error. AC frequency axes come back complex — strip to the real part.
+
+    When ``raw_path`` is given, a no-axis raw that is really a stepped ``.op``
+    collapsed to step 0 (the log shows >1 bias iteration) gets the same
+    ``.dc``-conversion pointer ``build_simulation_summary`` emits — so the
+    confused caller learns the fix where they hit the wall, not just that the
+    axis is missing.
     """
     try:
         axis = np.asarray(raw.get_axis(step=step))
     except Exception as e:
-        raise ResultError(
-            f"This result has no data axis ({e}). Use operating_point for a .op result."
-        ) from e
+        hint = "Use operating_point for a .op result."
+        if raw_path is not None:
+            log_path = raw_path.with_suffix(".log")
+            if log_path.exists():
+                log_steps, op_iters = scan_op_step_log(log_path)
+                if max(len(log_steps), op_iters) > 1:
+                    param = next(iter(log_steps[0].keys()), "param") if log_steps else "<param>"
+                    hint = (
+                        "This is a stepped .op whose .raw carries only step 0. Convert "
+                        f"to '.dc {param} START STOP STEP' to get an axis over every bias "
+                        "point, or use operating_point for a single bias point."
+                    )
+        raise ResultError(f"This result has no data axis ({e}). {hint}") from e
     if np.iscomplexobj(axis):
         axis = np.real(axis)
     return axis
@@ -243,7 +260,7 @@ async def _load_real_signal(
     _reject_non_transient(raw)
     signal = services.validate_signal(raw, signal)
     services.validate_step(raw, step)
-    axis = _guarded_axis(raw, step)
+    axis = _guarded_axis(raw, step, raw_path)
     wave = np.asarray(raw.get_wave(signal, step=step))
     if np.iscomplexobj(wave):
         raise ResultError(
@@ -463,9 +480,12 @@ class QueryValueInput(ToolInput):
     at: str | None = Field(
         default=None,
         description=(
-            "Time or frequency to query in SPICE notation (e.g., '1m', '100u', "
-            "'1G', '2.5k'). Required unless ``step_axis`` is given (then it picks "
-            "the inner-axis point within the chosen step; optional)."
+            "Value on the run's primary sweep axis in SPICE notation (e.g., '1m', "
+            "'100u', '1G', '2.5k'): time for .tran, frequency for .AC, or the .dc "
+            "sweep variable (e.g. '27' for a `.dc temp` sweep). The nearest data "
+            "point is returned without interpolation. Required unless ``step_axis`` "
+            "is given (then it picks the inner-axis point within the chosen step; "
+            "optional)."
         ),
     )
     step: int = Field(
@@ -475,9 +495,12 @@ class QueryValueInput(ToolInput):
     step_axis: str | None = Field(
         default=None,
         description=(
-            "Select the step by a .step/.DC sweep-axis VALUE instead of an index: "
-            "the parameter name (e.g. 'temp', 'Rval'). Pair with ``step_value``. "
-            "The nearest step is chosen and flagged with ``exact_match``."
+            "Select a run of a stepped (.step) sweep by its parameter VALUE instead "
+            "of an index: the parameter name (e.g. 'temp', 'Rval'). Pair with "
+            "``step_value``. The nearest step is chosen and flagged with "
+            "``exact_match``. NOT for a bare non-stepped .dc/.ac sweep, where the "
+            "swept variable is the run's primary axis — query it directly with "
+            "``at`` instead (e.g. ``at='27'`` on a `.dc temp` sweep)."
         ),
     )
     step_value: str | None = Field(
@@ -647,6 +670,7 @@ class SimulationSummaryInput(ToolInput):
             "mean_db": {"type": "number"},
             "min_phase": {"type": "number"},
             "max_phase": {"type": "number"},
+            "observations": OBSERVATIONS_SCHEMA,
             "warnings": WARNINGS_SCHEMA,
         },
     },
@@ -710,7 +734,7 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
             lines += [f"⚠ {w}" for w in solve_failures]
         return format_response("\n".join(lines), out, fmt)
 
-    axis = _guarded_axis(raw, step)
+    axis = _guarded_axis(raw, step, raw_path)
     wave_real = np.asarray(wave)
 
     # Distinguish DC sweep (axis = sweep variable, e.g. ``temp``)
@@ -817,7 +841,27 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
             f"Frequency:    {stats['freq_start_used']:.6g}..{stats['freq_end_used']:.6g} Hz"
             f"  ({stats['point_count']} samples)"
         )
+    # Surface a FACT (not a verdict) when the signal never moves across the
+    # window. min == max is the tell of a coerced/latched solve (e.g. a
+    # self-biased stage stuck at its trivial DC state) that still completes
+    # cleanly — the model, not this tool, decides whether that is expected.
+    observations: list[dict] = []
+    if core["min"] == core["max"]:
+        observations.append(
+            {
+                "code": "constant_window",
+                "kind": "value",
+                "detail": (
+                    f"Signal is constant across the analyzed window "
+                    f"(min == max == {core['min']:.6g}); peak-to-peak is 0."
+                ),
+            }
+        )
+
     out = {"signal": signal, **stats}
+    if observations:
+        out["observations"] = observations
+        lines += ["", *format_observations(observations)]
     if solve_failures:
         out["warnings"] = solve_failures
         lines += [f"⚠ {w}" for w in solve_failures]
@@ -995,7 +1039,7 @@ async def handle_get_waveform(args: GetWaveformInput, state: SessionState):
             show_hint=False,
         )
 
-    axis = _guarded_axis(raw, step)
+    axis = _guarded_axis(raw, step, raw_path)
 
     sim_type_raw, analysis_type, axis_unit, _ = _classify_analysis(raw)
 
@@ -1021,7 +1065,10 @@ async def handle_get_waveform(args: GetWaveformInput, state: SessionState):
                 "detail": (
                     f"{env['point_count']} samples reduced to {env['bucket_count']} "
                     "equal-time buckets; sub-bucket detail is not represented. "
-                    "Re-request a narrower [t_start, t_end] to resolve a region."
+                    "Re-request a narrower [t_start, t_end] to resolve a region. "
+                    "If this is a switching-converter waveform, per-bucket peak-to-peak "
+                    "is the settling envelope, not the ripple; size the window to 1-2 "
+                    "switching periods to read ripple."
                 ),
             }
         )
@@ -1399,7 +1446,7 @@ async def handle_export_waveform(args: ExportWaveformInput, state: SessionState)
     raw = await services.load_raw(raw_path, state)
     # A .op raw has no sweep axis to tabulate — refuse early with the clean
     # pointer to operating_point, not by failing mid-write inside the worker.
-    _guarded_axis(raw, 0)
+    _guarded_axis(raw, 0, raw_path)
 
     _, analysis_type, _, _ = _classify_analysis(raw)
 
@@ -1722,24 +1769,35 @@ async def handle_query_value(args: QueryValueInput, state: SessionState):
     value_unit = trace_unit(raw, signal)
     unit_suffix = f" {value_unit}" if value_unit else ""
 
+    # The query snaps to the nearest sample; flag when that snap moved the
+    # requested point. Reuse the step_axis path's own tolerance check so the two
+    # snap flags can't drift. On a coarse sweep this matters — e.g. a .dc temp
+    # sweep snapping 27 → 25 °C silently biases a tempco measurement.
+    from ltspice_mcp.tools.circuit import snap_match
+
+    req_x = float(result_data["requested_x"])
+    act_x = float(result_data["actual_x"])
+    exact_match = snap_match(req_x, act_x)
+
+    snap_note = "" if exact_match else f"  (requested {req_x:.6g}, snapped)"
     if "magnitude_db" in result_data:
         lines = [
-            f"Signal: {signal} at {x_unit}={result_data['requested_x']:.6g}",
-            f"Requested: {result_data['requested_x']:.6g}",
-            f"Nearest point: {result_data['actual_x']:.6g}",
+            f"Signal: {signal} at {x_unit}={req_x:.6g}",
+            f"Requested: {req_x:.6g}",
+            f"Nearest point: {act_x:.6g}{snap_note}",
             f"Magnitude: {result_data['magnitude_db']:.2f} dB "
             f"({result_data['magnitude_linear']:.6g})",
             f"Phase: {result_data['phase_deg']:.2f} deg",
         ]
     else:
         lines = [
-            f"Signal: {signal} at {x_unit}={result_data['requested_x']:.6g}",
-            f"Requested: {result_data['requested_x']:.6g}",
-            f"Nearest point: {result_data['actual_x']:.6g}",
+            f"Signal: {signal} at {x_unit}={req_x:.6g}",
+            f"Requested: {req_x:.6g}",
+            f"Nearest point: {act_x:.6g}{snap_note}",
             f"Value: {result_data['value']:.6g}{unit_suffix}",
         ]
 
-    out = {"signal": signal, **result_data}
+    out = {"signal": signal, **result_data, "exact_match": exact_match}
     if value_unit:
         out["unit"] = value_unit
     result = format_response("\n".join(lines), out, fmt)
@@ -2271,6 +2329,10 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
             "point_count": {"type": "integer"},
             "step_count": {"type": "integer"},
             "signals": {"type": "array", "items": {"type": "string"}},
+            # Ambient / nominal temperature the simulator ran at (°C), when the
+            # log records it — a provenance fact for temp-sensitive tasks.
+            "temp_c": {"type": "number"},
+            "tnom_c": {"type": "number"},
             "measurements": MEASUREMENTS_SCHEMA,
             "fourier": {"type": "array", "items": {"type": "object"}},
             "ac_bandwidth_metrics": {
@@ -2397,6 +2459,12 @@ def _format_summary_text(summary: dict, ac_metrics: dict | None) -> str:
     lines.append(
         f"Data points: {summary['point_count']} per signal, {summary['step_count']} step(s)"
     )
+    if "temp_c" in summary:
+        tnom = summary.get("tnom_c")
+        tnom_note = (
+            f" (tnom {tnom:g} °C)" if tnom is not None and tnom != summary["temp_c"] else ""
+        )
+        lines.append(f"Temperature: {summary['temp_c']:g} °C{tnom_note}")
     lines.append("")
 
     lines.append(f"Signals ({len(summary['signals'])}):")
@@ -3023,7 +3091,7 @@ async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
     sig_b = services.validate_signal(raw, args.signal_b)
     services.validate_step(raw, args.step)
 
-    axis = _guarded_axis(raw, args.step)
+    axis = _guarded_axis(raw, args.step, raw_path)
     ya_full = np.asarray(raw.get_wave(sig_a, step=args.step))
     yb_full = np.asarray(raw.get_wave(sig_b, step=args.step))
     if np.iscomplexobj(ya_full) or np.iscomplexobj(yb_full):
@@ -4778,6 +4846,12 @@ def _fmt_hz_range(f_lo: float, f_hi: float) -> str:
         "out-of-phase zero or a transport delay adds phase lag the magnitude plot "
         "cannot show, and caps achievable loop bandwidth; do not close a loop on "
         "magnitude alone when it is flagged.\n\n"
+        "``net_order`` is the net pole-zero order from the rational fit, or (on "
+        "the asymptotic-reading fallback) the net high-frequency magnitude-slope "
+        "order = round(-slope / 20 dB/decade). It is a real order — 0 for a flat "
+        "HF asymptote, negative for a net differentiator — never a sentinel; a "
+        "large |net_order| usually means the fallback fired on a high-order "
+        "response, so use resonance for driving-point impedance peaks.\n\n"
         "IMPORTANT — these are read from a finite sweep, so HAVE A HUMAN REVIEW "
         "them against the Bode plot (use plot_waveform on the same signal) and "
         "the circuit before acting. Closely-spaced corners merge into one range "
@@ -5368,7 +5442,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
 
     raw = await services.load_raw(raw_path, state)
     # A .op raw has no sweep axis to plot — refuse early with the clean pointer.
-    _guarded_axis(raw, 0)
+    _guarded_axis(raw, 0, raw_path)
 
     _, analysis_type, _, x_is_log = _classify_analysis(raw)
 
