@@ -2941,6 +2941,17 @@ class TestQueryValueDcLabelAndUnit:
         # The DC sweep axis is the swept variable, not time.
         assert " at t=" not in text
 
+    async def test_noise_density_labels_per_root_hz(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A .noise density trace is V/√Hz, not the plain V its whattype declares.
+        raw = _stage_recorded(work_dir, "ltspice_noise_rc")
+        res = await handle_query_value(
+            QueryValueInput(raw_file=str(raw), signal="V(onoise)", at="1k"),
+            state_no_sim,
+        )
+        assert res.structuredContent["unit"] == "V/√Hz"
+
 
 @pytest.mark.asyncio
 class TestNoiseIntegralHandler:
@@ -3038,6 +3049,25 @@ class TestThdHandler:
         assert sc is not None
         assert sc["thd_ratio"] == pytest.approx(0.1, rel=1e-2)
         assert sc["coherent"] is True
+
+    async def test_thd_labels_harmonic_unit(self, state_no_sim: SessionState, work_dir: Path):
+        # The per-harmonic magnitudes are in the signal's native unit; label it.
+        raw_file = work_dir / "thd_unit.raw"
+        f0, fs = 1000.0, 200_000.0
+        t = np.arange(0.0, 0.02, 1.0 / fs)
+        y = np.sin(2 * np.pi * f0 * t) + 0.05 * np.sin(2 * np.pi * 2 * f0 * t)
+        raw = _make_raw_mock(
+            plotname="Transient Analysis",
+            trace_names=["time", "V(out)"],
+            waves={"time": t, "V(out)": y},
+            axis=t,
+        )
+        _inject_raw_mock(state_no_sim, raw_file, raw)
+        res = await handle_thd(
+            ThdInput(raw_file=raw_file.name, signal="V(out)", fundamental="1k"),
+            state_no_sim,
+        )
+        assert res.structuredContent["unit"] == "V"
 
 
 def _ac_response_raw(signal: str, h: np.ndarray, freqs: np.ndarray) -> MagicMock:
