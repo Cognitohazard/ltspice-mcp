@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "Circuit simulation (LTspice/ngspice) with structured results incl. per-device operating points (gm/gds/vth) by name, plus LTspice .asc schematic editing, for Claude Code.",
-    "version": "0.1.0"
+    "version": "0.5.0"
   },
   "plugins": [
     {
       "name": "ltspice-mcp",
       "source": ".",
-      "version": "0.1.0",
+      "version": "0.5.0",
       "author": {
         "name": "cognitohazard"
       },
