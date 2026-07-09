@@ -2041,6 +2041,34 @@ class TestRecordedAcRaw:
         assert sc["run_index"] == 0
         assert sc["params"] == {"R": "1k"}
 
+    async def test_leading_minus_flips_phase_180(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # '-V(out)' and '-V(out)/V(out)' negate the complex wave: same |H|,
+        # phase shifted by 180° — the loop-gain / inverting-probe convention
+        # without a behavioral inverter node in the deck.
+        raw = _stage_recorded(work_dir, "ltspice_ac_rc")
+
+        async def point(signal: str) -> dict:
+            res = await handle_bode_metrics(
+                BodeMetricsInput(
+                    raw_file=str(raw), signal=signal, mode="point", frequencies=["1k"]
+                ),
+                state_no_sim,
+            )
+            assert res.structuredContent is not None
+            return res.structuredContent["points"][0]
+
+        plain = await point("V(out)")
+        negated = await point("-V(out)")
+        assert negated["magnitude_db"] == pytest.approx(plain["magnitude_db"], abs=1e-9)
+        delta = (negated["phase_deg"] - plain["phase_deg"]) % 360.0
+        assert delta == pytest.approx(180.0, abs=1e-6)
+        # Ratio form: -A/B is −(A/B) → exactly 0 dB at 180°.
+        inv_unity = await point("-V(out)/V(out)")
+        assert inv_unity["magnitude_db"] == pytest.approx(0.0, abs=1e-9)
+        assert abs(inv_unity["phase_deg"]) == pytest.approx(180.0, abs=1e-6)
+
     async def test_crossing_mode_minus_3db_at_cutoff(
         self, state_no_sim: SessionState, work_dir: Path
     ):
@@ -2125,6 +2153,24 @@ class TestRecordedSteppedAcRaw:
         for entry, fc in zip(steps, self.CUTOFFS, strict=True):
             assert entry["filter_type"] == "lowpass"
             assert entry["cutoff_high_hz"] == pytest.approx(fc, rel=0.01)
+
+    async def test_all_steps_entries_carry_step_params(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # LTspice runs a ``.step ... list`` ascending-sorted, not in declared
+        # order — each entry must name its own .step point so curves can't be
+        # mis-attributed to list positions.
+        raw = _stage_recorded(work_dir, "ltspice_step_ac")
+        res = await handle_bode_metrics(
+            BodeMetricsInput(raw_file=str(raw), signal="V(out)", mode="filter", all_steps=True),
+            state_no_sim,
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        for i, r_ohm in enumerate((1000.0, 2000.0, 4000.0)):
+            params = sc["steps"][i].get("step_params")
+            assert params is not None
+            assert list(params.values()) == [pytest.approx(r_ohm)]
 
     async def test_single_step_filter_uses_requested_step(
         self, state_no_sim: SessionState, work_dir: Path
