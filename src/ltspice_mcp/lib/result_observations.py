@@ -296,6 +296,14 @@ def parse_source_amplitudes(netlist_text: str) -> dict[str, float]:
         # Collapse spaces around '=' so ``Rser = 1`` tokenizes as one
         # key=value token instead of a bare word that reads as unparseable.
         card = _EQUALS_WS_RE.sub("=", card)
+        # Hand tokenizer, deliberately minimal. Two real-deck gaps have been
+        # patched at this seam already (inline ';' comments above, spaced
+        # key=values here). If you are patching a THIRD, stop: port this card
+        # walk to the spice_lex lexer (lex() + tokenize_body() — cards arrive
+        # comment-stripped and continuation-joined, key=value and {braced}
+        # atoms come typed) instead of growing a parallel tokenizer patch by
+        # patch. No import cycle; montecarlo.parse_param_nominal is the
+        # lex-based precedent.
         tokens = card.replace("(", " ").replace(")", " ").replace(",", " ").split()
         if len(tokens) < 4:
             continue
