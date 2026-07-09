@@ -874,6 +874,36 @@ class TestComputeReturnLoss:
         assert r["worst_match"] is True
         assert r["frequency_hz"] == pytest.approx(f[70], rel=1e-6)
 
+    def test_zin_extrema_reported_across_sweep(self):
+        # |Zin| range over the whole sweep rides along regardless of the
+        # evaluated point — the data for choosing a meaningful z0.
+        f = np.logspace(6, 9, 101)
+        H = np.full(101, 50 + 0j)
+        H[10] = 5 + 0j  # |Z| minimum
+        H[90] = 400 + 0j  # |Z| maximum
+        r = compute_return_loss(f, H, z0=50.0, at_hz=1e7)
+        # .get(): the keys are NotRequired in the TypedDict; a miss fails the
+        # approx compare loudly.
+        assert r.get("zin_min_mag_ohm") == pytest.approx(5.0)
+        assert r.get("zin_min_freq_hz") == pytest.approx(float(f[10]))
+        assert r.get("zin_max_mag_ohm") == pytest.approx(400.0)
+        assert r.get("zin_max_freq_hz") == pytest.approx(float(f[90]))
+
+    def test_reactive_worst_match_hints_z0_choice(self):
+        # A pure reactance reflects totally against ANY real z0 — the worst-
+        # match pick is then a tautology, so the result must say the 50 Ω
+        # default may not suit the port (the power/filter-input case).
+        f = np.logspace(3, 6, 60)
+        H = 1j * 2 * np.pi * f * 10e-6  # ideal 10 µH input
+        r = compute_return_loss(f, H, z0=50.0)
+        assert r["worst_match"] is True
+        assert r["gamma_mag"] == pytest.approx(1.0, abs=1e-9)
+        assert any("purely reactive" in w for w in r["warnings"])
+        # A resistive worst match must NOT carry the hint.
+        f2, H2 = self._flat(100 + 0j)
+        r2 = compute_return_loss(f2, H2, z0=50.0)
+        assert not any("purely reactive" in w for w in r2["warnings"])
+
     def test_out_of_range_at_reports_endpoint_frequency(self):
         # A request below/above the sweep clamps to the nearest endpoint; the
         # reported frequency_hz must be the endpoint actually evaluated, not the

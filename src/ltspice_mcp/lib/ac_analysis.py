@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 import numpy as np
 from scipy.signal import find_peaks
@@ -531,12 +531,20 @@ class ReturnLossOutput(TypedDict):
     ``return_loss_db`` is ``None`` at a perfect match (``|Γ|`` → 0, RL → ∞);
     ``vswr`` is ``None`` at a total reflection (``|Γ|`` ≥ 1, open/short, VSWR →
     ∞). Both are surfaced as a null rather than a meaningless large number.
+
+    ``zin_min_*``/``zin_max_*`` are the |Zin| extrema over the whole sweep —
+    the port's actual impedance range, meaningful regardless of whether z0
+    suits the port. Absent only if no swept sample has a finite |Zin|.
     """
 
     frequency_hz: float
     zin_real_ohm: float
     zin_imag_ohm: float
     zin_mag_ohm: float
+    zin_min_mag_ohm: NotRequired[float]
+    zin_min_freq_hz: NotRequired[float]
+    zin_max_mag_ohm: NotRequired[float]
+    zin_max_freq_hz: NotRequired[float]
     gamma_mag: float
     gamma_phase_deg: float
     return_loss_db: float | None
@@ -620,7 +628,20 @@ def compute_return_loss(
             "flips the impedance sign. See spice://guide."
         )
 
-    return {
+    # A worst-match pick that lands on a nearly purely reactive point is a
+    # tautology, not a matching insight: |Γ| → 1 there for ANY real z0. Typical
+    # of a power/filter port measured against the RF default z0=50 — point the
+    # caller at the port's actual impedance range instead.
+    if worst_match and gamma_mag >= 0.99 and abs(zin.real) <= 0.05 * abs(zin):
+        warnings.append(
+            "The worst-match point is nearly purely reactive, where |Γ|≈1 for any "
+            "real z0 — on a power/filter port this is expected, not a matching "
+            "defect. If this is not a matched-RF port, pass a z0 near the port's "
+            "working impedance (its DC input resistance, or √(L/C) of the input "
+            "filter) and see zin_min/zin_max_mag_ohm for the port's impedance range."
+        )
+
+    result: ReturnLossOutput = {
         "frequency_hz": frequency_hz,
         "zin_real_ohm": float(zin.real),
         "zin_imag_ohm": float(zin.imag),
@@ -632,6 +653,21 @@ def compute_return_loss(
         "worst_match": worst_match,
         "warnings": warnings,
     }
+
+    # |Zin| extrema across the sweep: the port's impedance range, useful for
+    # choosing a meaningful z0 when the 50 Ω RF default doesn't fit the port.
+    zmag = np.abs(H)
+    finite = np.isfinite(zmag)
+    if finite.any():
+        finite_idx = np.flatnonzero(finite)
+        i_min = int(finite_idx[np.argmin(zmag[finite_idx])])
+        i_max = int(finite_idx[np.argmax(zmag[finite_idx])])
+        result["zin_min_mag_ohm"] = float(zmag[i_min])
+        result["zin_min_freq_hz"] = float(freqs[i_min])
+        result["zin_max_mag_ohm"] = float(zmag[i_max])
+        result["zin_max_freq_hz"] = float(freqs[i_max])
+
+    return result
 
 
 # ---------------------------------------------------------------------------
