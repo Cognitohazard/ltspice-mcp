@@ -145,8 +145,8 @@ class SignalStatsOutput(TypedDict):
     min: float
     max: float
     pk_pk: float
-    t_min: float
-    t_max: float
+    t_at_min: float
+    t_at_max: float
 
 
 class WaveformBucket(TypedDict):
@@ -1432,8 +1432,10 @@ def compute_signal_stats(
 
     y_min = float(np.min(y))
     y_max = float(np.max(y))
-    t_min = float(t[int(np.argmin(y))])
-    t_max = float(t[int(np.argmax(y))])
+    # Named t_at_min/t_at_max (time OF the extremum) — t_min/t_max would read
+    # as window bounds next to t_start/t_end.
+    t_at_min = float(t[int(np.argmin(y))])
+    t_at_max = float(t[int(np.argmax(y))])
 
     if duration > 0 and len(t) >= 2:
         mean = float(np.trapezoid(y, t) / duration)
@@ -1460,8 +1462,8 @@ def compute_signal_stats(
         "min": y_min,
         "max": y_max,
         "pk_pk": y_max - y_min,
-        "t_min": t_min,
-        "t_max": t_max,
+        "t_at_min": t_at_min,
+        "t_at_max": t_at_max,
     }
 
 

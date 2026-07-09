@@ -93,7 +93,10 @@ from ltspice_mcp.lib.raw_parser import (
     safe_magnitude_db,
     trace_unit,
 )
-from ltspice_mcp.lib.result_observations import relay_observations
+from ltspice_mcp.lib.result_observations import (
+    deck_observation_inputs,
+    relay_observations,
+)
 from ltspice_mcp.lib.signal_analysis import (
     DisturbanceResponseOutput,
     EdgeMetricsOutput,
@@ -141,6 +144,14 @@ _OP_SIGNAL_FIELD_DESC = (
     "Signal/trace name (e.g., 'V(out)', 'I(R1)'), or a device operating-point "
     "shorthand for an ngspice .save'd parameter: 'm1.gm' / 'm1.vth' "
     "(resolves to '@m1[gm]', incl. subcircuit paths like 'x1.m1.gm')."
+)
+
+# Shared note for AC-tool `signal` fields whose expression support is generic
+# (all AC tools share _load_ac_signal); tools where the '-' has tool-specific
+# meaning (loop-gain probe sense, reversed impedance probe) word it bespoke.
+_AC_SIGNAL_EXPR_NOTE = (
+    "Ratios ('V(out)/V(in)') and a leading '-' (180° phase flip) are accepted "
+    "like the other AC tools."
 )
 
 # Fourier harmonics shown in the simulation_summary text before it truncates to a
@@ -657,9 +668,10 @@ class SimulationSummaryInput(ToolInput):
             "t_start_used": {"type": ["number", "null"]},
             "t_end_used": {"type": ["number", "null"]},
             "duration": {"type": ["number", "null"]},
-            # Time of the min/max sample (transient only)
-            "t_min": {"type": "number"},
-            "t_max": {"type": "number"},
+            # Time OF the min/max sample (transient only) — not window bounds,
+            # which are t_start_used/t_end_used above
+            "t_at_min": {"type": "number"},
+            "t_at_max": {"type": "number"},
             # DC-sweep window metadata (axis is the swept variable, not time)
             "sweep_start_used": {"type": ["number", "null"]},
             "sweep_end_used": {"type": ["number", "null"]},
@@ -812,8 +824,8 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
             "t_start_used": core["t_start"],
             "t_end_used": core["t_end"],
             "duration": core["duration"],
-            "t_min": core["t_min"],
-            "t_max": core["t_max"],
+            "t_at_min": core["t_at_min"],
+            "t_at_max": core["t_at_max"],
         }
     window_note = (
         f" (window [{core['t_start']:.6g}, {core['t_end']:.6g}] s)"
@@ -1240,11 +1252,10 @@ def _build_and_write(
     # Per-step .step parameter values for the step_value column. spicelib's
     # get_steps() carries only integers, not the name=value map, so recover it
     # from the sibling .log (same source query_value(step_axis=) uses).
-    step_dicts: list[dict[str, float]] = []
-    if stepped:
-        log_path = raw_path.with_suffix(".log")
-        if log_path.exists():
-            step_dicts = parse_step_iterations(log_path)
+    # parse_step_iterations returns [] for a missing/unreadable log.
+    step_dicts: list[dict[str, float]] = (
+        parse_step_iterations(raw_path.with_suffix(".log")) if stepped else []
+    )
 
     header: list[str] | None = None
     row_count = 0
@@ -2389,10 +2400,30 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
     # clearly instead of being silently ignored.
     services.validate_step(raw, args.step)
 
+    # Re-inspection parity with the run-completion summary: a job run's own
+    # netlist is known, so parse the same requested-outputs and source-
+    # amplitude facts run_simulation/check_job feed the observation surfacer —
+    # the same raw must yield the same observations here. A bare raw_file has
+    # no netlist to trust, so those observations stay unarmed on that path.
+    requested = None
+    source_amplitudes = None
+    if args.job_id:
+        requested, source_amplitudes = await asyncio.to_thread(
+            deck_observation_inputs, services.resolve_job(args.job_id, state).netlist
+        )
+
     try:
         # ``raw`` here is fully loaded (services.load_raw reads all traces), so
         # the value scan is affordable and surfaces NaN/extreme-value facts.
-        summary = build_simulation_summary(raw, log_path, None, step=args.step, value_scan="scan")
+        summary = build_simulation_summary(
+            raw,
+            log_path,
+            None,
+            step=args.step,
+            value_scan="scan",
+            requested=requested,
+            source_amplitudes=source_amplitudes,
+        )
     except Exception as e:
         # Suppress the generic ResultError hint — it points at simulation_summary,
         # which is the tool that just failed (self-referential).
@@ -2944,7 +2975,10 @@ async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
         "If the auto-detected initial/final (mean of first/last 10% of "
         "window) is contaminated by ringing, pass explicit initial_value/"
         "final_value. Rejects AC analysis.\n\n"
-        "For just rise/fall time without overshoot, use edge_metrics."
+        "For just rise/fall time without overshoot, use edge_metrics. For a "
+        "disturbance that returns to its own level — a mid-run load step, line "
+        "step, or injected glitch on a regulated output (net step ≈ 0, so step "
+        "metrics here would be meaningless) — use disturbance_response."
     ),
     input_model=PulseResponseInput,
     annotations=RO_ANNOTATIONS,
@@ -3821,10 +3855,21 @@ async def _load_ac_signal(
     are divided element-wise — the way to express an inter-stage gain, loop
     gain, or PSRR that the simulator never stores as its own trace.
 
+    A single leading ``-`` negates the whole expression (``-V(out)/V(vsense)``
+    is −(V(out)/V(vsense))): a 180° phase flip, so a loop gain probed with an
+    inverting sense or a reversed impedance probe reads in its natural
+    convention without a behavioral inverter node in the deck.
+
     A ``Path`` is treated as an already-resolved, trusted artifact (a job run's
     raw, resolved via the read-model) and loaded directly; a ``str`` is untrusted
     user input and validated via ``safe_path``.
     """
+    signal = signal.strip()
+    negate = signal.startswith("-")
+    if negate:
+        signal = signal[1:].lstrip()
+        if not signal:
+            raise ResultError("Signal is just a '-'; expected '-V(node)' or '-A/B'.")
     raw_path = raw_file if isinstance(raw_file, Path) else safe_path(raw_file, state)
     raw = await services.load_raw(raw_path, state)
     sim_type = detect_sim_type(raw)
@@ -3862,6 +3907,8 @@ async def _load_ac_signal(
             )
     else:
         wave = np.asarray(raw.get_wave(services.validate_signal(raw, signal), step=step))
+    if negate:
+        wave = -wave
     try:
         return prepare_ac_arrays(axis, wave)
     except ValueError as e:
@@ -3968,7 +4015,14 @@ class StabilityMetricsInput(ToolInput):
         default=0,
         description="0-based run to analyze when ``job_id`` is given (default 0).",
     )
-    signal: str = Field(description="Loop-gain signal (e.g. 'V(loop)')")
+    signal: str = Field(
+        description=(
+            "Loop-gain signal: a trace (e.g. 'V(loop)'), a ratio ('V(ret)/V(inj)'), "
+            "or either with a leading '-' for a sign-inverting probe "
+            "('-V(vout)/V(vsense)') — the 180° flip is applied here, no behavioral "
+            "inverter node needed."
+        )
+    )
     min_separation_decades: float = Field(
         default=0.1,
         description="Merge near-duplicate crossovers closer than this many decades.",
@@ -4002,7 +4056,7 @@ class ResonanceInput(ToolInput):
         default=0,
         description="0-based run to analyze when ``job_id`` is given (default 0).",
     )
-    signal: str = Field(description="Signal name (e.g. 'V(out)')")
+    signal: str = Field(description=f"Signal name (e.g. 'V(out)'). {_AC_SIGNAL_EXPR_NOTE}")
     min_prominence_db: float = Field(
         default=3.0,
         description=(
@@ -4326,11 +4380,15 @@ def _bode_output_schema() -> dict:
         merged.update(schema_from_typeddict(td).get("properties", {}))
     # all_steps mode wraps per-step results under ``steps``; a step entry is a
     # mode result plus its ``step`` index (or an ``error`` if that step failed).
+    # ``step_params`` maps the index to the .step name=value point — LTspice
+    # runs a ``.step ... list`` ascending-sorted, not in declared order, so the
+    # bare index is not safe to correlate with the deck's list order.
     step_item = {
         "type": "object",
         "properties": {
             **merged,
             "step": {"type": "integer"},
+            "step_params": {"type": "object", "additionalProperties": {"type": "number"}},
             "error": {"type": "string"},
         },
     }
@@ -4376,7 +4434,10 @@ class BodeMetricsInput(ToolInput):
             "Signal to analyze: a single trace (e.g. 'V(out)') or a "
             "transfer-function ratio of two traces (e.g. 'V(out)/V(mid)'), which "
             "divides the two complex AC waves — the way to express an inter-stage "
-            "gain, loop gain, or PSRR the simulator doesn't store as its own trace."
+            "gain, loop gain, or PSRR the simulator doesn't store as its own trace. "
+            "A leading '-' negates the whole expression (180° phase flip), e.g. "
+            "'-V(out)/V(vsense)' for a loop gain probed through an inverting sense — "
+            "no behavioral inverter node needed."
         )
     )
     mode: BodeMode = Field(
@@ -4500,6 +4561,17 @@ async def handle_bode_metrics(args: BodeMetricsInput, state: SessionState):
     raw = await services.load_raw(raw_path, state)
     step_count = get_step_count(raw)
 
+    # Per-step .step name=value points from the sibling .log (same source
+    # export_waveform's step_value column uses). LTspice runs a ``.step ...
+    # list`` ascending-sorted, not in declared order, so labeling entries with
+    # only the bare index invites mis-attribution of curves to list positions.
+    # parse_step_iterations returns [] for a missing/unreadable log.
+    step_params: list[dict[str, float]] = []
+    if step_count > 1:
+        step_params = await asyncio.to_thread(
+            parse_step_iterations, raw_path.with_suffix(".log")
+        )
+
     steps_out: list[dict] = []
     step_texts: list[str] = []
     # Distinct per-step warning -> the step indices that emitted it. A warning
@@ -4509,18 +4581,25 @@ async def handle_bode_metrics(args: BodeMetricsInput, state: SessionState):
     warning_steps: dict[str, list[int]] = {}
     first_error: ResultError | None = None
     for i in range(step_count):
+        params_i = step_params[i] if i < len(step_params) else None
+        label = f"step {i}"
+        entry: dict = {"step": i}
+        if params_i:
+            label += " (" + ", ".join(f"{k}={v:g}" for k, v in params_i.items()) + ")"
+            entry["step_params"] = params_i
         try:
             res = await _bode_dispatch(args, i, state, raw_path)
             sc = _structured(res)
             for w in sc.pop("warnings", None) or []:
                 warning_steps.setdefault(w, []).append(i)
-            steps_out.append({"step": i, **sc})
-            step_texts.append(f"── step {i} ──\n{_strip_warning_block(_result_text(res))}")
+            entry.update(sc)
+            step_texts.append(f"── {label} ──\n{_strip_warning_block(_result_text(res))}")
         except ResultError as e:
             if first_error is None:
                 first_error = e
-            steps_out.append({"step": i, "error": str(e)})
-            step_texts.append(f"── step {i} ── error: {e}")
+            entry["error"] = str(e)
+            step_texts.append(f"── {label} ── error: {e}")
+        steps_out.append(entry)
 
     errored = [s for s in steps_out if "error" in s]
     if step_count and len(errored) == step_count and first_error is not None:
@@ -4742,8 +4821,9 @@ class ReturnLossInput(ToolInput):
     signal: str = Field(
         description=(
             "Input-impedance trace: the node voltage under a 1 A AC probe, where "
-            "V(node) = Zin (e.g. 'V(in)'). See spice://guide for the probe idiom "
-            "and sign convention."
+            "V(node) = Zin (e.g. 'V(in)'). A leading '-' negates the trace — the "
+            "in-place fix for a probe wired backwards. See spice://guide for the "
+            "probe idiom and sign convention."
         )
     )
     z0: float = Field(default=50.0, description="Reference impedance in ohms (default 50).")
@@ -4777,7 +4857,12 @@ class ReturnLossResponse(ReturnLossOutput):
         "(the frequency of maximum |Γ|).\n\n"
         "return_loss_db is null at a perfect match (|Γ|→0, RL→∞); vswr is null at "
         "a total reflection (|Γ|≥1, open/short, VSWR→∞). A negative Zin real part "
-        "is flagged in warnings as a likely reversed probe. Needs an .AC run; for "
+        "is flagged in warnings as a likely reversed probe.\n\n"
+        "The 50 Ω default only means something for a matched-RF port. For a "
+        "power/filter input, pass a z0 near the port's working impedance (its DC "
+        "input resistance, or √(L/C) of the input filter) — and read "
+        "zin_min/zin_max_mag_ohm (+ their frequencies, always reported) for the "
+        "port's impedance range across the sweep. Needs an .AC run; for "
         "peak/notch frequencies of the impedance itself use resonance."
     ),
     input_model=ReturnLossInput,
@@ -4808,6 +4893,12 @@ async def handle_return_loss(args: ReturnLossInput, state: SessionState):
         f"Return loss: {rl_str}",
         f"VSWR: {vswr_str}",
     ]
+    if "zin_min_mag_ohm" in data:
+        lines.append(
+            f"|Zin| range: {data['zin_min_mag_ohm']:.4g} Ω at "
+            f"{data['zin_min_freq_hz']:.6g} Hz … {data['zin_max_mag_ohm']:.4g} Ω at "
+            f"{data['zin_max_freq_hz']:.6g} Hz"
+        )
     return await _finish_metric(lines, data, raw_path, args.format)
 
 
@@ -4828,7 +4919,10 @@ class AcStructureInput(ToolInput):
         description="0-based run to read when ``job_id`` is given (default 0).",
     )
     signal: str = Field(
-        description="Signal name (e.g. 'V(out)') — the transfer function H(jω) to analyze."
+        description=(
+            "Signal name (e.g. 'V(out)') — the transfer function H(jω) to analyze. "
+            f"{_AC_SIGNAL_EXPR_NOTE}"
+        )
     )
     step: int = Field(default=0, description="Step index for .step sweeps")
     format: FormatField = Field(default=None)
@@ -5489,11 +5583,10 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     ts = _parse_time(args.t_start, "t_start")
     te = _parse_time(args.t_end, "t_end")
 
-    step_dicts: list[dict[str, float]] = []
-    if len(steps_to_plot) > 1:
-        log_path = raw_path.with_suffix(".log")
-        if log_path.exists():
-            step_dicts = parse_step_iterations(log_path)
+    # parse_step_iterations returns [] for a missing/unreadable log.
+    step_dicts: list[dict[str, float]] = (
+        parse_step_iterations(raw_path.with_suffix(".log")) if len(steps_to_plot) > 1 else []
+    )
 
     max_points = min(args.max_points or _DEFAULT_PLOT_MAX_POINTS, _PLOT_MAX_POINTS_CEILING)
 
