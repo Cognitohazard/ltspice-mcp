@@ -111,6 +111,11 @@ Or call `resonance` (AC) for peak frequency + Q + bandwidth in one step.
 
 **Gotchas:**
 - RISE/FALL/CROSS numbering starts at **1**, not 0.
+- **`MAX` on a signed (always-negative) trace is a silent trap**: for a PMOS
+  drain current that swings −3 mA…−1 mA, `.meas TRAN imax MAX I(V1)` returns
+  **−1 mA** (the least-negative sample), not the 3 mA peak magnitude — no
+  error, just the wrong "peak". Wrap it: `.meas TRAN imax MAX abs(I(V1))`
+  (expression functions work inside `.meas`; verified against LTspice).
 - If TRIG event never occurs, measurement silently fails (no error, no warning).
 - Without `TD=` parameter, TARG matches from t=0 — can hit wrong edge.
 - AC measurements use **65k point ceiling** — exceeding this silently reduces resolution.
@@ -366,6 +371,17 @@ R1 in out {mc(10k, 0.1)}         ; uniform dist, 10k +/-10%
 - Avoid strict ideal voltage sources — add realistic parasitics.
 - Impedance ratios beyond 1e16 cause numerical issues.
 - Be suspicious of circuits needing `cshunt` — may indicate unrealistic models.
+
+**Bistable/multi-root circuits (bandgaps, current mirrors, latches):** the DC
+solver converges to *a* root, not necessarily the intended one — a bandgap
+happily "solves" at the degenerate 0 V state, a mirror at a spurious
+high-current root, with no convergence warning. `.nodeset` alone often fails
+to steer it (it's only an initial guess, released before the final solve).
+What works: a startup circuit in the deck (as in real silicon); ramping the
+supply with `.tran` + `V1 ... PWL(0 0 1m VDD)` and reading the settled state;
+or `.dc` sweeping the supply *upward* so each solution seeds the next. Verify
+which root you got (e.g. `operating_point` on a known-current branch) instead
+of trusting `status: completed`.
 
 **Hidden defaults (LTspice-specific):**
 - `Gfarad` — default parallel conductance on capacitors (1e-12). Disable: `.options Gfarad=0`
