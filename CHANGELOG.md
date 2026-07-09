@@ -31,8 +31,34 @@ tool-surface changes.
 - `signal_stats` emits a `constant_window` observation when a signal is constant
   across the whole analyzed window (min == max) — a fact (e.g. a latched/
   degenerate DC solution reads as a flat line), surfaced without a verdict.
-- `signal_stats` reports `t_min`/`t_max`, the time of the minimum and maximum
-  sample, so a transient droop or peak can be located in time from one call.
+- `signal_stats` reports `t_at_min`/`t_at_max`, the time of the minimum and
+  maximum sample, so a transient droop or peak can be located in time from one
+  call. (Named to read as "time of the extremum" — `t_min`/`t_max` would read
+  as window bounds next to `t_start_used`/`t_end_used`.)
+- Source-relative extreme-value observation: a run summary now flags a voltage
+  trace whose peak dwarfs every independent voltage source in the deck (supply
+  rails included) — the signature of a moderate-magnitude divergence, e.g. an
+  undamped LC growing to hundreds of volts from a millivolt-scale drive, which
+  sits far below the absolute extreme-value floor. Surfaced as a fact with the
+  source name/amplitude in evidence, per the result-trust doctrine; armed only
+  for `.tran`/`.op`, where node-voltage-vs-drive-level is meaningful.
+- `meas_batch_abort` observation: when one `.meas` directive fails to parse,
+  LTspice abandons the whole `.meas` batch (even directives earlier in the
+  deck come back missing). The summary now links the misses to the failing
+  directive instead of listing N independent-looking gaps.
+- `return_loss` reports the |Zin| extrema across the sweep
+  (`zin_min/zin_max_mag_ohm` + their frequencies) and, when the worst-match
+  scan lands on a nearly purely reactive point (|Γ|≈1 for any real z0), says
+  so and points at a meaningful z0 choice for power/filter ports — the 50 Ω
+  RF default is rarely the right reference there.
+- AC tools accept a leading `-` on the signal expression (`-V(out)` or
+  `-V(vout)/V(vsense)`): the complex wave is negated (a 180° phase flip), so a
+  loop gain probed through an inverting sense or a reversed impedance probe
+  reads in its natural convention without a behavioral inverter node.
+- `bode_metrics(all_steps=true)` entries carry `step_params` (the `.step`
+  name=value point from the log) next to the bare step index — LTspice runs a
+  `.step ... list` ascending-sorted, not in declared order, so index-only
+  labeling invited mis-attributing curves to list positions.
 - `resonance` peaks carry `magnitude_linear` alongside `magnitude_db` — |Z| in
   ohms under the 1 A impedance probe (or |H| for a transfer function), which
   disambiguates a dBΩ peak from a dB dip. (The tool's own description already
@@ -118,7 +144,15 @@ tool-surface changes.
   computed order (0 or negative possible), never a sentinel. Adds notes on the
   3- vs 4-terminal transistor symbols (`nmos4`/`pnp4`/…), the diode symbol's
   built-in default-`D` model collision, and the `AC <mag>` small-signal source
-  syntax.
+  syntax. Also: the `.meas MAX` signed-trace trap (`MAX I(...)` on an
+  always-negative current returns the least-negative sample, not the peak
+  magnitude — wrap in `abs()`; verified against LTspice) and how to steer
+  bistable circuits (bandgaps, mirrors, latches) to the intended DC root when
+  `.nodeset` alone won't.
+- `pulse_response` points at `disturbance_response` for a load/line step that
+  returns to its own level (the reference was one-directional — agents at the
+  buck-load-step moment found `pulse_response`, read its limitation, and never
+  discovered the tool built for exactly that case).
 - Auto-generated and example config files no longer write a live
   `max_parallel = 4` key — it is now a comment documenting the real default
   (number of CPU cores, capped at 8). The written key silently pinned every
