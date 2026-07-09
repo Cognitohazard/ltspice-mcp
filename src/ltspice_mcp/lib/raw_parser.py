@@ -426,6 +426,7 @@ def build_simulation_summary(
     step: int = 0,
     requested: dict[str, list[str]] | None = None,
     value_scan: str = "off",
+    source_amplitudes: dict[str, float] | None = None,
 ) -> dict:
     """Build comprehensive, type-aware simulation summary.
 
@@ -442,6 +443,9 @@ def build_simulation_summary(
         value_scan: Coverage decision for value surfacing — ``"scan"`` (this
             ``raw`` has traces loaded; scan them), ``"skipped_large"`` (traces
             not loaded; surface the coverage gap), or ``"off"``.
+        source_amplitudes: Parsed independent voltage-source amplitudes from
+            the deck (``parse_source_amplitudes``); arms the source-relative
+            extreme-value observation. None when the caller has no netlist.
 
     Returns:
         Dictionary with sim_type, range info, signals, point_count, step_count,
@@ -612,7 +616,11 @@ def build_simulation_summary(
             except Exception:
                 continue
     summary["observations"] = surface_observations(
-        summary, requested=requested, value_traces=value_traces, value_scan=value_scan
+        summary,
+        requested=requested,
+        value_traces=value_traces,
+        value_scan=value_scan,
+        source_amplitudes=source_amplitudes,
     )
 
     return summary

@@ -783,14 +783,12 @@ def parse_success_summary(
     unparseable raw still yields a dict carrying the paths and duration.
     """
     from ltspice_mcp.lib.raw_parser import build_simulation_summary
-    from ltspice_mcp.lib.result_observations import parse_requested_outputs
+    from ltspice_mcp.lib.result_observations import deck_observation_inputs
 
     requested: dict[str, list[str]] | None = None
+    source_amplitudes: dict[str, float] | None = None
     if netlist is not None:
-        try:
-            requested = parse_requested_outputs(read_spice_text(netlist))
-        except OSError:
-            requested = None
+        requested, source_amplitudes = deck_observation_inputs(netlist)
 
     result: dict = {
         "sim_type": "Unknown",
@@ -847,7 +845,12 @@ def parse_success_summary(
 
     log_path = log_file if log_file.exists() else None
     summary = build_simulation_summary(
-        raw_read, log_path, duration, requested=requested, value_scan=value_scan
+        raw_read,
+        log_path,
+        duration,
+        requested=requested,
+        value_scan=value_scan,
+        source_amplitudes=source_amplitudes,
     )
     # ``summary`` doesn't carry ``raw_file``/``log_file``; they're already
     # set in ``result`` above and survive ``update``.
