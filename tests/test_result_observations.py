@@ -18,6 +18,7 @@ import pytest
 from ltspice_mcp.lib.raw_parser import build_simulation_summary
 from ltspice_mcp.lib.result_observations import (
     parse_requested_outputs,
+    parse_source_amplitudes,
     reconciliation_observations,
     relay_observations,
     surface_observations,
@@ -27,6 +28,10 @@ from ltspice_mcp.tools._base import format_observations
 from tests.conftest import LTSPICE_TRAN_RC_VFINAL
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+# The source-relative trigger's canonical runaway: ±850 V oscillation, far
+# below the absolute extreme-value floor but huge next to any small drive.
+RUNAWAY_WAVE = 850.0 * np.sin(np.linspace(0, 30, 500))
 
 
 def _make_raw_mock(trace_names, axis, waves, plotname="Transient Analysis"):
@@ -215,6 +220,158 @@ class TestValueObservations:
         assert value_observations({"V(hv)": np.array([4.9e4, 5.0e4, 5.1e4])}) == []
 
 
+class TestParseSourceAmplitudes:
+    """Best-effort V-card drive-amplitude extraction for the source-relative
+    extreme-value trigger. Line 1 of every deck is the title."""
+
+    def test_dc_forms(self):
+        text = "title\nV1 in 0 5\nVdd vdd 0 DC 3.3\nV2 a 0 10m\nR1 in 0 1k\n"
+        amps = parse_source_amplitudes(text)
+        assert amps == {
+            "V1": pytest.approx(5.0),
+            "Vdd": pytest.approx(3.3),
+            "V2": pytest.approx(0.01),
+        }
+
+    def test_function_specs(self):
+        text = (
+            "title\n"
+            "V1 a 0 SINE(2 1 1k)\n"  # offset+amp → 3
+            "V2 b 0 PULSE(0 -5 0 1n 1n 1u 2u)\n"  # max |level| → 5
+            "V3 c 0 PWL(0 0 1m 12 2m -15)\n"  # max |v| → 15
+            "V4 d 0 EXP(0.5 4 0 1u 2u 1u)\n"  # max of the two levels → 4
+        )
+        amps = parse_source_amplitudes(text)
+        assert amps["V1"] == pytest.approx(3.0)
+        assert amps["V2"] == pytest.approx(5.0)
+        assert amps["V3"] == pytest.approx(15.0)
+        assert amps["V4"] == pytest.approx(4.0)
+
+    def test_continuation_lines_joined(self):
+        text = "title\nV1 in 0 PWL(0 0\n+ 1m 12\n+ 2m -20)\n"
+        assert parse_source_amplitudes(text)["V1"] == pytest.approx(20.0)
+
+    def test_ac_only_source_contributes_nothing(self):
+        # An AC-only card drives nothing in .tran/.op; its mag (and optional
+        # phase) must not be misread as a DC level — and it is PARSED (known
+        # zero drive), so it must not disarm the deck either.
+        text = "title\nV1 in 0 AC 1 90\nV2 a 0 5\n"
+        assert parse_source_amplitudes(text) == {"V2": pytest.approx(5.0)}
+
+    def test_ac_spec_after_dc_ignored(self):
+        assert parse_source_amplitudes("title\nV1 in 0 5 AC 1\n")["V1"] == pytest.approx(5.0)
+
+    def test_unbounded_source_disarms_whole_deck(self):
+        # An unresolvable {expr} rail might be the deck's LARGEST source; a
+        # max() over the remaining cards would state a false "largest
+        # independent voltage source" fact. All-or-nothing: return {}.
+        text = "title\nVdd vdd 0 {vin*2}\nVsig in 0 SINE(0 10m 1k)\n"
+        assert parse_source_amplitudes(text) == {}
+
+    def test_partial_function_spec_disarms(self):
+        # A PULSE cut short by a non-numeric arg leaves the second (often
+        # larger) level unknown — the card can't be bounded, so the deck
+        # disarms rather than contributing the small first level.
+        text = "title\nV1 in 0 PULSE(0.5 {vhi} 0 1n 1n 1u 2u)\nV2 a 0 5\n"
+        assert parse_source_amplitudes(text) == {}
+
+    def test_key_value_tokens_ignored_on_parseable_card(self):
+        text = "title\nV2 a 0 5 Rser=0.1\n"
+        assert parse_source_amplitudes(text) == {"V2": pytest.approx(5.0)}
+
+    def test_inline_comment_trail_stripped(self):
+        # A ``; comment`` trail must not read as an unparseable token and
+        # falsely disarm the deck.
+        text = "title\nV1 a 0 5 ; main supply\n"
+        assert parse_source_amplitudes(text) == {"V1": pytest.approx(5.0)}
+
+    def test_spaced_key_value_tolerated(self):
+        # ``Rser = 0.1`` tokenizes as three words without the '=' collapse —
+        # the bare 'Rser' would read as unparseable and falsely disarm.
+        text = "title\nV1 a 0 5 Rser = 0.1\n"
+        assert parse_source_amplitudes(text) == {"V1": pytest.approx(5.0)}
+
+    def test_param_reference_resolved(self):
+        # The common parameterized-rail idiom must not disarm the trigger.
+        text = "title\n.param VDD=12\nVdd vdd 0 {vdd}\nVsig in 0 SINE(0 10m 1k)\n"
+        amps = parse_source_amplitudes(text)
+        assert amps["Vdd"] == pytest.approx(12.0)
+        assert amps["Vsig"] == pytest.approx(0.01)
+
+    def test_bare_voltage_unit_suffix_parses(self):
+        # LTspice accepts '5V'; parse_spice_value alone raises on it (no scale
+        # suffix, unit tail only) — dropping such a rail would collapse the
+        # reference onto a small signal source.
+        amps = parse_source_amplitudes("title\nVdd vdd 0 5V\nV2 a 0 DC 3.3V\n")
+        assert amps == {"Vdd": pytest.approx(5.0), "V2": pytest.approx(3.3)}
+
+    def test_negative_dc_uses_absolute_value(self):
+        # abs() is load-bearing: without it a -15 V rail fails the amp>0 gate
+        # and silently vanishes from the reference.
+        amps = parse_source_amplitudes("title\nVneg a 0 -15\nVee b 0 DC -12\n")
+        assert amps == {"Vneg": pytest.approx(15.0), "Vee": pytest.approx(12.0)}
+
+    def test_current_sources_excluded(self):
+        # A 5 A I-card is not a 5 V reference — only V-cards bound voltages.
+        amps = parse_source_amplitudes("title\nI1 a 0 5\nV1 in 0 0.1\n")
+        assert amps == {"V1": pytest.approx(0.1)}
+
+    def test_zero_sense_source_is_parsed_not_a_drop(self):
+        # A 0 V current-sense source contributes nothing but is fully parsed —
+        # it must not disarm the deck.
+        amps = parse_source_amplitudes("title\nVsense a b 0\nV1 in 0 5\n")
+        assert amps == {"V1": pytest.approx(5.0)}
+
+    def test_title_line_never_a_source(self):
+        assert parse_source_amplitudes("Voltage reg startup 5 10\nR1 a 0 1k\n") == {}
+
+
+class TestSourceRelativeTrigger:
+    """Third extreme_value trigger: a voltage trace dwarfing every V-source in
+    the deck (the undamped-LC class — far below the absolute floor, invisible
+    to the self-relative gate because the whole trace is large)."""
+
+    def test_fires_on_moderate_magnitude_divergence(self):
+        # ±850 V oscillation from a 0.1 V drive: 8500× ≥ the 100× salience.
+        wave = RUNAWAY_WAVE
+        obs = value_observations({"V(n2)": wave}, source_reference=("V1", 0.1))
+        assert len(obs) == 1
+        assert obs[0]["code"] == "extreme_value"
+        assert "severity" not in obs[0]
+        assert obs[0]["evidence"]["source_name"] == "V1"
+        assert obs[0]["evidence"]["source_amplitude"] == pytest.approx(0.1)
+        assert obs[0]["evidence"]["peak_abs"] == pytest.approx(850.0, rel=1e-3)
+
+    def test_silent_below_salience(self):
+        # A boost/ring at 14× the source: not lifted into view.
+        wave = 170.0 * np.sin(np.linspace(0, 30, 500))
+        assert value_observations({"V(sw)": wave}, source_reference=("Vin", 12.0)) == []
+
+    def test_fires_against_supply_rail_reference(self):
+        # The rail (largest source) is the reference: an 850 V runaway on a
+        # 12 V-railed deck is ~71× — must fire even though the small stimulus
+        # that seeded it is no longer the comparison point.
+        wave = RUNAWAY_WAVE
+        obs = value_observations({"V(n2)": wave}, source_reference=("Vdd", 12.0))
+        assert len(obs) == 1
+        assert obs[0]["evidence"]["source_name"] == "Vdd"
+
+    def test_current_traces_not_compared(self):
+        # A V-source amplitude bounds voltages, not currents — no unit-crossing.
+        wave = np.full(100, 850.0)
+        assert value_observations({"I(L1)": wave}, source_reference=("V1", 0.1)) == []
+
+    def test_not_doubled_when_absolute_gate_fired(self):
+        # One extreme_value per trace: the absolute gate already surfaced it.
+        obs = value_observations({"V(n)": np.array([1e30])}, source_reference=("V1", 0.1))
+        assert len(obs) == 1
+        assert "source_name" not in obs[0]["evidence"]
+
+    def test_disarmed_without_reference(self):
+        wave = RUNAWAY_WAVE
+        assert value_observations({"V(n2)": wave}) == []
+
+
 class TestSurfaceObservations:
     def test_value_scan_off_no_value_or_coverage(self):
         obs = surface_observations({"errors": []}, value_scan="off")
@@ -236,6 +393,104 @@ class TestSurfaceObservations:
         )
         kinds = {o["kind"] for o in obs}
         assert kinds == {"relay", "reconciliation", "value"}
+
+    def test_source_reference_armed_only_for_real_valued_analyses(self):
+        wave = RUNAWAY_WAVE
+        amps = {"V1": 0.1}
+
+        def run(sim_type):
+            return surface_observations(
+                {"sim_type": sim_type},
+                value_traces={"V(n2)": wave},
+                value_scan="scan",
+                source_amplitudes=amps,
+            )
+
+        assert any(o["code"] == "extreme_value" for o in run("Transient Analysis"))
+        assert any(o["code"] == "extreme_value" for o in run("Operating Point"))
+        # AC/noise traces are per-frequency small-signal gains; a .dc sweep's
+        # source range comes from the .dc line, not the V-card. All disarmed.
+        assert run("AC Analysis") == []
+        assert run("Noise Spectral Density") == []
+        assert run("DC transfer characteristic") == []
+        # An unparseable raw defaults sim_type to 'Unknown' — the allow-list
+        # gate (not an AC/noise exclusion list) must keep those disarmed too.
+        assert run("Unknown") == []
+        assert (
+            surface_observations(
+                {},  # no sim_type key at all
+                value_traces={"V(n2)": wave},
+                value_scan="scan",
+                source_amplitudes=amps,
+            )
+            == []
+        )
+
+    def test_largest_source_is_the_reference(self):
+        # The 12 V rail bounds the scale, not the 10 mV signal input — a
+        # gain-of-100 amplifier output (1 V) stays quiet.
+        obs = surface_observations(
+            {"sim_type": "Transient Analysis"},
+            value_traces={"V(out)": np.array([0.0, 1.0])},
+            value_scan="scan",
+            source_amplitudes={"Vsig": 0.01, "Vdd": 12.0},
+        )
+        assert obs == []
+
+    def test_meas_batch_abort_links_parse_error_to_missing(self):
+        summary = {
+            "meas_errors": [{"directive": ".meas tran bad MAX I(Qnope)"}],
+            "measurements": {},
+        }
+        obs = surface_observations(
+            summary, requested={"meas": ["aaa_good", "bad", "zzz_good"], "four": []}
+        )
+        abort = [o for o in obs if o["code"] == "meas_batch_abort"]
+        assert len(abort) == 1
+        assert abort[0]["kind"] == "reconciliation"
+        assert "earlier" in abort[0]["detail"]
+        assert ".meas tran bad MAX I(Qnope)" in abort[0]["evidence"]["failed_directives"]
+        assert set(abort[0]["evidence"]["missing"]) >= {"aaa_good", "zzz_good"}
+
+    def test_no_abort_link_without_parse_error(self):
+        obs = surface_observations(
+            {"measurements": {}}, requested={"meas": ["vpp"], "four": []}
+        )
+        assert all(o["code"] != "meas_batch_abort" for o in obs)
+
+    def test_four_misses_excluded_from_abort_link(self):
+        # A missing .four also reconciles with reason="missing", but the
+        # Fourier pipeline is unrelated to the .meas batch abort — it must not
+        # inflate the count or appear in evidence.missing.
+        summary = {"meas_errors": [{"directive": ".meas tran bad MAX I(Qnope)"}]}
+        obs = surface_observations(
+            summary, requested={"meas": ["good"], "four": ["V(out)"]}
+        )
+        abort = next(o for o in obs if o["code"] == "meas_batch_abort")
+        assert abort["evidence"]["missing"] == ["good"]
+        assert abort["detail"].startswith("1 .meas requested")
+
+    def test_no_abort_link_for_ngspice_batch_skip(self):
+        # ngspice batch-mode misses are classified skipped_in_batch_mode, a
+        # different mechanism — a coincident parse error must not produce the
+        # LTspice batch-abort causal claim.
+        summary = {
+            "meas_errors": [{"directive": ".meas tran bad MAX I(Qnope)"}],
+            "warnings": ["ngspice batch mode skips .meas evaluation"],
+        }
+        obs = surface_observations(summary, requested={"meas": ["vpp"], "four": []})
+        assert all(o["code"] != "meas_batch_abort" for o in obs)
+
+    def test_no_abort_link_when_misses_are_failed(self):
+        # A FAIL'ed measurement ran and didn't trigger — that's not the abort
+        # cascade, so no causal link.
+        summary = {
+            "meas_errors": [{"directive": ".meas tran bad MAX I(Qnope)"}],
+            "measurements": {"vpp": None},
+            "failed_measurements": ["vpp"],
+        }
+        obs = surface_observations(summary, requested={"meas": ["vpp"], "four": []})
+        assert all(o["code"] != "meas_batch_abort" for o in obs)
 
 
 class TestFormatObservations:
@@ -281,6 +536,48 @@ class TestBuildSummaryWiring:
         )
         summary = build_simulation_summary(raw, None, value_scan="skipped_large")
         assert any(o["code"] == "value_scan_skipped" for o in summary["observations"])
+
+    def test_source_amplitudes_kwarg_arms_the_trigger(self):
+        # Pins the build_simulation_summary -> surface_observations hand-off:
+        # dropping the kwarg leaves every direct-function test green while the
+        # feature goes silently dead.
+        raw = _make_raw_mock(
+            ["time", "V(n2)"],
+            np.array([0.0, 1.0]),
+            {"V(n2)": np.array([0.0, 850.0])},
+        )
+        summary = build_simulation_summary(
+            raw, None, value_scan="scan", source_amplitudes={"V1": 0.1}
+        )
+        ev = next(
+            o for o in summary["observations"] if o["code"] == "extreme_value"
+        )
+        assert ev["evidence"]["source_name"] == "V1"
+
+    def test_success_summary_threads_deck_sources_end_to_end(self, tmp_path: Path):
+        # Full wiring: parse_success_summary reads the deck, parses the tiny
+        # SINE drive, and the recorded ~volt-scale RC output fires the
+        # source-relative trigger — the hand-off chain a refactor could drop
+        # at three places with all direct-function tests still green.
+        from ltspice_mcp.lib import log_parser
+
+        deck = tmp_path / "rc.cir"
+        deck.write_text(
+            "rc lowpass\n"
+            "V1 in 0 SINE(0 1u 1k)\n"
+            "R1 in out 1k\n"
+            "C1 out 0 100n\n"
+            ".tran 1m\n"
+            ".end\n"
+        )
+        summary = log_parser.parse_success_summary(
+            FIXTURES / "ltspice_tran_rc.raw",
+            FIXTURES / "ltspice_tran_rc.log",
+            0.0,
+            netlist=deck,
+        )
+        ev = [o for o in summary["observations"] if o["code"] == "extreme_value"]
+        assert ev and ev[0]["evidence"]["source_name"] == "V1"
 
 
 class TestOperatingPointValueScan:
