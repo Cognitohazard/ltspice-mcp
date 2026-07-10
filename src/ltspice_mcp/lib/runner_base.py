@@ -25,6 +25,7 @@ from spicelib.sim.sim_runner import SimRunner
 
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES, BatchJob
+from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
 
 if TYPE_CHECKING:
@@ -236,11 +237,9 @@ class BatchRunnerBase(RunnerBase):
     ):
         super().__init__(loop, simulator_class, output_folder, max_parallel)
         self._cancel_events: dict[str, threading.Event] = {}
-        self._active_runners: dict[str, SimRunner] = {}
 
     def _cleanup(self, job_id: str) -> None:
-        """Drop per-job runner + cancel-event references."""
-        self._active_runners.pop(job_id, None)
+        """Drop the per-job cancel-event reference."""
         self._cancel_events.pop(job_id, None)
 
     def _register_cancel(self, job_id: str) -> threading.Event:
@@ -249,11 +248,8 @@ class BatchRunnerBase(RunnerBase):
         self._cancel_events[job_id] = ev
         return ev
 
-    def _register_runner(self, job_id: str, runner: SimRunner) -> None:
-        self._active_runners[job_id] = runner
-
     def _gated_runner_for(self, job_id: str, cancel_event: threading.Event) -> SimRunner:
-        """Build, wrap, cancel-gate, and register this batch's spicelib runner.
+        """Build, wrap, and cancel-gate this batch's spicelib runner.
 
         The gate stops the submission loop (spicelib's ``run_all`` for
         sweeps, the per-run loop for Monte Carlo) from launching the
@@ -261,11 +257,9 @@ class BatchRunnerBase(RunnerBase):
         the kill frees simulator slots, which would otherwise resume
         submission of a job the user just cancelled.
         """
-        runner = gate_runner_on_cancel(
+        return gate_runner_on_cancel(
             wrap_runner_for_runno_callbacks(self._build_sim_runner()), cancel_event, job_id
         )
-        self._register_runner(job_id, runner)
-        return runner
 
     def _record_run_completion(
         self,
@@ -337,11 +331,14 @@ class BatchRunnerBase(RunnerBase):
         if cancel_event is not None:
             cancel_event.set()
 
-        # WSL: taskkill the Windows simulator processes whose per-run filenames
-        # carry this job's token. Batch sub-runs are named with the job id plus a
-        # per-run index (see batch_run_filename), so the substring token match in
-        # kill_windows_ltspice_by_token hits every run of this batch, the same way
-        # the single-run cancel path terminates its process.
+        # Kill the batch's simulator processes by job-id token. Batch sub-runs
+        # are named with the job id plus a per-run index (see
+        # batch_run_filename), so the substring token match hits every run of
+        # this batch and nothing else — in particular never a parallel server
+        # session's simulators. Two mechanisms, at most one matches per
+        # platform: the WSL taskkill for Windows-side LTspice (invisible to
+        # Linux psutil) and the psutil kill for everything else (native
+        # LTspice/Wine, ngspice/qspice/xyce — including ngspice on WSL).
         #
         # One pass is not enough: killing the in-flight runs frees simulator
         # slots, which can resume a submission already blocked inside
@@ -352,12 +349,15 @@ class BatchRunnerBase(RunnerBase):
         # miss the resumed submission's process (it showed up ~1s in live),
         # so the window stays open through the attempt-2 scan. A clean FIRST
         # pass means no slot was freed by us — no resume race — and breaks
-        # immediately; off WSL every pass is a cheap no-op returning 0, so
-        # the loop exits there with no sleep.
+        # immediately.
         try:
+            exe_names = simulator_executable_names(self.simulator_class)
             killed_total = 0
             for attempt in range(_CANCEL_KILL_MAX_PASSES):
                 killed = await asyncio.to_thread(kill_windows_ltspice_by_token, batch_job.job_id)
+                killed += await asyncio.to_thread(
+                    kill_simulator_by_token, batch_job.job_id, exe_names
+                )
                 killed_total += killed
                 if killed == 0 and attempt != 1:
                     break
@@ -367,15 +367,7 @@ class BatchRunnerBase(RunnerBase):
                     "Killed %d Windows %s process(es) for %s", killed_total, kind, batch_job.job_id
                 )
         except Exception as e:
-            logger.warning("WSL process kill for %s job %s failed: %s", kind, batch_job.job_id, e)
-
-        # Native/Wine: spicelib's kill_all_spice (a harmless no-op on WSL).
-        runner = self._active_runners.get(batch_job.job_id)
-        if runner is not None:
-            try:
-                await asyncio.to_thread(runner.kill_all_spice)
-            except Exception as e:
-                logger.warning("Error killing %s job %s: %s", kind, batch_job.job_id, e)
+            logger.warning("Process kill for %s job %s failed: %s", kind, batch_job.job_id, e)
 
         if batch_job.status == "running":
             transition(

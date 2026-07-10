@@ -14,6 +14,7 @@ import pytest
 
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.montecarlo_runner import MonteCarloRunner
+from ltspice_mcp.lib.proc_kill import simulator_executable_names
 from ltspice_mcp.lib.runner_base import discard_logopinfo_netlist
 from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
 from ltspice_mcp.lib.sweep_runner import SweepRunner
@@ -224,14 +225,15 @@ class TestSimulationRunnerCancel:
 class TestSimulationRunnerKillWsl:
     """Regression: kill()/cancel() must terminate the real (Windows) sim.
 
-    On WSL spicelib's ``kill_all_spice`` can't see the Windows process, so the
-    runner additionally taskkills it by job_id. cancel() must also mark the job
-    terminal BEFORE killing, so the killed sim's late completion callback can't
-    record a partial raw as success.
+    On WSL the simulator is a Windows process invisible to Linux psutil, so
+    the runner taskkills it by job_id token; everywhere else the psutil kill
+    scoped by the same token applies. cancel() must also mark the job
+    terminal BEFORE killing, so the killed sim's late completion callback
+    can't record a partial raw as success.
     """
 
     @pytest.mark.asyncio
-    async def test_kill_invokes_windows_taskkill_and_native(
+    async def test_kill_invokes_windows_taskkill_and_scoped_kill(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch
     ):
         runner = SimulationRunner(
@@ -241,17 +243,20 @@ class TestSimulationRunnerKillWsl:
             max_parallel=2,
         )
         job = _make_job(state_no_sim, work_dir)
-        fake_spice = MagicMock()
-        runner._runners[job.job_id] = fake_spice
         tokens: list[str] = []
+        scoped: list[tuple[str, frozenset[str]]] = []
         monkeypatch.setattr(
             "ltspice_mcp.lib.sim_runner.kill_windows_ltspice_by_token",
             lambda tok: tokens.append(tok) or 1,
         )
+        monkeypatch.setattr(
+            "ltspice_mcp.lib.sim_runner.kill_simulator_by_token",
+            lambda tok, names: scoped.append((tok, frozenset(names))) or 0,
+        )
         await runner.kill(job.job_id)
         assert tokens == [job.job_id]  # Windows kill targeted this specific job
-        fake_spice.kill_all_spice.assert_called_once()  # native/Wine path still runs
-        assert job.job_id not in runner._runners  # tracked runner dropped
+        # The psutil kill is scoped by the same token + this runner's simulator.
+        assert scoped == [(job.job_id, simulator_executable_names(FakeSim))]
 
     @pytest.mark.asyncio
     async def test_submit_passes_exe_log_and_job_token(
@@ -446,7 +451,6 @@ class TestSimulationRunnerConcurrencyGate:
         await _wait_for(lambda: tb.done())
 
         assert b.status == "timeout"  # stayed terminal
-        assert b.job_id not in runner._runners  # never registered as running
         assert launched == launched_before  # b's sim was never submitted (no orphan)
         for t in (ta, tb):
             if not t.done():
@@ -528,28 +532,30 @@ class TestSimulationRunnerConcurrencyGate:
     async def test_unverified_kill_keeps_slot_reserved_until_finalized(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch
     ):
-        """Codex review (high): a cancel whose process termination cannot be
-        verified (WSL taskkill finds nothing / native kill_all_spice raises) must
-        NOT free the concurrency slot — otherwise a queued job launches alongside
-        a still-running orphan and exceeds max_parallel. The slot stays reserved
+        """A cancel whose process termination cannot be verified (WSL taskkill
+        finds nothing / the scoped psutil kill raises) must NOT free the
+        concurrency slot — otherwise a queued job launches alongside a
+        still-running orphan and exceeds max_parallel. The slot stays reserved
         until the process is actually finalized (completion callback fires)."""
         launched: list = []
         runner = self._gate_runner(work_dir, launched, monkeypatch)  # max_parallel=1
         loop = asyncio.get_running_loop()
         # Both best-effort termination paths "fail": WSL taskkill confirms nothing,
-        # and kill_all_spice raises (and is swallowed).
+        # and the scoped kill raises (and is swallowed).
         monkeypatch.setattr(
             "ltspice_mcp.lib.sim_runner.kill_windows_ltspice_by_token", lambda tok: 0
         )
+
+        def _kill_boom(tok, names):
+            raise RuntimeError("kill boom")
+
+        monkeypatch.setattr("ltspice_mcp.lib.sim_runner.kill_simulator_by_token", _kill_boom)
         a = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_fk_a")
         b = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_fk_b")
         ta = loop.create_task(runner.start_simulation(a.netlist, a, state_no_sim))
         tb = loop.create_task(runner.start_simulation(b.netlist, b, state_no_sim))
         await _wait_for(lambda: a.status == "running")
         assert a.status == "running" and b.status == "queued"
-        mock_runner = runner._runners[a.job_id]
-        assert isinstance(mock_runner, MagicMock)  # _gate_runner builds MagicMock runners
-        mock_runner.kill_all_spice.side_effect = RuntimeError("kill boom")
         launched_before = list(launched)
 
         await runner.cancel(a, state_no_sim)
@@ -711,24 +717,27 @@ class TestSweepRunnerHandlers:
         monkeypatch,
     ):
         # Batch process-kill: sub-runs are named "{job_id}_<index>", so cancel()
-        # must taskkill the Windows processes by job_id token on WSL (where
-        # kill_all_spice is a no-op), in addition to the native kill_all_spice.
-        # After a pass that killed something, cancel re-scans until a clean
-        # pass confirms nothing matched (see TestBatchCancelSpawnRace).
+        # must kill by job_id token — the WSL taskkill for Windows-side LTspice
+        # plus the scoped psutil kill for local simulator processes. After a
+        # pass that killed something, cancel re-scans until a clean pass
+        # confirms nothing matched (see TestBatchCancelSpawnRace).
         bj = _make_batch(state_no_sim, work_dir)
-        fake_runner = MagicMock()
-        sweep_runner._register_runner(bj.job_id, fake_runner)
         monkeypatch.setattr("ltspice_mcp.lib.runner_base._CANCEL_KILL_RESCAN_DELAY", 0.001)
         tokens: list[str] = []
+        scoped_tokens: list[str] = []
         kill_returns = iter([1, 0, 0])
         monkeypatch.setattr(
             "ltspice_mcp.lib.runner_base.kill_windows_ltspice_by_token",
             lambda tok: tokens.append(tok) or next(kill_returns),
         )
+        monkeypatch.setattr(
+            "ltspice_mcp.lib.runner_base.kill_simulator_by_token",
+            lambda tok, names: scoped_tokens.append(tok) or 0,
+        )
         await sweep_runner.cancel(bj, state_no_sim)
-        # Windows kill targeted this batch's token, then re-scanned to clean.
+        # Both kills targeted this batch's token, then re-scanned to clean.
         assert tokens == [bj.job_id] * 3
-        fake_runner.kill_all_spice.assert_called_once()  # native/Wine path still runs
+        assert scoped_tokens == [bj.job_id] * 3
         assert bj.status == "cancelled"
 
     @pytest.mark.asyncio
