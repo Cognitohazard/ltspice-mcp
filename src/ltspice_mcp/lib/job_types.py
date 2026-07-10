@@ -27,6 +27,7 @@ SimulationJob`` keeps working.
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -224,6 +225,11 @@ class BatchJob:
     # ``None`` means "not scanned yet"; an empty list means "scanned, no
     # warnings found".
     convergence_warnings: list[dict] | None = field(default=None, repr=False)
+    # PID of the server process that launched (or, for records loaded from a
+    # sidecar, persisted) this job. Lets a parallel session tell a live
+    # sibling's running job from one orphaned by a dead server, and keeps
+    # shutdown from cancelling jobs it doesn't own. 0 = unknown owner.
+    owner_pid: int = field(default_factory=os.getpid)
 
 
 @dataclass
@@ -257,3 +263,6 @@ class SimulationJob:
     error: str | None = None
     task: Any | None = None
     done_event: asyncio.Event = field(default_factory=asyncio.Event)
+    # Same contract as BatchJob.owner_pid: which server process owns this
+    # job (0 = unknown). Persisted so parallel sessions can check liveness.
+    owner_pid: int = field(default_factory=os.getpid)

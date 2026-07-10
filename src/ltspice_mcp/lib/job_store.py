@@ -6,17 +6,22 @@ Loads are lazy — the server only reads a circuit's sidecar directory the first
 time a tool touches that circuit in a session.
 
 Jobs whose server process died while they were running come back as
-``interrupted`` (see ``_finalize_loaded_status``).
+``interrupted``; a record whose owning process is still alive — a parallel
+server session's live job — keeps its status as written (see
+``_finalize_loaded_status``).
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import psutil
 
 from ltspice_mcp.lib import atomic_write_json, parse_iso_datetime
 from ltspice_mcp.lib.job_types import (
@@ -105,6 +110,9 @@ def _serialize_sim_job(job: SimulationJob) -> dict:
         "schema_version": SCHEMA_VERSION,
         "job_id": job.job_id,
         "kind": "simulation",
+        # Additive within schema v2: older records lack it; readers treat a
+        # missing pid as a dead owner (the pre-pid behavior).
+        "pid": job.owner_pid,
         "netlist": str(job.netlist),
         "simulator": job.simulator,
         "status": job.status,
@@ -134,6 +142,7 @@ def _serialize_batch_job(job: BatchJob) -> dict:
         "schema_version": SCHEMA_VERSION,
         "job_id": job.job_id,
         "kind": "batch",
+        "pid": job.owner_pid,
         "job_type": job.job_type,
         "netlist": str(job.netlist),
         "total_runs": job.total_runs,
@@ -174,13 +183,51 @@ def delete_job(job: SimulationJob | BatchJob) -> None:
         return
 
 
-def _finalize_loaded_status(raw_status: str) -> tuple[str, bool]:
+def _pid_of(data: dict) -> int | None:
+    """Owning-server pid from a job record, or None if absent/invalid."""
+    pid = data.get("pid")
+    return pid if isinstance(pid, int) and pid > 0 else None
+
+
+def _owner_alive(pid: int | None, *, own_is_alive: bool = False) -> bool:
+    """Whether the record's owning server process is still running.
+
+    ``own_is_alive`` decides how a record carrying OUR pid reads, because
+    the right answer depends on the caller. Registry loading passes False:
+    a record we're loading isn't in our registry, so a matching pid can only
+    be a recycled one — dead owner. Disk-level summaries pass True: there
+    the overwhelmingly common own-pid case is this server's genuinely
+    running job (which registry loading never sees — it dedups against
+    in-memory jobs first).
+
+    Liveness only — a pid recycled by an unrelated process also reads as
+    alive until it exits; compare process create_time against the job's
+    started_at if that ever matters in practice.
+    """
+    if not pid:
+        return False
+    if pid == os.getpid():
+        return own_is_alive
+    try:
+        return psutil.pid_exists(pid)
+    except Exception:
+        return False
+
+
+def _finalize_loaded_status(
+    raw_status: str, owner_pid: int | None = None, *, own_is_alive: bool = False
+) -> tuple[str, bool]:
     """Translate a loaded status.
 
     Returns (effective_status, was_interrupted). Running/queued jobs whose
-    owning process is gone come back as ``interrupted``.
+    owning process is gone come back as ``interrupted``; if the owner is
+    still alive (a parallel server session's live job), the status stands
+    as written. ``own_is_alive`` is forwarded to ``_owner_alive`` — see its
+    docstring for which callers pass True.
     """
-    if raw_status in NON_TERMINAL_LIVE_STATUSES:
+    if raw_status in NON_TERMINAL_LIVE_STATUSES and not _owner_alive(
+        owner_pid, own_is_alive=own_is_alive
+    ):
         return INTERRUPTED_STATUS, True
     return raw_status, False
 
@@ -234,7 +281,8 @@ def _accept_schema(data: dict, source: Path) -> bool:
 
 
 def _deserialize_sim_job(data: dict) -> SimulationJob:
-    status, interrupted = _finalize_loaded_status(str(data.get("status", INTERRUPTED_STATUS)))
+    pid = _pid_of(data)
+    status, interrupted = _finalize_loaded_status(str(data.get("status", INTERRUPTED_STATUS)), pid)
     started = parse_iso_datetime(data.get("started_at"))
     if started is None:
         from ltspice_mcp.lib import now as _now
@@ -252,9 +300,13 @@ def _deserialize_sim_job(data: dict) -> SimulationJob:
         raw_file=raw_file,
         log_file=log_file,
         error=("Server restarted while job was running" if interrupted else data.get("error")),
+        # The record's pid, NOT ours: a loaded job belongs to whichever
+        # process persisted it (0 when the record predates the pid field).
+        owner_pid=pid or 0,
     )
-    # Any loaded job is already terminal — pre-trigger the done event so
-    # callers that await it don't block forever.
+    # A loaded terminal job's work is over — pre-trigger the done event so
+    # callers that await it don't block forever. (A parallel session's live
+    # job stays unset; its completion is signalled only in the owner.)
     if job.status in TERMINAL_STATUSES:
         job.done_event.set()
     return job
@@ -299,7 +351,8 @@ def _deserialize_mc_config(data: dict | None) -> MonteCarloConfig | None:
 
 
 def _deserialize_batch_job(data: dict) -> BatchJob:
-    status, interrupted = _finalize_loaded_status(str(data.get("status", INTERRUPTED_STATUS)))
+    pid = _pid_of(data)
+    status, interrupted = _finalize_loaded_status(str(data.get("status", INTERRUPTED_STATUS)), pid)
     started = parse_iso_datetime(data.get("started_at"))
     if started is None:
         from ltspice_mcp.lib import now as _now
@@ -332,10 +385,34 @@ def _deserialize_batch_job(data: dict) -> BatchJob:
         run_results=run_results,
         sweep_config=_deserialize_sweep_config(data.get("sweep_config")),
         mc_config=_deserialize_mc_config(data.get("mc_config")),
+        owner_pid=pid or 0,
     )
     if bj.status in TERMINAL_STATUSES:
         bj.done_event.set()
     return bj
+
+
+def _load_job_file(path: Path) -> SimulationJob | BatchJob | None:
+    """Read + schema-check + deserialize one sidecar record, or None.
+
+    Unreadable, unsupported-schema, and malformed files log a warning and
+    return None — a bad record never aborts a directory load.
+    """
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("Skipping unreadable job file %s: %s", path, e)
+        return None
+    if not _accept_schema(data, path):
+        return None
+    try:
+        if data.get("kind") == "batch":
+            return _deserialize_batch_job(data)
+        return _deserialize_sim_job(data)
+    except Exception as e:
+        logger.warning("Skipping malformed job file %s: %s", path, e)
+        return None
 
 
 def load_jobs_for_circuit(
@@ -352,25 +429,27 @@ def load_jobs_for_circuit(
         return sim_jobs, batch_jobs
 
     for file_path in sorted(target.glob("*.json")):
-        try:
-            with file_path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError) as e:
-            logger.warning("Skipping unreadable job file %s: %s", file_path, e)
-            continue
-        if not _accept_schema(data, file_path):
-            continue
-        kind = data.get("kind")
-        try:
-            if kind == "batch":
-                batch_jobs.append(_deserialize_batch_job(data))
-            else:
-                sim_jobs.append(_deserialize_sim_job(data))
-        except Exception as e:
-            logger.warning("Skipping malformed job file %s: %s", file_path, e)
-            continue
+        job = _load_job_file(file_path)
+        if isinstance(job, BatchJob):
+            batch_jobs.append(job)
+        elif isinstance(job, SimulationJob):
+            sim_jobs.append(job)
 
     return sim_jobs, batch_jobs
+
+
+def load_job(job_id: str, netlist: Path) -> SimulationJob | BatchJob | None:
+    """Load one job record by id from its circuit's sidecar, or None.
+
+    Used to refresh this session's view of a job owned by a parallel server
+    process — the owner keeps persisting status changes the in-memory
+    registry would otherwise never see. A missing file (e.g. the owner
+    evicted the job) is a silent None, not a warning.
+    """
+    path = _job_file(job_id, sidecar_dir(netlist))
+    if not path.is_file():
+        return None
+    return _load_job_file(path)
 
 
 def summarize_circuit(circuit_path: Path) -> dict[str, Any]:
@@ -407,9 +486,14 @@ def summarize_circuit(circuit_path: Path) -> dict[str, Any]:
             record_netlist = str(data.get("netlist", ""))
             if record_netlist != match_path:
                 continue
-            # Running/queued in a persisted record means the prior server
-            # died — treat as interrupted for summary purposes.
-            status, _ = _finalize_loaded_status(str(data.get("status", "unknown")))
+            # Running/queued with a dead owner means that server died —
+            # summarize as interrupted; with a live owner the status stands.
+            # own_is_alive: our own pid on a running record here is almost
+            # always THIS server's live job (not a recycled pid), so the
+            # summary reports it as running.
+            status, _ = _finalize_loaded_status(
+                str(data.get("status", "unknown")), _pid_of(data), own_is_alive=True
+            )
             counts[status] = counts.get(status, 0) + 1
             total += 1
             if data.get("kind") == "batch":
