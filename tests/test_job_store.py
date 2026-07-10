@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -281,15 +283,24 @@ class TestSummarize:
         circuit.write_text("")
         job_store.save_job(_sim_job(circuit, status="completed", job_id="sim_a"))
         job_store.save_job(_sim_job(circuit, status="failed", job_id="sim_b"))
+        # Written with THIS process's pid (the dataclass default): a running
+        # record whose owner is this live server is a genuinely running job.
         job_store.save_job(_sim_job(circuit, status="running", completed_at=None, job_id="sim_c"))
+        # A running record whose owning process is gone surfaces as interrupted.
+        dead_proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead_proc.wait()
+        orphan = _sim_job(circuit, status="running", completed_at=None, job_id="sim_d")
+        orphan.owner_pid = dead_proc.pid
+        job_store.save_job(orphan)
 
         summary = job_store.summarize_circuit(circuit)
-        assert summary["total_jobs"] == 3
+        assert summary["total_jobs"] == 4
         assert summary["status_counts"]["completed"] == 1
         assert summary["status_counts"]["failed"] == 1
-        # running persisted record means the prior server died — surface as interrupted
+        assert summary["status_counts"]["running"] == 1
         assert summary["status_counts"]["interrupted"] == 1
-        assert "sim_c" in summary["interrupted_job_ids"]
+        assert "sim_d" in summary["interrupted_job_ids"]
+        assert "sim_c" not in summary["interrupted_job_ids"]
 
     def test_summary_skips_unreadable_files(self, tmp_path: Path) -> None:
         circuit = tmp_path / "rc.cir"

@@ -24,7 +24,7 @@ from ltspice_mcp.lib.plot_html import (
     WIDGET_RESOURCE_URI,
     build_widget_html,
 )
-from ltspice_mcp.state import SessionState
+from ltspice_mcp.state import SessionState, SimulationJob
 
 logger = logging.getLogger(__name__)
 
@@ -292,33 +292,36 @@ def _read_results_list(
     del params
     items: list[dict] = []
 
-    for j in state.jobs.values():
-        items.append(
-            {
-                "job_id": j.job_id,
-                "type": "simulation",
-                "netlist": j.netlist.name,
-                "simulator": j.simulator,
-                "status": j.status,
-                "started_at": j.started_at.isoformat() if j.started_at else None,
-                "completed_at": (j.completed_at.isoformat() if j.completed_at else None),
-            }
-        )
-
-    for bj in state.batch_jobs.values():
-        items.append(
-            {
-                "job_id": bj.job_id,
-                "type": bj.job_type,
-                "netlist": bj.netlist.name,
-                "status": bj.status,
-                "total_runs": bj.total_runs,
-                "completed_runs": bj.completed_runs,
-                "failed_runs": bj.failed_runs,
-                "started_at": (bj.started_at.isoformat() if bj.started_at else None),
-                "completed_at": (bj.completed_at.isoformat() if bj.completed_at else None),
-            }
-        )
+    # refreshed_jobs re-reads parallel sessions' live jobs. (Resource reads
+    # run on a worker thread, where the refresh returns fresh views without
+    # touching the loop-owned registry.)
+    for job in state.job_registry.refreshed_jobs():
+        if isinstance(job, SimulationJob):
+            items.append(
+                {
+                    "job_id": job.job_id,
+                    "type": "simulation",
+                    "netlist": job.netlist.name,
+                    "simulator": job.simulator,
+                    "status": job.status,
+                    "started_at": job.started_at.isoformat() if job.started_at else None,
+                    "completed_at": (job.completed_at.isoformat() if job.completed_at else None),
+                }
+            )
+        else:
+            items.append(
+                {
+                    "job_id": job.job_id,
+                    "type": job.job_type,
+                    "netlist": job.netlist.name,
+                    "status": job.status,
+                    "total_runs": job.total_runs,
+                    "completed_runs": job.completed_runs,
+                    "failed_runs": job.failed_runs,
+                    "started_at": (job.started_at.isoformat() if job.started_at else None),
+                    "completed_at": (job.completed_at.isoformat() if job.completed_at else None),
+                }
+            )
 
     items.sort(key=lambda x: x.get("started_at") or "", reverse=True)
     data = {"jobs": items, "count": len(items)}

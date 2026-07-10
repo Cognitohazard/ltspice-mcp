@@ -802,7 +802,7 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
 
     # The union store holds every job (single-run and sweep/MC batch), so
     # check_job is a complete view of "what jobs exist".
-    all_jobs: list[SimulationJob | BatchJob] = list(state.all_jobs.values())
+    all_jobs: list[SimulationJob | BatchJob] = state.job_registry.refreshed_jobs()
 
     # Determine which jobs to show
     if status_filter == "all":

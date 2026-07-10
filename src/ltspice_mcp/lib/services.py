@@ -196,7 +196,10 @@ def resolve_job(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
     job = state.all_jobs.get(job_id)
     if job is None:
         raise JobNotFoundError(f"Job not found: {job_id}")
-    return job
+    # A parallel session's live job is only ever updated by its owner; pull
+    # the owner's latest persisted state so status checks and result reads
+    # here don't stay frozen at "running". No-op for this session's own jobs.
+    return state.job_registry.refresh_foreign_job(job)
 
 
 def resolve_simulation_job(job_id: str, state: SessionState) -> SimulationJob:
