@@ -14,6 +14,7 @@ from ltspice_mcp.lib.job_types import (
     SimulationJob,
 )
 from ltspice_mcp.lib.log_parser import extract_error_context
+from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.runner_base import (
     DEFAULT_MAX_PARALLEL,
     RunnerBase,
@@ -54,7 +55,6 @@ class SimulationRunner(RunnerBase):
         max_parallel: int = DEFAULT_MAX_PARALLEL,
     ):
         super().__init__(loop, simulator_class, output_folder, max_parallel)
-        self._runners: dict[str, SimRunner] = {}
         # Session-level concurrency gate: each run_simulation job builds its own
         # spicelib SimRunner (one task each), so spicelib's per-runner
         # ``parallel_sims`` never bounds the number of *independent* jobs. This
@@ -148,7 +148,6 @@ class SimulationRunner(RunnerBase):
                 transition(job, "running", state=state, simulator=job.simulator)
                 runner = await asyncio.to_thread(submit_sim)
                 if job.status not in TERMINAL_STATUSES:
-                    self._runners[job_id] = runner
                     job.task = runner
                 # If terminal already (cancel raced the submit), the submitted
                 # sim's completion callback still fires _handle_completion, which
@@ -183,7 +182,6 @@ class SimulationRunner(RunnerBase):
             return
         if job.status in TERMINAL_STATUSES:
             logger.debug("Job %s already in terminal state: %s", job_id, job.status)
-            self._runners.pop(job_id, None)
             # This callback fires when the simulator process finally exits, so
             # a killed run's file handle is now released and its partial output
             # is safe to delete. Without this, a cancelled/timed-out run strands
@@ -216,7 +214,6 @@ class SimulationRunner(RunnerBase):
                 logger.debug("Could not stat raw file %s: %s", job.raw_file, e)
                 raw_size = 0
 
-        self._runners.pop(job_id, None)
         if raw_size == 0:
             try:
                 if job.log_file and job.log_file.exists():
@@ -246,14 +243,13 @@ class SimulationRunner(RunnerBase):
         latter wants to record status='timeout' rather than 'cancelled',
         so it manages job state itself and only delegates the SIGKILL.
 
-        On WSL the actual simulator is a Windows process invisible to spicelib's
-        ``kill_all_spice`` (which name-matches the Linux psutil table), so this
-        also taskkills the specific Windows process by job_id — see
-        ``kill_windows_ltspice_by_token``.
+        Both kill mechanisms are scoped by the job_id token in the simulator's
+        command line (see ``_terminate_processes``), so a parallel server
+        session's simulators are never touched.
 
         It deliberately does NOT release the concurrency slot. Termination here
-        is best-effort (the WSL taskkill can fail/return 0; ``kill_all_spice``
-        exceptions are swallowed), so freeing the slot now would let a queued job
+        is best-effort (either kill can fail/return 0; exceptions are
+        swallowed), so freeing the slot now would let a queued job
         launch alongside a still-running orphan, violating ``max_parallel`` in the
         exact failure mode the cap exists for. The slot is released only when the
         process is confirmed gone — i.e. when the completion callback fires
@@ -263,11 +259,7 @@ class SimulationRunner(RunnerBase):
         immediately; a failed kill keeps the slot reserved until the orphan
         actually ends.
         """
-        runner = self._runners.get(job_id)
-        try:
-            await asyncio.to_thread(self._terminate_processes, job_id, runner)
-        finally:
-            self._runners.pop(job_id, None)
+        await asyncio.to_thread(self._terminate_processes, job_id)
 
     def _remove_run_artifacts(self, job_id: str) -> None:
         """Best-effort removal of a job's on-disk run artifacts.
@@ -289,12 +281,16 @@ class SimulationRunner(RunnerBase):
             except OSError as e:
                 logger.debug("Could not remove stale artifact %s: %s", path, e)
 
-    def _terminate_processes(self, job_id: str, runner: SimRunner | None) -> None:
+    def _terminate_processes(self, job_id: str) -> None:
         """Blocking process termination (runs in a worker thread).
 
-        WSL: taskkill the Windows LTspice process matching this job_id.
-        Native/Wine: spicelib's ``kill_all_spice`` (a harmless no-op on WSL,
-        where no Linux process carries the simulator's name).
+        WSL + LTspice: the simulator is a Windows process invisible to the
+        Linux psutil table — taskkill it by the job_id token in its command
+        line. Everything else (native LTspice/Wine, ngspice/qspice/xyce on
+        any OS, including ngspice on WSL where it IS a Linux process): psutil
+        kill scoped by the same token. Both matches require the job_id, so a
+        parallel server session's simulators can never be collateral.
+        (spicelib's name-global ``kill_all_spice`` is deliberately not used.)
         """
         try:
             killed = kill_windows_ltspice_by_token(job_id)
@@ -302,13 +298,14 @@ class SimulationRunner(RunnerBase):
                 logger.info("Killed %d Windows sim process(es) for %s", killed, job_id)
         except Exception as e:
             logger.warning("WSL process kill for %s failed: %s", job_id, e)
-        if runner is None:
-            logger.debug("No spicelib runner tracked for %s (already finalized?)", job_id)
-            return
         try:
-            runner.kill_all_spice()
+            killed = kill_simulator_by_token(
+                job_id, simulator_executable_names(self.simulator_class)
+            )
+            if killed:
+                logger.info("Killed %d local sim process(es) for %s", killed, job_id)
         except Exception as e:
-            logger.warning("kill_all_spice for %s failed: %s", job_id, e)
+            logger.warning("Scoped process kill for %s failed: %s", job_id, e)
 
     async def cancel(self, job: SimulationJob, state: SessionState | None = None) -> None:
         """Cancel a running simulation and record the cancelled state.

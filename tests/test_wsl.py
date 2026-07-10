@@ -261,10 +261,9 @@ class TestFindWindowsLtspiceExe:
 class TestKillWindowsLtspiceByToken:
     """Regression: cancel/timeout must actually terminate the Windows sim.
 
-    On WSL the simulator is a Windows process invisible to spicelib's
-    ``kill_all_spice`` (Linux psutil name-match), so the kill works by
-    taskkilling the specific Windows process matched by job_id in its command
-    line via PowerShell.
+    On WSL the simulator is a Windows process invisible to the Linux process
+    table (psutil), so the kill works by taskkilling the specific Windows
+    process matched by job_id in its command line via PowerShell.
     """
 
     def test_noop_off_wsl(self):

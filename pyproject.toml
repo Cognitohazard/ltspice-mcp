@@ -27,6 +27,9 @@ dependencies = [
     "anyio>=4.0,<5.0",
     "mcp[cli]>=1.27.0,<2.0",
     "numpy>=1.26,<3.0",
+    # Direct use (scoped simulator kill, job owner-pid liveness); also a
+    # spicelib transitive, so this adds no new install weight.
+    "psutil>=5.9,<8.0",
     "pydantic>=2.7,<3.0",
     "rapidfuzz>=3.0,<4.0",
     "scipy>=1.12,<2.0",
