@@ -651,9 +651,7 @@ class TestResonance:
         f = _log_freqs(1, 5, 4000)
         H = _biquad_resonator(f, 1000.0, 10.0)
         peak = compute_resonances(f, H)["peaks"][0]
-        assert peak["magnitude_linear"] == pytest.approx(
-            10.0 ** (peak["magnitude_db"] / 20.0)
-        )
+        assert peak["magnitude_linear"] == pytest.approx(10.0 ** (peak["magnitude_db"] / 20.0))
         assert peak["magnitude_linear"] > 0
 
     def test_rejects_bad_prominence(self):
