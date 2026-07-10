@@ -80,6 +80,7 @@ from ltspice_mcp.tools._base import (
     StrictModel,
     ToolInput,
     asc_export_lock,
+    circuit_file_lock,
     format_response,
     paginate,
     pagination_metadata,
@@ -173,6 +174,21 @@ _edit_locks: dict[Path, asyncio.Lock] = {}
 def _get_edit_lock(path: Path) -> asyncio.Lock:
     """Get or create a per-file edit lock (shared LRU mechanism: ``path_lock``)."""
     return path_lock(_edit_locks, path, _MAX_EDIT_LOCKS)
+
+
+@asynccontextmanager
+async def _edit_guard(path: Path) -> AsyncIterator[None]:
+    """Serialize a mutation of one circuit file, in-process and cross-process.
+
+    Layering: the per-path asyncio lock first (tasks in this session), then
+    the cross-process file lock (parallel server sessions in the same
+    directory). Every mutation is a whole-file read-modify-write, so an
+    unserialized concurrent edit is last-writer-wins; this guard plus the
+    editor cache's stat-on-fetch — which must happen INSIDE the guard —
+    turn that into edit-on-latest.
+    """
+    async with _get_edit_lock(path), circuit_file_lock(path):
+        yield
 
 
 # Standard LTspice SYMATTR slot names. Anything outside this set is
@@ -1222,7 +1238,7 @@ async def _editing(path: Path, state: SessionState) -> AsyncIterator[Editor]:
     the save raised, or both succeeded. The cached editor is dirty after
     any mutation; a failed save doesn't roll back the in-memory state.
     """
-    async with _get_edit_lock(path):
+    async with _edit_guard(path):
         editor = _get_editor(path, state)
         _snapshot_asc(path, state)
         try:
@@ -1789,7 +1805,7 @@ async def _set_component_value_netlist(
     from ltspice_mcp.lib.spice_lex import lex, write_cards
     from ltspice_mcp.lib.spice_lex_views import instances_by_ref
 
-    async with _get_edit_lock(file_path):
+    async with _edit_guard(file_path):
         cards = lex(read_spice_text(file_path)).cards
         refs_to_card = instances_by_ref(cards)
 
@@ -1834,7 +1850,7 @@ async def _set_component_nodes_netlist(
     from ltspice_mcp.lib.spice_lex import lex, write_cards
     from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
 
-    async with _get_edit_lock(file_path):
+    async with _edit_guard(file_path):
         cards = lex(read_spice_text(file_path)).cards
         refs_to_card = instances_by_ref(cards)
         if reference.lower() not in refs_to_card:
@@ -2462,16 +2478,18 @@ async def handle_remove_component(
 
     reference = args.reference
 
-    # Collect pin positions before removal to check for orphaned wires.
-    # Other components' pins are excluded so we don't blame this remove
-    # for wires that legitimately belong to a neighbour.
-    editor_pre = _get_asc_editor(asc_path, state)
-    _require_component(editor_pre, reference)
-    pin_coords = _component_pin_coords(editor_pre, reference)
-    other_pins = _other_components_pin_coords(editor_pre, reference)
-    target_only_pins = pin_coords - other_pins
-
     async with _editing_asc(asc_path, state) as editor:
+        # Collect pin positions before removal to check for orphaned wires.
+        # Other components' pins are excluded so we don't blame this remove
+        # for wires that legitimately belong to a neighbour. Read under the
+        # edit guard: a parallel session may have just moved this or a
+        # neighbouring component, and the guard's reload is what makes these
+        # coordinates current.
+        _require_component(editor, reference)
+        pin_coords = _component_pin_coords(editor, reference)
+        other_pins = _other_components_pin_coords(editor, reference)
+        target_only_pins = pin_coords - other_pins
+
         editor.remove_component(reference)
         deleted_wires = _drop_wires_at(editor, target_only_pins) if args.cleanup_wires else 0
         validation_warnings = _post_op_warnings(editor)
@@ -2845,7 +2863,7 @@ async def handle_reset_schematic(
             args.format,
         )
 
-    async with _get_edit_lock(asc_path):
+    async with _edit_guard(asc_path):
         atomic_write_bytes(asc_path, snapshot, durable=False)
         state.editors.invalidate(asc_path)
         del state.asc_snapshots[key]
@@ -3127,17 +3145,21 @@ async def handle_add_net_label(args: NetLabelInput, state: SessionState) -> type
     net = args.net
     label_desc = "ground" if net == "0" else f"net '{net}'"
 
-    # Resolve coordinates from pin reference or explicit x/y
-    if args.pin is not None:
-        editor = _get_asc_editor(asc_path, state)
-        x, y = _resolve_pin(args.pin, editor)
-    elif args.x is not None and args.y is not None:
-        x, y = args.x, args.y
-    else:
+    if args.pin is None and (args.x is None or args.y is None):
         raise NetlistError("Either pin or both x and y coordinates are required.")
+
+    def _resolve_xy(editor: AscEditor) -> tuple[int, int]:
+        # Resolved inside the edit guard: a pre-lock fetch could read pin
+        # coordinates a parallel session just changed (the guard's reload is
+        # what makes them current). Raises before any mutation.
+        if args.pin is not None:
+            return _resolve_pin(args.pin, editor)
+        assert args.x is not None and args.y is not None  # validated above
+        return args.x, args.y
 
     if args.action == "remove":
         async with _editing_asc(asc_path, state) as editor:
+            x, y = _resolve_xy(editor)
             for i, lbl in enumerate(editor.labels):
                 if lbl.text == net and int(lbl.coord.X) == x and int(lbl.coord.Y) == y:
                     editor.labels.pop(i)
@@ -3145,6 +3167,7 @@ async def handle_add_net_label(args: NetLabelInput, state: SessionState) -> type
             raise NetlistError(f"No {label_desc} found at ({x},{y})")
 
     async with _editing_asc(asc_path, state) as editor:
+        x, y = _resolve_xy(editor)
         warnings = _add_net_label_checks(editor, net, x, y)
         editor.labels.append(Text(coord=Point(x, y), text=net, type=TextTypeEnum.LABEL))
 
@@ -3216,10 +3239,12 @@ async def handle_connect(args: ConnectInput, state: SessionState) -> types.CallT
     asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
 
-    pre_editor = _get_asc_editor(asc_path, state)
-    plan = _plan_connect_route(pre_editor, args.from_pin, args.to_pin, args.waypoints)
-
     async with _editing_asc(asc_path, state) as ed:
+        # Plan from the editor the guard yielded: resolving pins from a
+        # pre-lock fetch could route against coordinates a parallel session
+        # just changed (the guard's reload is what makes them current). A
+        # planning failure raises before any mutation, so nothing is saved.
+        plan = _plan_connect_route(ed, args.from_pin, args.to_pin, args.waypoints)
         for sx1, sy1, sx2, sy2 in plan.segments:
             ed.wires.append(Line(Point(sx1, sy1), Point(sx2, sy2)))
         # Scope floating-pin advisories to the components this connect touched;
@@ -5077,7 +5102,7 @@ async def handle_apply_schematic_ops(
     abort_reason: str | None = None
 
     validation_warnings: list[dict] = []
-    async with _get_edit_lock(asc_path):
+    async with _edit_guard(asc_path):
         editor = _get_asc_editor(asc_path, state)
         # A dry run makes no on-disk mutation, so the reset snapshot is moot.
         if not args.dry_run:
