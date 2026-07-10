@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 from collections.abc import Iterator, MutableMapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -196,6 +197,54 @@ class JobRegistry:
             self._delete_persisted(j)
             self._persist_locks.pop(jid, None)
 
+    def refresh_foreign_job(self, job: SimulationJob | BatchJob) -> SimulationJob | BatchJob:
+        """Re-read a parallel session's live job from its sidecar.
+
+        A job loaded while its owning process was alive sits in this
+        registry as running/queued, but only the owner updates it — nothing
+        in this process would ever see it finish. Re-reading the sidecar at
+        resolution time picks up the owner's latest persisted state
+        (including the interrupted translation once the owner has died).
+        Own jobs, terminal jobs, and persistence-off sessions return
+        unchanged.
+        """
+        if (
+            not self.persist_enabled
+            or job.owner_pid in (0, os.getpid())
+            or job.status not in NON_TERMINAL_LIVE_STATUSES
+        ):
+            return job
+        try:
+            from ltspice_mcp.lib import job_store
+
+            fresh = job_store.load_job(job.job_id, job.netlist)
+        except Exception as e:
+            logger.debug("refresh_foreign_job %s: %s", job.job_id, e)
+            return job
+        if fresh is None:
+            return job
+        # Registry mutations are loop-only (the same contract as the cached
+        # editors — see tools/_base.py): resource reads run this via a worker
+        # thread (server.py offloads whole resource reads), where swapping the
+        # entry could race a loop-side transition on the same job. Off-loop
+        # callers get the fresh view without the registry update; the next
+        # on-loop resolution persists it.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return fresh
+        self.jobs[job.job_id] = fresh
+        return fresh
+
+    def refreshed_jobs(self) -> list[SimulationJob | BatchJob]:
+        """Snapshot of every job, with parallel sessions' live jobs re-read.
+
+        The listing surfaces (``check_job`` with no id, the results resource)
+        call this so a foreign job doesn't show "running" forever after its
+        owner finished it. Own and terminal jobs pass through unchanged.
+        """
+        return [self.refresh_foreign_job(job) for job in list(self.jobs.values())]
+
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
@@ -371,12 +420,18 @@ class JobRegistry:
         for a circular reference.
         """
         sim_runner = runners.get_existing_sim_runner()
+        own_pid = os.getpid()
         # Snapshot both views before iterating: the typed views iterate the
         # live union dict lazily, and the awaits below suspend this coroutine
         # — a concurrent job registration during a cancel would otherwise
         # raise "dictionary changed size during iteration".
+        #
+        # Only THIS process's jobs are cancelled: a parallel server session's
+        # live job also sits in the registry as running (loaded from its
+        # sidecar with the owner still alive) and must not be killed or
+        # relabeled by our shutdown.
         for job in list(self.sim_jobs.values()):
-            if job.status in NON_TERMINAL_LIVE_STATUSES:
+            if job.status in NON_TERMINAL_LIVE_STATUSES and job.owner_pid == own_pid:
                 if sim_runner is not None:
                     await sim_runner.cancel(job, session_state)
                 else:
@@ -386,7 +441,7 @@ class JobRegistry:
         sweep_runner = runners.get_existing_sweep_runner()
         mc_runner = runners.get_existing_mc_runner()
         for batch_job in list(self.batch_jobs.values()):
-            if batch_job.status == "running":
+            if batch_job.status == "running" and batch_job.owner_pid == own_pid:
                 if batch_job.job_type == "sweep" and sweep_runner is not None:
                     await sweep_runner.cancel(batch_job, session_state)
                 elif batch_job.job_type == "montecarlo" and mc_runner is not None:
