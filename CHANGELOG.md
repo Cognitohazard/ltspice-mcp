@@ -10,6 +10,24 @@ tool-surface changes.
 
 ### Added
 
+- Parallel-session coordination: independent server processes (e.g. several
+  coding agents sharing one directory) now stay out of each other's way.
+  - Circuit-file mutations and `.asc` exports take a cross-process file lock
+    (sidecar `.ltspice-mcp/locks/`), so concurrent edits of the same file
+    from two sessions serialize on the latest content instead of silently
+    losing one session's edit. Pin/route geometry (`connect`,
+    `add_net_label`, `remove_component`) resolves inside the lock, so it
+    reflects a peer's just-completed move; exports lock the sidecar `.net`
+    they overwrite as well as the `.asc`. A still-held lock surfaces as a
+    clear "locked by another ltspice-mcp process" error after a 10 s wait.
+  - Job sidecars record the owning server's pid. A running job whose owner
+    is still alive now loads in other sessions as `running` (previously it
+    was mislabeled `interrupted`), refreshes from its sidecar when its
+    status or results are read or listed (`check_job`, `spice://results/`),
+    and is excluded from other sessions' shutdown cleanup. `recent`
+    summaries report this server's own live job as `running` too.
+  - `psutil` is now a direct dependency (already installed as a spicelib
+    transitive).
 - `disturbance_response` — a transient tool for a regulated output under a
   load/line step (LDO/PMIC), where the output returns to its own level so
   `pulse_response` correctly nulls its step metrics. Measures droop and
@@ -191,6 +209,15 @@ tool-surface changes.
 
 ### Fixed
 
+- `cancel_job`, simulation timeouts, and shutdown cleanup now actually
+  terminate the simulator process on every platform/simulator combination.
+  Previously only WSL + LTspice worked: everywhere else the code deferred to
+  spicelib's `kill_all_spice`, which matches an empty process name in the
+  pinned spicelib and therefore killed nothing — a cancelled ngspice, Wine,
+  or Windows-native run kept simulating to completion. The replacement kill
+  requires both the simulator's executable name and the job id embedded in
+  its command line, so it is also incapable of touching a parallel session's
+  simulators (which a name-global kill would have hit once it worked).
 - Converting an `.asc` schematic to a runnable netlist (`run_simulation`,
   `configure_sweep`, `configure_montecarlo`, `export_netlist`) no longer runs
   the LTspice export subprocess on the server's event loop — it is offloaded

@@ -1,13 +1,14 @@
 """Shared utilities for tool handlers."""
 
 import asyncio
+import contextlib
 import copy
 import json
 import logging
 import re
 import types as _stdlib_types
 import typing
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from functools import cache, wraps
 from pathlib import Path
@@ -16,7 +17,9 @@ from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 from mcp import types
 from pydantic import BaseModel, ConfigDict
 
-from ltspice_mcp.errors import SimulationError
+from ltspice_mcp.errors import NetlistError, SimulationError
+from ltspice_mcp.lib.filelock import DEFAULT_TIMEOUT, file_lock
+from ltspice_mcp.lib.job_store import SIDECAR_DIRNAME
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.runner_base import LOGOPINFO_MARKER
 from ltspice_mcp.lib.simulator import no_simulator_message
@@ -687,6 +690,46 @@ def path_lock(registry: dict[Path, asyncio.Lock], path: Path, cap: int = 64) -> 
     return registry[path]
 
 
+def circuit_lock_target(path: Path) -> Path:
+    """Anchor for the cross-process lock on one circuit file.
+
+    Lives under the circuit's ``.ltspice-mcp/locks/`` sidecar directory
+    (``file_lock`` appends ``.lock``) so user directories aren't littered
+    with lock files next to their circuits.
+    """
+    return path.parent / SIDECAR_DIRNAME / "locks" / path.name
+
+
+@contextlib.asynccontextmanager
+async def circuit_file_lock(path: Path) -> AsyncIterator[None]:
+    """Cross-process lock for mutations/exports of one circuit file.
+
+    Parallel MCP server processes editing the same circuit serialize here —
+    without it, the whole-file read-modify-write saves are last-writer-wins
+    and a concurrent session's edit is silently lost. Acquisition polls in a
+    worker thread (per filelock's contract, so a contended lock never stalls
+    the event loop); release is two fast syscalls, done inline.
+
+    Acquire this BEFORE fetching a cached editor: the editor cache re-stats
+    the file on every fetch, so taking the lock first guarantees the stat
+    sees a concurrent writer's completed save rather than a mid-edit state.
+    (Residual: on coarse-mtime filesystems like WSL's /mnt/c a same-size
+    rewrite within one mtime tick can still go undetected — see FileCache.)
+    """
+    stack = contextlib.ExitStack()
+    try:
+        await asyncio.to_thread(stack.enter_context, file_lock(circuit_lock_target(path)))
+    except TimeoutError as e:
+        raise NetlistError(
+            f"{path.name} is locked by another ltspice-mcp process "
+            f"(waited {DEFAULT_TIMEOUT:.0f}s). Retry once its edit finishes."
+        ) from e
+    try:
+        yield
+    finally:
+        stack.close()
+
+
 # LTspice's ``create_netlist`` always writes the sidecar ``<name>.net`` next to
 # the ``.asc``, so two concurrent exports of the same schematic would race on
 # one output file (torn/partial reads of the deck). Serialize per resolved
@@ -694,9 +737,23 @@ def path_lock(registry: dict[Path, asyncio.Lock], path: Path, cap: int = 64) -> 
 _asc_export_locks: dict[Path, asyncio.Lock] = {}
 
 
-def asc_export_lock(asc_path: Path) -> asyncio.Lock:
-    """Per-``.asc`` lock serializing LTspice netlist exports of one schematic."""
-    return path_lock(_asc_export_locks, asc_path)
+@contextlib.asynccontextmanager
+async def asc_export_lock(asc_path: Path) -> AsyncIterator[None]:
+    """Serialize LTspice netlist exports of one schematic.
+
+    In-process: a per-``.asc`` asyncio lock. Cross-process: the shared
+    circuit file locks on BOTH the schematic and the sidecar ``.net`` —
+    LTspice reads the ``.asc`` and overwrites the ``.net``, and a parallel
+    session may be editing the ``.net`` itself under its own file lock.
+    Fixed acquisition order (``.asc`` then ``.net``); edit paths take exactly
+    one file lock, so no cycle is possible.
+    """
+    async with (
+        path_lock(_asc_export_locks, asc_path),
+        circuit_file_lock(asc_path),
+        circuit_file_lock(asc_path.with_suffix(".net")),
+    ):
+        yield
 
 
 async def resolve_runnable_netlist(netlist_str: str, state: SessionState) -> Path:
