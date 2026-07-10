@@ -453,9 +453,7 @@ class TestSurfaceObservations:
         assert set(abort[0]["evidence"]["missing"]) >= {"aaa_good", "zzz_good"}
 
     def test_no_abort_link_without_parse_error(self):
-        obs = surface_observations(
-            {"measurements": {}}, requested={"meas": ["vpp"], "four": []}
-        )
+        obs = surface_observations({"measurements": {}}, requested={"meas": ["vpp"], "four": []})
         assert all(o["code"] != "meas_batch_abort" for o in obs)
 
     def test_four_misses_excluded_from_abort_link(self):
@@ -463,9 +461,7 @@ class TestSurfaceObservations:
         # Fourier pipeline is unrelated to the .meas batch abort — it must not
         # inflate the count or appear in evidence.missing.
         summary = {"meas_errors": [{"directive": ".meas tran bad MAX I(Qnope)"}]}
-        obs = surface_observations(
-            summary, requested={"meas": ["good"], "four": ["V(out)"]}
-        )
+        obs = surface_observations(summary, requested={"meas": ["good"], "four": ["V(out)"]})
         abort = next(o for o in obs if o["code"] == "meas_batch_abort")
         assert abort["evidence"]["missing"] == ["good"]
         assert abort["detail"].startswith("1 .meas requested")
@@ -549,9 +545,7 @@ class TestBuildSummaryWiring:
         summary = build_simulation_summary(
             raw, None, value_scan="scan", source_amplitudes={"V1": 0.1}
         )
-        ev = next(
-            o for o in summary["observations"] if o["code"] == "extreme_value"
-        )
+        ev = next(o for o in summary["observations"] if o["code"] == "extreme_value")
         assert ev["evidence"]["source_name"] == "V1"
 
     def test_success_summary_threads_deck_sources_end_to_end(self, tmp_path: Path):
@@ -563,12 +557,7 @@ class TestBuildSummaryWiring:
 
         deck = tmp_path / "rc.cir"
         deck.write_text(
-            "rc lowpass\n"
-            "V1 in 0 SINE(0 1u 1k)\n"
-            "R1 in out 1k\n"
-            "C1 out 0 100n\n"
-            ".tran 1m\n"
-            ".end\n"
+            "rc lowpass\nV1 in 0 SINE(0 1u 1k)\nR1 in out 1k\nC1 out 0 100n\n.tran 1m\n.end\n"
         )
         summary = log_parser.parse_success_summary(
             FIXTURES / "ltspice_tran_rc.raw",
