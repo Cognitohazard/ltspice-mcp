@@ -2041,9 +2041,7 @@ class TestRecordedAcRaw:
         assert sc["run_index"] == 0
         assert sc["params"] == {"R": "1k"}
 
-    async def test_leading_minus_flips_phase_180(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
+    async def test_leading_minus_flips_phase_180(self, state_no_sim: SessionState, work_dir: Path):
         # '-V(out)' and '-V(out)/V(out)' negate the complex wave: same |H|,
         # phase shifted by 180° — the loop-gain / inverting-probe convention
         # without a behavioral inverter node in the deck.

@@ -125,9 +125,7 @@ class TestReadAscCircuit:
         assert "filtered" in text
         assert result.structuredContent["type"] == "asc"
 
-    async def test_asc_read_carries_wiring_norm(
-        self, asc_state: SessionState, asc_file: Path
-    ):
+    async def test_asc_read_carries_wiring_norm(self, asc_state: SessionState, asc_file: Path):
         # Co-design entry point: reading an inherited .asc states the wiring goal.
         result = await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
         assert "wiring list" in result.structuredContent["hint"]
@@ -136,9 +134,7 @@ class TestReadAscCircuit:
         self, asc_state: SessionState, sample_netlist: Path
     ):
         # The norm is .asc-only; a .cir read must not carry it.
-        result = await handle_read_circuit(
-            CircuitReadInput(path=sample_netlist.name), asc_state
-        )
+        result = await handle_read_circuit(CircuitReadInput(path=sample_netlist.name), asc_state)
         assert "hint" not in (result.structuredContent or {})
 
     async def test_list_components_asc(self, asc_state: SessionState, asc_file: Path):
@@ -388,9 +384,7 @@ class TestEditDirectiveCommentKind:
         assert b"320 240" in line
         assert b" 3 " in line
 
-    async def test_stacked_directives_auto_shift(
-        self, asc_state: SessionState, asc_file: Path
-    ):
+    async def test_stacked_directives_auto_shift(self, asc_state: SessionState, asc_file: Path):
         # Two add_directive ops without coordinates both default to (16,16);
         # the auto-declutter must nudge the second down so no two directives
         # share an anchor (which would render them on top of each other).
@@ -425,9 +419,7 @@ class TestEditDirectiveCommentKind:
         assert len(anchors) >= 2
         assert len(anchors) == len(set(anchors))  # no two directives share an anchor
 
-    async def test_stacked_directives_detected(
-        self, asc_state: SessionState, work_dir: Path
-    ):
+    async def test_stacked_directives_detected(self, asc_state: SessionState, work_dir: Path):
         # A hand-authored .asc with two directives at the same anchor (bypasses
         # the auto-shift) must surface a stacked_directive advisory.
         from ltspice_mcp.tools.circuit import _get_asc_editor, _post_op_warnings

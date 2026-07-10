@@ -56,9 +56,7 @@ class TestReadDeviceOpPoints:
         # "no small-signal device params" from operating_point). UTF-16 is the
         # modern LTspice log format. Both must still yield the device params:
         # we normalize through our own decoder before handing off to opLogReader.
-        body = _LOG_WITH_BLOCK.replace(
-            "Direct Newton", ".step temp=-40\xb0\nDirect Newton", 1
-        )
+        body = _LOG_WITH_BLOCK.replace("Direct Newton", ".step temp=-40\xb0\nDirect Newton", 1)
         for encoding in ("cp1252", "utf-16-le"):
             log = tmp_path / f"op_{encoding}.log"
             log.write_bytes(body.encode(encoding))

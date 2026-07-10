@@ -4568,9 +4568,7 @@ async def handle_bode_metrics(args: BodeMetricsInput, state: SessionState):
     # parse_step_iterations returns [] for a missing/unreadable log.
     step_params: list[dict[str, float]] = []
     if step_count > 1:
-        step_params = await asyncio.to_thread(
-            parse_step_iterations, raw_path.with_suffix(".log")
-        )
+        step_params = await asyncio.to_thread(parse_step_iterations, raw_path.with_suffix(".log"))
 
     steps_out: list[dict] = []
     step_texts: list[str] = []

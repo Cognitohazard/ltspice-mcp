@@ -583,8 +583,7 @@ def meas_batch_abort_observation(obs: list[Observation]) -> Observation | None:
         "evidence": {
             "missing": [o.get("evidence", {}).get("name") for o in missing],
             "failed_directives": [
-                o.get("evidence", {}).get("directive", o.get("detail"))
-                for o in parse_errors
+                o.get("evidence", {}).get("directive", o.get("detail")) for o in parse_errors
             ],
         },
     }
