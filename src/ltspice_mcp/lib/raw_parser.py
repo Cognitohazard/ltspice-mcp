@@ -28,6 +28,41 @@ from ltspice_mcp.lib.log_parser import (
 from ltspice_mcp.lib.result_observations import surface_observations
 
 
+class OffsetAwareRawRead(RawRead):
+    """RawRead that rebases a windowed-transient time axis to deck time.
+
+    LTspice stores ``.tran 0 <tstop> <tstart>`` output with the time axis
+    rebased to 0 and the true start in the header's ``Offset:`` field;
+    spicelib parses the field but never applies it, so every axis consumer
+    (analysis windows, measurements, exports) silently works in the offset
+    frame — a ``.tran 0 202u 196u`` run reads as 0..6 µs. Applying the offset
+    once here puts every downstream tool in deck coordinates. Only transient
+    plots with a nonzero offset are affected: other analyses' axes are not
+    time, and LTspice writes ``Offset: 0`` for unwindowed runs.
+
+    Server-side raw loads construct this class, not bare RawRead.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.time_offset = 0.0
+        try:
+            offset = float(str(self.raw_params.get("Offset", 0) or 0).strip())
+        except (TypeError, ValueError):
+            offset = 0.0
+        plotname = str(self.raw_params.get("Plotname", "")).lower()
+        if offset != 0.0 and "transient" in plotname:
+            self.time_offset = offset
+
+    def get_axis(self, step: int = 0):
+        axis = super().get_axis(step)
+        if self.time_offset:
+            # Rebase AFTER the parent's abs() (negative stored axis entries
+            # encode compression points), never on the stored data.
+            return np.asarray(axis) + self.time_offset
+        return axis
+
+
 class _OperatingPointStepMeta(TypedDict, total=False):
     """Optional metadata populated by the tool layer."""
 

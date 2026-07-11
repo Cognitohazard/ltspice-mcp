@@ -232,7 +232,7 @@ class TestComputeBatchStatsAt:
         def boom(self):
             raise RuntimeError("unreadable step metadata")
 
-        monkeypatch.setattr(br.RawRead, "get_steps", boom)
+        monkeypatch.setattr(br.OffsetAwareRawRead, "get_steps", boom)
         runs = {0: _make_run({"R": 1000.0}, raw_file=str(run0))}
         result = compute_batch_stats(runs, "V(out)")
         assert result["step_unknown_runs"] == [0]

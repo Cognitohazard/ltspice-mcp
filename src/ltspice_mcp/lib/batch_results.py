@@ -12,9 +12,9 @@ import time
 from pathlib import Path
 
 import numpy as np
-from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
 from ltspice_mcp.state import BatchJob
 
 _STAT_KEYS = (
@@ -121,7 +121,7 @@ def compute_batch_stats(
             continue
 
         try:
-            raw = RawRead(raw_path, traces_to_read=signal, dialect=dialect)
+            raw = OffsetAwareRawRead(raw_path, traces_to_read=signal, dialect=dialect)
             try:
                 n_inner_steps = len(raw.get_steps())
             except Exception:
