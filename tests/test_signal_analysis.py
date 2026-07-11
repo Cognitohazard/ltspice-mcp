@@ -83,6 +83,19 @@ class TestWindowAndClean:
         with pytest.raises(ValueError, match="outside axis range"):
             window_and_clean(t, y, None, 5.0)
 
+    def test_bound_a_few_ulps_past_axis_end_is_clamped(self):
+        """SI-suffix parsing lands '1500u' a few ulps past an axis ending at
+        1.5e-3; that must clamp, not reject with a self-contradicting
+        "outside [0, 0.0015]" message."""
+        t = np.linspace(0, 0.0015, 100)
+        y = np.zeros_like(t)
+        past_end = 0.0015 * (1 + 1e-15)  # last-ulp overshoot
+        t_out, _, _ = window_and_clean(t, y, None, past_end)
+        assert len(t_out) == 100
+        just_under_start = -0.0015 * 1e-15
+        t_out, _, _ = window_and_clean(t, y, just_under_start, None)
+        assert len(t_out) == 100
+
     def test_inverted_window(self):
         t = np.linspace(0, 1, 100)
         y = np.zeros_like(t)
@@ -694,6 +707,33 @@ class TestAnalyzeTimingBetween:
         with pytest.raises(ValueError, match="equal length"):
             analyze_timing_between(np.zeros(5), np.zeros(5), np.zeros(6))
 
+    def test_all_edge_pairs_aggregate(self):
+        """Dead-time audits need min/max over ALL edge pairs, not the first —
+        here the second pair's delay (0.05) is smaller than the first's (0.1)."""
+        t = np.linspace(0, 1, 100001)
+        ya = ((t >= 0.1) & (t < 0.2)) | ((t >= 0.5) & (t < 0.6))
+        yb = ((t >= 0.2) & (t < 0.3)) | ((t >= 0.65) & (t < 0.75))
+        result = analyze_timing_between(t, ya.astype(float), yb.astype(float))
+        # First-pair fields unchanged (rising edges at 0.1 → 0.2).
+        assert result["delay"] == pytest.approx(0.1, abs=1e-3)
+        # Aggregates over both pairs: (0.1→0.2)=0.1 and (0.5→0.65)=0.15.
+        assert result["pair_count"] == 2
+        assert result["delay_min"] == pytest.approx(0.1, abs=1e-3)
+        assert result["delay_max"] == pytest.approx(0.15, abs=1e-3)
+        assert result["delay_min_at"] == pytest.approx(0.1, abs=1e-3)
+        assert result["delay_max_at"] == pytest.approx(0.5, abs=1e-3)
+        assert result["delay_mean"] == pytest.approx(0.125, abs=1e-3)
+        assert any("delay_min" in w for w in result["warnings"])
+
+    def test_single_pair_aggregate_matches_first(self):
+        t = np.linspace(0, 1, 10001)
+        ya = np.where(t < 0.3, 0.0, 1.0)
+        yb = np.where(t < 0.5, 0.0, 1.0)
+        result = analyze_timing_between(t, ya, yb)
+        assert result["pair_count"] == 1
+        assert result["delay_min"] == pytest.approx(result["delay"], abs=1e-9)
+        assert result["warnings"] == []
+
 
 # ---------------------------------------------------------------------------
 # analyze_periodic
@@ -1141,6 +1181,27 @@ class TestAnalyzeThd:
         assert by_n[3]["db_rel"] == pytest.approx(20 * math.log10(0.05), abs=0.05)
         # No higher harmonics present -> they read as ~ -inf / negligible.
         assert by_n[4]["magnitude"] < 1e-6
+
+    def test_harmonic_magnitude_is_amplitude_not_raw_bin(self):
+        """`magnitude` must be the sinusoid amplitude in signal units — a raw
+        rfft bin is N/2 times larger (0.1 V read as ~819 at n_fft=16384)."""
+        f0, fs = 1000.0, 200_000.0
+        t = np.arange(0.0, 0.02, 1.0 / fs)
+        y = np.sin(2 * np.pi * f0 * t) + 0.1 * np.sin(2 * np.pi * 2 * f0 * t)
+        r = analyze_thd(t, y, fundamental=f0, n_harmonics=3)
+        by_n = {h["n"]: h for h in r["harmonics"]}
+        assert by_n[2]["magnitude"] == pytest.approx(0.1, rel=1e-3)
+
+    def test_hann_magnitude_is_amplitude_too(self):
+        """The Hann path root-sum-squares the ±2-bin lobe, whose RSS is
+        sqrt(1.5)x the amplitude for a bin-centered tone — the calibration
+        must divide that back out so `magnitude` stays a sinusoid amplitude."""
+        f0, fs = 1000.0, 200_000.0
+        t = np.arange(0.0, 0.02, 1.0 / fs)
+        y = np.sin(2 * np.pi * f0 * t) + 0.1 * np.sin(2 * np.pi * 2 * f0 * t)
+        r = analyze_thd(t, y, fundamental=f0, window="hann", n_harmonics=3)
+        by_n = {h["n"]: h for h in r["harmonics"]}
+        assert by_n[2]["magnitude"] == pytest.approx(0.1, rel=0.02)
 
     def test_autodetect_fundamental_and_few_cycle_warning(self):
         f0, fs = 500.0, 100_000.0

@@ -101,7 +101,14 @@ class DisturbanceResponseOutput(TypedDict):
 
 
 class TimingBetweenOutput(TypedDict):
-    """Return shape of :func:`analyze_timing_between`."""
+    """Return shape of :func:`analyze_timing_between`.
+
+    ``t_a``/``t_b``/``delay`` describe the FIRST crossing of each signal
+    (kept for the one-shot step/propagation case, and the only pairing that
+    can go negative when b leads a). The ``pair_*``/``delay_*`` fields
+    aggregate over ALL sequential edge pairs — what dead-time / minimum
+    off-time audits over a pulse train need.
+    """
 
     t_a: float
     t_b: float
@@ -112,6 +119,12 @@ class TimingBetweenOutput(TypedDict):
     direction_b: CrossingDirection
     num_crossings_a: int
     num_crossings_b: int
+    pair_count: int
+    delay_min: float | None
+    delay_max: float | None
+    delay_mean: float | None
+    delay_min_at: float | None
+    delay_max_at: float | None
     warnings: list[str]
 
 
@@ -236,14 +249,24 @@ def window_and_clean(
 
     if t_start is not None and t_end is not None and t_start >= t_end:
         raise ValueError(f"t_start ({t_start:.6g}) must be less than t_end ({t_end:.6g})")
-    if t_start is not None and (t_start < axis_min or t_start > axis_max):
+
+    # SI-suffix parsing can land a bound a few ulps past the axis end ('1500u'
+    # parses to 1.5000000000000002e-3 against an axis ending at 1.5e-3); a
+    # strict check then rejects it with a self-contradicting "t_end=0.0015 is
+    # outside axis range [0, 0.0015]". Clamp near-miss bounds instead.
+    tol = 1e-9 * max(abs(axis_min), abs(axis_max), axis_max - axis_min)
+
+    def _clamp_bound(value: float | None, name: str) -> float | None:
+        if value is None:
+            return None
+        if axis_min - tol <= value <= axis_max + tol:
+            return min(max(value, axis_min), axis_max)
         raise ValueError(
-            f"t_start={t_start:.6g} is outside axis range [{axis_min:.6g}, {axis_max:.6g}]"
+            f"{name}={value:.6g} is outside axis range [{axis_min:.6g}, {axis_max:.6g}]"
         )
-    if t_end is not None and (t_end < axis_min or t_end > axis_max):
-        raise ValueError(
-            f"t_end={t_end:.6g} is outside axis range [{axis_min:.6g}, {axis_max:.6g}]"
-        )
+
+    t_start = _clamp_bound(t_start, "t_start")
+    t_end = _clamp_bound(t_end, "t_end")
 
     i0 = 0 if t_start is None else int(np.searchsorted(t, t_start, side="left"))
     i1 = len(t) if t_end is None else int(np.searchsorted(t, t_end, side="right"))
@@ -977,16 +1000,39 @@ def analyze_timing_between(
     t_a = crossings_a[0]
     t_b = crossings_b[0]
 
+    # All-edges pairing: each A crossing consumes the first unused B crossing
+    # at or after it. A pulse train's dead-time / minimum-off audit needs the
+    # min/max over ALL pairs — the first pair alone says nothing about the
+    # worst edge.
+    pairs: list[tuple[float, float]] = []
+    j = 0
+    for ta_edge in crossings_a:
+        while j < len(crossings_b) and crossings_b[j] < ta_edge:
+            j += 1
+        if j == len(crossings_b):
+            break
+        pairs.append((ta_edge, crossings_b[j]))
+        j += 1
+    delays = [tb_edge - ta_edge for ta_edge, tb_edge in pairs]
+
     warnings: list[str] = []
-    if len(crossings_a) > 1:
+    if len(crossings_a) > 1 or len(crossings_b) > 1:
         warnings.append(
-            f"signal_a has {len(crossings_a)} {direction_a} crossings in window; using first"
-        )
-    if len(crossings_b) > 1:
-        warnings.append(
-            f"signal_b has {len(crossings_b)} {direction_b} crossings in window; using first"
+            f"signal_a has {len(crossings_a)} {direction_a} and signal_b "
+            f"{len(crossings_b)} {direction_b} crossing(s) in window; "
+            "t_a/t_b/delay use the first of each — read delay_min/delay_max "
+            "for the aggregate over all edge pairs"
         )
 
+    delay_min = delay_max = delay_mean = delay_min_at = delay_max_at = None
+    if delays:
+        min_i = int(np.argmin(delays))
+        max_i = int(np.argmax(delays))
+        delay_min = float(delays[min_i])
+        delay_max = float(delays[max_i])
+        delay_mean = float(np.mean(delays))
+        delay_min_at = float(pairs[min_i][0])
+        delay_max_at = float(pairs[max_i][0])
     return {
         "t_a": float(t_a),
         "t_b": float(t_b),
@@ -997,6 +1043,12 @@ def analyze_timing_between(
         "direction_b": direction_b,
         "num_crossings_a": len(crossings_a),
         "num_crossings_b": len(crossings_b),
+        "pair_count": len(pairs),
+        "delay_min": delay_min,
+        "delay_max": delay_max,
+        "delay_mean": delay_mean,
+        "delay_min_at": delay_min_at,
+        "delay_max_at": delay_max_at,
         "warnings": warnings,
     }
 
@@ -1120,7 +1172,11 @@ def analyze_periodic(
 
 
 class HarmonicEntry(TypedDict):
-    """One harmonic in :func:`analyze_thd`."""
+    """One harmonic in :func:`analyze_thd`.
+
+    ``magnitude`` is the harmonic's sinusoid amplitude in the signal's own
+    units (2/sum(window)-scaled one-sided spectrum), not a raw FFT bin.
+    """
 
     n: int
     frequency: float
@@ -1300,9 +1356,21 @@ def analyze_thd(
 
     yu = np.interp(tu, t, y)
     yu = yu - yu.mean()
-    spec = np.abs(np.fft.rfft(yu * win))
+    # Scale to amplitude units (2/sum(win) = one-sided amplitude with window
+    # coherent-gain correction; for the rectangular window this is 2/N). Raw
+    # rfft bins are N/2 times the sinusoid amplitude — reporting them as
+    # per-harmonic "magnitude" mislabels an 0.1 V harmonic as ~819 V at
+    # n_fft=16384. Ratios (THD, db_rel) are unaffected by the common factor.
+    spec = np.abs(np.fft.rfft(yu * win)) * (2.0 / float(np.sum(win)))
     freqs = np.fft.rfftfreq(n_fft, d=1.0 / fs)
     nyq = fs / 2.0
+    # Root-sum-squaring a windowed tone's main lobe overcounts its amplitude:
+    # the coherent-gain scaling above already calibrates the PEAK bin, so the
+    # half-height Hann neighbours add another sqrt(1.5) on top. By Parseval a
+    # tone's lobe energy in these units is (amplitude * sqrt(N*sum(win^2)) /
+    # sum(win))^2, so dividing a lobe RSS by this factor recovers the
+    # amplitude (exactly 1 for the rectangular window).
+    lobe_rss_norm = float(np.sqrt(n_fft * np.sum(win * win)) / np.sum(win))
 
     # Coherent sampling is only exact if the fundamental truly landed on its bin
     # (n_cyc). An imprecise f0 (e.g. auto-detected) makes the window a
@@ -1324,10 +1392,11 @@ def analyze_thd(
             )
 
     def _bin_mag(target: float) -> tuple[float, float]:
-        """(magnitude, frequency) near ``target`` Hz. Exact bin for coherent
+        """(amplitude, frequency) near ``target`` Hz. Exact bin for coherent
         sampling; for a Hann window the energy spreads across the main lobe, so
         root-sum-square the ±2-bin lobe (the same width for every harmonic, so
-        the THD ratio stays consistent) and report the peak bin's frequency."""
+        the THD ratio stays consistent), calibrate it back to amplitude via
+        ``lobe_rss_norm``, and report the peak bin's frequency."""
         k = round(target / fs * n_fft)
         if k <= 0 or k >= spec.size:
             return 0.0, target
@@ -1337,7 +1406,7 @@ def analyze_thd(
         hi = min(spec.size, k + 3)
         seg = spec[lo:hi]
         j = lo + int(np.argmax(seg))
-        return float(np.sqrt(np.sum(seg**2))), float(freqs[j])
+        return float(np.sqrt(np.sum(seg**2)) / lobe_rss_norm), float(freqs[j])
 
     fund_mag, fund_freq = _bin_mag(f0)
     if fund_mag <= 0:
@@ -1379,7 +1448,10 @@ def analyze_thd(
     mask[0] = False
     guard = 0 if coherent else 2
     mask[max(1, k_fund - guard) : k_fund + guard + 1] = False  # slice clamps past the end
-    thd_n_ratio = float(np.sqrt(np.sum(spec[mask] ** 2)) / fund_mag)
+    # Energy-over-energy ratio: the numerator is a per-bin RSS in raw spec
+    # units, so undo the fundamental's lobe→amplitude calibration (a no-op on
+    # the coherent/rectangular path, where lobe_rss_norm == 1).
+    thd_n_ratio = float(np.sqrt(np.sum(spec[mask] ** 2)) / (fund_mag * lobe_rss_norm))
 
     if n_cycles < 3:
         warnings.append(
