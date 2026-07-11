@@ -10,6 +10,63 @@ tool-surface changes.
 
 ### Added
 
+- `run_simulation(simulator=)` — per-run simulator selection by detected name
+  (`'ltspice'`, `'ngspice'`, ...), so one deck can be cross-checked on a second
+  engine without changing config. Runners are now cached per (kind, simulator,
+  output folder) so a second engine's runner doesn't evict the first's
+  in-flight concurrency/cancel state, and cancel resolves the runner by the
+  job's own recorded simulator. Result reads follow the job too: the raw
+  dialect comes from the simulator the job actually ran on — not the session
+  default — for the inline result, `check_job`, and every job-addressed
+  analysis tool, so an ngspice run under an LTspice default parses correctly
+  (and vice versa).
+- Fast runs return results inline on the default path: `run_simulation` now
+  waits a short grace window (10 s) for completion before handing back a job
+  id, so sub-second `.op`/`.ac` runs no longer force a `check_job` round-trip.
+  (The configured timeout is still enforced by the deadline watchdog.)
+- Log-only completions: a clean simulator exit that wrote results only to the
+  log (e.g. an ngspice `.control` script) now reports `completed` with the
+  log-parsed measurements and a `no_raw_output` coverage observation, instead
+  of "Simulation failed (no output generated)". No-raw runs whose log carries
+  errors still report failed.
+- `.asc` schematics now run on ngspice: the LTspice netlist export is
+  sanitized for an ngspice target — the exporter's `.backanno` (an
+  LTspice-only dot command ngspice aborts on) is stripped, and `µ` suffixes /
+  `§` name prefixes are translated. The scrub is written to its own
+  `{name}.ngspice.net` sidecar rather than rewriting the shared `.net`, so
+  concurrent LTspice- and ngspice-target runs of one schematic can't hand
+  each other the wrong deck.
+- `timing_between` aggregates over ALL sequential edge pairs — `pair_count`,
+  `delay_min`/`delay_max`/`delay_mean` and the times of the extremes — for
+  dead-time / minimum-off audits across a pulse train (previously only the
+  first crossing pair was measured).
+- Windowed-transient time axes are rebased to deck time: LTspice stores
+  `.tran 0 <tstop> <tstart>` output with the axis starting at 0 and the true
+  start only in the raw header's `Offset:` field, which nothing applied — a
+  196–202 µs window read as 0–6 µs in every tool. All raw loads now add the
+  offset back, so window arguments and reported times are in deck coordinates.
+- `server_status` reports the effective ngspice compatibility mode
+  (`ngbehavior`) so a differently-failing CLI run can be reconciled with the
+  server's.
+- `create_netlist(append_end=false)` writes a shared include fragment without
+  the forced `.END` (which would otherwise terminate the including deck
+  early); fragments skip the standalone-deck validation.
+- `set_component_attribute` with an empty value now CLEARS the attribute
+  (removes its SYMATTR line — the only representation of "no value" the .asc
+  format can read back). InstName remains protected.
+- `measurement_stats` warns when it aggregates a still-running or partial
+  batch ("N of M runs — partial, not final") and caps the `per_run` table at
+  100 rows with an explicit `per_run_truncated` count
+  (`include_per_run=true/false` for full/none).
+- Timed-out runs now carry diagnostics: the timeout response derives the run's
+  log path (the completion callback never records it for an already-terminal
+  job) and shows the log tail, and killed-run artifact cleanup keeps the
+  `.log`/`.exe.log`/`.fail` post-mortems while still reclaiming the
+  possibly-multi-GB `.raw` and netlist copies. A killed run exits nonzero, so
+  spicelib renames its log to `.fail` — the job is repointed at the renamed
+  file once the process exit is observed, keeping the excerpt readable from
+  `check_job`.
+
 - Parallel-session coordination: independent server processes (e.g. several
   coding agents sharing one directory) now stay out of each other's way.
   - Circuit-file mutations and `.asc` exports take a cross-process file lock
@@ -209,6 +266,51 @@ tool-surface changes.
 
 ### Fixed
 
+- Event-loop wedge on simulator abort: the completion callback used to run its
+  log post-mortem (an uncapped read + scan) on the event-loop thread — a
+  stalled read (huge abort log, hung network/DrvFs mount) froze every request
+  in the server process until restart, including `server_status`. All
+  completion-path file I/O now runs on worker threads, and the log-excerpt
+  reader caps its read to head+tail slices of oversized logs.
+- `thd` per-harmonic `magnitude` is now the sinusoid amplitude in the signal's
+  own units; it was the raw FFT bin (off by n_fft/2 — an 0.1 V harmonic read
+  as ~819 "V" at n_fft=16384). The Hann path's ±2-bin lobe sum is calibrated
+  back to amplitude as well (a bin-centered tone's lobe RSS is √1.5× the
+  amplitude). THD%/dBc ratios were and remain correct.
+- Setting a `.asc` behavioral source's expression (`set_component_value` with
+  `V=...`) corrupted the schematic: the expression was routed to SpiceLine as
+  a parameter while the old expression stayed in Value, netlisting two
+  expressions on one B-line ("No such node") behind a success message. The
+  whole value now replaces the Value slot for B references.
+- Directives with embedded newlines corrupted the `.asc` TEXT record; they are
+  now stored as LTspice's literal `\n` escapes, so multi-line directives
+  round-trip.
+- `measurement_stats` now reads each `.MEAS` directive's operator from the
+  deck (relay over inference) to pick the aggregation axis: a `FIND` probe
+  whose value is constant across runs can no longer be mistaken for a WHEN
+  crossing and silently aggregate the probe axis instead of the values, and a
+  deck-confirmed bare `WHEN` aggregates crossing times even when every run
+  crossed at the same instant (a deterministic batch).
+- Cancelling a sweep/Monte-Carlo batch when several batch runners were live
+  (decks running in different output folders) could signal the wrong runner
+  instance: the in-flight processes were killed, but the owning runner's
+  submission loop kept launching the batch's queued runs behind a `cancelled`
+  status. Batch cancels (tool and shutdown) now route to the runner instance
+  that owns the job's cancel state.
+- Analysis window bounds a few ulps past the axis end (SI-suffix rounding:
+  `t_end=1500u` vs an axis ending at exactly 1.5 ms) are clamped instead of
+  rejected with a self-contradicting "outside axis range" message.
+- Repeated identical log diagnostics collapse to one entry with a repeat count
+  (a PDK deck repeats "unknown model parameter" once per device instance,
+  burying the fatal line), and the failure-excerpt reader now anchors on
+  "File not found" / "already defined" lines, which previously fell outside
+  the excerpt entirely.
+- `apply_schematic_ops` collapses identical per-op warnings within one batch
+  (the documented per-pin-label style repeated the same duplicate-label
+  advisory once per label op — hundreds of lines on converter-scale builds).
+- The error for setting the `Prefix` attribute no longer misdirects to
+  SpiceLine: Prefix is a symbol (.asy) property; the message now points at
+  symbol-based placement.
 - `cancel_job`, simulation timeouts, and shutdown cleanup now actually
   terminate the simulator process on every platform/simulator combination.
   Previously only WSL + LTspice worked: everywhere else the code deferred to
