@@ -384,6 +384,31 @@ class TestEditDirectiveCommentKind:
         assert b"320 240" in line
         assert b" 3 " in line
 
+    async def test_multiline_directive_escaped_to_one_text_record(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        """Raw newlines in directive text must be stored as LTspice's literal
+        \\n escapes — a real newline splits the TEXT record and corrupts the
+        .asc (surfacing later as an unrelated 'Primitive not supported')."""
+        result = await handle_edit_directive(
+            EditDirectiveInput(
+                path=asc_file.name,
+                action="add",
+                instruction=".options reltol=1e-4\n.ic V(out)=0",
+                x=600,
+                y=600,
+            ),
+            asc_state,
+        )
+        assert "Added directive" in _result_text(result)
+        content = _read_bytes(asc_file)
+        line = next(ln for ln in content.splitlines() if b"!.options reltol=1e-4" in ln)
+        assert b"!.options reltol=1e-4\\n.ic V(out)=0" in line
+        # The file still parses cleanly.
+        from spicelib import AscEditor
+
+        AscEditor(str(asc_file))
+
     async def test_stacked_directives_auto_shift(self, asc_state: SessionState, asc_file: Path):
         # Two add_directive ops without coordinates both default to (16,16);
         # the auto-declutter must nudge the second down so no two directives
@@ -939,10 +964,11 @@ class TestAscValueExcludesValue2:
 
 
 @pytest.mark.asyncio
-class TestEmptyAttributeRejected:
-    """Regression: add_component with an empty SYMATTR value used to write a partial
-    SYMATTR line and crash mid-write, leaving the .asc permanently
-    unreadable. Reject up front."""
+class TestEmptyAttributeHandling:
+    """LTspice's format has no empty-SYMATTR-value representation (a 2-token
+    line bricks the file on the next parse). CREATION paths (add_component)
+    reject an empty value up front; set_component_attribute treats an empty
+    value as CLEAR (removes the SYMATTR line), except InstName."""
 
     async def test_empty_attribute_raises(self, asc_state: SessionState, asc_file: Path):
         original = asc_file.read_bytes()  # noqa: ASYNC240
@@ -1025,27 +1051,41 @@ class TestEmptyAttributeRejected:
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
         await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
 
-    async def test_set_component_attribute_empty_value_rejected(
+    async def test_set_component_attribute_empty_value_clears(
         self, asc_state: SessionState, asc_file: Path
     ):
-        # The reported bug: set_component_attribute(Value="") wrote a 2-token
-        # "SYMATTR Value " line the parser could not read back, bricking the
-        # editor for that file. Reject up front; the .asc stays intact + readable.
+        # An empty value means CLEAR: the SYMATTR line is removed (LTspice's
+        # format has no empty-value representation — writing a 2-token
+        # "SYMATTR Value " line bricks the file on the next parse). The .asc
+        # must stay readable afterwards.
+        result = await handle_set_component_attribute(
+            SetComponentAttributeInput(
+                path=asc_file.name, reference="R1", attribute="Value", value=""
+            ),
+            asc_state,
+        )
+        assert "Cleared R1.Value" in _result_text(result)
+        from spicelib import AscEditor
+
+        assert "Value" not in AscEditor(str(asc_file)).get_component("R1").attributes
+        await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
+
+    async def test_instname_cannot_be_cleared(self, asc_state: SessionState, asc_file: Path):
         original = asc_file.read_bytes()  # noqa: ASYNC240
-        with pytest.raises(NetlistError, match="empty value"):
+        with pytest.raises(NetlistError, match="InstName"):
             await handle_set_component_attribute(
                 SetComponentAttributeInput(
-                    path=asc_file.name, reference="R1", attribute="Value", value=""
+                    path=asc_file.name, reference="R1", attribute="InstName", value=""
                 ),
                 asc_state,
             )
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
-        await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
 
-    async def test_apply_ops_set_component_attribute_empty_value_rejected(
+    async def test_apply_ops_set_component_attribute_empty_value_clears(
         self, asc_state: SessionState, asc_file: Path
     ):
-        original = asc_file.read_bytes()  # noqa: ASYNC240
+        from spicelib import AscEditor
+
         result = await handle_apply_schematic_ops(
             ApplySchematicOpsInput(
                 path=asc_file.name,
@@ -1062,11 +1102,63 @@ class TestEmptyAttributeRejected:
         )
         data = result.structuredContent
         assert data is not None
+        assert data["saved"] is True
+        assert "Value" not in AscEditor(str(asc_file)).get_component("R1").attributes
+        await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
+
+    async def test_apply_ops_instname_clear_rejected(
+        self, asc_state: SessionState, asc_file: Path
+    ):
+        original = asc_file.read_bytes()  # noqa: ASYNC240
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path=asc_file.name,
+                ops=[
+                    {  # type: ignore[arg-type]
+                        "op": "set_component_attribute",
+                        "reference": "R1",
+                        "attribute": "InstName",
+                        "value": "",
+                    },
+                ],
+            ),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
         assert data["saved"] is False
         assert data["failed_count"] == 1
-        assert "empty value" in data["results"][0]["error"]
+        assert "InstName" in data["results"][0]["error"]
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
-        await handle_read_circuit(CircuitReadInput(path=asc_file.name), asc_state)
+
+
+@pytest.mark.asyncio
+class TestSetComponentValueBehavioralSource:
+    """Regression: on a .asc B-source, a value like 'V=V(in)*2' used to be
+    split as a KEY=VALUE parameter and written to SpiceLine while the old
+    expression stayed in Value — the netlisted B-line carried both
+    expressions ("No such node") behind a success message."""
+
+    async def test_bsource_expression_replaces_value_slot(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = work_dir / "bsrc.asc"
+        asc.write_text(
+            "Version 4\n"
+            "SHEET 1 880 680\n"
+            "SYMBOL bv 100 100 R0\n"
+            "SYMATTR InstName B1\n"
+            "SYMATTR Value V=1\n"
+        )
+        result = await handle_set_component_value(
+            SetComponentValueInput(path=asc.name, reference="B1", value="V=V(in)*2"),
+            asc_state,
+        )
+        assert "B1" in _result_text(result)
+        content = asc.read_text()
+        assert "SYMATTR Value V=V(in)*2" in content
+        assert "SpiceLine" not in content
+        assert "Value V=1\n" not in content
 
 
 @pytest.mark.asyncio
@@ -2419,3 +2511,44 @@ class TestAddComponentRealSymbols:
         )
         assert result.structuredContent["applied_count"] == 1
         assert result.structuredContent["failed_count"] == 0
+
+
+@pytest.mark.asyncio
+class TestBatchWarningCollapse:
+    """The documented per-pin-label style repeats one identical duplicate-label
+    advisory on every add_net_label op of a net; a batch must surface it once
+    with a count, not once per op."""
+
+    async def test_identical_label_warnings_collapse(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = work_dir / "labels.asc"
+        asc.write_text(
+            "Version 4\n"
+            "SHEET 1 880 680\n"
+            "WIRE 100 52 100 0\n"
+            "WIRE 100 148 100 200\n"
+            "WIRE 300 52 300 0\n"
+            "FLAG 100 0 vin\n"
+            "SYMBOL res 100 100 R0\n"
+            "SYMATTR InstName R1\n"
+            "SYMATTR Value 1k\n"
+        )
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path=asc.name,
+                ops=[  # type: ignore[arg-type]
+                    {"op": "add_net_label", "net": "vin", "x": 100, "y": 52},
+                    {"op": "add_net_label", "net": "vin", "x": 300, "y": 0},
+                    {"op": "add_net_label", "net": "vin", "x": 300, "y": 52},
+                ],
+            ),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        assert data["saved"] is True
+        all_warnings = [w for r in data["results"] for w in (r.get("warnings") or [])]
+        dup = [w for w in all_warnings if "already labels a net" in w]
+        assert len(dup) == 1, all_warnings
+        assert "identical warning on 3 ops" in dup[0]
