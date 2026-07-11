@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import cast
 
 import numpy as np
+import pytest
 from spicelib import RawRead
 
 from ltspice_mcp.lib.raw_parser import (
@@ -151,3 +152,61 @@ class TestTraceUnit:
         # The simulator typed @m1[gm] as an admittance -> relay S, don't fall
         # through to "no unit".
         assert trace_unit(cast(RawRead, _TypedRaw()), "@m1[gm]") == "S"
+
+
+class TestOffsetAwareRawRead:
+    """LTspice stores a windowed .tran (``.tran 0 202u 196u``) with the time
+    axis rebased to 0 and the true start in the header's ``Offset:`` field.
+    The offset-aware reader adds it back so every consumer works in deck time."""
+
+    @staticmethod
+    def _write_ascii_raw(path, *, plotname: str, offset: float) -> None:
+        path.write_text(
+            "Title: * windowed\n"
+            "Date: Thu Jul 10 12:00:00 2026\n"
+            f"Plotname: {plotname}\n"
+            "Flags: real\n"
+            "No. Variables: 2\n"
+            "No. Points: 3\n"
+            f"Offset: {offset:.16e}\n"
+            "Variables:\n"
+            "\t0\ttime\ttime\n"
+            "\t1\tV(out)\tvoltage\n"
+            "Values:\n"
+            "0\t0.0000000000000000e+00\n"
+            "\t1.0\n"
+            "1\t1.0000000000000000e-06\n"
+            "\t2.0\n"
+            "2\t2.0000000000000000e-06\n"
+            "\t3.0\n"
+        )
+
+    def test_windowed_tran_axis_rebased_to_deck_time(self, tmp_path):
+        from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
+
+        raw_file = tmp_path / "windowed.raw"
+        self._write_ascii_raw(raw_file, plotname="Transient Analysis", offset=1.96e-4)
+        raw = OffsetAwareRawRead(str(raw_file), traces_to_read="*", dialect="ltspice")
+        axis = np.asarray(raw.get_axis())
+        assert axis[0] == pytest.approx(1.96e-4)
+        assert axis[-1] == pytest.approx(1.98e-4)
+        # Trace data itself is untouched.
+        assert list(np.asarray(raw.get_trace("V(out)").get_wave())) == [1.0, 2.0, 3.0]
+
+    def test_zero_offset_axis_unchanged(self, tmp_path):
+        from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
+
+        raw_file = tmp_path / "plain.raw"
+        self._write_ascii_raw(raw_file, plotname="Transient Analysis", offset=0.0)
+        raw = OffsetAwareRawRead(str(raw_file), traces_to_read="*", dialect="ltspice")
+        axis = np.asarray(raw.get_axis())
+        assert axis[0] == pytest.approx(0.0)
+        assert axis[-1] == pytest.approx(2.0e-06)
+
+    def test_non_transient_offset_ignored(self, tmp_path):
+        from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
+
+        raw_file = tmp_path / "dc.raw"
+        self._write_ascii_raw(raw_file, plotname="DC transfer characteristic", offset=1.96e-4)
+        raw = OffsetAwareRawRead(str(raw_file), traces_to_read="*", dialect="ltspice")
+        assert np.asarray(raw.get_axis())[0] == pytest.approx(0.0)
