@@ -7,6 +7,7 @@ pure logic operating on BatchJob/SimulationJob state.
 """
 
 import asyncio
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -16,7 +17,7 @@ from ltspice_mcp.lib import now
 from ltspice_mcp.lib.montecarlo_runner import MonteCarloRunner
 from ltspice_mcp.lib.proc_kill import simulator_executable_names
 from ltspice_mcp.lib.runner_base import discard_logopinfo_netlist
-from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
+from ltspice_mcp.lib.sim_runner import SimulationRunner, collect_run_outcome, generate_job_id
 from ltspice_mcp.lib.sweep_runner import SweepRunner
 from ltspice_mcp.state import BatchJob, MonteCarloConfig, SessionState, SimulationJob, SweepConfig
 
@@ -119,7 +120,9 @@ class TestSimulationRunnerHandleCompletion:
         raw.write_text("non-empty")
         log = work_dir / "out.log"
         log.write_text("ok")
-        sim_runner._handle_completion(job.job_id, str(raw), str(log), state_no_sim)
+        sim_runner._handle_completion(
+            job.job_id, collect_run_outcome(str(raw), str(log)), state_no_sim
+        )
         assert job.status == "completed"
         assert job.done_event.is_set()
 
@@ -131,7 +134,9 @@ class TestSimulationRunnerHandleCompletion:
         raw.write_bytes(b"")  # zero size
         log = work_dir / "empty.log"
         log.write_text("Error: convergence failed\n")
-        sim_runner._handle_completion(job.job_id, str(raw), str(log), state_no_sim)
+        sim_runner._handle_completion(
+            job.job_id, collect_run_outcome(str(raw), str(log)), state_no_sim
+        )
         assert job.status == "failed"
         assert job.error is not None
         assert "no output" in job.error
@@ -141,7 +146,9 @@ class TestSimulationRunnerHandleCompletion:
         self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
     ):
         # Should silently warn, not raise
-        sim_runner._handle_completion("missing", "/x.raw", "/x.log", state_no_sim)
+        sim_runner._handle_completion(
+            "missing", collect_run_outcome("/x.raw", "/x.log"), state_no_sim
+        )
 
     def test_completion_terminal_state_skipped(
         self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
@@ -151,7 +158,9 @@ class TestSimulationRunnerHandleCompletion:
         raw.write_text("data")
         log = work_dir / "out.log"
         log.write_text("ok")
-        sim_runner._handle_completion(job.job_id, str(raw), str(log), state_no_sim)
+        sim_runner._handle_completion(
+            job.job_id, collect_run_outcome(str(raw), str(log)), state_no_sim
+        )
         # Status should not change from cancelled
         assert job.status == "cancelled"
 
@@ -165,7 +174,7 @@ class TestSimulationRunnerHandleCompletion:
         job = _make_job(state_no_sim, work_dir)
         log = work_dir / "out.fail"
         log.write_text("Error on line 2 : Q1 c b e mystery — undefined model\n")
-        sim_runner._handle_completion(job.job_id, ".", str(log), state_no_sim)
+        sim_runner._handle_completion(job.job_id, collect_run_outcome(".", str(log)), state_no_sim)
         assert job.status == "failed"
         assert job.raw_file is None
         assert job.error is not None and "no output" in job.error
@@ -180,10 +189,14 @@ class TestSimulationRunnerHandleCompletion:
         artifacts = [
             work_dir / f"{job.job_id}.cir",
             work_dir / f"{job.job_id}.raw",
+        ]
+        # Logs survive the reclaim: they are the post-mortem for a killed run
+        # (the timeout response points job.log_file at one).
+        kept_logs = [
             work_dir / f"{job.job_id}.log",
             work_dir / f"{job.job_id}.exe.log",
         ]
-        for path in artifacts:
+        for path in artifacts + kept_logs:
             path.write_text("partial")
         # An unrelated job's file must survive — the glob is stem-scoped.
         bystander = work_dir / "sim_other.raw"
@@ -191,13 +204,23 @@ class TestSimulationRunnerHandleCompletion:
 
         sim_runner._handle_completion(
             job.job_id,
-            str(work_dir / f"{job.job_id}.raw"),
-            str(work_dir / f"{job.job_id}.log"),
+            collect_run_outcome(
+                str(work_dir / f"{job.job_id}.raw"),
+                str(work_dir / f"{job.job_id}.log"),
+            ),
             state_no_sim,
         )
 
         assert job.status == "timeout"  # status untouched
-        assert all(not p.exists() for p in artifacts)
+        # Artifact removal is dispatched to a worker thread (file I/O must
+        # not run on the event loop) — poll for it rather than asserting
+        # synchronously.
+        deadline = time.monotonic() + 5.0
+        while any(p.exists() for p in artifacts):
+            if time.monotonic() > deadline:
+                pytest.fail(f"artifacts not removed: {[p for p in artifacts if p.exists()]}")
+            time.sleep(0.01)
+        assert all(p.exists() for p in kept_logs)
         assert bystander.exists()
 
     def test_completed_job_double_callback_keeps_artifacts(
@@ -208,8 +231,79 @@ class TestSimulationRunnerHandleCompletion:
         job = _make_job(state_no_sim, work_dir, status="completed")
         raw = work_dir / f"{job.job_id}.raw"
         raw.write_text("good output")
-        sim_runner._handle_completion(job.job_id, str(raw), "", state_no_sim)
+        sim_runner._handle_completion(job.job_id, collect_run_outcome(str(raw), ""), state_no_sim)
         assert raw.exists()
+
+    def test_clean_exit_without_raw_completes_log_only(
+        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A clean simulator exit whose results live only in the log (e.g. an
+        ngspice .control script) is a completed log-only run, not a failure —
+        the log parses free of errors, so relay the simulator's own verdict."""
+        job = _make_job(state_no_sim, work_dir)
+        raw = work_dir / "missing.raw"  # never written by the simulator
+        log = work_dir / "out.log"
+        log.write_text("Note: batch run\nvout = 2.5\n")
+        sim_runner._handle_completion(
+            job.job_id, collect_run_outcome(str(raw), str(log)), state_no_sim
+        )
+        assert job.status == "completed"
+        assert job.raw_file is None
+        assert job.log_file == log
+        assert job.error is None
+
+    def test_clean_exit_without_raw_but_log_errors_fails(
+        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        """No raw + a log that carries error diagnostics stays a failure even
+        when the simulator exited 0 (ngspice exits 0 on some no-data runs)."""
+        job = _make_job(state_no_sim, work_dir)
+        log = work_dir / "bad.log"
+        log.write_text("Error: circuit not parsed.\n")
+        sim_runner._handle_completion(
+            job.job_id, collect_run_outcome(str(work_dir / "missing.raw"), str(log)), state_no_sim
+        )
+        assert job.status == "failed"
+        assert job.error is not None and "no output" in job.error
+
+    def test_unreadable_raw_is_failure_not_log_only(self, work_dir: Path):
+        """A raw whose stat fails for a reason other than absence (permissions,
+        a flaky mount) must surface as a failure with the path preserved, not
+        be misread as a successful log-only run."""
+        blocker = work_dir / "sim.raw"
+        blocker.write_text("a regular file, not a directory")
+        unreadable_raw = blocker / "inner.raw"  # stat -> NotADirectoryError
+        log = work_dir / "sim.log"
+        log.write_text("no errors here\n")
+        outcome = collect_run_outcome(str(unreadable_raw), str(log))
+        assert outcome.error is not None and "unreadable" in outcome.error
+        assert outcome.raw_file == str(unreadable_raw)
+
+    def test_killed_run_keeps_fail_log_and_repoints_job(
+        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A killed run exits nonzero, so spicelib renames its log to ``.fail``.
+        The artifact reclaim must keep that post-mortem, and the job must be
+        repointed at it — the timeout path derived ``{job_id}.log`` before the
+        rename happened."""
+        job = _make_job(state_no_sim, work_dir, status="timeout")
+        job.log_file = work_dir / f"{job.job_id}.log"  # pre-rename derivation
+        fail_log = work_dir / f"{job.job_id}.fail"
+        fail_log.write_text("Fatal Error: simulation killed\n")
+        raw = work_dir / f"{job.job_id}.raw"
+        raw.write_text("partial")
+
+        sim_runner._handle_completion(
+            job.job_id, collect_run_outcome("", str(fail_log)), state_no_sim
+        )
+
+        assert job.log_file == fail_log
+        deadline = time.monotonic() + 5.0
+        while raw.exists():
+            if time.monotonic() > deadline:
+                pytest.fail("partial raw not removed")
+            time.sleep(0.01)
+        assert fail_log.exists()
 
 
 class TestSimulationRunnerCancel:
@@ -388,7 +482,9 @@ class TestSimulationRunnerConcurrencyGate:
         raw.write_text("data")
         log = work_dir / "g.log"
         log.write_text("ok")
-        runner._handle_completion(running.job_id, str(raw), str(log), state_no_sim)
+        runner._handle_completion(
+            running.job_id, collect_run_outcome(str(raw), str(log)), state_no_sim
+        )
         await _wait_for(lambda: sum(j.status == "queued" for j in jobs) == 0)
 
         assert running.status == "completed"
@@ -444,7 +540,7 @@ class TestSimulationRunnerConcurrencyGate:
         raw.write_text("data")
         log = work_dir / "to.log"
         log.write_text("ok")
-        runner._handle_completion(a.job_id, str(raw), str(log), state_no_sim)
+        runner._handle_completion(a.job_id, collect_run_outcome(str(raw), str(log)), state_no_sim)
         # b's queued waiter wakes when a's completion frees the slot; wait until
         # its self-heal has run so the "stayed terminal / no orphan" checks below
         # are meaningful rather than racing an unprocessed wake.
@@ -480,7 +576,7 @@ class TestSimulationRunnerConcurrencyGate:
         raw.write_text("data")
         log = work_dir / "cq.log"
         log.write_text("ok")
-        runner._handle_completion(a.job_id, str(raw), str(log), state_no_sim)
+        runner._handle_completion(a.job_id, collect_run_outcome(str(raw), str(log)), state_no_sim)
         # a's completion frees the slot and wakes b's cancelled waiter; wait for
         # it to finish self-healing before asserting it neither ran nor launched.
         await _wait_for(lambda: tb.done())
@@ -577,7 +673,7 @@ class TestSimulationRunnerConcurrencyGate:
         raw.write_text("data")
         log = work_dir / "fk.log"
         log.write_text("ok")
-        runner._handle_completion(a.job_id, str(raw), str(log), state_no_sim)
+        runner._handle_completion(a.job_id, collect_run_outcome(str(raw), str(log)), state_no_sim)
         await _wait_for(lambda: b.status == "running")
         assert b.status == "running"
         for t in (ta, tb):
