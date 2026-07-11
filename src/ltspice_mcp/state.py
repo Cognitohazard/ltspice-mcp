@@ -107,6 +107,11 @@ class SessionState:
     """Pre-first-edit byte snapshots of .asc schematics touched this session,
     keyed by resolved path string. Captured before the first in-session
     mutation; backs ``reset_schematic`` (revert to last good state)."""
+    raw_dialect_hints: dict[Path, str | None] = field(default_factory=dict, repr=False)
+    """Raw dialect per job-resolved raw path, recorded when the path is
+    resolved (``services._resolve_result_file``) and read by ``load_raw`` —
+    a per-run simulator override's raw must not parse with the session
+    default's dialect. Paths never resolved through a job aren't listed."""
 
     @property
     def raw_dialect(self) -> str | None:

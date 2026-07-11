@@ -32,93 +32,128 @@ _RUNNER_IMPORTS: dict[str, tuple[str, str]] = {
 }
 
 
-class RunnerManager:
-    """Creates and caches runner instances, invalidating when context changes.
+_RUNNER_CACHE_CAP = 8
+"""Upper bound on cached runner instances. Keys are (kind, simulator class,
+output folder); distinct folders arise from relative-include decks running in
+their own dirs, so the cache is LRU-bounded rather than unbounded."""
 
-    A runner is stale when any of these change:
-    - The asyncio event loop (e.g., between test runs)
-    - The simulator class (e.g., user switches from LTspice to ngspice)
-    - The output folder (e.g., WSL temp dir changes)
+
+class RunnerManager:
+    """Creates and caches runner instances, one per (kind, simulator, folder).
+
+    Runners are cached per simulator class and output folder so a per-run
+    simulator override (or a deck that runs in its own directory) does not
+    evict a runner with in-flight work — eviction would drop its concurrency
+    semaphore and per-job cancel events. Only an event-loop change (test
+    fixtures) invalidates everything: runners bridge worker callbacks onto
+    the loop they were created with.
     """
 
     def __init__(self) -> None:
-        self._runners: dict[str, Any] = {}
-
-        # Track the context that runners were created with
+        self._runners: dict[tuple[str, type, Path], Any] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._simulator_class: type | None = None
-        self._output_folder: Path | None = None
-
-    def _ensure_fresh(
-        self, loop: asyncio.AbstractEventLoop, simulator_class: type, output_folder: Path
-    ) -> None:
-        """Invalidate all runners if context has changed."""
-        if (
-            self._loop is None
-            or self._loop is not loop
-            or self._simulator_class is not simulator_class
-            or self._output_folder != output_folder
-        ):
-            self._runners.clear()
-            self._loop = loop
-            self._simulator_class = simulator_class
-            self._output_folder = output_folder
 
     def _get_or_create(
         self,
-        key: str,
+        kind: str,
         loop: asyncio.AbstractEventLoop,
         simulator_class: type,
         output_folder: Path,
         max_parallel: int,
     ) -> Any:
         """Get a cached runner or create a new one."""
-        self._ensure_fresh(loop, simulator_class, output_folder)
+        if self._loop is None or self._loop is not loop:
+            self._runners.clear()
+            self._loop = loop
 
-        if key not in self._runners:
-            module_path, class_name = _RUNNER_IMPORTS[key]
-            import importlib
+        key = (kind, simulator_class, output_folder)
+        runner = self._runners.pop(key, None)
+        if runner is not None:
+            # Re-insert to refresh LRU recency. A cached runner keeps the
+            # max_parallel it was created with, but a later call may request a
+            # different cap. Update it in place: each batch rebuilds its
+            # spicelib SimRunner from ``self.max_parallel`` at launch, so the
+            # new cap takes effect on the next batch this runner starts.
+            # Updating the attribute (vs. recreating the instance) preserves
+            # the per-job cancel-event / live-process map that an in-flight
+            # batch — and cancel_job — depend on.
+            runner.max_parallel = max_parallel
+            self._runners[key] = runner
+            return runner
 
-            mod = importlib.import_module(module_path)
-            cls = getattr(mod, class_name)
+        if len(self._runners) >= _RUNNER_CACHE_CAP:
+            # Never evict a runner with in-flight work: dropping it would
+            # split the concurrency semaphore (a recreated instance admits
+            # max_parallel more jobs) and lose its per-job cancel state. If
+            # every cached runner is busy, let the cache exceed the cap —
+            # busy runners are bounded by running jobs, not by this dict.
+            victim = next((k for k, r in self._runners.items() if not r.has_active_work()), None)
+            if victim is not None:
+                del self._runners[victim]
+                logger.debug("Runner cache full; evicted %s", victim)
 
-            self._runners[key] = cls(
-                loop=loop,
-                simulator_class=simulator_class,
-                output_folder=output_folder,
-                max_parallel=max_parallel,
-            )
-            logger.debug(f"Created {class_name}: output={output_folder}")
-        else:
-            # A cached runner keeps the max_parallel it was created with, but a
-            # later run_sweep/run_montecarlo may request a different cap. Update
-            # it in place: each batch rebuilds its spicelib SimRunner from
-            # ``self.max_parallel`` at launch, so the new cap takes effect on the
-            # next batch this runner starts. Updating the attribute (vs. recreating
-            # the instance) preserves the per-job cancel-event / live-process map
-            # that an in-flight batch — and cancel_job — depend on.
-            self._runners[key].max_parallel = max_parallel
+        module_path, class_name = _RUNNER_IMPORTS[kind]
+        import importlib
 
-        return self._runners[key]
+        mod = importlib.import_module(module_path)
+        cls = getattr(mod, class_name)
+        runner = cls(
+            loop=loop,
+            simulator_class=simulator_class,
+            output_folder=output_folder,
+            max_parallel=max_parallel,
+        )
+        self._runners[key] = runner
+        logger.debug(f"Created {class_name}: output={output_folder}")
+        return runner
 
     def reset(self) -> None:
         """Force-invalidate all runners. Used by test fixtures."""
         self._runners.clear()
         self._loop = None
-        self._simulator_class = None
-        self._output_folder = None
 
-    def get_existing_sim_runner(self) -> SimulationRunner | None:
-        """Return the currently cached ``SimulationRunner`` if present."""
-        return self._runners.get("sim")
+    def _get_existing(self, kind: str, simulator: str | None) -> Any | None:
+        """Most-recently-used cached runner of ``kind``.
 
-    def get_existing_sweep_runner(self) -> SweepRunner | None:
-        """Return the currently cached ``SweepRunner`` if present."""
-        return self._runners.get("sweep")
+        ``simulator`` (a class name, e.g. ``"LTspiceWSL"``) narrows the match —
+        pass the job's own ``simulator`` field when cancelling, so the kill uses
+        that simulator's executable names and the launching runner's cancel
+        events rather than whichever runner was used last.
+        """
+        of_kind = [(cls, runner) for (k, cls, _f), runner in self._runners.items() if k == kind]
+        if simulator is not None:
+            named = [runner for cls, runner in of_kind if cls.__name__ == simulator]
+            if named:
+                return named[-1]
+            # Name matched nothing (runner evicted, or a recovered job whose
+            # recorded name predates this session). With a single live runner
+            # of this kind, prefer it over giving up: its kill is token-scoped,
+            # so a class mismatch just matches no process — same as returning
+            # None — while a match kills the right one.
+            if len(of_kind) != 1:
+                return None
+        return of_kind[-1][1] if of_kind else None
 
-    def get_existing_mc_runner(self) -> MonteCarloRunner | None:
-        """Return the currently cached ``MonteCarloRunner`` if present."""
-        return self._runners.get("mc")
+    def get_batch_runner_for(self, job: Any) -> Any | None:
+        """Runner to cancel batch ``job`` with.
+
+        Batch cancel state (the cancel event that stops the submission loop)
+        lives on the instance that launched the batch — with several runners
+        of one kind cached (distinct output folders), most-recent is not
+        necessarily the owner, so prefer the instance whose cancel registry
+        owns the job id. Fall back to the most-recent runner of the kind for
+        a job whose owner is gone (e.g. recovered after a restart): its
+        token-scoped kill still reaches the right processes.
+        """
+        kind = "mc" if job.job_type == "montecarlo" else "sweep"
+        for (k, _cls, _folder), runner in self._runners.items():
+            if k == kind and runner.owns_batch_job(job.job_id):
+                return runner
+        return self._get_existing(kind, None)
+
+    def get_existing_sim_runner(self, simulator: str | None = None) -> SimulationRunner | None:
+        """Return a cached ``SimulationRunner`` if present (see ``_get_existing``)."""
+        return self._get_existing("sim", simulator)
 
     def get_sim_runner(
         self,

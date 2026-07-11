@@ -167,7 +167,7 @@ class TestJobHandlerDualStore:
         _make_batch(state_with_sim, status="running")
         fake_runner = MagicMock(cancel=AsyncMock())
         with patch.object(
-            state_with_sim.runners, "get_existing_sweep_runner", return_value=fake_runner
+            state_with_sim.runners, "get_batch_runner_for", return_value=fake_runner
         ):
             result = await handle_cancel_job(CancelJobInput(job_id="b1"), state_with_sim)
         assert "not found" not in _text(result).lower()
@@ -238,8 +238,10 @@ class TestCancelJobRoutingFork:
             result = await handle_cancel_job(CancelJobInput(job_id="j1"), state_with_sim)
         assert "cancelled" in _text(result).lower()
         # Resolved via the job's own netlist so the runner's output folder matches
-        # the one the job launched with (else RunnerManager evicts the live runner).
-        get_runner.assert_called_once_with(state_with_sim, job.netlist)
+        # the one the job launched with. simulator_class is None here: the
+        # job's recorded name ("ltspice") matches no detected class, so the
+        # runner falls back to the session default.
+        get_runner.assert_called_once_with(state_with_sim, job.netlist, simulator_class=None)
         fake_runner.cancel.assert_awaited_once()
         # The exact job resolved from state.jobs reaches the runner —
         # not a re-looked-up copy, not a batch-runner detour.
@@ -256,12 +258,10 @@ class TestCancelJobRoutingFork:
                 "ltspice_mcp.tools.simulation._get_or_create_runner",
                 return_value=fake_runner,
             ),
-            patch.object(state_with_sim.runners, "get_existing_sweep_runner") as sweep,
-            patch.object(state_with_sim.runners, "get_existing_mc_runner") as mc,
+            patch.object(state_with_sim.runners, "get_batch_runner_for") as batch,
         ):
             await handle_cancel_job(CancelJobInput(job_id="j1"), state_with_sim)
-        sweep.assert_not_called()
-        mc.assert_not_called()
+        batch.assert_not_called()
         fake_runner.cancel.assert_awaited_once()
 
 

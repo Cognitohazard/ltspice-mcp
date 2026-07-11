@@ -38,6 +38,7 @@ from ltspice_mcp.tools._base import (
     inject_logopinfo,
     registry,
     require_simulator,
+    resolve_netlist_path,
     resolve_output_folder,
     resolve_runnable_netlist,
     text_response,
@@ -52,6 +53,13 @@ from ltspice_mcp.tools._base import (
 # HARD_MAX_TIMEOUT).
 SYNC_TIMEOUT_THRESHOLD = 30.0
 HARD_MAX_TIMEOUT = 600.0  # 10 minutes - max for wait=true mode
+
+# How long the async path waits inline for completion before returning a job
+# handle. Most .op/.ac/small-.tran runs finish in well under a second, and
+# returning their parsed results directly saves every caller a check_job
+# round-trip; a run that outlives the grace window continues in the background
+# under the deadline watchdog (nothing is killed at grace expiry).
+SYNC_GRACE_WAIT = 10.0
 
 # Appended to the timed-out response (built by _timeout_response, shared by the
 # sync wait path and the async check_job path). A timeout is a tool-set limit,
@@ -105,13 +113,22 @@ class RunSimulationInput(ToolInput):
     """Inputs for run_simulation."""
 
     netlist: str = Field(description="Path to the netlist file (.cir, .net, .asc)")
+    simulator: str | None = Field(
+        default=None,
+        description=(
+            "Simulator for this run, by detected name (e.g. 'ltspice', 'ngspice' — "
+            "server_status lists them). Defaults to the server's default simulator. "
+            "Lets one deck be cross-checked on a second engine without changing config."
+        ),
+    )
     timeout: float | None = Field(
         default=None,
         description=(
             "Timeout in seconds (defaults to the server's configured default, 300s). "
-            "Simulations exceeding 30s run asynchronously unless wait=true. With "
-            "wait=true the effective limit is min(this timeout, 600s): 600s is a hard "
-            "ceiling, not a floor — pass a larger timeout to use the full 600s."
+            "Runs that finish within a short grace window return results inline; "
+            "longer runs return a job ID for check_job tracking. With wait=true the "
+            "effective limit is min(this timeout, 600s): 600s is a hard ceiling, not "
+            "a floor — pass a larger timeout to use the full 600s."
         ),
     )
     wait: bool = Field(
@@ -160,16 +177,18 @@ class CancelJobInput(ToolInput):
 
 
 async def _get_or_create_runner(
-    state: SessionState, netlist_path: Path | None = None
+    state: SessionState,
+    netlist_path: Path | None = None,
+    simulator_class: type | None = None,
 ) -> SimulationRunner:
     """Get or create a SimulationRunner via the centralized RunnerManager."""
-    default_simulator = state.default_simulator
-    if default_simulator is None:
+    sim_cls = simulator_class or state.default_simulator
+    if sim_cls is None:
         raise SimulationError(no_simulator_message())
     return state.runners.get_sim_runner(
         loop=asyncio.get_running_loop(),
-        simulator_class=default_simulator,
-        output_folder=await resolve_output_folder(state, netlist_path),
+        simulator_class=sim_cls,
+        output_folder=await resolve_output_folder(state, netlist_path, simulator=sim_cls),
         max_parallel=state.config.max_parallel_sims,
     )
 
@@ -180,10 +199,11 @@ async def _get_or_create_runner(
         "Run a SPICE simulation on a netlist file. Sets the right batch flags, "
         "handles the ngspice headerless-raw dialect, routes the raw/log "
         "artifacts, and parses the results — so you never hand-parse a rawfile. "
-        "Automatically runs synchronously for short simulations (<=30s timeout) "
-        "or asynchronously for longer ones. Use wait=true to force synchronous execution. "
-        "Returns raw/log file paths and simulation summary on completion, "
-        "or a job ID for async tracking."
+        "Fast runs return their parsed results inline (short grace wait); "
+        "longer runs return a job ID for check_job tracking. Use wait=true to "
+        "force synchronous execution up to the hard 600s ceiling. Pass "
+        "simulator= to run on a non-default engine (e.g. cross-check a deck "
+        "on ngspice)."
     ),
     input_model=RunSimulationInput,
     annotations=types.ToolAnnotations(
@@ -217,10 +237,28 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     wait = args.wait
     fmt = args.format
 
-    netlist_path = await resolve_runnable_netlist(netlist_str, state)
-    require_simulator(state)
-    default_simulator = state.default_simulator
-    assert default_simulator is not None  # guaranteed by require_simulator
+    # Cheap path validation first, so a bad path reports as such even when no
+    # simulator is configured.
+    resolve_netlist_path(netlist_str, state)
+
+    if args.simulator is not None:
+        sim_cls = state.available_simulators.get(args.simulator.lower())
+        if sim_cls is None:
+            raise SimulationError(
+                f"Simulator '{args.simulator}' is not available on this server "
+                f"(detected: {list(state.available_simulators)}). server_status "
+                "lists the detected simulators.",
+                show_hint=False,
+            )
+        default_simulator = sim_cls
+    else:
+        require_simulator(state)
+        assert state.default_simulator is not None  # guaranteed by require_simulator
+        default_simulator = state.default_simulator
+
+    # Simulator resolved BEFORE the .asc export so an ngspice target gets the
+    # sanitized export (LTspice's .backanno / µ / § would abort ngspice).
+    netlist_path = await resolve_runnable_netlist(netlist_str, state, simulator=default_simulator)
 
     preflight_warnings = services.ngspice_preflight_warnings(netlist_path, default_simulator)
 
@@ -251,7 +289,9 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     # delete the generated logopinfo sibling so the error path leaves no orphan.
     started = False
     try:
-        runner = await _get_or_create_runner(state, netlist_path)
+        runner = await _get_or_create_runner(
+            state, netlist_path, simulator_class=default_simulator
+        )
         state.add_job(job)
         job.task = asyncio.create_task(runner.start_simulation(run_path, job, state))
         started = True
@@ -264,8 +304,9 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
 
     # Decide sync vs async
     # If wait=true: force sync with hard max timeout
-    # Elif timeout <= threshold: sync
-    # Else: async (return job ID immediately)
+    # Elif timeout <= threshold: sync (the timeout IS the inline deadline)
+    # Else: async with a short inline grace wait — fast runs return their
+    # results directly instead of forcing a check_job round-trip.
     if wait:
         effective_timeout = min(timeout, HARD_MAX_TIMEOUT)
         return await _wait_for_completion(
@@ -274,38 +315,48 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     elif timeout <= SYNC_TIMEOUT_THRESHOLD:
         return await _wait_for_completion(job, timeout, runner, state, fmt, preflight_warnings)
     else:
-        # Async path — return the job ID immediately, but arm a deadline
-        # watchdog first: the sync branches enforce their deadline via
-        # wait_for below, and without a watchdog an async job's timeout
-        # (including the config default) was accepted and never enforced.
+        # Async path — arm the deadline watchdog first: the sync branches
+        # enforce their deadline via wait_for, and without a watchdog an
+        # async job's timeout (including the config default) was accepted
+        # and never enforced.
         _arm_timeout_watchdog(job, timeout, runner, state)
-        # Let the submission task advance to its first suspension point so
-        # the reported status reflects reality: "running" when a slot was
-        # free, "queued" when the job is waiting on the concurrency cap.
-        await asyncio.sleep(0)
-        data = {
-            "job_id": job_id,
-            "status": job.status,
-            "netlist": str(netlist_path),
-            "simulator": default_simulator.__name__,
-            # Structured-content clients render only structuredContent, so the
-            # follow-up referral must live in the data dict too.
-            "hint": (
-                f"Use check_job('{job_id}') to check status, check_job() to see "
-                f"all jobs, or cancel_job('{job_id}') to cancel."
-            ),
-        }
-        return format_response(
-            f"Simulation started in background\n"
-            f"Job ID: {job_id}\n"
-            f"Netlist: {netlist_path}\n"
-            f"Simulator: {default_simulator.__name__}\n\n"
-            f"Use check_job('{job_id}') to check status\n"
-            f"Use check_job() to see all jobs\n"
-            f"Use cancel_job('{job_id}') to cancel",
-            data,
-            fmt,
+        try:
+            await asyncio.wait_for(job.done_event.wait(), timeout=min(SYNC_GRACE_WAIT, timeout))
+        except TimeoutError:
+            # Still running after the grace window — hand back the job id.
+            # (The wait above also let the submission task advance, so the
+            # reported status reflects reality: "running" when a slot was
+            # free, "queued" when waiting on the concurrency cap.)
+            data = {
+                "job_id": job_id,
+                "status": job.status,
+                "netlist": str(netlist_path),
+                "simulator": default_simulator.__name__,
+                # Structured-content clients render only structuredContent, so
+                # the follow-up referral must live in the data dict too.
+                "hint": (
+                    f"Use check_job('{job_id}') to check status, check_job() to see "
+                    f"all jobs, or cancel_job('{job_id}') to cancel."
+                ),
+            }
+            return format_response(
+                f"Simulation started in background\n"
+                f"Job ID: {job_id}\n"
+                f"Netlist: {netlist_path}\n"
+                f"Simulator: {default_simulator.__name__}\n\n"
+                f"Use check_job('{job_id}') to check status\n"
+                f"Use check_job() to see all jobs\n"
+                f"Use cancel_job('{job_id}') to cancel",
+                data,
+                fmt,
+            )
+        duration = (
+            services.job_duration_seconds(
+                job.started_at, job.completed_at, label=f"sim job {job.job_id}"
+            )
+            or 0.0
         )
+        return await _finished_job_response(job, duration, state, fmt, preflight_warnings)
 
 
 _timeout_watchdogs: set[asyncio.Task[None]] = set()
@@ -334,6 +385,13 @@ async def _timeout_job(job: SimulationJob, runner: SimulationRunner, state: Sess
     """
     if job.status in NON_TERMINAL_LIVE_STATUSES:
         transition(job, "timeout", state=state)
+        if job.log_file is None:
+            # The completion callback (which normally records log_file) hasn't
+            # fired yet, and once it does it early-returns on the terminal
+            # status — so derive the path from the run-file naming contract
+            # ({job_id}.log in the runner's output folder). Without this the
+            # timeout response could never show a log excerpt.
+            job.log_file = runner.output_folder / f"{job.job_id}.log"
     await runner.kill(job.job_id)
 
 
@@ -384,20 +442,45 @@ async def _wait_for_completion(
             or time.monotonic() - start_time
         )
 
-        return _timeout_response(job, duration, fmt)
+        return await _timeout_response(job, duration, fmt)
 
     # Simulation completed (success or failure)
     duration = time.monotonic() - start_time
+    return await _finished_job_response(job, duration, state, fmt, preflight_warnings)
 
+
+async def _finished_job_response(
+    job: SimulationJob,
+    duration: float,
+    state: SessionState,
+    fmt: str | None,
+    preflight_warnings: list[str] | None = None,
+):
+    """Build the response for a job that reached a terminal state.
+
+    Shared by the sync wait path and the async grace-wait path — the latter
+    can observe any terminal status, including a timeout that raced the
+    deadline watchdog.
+    """
     if job.status == "completed":
-        # Parse success summary
-        if job.raw_file is None or job.log_file is None:
+        if job.raw_file is None:
+            # Log-only completion: a clean exit that wrote results (if any)
+            # to the log rather than a raw file — see collect_run_outcome.
+            await mcp_log(
+                "info", f"Simulation completed (log-only): {job.netlist.name} ({duration:.1f}s)"
+            )
+            return await _log_only_response(job, duration, fmt, preflight_warnings)
+        if job.log_file is None:
             raise ResultError(
                 f"Job {job.job_id} completed but result files are missing.\n"
                 f"raw_file: {job.raw_file}, log_file: {job.log_file}"
             )
         summary = parse_success_summary(
-            job.raw_file, job.log_file, duration, dialect=state.raw_dialect, netlist=job.netlist
+            job.raw_file,
+            job.log_file,
+            duration,
+            dialect=services.dialect_for_job(job, state),
+            netlist=job.netlist,
         )
         if preflight_warnings:
             existing = summary.get("warnings") or []
@@ -413,21 +496,117 @@ async def _wait_for_completion(
     elif job.status == "cancelled":
         data = {"job_id": job.job_id, "status": "cancelled"}
         return format_response(f"Simulation cancelled\nJob ID: {job.job_id}", data, fmt)
+    elif job.status == "timeout":
+        return await _timeout_response(job, duration, fmt)
     else:
         # Unexpected status
         data = {"job_id": job.job_id, "status": job.status}
         return format_response(f"Simulation ended with unexpected status: {job.status}", data, fmt)
 
 
-def _timeout_response(job, duration: float, fmt: str | None):
+def _read_log_only_payload(log_file: Path) -> tuple[list[str], list[str], dict, list[str]]:
+    """Read a log-only run's diagnostics and measurements (worker thread only —
+    both calls below read the whole log, which can stall on a hung mount)."""
+    from ltspice_mcp.lib.log_parser import extract_log_diagnostics, parse_measurements
+
+    if not log_file.exists():
+        return [], [], {}, []
+    diagnostics = extract_log_diagnostics(log_file)
+    measurements: dict = {}
+    failed: list[str] = []
+    try:
+        meas = parse_measurements(log_file)
+        measurements = meas["measurements"]
+        failed = meas["failed_measurements"]
+    except Exception:
+        pass
+    return diagnostics["warnings"], diagnostics["errors"], measurements, failed
+
+
+async def _log_only_response(
+    job: SimulationJob,
+    duration: float,
+    fmt: str | None,
+    preflight_warnings: list[str] | None = None,
+):
+    """Response for a completed run that produced no raw waveform data.
+
+    Happens when a clean simulator exit writes results only to the log — an
+    ngspice ``.control`` script driving its own analyses, or a deck with no
+    analysis card. The log-parsed measurements are the payload; the no-raw
+    fact rides as a coverage observation, and waveform tools will correctly
+    refuse this job.
+    """
+    log_file = job.log_file
+    warnings_list: list[str] = list(preflight_warnings or [])
+    errors: list[str] = []
+    measurements: dict = {}
+    failed: list[str] = []
+    if log_file is not None:
+        log_warnings, errors, measurements, failed = await asyncio.to_thread(
+            _read_log_only_payload, log_file
+        )
+        warnings_list.extend(log_warnings)
+
+    hint = (
+        "No raw waveform file was produced (common for .control-script decks "
+        "whose results go to the log). Waveform tools cannot read this run; "
+        "read the log file directly for printed output. Parsed .meas results, "
+        "when present, are in 'measurements'."
+    )
+    data: dict = {
+        "job_id": job.job_id,
+        "status": "completed",
+        "duration": duration,
+        "observations": [
+            {
+                "code": "no_raw_output",
+                "kind": "coverage",
+                "detail": (
+                    "The simulator exited cleanly but wrote no raw waveform "
+                    "data; results, if any, are in the log."
+                ),
+            }
+        ],
+        "hint": hint,
+    }
+    if log_file is not None:
+        data["log_file"] = str(log_file)
+    if warnings_list:
+        data["warnings"] = warnings_list
+    if errors:
+        data["errors"] = errors
+    if measurements:
+        data["measurements"] = measurements
+    if failed:
+        data["failed_measurements"] = failed
+
+    meas_note = f"\nMeasurements parsed from log: {len(measurements)}" if measurements else ""
+    text = (
+        f"Simulation completed (log-only: no raw waveform data)\n"
+        f"Job ID: {job.job_id}\n"
+        f"Duration: {duration:.2f}s\n"
+        f"Log file: {log_file}{meas_note}\n\n{hint}"
+    )
+    return format_response(text, data, fmt)
+
+
+def _read_timeout_excerpt(log_file: Path) -> str | None:
+    """Existence probe + capped excerpt read (worker thread only — file I/O)."""
+    if not log_file.exists():
+        return None
+    return extract_error_context(log_file, max_lines=20)
+
+
+async def _timeout_response(job, duration: float, fmt: str | None):
     """Build the timed-out response — shared by the sync wait path and check_job.
 
     Log excerpt and raise-the-limit guidance ride in the structured payload
     too (see format_response's self-sufficiency contract).
     """
     excerpt: str | None = None
-    if job.log_file and job.log_file.exists():
-        excerpt = extract_error_context(job.log_file, max_lines=20)
+    if job.log_file:
+        excerpt = await asyncio.to_thread(_read_timeout_excerpt, job.log_file)
     log_excerpt = f"\n\nLog excerpt:\n{excerpt}" if excerpt else ""
 
     data = {
@@ -672,7 +851,10 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
             )
             or 0
         )
-        if job.raw_file is None or job.log_file is None:
+        if job.raw_file is None:
+            # Log-only completion (clean exit, results in the log, no raw).
+            return await _log_only_response(job, duration, fmt)
+        if job.log_file is None:
             raise ResultError(
                 f"Job {job_id} completed but result files are missing.\n"
                 f"raw_file: {job.raw_file}, log_file: {job.log_file}"
@@ -683,7 +865,11 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
                 f"raw: {job.raw_file.exists()}, log: {job.log_file.exists()}"
             )
         summary = parse_success_summary(
-            job.raw_file, job.log_file, duration, dialect=state.raw_dialect, netlist=job.netlist
+            job.raw_file,
+            job.log_file,
+            duration,
+            dialect=services.dialect_for_job(job, state),
+            netlist=job.netlist,
         )
         suggestions = services.suggestions_from_errors(summary.get("errors"), state.libraries)
         if suggestions:
@@ -704,7 +890,7 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
             )
             or 0
         )
-        return _timeout_response(job, duration, fmt)
+        return await _timeout_response(job, duration, fmt)
     elif job.status == "cancelled":
         data = _terminal_job_data(job, "cancelled")
         dur = data.get("duration")
@@ -931,14 +1117,10 @@ async def handle_cancel_job(args: CancelJobInput, state: SessionState) -> types.
 
     # Cancel via the runner that owns the job. A batch job's cancel event and
     # live-process map live on the SweepRunner/MonteCarloRunner instance that
-    # launched it, so route by job type rather than assuming a single-sim runner.
+    # launched it, so route by ownership rather than assuming one runner per kind.
     require_simulator(state)
     if isinstance(job, BatchJob):
-        batch_runner = (
-            state.runners.get_existing_mc_runner()
-            if job.job_type == "montecarlo"
-            else state.runners.get_existing_sweep_runner()
-        )
+        batch_runner = state.runners.get_batch_runner_for(job)
         if batch_runner is None:
             raise SimulationError(
                 f"Job {job_id} is marked running but its {job.job_type} runner is no "
@@ -946,12 +1128,13 @@ async def handle_cancel_job(args: CancelJobInput, state: SessionState) -> types.
             )
         await batch_runner.cancel(job, state)
     else:
-        # Resolve the runner via the JOB's netlist, so its output folder matches
-        # the one the job launched with. Acquiring with no netlist resolves to a
-        # different folder, which makes RunnerManager invalidate the live runner
-        # (losing the spicelib process handle) — the simulator would keep running
-        # while the job shows cancelled.
-        sim_runner = await _get_or_create_runner(state, job.netlist)
+        # Resolve the runner via the JOB's netlist and recorded simulator, so
+        # the cache key (class, output folder) matches the one the job
+        # launched with — a mismatch would resolve to a different runner
+        # whose kill scopes by the wrong executable names.
+        sim_runner = await _get_or_create_runner(
+            state, job.netlist, simulator_class=services.simulator_class_for_job(job, state)
+        )
         await sim_runner.cancel(job, state)
 
     return text_response(f"Job {job_id} cancelled")

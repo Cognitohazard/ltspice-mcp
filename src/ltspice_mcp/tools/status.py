@@ -6,7 +6,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from ltspice_mcp.lib import services
-from ltspice_mcp.lib.simulator import no_simulator_message
+from ltspice_mcp.lib.simulator import current_ngbehavior, no_simulator_message
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
@@ -121,6 +121,12 @@ async def handle_server_status(args: ServerStatusInput, state: SessionState):
     lines.append(f"  Default timeout: {state.config.default_timeout}s")
     lines.append(f"  Max points returned: {state.config.max_points_returned}")
     lines.append(f"  Log level: {state.config.log_level}")
+    if "ngspice" in state.available_simulators:
+        # The effective compatibility mode ngspice runs under. It changes how
+        # decks parse (e.g. sectioned `.lib file section` handling), so it must
+        # be observable for reproducibility — a CLI ngspice run without it can
+        # fail differently than the server's.
+        lines.append(f"  ngspice behavior mode (ngbehavior): {current_ngbehavior() or 'default'}")
     lines.append(f"  Job persistence: {'on' if state.config.persist_jobs else 'off'}")
     if not state.config.persist_jobs:
         # Distinguish "nothing run yet" from "persistence off" — otherwise an
@@ -170,6 +176,9 @@ async def handle_server_status(args: ServerStatusInput, state: SessionState):
             "default_timeout": state.config.default_timeout,
             "max_points_returned": state.config.max_points_returned,
             "log_level": state.config.log_level,
+            "ngbehavior": current_ngbehavior()
+            if "ngspice" in state.available_simulators
+            else None,
             "persist_jobs": state.config.persist_jobs,
             "preload_recent_count": state.config.preload_recent_count,
         },
