@@ -266,14 +266,8 @@ class TestOwnerPidLiveness:
         cancelled: list[str] = []
 
         class _StubRunners:
-            def get_existing_sim_runner(self):
+            def get_existing_sim_runner(self, simulator=None):
                 return self
-
-            def get_existing_sweep_runner(self):
-                return None
-
-            def get_existing_mc_runner(self):
-                return None
 
             async def cancel(self, job, state):
                 cancelled.append(job.job_id)

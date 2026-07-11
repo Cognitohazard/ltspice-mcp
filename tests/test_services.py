@@ -158,6 +158,40 @@ class TestResolveResultFile:
         assert services.resolve_raw_file("b1", state_no_sim) == raw
 
 
+class TestPerJobDialect:
+    """A run's raw parses with the dialect of the simulator that PRODUCED it:
+    a per-run simulator override (or a persisted job read back under a
+    different session default) must not inherit the default's dialect."""
+
+    def test_job_recorded_simulator_wins_over_default(self, state_with_sim: SessionState):
+        # Session default is FakeSim (dialect None); the job ran on ngspice.
+        state_with_sim.available_simulators["ngspice"] = type("NGspiceSimulator", (), {})
+        job = _make_job(state_with_sim)
+        job.simulator = "NGspiceSimulator"
+        assert state_with_sim.raw_dialect is None
+        assert services.dialect_for_job(job, state_with_sim) == "ngspice"
+
+    def test_unknown_simulator_name_falls_back_to_default(self, state_with_sim: SessionState):
+        job = _make_job(state_with_sim)
+        job.simulator = "GoneSimulator"  # e.g. recovered from an old sidecar
+        assert services.dialect_for_job(job, state_with_sim) == state_with_sim.raw_dialect
+
+    def test_raw_dialect_recorded_at_job_resolution(
+        self, state_with_sim: SessionState, tmp_path: Path
+    ):
+        state_with_sim.available_simulators["ngspice"] = type("NGspiceSimulator", (), {})
+        raw = tmp_path / "run.raw"
+        raw.write_text("d")
+        job = _make_job(state_with_sim, raw_file=raw)
+        job.simulator = "NGspiceSimulator"
+        # Resolving the job's raw records the producing simulator's dialect,
+        # which the subsequent load then picks up.
+        assert services.resolve_raw_file("j1", state_with_sim) == raw
+        assert services.raw_dialect_for(raw, state_with_sim) == "ngspice"
+        # A path never resolved through a job uses the session default.
+        assert services.raw_dialect_for(tmp_path / "other.raw", state_with_sim) is None
+
+
 class TestLoadRaw:
     async def test_missing_file(self, state_no_sim: SessionState, tmp_path: Path):
         with pytest.raises(ResultError, match="not found"):

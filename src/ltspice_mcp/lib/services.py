@@ -31,7 +31,8 @@ from ltspice_mcp.lib.log_parser import (
     parse_measurements,
     read_log_text,
 )
-from ltspice_mcp.lib.raw_parser import get_step_count
+from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead, get_step_count
+from ltspice_mcp.lib.simulator import simulator_dialect
 from ltspice_mcp.state import (
     TERMINAL_STATUSES,
     BatchJob,
@@ -366,6 +367,11 @@ def _resolve_result_file(
     file_path = run.raw_file if field == "raw_file" else run.log_file
     if file_path is None:
         raise ResultError(f"Job {job_id!r} run {run_index} has no {label} file")
+    if field == "raw_file":
+        # Record which simulator produced this raw (resolution always precedes
+        # the load) so load_raw parses it with the job's dialect — a per-run
+        # simulator override can differ from the session default.
+        state.raw_dialect_hints[file_path] = dialect_for_job(resolve_job(job_id, state), state)
     return file_path
 
 
@@ -377,6 +383,46 @@ def resolve_raw_file(job_id: str, state: SessionState, run_index: int = 0) -> Pa
 def resolve_log_file(job_id: str, state: SessionState, run_index: int = 0) -> Path:
     """Get the log file for a completed simulation or batch job run."""
     return _resolve_result_file(job_id, state, "log_file", "log", run_index=run_index)
+
+
+def simulator_class_for_job(job: SimulationJob | BatchJob, state: SessionState) -> type | None:
+    """The configured simulator class matching ``job.simulator``, or None.
+
+    Jobs record the class ``__name__`` (e.g. ``"LTspiceWSL"``); with per-run
+    simulator selection this may differ from the session default. A recovered
+    job may name a simulator that is no longer configured — callers fall back
+    to their own default then.
+    """
+    name = getattr(job, "simulator", None)
+    if name:
+        for cls in state.available_simulators.values():
+            if cls.__name__ == name:
+                return cls
+    return None
+
+
+def dialect_for_job(job: SimulationJob | BatchJob, state: SessionState) -> str | None:
+    """Raw dialect for the simulator ``job`` actually ran on.
+
+    A per-run simulator override can differ from the session default (and a
+    persisted job may be read back under a different default), so the job's
+    own recorded simulator wins. Falls back to the session default when the
+    job records no simulator or the name matches no configured simulator.
+    """
+    cls = simulator_class_for_job(job, state)
+    return simulator_dialect(cls) if cls is not None else state.raw_dialect
+
+
+def raw_dialect_for(raw_path: Path, state: SessionState) -> str | None:
+    """Raw dialect for the simulator that produced ``raw_path``.
+
+    Job-addressed reads record the producing job's dialect when the path is
+    resolved (see ``_resolve_result_file``), so a run launched with a per-run
+    simulator override parses with that simulator's dialect rather than the
+    session default's. Paths with no recorded producer (a user-supplied
+    ``raw_file``) use the default.
+    """
+    return state.raw_dialect_hints.get(raw_path, state.raw_dialect)
 
 
 async def load_raw(raw_path: Path, state: SessionState) -> RawRead:
@@ -404,11 +450,11 @@ def load_raw_sync(raw_path: Path, state: SessionState) -> RawRead:
     Call directly only from code already off the event loop, or from the
     synchronous resource router. Coroutine handlers must ``await load_raw``.
     """
-    dialect = state.raw_dialect
+    dialect = raw_dialect_for(raw_path, state)
     try:
         raw = state.results.get(
             raw_path,
-            lambda p: RawRead(str(p), traces_to_read="*", dialect=dialect),
+            lambda p: OffsetAwareRawRead(str(p), traces_to_read="*", dialect=dialect),
         )
     except FileNotFoundError:
         raise ResultError(f"Result file not found: {raw_path}") from None

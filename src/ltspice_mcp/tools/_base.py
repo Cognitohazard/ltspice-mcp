@@ -756,7 +756,32 @@ async def asc_export_lock(asc_path: Path) -> AsyncIterator[None]:
         yield
 
 
-async def resolve_runnable_netlist(netlist_str: str, state: SessionState) -> Path:
+def _sanitize_export_for_ngspice(net_path: Path) -> Path:
+    """Write an ngspice-runnable twin of an LTspice-exported netlist.
+
+    LTspice's exporter appends ``.backanno`` — an LTspice-only dot command
+    ngspice aborts on ("unimplemented dot command") — and can emit its
+    private ``§`` name-prefix character and ``µ`` unit suffix, neither of
+    which ngspice's parser accepts. The scrub goes to its own
+    ``{stem}.ngspice.net`` sidecar rather than rewriting the shared ``.net``
+    in place: a concurrent LTspice-target run of the same schematic
+    regenerates ``.net`` after the export lock releases, and an in-place
+    rewrite would hand one of the two runs the other simulator's deck.
+    """
+    from ltspice_mcp.lib import atomic_write_text
+    from ltspice_mcp.lib.encoding import read_spice_text
+
+    text = read_spice_text(net_path)
+    lines = [ln for ln in text.splitlines() if ln.strip().lower() != ".backanno"]
+    cleaned = "\n".join(lines).replace("§", "").replace("µ", "u").replace("μ", "u")
+    out_path = net_path.with_name(net_path.stem + ".ngspice.net")
+    atomic_write_text(out_path, cleaned + "\n", durable=False)
+    return out_path
+
+
+async def resolve_runnable_netlist(
+    netlist_str: str, state: SessionState, simulator: type | None = None
+) -> Path:
     """Resolve a path AND auto-export ``.asc`` → ``.net`` if needed.
 
     spicelib's ``SpiceEditor`` (used by the sweep / Monte Carlo runners)
@@ -765,6 +790,11 @@ async def resolve_runnable_netlist(netlist_str: str, state: SessionState) -> Pat
     not found``. This helper detects ``.asc`` and runs the LTspice
     ``create_netlist`` exporter to produce a sidecar ``.net``, so
     callers (sweep / MC config) can store the runnable path up front.
+
+    ``simulator`` is the class the run will execute on (defaults to the
+    session default): when it is ngspice, the LTspice export is sanitized
+    for it (see ``_sanitize_export_for_ngspice``) — without that, every
+    schematic run on ngspice dies on the exporter's ``.backanno``.
 
     The cheap safe_path/exists checks run inline, but the export launches the
     LTspice binary and blocks until it exits — heavy work that would stall the
@@ -798,6 +828,10 @@ async def resolve_runnable_netlist(netlist_str: str, state: SessionState) -> Pat
             ) from e
         if not await asyncio.to_thread(net_path.exists):
             raise SimulationError(f"Auto-export of {netlist_path.name} produced no .net file")
+        from ltspice_mcp.lib.simulator import is_ngspice
+
+        if is_ngspice(simulator or state.default_simulator):
+            net_path = await asyncio.to_thread(_sanitize_export_for_ngspice, net_path)
     return net_path
 
 
@@ -978,7 +1012,11 @@ def _netlist_has_local_dependency(netlist_path: Path) -> bool:
     return False
 
 
-async def resolve_output_folder(state: SessionState, netlist_path: Path | None = None) -> Path:
+async def resolve_output_folder(
+    state: SessionState,
+    netlist_path: Path | None = None,
+    simulator: type | None = None,
+) -> Path:
     """Determine the output folder for the simulation runner.
 
     Kept **stable** — one ``{working_dir}/.ltspice-mcp/runs`` sidecar — so the
@@ -1014,7 +1052,7 @@ async def resolve_output_folder(state: SessionState, netlist_path: Path | None =
 
     # Override: WSL + LTspice + Linux-fs source → Windows temp (UNC .db failure).
     if is_wsl() and not is_windows_native_path(source_dir) and not has_local_dep:
-        sim_cls = state.default_simulator
+        sim_cls = simulator or state.default_simulator
         if sim_cls is not None and issubclass(sim_cls, LTspice):
             out = await asyncio.to_thread(get_windows_output_dir)
             if out is not None:

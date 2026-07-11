@@ -172,8 +172,23 @@ class TestCheckJob:
         assert "Log excerpt:" in text
         assert "time step too small" in text
 
-    async def test_completed_missing_files(self, state_no_sim: SessionState):
-        _make_job(state_no_sim, status="completed")
+    async def test_completed_no_raw_is_log_only(self, state_no_sim: SessionState, work_dir: Path):
+        """A completed job with no raw file is a log-only run (clean simulator
+        exit whose results live in the log), not a missing-files error."""
+        log = work_dir / "ctl.log"
+        log.write_text("Note: batch run\nvout = 2.5\n")
+        _make_job(state_no_sim, status="completed", log_file=log)
+        result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert data["status"] == "completed"
+        assert any(o["code"] == "no_raw_output" for o in data["observations"])
+        assert "log-only" in result.content[0].text
+
+    async def test_completed_missing_log_raises(self, state_no_sim: SessionState, work_dir: Path):
+        raw = work_dir / "x.raw"
+        raw.write_text("d")
+        _make_job(state_no_sim, status="completed", raw_file=raw)
         with pytest.raises(ResultError, match="result files are missing"):
             await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
 
@@ -440,10 +455,11 @@ class TestCancelJobBatch:
         state_with_sim.add_batch_job(bj)
         fake_runner = MagicMock()
         fake_runner.cancel = AsyncMock()
-        with patch.object(
-            state_with_sim.runners, "get_existing_sweep_runner", return_value=fake_runner
-        ):
-            result = await handle_cancel_job(CancelJobInput(job_id="sweep_live"), state_with_sim)
+        # Registered in the runner cache as a live sweep runner (its mock
+        # owns_batch_job answers truthy) — the handler routes by ownership
+        # through the real get_batch_runner_for, not most-recent-of-kind.
+        state_with_sim.runners._runners[("sweep", MagicMock, Path("/tmp"))] = fake_runner
+        result = await handle_cancel_job(CancelJobInput(job_id="sweep_live"), state_with_sim)
         assert "cancelled" in result.content[0].text.lower()
         fake_runner.cancel.assert_awaited_once()
         # The batch job itself (resolved from batch_jobs) was handed to the runner.
@@ -463,10 +479,8 @@ class TestCancelJobBatch:
         state_with_sim.add_batch_job(bj)
         fake_runner = MagicMock()
         fake_runner.cancel = AsyncMock()
-        with patch.object(
-            state_with_sim.runners, "get_existing_mc_runner", return_value=fake_runner
-        ):
-            result = await handle_cancel_job(CancelJobInput(job_id="mc_live"), state_with_sim)
+        state_with_sim.runners._runners[("mc", MagicMock, Path("/tmp"))] = fake_runner
+        result = await handle_cancel_job(CancelJobInput(job_id="mc_live"), state_with_sim)
         assert "cancelled" in result.content[0].text.lower()
         fake_runner.cancel.assert_awaited_once()
 
@@ -483,7 +497,7 @@ class TestCancelJobBatch:
         )
         state_with_sim.add_batch_job(bj)
         with (
-            patch.object(state_with_sim.runners, "get_existing_sweep_runner", return_value=None),
+            patch.object(state_with_sim.runners, "get_batch_runner_for", return_value=None),
             pytest.raises(SimulationError, match="no longer live"),
         ):
             await handle_cancel_job(CancelJobInput(job_id="sweep_orphan"), state_with_sim)
@@ -683,10 +697,13 @@ class TestRunSimulationStubbed:
         assert job.status == "completed"
         fake_runner.kill.assert_not_awaited()
 
-    async def test_sync_timeout(self, state_with_sim: SessionState, sample_netlist: Path):
+    async def test_sync_timeout(
+        self, state_with_sim: SessionState, sample_netlist: Path, work_dir: Path
+    ):
         fake_runner = MagicMock()
         fake_runner.start_simulation = AsyncMock()
         fake_runner.kill = AsyncMock()
+        fake_runner.output_folder = work_dir  # _timeout_job derives {job_id}.log from it
         with patch(
             "ltspice_mcp.tools.simulation._get_or_create_runner",
             return_value=fake_runner,
@@ -704,6 +721,37 @@ class TestRunSimulationStubbed:
         assert data["status"] == "timeout"
         assert data["hint"] == TIMEOUT_HINT.strip()
         assert "log_excerpt" not in data  # the stubbed run produced no log
+
+    async def test_sync_timeout_surfaces_log_excerpt(
+        self, state_with_sim: SessionState, sample_netlist: Path, work_dir: Path
+    ):
+        """A timed-out run's response must carry the log tail: the completion
+        callback (which normally records log_file) never finalizes a job that
+        already went terminal, so the timeout path derives the path itself."""
+        fake_runner = MagicMock()
+        fake_runner.kill = AsyncMock()
+        fake_runner.output_folder = work_dir
+
+        async def start_sim(netlist_path, job, state):
+            # Simulator writes its log progressively, then hangs.
+            (work_dir / f"{job.job_id}.log").write_text(
+                "Direct Newton iteration\nAnalysis stopped at t=1.00076ms: time step too small\n"
+            )
+
+        fake_runner.start_simulation = start_sim
+        with patch(
+            "ltspice_mcp.tools.simulation._get_or_create_runner",
+            return_value=fake_runner,
+        ):
+            result = await handle_run_simulation(
+                RunSimulationInput(netlist=sample_netlist.name, timeout=0.05, wait=False),
+                state_with_sim,
+            )
+        data = result.structuredContent
+        assert data is not None
+        assert data["status"] == "timeout"
+        assert "time step too small" in data["log_excerpt"]
+        assert "time step too small" in result.content[0].text
 
     async def test_sync_failed(
         self, state_with_sim: SessionState, sample_netlist: Path, work_dir: Path
@@ -748,6 +796,85 @@ class TestRunSimulationStubbed:
                 state_with_sim,
             )
         assert "cancelled" in result.content[0].text.lower()
+
+    async def test_fast_run_returns_inline_despite_long_timeout(
+        self, state_with_sim: SessionState, sample_netlist: Path, work_dir: Path
+    ):
+        """A long configured timeout must not force the check_job round-trip
+        when the run finishes within the grace window — results come inline."""
+        log = work_dir / "fast.log"
+        log.write_text("Note: quick run\n")
+
+        async def start_sim(netlist_path, job, state):
+            job.log_file = log  # log-only completion: no raw parse needed
+            job.status = "completed"
+            job.completed_at = now()
+            job.done_event.set()
+
+        fake_runner = MagicMock()
+        fake_runner.start_simulation = AsyncMock(side_effect=start_sim)
+        with patch(
+            "ltspice_mcp.tools.simulation._get_or_create_runner",
+            return_value=fake_runner,
+        ):
+            result = await handle_run_simulation(
+                RunSimulationInput(netlist=sample_netlist.name, timeout=300, wait=False),
+                state_with_sim,
+            )
+        data = result.structuredContent
+        assert data is not None
+        assert data["status"] == "completed"
+        assert "started in background" not in result.content[0].text.lower()
+
+    async def test_slow_run_returns_job_handle_after_grace(
+        self, state_with_sim: SessionState, sample_netlist: Path, monkeypatch
+    ):
+        monkeypatch.setattr("ltspice_mcp.tools.simulation.SYNC_GRACE_WAIT", 0.05)
+        fake_runner = MagicMock()
+        fake_runner.start_simulation = AsyncMock()  # never completes the job
+        with patch(
+            "ltspice_mcp.tools.simulation._get_or_create_runner",
+            return_value=fake_runner,
+        ):
+            result = await handle_run_simulation(
+                RunSimulationInput(netlist=sample_netlist.name, timeout=300, wait=False),
+                state_with_sim,
+            )
+        data = result.structuredContent
+        assert data is not None
+        assert data["job_id"].startswith("sim_")
+        assert "check_job" in data["hint"]
+        assert "started in background" in result.content[0].text.lower()
+
+    async def test_per_run_simulator_selection(
+        self, state_with_sim: SessionState, sample_netlist: Path, monkeypatch
+    ):
+        """simulator= resolves against the detected-simulator names and the
+        chosen class flows into the job record."""
+        monkeypatch.setattr("ltspice_mcp.tools.simulation.SYNC_GRACE_WAIT", 0.05)
+        fake_runner = MagicMock()
+        fake_runner.start_simulation = AsyncMock()
+        with patch(
+            "ltspice_mcp.tools.simulation._get_or_create_runner",
+            return_value=fake_runner,
+        ) as get_runner:
+            result = await handle_run_simulation(
+                RunSimulationInput(netlist=sample_netlist.name, simulator="fake"),
+                state_with_sim,
+            )
+        data = result.structuredContent
+        assert data is not None
+        assert data["simulator"] == "FakeSim"
+        assert get_runner.call_args.kwargs["simulator_class"] is FakeSim
+
+    async def test_per_run_simulator_unknown_raises(
+        self, state_with_sim: SessionState, sample_netlist: Path
+    ):
+        with pytest.raises(SimulationError, match="not available"):
+            await handle_run_simulation(
+                RunSimulationInput(netlist=sample_netlist.name, simulator="xyce"),
+                state_with_sim,
+            )
 
 
 @pytest.mark.asyncio

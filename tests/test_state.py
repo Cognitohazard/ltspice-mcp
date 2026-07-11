@@ -27,6 +27,11 @@ class _RecordingRunner:
     def __init__(self) -> None:
         self.cancel_calls: list[tuple[SimulationJob | BatchJob, SessionState | None]] = []
 
+    def owns_batch_job(self, job_id: str) -> bool:
+        # No recorded ownership: batch-cancel routing falls back to
+        # most-recent-of-kind, which is what these tests pin.
+        return False
+
     async def cancel(
         self, job: SimulationJob | BatchJob, state: SessionState | None = None
     ) -> None:
@@ -122,7 +127,7 @@ class TestSessionStateShutdown:
         only flipping the job status."""
         state = SessionState.create(config, {})
         sim_runner = _RecordingRunner()
-        state.runners._runners["sim"] = sim_runner
+        state.runners._runners[("sim", _RecordingRunner, tmp_path)] = sim_runner
 
         job = SimulationJob(
             job_id="sim-live",
@@ -160,8 +165,8 @@ class TestSessionStateShutdown:
         state = SessionState.create(config, {})
         active_runner = _RecordingRunner()
         idle_runner = _RecordingRunner()
-        state.runners._runners[active_runner_key] = active_runner
-        state.runners._runners[idle_runner_key] = idle_runner
+        state.runners._runners[(active_runner_key, _RecordingRunner, tmp_path)] = active_runner
+        state.runners._runners[(idle_runner_key, _RecordingRunner, tmp_path)] = idle_runner
 
         batch = make_batch_job(
             f"{job_type}-live",
@@ -290,7 +295,7 @@ class TestCancelRunningSnapshotsViews:
                 register_late(make_job(f"late-{job.job_id}"))
                 await super().cancel(job, state)
 
-        state.runners._runners[runner_key] = _RegisteringRunner()
+        state.runners._runners[(runner_key, _RegisteringRunner, Path("."))] = _RegisteringRunner()
         for i in range(3):
             registry.jobs[f"run{i}"] = make_job(f"run{i}", status="running")
 
