@@ -17,6 +17,14 @@ class _StubRunner:
         self.simulator_class = simulator_class
         self.output_folder = output_folder
         self.max_parallel = max_parallel
+        self.busy = False
+        self.owned_jobs: set[str] = set()
+
+    def has_active_work(self) -> bool:
+        return self.busy
+
+    def owns_batch_job(self, job_id: str) -> bool:
+        return job_id in self.owned_jobs
 
 
 @pytest.fixture(autouse=True)
@@ -125,3 +133,84 @@ class TestRunnerManager:
         sweep = mgr.get_sweep_runner(loop, sim_cls, out)
         assert sim is not sweep
         assert len(mgr._runners) == 2
+
+
+class TestCapEviction:
+    """The LRU cap must never evict a runner with in-flight work — dropping it
+    would split its concurrency semaphore and lose per-job cancel state."""
+
+    def _fill_to_cap(self, mgr, loop, sim_cls):
+        from ltspice_mcp.lib.runner_manager import _RUNNER_CACHE_CAP
+
+        return [
+            mgr.get_sim_runner(loop, sim_cls, Path(f"/tmp/out{i}"))
+            for i in range(_RUNNER_CACHE_CAP)
+        ]
+
+    def test_oldest_idle_runner_evicted_busy_survive(self, loop):
+        mgr = RunnerManager()
+        sim_cls = type("FakeSim", (), {})
+        runners = self._fill_to_cap(mgr, loop, sim_cls)
+        runners[0].busy = True
+        runners[1].busy = True
+
+        mgr.get_sim_runner(loop, sim_cls, Path("/tmp/overflow"))
+
+        cached = set(mgr._runners.values())
+        assert runners[0] in cached and runners[1] in cached
+        assert runners[2] not in cached  # oldest idle went, not the busy heads
+
+    def test_no_eviction_when_all_busy(self, loop):
+        from ltspice_mcp.lib.runner_manager import _RUNNER_CACHE_CAP
+
+        mgr = RunnerManager()
+        sim_cls = type("FakeSim", (), {})
+        runners = self._fill_to_cap(mgr, loop, sim_cls)
+        for r in runners:
+            r.busy = True
+
+        mgr.get_sim_runner(loop, sim_cls, Path("/tmp/overflow"))
+
+        cached = set(mgr._runners.values())
+        assert all(r in cached for r in runners)  # cache exceeds cap instead
+        assert len(mgr._runners) == _RUNNER_CACHE_CAP + 1
+
+
+class TestBatchRunnerRouting:
+    """Batch cancel state lives on the instance that launched the batch; with
+    several runners of one kind cached, most-recent is not the owner."""
+
+    def test_owner_preferred_over_most_recent(self, loop):
+        import types as _types
+        from typing import cast
+
+        mgr = RunnerManager()
+        sim_cls = type("FakeSim", (), {})
+        older = cast(_StubRunner, mgr.get_sweep_runner(loop, sim_cls, Path("/tmp/a")))
+        newer = mgr.get_sweep_runner(loop, sim_cls, Path("/tmp/b"))
+        older.owned_jobs.add("sweep_1")
+
+        job = _types.SimpleNamespace(job_id="sweep_1", job_type="sweep")
+        assert mgr.get_batch_runner_for(job) is older
+        assert mgr.get_batch_runner_for(job) is not newer
+
+    def test_falls_back_to_most_recent_of_kind(self, loop):
+        import types as _types
+
+        mgr = RunnerManager()
+        sim_cls = type("FakeSim", (), {})
+        mgr.get_sweep_runner(loop, sim_cls, Path("/tmp/a"))
+        newest_mc = mgr.get_mc_runner(loop, sim_cls, Path("/tmp/b"))
+
+        job = _types.SimpleNamespace(job_id="mc_unknown", job_type="montecarlo")
+        assert mgr.get_batch_runner_for(job) is newest_mc
+
+    def test_none_when_no_runner_of_kind(self, loop):
+        import types as _types
+
+        mgr = RunnerManager()
+        sim_cls = type("FakeSim", (), {})
+        mgr.get_sim_runner(loop, sim_cls, Path("/tmp/a"))  # wrong kind only
+
+        job = _types.SimpleNamespace(job_id="sweep_1", job_type="sweep")
+        assert mgr.get_batch_runner_for(job) is None
