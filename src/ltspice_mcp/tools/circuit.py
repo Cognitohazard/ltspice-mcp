@@ -12,6 +12,7 @@ import contextlib
 import importlib
 import io
 import re
+from collections import Counter
 from collections.abc import AsyncIterator, Callable
 from collections.abc import Set as AbstractSet
 from contextlib import asynccontextmanager
@@ -107,6 +108,22 @@ def _reject_empty_attr_value(reference: str, attribute: str, value: str) -> None
         )
 
 
+def _require_clearable_attr(reference: str, attribute: str) -> None:
+    """Refuse clearing an attribute the component cannot live without.
+
+    An empty value on set_component_attribute means "remove the SYMATTR line"
+    (LTspice's format has no empty-value representation — a 2-token SYMATTR
+    line is unreadable on the next parse). InstName is the instance's
+    identity and must never be removed.
+    """
+    if attribute == "InstName":
+        raise NetlistError(
+            f"InstName on {reference!r} cannot be cleared — it is the "
+            "component's identity. Use remove_component to delete the "
+            "instance, or set a new non-empty name."
+        )
+
+
 def _reject_unknown_attr(attribute: str) -> None:
     """Refuse a SYMATTR name outside LTspice's fixed slot set.
 
@@ -122,6 +139,17 @@ def _reject_unknown_attr(attribute: str) -> None:
         raise NetlistError(
             f"Unknown attribute {attribute!r}. Did you mean {canonical!r}? "
             "LTspice attribute names are case-sensitive."
+        )
+    if attribute.lower() == "prefix":
+        # A SpiceLine referral here misdirects: Prefix is a SYMBOL property,
+        # not an instance attribute, and SpiceLine can't change it.
+        raise NetlistError(
+            "Attribute 'Prefix' is a symbol property, not an instance "
+            "attribute — the element prefix comes from the symbol's .asy "
+            "file ('SYMATTR Prefix ...'). To place a subcircuit (X-prefix) "
+            "device, add_component with a symbol whose .asy declares "
+            "'SYMATTR Prefix X', then bind the subckt name via Value or "
+            "SpiceModel."
         )
     raise NetlistError(
         f"Unknown attribute {attribute!r}. LTspice silently ignores "
@@ -409,7 +437,13 @@ def _apply_component_value(editor, reference: str, value: str) -> None:
     ``R1 n1 n2 {1/(2*pi*RC)}`` route correctly.
     """
     _validate_component_value(reference, value)
-    if "=" not in value:
+    # Behavioral sources: the whole value IS an equation whose first token is
+    # V=/I=/R=... — not a model name with trailing parameters. The KEY=VALUE
+    # split below would route it to set_component_parameters, which the .asc
+    # editor writes into SpiceLine while the stale expression stays in Value:
+    # the netlisted B-line then carries two expressions ("No such node")
+    # behind a success message.
+    if reference[:1].upper() == "B" or "=" not in value:
         _set_or_create_value(editor, reference, value)
         return
     try:
@@ -871,6 +905,14 @@ class CreateNetlistInput(ToolInput):
         default=False,
         description="Overwrite an existing file at this path. Default is to refuse.",
     )
+    append_end: bool = Field(
+        default=True,
+        description=(
+            "Append a final .END when the content lacks one. Set false when "
+            "authoring a shared include fragment (a .inc/.lib target) — a "
+            ".END inside an include terminates the including deck early."
+        ),
+    )
 
 
 class CircuitReadInput(ToolInput):
@@ -1017,7 +1059,13 @@ class SetComponentAttributeInput(ToolInput):
     attribute: str = Field(
         description="Attribute name (e.g., 'SpiceLine', 'SpiceModel', 'Value2')"
     )
-    value: str = Field(description="Attribute value (e.g., 'W=10u L=0.5u')")
+    value: str = Field(
+        description=(
+            "Attribute value (e.g., 'W=10u L=0.5u'). An empty string CLEARS "
+            "the attribute (removes its SYMATTR line); InstName cannot be "
+            "cleared."
+        )
+    )
 
 
 class ExportNetlistInput(ToolInput):
@@ -1265,7 +1313,8 @@ async def _editing_asc(path: Path, state: SessionState) -> AsyncIterator[AscEdit
 @registry.tool(
     name="create_netlist",
     description=(
-        "Create a new SPICE netlist file from content string. Automatically appends .END if missing."
+        "Create a new SPICE netlist file from content string. Automatically "
+        "appends .END if missing (append_end=false for include fragments)."
     ),
     input_model=CreateNetlistInput,
     annotations=types.ToolAnnotations(
@@ -1312,7 +1361,7 @@ async def handle_create_netlist(
             "to fail in LTspice:\n" + joined
         )
 
-    if not content.strip().upper().endswith(".END"):
+    if args.append_end and not content.strip().upper().endswith(".END"):
         content = content.rstrip() + "\n.END\n"
 
     try:
@@ -1321,6 +1370,16 @@ async def handle_create_netlist(
         raise NetlistError(
             f"File already exists: {target_path}. Pass overwrite=true to replace it."
         ) from e
+
+    if not content.strip().upper().endswith(".END"):
+        # append_end=false fragment: it is not a standalone deck (no title
+        # line, no .END), so the SpiceEditor full-deck parse below would
+        # reject it. The directive pre-flight above already ran.
+        return text_response(
+            f"Created netlist fragment: {target_path}\n"
+            "(no .END — intended as a .inc/.lib target, not validated as a "
+            "standalone deck)"
+        )
 
     try:
         editor = SpiceEditor(str(target_path))
@@ -2071,6 +2130,12 @@ def _append_asc_text(
     step it down one grid cell at a time until it's free, so stacked directives
     don't render on top of each other.
     """
+    # LTspice's on-disk TEXT record is one physical line; embedded newlines
+    # are stored as literal "\n" escapes (LTspice's own multi-line text
+    # convention). A raw newline would split the record and corrupt the file
+    # — the downstream symptom is an unrelated-looking "Primitive not
+    # supported" parse error.
+    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
     px = x if x is not None else default_x
     py = y if y is not None else default_y
     occupied = {(int(d.coord.X), int(d.coord.Y)) for d in editor.directives}
@@ -2572,14 +2637,20 @@ async def handle_set_component_attribute(
 
     if not attribute.strip():
         raise NetlistError("Attribute name must not be empty")
-    _reject_empty_attr_value(reference, attribute, value)
-
     _reject_unknown_attr(attribute)
+    clearing = not value.strip()
+    if clearing:
+        _require_clearable_attr(reference, attribute)
 
     async with _editing_asc(asc_path, state) as editor:
         _require_component(editor, reference)
-        editor.set_component_attribute(reference, attribute, value)
+        if clearing:
+            editor.get_component(reference).attributes.pop(attribute, None)
+        else:
+            editor.set_component_attribute(reference, attribute, value)
 
+    if clearing:
+        return text_response(f"Cleared {reference}.{attribute}")
     return text_response(f"Set {reference}.{attribute} = {value}")
 
 
@@ -4742,7 +4813,10 @@ class _OpRemoveNetLabel(StrictModel):
 class _OpRemoveWire(StrictModel):
     op: Literal["remove_wire"]
     # Exact-segment form: all four endpoints (either direction). This is the
-    # precise inverse of a single connect segment — it removes only that segment.
+    # precise inverse of a single connect segment — it removes only that
+    # segment. If the schematic holds several byte-identical copies of the
+    # segment (double-drawn wires), ALL of them are removed in one op; the
+    # result's `removed` count says how many.
     x1: int | None = None
     y1: int | None = None
     x2: int | None = None
@@ -4877,10 +4951,16 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
 
     if isinstance(op, _OpSetComponentAttribute):
         _reject_unknown_attr(op.attribute)
-        _reject_empty_attr_value(op.reference, op.attribute, op.value)
         if op.reference not in editor.components:
             raise NetlistError(f"Component '{op.reference}' not found.")
-        editor.set_component_attribute(op.reference, op.attribute, op.value)
+        if not op.value.strip():
+            # Empty value = clear. LTspice's format has no "empty value"
+            # representation (a 2-token SYMATTR line is unreadable), so the
+            # line is removed instead.
+            _require_clearable_attr(op.reference, op.attribute)
+            editor.get_component(op.reference).attributes.pop(op.attribute, None)
+        else:
+            editor.set_component_attribute(op.reference, op.attribute, op.value)
         return {
             "op": "set_component_attribute",
             "reference": op.reference,
@@ -5006,6 +5086,41 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
         return {"op": "remove_directive", "instruction": op.instruction, "removed": removed}
 
     raise NetlistError(f"Unknown op type: {type(op).__name__}")
+
+
+def _collapse_result_warnings(results: list[dict[str, object]]) -> None:
+    """Collapse identical per-op warnings across one ops batch, in place.
+
+    The documented per-pin-label style repeats the same duplicate-label
+    advisory on every add_net_label op of that net — hundreds of identical
+    lines per converter-scale batch. Keep the first occurrence (annotated
+    with the repeat count) and drop the copies.
+    """
+    counts: Counter[str] = Counter()
+    for entry in results:
+        warnings = entry.get("warnings")
+        if isinstance(warnings, list):
+            counts.update(warnings)
+    if not counts or max(counts.values()) < 2:
+        return
+    emitted: set[str] = set()
+    for entry in results:
+        warnings = entry.get("warnings")
+        if not isinstance(warnings, list):
+            continue
+        kept: list[str] = []
+        for w in warnings:
+            if w in emitted:
+                continue
+            emitted.add(w)
+            n = counts[w]
+            kept.append(
+                w if n == 1 else f"{w} (identical warning on {n} ops in this batch; collapsed)"
+            )
+        if kept:
+            entry["warnings"] = kept
+        else:
+            del entry["warnings"]
 
 
 @registry.tool(
@@ -5152,6 +5267,8 @@ async def handle_apply_schematic_ops(
             # doesn't see them.
             state.editors.invalidate(asc_path)
             raise
+
+    _collapse_result_warnings(results)
 
     header = "apply_schematic_ops (dry run)" if args.dry_run else "apply_schematic_ops"
     summary_lines = [f"{header} on {asc_path.name}: {applied} ok, {failed} failed"]
