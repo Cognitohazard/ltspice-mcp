@@ -439,3 +439,124 @@ class TestJobResolutionErrors:
                 MeasurementStatsInput(job_id="sweep1", log_file=str(LTSPICE_SWEEP_RUN_LOGS[0])),
                 state_no_sim,
             )
+
+
+class TestMeasKindRelay:
+    """The deck's .MEAS operator overrides the shape heuristic (relay beats
+    inference): a FIND probe whose value is constant across runs must NOT
+    swap to the probe axis, even though constant-values + varying-at is
+    exactly the WHEN shape."""
+
+    def test_meas_kinds_from_netlist(self, tmp_path: Path):
+        from ltspice_mcp.tools.analysis import _meas_kinds_from_netlist
+
+        deck = tmp_path / "deck.cir"
+        deck.write_text(
+            "* kinds\n"
+            ".meas tran t1 WHEN V(out)=0.5\n"
+            ".meas tran v2 FIND V(out) WHEN V(a)=1\n"
+            ".meas op v3 FIND V(mid) AT=1\n"
+            ".MEASURE AC gmax MAX mag(V(out))\n"
+            ".end\n"
+        )
+        assert _meas_kinds_from_netlist(deck) == {
+            "t1": "when",
+            "v2": "value",
+            "v3": "value",
+            "gmax": "value",
+        }
+        assert _meas_kinds_from_netlist(tmp_path / "missing.cir") == {}
+        assert _meas_kinds_from_netlist(None) == {}
+
+    def test_when_constant_crossings_still_swap(self):
+        """A deck-confirmed bare WHEN aggregates crossing times even when every
+        run crossed at the same instant (a deterministic batch) — the constant
+        trigger level is never the requested quantity."""
+        from ltspice_mcp.tools.analysis import _apply_when_axis_swap
+
+        # Trigger level (constant by construction) / crossing time (constant across runs).
+        flat: dict[str, list[float | None]] = {"tcross": [1.5, 1.5, 1.5]}
+        ats: dict[str, list[float | None]] = {"tcross": [2e-6, 2e-6, 2e-6]}
+        axis = _apply_when_axis_swap(flat, ats, kinds={"tcross": "when"})
+        assert axis["tcross"] == "at"
+        assert flat["tcross"] == [2e-6, 2e-6, 2e-6]
+
+    @pytest.mark.asyncio
+    async def test_find_constant_value_does_not_swap(
+        self, state_no_sim: SessionState, tmp_path: Path
+    ):
+        deck = tmp_path / "reg.cir"
+        deck.write_text("* reg\nV1 ref 0 2.5\n.op\n.meas op vref FIND V(ref) AT=1\n.end\n")
+        bj = make_batch_job("mcref", netlist=deck, total_runs=3, completed_runs=3)
+        for i, at in enumerate([1, 2, 3]):
+            log = tmp_path / f"run{i}.log"
+            log.write_text(
+                f"Circuit: * reg\n\nvref: V(ref)=2.5 at {at}\n\n"
+                "Total elapsed time: 0.01 seconds.\n"
+            )
+            bj.run_results[i] = {"log_file": str(log), "params": {}}
+        state_no_sim.batch_jobs["mcref"] = bj
+        stats = await _stats(state_no_sim, "mcref")
+        entry = stats["vref"]
+        # Without the deck relay this is the degenerate misread: constant
+        # values + varying at would swap and aggregate the probe axis 1..3.
+        assert entry["aggregated_field"] == "value"
+        assert entry["min"] == pytest.approx(2.5)
+        assert entry["max"] == pytest.approx(2.5)
+
+
+@pytest.mark.asyncio
+class TestPerRunCapAndPartialWarning:
+    async def test_partial_batch_carries_warning(self, state_no_sim: SessionState):
+        bj = _make_sweep_batch(state_no_sim)
+        bj.total_runs = 5
+        bj.status = "running"
+        result = await handle_measurement_stats(
+            MeasurementStatsInput(job_id="sweep1"), state_no_sim
+        )
+        sc = result.structuredContent
+        assert sc is not None
+        assert any("3 of 5" in w and "partial" in w for w in sc["warnings"])
+        assert "3 of 5" in _text(result)
+
+    async def test_complete_batch_has_no_partial_warning(self, state_no_sim: SessionState):
+        _make_sweep_batch(state_no_sim)
+        result = await handle_measurement_stats(
+            MeasurementStatsInput(job_id="sweep1"), state_no_sim
+        )
+        sc = result.structuredContent
+        assert sc is not None
+        assert "warnings" not in sc
+
+    async def test_per_run_table_capped_with_explicit_truncation(self, state_no_sim: SessionState):
+        # 150 runs sharing one real log: table must cap at 100 rows with the
+        # full count surfaced — never a silent truncation.
+        bj = make_batch_job(
+            "big", netlist=Path("/tmp/big.cir"), total_runs=150, completed_runs=150
+        )
+        for i in range(150):
+            bj.run_results[i] = {
+                "log_file": str(LTSPICE_SWEEP_RUN_LOGS[0]),
+                "params": {"run": i},
+            }
+        state_no_sim.batch_jobs["big"] = bj
+
+        result = await handle_measurement_stats(MeasurementStatsInput(job_id="big"), state_no_sim)
+        sc = result.structuredContent
+        assert sc is not None
+        assert len(sc["per_run"]) == 100
+        assert sc["per_run_truncated"] == 150
+        assert any("include_per_run=true" in w for w in sc["warnings"])
+
+        full = await handle_measurement_stats(
+            MeasurementStatsInput(job_id="big", include_per_run=True), state_no_sim
+        )
+        assert full.structuredContent is not None
+        assert len(full.structuredContent["per_run"]) == 150
+        assert "per_run_truncated" not in full.structuredContent
+
+        omitted = await handle_measurement_stats(
+            MeasurementStatsInput(job_id="big", include_per_run=False), state_no_sim
+        )
+        assert omitted.structuredContent is not None
+        assert "per_run" not in omitted.structuredContent

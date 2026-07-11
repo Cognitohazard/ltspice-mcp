@@ -2201,9 +2201,11 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     # the .log under '.options logopinfo', not as @dev[param] raw traces the way
     # ngspice does. Fold the log block into device_op_points — keyed in the same
     # @dev[param] form — so they read back by name (m1.gm) on either simulator.
-    # ngspice logs never carry the block, so skip the read entirely there (its
-    # raw loads only in an ngspice session). Don't clobber a value the raw gave.
-    if state.raw_dialect != "ngspice":
+    # ngspice logs never carry the block, so skip the read entirely there.
+    # Dialect resolved per raw: a per-run simulator override can differ from
+    # the session default. Don't clobber a value the raw gave.
+    raw_dialect = services.raw_dialect_for(raw_path, state)
+    if raw_dialect != "ngspice":
         log_op_points = await asyncio.to_thread(
             read_device_op_points, raw_path.with_suffix(".log")
         )
@@ -2256,10 +2258,10 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     # (LTspice exposes those), or when the run is ngspice — whose bare .op shows
     # no device traces, so a saved-nothing run is indistinguishable from a
     # passive one. raw_dialect only gates here, never picks the wording, and is
-    # reliable for that: an ngspice raw loads only in an ngspice session.
+    # resolved per raw (the run's own simulator, not the session default).
     op_point_note: str | None = None
     if not op_data.get("device_op_points") and (
-        _has_active_device(op_data.get("currents", {})) or state.raw_dialect == "ngspice"
+        _has_active_device(op_data.get("currents", {})) or raw_dialect == "ngspice"
     ):
         op_point_note = (
             "No small-signal device params (gm/gds/vth/vdsat) in this run. "
@@ -2827,6 +2829,15 @@ class MeasurementStatsInput(ToolInput):
         default=10,
         description="Histogram bin count. Set to 0 to skip histogram computation.",
     )
+    include_per_run: bool | None = Field(
+        default=None,
+        description=(
+            "Whether to include the per-run {run_index, params} table for batch "
+            "jobs. Default: included up to 100 runs, then truncated with "
+            "per_run_truncated set to the full count. true = always the full "
+            "table; false = omit it."
+        ),
+    )
     format: FormatField = Field(default=None, description="'json' or 'text'")
 
 
@@ -2881,6 +2892,12 @@ class MeasurementStatsResponse(TypedDict):
     # Present only for a multi-run batch (job_id): per-run {run_index, params} in
     # the order the value lists use, so min_step_index/max_step_index name a corner.
     per_run: NotRequired[list[dict[str, Any]]]
+    # Present when per_run was truncated to the row cap: the FULL run count.
+    # Pass include_per_run=true for the whole table.
+    per_run_truncated: NotRequired[int]
+    # Measurement-level caveats, e.g. "batch still running: stats aggregate a
+    # partial run set".
+    warnings: NotRequired[list[str]]
 
 
 # ---------------------------------------------------------------------------
@@ -3107,20 +3124,22 @@ async def handle_disturbance_response(args: DisturbanceResponseInput, state: Ses
     name="timing_between",
     description=(
         "Use when you need propagation delay / skew between TWO signals — "
-        "e.g. input-to-output delay, clock-to-Q, input-skew. Inputs one "
-        "transient .raw containing both signals on a shared time axis.\n\n"
+        "e.g. input-to-output delay, clock-to-Q, dead-time between gate "
+        "drives. Inputs one transient .raw containing both signals on a "
+        "shared time axis.\n\n"
         "Returns: signed delay = t_b - t_a where t_a and t_b are the FIRST "
-        "threshold crossings of signal_a and signal_b in the window. "
-        "Negative delay means signal_b leads signal_a.\n\n"
+        "threshold crossings of signal_a and signal_b in the window "
+        "(negative delay means signal_b leads signal_a), PLUS aggregates "
+        "over ALL sequential edge pairs — pair_count, delay_min/max/mean and "
+        "the times of the extremes — for dead-time / minimum-off audits "
+        "across a whole pulse train.\n\n"
         "Thresholds default to 50% of EACH signal's own min-max range in the "
         "window — intentional for asymmetric CMOS where V_in and V_out have "
         "different rails. Override per-signal via threshold_a / threshold_b "
         "if you need absolute thresholds (e.g. VIH/VIL at fixed voltages). "
         "Set direction_a / direction_b independently (e.g. rising input → "
-        "falling output for an inverter).\n\n"
-        "Picks only the FIRST crossing of each signal in the window — if "
-        "both signals have multiple edges, tighten t_start/t_end around the "
-        "specific edge pair you want. Rejects AC analysis."
+        "falling output for an inverter, falling high-side → rising low-side "
+        "for dead-time). Rejects AC analysis."
     ),
     input_model=TimingBetweenInput,
     annotations=RO_ANNOTATIONS,
@@ -3182,6 +3201,12 @@ async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
         f"t({args.signal_b}) = {data['t_b']:.6g} s @ threshold={data['threshold_b_used']:.6g}",
         f"Delay (t_b - t_a): {data['delay']:.6g} s",
     ]
+    if data["pair_count"] > 1:
+        lines.append(
+            f"All {data['pair_count']} edge pairs: min {data['delay_min']:.6g} s "
+            f"(at t={data['delay_min_at']:.6g}), max {data['delay_max']:.6g} s "
+            f"(at t={data['delay_max_at']:.6g}), mean {data['delay_mean']:.6g} s"
+        )
     return await _finish_metric(lines, data, raw_path, args.format)
 
 
@@ -3466,9 +3491,54 @@ def _diagnostics_block(diags: list[str], empty_note: str) -> str:
     return "\n".join(f"  {d}" for d in diags)
 
 
+# Row cap for the per-run corner table (see include_per_run); large Monte
+# Carlo batches otherwise append hundreds of rows to every stats response.
+_MAX_PER_RUN_ROWS = 100
+
+_RE_MEAS_WHEN = re.compile(r"\bwhen\b", re.IGNORECASE)
+_RE_MEAS_FIND = re.compile(r"\bfind\b", re.IGNORECASE)
+_RE_MEAS_HEAD = re.compile(
+    r"^\.meas(?:ure)?(?:\s+(?:tran|ac|dc|op|sp|fft|noise))?\s+(?P<name>[A-Za-z0-9_$]+)",
+    re.IGNORECASE,
+)
+
+
+def _meas_kinds_from_netlist(netlist: Path | None) -> dict[str, str]:
+    """Operator kind per lowercase .MEAS name, read from the deck itself.
+
+    The log alone cannot distinguish a WHEN crossing search from a FIND...AT
+    probe — both print ``name: expr=value at X`` — so the shape heuristic in
+    ``_apply_when_axis_swap`` has a documented degenerate misread. The deck is
+    ground truth: relay the operator when the netlist is readable. Kinds:
+    ``"when"`` (bare WHEN — value is the constant trigger level, the crossing
+    in ``at`` is the payload) vs ``"value"`` (everything else, including
+    FIND...WHEN, whose FIND result is the payload). Names defined inside
+    includes stay absent and fall back to the heuristic.
+    """
+    if netlist is None:
+        return {}
+    try:
+        from ltspice_mcp.lib.spice_lex import cards_from_path
+
+        cards = cards_from_path(netlist).cards
+    except Exception:
+        return {}
+    kinds: dict[str, str] = {}
+    for card in cards:
+        body = card.body
+        m = _RE_MEAS_HEAD.match(body)
+        if not m:
+            continue
+        rest = body[m.end() :]
+        is_bare_when = bool(_RE_MEAS_WHEN.search(rest)) and not _RE_MEAS_FIND.search(rest)
+        kinds[m.group("name").lower()] = "when" if is_bare_when else "value"
+    return kinds
+
+
 def _apply_when_axis_swap(
     flat_values: dict[str, list[float | None]],
     at_map: dict[str, list[float | None]],
+    kinds: dict[str, str] | None = None,
 ) -> dict[str, AggregatedField]:
     """Pick each .MEAS name's aggregation axis, swapping WHEN-style ones to ``at``.
 
@@ -3480,12 +3550,13 @@ def _apply_when_axis_swap(
     (per-step) aggregators so both classify identically. Mutates ``flat_values``
     in place for swapped names; returns the axis map.
 
-    The WHEN-vs-FIND operator is not recoverable from the parsed log (the
-    simulator prints only the folded ``at`` value, not the directive), so this
-    infers it from numeric shape. The one misread is the degenerate
-    ``FIND ... AT=<stepped>`` whose found value happens to be constant to 12
-    decimals across steps — then the probe axis is aggregated instead. The chosen
-    axis is always reported via ``aggregated_field`` so the consumer can tell.
+    ``kinds`` (from :func:`_meas_kinds_from_netlist`) relays the directive's
+    real operator and overrides the shape inference: a known non-WHEN never
+    swaps (kills the degenerate misread where a FIND probe constant to 12
+    decimals across runs would aggregate the probe axis), and a known bare
+    WHEN swaps whenever crossings are present. Names not in ``kinds`` fall back
+    to the numeric-shape heuristic. The chosen axis is always reported via
+    ``aggregated_field`` so the consumer can tell.
     """
     axis_map: dict[str, AggregatedField] = {}
     for name, vals in flat_values.items():
@@ -3494,7 +3565,18 @@ def _apply_when_axis_swap(
         valid_ats = [a for a in ats if a is not None]
         levels_constant = len({round(v, 12) for v in valid_vals}) <= 1
         ats_vary = len({round(a, 12) for a in valid_ats}) > 1
-        if levels_constant and ats_vary:
+        kind = (kinds or {}).get(name.lower())
+        if kind == "when":
+            # A deck-confirmed bare WHEN aggregates crossing times whenever the
+            # logs carry any — constant crossings (a deterministic batch) are
+            # still the requested quantity, not a reason to fall back to the
+            # constant trigger level.
+            swap = bool(valid_ats)
+        elif kind == "value":
+            swap = False
+        else:
+            swap = levels_constant and ats_vary
+        if swap:
             flat_values[name] = ats
             axis_map[name] = "at"
         else:
@@ -3591,13 +3673,16 @@ def _aggregate_job_measurements(
 
     flat_values: dict[str, list[float | None]] = {n: b["values"] for n, b in samples.items()}
     at_map: dict[str, list[float | None]] = {n: b["ats"] for n, b in samples.items()}
-    axis_map = _apply_when_axis_swap(flat_values, at_map)
+    axis_map = _apply_when_axis_swap(
+        flat_values, at_map, _meas_kinds_from_netlist(batch_job.netlist)
+    )
 
     return flat_values, runs_processed, axis_map, diagnostics, per_run, at_map
 
 
 def _aggregate_log_measurements(
     log_path: Path,
+    netlist: Path | None = None,
 ) -> tuple[
     dict[str, list[float | None]],
     dict[str, AggregatedField],
@@ -3646,7 +3731,7 @@ def _aggregate_log_measurements(
             at_map[name] = [float(at_field)]
         else:
             at_map[name] = []
-    axis_map = _apply_when_axis_swap(flat_values, at_map)
+    axis_map = _apply_when_axis_swap(flat_values, at_map, _meas_kinds_from_netlist(netlist))
     steps_label = f"{meas_data.get('step_count', 1)} step(s)"
     return flat_values, axis_map, steps_label, at_map
 
@@ -3694,12 +3779,22 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
     axis_map: dict[str, AggregatedField] = {}
     at_map: dict[str, list[float | None]] = {}
     per_run: list[dict] = []
+    caveats: list[str] = []
     if args.job_id is not None:
         job = services.resolve_job(args.job_id, state)
         if isinstance(job, BatchJob):
             flat_values, run_count, axis_map, run_diags, per_run, at_map = (
                 _aggregate_job_measurements(job)
             )
+            # A partial aggregate is a measurement assumption the caller must
+            # see: a still-running batch silently reading as final stats was a
+            # recurring field trap.
+            if run_count < job.total_runs:
+                state_word = "still running" if job.status in ("queued", "running") else job.status
+                caveats.append(
+                    f"Stats aggregate {run_count} of {job.total_runs} runs "
+                    f"(batch {state_word}) — partial, not final."
+                )
             if not flat_values:
                 if run_count == 0:
                     raise ResultError(
@@ -3730,7 +3825,9 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
             # ``resolve_log_file`` gates on completed status like every other
             # job-id-addressed read; the path is a trusted server artifact.
             log_path = services.resolve_log_file(args.job_id, state)
-            flat_values, axis_map, steps_label, at_map = _aggregate_log_measurements(log_path)
+            flat_values, axis_map, steps_label, at_map = _aggregate_log_measurements(
+                log_path, netlist=job.netlist
+            )
     elif args.log_file is not None:
         flat_values, axis_map, steps_label, at_map = _aggregate_log_measurements(
             safe_path(args.log_file, state)
@@ -3796,8 +3893,21 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
         lines.append("")
 
     payload: dict = {"stats": stats}
-    if per_run:
-        payload["per_run"] = per_run
+    if per_run and args.include_per_run is not False:
+        if args.include_per_run is True or len(per_run) <= _MAX_PER_RUN_ROWS:
+            payload["per_run"] = per_run
+        else:
+            # Explicit truncation, never silent: a 400-run Monte Carlo table
+            # floods the caller's context for no aggregate value.
+            payload["per_run"] = per_run[:_MAX_PER_RUN_ROWS]
+            payload["per_run_truncated"] = len(per_run)
+            caveats.append(
+                f"per_run table truncated to {_MAX_PER_RUN_ROWS} of {len(per_run)} "
+                "rows; pass include_per_run=true for the full table."
+            )
+    if caveats:
+        payload["warnings"] = caveats
+        lines = [*lines, *(f"NOTE: {c}" for c in caveats)]
     return format_response("\n".join(lines).rstrip(), payload, args.format)
 
 
