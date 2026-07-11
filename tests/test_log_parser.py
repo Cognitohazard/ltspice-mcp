@@ -789,3 +789,69 @@ class TestLogEncodingRecovery:
         log = tmp_path / "cp1252.log"
         log.write_bytes("LTspice 26.0\n.step temp=-40\xb0\n".encode("cp1252"))
         assert parse_step_iterations(log) == [{"temp": -40.0}]
+
+
+class TestDiagnosticsDedupe:
+    """Exact-duplicate diagnostic lines collapse to one entry with a count —
+    a PDK deck repeats 'unknown model parameter' once per device instance,
+    burying the one fatal line under dozens of copies."""
+
+    def test_repeated_errors_collapse_with_count(self, tmp_path: Path):
+        log = tmp_path / "dup.log"
+        log.write_text(
+            "Error: Ignoring unknown model parameter: bork\n" * 40
+            + "Fatal Error: Could not open library file\n"
+        )
+        diags = extract_log_diagnostics(log)
+        assert diags["errors"][0] == (
+            "Error: Ignoring unknown model parameter: bork (repeated 40 times)"
+        )
+        assert sum("unknown model parameter" in e for e in diags["errors"]) == 1
+        assert any("Could not open library file" in e for e in diags["errors"])
+
+    def test_repeated_warnings_collapse_with_count(self, tmp_path: Path):
+        log = tmp_path / "dupw.log"
+        log.write_text("Warning: pd + ps not given\n" * 3 + "Warning: unique note\n")
+        diags = extract_log_diagnostics(log)
+        assert diags["warnings"] == [
+            "Warning: pd + ps not given (repeated 3 times)",
+            "Warning: unique note",
+        ]
+
+    def test_single_occurrence_unannotated(self, tmp_path: Path):
+        log = tmp_path / "single.log"
+        log.write_text("Error: just once\n")
+        assert extract_log_diagnostics(log)["errors"] == ["Error: just once"]
+
+
+class TestExcerptFatalAnchors:
+    """Fatal lines without an 'error' prefix must anchor the excerpt window:
+    a bad .include path ('File not found') and a colliding .param
+    ('already defined') both abort the run with keyword-less phrasing."""
+
+    def test_file_not_found_anchors_excerpt(self, tmp_path: Path):
+        log = tmp_path / "fnf.log"
+        lines = [f"benign line {i}" for i in range(200)]
+        lines[5] = "File not found: gf180mcu.lib"
+        log.write_text("\n".join(lines))
+        excerpt = extract_error_context(log, max_lines=20)
+        assert "File not found: gf180mcu.lib" in excerpt
+
+    def test_already_defined_anchors_excerpt(self, tmp_path: Path):
+        log = tmp_path / "dup_param.log"
+        lines = [f"benign line {i}" for i in range(200)]
+        lines[7] = "parameter vref already defined"
+        log.write_text("\n".join(lines))
+        excerpt = extract_error_context(log, max_lines=20)
+        assert "parameter vref already defined" in excerpt
+
+    def test_oversize_log_excerpt_reads_head_and_tail(self, tmp_path: Path, monkeypatch):
+        """Beyond the read cap the excerpt reads only head+tail slices —
+        the head parse error and the tail abort must both survive."""
+        monkeypatch.setattr("ltspice_mcp.lib.log_parser._ERROR_CONTEXT_READ_CAP", 64 * 1024)
+        log = tmp_path / "huge.log"
+        filler = ("x" * 80 + "\n") * 2000  # ~162 KB of noise
+        log.write_text("Fatal Error: head marker\n" + filler + "Analysis failed: tail marker\n")
+        excerpt = extract_error_context(log, max_lines=20)
+        assert "head marker" in excerpt
+        assert "tail marker" in excerpt

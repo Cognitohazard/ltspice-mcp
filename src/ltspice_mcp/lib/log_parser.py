@@ -9,15 +9,15 @@ import contextlib
 import logging
 import re
 import tempfile
+from collections import Counter
 from pathlib import Path
 from typing import TypedDict
 
 from spicelib.log.ltsteps import LTSpiceLogReader
 from spicelib.log.semi_dev_op_reader import opLogReader
-from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text
 from ltspice_mcp.lib.spice_validator import validate_directive
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,12 @@ class MeasurementsOutput(TypedDict):
 
 _MAX_DIAGNOSTICS = 50
 
+# Cap on how much of a log ``extract_error_context`` reads (total bytes; half
+# head, half tail). The excerpt only ever needs the head (parse errors) and the
+# tail (abort/convergence dump), and a pathological abort log — a .control loop
+# echoing per step, a runaway node-voltage dump — can reach hundreds of MB.
+_ERROR_CONTEXT_READ_CAP = 8 * 1024 * 1024
+
 # Above this many ESTIMATED trace samples (axis points × number of non-axis
 # traces) a completed result is loaded axis-only and the per-trace value scan
 # (NaN/Inf/extreme-magnitude detection) is skipped, with the gap surfaced as a
@@ -115,6 +121,11 @@ _ERROR_KEYWORDS = [
     "last node voltages",
     "missing",
     "can't find",
+    # Fatal lines observed to fall out of excerpts without an anchor: a bad
+    # .include/.lib path and a colliding .param both abort the run with these
+    # phrases and no "error" prefix.
+    "file not found",
+    "already defined",
 ]
 
 # --- Structured log diagnostic extraction ---
@@ -662,7 +673,31 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
 
         i += 1
 
-    return {"warnings": warnings, "errors": errors, "meas_errors": meas_errors}
+    return {
+        "warnings": _collapse_repeats(warnings),
+        "errors": _collapse_repeats(errors),
+        "meas_errors": meas_errors,
+    }
+
+
+def _collapse_repeats(items: list[str]) -> list[str]:
+    """Collapse exact-duplicate diagnostic lines into one entry with a count.
+
+    Model-parameter complaints repeat once per device instance — a PDK deck
+    can emit the same "unknown model parameter" line dozens of times per run,
+    burying the one fatal line in the relay. First occurrence keeps its
+    position; duplicates annotate it with ``(repeated N times)``.
+    """
+    counts = Counter(items)
+    out: list[str] = []
+    emitted: set[str] = set()
+    for item in items:
+        if item in emitted:
+            continue
+        emitted.add(item)
+        n = counts[item]
+        out.append(item if n == 1 else f"{item} (repeated {n} times)")
+    return out
 
 
 def extract_error_context(log_file: Path, max_lines: int = 20) -> str:
@@ -686,7 +721,24 @@ def extract_error_context(log_file: Path, max_lines: int = 20) -> str:
         # Read directly (not read_log_text, which swallows OSError) so a genuine
         # read failure reaches the except below and is reported, not hidden as an
         # empty log. read_spice_text gives the same BOM/UTF-16/cp1252 handling.
-        content = read_spice_text(log_file)
+        # Beyond the cap, read only the head and tail slices: the excerpt only
+        # ever shows parse errors (head) and the abort/convergence dump (tail),
+        # and a runaway abort log can reach hundreds of MB.
+        size = log_file.stat().st_size
+        if size > _ERROR_CONTEXT_READ_CAP:
+            half = _ERROR_CONTEXT_READ_CAP // 2
+            with open(log_file, "rb") as fh:
+                head = fh.read(half)
+                # Even seek offset keeps a UTF-16 tail slice byte-aligned.
+                fh.seek((size - half) & ~1)
+                tail = fh.read()
+            content = (
+                decode_spice_bytes(head)
+                + f"\n... (log truncated for excerpt: {size} bytes total) ...\n"
+                + decode_spice_bytes(tail)
+            )
+        else:
+            content = read_spice_text(log_file)
         lines = [line.rstrip() for line in content.splitlines()]
 
         if not lines:
@@ -782,7 +834,7 @@ def parse_success_summary(
     Returns partial data on parse errors (graceful degradation): an
     unparseable raw still yields a dict carrying the paths and duration.
     """
-    from ltspice_mcp.lib.raw_parser import build_simulation_summary
+    from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead, build_simulation_summary
     from ltspice_mcp.lib.result_observations import deck_observation_inputs
 
     requested: dict[str, list[str]] | None = None
@@ -808,7 +860,7 @@ def parse_success_summary(
         # does NOT need V(*)/I(*) trace data. Loading "*" would
         # materialise every signal on every completion — fine for a
         # short .op, unbounded for a long .tran (Codex M3).
-        header = RawRead(str(raw_file), traces_to_read=None, dialect=dialect)
+        header = OffsetAwareRawRead(str(raw_file), traces_to_read=None, dialect=dialect)
         trace_names = header.get_trace_names()
         # Decide value-scan coverage by the ESTIMATED total sample count (axis
         # points × number of non-axis traces) — the real memory/time cost of
@@ -824,11 +876,11 @@ def parse_success_summary(
             point_count = 1
         trace_count = max(0, len(trace_names) - 1)  # exclude the axis
         if point_count * trace_count <= _VALUE_SCAN_SAMPLE_BUDGET:
-            raw_read = RawRead(str(raw_file), traces_to_read="*", dialect=dialect)
+            raw_read = OffsetAwareRawRead(str(raw_file), traces_to_read="*", dialect=dialect)
             value_scan = "scan"
         else:
             axis_only = [trace_names[0]] if trace_names else None
-            raw_read = RawRead(str(raw_file), traces_to_read=axis_only, dialect=dialect)
+            raw_read = OffsetAwareRawRead(str(raw_file), traces_to_read=axis_only, dialect=dialect)
             value_scan = "skipped_large"
     except Exception as e:
         logger.warning(f"Could not parse raw file {raw_file}: {e}")
