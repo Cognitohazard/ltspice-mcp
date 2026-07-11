@@ -84,3 +84,39 @@ class TestSimulationWithoutSimulator:
 
         assert [str(p) for p in results] == [str(net)] * 2
         assert max_active == 1
+
+
+class TestNgspiceExportSanitizer:
+    """LTspice's netlist exporter appends .backanno (ngspice: 'unimplemented
+    dot command' → abort) and can emit § name prefixes and µ suffixes; the
+    export must be scrubbed before an ngspice run. The scrub goes to its own
+    ``.ngspice.net`` sidecar so a concurrent LTspice-target run regenerating
+    the shared ``.net`` can't hand either run the other simulator's deck."""
+
+    def test_backanno_and_ltspice_chars_scrubbed(self, work_dir):
+        from ltspice_mcp.tools._base import _sanitize_export_for_ngspice
+
+        net = work_dir / "sch.net"
+        original = "* C:\\schematics\\sch.asc\nR1 N001 0 10µ\nXU1 N001 0 §opamp\n.backanno\n.end\n"
+        net.write_text(original, encoding="utf-8")
+        out = _sanitize_export_for_ngspice(net)
+        assert out == work_dir / "sch.ngspice.net"
+        text = out.read_text()
+        assert ".backanno" not in text
+        assert "µ" not in text and "§" not in text
+        assert "R1 N001 0 10u" in text
+        assert "XU1 N001 0 opamp" in text
+        assert text.rstrip().endswith(".end")
+        # The shared LTspice-target export is never mutated.
+        assert net.read_text(encoding="utf-8") == original
+
+    def test_clean_export_copied_verbatim(self, work_dir):
+        from ltspice_mcp.tools._base import _sanitize_export_for_ngspice
+
+        net = work_dir / "clean.net"
+        original = "* clean\nR1 a 0 1k\n.end\n"
+        net.write_text(original)
+        out = _sanitize_export_for_ngspice(net)
+        assert out == work_dir / "clean.ngspice.net"
+        assert out.read_text() == original
+        assert net.read_text() == original

@@ -242,6 +242,14 @@ class BatchRunnerBase(RunnerBase):
         """Drop the per-job cancel-event reference."""
         self._cancel_events.pop(job_id, None)
 
+    def owns_batch_job(self, job_id: str) -> bool:
+        """Whether this instance launched (and can therefore cancel) ``job_id``."""
+        return job_id in self._cancel_events
+
+    def has_active_work(self) -> bool:
+        """Whether any batch launched by this instance is still in flight."""
+        return bool(self._cancel_events)
+
     def _register_cancel(self, job_id: str) -> threading.Event:
         """Register a cancel event for a batch job and return it."""
         ev = threading.Event()

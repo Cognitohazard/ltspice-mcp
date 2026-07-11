@@ -419,7 +419,6 @@ class JobRegistry:
         the caller passes it through rather than the registry reaching back
         for a circular reference.
         """
-        sim_runner = runners.get_existing_sim_runner()
         own_pid = os.getpid()
         # Snapshot both views before iterating: the typed views iterate the
         # live union dict lazily, and the awaits below suspend this coroutine
@@ -432,20 +431,24 @@ class JobRegistry:
         # relabeled by our shutdown.
         for job in list(self.sim_jobs.values()):
             if job.status in NON_TERMINAL_LIVE_STATUSES and job.owner_pid == own_pid:
+                # Match the runner to the job's own simulator: runners are
+                # cached per simulator class, and the kill scopes by that
+                # class's executable names.
+                sim_runner = runners.get_existing_sim_runner(job.simulator)
                 if sim_runner is not None:
                     await sim_runner.cancel(job, session_state)
                 else:
                     transition(job, "cancelled")
                     self.persist_job(job)
 
-        sweep_runner = runners.get_existing_sweep_runner()
-        mc_runner = runners.get_existing_mc_runner()
         for batch_job in list(self.batch_jobs.values()):
             if batch_job.status == "running" and batch_job.owner_pid == own_pid:
-                if batch_job.job_type == "sweep" and sweep_runner is not None:
-                    await sweep_runner.cancel(batch_job, session_state)
-                elif batch_job.job_type == "montecarlo" and mc_runner is not None:
-                    await mc_runner.cancel(batch_job, session_state)
+                # Route to the runner instance that launched the batch — with
+                # several runners of one kind cached, most-recent isn't
+                # necessarily the owner of this job's cancel event.
+                batch_runner = runners.get_batch_runner_for(batch_job)
+                if batch_runner is not None:
+                    await batch_runner.cancel(batch_job, session_state)
                 else:
                     transition(batch_job, "cancelled")
                     self.persist_job(batch_job)
