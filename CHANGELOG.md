@@ -191,6 +191,12 @@ tool-surface changes.
   per-run isolated artifacts, cross-product corners); `simulation_summary` is
   described as the one-call post-run triage rather than a feature list, and
   the server instructions point to it after any finished run.
+- The schematic layout playbook (`spice://guide`, the LTspice skill, and
+  `create_schematic`'s checklist) now recommends delegating placement+wiring
+  to a focused subagent when the harness supports one — the build is
+  mechanical, meticulous work that degrades into net-label soup when done
+  inline — with a verification gate before it returns (`export_netlist`
+  matches the source netlist, `trace_net` shows no multi-label shorts).
 - `query_value` returns an `exact_match` flag: `false` when the requested
   time/frequency/sweep value snapped to a different sample. On a coarse sweep
   this matters — a `.dc temp` run silently snapping 27 → 25 °C biases a tempco
@@ -272,6 +278,11 @@ tool-surface changes.
 
 ### Fixed
 
+- The LTspice skill no longer claims device operating points (gm/gds/vth/…)
+  require ngspice: LTspice `.op` runs surface them via the auto-injected
+  `.options logopinfo`, and `operating_point` reads both engines uniformly.
+  The packaged guide was already correct; the skill's copy had drifted. Swept
+  gm (the gm/ID `.dc` table) still needs ngspice, as both now say.
 - Event-loop wedge on simulator abort: the completion callback used to run its
   log post-mortem (an uncapped read + scan) on the event-loop thread — a
   stalled read (huge abort log, hung network/DrvFs mount) froze every request
