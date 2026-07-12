@@ -464,7 +464,12 @@ def _netlist_component_refs(netlist_path) -> set[str]:
         "Use configure_montecarlo instead for statistical yield/spread. NOT for a "
         "bias sweep: a native `.dc Vds Vgs` (e.g. a gm/ID characterization) goes "
         "in one deck + run_simulation + export_waveform, not here — this is for "
-        "per-value SEPARATE runs (corners, L/W, .lib model swaps)."
+        "per-value SEPARATE runs (corners, L/W, .lib model swaps). Likewise a "
+        "plain one-parameter sweep on LTspice is usually better as a native "
+        "`.step param` in the deck (one run, one stepped raw — query_value/"
+        "bode_metrics read steps directly); use this pipeline when the simulator "
+        "has no `.step` (ngspice), when each point needs its own isolated "
+        "raw/log, or for the multi-dimension cross products above."
     ),
     input_model=ConfigureSweepInput,
     annotations=types.ToolAnnotations(

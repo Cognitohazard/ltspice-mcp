@@ -185,6 +185,12 @@ tool-surface changes.
 
 ### Changed
 
+- Tool-guidance pass driven by observed agent usage: `configure_sweep` now says
+  when a native `.step` in the deck is the better route (LTspice one-parameter
+  sweeps) and when the sweep pipeline wins (no `.step` on the simulator,
+  per-run isolated artifacts, cross-product corners); `simulation_summary` is
+  described as the one-call post-run triage rather than a feature list, and
+  the server instructions point to it after any finished run.
 - `query_value` returns an `exact_match` flag: `false` when the requested
   time/frequency/sweep value snapped to a different sample. On a coarse sweep
   this matters — a `.dc temp` run silently snapping 27 → 25 °C biases a tempco
