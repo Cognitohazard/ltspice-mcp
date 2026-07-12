@@ -2338,8 +2338,12 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
 @registry.tool(
     name="simulation_summary",
     description=(
-        "Get a comprehensive simulation summary including type, signal list, data size, "
-        ".MEAS results, Fourier analysis, AC bandwidth metrics, and warnings."
+        "One-call triage of a finished run: simulation type, signal list, data "
+        "size, .MEAS results, Fourier analysis, AC bandwidth metrics, and the "
+        "run's errors/warnings/observations in a single read. Call it first on "
+        "a completed job — especially a failed or suspect one — before reaching "
+        "for per-signal analysis tools: it tells you whether the result is "
+        "trustworthy and which signals and measurements actually exist."
     ),
     input_model=SimulationSummaryInput,
     annotations=RO_ANNOTATIONS,
