@@ -252,11 +252,13 @@ C1 out 0 {C}
 
 **Design and iterate over `.cir` netlists** — plain text, no placement overhead, fast to edit and simulate. Only build `.asc` schematics after the circuit design is finalized or when the user needs a visual schematic for review. The `.asc` tools are for presentation, not design iteration.
 
-**Device internals (gm/gds/vth/…) need ngspice.** LTspice's `.op` does not export `@dev[param]` small-signal parameters, so `operating_point`/`export_waveform` return only node voltages and branch currents on an LTspice run. For a gm/ID characterization, run the deck on ngspice with `.save @m1[gm] @m1[gds]` (one parameter per bracket) and read it back via the `m1.gm` shorthand — see the ngspice skill / the `spice://guide` resource.
+**Device operating points (gm/gds/vth/…) work on both simulators for `.op`.** On LTspice, `run_simulation` auto-adds `.options logopinfo` and `operating_point` reads the log's *Semiconductor Device Operating Points* block (LTspice writes it only under that option, and only for `.op`). On ngspice, `.save @m1[gm] @m1[gds]` (one parameter per bracket) puts them in the raw; `operating_point` reads either uniformly via the `m1.gm` shorthand. A **swept** gm (the gm/ID sizing table via `.dc` + `.save @m1[gm]`) still needs ngspice — LTspice's `logopinfo` is `.op`-only, so on LTspice differentiate the drain current (`d(Id(M1))`) instead. See the ngspice skill / the `spice://guide` resource.
 
 ### .asc Schematics
 
 `.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use the server's schematic tools (`create_schematic`, `add_component`, `connect`, `apply_schematic_ops`, ...) or LTspice's GUI. These are available in both the full and agentic profiles — geometry-aware editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match. Ack-only mutations (move/remove a component, set an attribute, add or remove a net label, remove a wire) are `apply_schematic_ops` ops rather than standalone tools, so batch them in one transaction.
+
+**Delegate the build when you can.** Placement and wiring is meticulous, mechanical work that competes with design attention — done inline it tends to degrade into net-label soup instead of routed wires. If subagents are available, hand the schematic build to one whose entire brief is the layout playbook (`spice://guide`): give it the final netlist, require the schematic tools (never hand-written `.asc`), and have it verify before returning — `export_netlist` matching the source netlist, `trace_net` showing no multi-label shorts.
 
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2.
 - Export to netlist for direct text editing when needed.

@@ -460,6 +460,16 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 
 #### Schematic layout best practices
 
+**Delegate the build when you can.** Placement and wiring is meticulous,
+mechanical work that competes with design attention — an agent doing both in
+one pass tends to cut corners (net-label soup instead of routed wires). If
+your environment supports subagents, hand the schematic build to one whose
+entire brief is this playbook: give it the final netlist and this guide
+section, require it to build with `create_schematic` / `apply_schematic_ops` /
+`connect` (never by hand-writing the `.asc`), and have it verify before
+returning — `export_netlist` must match the source netlist, and `trace_net`
+must show no multi-label shorts. Review the result with `read_circuit`.
+
 **Component placement:**
 - **Tier alignment**: Matched/mirrored transistors (diff pairs, current mirrors, bias mirrors) MUST share the same y-coordinate. Plan horizontal tiers: VDD rail → PMOS loads → diff pair → tail/bias → VSS.
 - **Drain/source alignment on each branch**: Within a vertical branch (e.g., PMOS load stacked above NMOS input), position components so the drain pin of the upper device is on the same x-column as the drain pin of the lower device. This eliminates horizontal jogs between stacked transistors.

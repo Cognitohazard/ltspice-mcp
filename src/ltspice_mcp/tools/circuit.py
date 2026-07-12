@@ -3706,6 +3706,9 @@ async def handle_create_schematic(
         "to validate without saving)."
         "\n- Matched devices (diff pairs/mirrors) share a y-tier; get pin coords "
         "from symbol_info."
+        "\n- This is meticulous work: if subagents are available, delegate "
+        "placement+wiring to one with this checklist + spice://guide, verifying "
+        "via export_netlist against the source netlist before it returns."
     )
     data = {
         "path": str(target_path),
