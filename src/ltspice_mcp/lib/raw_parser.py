@@ -96,6 +96,9 @@ class _MultiPlotAsciiGuard:
             self._break_at = pos
         return self._f.seek(pos, *args)  # type: ignore[attr-defined]
 
+    def tell(self) -> int:
+        return self._f.tell()  # type: ignore[attr-defined,no-any-return]
+
     def __getattr__(self, name: str) -> object:
         return getattr(self._f, name)
 
