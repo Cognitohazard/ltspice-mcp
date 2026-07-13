@@ -191,6 +191,22 @@ class TestPerJobDialect:
         # A path never resolved through a job uses the session default.
         assert services.raw_dialect_for(tmp_path / "other.raw", state_with_sim) is None
 
+    def test_effective_raw_path_records_dialect_for_job_addressed_read(
+        self, state_with_sim: SessionState, tmp_path: Path
+    ):
+        # The analysis-layer resolver EVERY job-addressed tool goes through must
+        # record the producing dialect too — it resolved via resolve_run directly
+        # and so silently parsed a per-run-override raw with the session default.
+        from ltspice_mcp.tools.analysis import _effective_raw_path
+
+        state_with_sim.available_simulators["ngspice"] = type("NGspiceSimulator", (), {})
+        raw = tmp_path / "run.raw"
+        raw.write_text("d")
+        job = _make_job(state_with_sim, raw_file=raw)
+        job.simulator = "NGspiceSimulator"
+        assert _effective_raw_path(None, "j1", 0, state_with_sim) == raw
+        assert services.raw_dialect_for(raw, state_with_sim) == "ngspice"
+
 
 class TestLoadRaw:
     async def test_missing_file(self, state_no_sim: SessionState, tmp_path: Path):
