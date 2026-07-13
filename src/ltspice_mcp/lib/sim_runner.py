@@ -14,7 +14,12 @@ from ltspice_mcp.lib.job_types import (
     TERMINAL_STATUSES,
     SimulationJob,
 )
-from ltspice_mcp.lib.log_parser import extract_error_context, extract_log_diagnostics
+from ltspice_mcp.lib.log_parser import (
+    extract_error_context,
+    extract_log_diagnostics,
+    is_op_stepping_failure,
+    op_ladder_exhausted,
+)
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.runner_base import (
     DEFAULT_MAX_PARALLEL,
@@ -92,9 +97,16 @@ def collect_run_outcome(raw_file: str, log_file: str) -> RunOutcome:
     # Clean exit but no raw data: a deck driven by a .control script (ngspice)
     # legitimately prints its results to the log and writes no raw at all.
     # When the log parses free of errors, that's a completed log-only run,
-    # not a failure.
-    if not sim_failed and log_exists and not extract_log_diagnostics(log_path)["errors"]:
-        return RunOutcome("", log_file, 0, None)
+    # not a failure. An OP "gmin stepping failed" rung on its own is a
+    # recoverable mid-ladder step (ngspice tries the next method and may solve),
+    # not a terminal error — with no raw to gate on (unlike build_simulation_
+    # summary's raw-validity check), keep the run failed only if a genuine
+    # terminal error is present OR the whole stepping ladder was exhausted.
+    if not sim_failed and log_exists:
+        errors = extract_log_diagnostics(log_path)["errors"]
+        non_rung = [e for e in errors if not is_op_stepping_failure(e)]
+        if not non_rung and not op_ladder_exhausted(errors):
+            return RunOutcome("", log_file, 0, None)
 
     if log_exists:
         context = extract_error_context(log_path, max_lines=20)
