@@ -406,10 +406,12 @@ def _effective_raw_path(
     if bool(raw_file) == bool(job_id):
         raise ResultError("Pass exactly one of 'raw_file' or 'job_id'.")
     if job_id:
-        run = services.resolve_run(job_id, state, run_index)
-        if run.raw_file is None:
-            raise ResultError(f"Run {run_index} of job {job_id!r} has no raw file yet.")
-        return run.raw_file
+        # Route through resolve_raw_file (not resolve_run directly): it records
+        # state.raw_dialect_hints for this raw, so a later load_raw/raw_dialect_for
+        # parses it with the dialect of the simulator the job actually ran on, not
+        # the session default. Every job-addressed analysis tool resolves here, so
+        # a per-run simulator override was otherwise silently parsed as the default.
+        return services.resolve_raw_file(job_id, state, run_index)
     assert raw_file  # truthy per the guard above
     return safe_path(raw_file, state)
 
