@@ -72,11 +72,13 @@ class SweepRunner(BatchRunnerBase):
         def run_completion_callback(raw_file, log_file, runno: int) -> None:
             if cancel_event.is_set():
                 return
+            # raw_file is None when the sub-run aborted (callback_on_error);
+            # pass it through as None so it is recorded as a failed run.
             self._bridge(
                 self._handle_run_completion,
                 batch_job.job_id,
-                Path(raw_file),
-                Path(log_file),
+                Path(raw_file) if raw_file else None,
+                Path(log_file) if log_file else None,
                 state,
                 runno,
                 context=f"sweep run (job {batch_job.job_id})",
@@ -152,8 +154,8 @@ class SweepRunner(BatchRunnerBase):
     def _handle_run_completion(
         self,
         job_id: str,
-        raw_file: Path,
-        log_file: Path,
+        raw_file: Path | None,
+        log_file: Path | None,
         state: SessionState,
         runno: int | None = None,
     ) -> None:
@@ -204,6 +206,10 @@ class SweepRunner(BatchRunnerBase):
                 except (ValueError, TypeError):
                     params[key] = val
             batch_job.run_results[run_key]["params"] = params
+
+        # Account for any run that never reported (silent drop) before completing,
+        # so completed_runs == total_runs and "completed" can't mask a shortfall.
+        self._finalize_batch(batch_job, "Sweep")
 
         transition(
             batch_job,
