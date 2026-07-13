@@ -137,6 +137,18 @@ class ServerConfig:
     default_timeout: float = 300.0
     """Simulation timeout in seconds."""
 
+    max_estimated_points: int = 20_000_000
+    """Preflight WARN threshold: a .tran/.ac/.dc whose estimated point count
+    exceeds this gets a warning (large raws are slow to produce and parse).
+    Estimate only — .tran uses adaptive stepping. ``[simulation] max_estimated_points``."""
+
+    max_raw_mb: int = 4096
+    """Preflight REFUSE threshold: reject a run whose estimated raw size exceeds
+    this. Estimated as a single-trace lower bound (8 bytes/point), so it never
+    false-refuses (a real multi-trace raw is only larger) — it catches a runaway
+    directive (e.g. a fs step for a ns run) before it fills the disk.
+    ``[simulation] max_raw_mb``."""
+
     max_points_returned: int = 10000
     """Maximum waveform data points to return."""
 
@@ -225,6 +237,12 @@ class ServerConfig:
                     config_dict["max_parallel_sims"] = toml_data["simulation"]["max_parallel"]
                 if "timeout" in toml_data["simulation"]:
                     config_dict["default_timeout"] = toml_data["simulation"]["timeout"]
+                if "max_estimated_points" in toml_data["simulation"]:
+                    config_dict["max_estimated_points"] = toml_data["simulation"][
+                        "max_estimated_points"
+                    ]
+                if "max_raw_mb" in toml_data["simulation"]:
+                    config_dict["max_raw_mb"] = toml_data["simulation"]["max_raw_mb"]
 
             if "analysis" in toml_data and "max_points" in toml_data["analysis"]:
                 config_dict["max_points_returned"] = toml_data["analysis"]["max_points"]
@@ -281,6 +299,10 @@ class ServerConfig:
                 source="config",
             )
             _validate_numeric(
+                config_dict, "max_estimated_points", int, 1, 100_000_000_000, source="config"
+            )
+            _validate_numeric(config_dict, "max_raw_mb", int, 1, 10_000_000, source="config")
+            _validate_numeric(
                 config_dict,
                 "max_points_returned",
                 int,
@@ -326,6 +348,15 @@ class ServerConfig:
         _load_bounded_env(
             "LTSPICE_MCP_MAX_POINTS", config_dict, "max_points_returned", int, 1, 10_000_000
         )
+        _load_bounded_env(
+            "LTSPICE_MCP_MAX_ESTIMATED_POINTS",
+            config_dict,
+            "max_estimated_points",
+            int,
+            1,
+            100_000_000_000,
+        )
+        _load_bounded_env("LTSPICE_MCP_MAX_RAW_MB", config_dict, "max_raw_mb", int, 1, 10_000_000)
         if env_log := os.getenv("LTSPICE_MCP_LOG_LEVEL"):
             env_log_upper = env_log.upper()
             if env_log_upper in VALID_LOG_LEVELS:
@@ -429,6 +460,12 @@ def generate_default_config(path: Path) -> None:
     sim_conf.add(nl())
     sim_conf.add(comment("Default simulation timeout in seconds"))
     sim_conf.add("timeout", 300.0)
+    sim_conf.add(nl())
+    sim_conf.add(comment("Preflight size guard, estimated from .tran/.ac/.dc directives."))
+    sim_conf.add(comment("Warn when the estimated point count exceeds this:"))
+    sim_conf.add("max_estimated_points", 20_000_000)
+    sim_conf.add(comment("Refuse a run whose estimated raw (MB, single-trace) exceeds this:"))
+    sim_conf.add("max_raw_mb", 4096)
     doc.add("simulation", sim_conf)
     doc.add(nl())
 
