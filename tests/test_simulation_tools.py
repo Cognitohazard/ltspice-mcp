@@ -49,7 +49,9 @@ class TestSimulationWithoutSimulator:
         # LTspice always writes the same sidecar .net next to the .asc, so two
         # concurrent exports of one schematic must not run in parallel — the
         # per-.asc lock has to serialize them (a torn .net means running the
-        # wrong deck). The offloaded export made this reachable; pin it.
+        # wrong deck). The offloaded export made this reachable; pin it. Each
+        # caller also gets its OWN immutable snapshot path, so a peer re-export
+        # overwriting the shared .net can't swap a stored deck out.
         from ltspice_mcp.tools._base import resolve_runnable_netlist
 
         asc = work_dir / "race.asc"
@@ -62,7 +64,7 @@ class TestSimulationWithoutSimulator:
 
         class FakeLTspice:
             @classmethod
-            def create_netlist(cls, path: str) -> str:
+            def create_netlist(cls, path: str, timeout: float | None = None) -> str:
                 nonlocal active, max_active
                 with gate:
                     active += 1
@@ -82,8 +84,15 @@ class TestSimulationWithoutSimulator:
         finally:
             del state_no_sim.available_simulators["ltspice"]
 
-        assert [str(p) for p in results] == [str(net)] * 2
+        # Serialized (never overlapped) ...
         assert max_active == 1
+        # ... and each caller got a distinct snapshot beside the shared .net,
+        # both carrying the exported deck.
+        assert results[0] != results[1]
+        for p in results:
+            assert p.parent == net.parent
+            assert p.name.startswith("race.run-") and p.suffix == ".net"
+            assert p.read_text() == "* exported\n.end\n"
 
 
 class TestNgspiceExportSanitizer:
