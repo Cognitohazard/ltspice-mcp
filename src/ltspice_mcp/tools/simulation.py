@@ -475,7 +475,11 @@ async def _finished_job_response(
                 f"Job {job.job_id} completed but result files are missing.\n"
                 f"raw_file: {job.raw_file}, log_file: {job.log_file}"
             )
-        summary = parse_success_summary(
+        # Offload the raw parse off the event-loop thread (heavy, untrusted
+        # I/O); dialect_for_job stays on the loop (cheap) before the hop, and
+        # parse_success_summary returns a dict, not a CallToolResult.
+        summary = await asyncio.to_thread(
+            parse_success_summary,
             job.raw_file,
             job.log_file,
             duration,
@@ -867,7 +871,10 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
                 f"Job {job_id} completed but result files have been removed.\n"
                 f"raw: {job.raw_file.exists()}, log: {job.log_file.exists()}"
             )
-        summary = parse_success_summary(
+        # Offload the raw parse off the event-loop thread (heavy, untrusted I/O);
+        # dialect_for_job stays on the loop (cheap) before the hop.
+        summary = await asyncio.to_thread(
+            parse_success_summary,
             job.raw_file,
             job.log_file,
             duration,
