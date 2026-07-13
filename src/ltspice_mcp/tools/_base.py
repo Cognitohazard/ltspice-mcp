@@ -6,6 +6,7 @@ import copy
 import json
 import logging
 import re
+import shutil
 import types as _stdlib_types
 import typing
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -716,15 +717,21 @@ async def circuit_file_lock(path: Path) -> AsyncIterator[None]:
     (Residual: on coarse-mtime filesystems like WSL's /mnt/c a same-size
     rewrite within one mtime tick can still go undetected — see FileCache.)
     """
+    # Acquire INSIDE the try so stack.close() always runs: a cancel (cancel_job
+    # / shutdown) landing at the await boundary right after the worker thread
+    # took the flock would otherwise leak it until process exit. (Residual: if
+    # the cancel lands while the worker is still blocked acquiring, the thread
+    # can register the lock after close() already ran — inherent to to_thread,
+    # not fixable without a cancel-aware lock; the narrow window is cancel-only.)
     stack = contextlib.ExitStack()
     try:
-        await asyncio.to_thread(stack.enter_context, file_lock(circuit_lock_target(path)))
-    except TimeoutError as e:
-        raise NetlistError(
-            f"{path.name} is locked by another ltspice-mcp process "
-            f"(waited {DEFAULT_TIMEOUT:.0f}s). Retry once its edit finishes."
-        ) from e
-    try:
+        try:
+            await asyncio.to_thread(stack.enter_context, file_lock(circuit_lock_target(path)))
+        except TimeoutError as e:
+            raise NetlistError(
+                f"{path.name} is locked by another ltspice-mcp process "
+                f"(waited {DEFAULT_TIMEOUT:.0f}s). Retry once its edit finishes."
+            ) from e
         yield
     finally:
         stack.close()
@@ -821,7 +828,17 @@ async def resolve_runnable_netlist(
         )
     async with asc_export_lock(netlist_path):
         try:
-            net_path = Path(await asyncio.to_thread(ltspice_cls.create_netlist, str(netlist_path)))
+            # Bound the export: create_netlist launches LTspice, which can hang
+            # indefinitely on a Windows-side modal dialog. The export lock is
+            # held across this call, so an unbounded hang wedges every later run
+            # of this schematic — cap it at the sim timeout so it fails loudly.
+            net_path = Path(
+                await asyncio.to_thread(
+                    ltspice_cls.create_netlist,
+                    str(netlist_path),
+                    timeout=state.config.default_timeout,
+                )
+            )
         except Exception as e:
             raise SimulationError(
                 f"Auto-exporting {netlist_path.name} to a netlist failed: {e}"
@@ -832,7 +849,20 @@ async def resolve_runnable_netlist(
 
         if is_ngspice(simulator or state.default_simulator):
             net_path = await asyncio.to_thread(_sanitize_export_for_ngspice, net_path)
-    return net_path
+
+        # Snapshot the fresh deck to a unique name INSIDE the lock and return
+        # THAT: create_netlist writes a shared <stem>.net, so a parallel session
+        # re-exporting this .asc overwrites it — and a caller that stored the
+        # shared path (sweep/MC config, or a run staged moments later) would then
+        # read the peer's deck. The snapshot stays in the same directory so a
+        # relative .include/.lib in the deck still resolves against it.
+        # ponytail: only direct-.asc runs reach here (the .cir/.net path returns
+        # above), so these are rare; GC them on job completion if they ever pile up.
+        from uuid import uuid4
+
+        snapshot = net_path.with_name(f"{net_path.stem}.run-{uuid4().hex[:8]}{net_path.suffix}")
+        await asyncio.to_thread(shutil.copy2, net_path, snapshot)
+        return snapshot
 
 
 def inject_logopinfo(netlist_path: Path, simulator: type, job_id: str) -> Path:
