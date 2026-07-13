@@ -320,7 +320,7 @@ def read_device_op_points(log_path: Path) -> dict[str, float]:
         return out
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".log", delete=False, encoding="utf-8"
+            mode="w", suffix=".log", delete=False, encoding="utf-8", newline=""
         ) as tmp:
             tmp.write(text)
             tmp_path = Path(tmp.name)
@@ -1028,6 +1028,7 @@ def make_log_reader(log_path: Path) -> LTSpiceLogReader:
                 prefix=f"{log_path.stem}.sanitized.",
                 delete=False,
                 encoding="utf-8",
+                newline="",
             ) as tmp:
                 tmp.write(candidate)
                 tmp_path = Path(tmp.name)
