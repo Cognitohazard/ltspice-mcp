@@ -176,6 +176,35 @@ class TestPerJobDialect:
         job.simulator = "GoneSimulator"  # e.g. recovered from an old sidecar
         assert services.dialect_for_job(job, state_with_sim) == state_with_sim.raw_dialect
 
+    def test_recorded_ngspice_dialect_survives_without_the_simulator(
+        self, state_with_sim: SessionState
+    ):
+        # A persisted ngspice job read back with only the default simulator
+        # installed must still parse as ngspice — the dialect resolves from the
+        # recorded NAME, not the (now-absent) class. Session default here is
+        # LTspice-like (dialect None); the old class-lookup would wrongly fall
+        # back to it.
+        job = _make_job(state_with_sim)
+        job.simulator = "NGspiceSimulator"
+        names = {c.__name__ for c in state_with_sim.available_simulators.values()}
+        assert "NGspiceSimulator" not in names
+        assert state_with_sim.raw_dialect is None
+        assert services.dialect_for_job(job, state_with_sim) == "ngspice"
+
+    def test_batch_job_dialect_resolves_from_recorded_name(self, state_with_sim: SessionState):
+        # batch_results reads the aggregate dialect via dialect_for_job(batch_job)
+        # — a persisted ngspice sweep must not inherit the session default.
+        from ltspice_mcp.state import BatchJob
+
+        batch = BatchJob(
+            job_id="b1",
+            job_type="sweep",
+            netlist=Path("/x.cir"),
+            total_runs=4,
+            simulator="NGspiceSimulator",
+        )
+        assert services.dialect_for_job(batch, state_with_sim) == "ngspice"
+
     def test_raw_dialect_recorded_at_job_resolution(
         self, state_with_sim: SessionState, tmp_path: Path
     ):

@@ -91,38 +91,42 @@ def _safe_stat_size(path: Path) -> int:
 def _preflight_size_guard(netlist_path: Path, config: ServerConfig) -> str | None:
     """Estimate the raw a run will produce and guard against a runaway.
 
-    Refuses (raises ``SimulationError``) when the estimated raw exceeds
+    Refuses (raises ``SimulationError``) only when a DETERMINISTIC-count analysis
+    (``.ac``/``.dc``, where saved points = the exact swept count) would exceed
     ``max_raw_mb`` — sized as a single-trace lower bound (``8 bytes/point``), so a
-    real multi-trace raw is only larger and this never false-refuses; it catches a
-    directive typo (a fs step for a ns run) before it fills the disk. Warns (return
-    value) when the estimated point count exceeds ``max_estimated_points``. Returns
-    the warning string or ``None``. An unestimable directive (auto-timestep,
-    parameterised) is left alone — the estimate is best-effort, not a gate on every
-    run.
+    real multi-trace raw is only larger; it catches a directive typo (a fs step
+    for a ns run) before it fills the disk. ``.tran`` is never refused: LTspice
+    compresses waveforms and Tstep is only an initial-step guess, so its count
+    isn't a bound and a hard refuse would reject legitimate runs — a large
+    ``.tran`` (or any large estimate) only warns. Returns the warning string or
+    ``None``; an unestimable directive is left alone.
     """
     try:
-        points = estimate_analysis_points(read_spice_text(netlist_path))
+        text = read_spice_text(netlist_path)
+        points = estimate_analysis_points(text)
+        hard_points = estimate_analysis_points(text, deterministic_only=True)
     except (OSError, OverflowError, ValueError):
         # Best-effort estimate: an unreadable deck or a pathological directive
         # (e.g. .tran 1e-200 1e200 → non-finite point count) leaves the run
         # ungated rather than crashing run_simulation.
         return None
-    if points is None:
-        return None
-    est_mb = points * _BYTES_PER_POINT / (1024 * 1024)
-    if est_mb > config.max_raw_mb:
+    # Integer comparison throughout — a pathological nested .dc can estimate a
+    # huge but finite Python int (~1e600) that overflows a float MB conversion.
+    max_bytes = config.max_raw_mb * 1024 * 1024
+    if hard_points is not None and hard_points * _BYTES_PER_POINT > max_bytes:
+        est_mb = hard_points * _BYTES_PER_POINT // (1024 * 1024)
         raise SimulationError(
-            f"Refusing to run: the analysis directive estimates ~{points:,} points "
-            f"(>={est_mb:,.0f} MB for even a single trace, over the {config.max_raw_mb} MB "
-            "max_raw_mb cap — a real multi-trace raw is larger). Check the timestep / "
-            "step size, or raise [simulation] max_raw_mb. (.tran uses adaptive stepping, "
-            "so the real count may differ — this is an estimate from tstop/tstep.)",
+            f"Refusing to run: a .ac/.dc directive estimates ~{hard_points:,} points "
+            f"(>= {est_mb:,} MB for even a single trace, over the {config.max_raw_mb} MB "
+            "max_raw_mb cap — a real multi-trace raw is larger). Check the sweep "
+            "increment / point count, or raise [simulation] max_raw_mb.",
             show_hint=False,
         )
-    if points > config.max_estimated_points:
+    if points is not None and points > config.max_estimated_points:
         return (
             f"Large run: the analysis directive estimates ~{points:,} points; the raw may "
-            "be slow to produce and parse. check_job reports raw_bytes as it grows."
+            "be slow to produce and parse. check_job reports raw_bytes as it grows. "
+            "(.tran uses adaptive stepping + compression, so the real count may differ.)"
         )
     return None
 

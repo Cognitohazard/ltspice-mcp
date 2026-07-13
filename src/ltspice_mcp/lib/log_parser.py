@@ -484,17 +484,22 @@ def count_op_iterations(log_path: Path | None = None, *, text: str | None = None
 def scan_op_step_log(
     log_path: Path | None = None, *, text: str | None = None
 ) -> tuple[list[dict[str, float]], int]:
-    """Single-pass equivalent of ``parse_step_iterations`` +
-    ``count_op_iterations``. Returns ``(iterations, op_count)``.
+    """Single-pass stepped-``.op`` scan. Returns ``(iterations, op_solve_count)``.
 
-    Used by stepped-``.op`` detection in :func:`build_simulation_summary`
-    where both signals are needed and walking the log twice is wasteful.
+    ``iterations`` are the ``.step name=value`` parameter maps; ``op_solve_count``
+    is the number of bias-point solve blocks — each opens with a "Direct Newton
+    iteration" line whether it converges OR fails. Counting *attempts* (not just
+    successes) is deliberate: a stepped ``.op`` whose later step fails emits no
+    success line for that step, so a success-only count would miss it and let the
+    raw-validity demote in :func:`build_simulation_summary` mask a genuinely
+    unsolved bias point. Either signal exceeding 1 means the ``.raw`` (step 0
+    only) under-represents the run.
     """
     iterations: list[dict[str, float]] = []
-    op_count = 0
+    op_solve_count = 0
     for line in _resolve_log_text(log_path, text).splitlines():
-        if _RE_OP_ITERATION.match(line):
-            op_count += 1
+        if _RE_OP_SOLVE_ATTEMPT.match(line):
+            op_solve_count += 1
             continue
         m = _RE_STEP_LINE.match(line.strip())
         if not m:
@@ -507,7 +512,7 @@ def scan_op_step_log(
                 continue
         if params:
             iterations.append(params)
-    return iterations, op_count
+    return iterations, op_solve_count
 
 
 def missing_refs_from_text(text: str) -> list[str]:

@@ -195,14 +195,22 @@ def _estimate_dc_points(line: str) -> int | None:
     return total if found else None
 
 
-def estimate_analysis_points(netlist_text: str) -> int | None:
+def estimate_analysis_points(netlist_text: str, *, deterministic_only: bool = False) -> int | None:
     """Rough saved-point-count estimate for the deck's analysis directive.
 
-    Parses ``.tran`` / ``.ac`` / ``.dc`` to bound the raw a run will produce, for
-    the preflight size guard. An ESTIMATE only: ``.tran`` uses adaptive stepping
-    (this is the Tstop/Tstep upper bound), and an auto-timestep or parameterised
-    directive returns ``None`` (unknowable up front). When several analyses are
-    present the largest estimate wins. ``None`` when nothing is estimable.
+    Parses ``.tran`` / ``.ac`` / ``.dc`` to size the raw a run will produce, for
+    the preflight size guard. An ESTIMATE only, and an auto-timestep or
+    parameterised directive returns ``None`` (unknowable up front). When several
+    analyses are present the largest estimate wins; ``None`` when nothing is
+    estimable.
+
+    ``.ac`` (lin/dec/oct) and ``.dc`` have a deterministic saved-point count.
+    ``.tran`` does NOT: LTspice's Tstep is a plotting increment / initial-step
+    guess, and adaptive stepping plus waveform compression move the real count
+    far off Tstop/Tstep in either direction — so it can't be a bound. Pass
+    ``deterministic_only=True`` to consider only ``.ac``/``.dc`` (the count the
+    hard size refusal may safely act on); the default includes ``.tran`` for the
+    soft warning path.
     """
     best: int | None = None
     for raw_line in netlist_text.splitlines():
@@ -210,6 +218,8 @@ def estimate_analysis_points(netlist_text: str) -> int | None:
         low = line.lower()
         est: int | None = None
         if low.startswith(".tran"):
+            if deterministic_only:
+                continue
             est = _estimate_tran_points(line)
         elif low.startswith(".ac"):
             est = _estimate_ac_points(line)

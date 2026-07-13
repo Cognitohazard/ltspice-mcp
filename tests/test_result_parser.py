@@ -101,6 +101,41 @@ class TestOpSteppingFailureRawGate:
         assert any("gmin stepping failed" in e for e in s.get("errors", []))
         assert any("Stepped .op detected" in w for w in s.get("warnings", []))
 
+    def test_stepped_op_later_step_fails_without_step_markers(self, tmp_path: Path):
+        # LTspice stepped .op emits no ".step name=value" markers — the only
+        # signal is the per-step "Direct Newton iteration" line. Step 0 succeeds
+        # (one line) and step 1 fails (a second attempt + gmin failure): two
+        # solve blocks, so step 0's finite raw can't vouch for step 1's failure.
+        from ltspice_mcp.lib.raw_parser import build_simulation_summary
+
+        log = tmp_path / "op.log"
+        log.write_text(
+            "Direct Newton iteration succeeded in finding operating point.\n"
+            "Direct Newton iteration failed to find operating point.\n"
+            "gmin stepping failed\n"
+        )
+        raw = _make_raw_mock(
+            ["v(out)"], np.array([0.0]), {"v(out)": np.array([1.0])}, plotname="Operating Point"
+        )
+        raw.get_axis.side_effect = Exception("This RAW file does not have an axis.")
+        s = build_simulation_summary(raw, log)
+        assert any("gmin stepping failed" in e for e in s.get("errors", []))
+
+    def test_current_only_raw_keeps_error(self, tmp_path: Path):
+        # A finite branch current can't vouch for a solved bias point: a failing
+        # .op may still write i(V1) while the node voltage sits at NaN/rail. Only
+        # a finite node VOLTAGE demotes; a current-only raw keeps the error.
+        from ltspice_mcp.lib.raw_parser import build_simulation_summary
+
+        log = tmp_path / "op.log"
+        log.write_text("ngspice-42\ngmin stepping failed\n")
+        raw = _make_raw_mock(
+            ["i(v1)"], np.array([0.0]), {"i(v1)": np.array([0.0])}, plotname="Operating Point"
+        )
+        raw.get_axis.side_effect = Exception("This RAW file does not have an axis.")
+        s = build_simulation_summary(raw, log)
+        assert any("gmin stepping failed" in e for e in s.get("errors", []))
+
     def test_single_step_op_still_demotes(self, tmp_path: Path):
         # An unstepped .op (one bias point) with finite data and no success line
         # still demotes — the guard must not over-suppress the single-block case.

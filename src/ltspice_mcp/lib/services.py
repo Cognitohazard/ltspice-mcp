@@ -32,7 +32,7 @@ from ltspice_mcp.lib.log_parser import (
     read_log_text,
 )
 from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead, get_step_count
-from ltspice_mcp.lib.simulator import simulator_dialect
+from ltspice_mcp.lib.simulator import dialect_for_simulator_name
 from ltspice_mcp.state import (
     TERMINAL_STATUSES,
     BatchJob,
@@ -433,12 +433,17 @@ def dialect_for_job(job: SimulationJob | BatchJob, state: SessionState) -> str |
     """Raw dialect for the simulator ``job`` actually ran on.
 
     A per-run simulator override can differ from the session default (and a
-    persisted job may be read back under a different default), so the job's
-    own recorded simulator wins. Falls back to the session default when the
-    job records no simulator or the name matches no configured simulator.
+    persisted job may be read back under a different default), so the job's own
+    recorded simulator wins. Resolved from the recorded name string, so a
+    persisted ngspice job read back with only LTspice installed still parses
+    with the ngspice dialect — the producing simulator need not remain
+    configured. Falls back to the session default only when the job records no
+    simulator at all.
     """
-    cls = simulator_class_for_job(job, state)
-    return simulator_dialect(cls) if cls is not None else state.raw_dialect
+    name = getattr(job, "simulator", None)
+    if name:
+        return dialect_for_simulator_name(name)
+    return state.raw_dialect
 
 
 def raw_dialect_for(raw_path: Path, state: SessionState) -> str | None:
