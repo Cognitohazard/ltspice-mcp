@@ -43,6 +43,14 @@ class TestExtractMissingRefs:
         log.write_text("Fatal Error: Unknown subcircuit called in: xu1 n004 n001 vcc 0 lm741\n")
         assert extract_missing_refs(log) == ["lm741"]
 
+    def test_missing_subckt_ngspice_phrasing(self, tmp_path: Path):
+        # ngspice phrases a missing subcircuit differently from LTspice; without
+        # its own pattern the name was never captured, so find_model recovery
+        # hints stayed empty for ngspice missing-subckt failures.
+        log = tmp_path / "ng_subckt.log"
+        log.write_text("Error: unable to find subcircuit named 'lm741'\n")
+        assert extract_missing_refs(log) == ["lm741"]
+
     def test_dedupes_repeated_refs(self, tmp_path: Path):
         log = tmp_path / "dupes.log"
         log.write_text(

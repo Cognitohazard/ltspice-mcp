@@ -266,6 +266,35 @@ class TestSimulationRunnerHandleCompletion:
         assert job.status == "failed"
         assert job.error is not None and "no output" in job.error
 
+    def test_log_only_single_stepping_rung_is_recovered(
+        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        """No raw + a lone OP 'gmin stepping failed' rung: ngspice tries the next
+        method and may solve, so a single failed rung is not terminal. With no raw
+        to gate on, treat it as a completed log-only run, not a failure."""
+        job = _make_job(state_no_sim, work_dir)
+        log = work_dir / "recovered.log"
+        log.write_text("gmin stepping failed\nvout = 2.5\n")
+        sim_runner._handle_completion(
+            job.job_id, collect_run_outcome(str(work_dir / "missing.raw"), str(log)), state_no_sim
+        )
+        assert job.status == "completed"
+        assert job.error is None
+
+    def test_log_only_full_ladder_exhausted_fails(
+        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        """No raw + BOTH gmin AND source stepping failed is ngspice's genuine
+        no-bias-point signature (the whole ladder exhausted) — stays a failure."""
+        job = _make_job(state_no_sim, work_dir)
+        log = work_dir / "nobias.log"
+        log.write_text("gmin stepping failed\nsource stepping failed\n")
+        sim_runner._handle_completion(
+            job.job_id, collect_run_outcome(str(work_dir / "missing.raw"), str(log)), state_no_sim
+        )
+        assert job.status == "failed"
+        assert job.error is not None and "no output" in job.error
+
     def test_unreadable_raw_is_failure_not_log_only(self, work_dir: Path):
         """A raw whose stat fails for a reason other than absence (permissions,
         a flaky mount) must surface as a failure with the path preserved, not
