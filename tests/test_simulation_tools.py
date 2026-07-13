@@ -86,9 +86,11 @@ class TestSimulationWithoutSimulator:
 
         # Serialized (never overlapped) ...
         assert max_active == 1
-        # ... and each caller got a distinct snapshot beside the shared .net,
-        # both carrying the exported deck.
-        assert results[0] != results[1]
+        # ... and each caller got a content-addressed snapshot beside the shared
+        # .net, carrying its exported deck. Identical exports dedupe to one
+        # snapshot (content-hash name) so the files stay bounded per distinct
+        # deck, not one-per-run.
+        assert results[0] == results[1]
         for p in results:
             assert p.parent == net.parent
             assert p.name.startswith("race.run-") and p.suffix == ".net"

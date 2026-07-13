@@ -708,6 +708,19 @@ def build_simulation_summary(
         except Exception:
             pass
 
+        # Stepped ``.op`` runs the bias point per step, but LTspice only
+        # writes step 0 to the .raw — leaving the user thinking it's the
+        # only step. Two signals: ``.step name=value`` lines (only emitted
+        # for ``.tran``/``.ac`` steps) and the Newton-iteration counter
+        # (the only signal for stepped ``.op``). Detect it once here: it
+        # both warns the user and gates the OP-error demote below (step 0's
+        # data can't vouch for a later step the raw never carries).
+        op_log_steps: list[dict[str, float]] = []
+        op_iteration_count = 1
+        if step_count <= 1 and "operating" in sim_type.lower():
+            op_log_steps, op_iters = scan_op_step_log(text=log_text)
+            op_iteration_count = max(len(op_log_steps), op_iters, 1)
+
         # Raw-validity gate for OP "stepping failed" errors. The log-only
         # converged-check keys on LTspice's success wording, so an ngspice run
         # that recovered via an unannounced fallback leaves a false hard error.
@@ -715,11 +728,17 @@ def build_simulation_summary(
         # recover — demote those stepping-failure errors to warnings. A genuine
         # no-data run (NaN/±1e30 raw) fails the check and keeps the error, and
         # always-terminal failures (iteration limit) aren't candidates. Only
-        # loads waves when such an error exists, so the cost is paid rarely.
+        # demote when the raw covers every bias point: a stepped .op writes just
+        # step 0, whose finite data proves nothing about a later step that failed
+        # — keep the error there. Only loads waves when such an error exists.
         errs = summary.get("errors")
         if errs:
             demoted = [e for e in errs if is_op_stepping_failure(e)]
-            if demoted and _raw_node_data_is_finite(raw, trace_names, has_axis, step):
+            if (
+                demoted
+                and op_iteration_count <= 1
+                and _raw_node_data_is_finite(raw, trace_names, has_axis, step)
+            ):
                 kept = [e for e in errs if e not in demoted]
                 if kept:
                     summary["errors"] = kept
@@ -731,32 +750,22 @@ def build_simulation_summary(
                     for d in demoted
                 )
 
-        # Stepped ``.op`` runs the bias point per step, but LTspice only
-        # writes step 0 to the .raw — leaving the user thinking it's the
-        # only step. Two signals: ``.step name=value`` lines (only emitted
-        # for ``.tran``/``.ac`` steps) and the Newton-iteration counter
-        # (the only signal for stepped ``.op``). Single log walk picks up
-        # both.
-        if step_count <= 1 and "operating" in sim_type.lower():
-            log_steps, op_iters = scan_op_step_log(text=log_text)
-            iteration_count = max(len(log_steps), op_iters)
-            if iteration_count > 1:
-                if log_steps:
-                    param_name = next(iter(log_steps[0].keys()), "param")
-                    suggestion = (
-                        f"Convert to '.dc {param_name} START STOP STEP' to "
-                        "access every bias point."
-                    )
-                else:
-                    suggestion = (
-                        "Convert the parametric .op to '.dc <param> START STOP "
-                        "STEP' or wrap the .op inside a .tran to capture every "
-                        "bias point."
-                    )
-                warnings.append(
-                    f"Stepped .op detected: log shows {iteration_count} bias-"
-                    "point iterations but the .raw only carries step 0. " + suggestion
+        if op_iteration_count > 1:
+            if op_log_steps:
+                param_name = next(iter(op_log_steps[0].keys()), "param")
+                suggestion = (
+                    f"Convert to '.dc {param_name} START STOP STEP' to access every bias point."
                 )
+            else:
+                suggestion = (
+                    "Convert the parametric .op to '.dc <param> START STOP "
+                    "STEP' or wrap the .op inside a .tran to capture every "
+                    "bias point."
+                )
+            warnings.append(
+                f"Stepped .op detected: log shows {op_iteration_count} bias-"
+                "point iterations but the .raw only carries step 0. " + suggestion
+            )
 
         if warnings:
             summary["warnings"] = warnings

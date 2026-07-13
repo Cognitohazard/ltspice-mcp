@@ -937,11 +937,16 @@ def analyze_ac_structure(freqs: np.ndarray, H: np.ndarray) -> AcStructureResult:
         # asymptote. The fit's error norm is magnitude-weighted, so it can
         # under-count a high-frequency pole whose |H| is tiny — the fit then
         # looks authoritative at a too-low order. Surface the disagreement (both
-        # numbers, no verdict) when the asymptote implies MORE net poles.
-        asym_order = _hf_slope_order(
-            _running_slope(np.log10(freqs), mag_db, _SLOPE_WINDOW_DEC / 2.0)
-        )
-        if asym_order > net_order:
+        # numbers, no verdict) when the asymptote implies MORE net poles — but
+        # only when the tail slope has actually settled. If the sweep tops out
+        # inside a resonance/transition band the last-decade slope is a local,
+        # steeper value, not the asymptote, and would fire a false disagreement.
+        hf_slope = _running_slope(np.log10(freqs), mag_db, _SLOPE_WINDOW_DEC / 2.0)
+        tail = hf_slope[-max(3, hf_slope.size // 20) :]
+        tail = tail[np.isfinite(tail)]
+        settled = tail.size >= 3 and float(np.ptp(tail)) <= _DB_PER_ORDER / 2.0
+        asym_order = _hf_slope_order(hf_slope)
+        if settled and asym_order > net_order:
             observations.append(
                 {
                     "code": "order_disagreement",

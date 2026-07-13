@@ -407,9 +407,20 @@ class JobRegistry:
         resolved = self._claim_circuit_load(circuit_path)
         if resolved is None:
             return
-        loaded = await asyncio.to_thread(self._read_persisted_jobs, resolved)
-        if loaded is not None:
-            self._apply_loaded_jobs(*loaded)
+        applied = False
+        try:
+            loaded = await asyncio.to_thread(self._read_persisted_jobs, resolved)
+            if loaded is not None:
+                self._apply_loaded_jobs(*loaded)
+            applied = True
+        finally:
+            # The claim goes in before the cancellable read; if that read is
+            # cancelled (or the apply raises), release it so a later call
+            # retries instead of deduping to a permanent no-op that would leave
+            # an on-disk job unloadable. A failed read (loaded is None) keeps
+            # the claim, matching the sync path.
+            if not applied:
+                self._loaded_circuits.discard(resolved)
 
     def _apply_loaded_jobs(
         self,

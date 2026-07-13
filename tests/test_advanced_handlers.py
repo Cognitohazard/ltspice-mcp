@@ -556,6 +556,38 @@ class TestMonteCarloMismatchPreflight:
         warnings = result.structuredContent.get("warnings", [])
         assert not any("match 0 devices" in w for w in warnings), warnings
 
+    async def test_top_level_m_present_but_prefix_mismatch(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # A top-level M exists AND an X instance is present, but the rule targets
+        # a different prefix. The advice must call out the ref/prefix mismatch,
+        # not the subckt-PDK remediation — the M IS reachable, the rule missed it.
+        deck = work_dir / "mixed_mc.cir"
+        deck.write_text(
+            "* top-level M plus an X subckt instance\n"
+            "M1 d g 0 0 nch W=1u L=0.15u\n"
+            "X1 a b 0 0 nfet W=1u L=0.15u\n"
+            ".subckt nfet d g s b\n"
+            "MI d g s b nch\n"
+            ".ends\n"
+            ".model nch NMOS\n"
+            "V1 g 0 1\n"
+            ".op\n"
+            ".end\n"
+        )
+        result = await handle_configure_montecarlo(
+            ConfigureMonteCarloInput(
+                netlist=deck.name,
+                mismatch=[MonteCarloMismatchRule(prefix="Q", AVT=3e-3)],
+                num_runs=10,
+            ),
+            state_no_sim,
+        )
+        warnings = result.structuredContent.get("warnings", [])
+        assert any("match 0 devices" in w for w in warnings), warnings
+        assert any("prefix" in w.lower() for w in warnings), warnings
+        assert not any("subcircuit" in w.lower() for w in warnings), warnings
+
 
 class TestRunMonteCarlo:
     async def test_unknown_config(self, state_no_sim: SessionState):
