@@ -69,6 +69,37 @@ def _corner_near(result, f_hz: float, *, decades: float, kind: str | None = None
     return None
 
 
+class TestHfSlopeOrderDisagreement:
+    """The rational fit's error is magnitude-weighted, so it can under-count a
+    high-frequency pole whose |H| is tiny. _hf_slope_order reads the net order
+    off the HF magnitude asymptote as an independent cross-check, and an
+    order_disagreement observation surfaces a mismatch."""
+
+    def test_hf_slope_order_reads_asymptote(self):
+        from ltspice_mcp.lib.ac_structure import _hf_slope_order
+
+        assert _hf_slope_order(np.full(200, -20.0)) == 1
+        assert _hf_slope_order(np.full(200, -60.0)) == 3
+        # Only the HF tail matters: a flat body then a -40 dB/dec tail → order 2.
+        assert _hf_slope_order(np.concatenate([np.zeros(180), np.full(20, -40.0)])) == 2
+
+    def test_clean_responses_do_not_flag_disagreement(self):
+        # A well-fit response's fit order matches its asymptote — no false fire.
+        for H in (one_pole(1e3), rlc(1e4, 5.0), rhp_zero(5e3, 500.0)):
+            result = analyze_ac_structure(FREQS, H)
+            assert not any(o.get("code") == "order_disagreement" for o in result["observations"])
+
+    def test_undercounted_hf_pole_flags_disagreement(self):
+        # Three real poles, one high and low-|H|: the magnitude-weighted fit
+        # reads net order 2, but the -60 dB/dec asymptote implies 3. The
+        # order_disagreement observation must surface the gap.
+        H = 1.0 / ((1 + 1j * FREQS / 1e3) ** 2 * (1 + 1j * FREQS / 2e6))
+        result = analyze_ac_structure(FREQS, H)
+        assert result["net_order"] == 2  # fit under-counts
+        dis = [o for o in result["observations"] if o.get("code") == "order_disagreement"]
+        assert dis and "net order 3" in dis[0].get("detail", "")
+
+
 # ---- A. LIB: analyze_ac_structure on synthesized signals ------------------
 
 

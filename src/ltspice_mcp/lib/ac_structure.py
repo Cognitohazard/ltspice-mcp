@@ -294,6 +294,23 @@ def _slope_plateaus(slope: np.ndarray, log_f: np.ndarray) -> list[dict[str, floa
     return plateaus
 
 
+def _hf_slope_order(slope: np.ndarray) -> int:
+    """Net pole-zero excess implied by the high-frequency magnitude asymptote.
+
+    A rational response settles to ``-20·(net order) dB/decade``, so the median
+    magnitude slope over the top of the sweep divides by 20 to the asymptotic
+    net order. Independent of any rational fit — a magnitude-weighted fit can
+    under-count a high-frequency pole whose ``|H|`` is tiny, and this is the
+    cross-check that catches it (see the ``order_disagreement`` observation).
+    """
+    hf_slope = float(np.median(slope[-max(3, slope.size // 20) :]))
+    if not np.isfinite(hf_slope):
+        # A too-short or degenerate sweep has no readable asymptote — report
+        # order 0 (no poles read), which also skips the fit cross-check.
+        return 0
+    return round(-hf_slope / _DB_PER_ORDER)
+
+
 def _read_breakpoints(freqs: np.ndarray, mag_db: np.ndarray) -> tuple[int, list[_Breakpoint]]:
     """Net high-frequency order and the located breakpoints from the magnitude
     staircase. Returns ``(net_order, breakpoints)``.
@@ -301,8 +318,7 @@ def _read_breakpoints(freqs: np.ndarray, mag_db: np.ndarray) -> tuple[int, list[
     log_f = np.log10(freqs)
     slope = _running_slope(log_f, mag_db, _SLOPE_WINDOW_DEC / 2.0)
 
-    hf_slope = float(np.median(slope[-max(3, slope.size // 20) :]))
-    net_order = round(-hf_slope / _DB_PER_ORDER)
+    net_order = _hf_slope_order(slope)
 
     plateaus = _slope_plateaus(slope, log_f)
 
@@ -917,6 +933,28 @@ def analyze_ac_structure(freqs: np.ndarray, H: np.ndarray) -> AcStructureResult:
                 ),
             }
         )
+        # Cross-check the fit's order against the high-frequency magnitude
+        # asymptote. The fit's error norm is magnitude-weighted, so it can
+        # under-count a high-frequency pole whose |H| is tiny — the fit then
+        # looks authoritative at a too-low order. Surface the disagreement (both
+        # numbers, no verdict) when the asymptote implies MORE net poles.
+        asym_order = _hf_slope_order(
+            _running_slope(np.log10(freqs), mag_db, _SLOPE_WINDOW_DEC / 2.0)
+        )
+        if asym_order > net_order:
+            observations.append(
+                {
+                    "code": "order_disagreement",
+                    "detail": (
+                        f"The rational fit reports net order {net_order}, but the "
+                        f"high-frequency magnitude asymptote implies net order {asym_order} "
+                        f"({asym_order * -_DB_PER_ORDER:.0f} dB/dec roll-off). The fit's "
+                        "magnitude-weighted error can miss a high-frequency pole whose |H| is "
+                        "small; re-sweep to a higher frequency or check the plot's final slope "
+                        "to confirm the pole count."
+                    ),
+                }
+            )
     else:
         net_order, corners = _fuse_asymptotic(freqs, H, mag_db)
         method = "asymptotic_reading"
