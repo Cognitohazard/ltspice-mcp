@@ -46,9 +46,9 @@ No Makefile. CI: `.github/workflows/publish.yml` (test + publish to PyPI on vers
 
 `docs/TESTING.md` is the testing-practice doc: the absence-class blind spot path-walking stress tests cannot see (a missing or unusable-for-a-class capability), and the mechanisms that catch it — inverse-op closure (`test_dispatch.py::TestOpInverseClosure`), the archetype build battery (`test_circuit_asc.py::TestArchetypeBuildCoverage`), task-down coverage, and blind-artifact judging. Read it before adding a tool or an op.
 
-## Comments, docstrings, and commit messages
+## Comments, docstrings, commit messages, and branch names
 
-These are read by people outside this repo's internal process — keep internal jargon out of them. Do **not** use, in code comments, docstrings, or commit messages: severity codes (P0–P3), internal codenames for stress-test findings (e.g. J-KILL, J-MAXPAR), backlog item numbers (`open_followups` item N), or stress-test version numbers (v9/v10). Describe the actual behavior, condition, or bug in plain technical terms instead. Internal planning docs and the backlog may use that shorthand; shipped code and git history may not.
+These are read by people outside this repo's internal process — keep internal jargon out of them. Do **not** use, in code comments, docstrings, commit messages, or branch names: severity codes (P0–P3), internal codenames for stress-test findings (e.g. J-KILL, J-MAXPAR), backlog item numbers (`open_followups` item N), or stress-test/audit version numbers (v9/v10/v14). Name a branch for what it changes, not the internal batch it came from (`fix/asc-export-lock`, not `fix/v14-audit-batch`). Describe the actual behavior, condition, or bug in plain technical terms instead. Internal planning docs and the backlog may use that shorthand; shipped code, git history, and branch names may not.
 
 ## Architecture
 
