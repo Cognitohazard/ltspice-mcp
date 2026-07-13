@@ -182,6 +182,19 @@ def is_op_stepping_failure(text: str) -> bool:
     return any(phrase in lowered for phrase in _OP_STEPPING_FAILURE_PHRASES)
 
 
+def op_ladder_exhausted(errors: list[str]) -> bool:
+    """Whether EVERY OP stepping rung failed — ngspice's genuine no-solution mark.
+
+    A single failed rung (only ``gmin stepping failed``) is a recoverable
+    mid-ladder step; ngspice tries the next method. All rungs failing (both gmin
+    AND source stepping) is the floating-node/no-bias-point signature the log-only
+    path (no raw to gate on) uses to keep such a run classified as failed, while
+    a lone rung is treated as recovered.
+    """
+    blob = " ".join(errors).lower()
+    return all(phrase in blob for phrase in _OP_STEPPING_FAILURE_PHRASES)
+
+
 # Always-terminal convergence failures — no later success rescues these.
 _CONVERGENCE_FAILURE_PHRASES = ("iteration limit reached",)
 # Bare convergence / runtime messages with no prefix.
@@ -281,6 +294,15 @@ _RE_MISSING_MODEL_NGSPICE = re.compile(
 _RE_MISSING_SUBCKT = re.compile(
     r"Unknown subcircuit called in:\s+(.+?)\s*$",
     re.IGNORECASE | re.MULTILINE,
+)
+# ngspice phrasing for a missing subcircuit, e.g.:
+#   Error: unable to find subcircuit named 'lm741'
+# The name is captured directly (group 1), so it joins the model-name loop
+# rather than the LTspice last-token path — without it, an ngspice missing
+# subcircuit produced no structured missing-ref and no find_model recovery hint.
+_RE_MISSING_SUBCKT_NGSPICE = re.compile(
+    r"unable to find subcircuit named\s+['\"]?([A-Za-z0-9_.\-]+)['\"]?",
+    re.IGNORECASE,
 )
 
 
@@ -493,7 +515,7 @@ def missing_refs_from_text(text: str) -> list[str]:
     seen: set[str] = set()
     refs: list[str] = []
 
-    for regex in (_RE_MISSING_MODEL, _RE_MISSING_MODEL_NGSPICE):
+    for regex in (_RE_MISSING_MODEL, _RE_MISSING_MODEL_NGSPICE, _RE_MISSING_SUBCKT_NGSPICE):
         for m in regex.finditer(text):
             name = m.group(1)
             if name and name not in seen:
