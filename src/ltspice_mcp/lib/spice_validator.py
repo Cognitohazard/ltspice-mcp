@@ -131,6 +131,15 @@ def _leading_numeric_tokens(tokens: list[str]) -> list[float]:
     return nums
 
 
+def _finite_point_count(span: float) -> int | None:
+    """``int(span) + 1`` sample points for a swept span, or None if non-finite.
+
+    Guards ``int(...)`` against a pathological directive whose span overflows to
+    inf/nan (e.g. ``.tran 1e-200 1e200``) — those are unestimable, not a crash.
+    """
+    return int(span) + 1 if math.isfinite(span) else None
+
+
 def _estimate_tran_points(line: str) -> int | None:
     # .tran <Tstep> <Tstop> [<Tstart> [<Tmax>]] — points ≈ (Tstop-Tstart)/Tstep.
     # A bare Tstop or Tstep=0 is auto-timestep: unknowable up front → None.
@@ -141,10 +150,7 @@ def _estimate_tran_points(line: str) -> int | None:
     tstart = nums[2] if len(nums) >= 3 else 0.0
     if tstep <= 0 or tstop <= tstart:
         return None
-    pts = (tstop - tstart) / tstep
-    if not math.isfinite(pts):
-        return None
-    return int(pts) + 1
+    return _finite_point_count((tstop - tstart) / tstep)
 
 
 def _estimate_ac_points(line: str) -> int | None:
@@ -160,16 +166,12 @@ def _estimate_ac_points(line: str) -> int | None:
     if n <= 0 or fstart <= 0 or fstop <= fstart:
         return None
     if kind == "dec":
-        pts = n * math.log10(fstop / fstart)
-    elif kind == "oct":
-        pts = n * math.log2(fstop / fstart)
-    elif kind == "lin":
-        pts = n
-    else:
-        return None
-    if not math.isfinite(pts):
-        return None
-    return int(pts) + 1
+        return _finite_point_count(n * math.log10(fstop / fstart))
+    if kind == "oct":
+        return _finite_point_count(n * math.log2(fstop / fstart))
+    if kind == "lin":
+        return _finite_point_count(n)
+    return None
 
 
 def _estimate_dc_points(line: str) -> int | None:
@@ -186,10 +188,10 @@ def _estimate_dc_points(line: str) -> int | None:
         start, stop, incr = nums
         if incr == 0:
             break
-        span = abs((stop - start) / incr)
-        if not math.isfinite(span):
+        count = _finite_point_count(abs((stop - start) / incr))
+        if count is None:
             return None
-        total *= max(int(span) + 1, 1)
+        total *= max(count, 1)
         found = True
         i += 4
     return total if found else None

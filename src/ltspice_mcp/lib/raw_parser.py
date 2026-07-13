@@ -711,12 +711,21 @@ def build_simulation_summary(
 
         # How many bias-point solves the log records — each OP-solve block opens
         # with a "Direct Newton iteration" line (whether it converges or fails),
-        # and a stepped ``.op`` writes only step 0 to the .raw. Detect it once
-        # here: it both warns the user and gates the OP-error demote below (step
-        # 0's data can't vouch for a later step the raw never carries). ``.step
-        # name=value`` lines are the extra signal when LTspice emits them.
-        op_log_steps, op_solves = scan_op_step_log(text=log_text)
-        op_solve_count = max(len(op_log_steps), op_solves)
+        # and a stepped ``.op`` writes only step 0 to the .raw. It both warns the
+        # user (operating-point runs) and gates the OP-error demote below (step
+        # 0's data can't vouch for a later step the raw never carries). Only scan
+        # when a consumer needs it — the demote needs it solely when an OP
+        # stepping-failure error is present — so the common clean .tran/.ac path
+        # skips a full log walk. ``.step name=value`` lines add signal when
+        # LTspice emits them.
+        op_log_steps: list[dict[str, float]] = []
+        op_solve_count = 1
+        _pending_errs = summary.get("errors")
+        if "operating" in sim_type.lower() or (
+            _pending_errs and any(is_op_stepping_failure(e) for e in _pending_errs)
+        ):
+            op_log_steps, op_solves = scan_op_step_log(text=log_text)
+            op_solve_count = max(len(op_log_steps), op_solves, 1)
 
         # Raw-validity gate for OP "stepping failed" errors. The log-only
         # converged-check keys on LTspice's success wording, so an ngspice run
