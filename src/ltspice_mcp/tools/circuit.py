@@ -2837,7 +2837,11 @@ async def handle_export_netlist(
             # create_netlist launches the LTspice binary and blocks until it
             # exits; offload it so the shared event loop stays responsive
             # (CLAUDE.md offload contract — it touches no cached editors).
-            net_path = await asyncio.to_thread(ltspice_cls.create_netlist, str(asc_path))
+            # Bounded by the sim timeout: LTspice can hang on a modal dialog,
+            # and the export lock is held across this call.
+            net_path = await asyncio.to_thread(
+                ltspice_cls.create_netlist, str(asc_path), timeout=state.config.default_timeout
+            )
             net_path = Path(net_path)
         except Exception as e:
             raise NetlistError(f"LTspice netlist export failed: {e}") from e
