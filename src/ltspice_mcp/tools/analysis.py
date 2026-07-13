@@ -428,7 +428,7 @@ def _run_meta(job_id: str | None, run_index: int, state: SessionState) -> dict |
     return {"run_index": run.index, "params": dict(run.params)}
 
 
-def _resolve_artifact_dest(
+async def _resolve_artifact_dest(
     *,
     out_dir: str | None,
     job_id: str | None,
@@ -453,7 +453,7 @@ def _resolve_artifact_dest(
         out_path = (dest_anchor / filename).resolve()
     else:
         if job_id:
-            dest_anchor = services.resolve_job(job_id, state).netlist.parent
+            dest_anchor = (await services.resolve_job_async(job_id, state)).netlist.parent
         else:
             dest_anchor = safe_path(raw_file, state).parent  # type: ignore[arg-type]
         # Sidecar next to the anchor — but if the anchor is already inside a
@@ -1488,7 +1488,7 @@ async def handle_export_waveform(args: ExportWaveformInput, state: SessionState)
     ts = _parse_time(args.t_start, "t_start")
     te = _parse_time(args.t_end, "t_end")
 
-    out_path = _resolve_artifact_dest(
+    out_path = await _resolve_artifact_dest(
         out_dir=args.out_dir,
         job_id=args.job_id,
         raw_file=args.raw_file,
@@ -2414,8 +2414,9 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
     requested = None
     source_amplitudes = None
     if args.job_id:
+        job_netlist = (await services.resolve_job_async(args.job_id, state)).netlist
         requested, source_amplitudes = await asyncio.to_thread(
-            deck_observation_inputs, services.resolve_job(args.job_id, state).netlist
+            deck_observation_inputs, job_netlist
         )
 
     try:
@@ -3785,7 +3786,7 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
     per_run: list[dict] = []
     caveats: list[str] = []
     if args.job_id is not None:
-        job = services.resolve_job(args.job_id, state)
+        job = await services.resolve_job_async(args.job_id, state)
         if isinstance(job, BatchJob):
             flat_values, run_count, axis_map, run_diags, per_run, at_map = (
                 _aggregate_job_measurements(job)
@@ -5702,7 +5703,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
 
     max_points = min(args.max_points or _DEFAULT_PLOT_MAX_POINTS, _PLOT_MAX_POINTS_CEILING)
 
-    out_path = _resolve_artifact_dest(
+    out_path = await _resolve_artifact_dest(
         out_dir=args.out_dir,
         job_id=args.job_id,
         raw_file=args.raw_file,

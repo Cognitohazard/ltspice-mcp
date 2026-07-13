@@ -236,6 +236,35 @@ class JobRegistry:
         self.jobs[job.job_id] = fresh
         return fresh
 
+    async def refresh_foreign_job_async(
+        self, job: SimulationJob | BatchJob
+    ) -> SimulationJob | BatchJob:
+        """Loop-safe ``refresh_foreign_job``: offload the sidecar re-read.
+
+        Same contract as the sync version, but the single-file ``load_job``
+        read runs in a worker thread so a wedged filesystem can't freeze the
+        loop. The guard (no IO for own/terminal jobs) and the registry swap
+        both stay on the loop; only the foreign non-terminal case does IO.
+        """
+        if (
+            not self.persist_enabled
+            or job.owner_pid in (0, os.getpid())
+            or job.status not in NON_TERMINAL_LIVE_STATUSES
+        ):
+            return job
+        try:
+            from ltspice_mcp.lib import job_store
+
+            fresh = await asyncio.to_thread(job_store.load_job, job.job_id, job.netlist)
+        except Exception as e:
+            logger.debug("refresh_foreign_job %s: %s", job.job_id, e)
+            return job
+        if fresh is None:
+            return job
+        # On the loop here (awaited from a handler) — safe to swap the entry.
+        self.jobs[job.job_id] = fresh
+        return fresh
+
     def refreshed_jobs(self) -> list[SimulationJob | BatchJob]:
         """Snapshot of every job, with parallel sessions' live jobs re-read.
 
@@ -320,31 +349,74 @@ class JobRegistry:
     # Recovery
     # ------------------------------------------------------------------
 
+    def _claim_circuit_load(self, circuit_path: Path) -> Path | None:
+        """Resolve + dedup a circuit for a one-shot load; None if nothing to do.
+
+        Adds to ``_loaded_circuits`` BEFORE the read so a concurrent dispatch
+        for the same circuit skips it (benign: the second caller proceeds
+        without the jobs for the brief read window, then sees them applied).
+        """
+        if not self.persist_enabled:
+            return None
+        try:
+            resolved = circuit_path.resolve()
+        except OSError:
+            return None
+        if resolved in self._loaded_circuits:
+            return None
+        self._loaded_circuits.add(resolved)
+        return resolved
+
+    @staticmethod
+    def _read_persisted_jobs(resolved: Path) -> tuple[list, list] | None:
+        """File-read half of the load — offloadable (touches no registry state)."""
+        try:
+            from ltspice_mcp.lib import job_store
+
+            return job_store.load_jobs_for_circuit(resolved)
+        except Exception as e:
+            logger.warning("Failed to load persisted jobs for %s: %s", resolved, e)
+            return None
+
     def ensure_loaded_for(self, circuit_path: Path) -> None:
         """Load any persisted jobs for this circuit into memory, once per session.
 
         No-op when persistence is disabled, the path is not a circuit file,
         or the sidecar directory doesn't exist. Jobs in non-terminal states
         at load time are marked ``interrupted`` (their owning server is gone).
+
+        Synchronous — for off-loop callers (startup ``preload_recent``). On the
+        event loop use ``ensure_loaded_for_async`` so the sidecar read (a glob +
+        JSON reads that stalls the whole loop on a wedged ``/mnt/c``) is offloaded.
         """
-        if not self.persist_enabled:
+        resolved = self._claim_circuit_load(circuit_path)
+        if resolved is None:
             return
-        try:
-            resolved = circuit_path.resolve()
-        except OSError:
-            return
-        if resolved in self._loaded_circuits:
-            return
-        self._loaded_circuits.add(resolved)
+        loaded = self._read_persisted_jobs(resolved)
+        if loaded is not None:
+            self._apply_loaded_jobs(*loaded)
 
-        try:
-            from ltspice_mcp.lib import job_store
+    async def ensure_loaded_for_async(self, circuit_path: Path) -> None:
+        """Loop-safe ``ensure_loaded_for``: offload the read, apply on the loop.
 
-            sim_jobs, batch_jobs = job_store.load_jobs_for_circuit(resolved)
-        except Exception as e:
-            logger.warning("Failed to load persisted jobs for %s: %s", resolved, e)
+        The sidecar read runs in a worker thread (an unresponsive filesystem
+        must not freeze the shared event loop — this runs on the common tool-
+        dispatch path). The registry mutation stays on the loop, per the
+        loop-only contract that also governs the cached editors.
+        """
+        resolved = self._claim_circuit_load(circuit_path)
+        if resolved is None:
             return
+        loaded = await asyncio.to_thread(self._read_persisted_jobs, resolved)
+        if loaded is not None:
+            self._apply_loaded_jobs(*loaded)
 
+    def _apply_loaded_jobs(
+        self,
+        sim_jobs: list[SimulationJob],
+        batch_jobs: list[BatchJob],
+    ) -> None:
+        """Registry-mutation half of the load — loop-only (mutates ``self.jobs``)."""
         for sj in sim_jobs:
             if sj.job_id in self.jobs:
                 continue
