@@ -203,6 +203,34 @@ def resolve_job(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
     return state.job_registry.refresh_foreign_job(job)
 
 
+async def resolve_job_async(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
+    """Loop-safe ``resolve_job``: offload the foreign-job sidecar re-read.
+
+    Use from async handlers so the parallel-session refresh (a sidecar read
+    that stalls the loop on a wedged filesystem) runs in a worker thread. Same
+    semantics otherwise — raises ``JobNotFoundError`` for an unknown id.
+    """
+    job = state.all_jobs.get(job_id)
+    if job is None:
+        raise JobNotFoundError(f"Job not found: {job_id}")
+    return await state.job_registry.refresh_foreign_job_async(job)
+
+
+async def resolve_batch_job_async(job_id: str, state: SessionState) -> BatchJob:
+    """Loop-safe ``resolve_batch_job`` (offloaded foreign refresh)."""
+    try:
+        job = await resolve_job_async(job_id, state)
+    except JobNotFoundError:
+        raise BatchJobError(f"Batch job not found: {job_id}") from None
+    if isinstance(job, SimulationJob):
+        raise BatchJobError(
+            f"Job '{job_id}' is a single simulation job — read its results with "
+            "check_job (status + completion summary) or query_value (job_id + "
+            "run_index) for a signal value."
+        )
+    return job
+
+
 def resolve_simulation_job(job_id: str, state: SessionState) -> SimulationJob:
     """Look up a single-simulation job by id.
 

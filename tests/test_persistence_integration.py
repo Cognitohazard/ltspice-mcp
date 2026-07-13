@@ -97,6 +97,29 @@ class TestEnsureJobsLoadedFor:
         state.ensure_jobs_loaded_for(circuit)
         assert len(state.jobs) == 1
 
+    @pytest.mark.asyncio
+    async def test_async_loader_matches_sync(self, state: SessionState, tmp_path: Path) -> None:
+        # ensure_loaded_for_async offloads the sidecar read but must apply the
+        # same registry state as the sync path (the loop-freeze fix on the common
+        # dispatch path), and dedup on second call the same way.
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        job_store.save_job(
+            SimulationJob(
+                job_id="sim_async",
+                netlist=circuit,
+                simulator="LTspice",
+                status="completed",
+                started_at=now(),
+                completed_at=now(),
+            )
+        )
+        assert "sim_async" not in state.jobs
+        await state.ensure_jobs_loaded_for_async(circuit)
+        assert "sim_async" in state.jobs
+        await state.ensure_jobs_loaded_for_async(circuit)
+        assert len(state.jobs) == 1
+
     def test_reload_dedupes_against_union_store(self, state: SessionState, tmp_path: Path) -> None:
         """A job id already present in the union store is skipped on load —
         the in-memory object (e.g. a job resubmitted this session) is never

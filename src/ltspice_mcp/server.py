@@ -69,7 +69,7 @@ _recent_touch_tasks: set[asyncio.Task[None]] = set()
 garbage-collectable while pending; each task discards itself when done."""
 
 
-def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
+async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     """Side effects for any tool call that references a circuit file.
 
     Loads the circuit's persisted jobs (once per session) and bumps it to
@@ -78,14 +78,16 @@ def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     ``SessionState._touched_recent`` so repeated tool calls on the same
     circuit don't rewrite the file each time.
 
-    The sidecar job load stays on the loop (small per-circuit JSON files,
-    and it mutates the JobRegistry). The recent-index write is fire-and-
-    forget: ``recent.touch`` can poll a contended cross-process lock for
-    up to 10 s, and a best-effort bookkeeping write must not gate tool
+    The sidecar job load's file read is offloaded (a glob + JSON reads on a
+    wedged ``/mnt/c`` would otherwise freeze the whole loop from this common
+    dispatch path); its registry mutation stays on the loop. It is awaited so
+    a job the handler is about to read is present. The recent-index write is
+    fire-and-forget: ``recent.touch`` can poll a contended cross-process lock
+    for up to 10 s, and a best-effort bookkeeping write must not gate tool
     dispatch on that. The debounce set is updated before the write's first
-    await, so back-to-back calls cannot double-write. A touch still in
-    flight at shutdown may be lost — acceptable for best-effort state, and
-    the atomic write keeps ``recent.json`` consistent either way.
+    await, so back-to-back calls cannot double-write. A touch still in flight
+    at shutdown may be lost — acceptable for best-effort state, and the atomic
+    write keeps ``recent.json`` consistent either way.
     """
     raw = _extract_circuit_path(arguments)
     if not raw:
@@ -96,7 +98,7 @@ def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
         return
     if resolved.suffix.lower() not in CIRCUIT_EXTENSIONS:
         return
-    state.ensure_jobs_loaded_for(resolved)
+    await state.ensure_jobs_loaded_for_async(resolved)
     task = asyncio.create_task(state.note_recent_circuit(resolved))
     _recent_touch_tasks.add(task)
     task.add_done_callback(_recent_touch_tasks.discard)
@@ -520,7 +522,7 @@ async def call_tool(name: str, arguments: dict | None):
     # Lazy-load persisted jobs for the circuit this tool is operating on,
     # and bump it in the recent-circuits index. Best-effort; errors swallowed;
     # the index write runs as a background task so it never gates dispatch.
-    _notice_circuit(arguments, state)
+    await _notice_circuit(arguments, state)
 
     # Invoke handler — enrich known errors with actionable guidance.
     # Exceptions propagate to the MCP SDK which sets isError=True.

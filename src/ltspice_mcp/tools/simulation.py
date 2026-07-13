@@ -518,8 +518,8 @@ def _read_log_only_payload(log_file: Path) -> tuple[list[str], list[str], dict, 
         meas = parse_measurements(log_file)
         measurements = meas["measurements"]
         failed = meas["failed_measurements"]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("parse_measurements failed for %s: %s", log_file, e)
     return diagnostics["warnings"], diagnostics["errors"], measurements, failed
 
 
@@ -811,7 +811,7 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
     # Single-sim and batch jobs share one store; route by type. Batch
     # (sweep/MC) jobs get a concise status here pointing at the richer
     # per-run view in batch_results.
-    resolved = services.resolve_job(job_id, state)
+    resolved = await services.resolve_job_async(job_id, state)
     if isinstance(resolved, BatchJob):
         return _check_batch_job(resolved, fmt)
     job = resolved
@@ -1101,7 +1101,7 @@ async def handle_cancel_job(args: CancelJobInput, state: SessionState) -> types.
     """
     job_id = args.job_id
 
-    job = services.resolve_job(job_id, state)
+    job = await services.resolve_job_async(job_id, state)
 
     # Check if job is running
     if job.status not in NON_TERMINAL_LIVE_STATUSES:

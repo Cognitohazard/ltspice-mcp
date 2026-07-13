@@ -1265,7 +1265,7 @@ async def handle_batch_results(args: GetBatchResultsInput, state: SessionState):
     job_id = args.job_id
     signal = args.signal
     fmt = args.format
-    batch_job = services.resolve_batch_job(job_id, state)
+    batch_job = await services.resolve_batch_job_async(job_id, state)
 
     if signal is None:
         data = await services.get_batch_status(batch_job)

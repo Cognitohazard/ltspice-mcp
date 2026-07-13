@@ -294,6 +294,23 @@ class TestOwnerPidLiveness:
         assert fresh.status == "completed"
         assert registry.jobs["sim_1_refresh"] is fresh
 
+    async def test_refresh_foreign_job_async_matches_sync(
+        self, work_dir: Path, live_peer_pid: int
+    ):
+        # The async variant offloads the sidecar read (loop-freeze fix) but must
+        # produce the same result + registry swap as the sync path on a loop.
+        registry = JobRegistry(persist_enabled=True)
+        stale = _make_running_job(work_dir, "sim_1_async_refresh", live_peer_pid)
+        registry.jobs[stale.job_id] = stale
+        done = _make_running_job(work_dir, "sim_1_async_refresh", live_peer_pid)
+        done.status = "completed"
+        done.completed_at = now()
+        job_store.save_job(done)
+
+        fresh = await registry.refresh_foreign_job_async(stale)
+        assert fresh.status == "completed"
+        assert registry.jobs["sim_1_async_refresh"] is fresh
+
     def test_refresh_off_loop_returns_fresh_without_registry_swap(
         self, work_dir: Path, live_peer_pid: int
     ):
