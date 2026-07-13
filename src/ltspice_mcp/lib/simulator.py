@@ -234,6 +234,20 @@ def simulator_dialect(simulator_class: type | None) -> str | None:
     return _DIALECT_MAP.get(simulator_class.__name__)
 
 
+def dialect_for_simulator_name(name: str | None) -> str | None:
+    """``RawRead`` dialect for a simulator class *name* (e.g. ``job.simulator``).
+
+    Same mapping as :func:`simulator_dialect` but keyed off the recorded name
+    string, so a persisted job's dialect resolves even when that simulator is
+    no longer configured (an ngspice sweep read back under an LTspice-only
+    session still parses as ngspice). LTspice / unknown names → ``None``
+    (spicelib auto-detects from the ``Command:`` header).
+    """
+    if not name:
+        return None
+    return _DIALECT_MAP.get(name)
+
+
 def detect_simulators(
     config: ServerConfig | None = None,
     diagnostics: list[str] | None = None,

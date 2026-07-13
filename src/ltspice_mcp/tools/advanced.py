@@ -451,6 +451,19 @@ def _netlist_component_refs(netlist_path) -> set[str]:
     return {card.instance_ref.upper() for card in lex(text).cards if card.instance_ref}
 
 
+def _x_instance_is_fet_like(card) -> bool:
+    """Whether an ``X`` subckt instance carries both W= and L= (a PDK-FET call).
+
+    Distinguishes a foundry MOS subcircuit (``X1 d g s b nfet W=1u L=0.15u``),
+    which the Pelgrom mismatch preflight should flag, from a plain macro
+    instance (an op-amp, a behavioral block) that has no W/L and isn't a FET.
+    """
+    if not (card.instance_ref or "").upper().startswith("X"):
+        return False
+    tokens = card.body.upper().split()
+    return any(t.startswith("W=") for t in tokens) and any(t.startswith("L=") for t in tokens)
+
+
 # ---------------------------------------------------------------------------
 # Handler 1: configure_sweep
 # ---------------------------------------------------------------------------
@@ -733,17 +746,18 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
         dim_sizes.append(len(values))
     total_runs = prod(dim_sizes) if dim_sizes else 0
 
+    default_simulator = state.default_simulator
+    assert default_simulator is not None  # guaranteed by require_simulator above
+
     job_id = generate_batch_job_id("sweep")
     batch_job = BatchJob(
         job_id=job_id,
         job_type="sweep",
         netlist=config.netlist,
         total_runs=total_runs,
+        simulator=default_simulator.__name__,
         sweep_config=config,
     )
-
-    default_simulator = state.default_simulator
-    assert default_simulator is not None  # guaranteed by require_simulator above
     # On LTspice .op batches, run an augmented copy carrying '.options logopinfo'
     # so each run's log exposes per-device op points for operating_point to read
     # back by name. No-op for ngspice / non-.op decks. The runner reads this as
@@ -1001,10 +1015,11 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
                         "matched the rule's reference/prefix — check the mismatch rule's "
                         "target."
                     )
-                elif any(
-                    (card.instance_ref or "").upper().startswith("X")
-                    for card in lex(mm_text).cards
-                ):
+                elif any(_x_instance_is_fet_like(card) for card in lex(mm_text).cards):
+                    # A subckt instance carrying W=/L= is a PDK-FET call; per-instance
+                    # mismatch reaches only top-level M, so this run has zero spread.
+                    # (A plain X macro without W/L — e.g. an op-amp — isn't a FET and
+                    # falls through to the neutral message below.)
                     detail = (
                         " The netlist's transistors are subcircuit instances (X…), where "
                         "foundry-PDK FETs live; per-instance mismatch reaches only top-level "
@@ -1104,17 +1119,18 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
 
     require_simulator(state)
 
+    default_simulator = state.default_simulator
+    assert default_simulator is not None  # guaranteed by require_simulator above
+
     job_id = generate_batch_job_id("mc")
     batch_job = BatchJob(
         job_id=job_id,
         job_type="montecarlo",
         netlist=config.netlist,
         total_runs=config.num_runs,
+        simulator=default_simulator.__name__,
         mc_config=config,
     )
-
-    default_simulator = state.default_simulator
-    assert default_simulator is not None  # guaranteed by require_simulator above
     # On LTspice .op batches, run an augmented copy carrying '.options logopinfo'
     # so each run's log exposes per-device op points for operating_point to read
     # back by name. No-op for ngspice / non-.op decks. The runner reads this as
@@ -1303,7 +1319,7 @@ async def handle_batch_results(args: GetBatchResultsInput, state: SessionState):
         offset=offset,
         limit=limit,
         at=at_value,
-        dialect=state.raw_dialect,
+        dialect=services.dialect_for_job(batch_job, state),
     )
     hint = _step_collapse_hint(data)
     if hint is not None:

@@ -549,22 +549,23 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     return metrics
 
 
-def _raw_node_data_is_finite(
-    raw: RawRead, trace_names: list[str], has_axis: bool, step: int
-) -> bool:
-    """Whether the raw's node traces hold real, finite data (a solved bias point).
+def _raw_node_data_is_finite(raw: RawRead, trace_names: list[str], step: int) -> bool:
+    """Whether the raw holds a real, finite NODE VOLTAGE (a solved bias point).
 
     ngspice can print an OP ``<method> stepping failed`` line, recover via a
     later method it does not announce in wording this parser recognizes, and
     still write a valid raw — but it ALSO writes a rail-pinned/NaN raw on a
     genuine floating-node failure and exits 0. The log alone can't tell recovery
-    from failure; the data can. Returns True only when at least one non-axis
-    trace was checked and every checked trace is finite and off the ~1e30 rail.
+    from failure; the data can. Only node-voltage traces (``V(...)``) count: a
+    failing ``.op`` can still write a finite branch current or device-parameter
+    trace (``.save i(V1)``, ``@m1[gm]``) while the node voltage sits at NaN/rail,
+    so a non-voltage trace must not vouch for a bias point that didn't converge.
+    Returns True only when at least one voltage trace was checked and every
+    checked voltage is finite and off the ~1e30 rail.
     """
-    axis = trace_names[0] if (has_axis and trace_names) else None
     checked = 0
     for name in trace_names:
-        if name == axis:
+        if not name.lower().startswith("v("):
             continue
         try:
             arr = np.asarray(raw.get_wave(name, step=step))
@@ -708,18 +709,14 @@ def build_simulation_summary(
         except Exception:
             pass
 
-        # Stepped ``.op`` runs the bias point per step, but LTspice only
-        # writes step 0 to the .raw — leaving the user thinking it's the
-        # only step. Two signals: ``.step name=value`` lines (only emitted
-        # for ``.tran``/``.ac`` steps) and the Newton-iteration counter
-        # (the only signal for stepped ``.op``). Detect it once here: it
-        # both warns the user and gates the OP-error demote below (step 0's
-        # data can't vouch for a later step the raw never carries).
-        op_log_steps: list[dict[str, float]] = []
-        op_iteration_count = 1
-        if step_count <= 1 and "operating" in sim_type.lower():
-            op_log_steps, op_iters = scan_op_step_log(text=log_text)
-            op_iteration_count = max(len(op_log_steps), op_iters, 1)
+        # How many bias-point solves the log records — each OP-solve block opens
+        # with a "Direct Newton iteration" line (whether it converges or fails),
+        # and a stepped ``.op`` writes only step 0 to the .raw. Detect it once
+        # here: it both warns the user and gates the OP-error demote below (step
+        # 0's data can't vouch for a later step the raw never carries). ``.step
+        # name=value`` lines are the extra signal when LTspice emits them.
+        op_log_steps, op_solves = scan_op_step_log(text=log_text)
+        op_solve_count = max(len(op_log_steps), op_solves)
 
         # Raw-validity gate for OP "stepping failed" errors. The log-only
         # converged-check keys on LTspice's success wording, so an ngspice run
@@ -727,17 +724,20 @@ def build_simulation_summary(
         # When the raw actually holds finite, off-rail node data, the solve DID
         # recover — demote those stepping-failure errors to warnings. A genuine
         # no-data run (NaN/±1e30 raw) fails the check and keeps the error, and
-        # always-terminal failures (iteration limit) aren't candidates. Only
-        # demote when the raw covers every bias point: a stepped .op writes just
-        # step 0, whose finite data proves nothing about a later step that failed
-        # — keep the error there. Only loads waves when such an error exists.
+        # always-terminal failures (iteration limit) aren't candidates. Demote
+        # only when the raw covers the WHOLE run: a single solve block
+        # (op_solve_count <= 1) written to a single-step raw (step_count <= 1). A
+        # stepped .op (raw = step 0, log shows >1 solve) or a multi-step raw
+        # (later steps not checked here) keeps the error — step 0's finite data
+        # can't clear a failure that belongs to a step the raw can't speak for.
         errs = summary.get("errors")
         if errs:
             demoted = [e for e in errs if is_op_stepping_failure(e)]
             if (
                 demoted
-                and op_iteration_count <= 1
-                and _raw_node_data_is_finite(raw, trace_names, has_axis, step)
+                and step_count <= 1
+                and op_solve_count <= 1
+                and _raw_node_data_is_finite(raw, trace_names, step)
             ):
                 kept = [e for e in errs if e not in demoted]
                 if kept:
@@ -750,7 +750,7 @@ def build_simulation_summary(
                     for d in demoted
                 )
 
-        if op_iteration_count > 1:
+        if op_solve_count > 1 and "operating" in sim_type.lower():
             if op_log_steps:
                 param_name = next(iter(op_log_steps[0].keys()), "param")
                 suggestion = (
@@ -763,7 +763,7 @@ def build_simulation_summary(
                     "bias point."
                 )
             warnings.append(
-                f"Stepped .op detected: log shows {op_iteration_count} bias-"
+                f"Stepped .op detected: log shows {op_solve_count} bias-"
                 "point iterations but the .raw only carries step 0. " + suggestion
             )
 

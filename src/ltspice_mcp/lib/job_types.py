@@ -204,6 +204,11 @@ class BatchJob:
     job_type: Literal["sweep", "montecarlo"]
     netlist: Path
     total_runs: int
+    # Class name of the simulator the batch ran on (e.g. "NGspiceSimulator"),
+    # so its raw results parse with that simulator's dialect even after a
+    # restart under a different default. "" = unknown (old sidecar) → the
+    # reader falls back to the session default. See services.dialect_for_job.
+    simulator: str = ""
     completed_runs: int = 0
     failed_runs: int = 0
     status: Literal["running", "completed", "failed", "cancelled", "interrupted"] = "running"
