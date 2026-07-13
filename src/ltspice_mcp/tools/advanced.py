@@ -16,6 +16,8 @@ from ltspice_mcp.lib.montecarlo import (
     ModelTolerance,
     ParamTolerance,
     ToleranceSpec,
+    extract_mosfet_instances,
+    find_mismatch_rule,
 )
 from ltspice_mcp.lib.runner_base import discard_logopinfo_netlist
 from ltspice_mcp.lib.spice_lex import lex
@@ -977,6 +979,34 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
                     f"netlist — they will perturb nothing and the variation will be "
                     f"understated. Check the reference designators."
                 )
+    # Mismatch preflight: Pelgrom per-instance mismatch reaches only top-level
+    # M devices. Foundry-PDK FETs are X-prefix subcircuit instances, so a
+    # mismatch-only run over a PDK deck would perturb nothing and report a
+    # clean run with zero mismatch spread — surface that instead of hiding it.
+    if mismatch_rules:
+        try:
+            mm_text = netlist_path.read_text(errors="replace")
+        except OSError:
+            mm_text = ""
+        if mm_text:
+            instances = extract_mosfet_instances(mm_text)
+            matched = [i for i in instances if find_mismatch_rule(i.ref, mismatch_rules)]
+            if not matched:
+                has_subckt_instances = any(
+                    (card.instance_ref or "").upper().startswith("X")
+                    for card in lex(mm_text).cards
+                )
+                detail = (
+                    " The netlist's transistors are subcircuit instances (X…), where "
+                    "foundry-PDK FETs live; per-instance mismatch reaches only top-level "
+                    "M devices, so this run would have zero mismatch spread. Use this "
+                    "tool's model_tolerances (per-.MODEL parameter perturbation) or the "
+                    "foundry's native statistical corner instead."
+                    if has_subckt_instances
+                    else " No top-level M device with parseable W/L was found to apply it to."
+                )
+                warnings.append(f"Mismatch (Pelgrom) rule(s) match 0 devices.{detail}")
+
     warnings.extend(_ngspice_preflight_warnings(netlist_path, state))
 
     text = (
