@@ -210,3 +210,56 @@ class TestOffsetAwareRawRead:
         self._write_ascii_raw(raw_file, plotname="DC transfer characteristic", offset=1.96e-4)
         raw = OffsetAwareRawRead(str(raw_file), traces_to_read="*", dialect="ltspice")
         assert np.asarray(raw.get_axis())[0] == pytest.approx(0.0)
+
+
+class TestMultiPlotNoiseRaw:
+    """An ngspice ``.noise`` raw is two ASCII plots (spectral density, then
+    integrated noise) with no blank line between them. Stock spicelib's
+    trailing-empty-line skip infinite-loops on the second plot's header,
+    which — parsed synchronously — hangs the whole server. The install-time
+    guard must break that loop and still read both plots.
+    """
+
+    def test_guard_breaks_reread_of_next_plot_header(self):
+        # Simulate the trailing-skip loop's pathological move directly: read a
+        # non-empty line, seek back to it, read again. The guard must return a
+        # one-shot empty read the second time so the loop can break.
+        import io
+
+        from ltspice_mcp.lib.raw_parser import _MultiPlotAsciiGuard
+
+        buf = io.BytesIO(b"Title: plot 2\nDate: ...\n")
+        g = _MultiPlotAsciiGuard(buf)
+        cursor = g.tell()
+        first = g.readline()
+        assert first.strip()  # non-empty (the next plot's header)
+        g.seek(cursor)  # trailing-skip loop rewinds onto it
+        second = g.readline()
+        assert second == b""  # guard breaks the loop instead of re-reading forever
+        # After the one-shot break the cursor is left on the header for the
+        # next plot's reader (position unchanged, header not consumed).
+        assert g.tell() == cursor
+
+    def test_two_plot_noise_raw_parses_without_hanging(self):
+        # Integration: the real captured artifact that used to wedge the server.
+        # Run the parse in a worker thread with a hard deadline so a regression
+        # fails the test fast instead of hanging the whole suite.
+        import threading
+
+        from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
+        from tests.conftest import FIXTURES_DIR
+
+        fixture = FIXTURES_DIR / "ngspice_noise_2plot.raw"
+        result: dict = {}
+
+        def _parse() -> None:
+            raw = OffsetAwareRawRead(str(fixture), dialect="ngspice")
+            result["plots"] = len(raw.plots)
+            result["traces"] = raw.get_trace_names()
+
+        t = threading.Thread(target=_parse, daemon=True)
+        t.start()
+        t.join(timeout=20)
+        assert not t.is_alive(), "parsing the two-plot noise raw hung (guard regressed)"
+        assert result["plots"] == 2  # both plots preserved, not just the first
+        assert "onoise_spectrum" in result["traces"]
