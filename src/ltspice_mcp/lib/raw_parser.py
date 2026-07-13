@@ -28,6 +28,78 @@ from ltspice_mcp.lib.log_parser import (
 from ltspice_mcp.lib.result_observations import surface_observations
 
 
+class _MultiPlotAsciiGuard:
+    """Break spicelib's trailing-empty-line skip when it meets the next plot.
+
+    spicelib's ``PlotData._read_ascii_vector`` ends each ASCII plot by skipping
+    trailing blank lines: it reads a line, and if it is non-empty seeks back to
+    re-read it, else breaks. On a multi-plot ASCII raw with no blank line
+    between plots — ngspice writes ``.noise`` as two plots (spectral density,
+    then integrated noise) exactly this way — the "non-empty" line is the next
+    plot's ``Title:`` header, so it seeks back and re-reads the same line
+    forever: a CPU-bound infinite loop that runs synchronously and hangs the
+    whole server. This wrapper watches for that one pathological move — a
+    seek back to a line just read as non-empty — and returns a one-shot empty
+    read so the skip loop breaks with the cursor left at the next plot's
+    header, which ``RawRead``'s outer loop then reads as plot 2. The data-read
+    loop never seeks, so it is untouched. Version-independent: it keys on the
+    read/seek pattern, not on spicelib internals, and is harmless on a spicelib
+    that already breaks correctly.
+    """
+
+    def __init__(self, fobj: object) -> None:
+        self._f = fobj
+        self._last_read_start: int | None = None
+        self._last_nonempty = False
+        self._break_at: int | None = None
+
+    def readline(self, *args: object) -> bytes:
+        pos = self._f.tell()  # type: ignore[attr-defined]
+        if self._break_at is not None and pos == self._break_at:
+            # One-shot: break the skip loop, leaving the cursor on the next
+            # plot's header (do not consume it) so the outer reader continues.
+            self._break_at = None
+            return b""
+        self._last_read_start = pos
+        line = self._f.readline(*args)  # type: ignore[attr-defined]
+        self._last_nonempty = bool(line.strip())
+        return line
+
+    def seek(self, pos: int, *args: object) -> object:
+        # A seek back to a line just read as non-empty is the trailing-skip
+        # loop rewinding onto the next plot's header — arm the one-shot break.
+        if pos == self._last_read_start and self._last_nonempty:
+            self._break_at = pos
+        return self._f.seek(pos, *args)  # type: ignore[attr-defined]
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._f, name)
+
+
+def _install_multiplot_ascii_guard() -> None:
+    """Wrap ``PlotData._read_ascii_vector`` so a multi-plot ASCII raw can't hang.
+
+    Idempotent. Applied at import because every server raw read constructs a
+    ``RawRead`` (via ``OffsetAwareRawRead``), and a single ngspice ``.noise``
+    run would otherwise wedge the process. Report/patch upstream separately;
+    this guard no-ops once spicelib breaks the loop itself.
+    """
+    from spicelib.raw.plot_data import PlotData
+
+    original = PlotData._read_ascii_vector  # pyright: ignore[reportPrivateUsage]
+    if getattr(original, "_multiplot_guarded", False):
+        return
+
+    def guarded(self: object, raw_file: object) -> object:
+        return original(self, _MultiPlotAsciiGuard(raw_file))  # type: ignore[arg-type]
+
+    guarded._multiplot_guarded = True  # type: ignore[attr-defined]
+    PlotData._read_ascii_vector = guarded  # type: ignore[assignment,method-assign]
+
+
+_install_multiplot_ascii_guard()
+
+
 class OffsetAwareRawRead(RawRead):
     """RawRead that rebases a windowed-transient time axis to deck time.
 
