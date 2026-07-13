@@ -140,6 +140,11 @@ def wrap_runner_for_runno_callbacks(runner: SimRunner) -> SimRunner:
     def runno_aware_run(*args, **kwargs):
         user_callback = kwargs.pop("callback", None)
         user_callback_args = kwargs.pop("callback_args", None)
+        # Fire the completion callback even for a failed sub-run, so a run that
+        # aborts (or produces no raw) is recorded as failed instead of vanishing
+        # from the batch. Without this a dropped run leaves completed_runs+
+        # failed_runs < total_runs while the batch still reports "completed".
+        kwargs.setdefault("callback_on_error", True)
         if user_callback is None:
             return original_run(*args, callback=None, callback_args=None, **kwargs)
 
@@ -272,13 +277,13 @@ class BatchRunnerBase(RunnerBase):
     def _record_run_completion(
         self,
         batch_job: BatchJob,
-        raw_file: Path,
-        log_file: Path,
+        raw_file: Path | None,
+        log_file: Path | None,
         state: SessionState,
         kind: str,
         runno: int | None = None,
     ) -> None:
-        """Append one successful sub-run to ``batch_job.run_results``.
+        """Record one finished sub-run (successful or failed) in ``run_results``.
 
         ``run_results`` is keyed by 0-based runno. The runno is passed
         explicitly when available (callers using
@@ -289,6 +294,14 @@ class BatchRunnerBase(RunnerBase):
         ``<stem>_<runno><suffix>``); failing that, completion order is
         used (a third-best signal for environments where neither
         mechanism applies).
+
+        A run whose simulation aborted arrives here with ``raw_file`` None
+        (or pointing at a raw that was never written); it is recorded as a
+        failed entry so the batch counts stay honest — ``completed_runs``
+        advances for every finished run, ``failed_runs`` for the failed
+        subset, and ``successful`` (``completed_runs - failed_runs``) is the
+        real success count. A failed entry has an empty ``raw_file`` so the
+        aggregation readers skip it cleanly.
 
         Params are stored empty at this stage. Sweeps populate them from
         ``stepper.sim_info`` after run_all returns; Monte Carlo leaves
@@ -303,27 +316,68 @@ class BatchRunnerBase(RunnerBase):
             )
             return
 
-        if runno is None:
+        failed = raw_file is None or not raw_file.exists()
+        if runno is None and raw_file is not None:
             runno = _parse_runno(raw_file)
         # 0-based key preserves the existing "first run = key 0" convention.
         run_index = (runno - 1) if runno is not None else batch_job.completed_runs
-        batch_job.run_results[run_index] = {
-            "raw_file": str(raw_file),
-            "log_file": str(log_file),
-            "params": {},
-        }
+        if failed:
+            batch_job.run_results[run_index] = {
+                "raw_file": "",
+                "log_file": str(log_file) if log_file is not None else "",
+                "params": {},
+                "failed": True,
+            }
+            batch_job.failed_runs += 1
+        else:
+            batch_job.run_results[run_index] = {
+                "raw_file": str(raw_file),
+                "log_file": str(log_file) if log_file is not None else "",
+                "params": {},
+            }
         batch_job.completed_runs += 1
         state.persist_batch_progress(batch_job)
 
         logger.debug(
-            "%s job %s: run %d complete (%d/%d), raw=%s",
+            "%s job %s: run %d %s (%d/%d, %d failed)",
             kind,
             batch_job.job_id,
             run_index,
+            "failed" if failed else "complete",
             batch_job.completed_runs,
             batch_job.total_runs,
-            raw_file.name,
+            batch_job.failed_runs,
         )
+
+    def _finalize_batch(self, batch_job: BatchJob, kind: str) -> None:
+        """Reconcile any sub-run that never reported a completion at all.
+
+        ``callback_on_error`` makes a failed run report itself, but spicelib
+        can still omit a run entirely (a submission the stepper never launched,
+        a run dropped before its task existed). Any 0-based index missing from
+        ``run_results`` after the submission loop returned produced no result:
+        record it as failed so ``completed_runs == total_runs`` holds and a
+        terminal ``completed`` can never mask a silent shortfall. Call this on
+        the non-cancelled completion path, before transitioning to completed.
+        """
+        missing = [i for i in range(batch_job.total_runs) if i not in batch_job.run_results]
+        for i in missing:
+            batch_job.run_results[i] = {
+                "raw_file": "",
+                "log_file": "",
+                "params": {},
+                "failed": True,
+            }
+        if missing:
+            batch_job.failed_runs += len(missing)
+            batch_job.completed_runs = len(batch_job.run_results)
+            logger.warning(
+                "%s job %s: %d run(s) produced no result and were recorded as failed (indices %s)",
+                kind,
+                batch_job.job_id,
+                len(missing),
+                missing,
+            )
 
     async def cancel(self, batch_job: BatchJob, state: SessionState | None = None) -> None:
         """Cancel a running batch job (sweep or Monte Carlo).

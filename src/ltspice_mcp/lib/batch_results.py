@@ -111,13 +111,18 @@ def compute_batch_stats(
     # Runs whose step metadata couldn't be read at all: step 0 is still returned,
     # but dropped steps can't be ruled out — surface separately, never swallow.
     step_unknown: list[int] = []
+    # Runs with no readable raw (a failed sub-run, or a cancelled job's partial):
+    # surface the indices rather than dropping them from the count silently.
+    missing_raw: list[int] = []
 
     for run_index in sorted(run_results.keys()):
         run = run_results[run_index]
         raw_path = run.get("raw_file", "")
 
-        # Skip runs with missing raw files (partial results from cancelled jobs)
+        # No readable raw — a failed run, or a partial from a cancelled job.
+        # Record the index so the shortfall is visible instead of swallowed.
         if not raw_path or not Path(raw_path).exists():
+            missing_raw.append(run_index)
             continue
 
         try:
@@ -195,6 +200,10 @@ def compute_batch_stats(
             entry: dict = {
                 "run_index": run_index,
                 "params": run.get("params", {}),
+                # Per-run artifact paths so a single point is individually
+                # addressable/archivable without re-deriving the location.
+                "raw_file": raw_path,
+                "log_file": run.get("log_file", ""),
             }
             # Point query -> surface just ``value``; full-waveform aggregation
             # -> always keep peak/mean/min, even when they happen to be equal,
@@ -222,6 +231,7 @@ def compute_batch_stats(
         "runs": per_run_summaries,
         "step_collapsed_runs": step_collapsed,
         "step_unknown_runs": step_unknown,
+        "missing_raw_runs": missing_raw,
         "stats": stats,
         # Neutral naming: "worst"/"best" would assume larger-peak = worse,
         # which has no inherent meaning for an arbitrary signal (e.g. a

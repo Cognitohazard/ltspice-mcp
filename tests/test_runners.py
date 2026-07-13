@@ -874,6 +874,86 @@ class TestSweepRunnerHandlers:
         assert n1 != n2  # unique per run
 
 
+class TestBatchCompletionAccounting:
+    """A batch must account for every run: a failed or dropped sub-run is
+    recorded as failed, never silently vanished, so a terminal 'completed'
+    can't mask a shortfall (completed_runs == total_runs, failed_runs honest).
+    """
+
+    def test_failed_run_recorded_not_dropped(
+        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        # An aborted sub-run arrives with raw_file=None (callback_on_error).
+        bj = _make_batch(state_no_sim, work_dir)
+        fail_log = work_dir / "sweep_2.fail"
+        fail_log.write_text("Simulation Aborted")
+        sweep_runner._record_run_completion(
+            bj, None, fail_log, state_no_sim, kind="Sweep", runno=2
+        )
+        assert bj.completed_runs == 1
+        assert bj.failed_runs == 1
+        entry = bj.run_results[1]  # runno 2 -> 0-based key 1
+        assert entry["failed"] is True
+        assert entry["raw_file"] == ""
+        assert entry["log_file"].endswith("sweep_2.fail")
+
+    def test_missing_raw_path_is_failure(
+        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        # raw_file given but never written on disk -> still counts as failed.
+        bj = _make_batch(state_no_sim, work_dir)
+        ghost = work_dir / "never_written.raw"
+        sweep_runner._record_run_completion(
+            bj, ghost, work_dir / "r.log", state_no_sim, kind="Sweep", runno=1
+        )
+        assert bj.failed_runs == 1
+        assert bj.run_results[0]["failed"] is True
+
+    def test_finalize_fills_missing_runs_as_failed(
+        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        # Two of four runs reported; the other two vanished (silent drop).
+        bj = _make_batch(state_no_sim, work_dir)
+        bj.total_runs = 4
+        bj.run_results = {
+            0: {"raw_file": "a.raw", "log_file": "a.log", "params": {}},
+            2: {"raw_file": "c.raw", "log_file": "c.log", "params": {}},
+        }
+        bj.completed_runs = 2
+        sweep_runner._finalize_batch(bj, "Sweep")
+        assert bj.completed_runs == bj.total_runs == 4
+        assert bj.failed_runs == 2
+        assert bj.run_results[1]["failed"] is True
+        assert bj.run_results[3]["failed"] is True
+
+    def test_all_runs_dropped_completes_with_full_failed_count(
+        self, sweep_runner: SweepRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        # The silent-whole-batch-drop scenario: every run vanished. The batch
+        # must finalize with failed_runs == total_runs and successful == 0, not
+        # report a clean 'completed' with zero runs and no error.
+        bj = _make_batch(state_no_sim, work_dir)
+        bj.total_runs = 4
+        sweep_runner._finalize_batch(bj, "Sweep")
+        assert bj.completed_runs == 4
+        assert bj.failed_runs == 4
+        assert bj.completed_runs - bj.failed_runs == 0  # successful
+
+    def test_finalize_noop_when_all_present(
+        self, mc_runner: MonteCarloRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        bj = _make_batch(state_no_sim, work_dir, job_type="montecarlo")
+        bj.total_runs = 2
+        bj.run_results = {
+            0: {"raw_file": "a.raw", "log_file": "", "params": {}},
+            1: {"raw_file": "b.raw", "log_file": "", "params": {}},
+        }
+        bj.completed_runs = 2
+        mc_runner._finalize_batch(bj, "MC")
+        assert bj.failed_runs == 0
+        assert bj.completed_runs == 2
+
+
 class TestMonteCarloRunnerHandlers:
     def test_handle_run_completion(
         self, mc_runner: MonteCarloRunner, state_no_sim: SessionState, work_dir: Path
