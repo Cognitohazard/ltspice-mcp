@@ -19,6 +19,7 @@ mismatches, etc.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -112,6 +113,101 @@ _RULES: tuple[_Rule, ...] = (
         ),
     ),
 )
+
+
+def _leading_numeric_tokens(tokens: list[str]) -> list[float]:
+    """Parse leading tokens as SPICE values, stopping at the first non-numeric.
+
+    A directive's numeric arguments precede any trailing modifier keywords
+    (``uic``, ``startup``, ``dec``…) or ``.param`` expressions, which parse_value
+    rejects — so a break there keeps the estimate to the resolvable prefix.
+    """
+    nums: list[float] = []
+    for t in tokens:
+        try:
+            nums.append(parse_spice_value(t))
+        except (ValueError, TypeError):
+            break
+    return nums
+
+
+def _estimate_tran_points(line: str) -> int | None:
+    # .tran <Tstep> <Tstop> [<Tstart> [<Tmax>]] — points ≈ (Tstop-Tstart)/Tstep.
+    # A bare Tstop or Tstep=0 is auto-timestep: unknowable up front → None.
+    nums = _leading_numeric_tokens(line.split()[1:])
+    if len(nums) < 2:
+        return None
+    tstep, tstop = nums[0], nums[1]
+    tstart = nums[2] if len(nums) >= 3 else 0.0
+    if tstep <= 0 or tstop <= tstart:
+        return None
+    return int((tstop - tstart) / tstep) + 1
+
+
+def _estimate_ac_points(line: str) -> int | None:
+    # .ac <dec|oct|lin> <N> <fstart> <fstop>
+    tokens = line.split()
+    if len(tokens) < 5:
+        return None
+    kind = tokens[1].lower()
+    nums = _leading_numeric_tokens(tokens[2:5])
+    if len(nums) < 3:
+        return None
+    n, fstart, fstop = nums
+    if n <= 0 or fstart <= 0 or fstop <= fstart:
+        return None
+    if kind == "dec":
+        return int(n * math.log10(fstop / fstart)) + 1
+    if kind == "oct":
+        return int(n * math.log2(fstop / fstart)) + 1
+    if kind == "lin":
+        return int(n) + 1
+    return None
+
+
+def _estimate_dc_points(line: str) -> int | None:
+    # .dc <src> <start> <stop> <incr> [<src2> <start2> <stop2> <incr2> ...]
+    # Nested sweeps multiply. Each group is name + 3 numbers.
+    tokens = line.split()[1:]
+    total = 1
+    found = False
+    i = 0
+    while i + 4 <= len(tokens):
+        nums = _leading_numeric_tokens(tokens[i + 1 : i + 4])
+        if len(nums) < 3:
+            break
+        start, stop, incr = nums
+        if incr == 0:
+            break
+        total *= max(int(abs((stop - start) / incr)) + 1, 1)
+        found = True
+        i += 4
+    return total if found else None
+
+
+def estimate_analysis_points(netlist_text: str) -> int | None:
+    """Rough saved-point-count estimate for the deck's analysis directive.
+
+    Parses ``.tran`` / ``.ac`` / ``.dc`` to bound the raw a run will produce, for
+    the preflight size guard. An ESTIMATE only: ``.tran`` uses adaptive stepping
+    (this is the Tstop/Tstep upper bound), and an auto-timestep or parameterised
+    directive returns ``None`` (unknowable up front). When several analyses are
+    present the largest estimate wins. ``None`` when nothing is estimable.
+    """
+    best: int | None = None
+    for raw_line in netlist_text.splitlines():
+        line = raw_line.strip()
+        low = line.lower()
+        est: int | None = None
+        if low.startswith(".tran"):
+            est = _estimate_tran_points(line)
+        elif low.startswith(".ac"):
+            est = _estimate_ac_points(line)
+        elif low.startswith(".dc"):
+            est = _estimate_dc_points(line)
+        if est is not None:
+            best = est if best is None else max(best, est)
+    return best
 
 
 def _validate_tran_tstep(directive: str, simulator: str) -> ValidationError | None:

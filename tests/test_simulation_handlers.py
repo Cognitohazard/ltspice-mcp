@@ -18,10 +18,44 @@ from ltspice_mcp.tools.simulation import (
     CancelJobInput,
     CheckJobInput,
     RunSimulationInput,
+    _preflight_size_guard,
     handle_cancel_job,
     handle_check_job,
     handle_run_simulation,
 )
+
+
+class TestPreflightSizeGuard:
+    """Estimate the raw a .tran/.ac/.dc will produce and refuse a runaway before
+    launching (single-trace lower bound, so it never false-refuses) / warn on a
+    merely-large run; leave an unestimable auto-timestep directive alone."""
+
+    def _deck(self, work_dir: Path, directive: str) -> Path:
+        p = work_dir / "deck.cir"
+        p.write_text(f"V1 in 0 1\nR1 in 0 1k\n{directive}\n.end\n")
+        return p
+
+    def test_refuses_runaway(self, state_no_sim: SessionState, work_dir: Path):
+        deck = self._deck(work_dir, ".tran 1f 1m")  # ~1e12 points
+        state_no_sim.config.max_raw_mb = 100
+        with pytest.raises(SimulationError, match="max_raw_mb"):
+            _preflight_size_guard(deck, state_no_sim.config)
+
+    def test_warns_on_large_allowed(self, state_no_sim: SessionState, work_dir: Path):
+        deck = self._deck(work_dir, ".tran 1n 1m")  # ~1e6 points ≈ 8 MB single-trace
+        state_no_sim.config.max_estimated_points = 100_000
+        state_no_sim.config.max_raw_mb = 100_000
+        warn = _preflight_size_guard(deck, state_no_sim.config)
+        assert warn is not None and "Large run" in warn
+
+    def test_small_run_clean(self, state_no_sim: SessionState, work_dir: Path):
+        deck = self._deck(work_dir, ".tran 1u 1m")  # ~1000 points
+        assert _preflight_size_guard(deck, state_no_sim.config) is None
+
+    def test_auto_timestep_not_gated(self, state_no_sim: SessionState, work_dir: Path):
+        deck = self._deck(work_dir, ".tran 1m")  # bare tstop → unestimable
+        state_no_sim.config.max_raw_mb = 1
+        assert _preflight_size_guard(deck, state_no_sim.config) is None
 
 
 def _text_of(result) -> str:
@@ -70,6 +104,16 @@ class TestCheckJob:
         result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
         assert "still running" in result.content[0].text
         assert result.structuredContent["status"] == "running"
+
+    async def test_running_reports_raw_bytes_progress(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # The growing raw's on-disk size is surfaced as a progress signal.
+        raw = work_dir / "growing.raw"
+        raw.write_bytes(b"x" * 512)
+        _make_job(state_no_sim, status="running", raw_file=raw)
+        result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
+        assert result.structuredContent["raw_bytes"] == 512
 
     async def test_failed(self, state_no_sim: SessionState):
         job = _make_job(state_no_sim, status="failed")
