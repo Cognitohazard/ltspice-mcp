@@ -27,16 +27,34 @@ from ltspice_mcp.tools.simulation import (
 
 class TestPreflightSizeGuard:
     """Estimate the raw a .tran/.ac/.dc will produce and refuse a runaway before
-    launching (single-trace lower bound, so it never false-refuses) / warn on a
-    merely-large run; leave an unestimable auto-timestep directive alone."""
+    launching. Only .ac/.dc (deterministic saved-point counts) are hard-refused;
+    .tran is warn-only because LTspice waveform compression means Tstop/Tstep is
+    not a bound and refusing it would reject legitimate runs. Leave an
+    unestimable auto-timestep directive alone."""
 
     def _deck(self, work_dir: Path, directive: str) -> Path:
         p = work_dir / "deck.cir"
         p.write_text(f"V1 in 0 1\nR1 in 0 1k\n{directive}\n.end\n")
         return p
 
-    def test_refuses_runaway(self, state_no_sim: SessionState, work_dir: Path):
-        deck = self._deck(work_dir, ".tran 1f 1m")  # ~1e12 points
+    def test_refuses_deterministic_runaway(self, state_no_sim: SessionState, work_dir: Path):
+        deck = self._deck(work_dir, ".dc V1 0 1e9 1")  # ~1e9 points, deterministic
+        state_no_sim.config.max_raw_mb = 100
+        with pytest.raises(SimulationError, match="max_raw_mb"):
+            _preflight_size_guard(deck, state_no_sim.config)
+
+    def test_huge_tran_warns_never_refuses(self, state_no_sim: SessionState, work_dir: Path):
+        # LTspice compresses .tran, so Tstop/Tstep isn't a bound — a huge .tran
+        # must warn, never hard-refuse (that would reject a legitimate run).
+        deck = self._deck(work_dir, ".tran 1f 1m")  # ~1e12 by Tstop/Tstep
+        state_no_sim.config.max_raw_mb = 1
+        warn = _preflight_size_guard(deck, state_no_sim.config)
+        assert warn is not None and "Large run" in warn
+
+    def test_huge_nested_dc_no_overflow(self, state_no_sim: SessionState, work_dir: Path):
+        # A finite-but-enormous nested-.dc estimate (~1e600) must refuse via
+        # integer math, not crash on a float MB conversion (OverflowError).
+        deck = self._deck(work_dir, ".dc V1 0 1e308 1 V2 0 1e308 1")
         state_no_sim.config.max_raw_mb = 100
         with pytest.raises(SimulationError, match="max_raw_mb"):
             _preflight_size_guard(deck, state_no_sim.config)

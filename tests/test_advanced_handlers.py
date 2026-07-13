@@ -588,6 +588,36 @@ class TestMonteCarloMismatchPreflight:
         assert any("prefix" in w.lower() for w in warnings), warnings
         assert not any("subcircuit" in w.lower() for w in warnings), warnings
 
+    async def test_opamp_macro_only_gets_neutral_advice(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # An X macro with no W/L isn't a FET, so the zero-match warning must give
+        # the neutral "no eligible M" advice, not the PDK subckt remediation
+        # (which would falsely tell the user their transistors are subcircuits).
+        deck = work_dir / "macro_mc.cir"
+        deck.write_text(
+            "* op-amp macro, no MOSFETs\n"
+            "XU1 inp inn out opamp\n"
+            ".subckt opamp p n o\n"
+            "R1 p n 1meg\n"
+            ".ends\n"
+            "V1 inp 0 1\n"
+            ".op\n"
+            ".end\n"
+        )
+        result = await handle_configure_montecarlo(
+            ConfigureMonteCarloInput(
+                netlist=deck.name,
+                mismatch=[MonteCarloMismatchRule(AVT=3e-3)],
+                num_runs=10,
+            ),
+            state_no_sim,
+        )
+        warnings = result.structuredContent.get("warnings", [])
+        assert any("match 0 devices" in w for w in warnings), warnings
+        assert not any("subcircuit" in w.lower() for w in warnings), warnings
+        assert any("No top-level M" in w for w in warnings), warnings
+
 
 class TestRunMonteCarlo:
     async def test_unknown_config(self, state_no_sim: SessionState):
