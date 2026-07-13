@@ -167,6 +167,21 @@ _OP_STEPPING_FAILURE_PHRASES = (
     "gmin stepping failed",
     "source stepping failed",
 )
+
+
+def is_op_stepping_failure(text: str) -> bool:
+    """Whether ``text`` is an OP-solve stepping-failure rung (gmin/source).
+
+    These are the recoverable rungs of the bias-point escalation ladder — a
+    later method may still converge. Public so the summary builder can gate
+    such an error on raw validity (a recovered run left finite data; a genuine
+    no-data run left NaN/rail-pinned data). Always-terminal convergence
+    failures (iteration limit) are deliberately excluded.
+    """
+    lowered = text.lower()
+    return any(phrase in lowered for phrase in _OP_STEPPING_FAILURE_PHRASES)
+
+
 # Always-terminal convergence failures — no later success rescues these.
 _CONVERGENCE_FAILURE_PHRASES = ("iteration limit reached",)
 # Bare convergence / runtime messages with no prefix.
@@ -644,7 +659,7 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
         # Gmin/source stepping "failed" is an intermediate escalation rung on
         # LTspice — drop it when THIS solve block later converged; keep it as an
         # error otherwise (ngspice no-data run, or a step that never converged).
-        if any(phrase in stripped_lower for phrase in _OP_STEPPING_FAILURE_PHRASES):
+        if is_op_stepping_failure(stripped):
             if not _op_block_recovered(lines, i):
                 errors.append(stripped)
             i += 1

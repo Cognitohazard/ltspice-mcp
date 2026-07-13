@@ -50,6 +50,41 @@ def _make_raw_mock(
     return raw
 
 
+class TestOpSteppingFailureRawGate:
+    """An OP 'gmin/source stepping failed' error is a recoverable ladder rung.
+    The log-only converged-check keys on LTspice's success wording, so an
+    ngspice run that recovered via an unannounced fallback leaves a false hard
+    error — gated on raw validity: finite node data demotes it to a warning, a
+    rail-pinned/NaN raw keeps it an error, and always-terminal failures don't
+    qualify at all."""
+
+    def _summary(self, tmp_path: Path, node_wave: np.ndarray, phrase: str) -> dict:
+        from ltspice_mcp.lib.raw_parser import build_simulation_summary
+
+        log = tmp_path / "op.log"
+        # No recognized LTspice success line follows, so extract_log_diagnostics
+        # classifies the phrase as an error before the raw gate runs.
+        log.write_text(f"ngspice-42\n{phrase}\n")
+        axis = np.array([0.0, 1e-3, 2e-3])
+        raw = _make_raw_mock(["time", "v(out)"], axis, {"time": axis, "v(out)": node_wave})
+        return build_simulation_summary(raw, log)
+
+    def test_finite_data_demotes_to_warning(self, tmp_path: Path):
+        s = self._summary(tmp_path, np.array([1.0, 1.01, 0.99]), "gmin stepping failed")
+        assert "errors" not in s
+        assert any("gmin stepping failed" in w for w in s.get("warnings", []))
+
+    def test_railed_data_keeps_error(self, tmp_path: Path):
+        s = self._summary(tmp_path, np.array([1e30, 1e30, 1e30]), "source stepping failed")
+        assert any("source stepping failed" in e for e in s.get("errors", []))
+        assert not any("source stepping failed" in w for w in s.get("warnings", []))
+
+    def test_iteration_limit_never_demoted(self, tmp_path: Path):
+        # Always-terminal — not a stepping-failure candidate even with clean data.
+        s = self._summary(tmp_path, np.array([1.0, 1.0, 1.0]), "iteration limit reached")
+        assert any("iteration limit" in e for e in s.get("errors", []))
+
+
 class TestDetectSimType:
     def test_transient(self):
         raw = _make_raw_mock([], np.array([]), {}, plotname="Transient Analysis")
