@@ -55,6 +55,14 @@ class TestEstimateAnalysisPoints:
         text = ".ac dec 10 1 1k\n.tran 1n 1m\n"
         assert estimate_analysis_points(text) == pytest.approx(1_000_001, rel=1e-6)
 
+    def test_non_finite_directive_is_unestimable(self):
+        # A pathological directive (tstop/tstep overflows to inf, or a huge dec
+        # sweep) must return None (best-effort unestimable), never raise
+        # OverflowError from int(inf) into the preflight guard.
+        assert estimate_analysis_points(".tran 1e-200 1e200") is None
+        assert estimate_analysis_points(".dc V1 -1e300 1e300 1e-300") is None
+        assert estimate_analysis_points(".ac dec 1e300 1e-300 1e300") is None
+
 
 class TestVdbInMeas:
     def test_vdb_when_form_blocked(self):

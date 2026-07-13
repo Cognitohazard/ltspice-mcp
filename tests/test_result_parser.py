@@ -84,6 +84,38 @@ class TestOpSteppingFailureRawGate:
         s = self._summary(tmp_path, np.array([1.0, 1.0, 1.0]), "iteration limit reached")
         assert any("iteration limit" in e for e in s.get("errors", []))
 
+    def test_stepped_op_keeps_error_for_later_step(self, tmp_path: Path):
+        # A stepped .op solves the bias point per step but LTspice writes only
+        # step 0 to the .raw. Step 0's finite data can't clear a stepping failure
+        # that belongs to a later step the raw never carries — keep it an error.
+        from ltspice_mcp.lib.raw_parser import build_simulation_summary
+
+        log = tmp_path / "op.log"
+        log.write_text(".step v1=1\n.step v1=2\nngspice-42\ngmin stepping failed\n")
+        # A real .op raw has no axis — get_axis raises "does not have an axis".
+        raw = _make_raw_mock(
+            ["v(out)"], np.array([0.0]), {"v(out)": np.array([1.0])}, plotname="Operating Point"
+        )
+        raw.get_axis.side_effect = Exception("This RAW file does not have an axis.")
+        s = build_simulation_summary(raw, log)
+        assert any("gmin stepping failed" in e for e in s.get("errors", []))
+        assert any("Stepped .op detected" in w for w in s.get("warnings", []))
+
+    def test_single_step_op_still_demotes(self, tmp_path: Path):
+        # An unstepped .op (one bias point) with finite data and no success line
+        # still demotes — the guard must not over-suppress the single-block case.
+        from ltspice_mcp.lib.raw_parser import build_simulation_summary
+
+        log = tmp_path / "op.log"
+        log.write_text("ngspice-42\ngmin stepping failed\n")
+        raw = _make_raw_mock(
+            ["v(out)"], np.array([0.0]), {"v(out)": np.array([1.0])}, plotname="Operating Point"
+        )
+        raw.get_axis.side_effect = Exception("This RAW file does not have an axis.")
+        s = build_simulation_summary(raw, log)
+        assert "errors" not in s
+        assert any("gmin stepping failed" in w for w in s.get("warnings", []))
+
 
 class TestDetectSimType:
     def test_transient(self):

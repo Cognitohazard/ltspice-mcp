@@ -141,7 +141,10 @@ def _estimate_tran_points(line: str) -> int | None:
     tstart = nums[2] if len(nums) >= 3 else 0.0
     if tstep <= 0 or tstop <= tstart:
         return None
-    return int((tstop - tstart) / tstep) + 1
+    pts = (tstop - tstart) / tstep
+    if not math.isfinite(pts):
+        return None
+    return int(pts) + 1
 
 
 def _estimate_ac_points(line: str) -> int | None:
@@ -157,12 +160,16 @@ def _estimate_ac_points(line: str) -> int | None:
     if n <= 0 or fstart <= 0 or fstop <= fstart:
         return None
     if kind == "dec":
-        return int(n * math.log10(fstop / fstart)) + 1
-    if kind == "oct":
-        return int(n * math.log2(fstop / fstart)) + 1
-    if kind == "lin":
-        return int(n) + 1
-    return None
+        pts = n * math.log10(fstop / fstart)
+    elif kind == "oct":
+        pts = n * math.log2(fstop / fstart)
+    elif kind == "lin":
+        pts = n
+    else:
+        return None
+    if not math.isfinite(pts):
+        return None
+    return int(pts) + 1
 
 
 def _estimate_dc_points(line: str) -> int | None:
@@ -179,7 +186,10 @@ def _estimate_dc_points(line: str) -> int | None:
         start, stop, incr = nums
         if incr == 0:
             break
-        total *= max(int(abs((stop - start) / incr)) + 1, 1)
+        span = abs((stop - start) / incr)
+        if not math.isfinite(span):
+            return None
+        total *= max(int(span) + 1, 1)
         found = True
         i += 4
     return total if found else None

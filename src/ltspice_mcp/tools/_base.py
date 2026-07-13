@@ -3,10 +3,11 @@
 import asyncio
 import contextlib
 import copy
+import hashlib
 import json
 import logging
+import os
 import re
-import shutil
 import types as _stdlib_types
 import typing
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -850,19 +851,31 @@ async def resolve_runnable_netlist(
         if is_ngspice(simulator or state.default_simulator):
             net_path = await asyncio.to_thread(_sanitize_export_for_ngspice, net_path)
 
-        # Snapshot the fresh deck to a unique name INSIDE the lock and return
-        # THAT: create_netlist writes a shared <stem>.net, so a parallel session
-        # re-exporting this .asc overwrites it — and a caller that stored the
-        # shared path (sweep/MC config, or a run staged moments later) would then
-        # read the peer's deck. The snapshot stays in the same directory so a
-        # relative .include/.lib in the deck still resolves against it.
-        # ponytail: only direct-.asc runs reach here (the .cir/.net path returns
-        # above), so these are rare; GC them on job completion if they ever pile up.
-        from uuid import uuid4
+        # Snapshot the fresh deck INSIDE the lock and return THAT: create_netlist
+        # writes a shared <stem>.net, so a parallel session re-exporting this .asc
+        # overwrites it — and a caller that stored the shared path (sweep/MC
+        # config, or a run staged moments later) would then read the peer's deck.
+        # The snapshot stays in the same directory so a relative .include/.lib in
+        # the deck still resolves against it.
+        return await asyncio.to_thread(_stage_deck_snapshot, net_path)
 
-        snapshot = net_path.with_name(f"{net_path.stem}.run-{uuid4().hex[:8]}{net_path.suffix}")
-        await asyncio.to_thread(shutil.copy2, net_path, snapshot)
-        return snapshot
+
+def _stage_deck_snapshot(net_path: Path) -> Path:
+    """Copy the exported deck to a content-addressed sibling and return it.
+
+    Named by a hash of its bytes so repeat exports of the same .asc reuse one
+    file — the snapshots stay bounded to one per distinct deck content, not one
+    per run (a plain per-call unique name accumulates unbounded). Written via
+    ``os.replace`` so a concurrent reader sees a whole file, never a torn copy.
+    """
+    data = net_path.read_bytes()
+    digest = hashlib.sha1(data).hexdigest()[:12]
+    snapshot = net_path.with_name(f"{net_path.stem}.run-{digest}{net_path.suffix}")
+    if not snapshot.exists():
+        tmp = snapshot.with_name(f"{snapshot.name}.{os.getpid()}.tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, snapshot)
+    return snapshot
 
 
 def inject_logopinfo(netlist_path: Path, simulator: type, job_id: str) -> Path:
