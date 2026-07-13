@@ -649,7 +649,10 @@ def _failed_response(job, duration: float, state: SessionState, fmt: str | None)
         hint = services.ngbehavior_lib_hint(
             job.netlist,
             error_msg,
-            is_ngspice=is_ngspice(state.default_simulator),
+            # The job's own simulator, not the session default: a per-run
+            # simulator override (run_simulation(simulator=...)) makes them
+            # differ, and the sectioned-.lib hint is ngspice-specific.
+            is_ngspice=is_ngspice(services.simulator_class_for_job(job, state)),
             current_mode=current_ngbehavior(),
         )
         if hint:
