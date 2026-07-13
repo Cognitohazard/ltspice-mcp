@@ -6,6 +6,7 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.component_value import apply_value_to_instance
 from ltspice_mcp.lib.spice_lex import lex
 from ltspice_mcp.lib.spice_validator import (
+    estimate_analysis_points,
     list_rules,
     validate_directive,
     validate_netlist_arity,
@@ -13,6 +14,46 @@ from ltspice_mcp.lib.spice_validator import (
     validate_netlist_dangling_nodes,
     validate_netlist_directive_refs,
 )
+
+
+class TestEstimateAnalysisPoints:
+    def test_tran_tstep_tstop(self):
+        # .tran 1n 1m → ~1e6 points.
+        assert estimate_analysis_points(".tran 1n 1m") == pytest.approx(1_000_001, rel=1e-6)
+
+    def test_tran_with_tstart(self):
+        # (tstop - tstart) / tstep = (2m - 1m)/1n = 1e6.
+        assert estimate_analysis_points(".tran 1n 2m 1m") == pytest.approx(1_000_001, rel=1e-6)
+
+    def test_tran_auto_timestep_unknowable(self):
+        # Bare Tstop (LTspice shorthand) and Tstep=0 are auto-timestep → None.
+        assert estimate_analysis_points(".tran 1m") is None
+        assert estimate_analysis_points(".tran 0 1m") is None
+
+    def test_tran_parameterised_unknowable(self):
+        assert estimate_analysis_points(".tran {step} {stop}") is None
+
+    def test_ac_dec(self):
+        # .ac dec 100 1 1e6 → 100 * 6 decades = 600 (+1).
+        assert estimate_analysis_points(".ac dec 100 1 1meg") == 601
+
+    def test_ac_lin(self):
+        assert estimate_analysis_points(".ac lin 500 1 1k") == 501
+
+    def test_dc_single_sweep(self):
+        # .dc V1 0 5 0.01 → 500 (+1).
+        assert estimate_analysis_points(".dc V1 0 5 0.01") == 501
+
+    def test_dc_nested_sweeps_multiply(self):
+        # 11 x 11 nested.
+        assert estimate_analysis_points(".dc V1 0 10 1 V2 0 10 1") == 121
+
+    def test_no_analysis_directive(self):
+        assert estimate_analysis_points("R1 n1 0 1k\n.op\n.end") is None
+
+    def test_largest_estimate_wins(self):
+        text = ".ac dec 10 1 1k\n.tran 1n 1m\n"
+        assert estimate_analysis_points(text) == pytest.approx(1_000_001, rel=1e-6)
 
 
 class TestVdbInMeas:

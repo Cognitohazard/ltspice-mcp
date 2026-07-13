@@ -9,14 +9,17 @@ from typing import Literal
 from mcp import types
 from pydantic import Field
 
+from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import ResultError, SimulationError
 from ltspice_mcp.lib import now, services
+from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.log_parser import extract_error_context, parse_success_summary
 from ltspice_mcp.lib.mcp_logging import mcp_log
 from ltspice_mcp.lib.runner_base import discard_logopinfo_netlist
 from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
 from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice, no_simulator_message
+from ltspice_mcp.lib.spice_validator import estimate_analysis_points
 from ltspice_mcp.state import (
     NON_TERMINAL_LIVE_STATUSES,
     BatchJob,
@@ -73,6 +76,52 @@ TIMEOUT_HINT = (
 )
 
 logger = logging.getLogger(__name__)
+
+_BYTES_PER_POINT = 8  # one float64 per saved point — the single-trace lower bound
+
+
+def _safe_stat_size(path: Path) -> int:
+    """File size in bytes, or 0 if it doesn't exist / can't be statted."""
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _preflight_size_guard(netlist_path: Path, config: ServerConfig) -> str | None:
+    """Estimate the raw a run will produce and guard against a runaway.
+
+    Refuses (raises ``SimulationError``) when the estimated raw exceeds
+    ``max_raw_mb`` — sized as a single-trace lower bound (``8 bytes/point``), so a
+    real multi-trace raw is only larger and this never false-refuses; it catches a
+    directive typo (a fs step for a ns run) before it fills the disk. Warns (return
+    value) when the estimated point count exceeds ``max_estimated_points``. Returns
+    the warning string or ``None``. An unestimable directive (auto-timestep,
+    parameterised) is left alone — the estimate is best-effort, not a gate on every
+    run.
+    """
+    try:
+        points = estimate_analysis_points(read_spice_text(netlist_path))
+    except OSError:
+        return None
+    if points is None:
+        return None
+    est_mb = points * _BYTES_PER_POINT / (1024 * 1024)
+    if est_mb > config.max_raw_mb:
+        raise SimulationError(
+            f"Refusing to run: the analysis directive estimates ~{points:,} points "
+            f"(>={est_mb:,.0f} MB for even a single trace, over the {config.max_raw_mb} MB "
+            "max_raw_mb cap — a real multi-trace raw is larger). Check the timestep / "
+            "step size, or raise [simulation] max_raw_mb. (.tran uses adaptive stepping, "
+            "so the real count may differ — this is an estimate from tstop/tstep.)",
+            show_hint=False,
+        )
+    if points > config.max_estimated_points:
+        return (
+            f"Large run: the analysis directive estimates ~{points:,} points; the raw may "
+            "be slow to produce and parse. check_job reports raw_bytes as it grows."
+        )
+    return None
 
 
 # Output-schema fragment shared by ``run_simulation`` and ``check_job`` —
@@ -261,6 +310,12 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     netlist_path = await resolve_runnable_netlist(netlist_str, state, simulator=default_simulator)
 
     preflight_warnings = services.ngspice_preflight_warnings(netlist_path, default_simulator)
+
+    # Preflight size guard: estimate the raw the analysis directive will produce
+    # and refuse a runaway (e.g. a fs step for a ns run) before launching, or
+    # warn on a merely-large one. Raises SimulationError on refuse.
+    if size_warning := _preflight_size_guard(netlist_path, state.config):
+        preflight_warnings = [*preflight_warnings, size_warning]
 
     # Generate job ID and create job
     job_id = generate_job_id()
@@ -781,6 +836,7 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
             "netlist": {"type": "string"},
             "simulator": {"type": "string"},
             "elapsed": {"type": "number"},
+            "raw_bytes": {"type": "integer"},
             **_SIM_RESULT_FIELDS_SCHEMA,
             "error": {"type": "string"},
             # Batch (sweep / Monte Carlo) status fields.
@@ -826,12 +882,21 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
     # Check status
     if job.status in NON_TERMINAL_LIVE_STATUSES:
         elapsed = (now() - job.started_at).total_seconds()
+        # Progress signal: the raw grows on disk as the run writes it. One
+        # on-demand stat (no poller), offloaded so a slow mount can't stall the
+        # loop; 0 before the file appears.
+        raw_bytes = (
+            await asyncio.to_thread(_safe_stat_size, job.raw_file)
+            if job.raw_file is not None
+            else 0
+        )
         data = {
             "job_id": job_id,
             "status": job.status,
             "netlist": str(job.netlist),
             "simulator": job.simulator,
             "elapsed": elapsed,
+            "raw_bytes": raw_bytes,
             "hint": f"Use cancel_job('{job_id}') to cancel.",
         }
         if job.status == "queued":
