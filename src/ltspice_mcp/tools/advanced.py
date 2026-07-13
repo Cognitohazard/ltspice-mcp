@@ -20,7 +20,8 @@ from ltspice_mcp.lib.montecarlo import (
     find_mismatch_rule,
 )
 from ltspice_mcp.lib.runner_base import discard_logopinfo_netlist
-from ltspice_mcp.lib.spice_lex import lex
+from ltspice_mcp.lib.spice_lex import SpiceCard, lex
+from ltspice_mcp.lib.spice_lex_views import InstanceLine
 from ltspice_mcp.lib.sweep_utils import (
     generate_batch_job_id,
     generate_config_id,
@@ -451,17 +452,19 @@ def _netlist_component_refs(netlist_path) -> set[str]:
     return {card.instance_ref.upper() for card in lex(text).cards if card.instance_ref}
 
 
-def _x_instance_is_fet_like(card) -> bool:
+def _x_instance_is_fet_like(card: SpiceCard) -> bool:
     """Whether an ``X`` subckt instance carries both W= and L= (a PDK-FET call).
 
     Distinguishes a foundry MOS subcircuit (``X1 d g s b nfet W=1u L=0.15u``),
     which the Pelgrom mismatch preflight should flag, from a plain macro
     instance (an op-amp, a behavioral block) that has no W/L and isn't a FET.
+    Reads params via the lex view (casing-robust; ngspice decks write ``w=``/
+    ``l=``), the same way ``extract_mosfet_instances`` reads top-level M devices.
     """
     if not (card.instance_ref or "").upper().startswith("X"):
         return False
-    tokens = card.body.upper().split()
-    return any(t.startswith("W=") for t in tokens) and any(t.startswith("L=") for t in tokens)
+    view = InstanceLine.from_card(card)
+    return view.get_param("W") is not None and view.get_param("L") is not None
 
 
 # ---------------------------------------------------------------------------

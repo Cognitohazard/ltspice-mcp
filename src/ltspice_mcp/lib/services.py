@@ -421,10 +421,9 @@ def simulator_class_for_job(job: SimulationJob | BatchJob, state: SessionState) 
     job may name a simulator that is no longer configured — callers fall back
     to their own default then.
     """
-    name = getattr(job, "simulator", None)
-    if name:
+    if job.simulator:
         for cls in state.available_simulators.values():
-            if cls.__name__ == name:
+            if cls.__name__ == job.simulator:
                 return cls
     return None
 
@@ -440,9 +439,8 @@ def dialect_for_job(job: SimulationJob | BatchJob, state: SessionState) -> str |
     configured. Falls back to the session default only when the job records no
     simulator at all.
     """
-    name = getattr(job, "simulator", None)
-    if name:
-        return dialect_for_simulator_name(name)
+    if job.simulator:
+        return dialect_for_simulator_name(job.simulator)
     return state.raw_dialect
 
 
