@@ -102,7 +102,10 @@ def _preflight_size_guard(netlist_path: Path, config: ServerConfig) -> str | Non
     """
     try:
         points = estimate_analysis_points(read_spice_text(netlist_path))
-    except OSError:
+    except (OSError, OverflowError, ValueError):
+        # Best-effort estimate: an unreadable deck or a pathological directive
+        # (e.g. .tran 1e-200 1e200 → non-finite point count) leaves the run
+        # ungated rather than crashing run_simulation.
         return None
     if points is None:
         return None

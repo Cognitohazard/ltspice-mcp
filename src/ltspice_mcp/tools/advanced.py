@@ -992,19 +992,28 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
             instances = extract_mosfet_instances(mm_text)
             matched = [i for i in instances if find_mismatch_rule(i.ref, mismatch_rules)]
             if not matched:
-                has_subckt_instances = any(
+                if instances:
+                    # Pelgrom-eligible top-level M devices exist, but the rule's
+                    # reference/prefix matched none — a targeting typo, not a PDK
+                    # deck. Don't send the model_tolerances/foundry-corner advice.
+                    detail = (
+                        f" {len(instances)} top-level M device(s) are present but none "
+                        "matched the rule's reference/prefix — check the mismatch rule's "
+                        "target."
+                    )
+                elif any(
                     (card.instance_ref or "").upper().startswith("X")
                     for card in lex(mm_text).cards
-                )
-                detail = (
-                    " The netlist's transistors are subcircuit instances (X…), where "
-                    "foundry-PDK FETs live; per-instance mismatch reaches only top-level "
-                    "M devices, so this run would have zero mismatch spread. Use this "
-                    "tool's model_tolerances (per-.MODEL parameter perturbation) or the "
-                    "foundry's native statistical corner instead."
-                    if has_subckt_instances
-                    else " No top-level M device with parseable W/L was found to apply it to."
-                )
+                ):
+                    detail = (
+                        " The netlist's transistors are subcircuit instances (X…), where "
+                        "foundry-PDK FETs live; per-instance mismatch reaches only top-level "
+                        "M devices, so this run would have zero mismatch spread. Use this "
+                        "tool's model_tolerances (per-.MODEL parameter perturbation) or the "
+                        "foundry's native statistical corner instead."
+                    )
+                else:
+                    detail = " No top-level M device with parseable W/L was found to apply it to."
                 warnings.append(f"Mismatch (Pelgrom) rule(s) match 0 devices.{detail}")
 
     warnings.extend(_ngspice_preflight_warnings(netlist_path, state))
