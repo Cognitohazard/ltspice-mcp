@@ -240,6 +240,43 @@ class TestMultiPlotNoiseRaw:
         # next plot's reader (position unchanged, header not consumed).
         assert g.tell() == cursor
 
+    def test_stall_backstop_aborts_a_nonprogressing_loop(self):
+        # A file-like whose position never advances models any pathological
+        # ASCII loop the specific break above doesn't recognize. The guard must
+        # fail THIS parse after a bounded number of no-progress reads instead of
+        # spinning forever — the categorical "bound untrusted work" backstop.
+        from ltspice_mcp.lib.raw_parser import _MultiPlotAsciiGuard
+
+        class _StuckFile:
+            def tell(self) -> int:
+                return 0  # never advances — a stalled reader
+
+            def readline(self, *args: object) -> bytes:
+                return b"data 1.0 2.0\n"  # always non-empty, no forward motion
+
+        g = _MultiPlotAsciiGuard(_StuckFile())
+
+        def _spin() -> None:
+            for _ in range(_MultiPlotAsciiGuard._STALL_LIMIT + 5):
+                g.readline()
+
+        with pytest.raises(RuntimeError, match="no forward progress"):
+            _spin()
+
+    def test_stall_backstop_allows_a_large_forward_read(self):
+        # The backstop counts NON-advancing reads, so a legitimately long raw
+        # (every read advances) must never trip it, regardless of length.
+        import io
+
+        from ltspice_mcp.lib.raw_parser import _MultiPlotAsciiGuard
+
+        big = b"".join(b"%d 1.0 2.0\n" % i for i in range(_MultiPlotAsciiGuard._STALL_LIMIT * 10))
+        g = _MultiPlotAsciiGuard(io.BytesIO(big))
+        reads = 0
+        while g.readline():
+            reads += 1
+        assert reads == _MultiPlotAsciiGuard._STALL_LIMIT * 10  # no false abort
+
     def test_two_plot_noise_raw_parses_without_hanging(self):
         # Integration: the real captured artifact that used to wedge the server.
         # Run the parse in a worker thread with a hard deadline so a regression

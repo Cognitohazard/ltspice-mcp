@@ -269,12 +269,24 @@ _RE_MISSING_SUBCKT = re.compile(
 )
 
 
+# Logs are normally KB to low-MB; even a huge stepped .op run stays well under
+# this. A log past the cap is pathological or adversarial, so bound the read:
+# the log text feeds ~24 diagnostic regexes, and an unbounded read would let a
+# giant/malformed log OOM the process or make those scans grind for seconds on
+# the shared thread. Read only the head (setup/parse errors appear early); an
+# up-front size guard is the place to reject a legitimately oversized run.
+_LOG_READ_CAP_BYTES = 64 * 1024 * 1024
+
+
 def read_log_text(log_path: Path) -> str:
     """Read a log file, returning empty string on I/O failure.
 
     Public so callers (e.g. ``raw_parser.build_simulation_summary``) can
     pre-read the log buffer once and pass the text to every parser that
     needs it instead of triggering one syscall per parser.
+
+    Bounded at ``_LOG_READ_CAP_BYTES`` — a log past that is parsed head-only so
+    a pathological file can't OOM or stall the diagnostic regex scans.
     """
     try:
         # Decode through the same BOM/UTF-16/cp1252 sniffer the netlist and
@@ -283,6 +295,15 @@ def read_log_text(log_path: Path) -> str:
         # plain read_text() decodes those with the platform default (UTF-8 on
         # Linux/WSL), garbling the degree/step lines so step detection finds
         # no temperature steps and temp/tnom parsing comes back empty.
+        if log_path.stat().st_size > _LOG_READ_CAP_BYTES:
+            with log_path.open("rb") as fh:
+                head = fh.read(_LOG_READ_CAP_BYTES)
+            logger.warning(
+                "log %s exceeds the %d-byte parse cap; reading head only",
+                log_path,
+                _LOG_READ_CAP_BYTES,
+            )
+            return decode_spice_bytes(head)
         return read_spice_text(log_path)
     except OSError:
         return ""
@@ -1069,9 +1090,10 @@ def parse_measurements(
     # filters them out, so without this pass they appear as a silent
     # absence — indistinguishable from a measurement that wasn't parsed.
     failed_names: list[str] = []
-    log_text = ""
+    # read_log_text (not read_spice_text): the FAIL scan below is a regex over
+    # the whole log, so it must inherit the same head-only parse cap.
+    log_text = read_log_text(log_path)
     try:
-        log_text = read_spice_text(log_path)
         # Preserve discovery order, drop duplicates (spicelib reports
         # FAIL'ed once per step, but the name is the same).
         seen: set[str] = set()
