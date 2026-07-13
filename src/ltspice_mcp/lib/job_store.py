@@ -145,6 +145,7 @@ def _serialize_batch_job(job: BatchJob) -> dict:
         "pid": job.owner_pid,
         "job_type": job.job_type,
         "netlist": str(job.netlist),
+        "simulator": job.simulator,
         "total_runs": job.total_runs,
         "completed_runs": job.completed_runs,
         "failed_runs": job.failed_runs,
@@ -375,6 +376,7 @@ def _deserialize_batch_job(data: dict) -> BatchJob:
         job_id=str(data["job_id"]),
         job_type=str(data.get("job_type", "sweep")),  # type: ignore[arg-type]
         netlist=Path(str(data["netlist"])),
+        simulator=str(data.get("simulator", "")),
         total_runs=int(data.get("total_runs", 0)),
         completed_runs=int(data.get("completed_runs", 0)),
         failed_runs=int(data.get("failed_runs", 0)),
