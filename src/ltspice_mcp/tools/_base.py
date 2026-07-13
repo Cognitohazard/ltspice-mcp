@@ -6,7 +6,6 @@ import copy
 import hashlib
 import json
 import logging
-import os
 import re
 import types as _stdlib_types
 import typing
@@ -865,16 +864,16 @@ def _stage_deck_snapshot(net_path: Path) -> Path:
 
     Named by a hash of its bytes so repeat exports of the same .asc reuse one
     file — the snapshots stay bounded to one per distinct deck content, not one
-    per run (a plain per-call unique name accumulates unbounded). Written via
-    ``os.replace`` so a concurrent reader sees a whole file, never a torn copy.
+    per run (a plain per-call unique name accumulates unbounded). Written
+    atomically so a concurrent reader sees a whole file, never a torn copy.
     """
+    from ltspice_mcp.lib import atomic_write_bytes
+
     data = net_path.read_bytes()
     digest = hashlib.sha1(data).hexdigest()[:12]
     snapshot = net_path.with_name(f"{net_path.stem}.run-{digest}{net_path.suffix}")
     if not snapshot.exists():
-        tmp = snapshot.with_name(f"{snapshot.name}.{os.getpid()}.tmp")
-        tmp.write_bytes(data)
-        os.replace(tmp, snapshot)
+        atomic_write_bytes(snapshot, data, durable=False)
     return snapshot
 
 

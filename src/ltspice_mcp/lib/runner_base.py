@@ -71,6 +71,11 @@ def _parse_runno(raw_file: Path) -> int | None:
     return int(match.group(1))
 
 
+def _failed_run_entry(log_file: str = "") -> dict:
+    """A ``run_results`` entry marking a batch sub-run failed (no raw produced)."""
+    return {"raw_file": "", "log_file": log_file, "params": {}, "failed": True}
+
+
 def batch_run_filename(job_id: str, runno: int, netlist: Path) -> str:
     """Per-run filename for a batch sub-run: ``"{job_id}_{runno}{ext}"``.
 
@@ -322,12 +327,9 @@ class BatchRunnerBase(RunnerBase):
         # 0-based key preserves the existing "first run = key 0" convention.
         run_index = (runno - 1) if runno is not None else batch_job.completed_runs
         if failed:
-            batch_job.run_results[run_index] = {
-                "raw_file": "",
-                "log_file": str(log_file) if log_file is not None else "",
-                "params": {},
-                "failed": True,
-            }
+            batch_job.run_results[run_index] = _failed_run_entry(
+                str(log_file) if log_file is not None else ""
+            )
             batch_job.failed_runs += 1
         else:
             batch_job.run_results[run_index] = {
@@ -362,12 +364,7 @@ class BatchRunnerBase(RunnerBase):
         """
         missing = [i for i in range(batch_job.total_runs) if i not in batch_job.run_results]
         for i in missing:
-            batch_job.run_results[i] = {
-                "raw_file": "",
-                "log_file": "",
-                "params": {},
-                "failed": True,
-            }
+            batch_job.run_results[i] = _failed_run_entry()
         if missing:
             batch_job.failed_runs += len(missing)
             batch_job.completed_runs = len(batch_job.run_results)

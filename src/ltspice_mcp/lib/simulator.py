@@ -229,9 +229,7 @@ def simulator_dialect(simulator_class: type | None) -> str | None:
     explicit hint because older versions (e.g. ngspice < 44) omit that
     header.
     """
-    if simulator_class is None:
-        return None
-    return _DIALECT_MAP.get(simulator_class.__name__)
+    return dialect_for_simulator_name(simulator_class.__name__) if simulator_class else None
 
 
 def dialect_for_simulator_name(name: str | None) -> str | None:
