@@ -47,11 +47,20 @@ class _MultiPlotAsciiGuard:
     that already breaks correctly.
     """
 
+    # Hard backstop: a forward-only reader always advances the high-water byte
+    # offset, so a run of reads that never passes it is a loop. Catches ANY
+    # pathological ASCII shape the specific break above doesn't, at a few dozen
+    # microseconds' cost. A legitimately huge raw advances every read, so this
+    # counts NON-advancing reads only — it can't false-positive on size.
+    _STALL_LIMIT = 128
+
     def __init__(self, fobj: object) -> None:
         self._f = fobj
         self._last_read_start: int | None = None
         self._last_nonempty = False
         self._break_at: int | None = None
+        self._max_pos = -1
+        self._stall_reads = 0
 
     def readline(self, *args: object) -> bytes:
         pos = self._f.tell()  # type: ignore[attr-defined]
@@ -63,6 +72,20 @@ class _MultiPlotAsciiGuard:
         self._last_read_start = pos
         line = self._f.readline(*args)  # type: ignore[attr-defined]
         self._last_nonempty = bool(line.strip())
+        new_pos = self._f.tell()  # type: ignore[attr-defined]
+        if new_pos > self._max_pos:
+            self._max_pos = new_pos
+            self._stall_reads = 0
+        else:
+            self._stall_reads += 1
+            if self._stall_reads > self._STALL_LIMIT:
+                # Fail THIS parse (surfaced as a parse error) rather than let a
+                # not-yet-understood loop hang the whole server.
+                raise RuntimeError(
+                    "ASCII raw parse made no forward progress for "
+                    f"{self._STALL_LIMIT} reads at byte {new_pos} — aborting a "
+                    "suspected parser loop (malformed or unsupported raw layout)."
+                )
         return line
 
     def seek(self, pos: int, *args: object) -> object:

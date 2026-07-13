@@ -629,6 +629,27 @@ class TestParseMeasurementsFromTo:
         assert entry.get("range_to") == pytest.approx(0.06)
 
 
+class TestLogReadCap:
+    def test_oversized_log_read_head_only(self, tmp_path: Path, monkeypatch):
+        # A log past the parse cap is read head-only so a pathological/adversarial
+        # log can't OOM the process or make the diagnostic regexes scan gigabytes.
+        import ltspice_mcp.lib.log_parser as lp
+
+        monkeypatch.setattr(lp, "_LOG_READ_CAP_BYTES", 100)
+        log = tmp_path / "huge.log"
+        log.write_bytes(b"HEAD" + b"x" * 5000)  # well over the 100-byte cap
+        text = lp.read_log_text(log)
+        assert text.startswith("HEAD")
+        assert len(text.encode()) <= 100
+
+    def test_normal_log_read_in_full(self, tmp_path: Path):
+        # Under the cap → full read, unchanged behavior.
+        log = tmp_path / "ok.log"
+        body = "LTspice\n.step rval=100\n" + "line\n" * 50
+        log.write_text(body)
+        assert read_log_text(log) == body
+
+
 class TestParseStepIterations:
     def test_single_param_per_line(self, tmp_path: Path):
         """``.step param X list ...`` writes ``.step x=val`` per
