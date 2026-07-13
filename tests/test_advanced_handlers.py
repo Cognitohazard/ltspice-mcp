@@ -500,6 +500,63 @@ class TestConfigureMonteCarlo:
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+class TestMonteCarloMismatchPreflight:
+    """A mismatch rule that matches zero devices must be surfaced, not run as a
+    clean zero-spread Monte Carlo. Foundry-PDK FETs are X-subckt instances,
+    which per-instance mismatch (top-level M only) can't reach."""
+
+    async def test_zero_match_on_subckt_fets_warns(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        deck = work_dir / "pdk_mc.cir"
+        deck.write_text(
+            "* PDK-style deck: the only FET is inside a subckt\n"
+            "X1 d g 0 0 nfet W=1u L=0.15u\n"
+            ".subckt nfet d g s b\n"
+            "M1 d g s b nch\n"
+            ".model nch NMOS level=1\n"
+            ".ends\n"
+            "V1 g 0 1\n"
+            ".op\n"
+            ".end\n"
+        )
+        result = await handle_configure_montecarlo(
+            ConfigureMonteCarloInput(
+                netlist=deck.name,
+                mismatch=[MonteCarloMismatchRule(AVT=3e-3)],
+                num_runs=10,
+            ),
+            state_no_sim,
+        )
+        warnings = result.structuredContent.get("warnings", [])
+        assert any("match 0 devices" in w for w in warnings), warnings
+        assert any("subcircuit" in w.lower() for w in warnings), warnings
+
+    async def test_top_level_m_device_does_not_warn(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        deck = work_dir / "flat_mc.cir"
+        deck.write_text(
+            "* flat deck with a top-level FET\n"
+            "M1 d g 0 0 nch W=1u L=0.15u\n"
+            ".model nch NMOS\n"
+            "V1 g 0 1\n"
+            ".op\n"
+            ".end\n"
+        )
+        result = await handle_configure_montecarlo(
+            ConfigureMonteCarloInput(
+                netlist=deck.name,
+                mismatch=[MonteCarloMismatchRule(AVT=3e-3)],
+                num_runs=10,
+            ),
+            state_no_sim,
+        )
+        warnings = result.structuredContent.get("warnings", [])
+        assert not any("match 0 devices" in w for w in warnings), warnings
+
+
 class TestRunMonteCarlo:
     async def test_unknown_config(self, state_no_sim: SessionState):
         with pytest.raises(BatchJobError, match="not found"):
