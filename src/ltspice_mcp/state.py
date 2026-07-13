@@ -198,6 +198,9 @@ class SessionState:
     def ensure_jobs_loaded_for(self, circuit_path: Path) -> None:
         self.job_registry.ensure_loaded_for(circuit_path)
 
+    async def ensure_jobs_loaded_for_async(self, circuit_path: Path) -> None:
+        await self.job_registry.ensure_loaded_for_async(circuit_path)
+
     # ------------------------------------------------------------------
     # Recent-circuits index (session-scoped state, not job-scoped)
     # ------------------------------------------------------------------
