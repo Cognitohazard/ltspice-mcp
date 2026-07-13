@@ -22,6 +22,7 @@ from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.lib.log_parser import (
     extract_log_diagnostics,
+    is_op_stepping_failure,
     parse_fourier_data,
     parse_measurements,
 )
@@ -548,6 +549,35 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     return metrics
 
 
+def _raw_node_data_is_finite(
+    raw: RawRead, trace_names: list[str], has_axis: bool, step: int
+) -> bool:
+    """Whether the raw's node traces hold real, finite data (a solved bias point).
+
+    ngspice can print an OP ``<method> stepping failed`` line, recover via a
+    later method it does not announce in wording this parser recognizes, and
+    still write a valid raw — but it ALSO writes a rail-pinned/NaN raw on a
+    genuine floating-node failure and exits 0. The log alone can't tell recovery
+    from failure; the data can. Returns True only when at least one non-axis
+    trace was checked and every checked trace is finite and off the ~1e30 rail.
+    """
+    axis = trace_names[0] if (has_axis and trace_names) else None
+    checked = 0
+    for name in trace_names:
+        if name == axis:
+            continue
+        try:
+            arr = np.asarray(raw.get_wave(name, step=step))
+        except Exception:
+            continue
+        if arr.size == 0:
+            continue
+        if not np.all(np.isfinite(arr)) or float(np.abs(arr).max()) > 1e29:
+            return False
+        checked += 1
+    return checked > 0
+
+
 def build_simulation_summary(
     raw: RawRead,
     log_path: Path | None,
@@ -677,6 +707,29 @@ def build_simulation_summary(
                 summary["meas_errors"] = diagnostics["meas_errors"]
         except Exception:
             pass
+
+        # Raw-validity gate for OP "stepping failed" errors. The log-only
+        # converged-check keys on LTspice's success wording, so an ngspice run
+        # that recovered via an unannounced fallback leaves a false hard error.
+        # When the raw actually holds finite, off-rail node data, the solve DID
+        # recover — demote those stepping-failure errors to warnings. A genuine
+        # no-data run (NaN/±1e30 raw) fails the check and keeps the error, and
+        # always-terminal failures (iteration limit) aren't candidates. Only
+        # loads waves when such an error exists, so the cost is paid rarely.
+        errs = summary.get("errors")
+        if errs:
+            demoted = [e for e in errs if is_op_stepping_failure(e)]
+            if demoted and _raw_node_data_is_finite(raw, trace_names, has_axis, step):
+                kept = [e for e in errs if e not in demoted]
+                if kept:
+                    summary["errors"] = kept
+                else:
+                    summary.pop("errors", None)
+                warnings.extend(
+                    f"{d} — run produced finite node data (OP solve recovered via an "
+                    "unlabeled fallback); surfaced as a warning, not an error."
+                    for d in demoted
+                )
 
         # Stepped ``.op`` runs the bias point per step, but LTspice only
         # writes step 0 to the .raw — leaving the user thinking it's the
