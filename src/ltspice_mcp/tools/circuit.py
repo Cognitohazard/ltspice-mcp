@@ -68,7 +68,7 @@ from ltspice_mcp.lib.spice_validator import (
     validate_netlist_dangling_nodes,
     validate_netlist_directive_refs,
 )
-from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, get_symbol_info
+from ltspice_mcp.lib.symbol_geometry import SymbolInfo, compute_placed_geometry, get_symbol_info
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     BBOX_SCHEMA,
@@ -147,7 +147,7 @@ def _reject_unknown_attr(attribute: str) -> None:
             "Attribute 'Prefix' is a symbol property, not an instance "
             "attribute — the element prefix comes from the symbol's .asy "
             "file ('SYMATTR Prefix ...'). To place a subcircuit (X-prefix) "
-            "device, add_component with a symbol whose .asy declares "
+            "device, use the apply_schematic_ops add_component op with a symbol whose .asy declares "
             "'SYMATTR Prefix X', then bind the subckt name via Value or "
             "SpiceModel."
         )
@@ -521,6 +521,19 @@ def _collect_component_geometry(editor: AscEditor) -> list[dict]:
     return result
 
 
+def _overlap_warnings(editor: AscEditor, reference: str, bbox: dict[str, int]) -> list[str]:
+    """Warn for each other component whose bounding box overlaps ``bbox``.
+
+    Shared by add_component placement and move_component reposition — both flag
+    where a just-placed or just-moved part lands on top of another.
+    """
+    return [
+        f"Overlaps {existing['ref']} bounding box"
+        for existing in _collect_component_geometry(editor)
+        if existing["ref"] != reference and _bboxes_overlap(bbox, existing)
+    ]
+
+
 def _component_pin_coords(editor: AscEditor, reference: str) -> set[tuple[int, int]]:
     """Pin coordinates for a single component, ``set()`` if symbol unknown."""
     if reference not in editor.components:
@@ -849,29 +862,18 @@ def _post_op_warnings(editor: AscEditor) -> list[dict]:
     return warnings
 
 
-def _scope_floating_pin_warnings(
-    warnings: list[dict], refs: set[str] | str, *, keep_other_kinds: bool
-) -> list[dict]:
-    """Scope ``_post_op_warnings`` floating-pin advisories to ``refs``.
+def _scope_floating_pin_warnings(warnings: list[dict], refs: set[str]) -> list[dict]:
+    """Drop floating-pin advisories except those on ``refs``; keep other kinds.
 
     ``_post_op_warnings`` returns the whole schematic's floating pins on every
     call, so during an incremental build it re-emits every not-yet-wired pin —
-    O(n²) noise that buries the one actionable warning. Each mutating handler
-    keeps only the floating pins of the component(s) it touched: ``add_component``
-    passes its new ref with ``keep_other_kinds=False`` (a bare placement raises
-    no other advisory); ``connect`` passes its two touched refs with
-    ``keep_other_kinds=True`` so the shorts / junction-overlap warnings it *can*
-    create still pass through.
+    O(n²) noise that buries the one actionable warning. ``connect`` (the sole
+    caller) scopes floating-pin warnings to its two touched refs while letting
+    the shorts / junction-overlap warnings it *can* create pass through. Bare
+    placement via the ``add_component`` op raises no floating-pin advisory at
+    all — every pin is floating by construction — so it doesn't call this.
     """
-    ref_set = {refs} if isinstance(refs, str) else refs
-    result = []
-    for w in warnings:
-        if w.get("kind") == "floating_pin":
-            if w.get("ref") in ref_set:
-                result.append(w)
-        elif keep_other_kinds:
-            result.append(w)
-    return result
+    return [w for w in warnings if w.get("kind") != "floating_pin" or w.get("ref") in refs]
 
 
 def _validation_warnings_lines(warnings: list[dict]) -> list[str]:
@@ -2515,9 +2517,7 @@ def _move_component_warnings(
         if moved_sym is not None:
             moved_bb = compute_placed_geometry(moved_sym, x, y, rot_name)["bounding_box"]
     if moved_bb is not None:
-        for ebb in _collect_component_geometry(editor):
-            if ebb["ref"] != reference and _bboxes_overlap(moved_bb, ebb):
-                warnings.append(f"Overlaps {ebb['ref']} bounding box")
+        warnings.extend(_overlap_warnings(editor, reference, moved_bb))
 
     # Pins that the move abandoned (no longer this component's, not a neighbour's)
     # but that still have a wire ending on them are orphaned by the move.
@@ -2654,33 +2654,32 @@ async def handle_set_component_attribute(
     return text_response(f"Set {reference}.{attribute} = {value}")
 
 
-@registry.tool(
-    name="add_component",
-    description="Add a new component to an .asc schematic at a specified grid position.",
-    input_model=AddComponentInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-    output_schema={
-        "type": "object",
-        "properties": {
-            "reference": {"type": "string"},
-            "symbol": {"type": "string"},
-            "position": {
-                "type": "object",
-                "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
-            },
-            "rotation": {"type": "string"},
-            "pins": {"type": "array", "items": PIN_SCHEMA},
-            "bounding_box": BBOX_SCHEMA,
-            "warnings": WARNINGS_SCHEMA,
-        },
-    },
-)
+def _placed_component_data(
+    editor: AscEditor,
+    reference: str,
+    symbol: str,
+    x: int,
+    y: int,
+    rotation: str,
+    symbol_info: SymbolInfo,
+) -> dict[str, object]:
+    """Return the placed symbol geometry and any component-overlap warnings."""
+    geometry = compute_placed_geometry(symbol_info, x, y, rotation)
+    bounding_box = geometry["bounding_box"]
+    warnings = _overlap_warnings(editor, reference, bounding_box)
+    return {
+        "reference": reference,
+        "symbol": symbol,
+        "position": {"x": x, "y": y},
+        "rotation": rotation,
+        "pins": geometry["pins"],
+        "bounding_box": bounding_box,
+        "warnings": warnings,
+    }
+
+
+# Unregistered schematic mutation. Reached via apply_schematic_ops' add_component
+# op; kept as an internal handler so its existing direct tests remain useful.
 async def handle_add_component(
     args: AddComponentInput, state: SessionState
 ) -> types.CallToolResult:
@@ -2699,7 +2698,8 @@ async def handle_add_component(
     # Validate the symbol exists BEFORE touching the file. Saving a .asc with
     # a dangling symbol name corrupts it — spicelib's AscEditor refuses to
     # re-open such a file because it can't find the .asy on reset_netlist().
-    if get_symbol_info(symbol) is None:
+    symbol_info = get_symbol_info(symbol)
+    if symbol_info is None:
         raise NetlistError(
             f"Symbol '{symbol}' not found in any configured symbol library. "
             "Use symbol_info to verify the symbol name, or "
@@ -2730,48 +2730,23 @@ async def handle_add_component(
         # actionable) and validate_netlist (the end-of-build gate); the pin
         # positions are already in this response.
 
+        data = _placed_component_data(editor, reference, symbol, x, y, rotation, symbol_info)
+
     result = f"Added {reference} ({symbol}) at ({x},{y})"
     if value is not None:
         result += f" = {value}"
 
-    sym_info = get_symbol_info(symbol)
-    if sym_info is None:
-        fallback_data = {
-            "reference": reference,
-            "symbol": symbol,
-            "position": {"x": x, "y": y},
-            "rotation": rotation,
-        }
-        return format_response(result, fallback_data, args.format)
-
-    geometry = compute_placed_geometry(sym_info, x, y, rotation)
-    for pin in geometry["pins"]:
+    pins = cast(list[dict[str, object]], data["pins"])
+    for pin in pins:
         result += f"\n  {pin['name']}: ({pin['x']}, {pin['y']}) [{pin['dir']}]"
-    bb = geometry["bounding_box"]
+    bb = cast(dict[str, int], data["bounding_box"])
     result += f"\n  bbox: ({bb['x']},{bb['y']}) {bb['width']}x{bb['height']}"
 
-    warnings: list[str] = []
-    for ebb in _collect_component_geometry(_get_asc_editor(asc_path, state)):
-        if ebb["ref"] == reference:
-            continue
-        if _bboxes_overlap(bb, ebb):
-            warnings.append(f"Overlaps {ebb['ref']} bounding box")
-
+    warnings = cast(list[str], data["warnings"])
     if warnings:
         result += "\n\nWarnings:"
         for w in warnings:
             result += f"\n  {w}"
-
-    data: dict = {
-        "reference": reference,
-        "symbol": symbol,
-        "position": {"x": x, "y": y},
-        "rotation": rotation,
-        "pins": geometry["pins"],
-        "bounding_box": geometry["bounding_box"],
-    }
-    if warnings:
-        data["warnings"] = warnings
 
     return format_response(result, data, args.format)
 
@@ -2895,10 +2870,11 @@ async def handle_export_netlist(
         "Revert an .asc schematic to the state it had BEFORE the first edit this "
         "session — a recovery escape hatch for when a sequence of edits went wrong. "
         "The server snapshots each .asc file's bytes just before its first in-session "
-        "mutation (add_component, set_component_value, move_component, connect, "
+        "mutation (component placement through apply_schematic_ops, "
+        "set_component_value, move_component, connect, "
         "apply_schematic_ops, etc.); this restores that snapshot exactly and drops it "
-        "(so a later edit establishes a fresh restore point). Because add_component is a "
-        "trigger, the first add_component on a freshly created schematic snapshots the "
+        "(so a later edit establishes a fresh restore point). Because component placement is a "
+        "trigger, the first placement on a freshly created schematic snapshots the "
         "empty file — so reset can revert all the way back to the empty post-create "
         "state, dropping every component added this session. Returns reverted=false (not an error) "
         "when the file has no recorded in-session edits. Note: the snapshot lives only "
@@ -3323,14 +3299,12 @@ async def handle_connect(args: ConnectInput, state: SessionState) -> types.CallT
         for sx1, sy1, sx2, sy2 in plan.segments:
             ed.wires.append(Line(Point(sx1, sy1), Point(sx2, sy2)))
         # Scope floating-pin advisories to the components this connect touched;
-        # keep_other_kinds keeps the shorts / junction-overlap warnings connect
-        # can create. rsplit matches _resolve_pin's ref/pin split convention.
+        # the shorts / junction-overlap warnings connect can create still pass
+        # through. rsplit matches _resolve_pin's ref/pin split convention.
         touched_refs = {
             pin.rsplit(".", 1)[0] for pin in (args.from_pin, args.to_pin) if "." in pin
         }
-        validation_warnings = _scope_floating_pin_warnings(
-            _post_op_warnings(ed), touched_refs, keep_other_kinds=True
-        )
+        validation_warnings = _scope_floating_pin_warnings(_post_op_warnings(ed), touched_refs)
 
     x1, y1, x2, y2, segments, warnings = (
         plan.x1,
@@ -3640,9 +3614,9 @@ class CreateSchematicInput(ToolInput):
 @registry.tool(
     name="create_schematic",
     description=(
-        "Create an empty .asc schematic ready for incremental editing via the "
-        "add_component and connect tools, plus the apply_schematic_ops "
-        "add_net_label op for ground/net flags. "
+        "Create an empty .asc schematic ready for incremental editing via "
+        "apply_schematic_ops add_component ops, the connect tool, and "
+        "apply_schematic_ops add_net_label ops for ground/net flags. "
         "Tip: prefer ``create_netlist`` + .cir for design iteration; "
         "use this only when a visual schematic is the deliverable."
         " Prefer apply_schematic_ops for multi-step builds (one transaction); "
@@ -4929,7 +4903,8 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
     decides whether to abort or continue based on ``stop_on_error``.
     """
     if isinstance(op, _OpAddComponent):
-        if get_symbol_info(op.symbol) is None:
+        symbol_info = get_symbol_info(op.symbol)
+        if symbol_info is None:
             raise NetlistError(f"Symbol '{op.symbol}' not found in any configured symbol library.")
         if op.reference in editor.components:
             raise NetlistError(f"Component '{op.reference}' already exists in {asc_path.name}.")
@@ -4944,7 +4919,18 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
             value=op.value,
             attributes=op.attributes,
         )
-        return {"op": "add_component", "reference": op.reference}
+        return {
+            "op": "add_component",
+            **_placed_component_data(
+                editor,
+                op.reference,
+                op.symbol,
+                op.x,
+                op.y,
+                op.rotation,
+                symbol_info,
+            ),
+        }
 
     if isinstance(op, _OpSetComponentValue):
         if op.reference not in editor.components:
@@ -5135,12 +5121,13 @@ def _collapse_result_warnings(results: list[dict[str, object]]) -> None:
     description=(
         "Apply many .asc edits in one transaction. Loads the schematic once, "
         "runs each op against the in-memory editor in order, and saves once at "
-        "the end. Cuts the typical 25+ tool calls to build a real circuit "
+        "the end. Component-placement results include pins, bounding boxes, "
+        "and overlap warnings for use by later routing ops. Cuts the typical "
+        "25+ tool calls to build a real circuit "
         "(add_component × N + connect × N + add_net_label × N + edit_directive "
         "× N) down to a single round-trip. This is also the home for the "
-        "ack-only schematic mutations that have no standalone tool — they return "
-        "no geometry to act on, so they live here rather than each costing a "
-        "separate tool slot.\n\n"
+        "ack-only schematic mutations that have no standalone tool, so they do "
+        "not each cost a separate tool slot.\n\n"
         "Supported ops (each tagged via the ``op`` field): ``add_component``, "
         "``set_component_value``, ``set_component_attribute``, "
         "``remove_component``, ``move_component``, ``add_net_label``, "
@@ -5184,6 +5171,17 @@ def _collapse_result_warnings(results: list[dict[str, object]]) -> None:
                         # Per-op payload merged in on success (which keys appear
                         # depends on the op). See _apply_op_inplace.
                         "reference": {"type": "string"},
+                        "symbol": {"type": "string"},
+                        "position": {
+                            "type": "object",
+                            "properties": {
+                                "x": {"type": "integer"},
+                                "y": {"type": "integer"},
+                            },
+                        },
+                        "rotation": {"type": "string"},
+                        "pins": {"type": "array", "items": PIN_SCHEMA},
+                        "bounding_box": BBOX_SCHEMA,
                         "value": {"type": "string"},
                         "attribute": {"type": "string"},
                         "deleted_wires": {"type": "integer"},

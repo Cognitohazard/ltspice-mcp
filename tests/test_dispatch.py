@@ -134,7 +134,6 @@ class TestToolProfiles:
         not be dropped from the agent-facing profile."""
         construction = {
             "create_schematic",
-            "add_component",
             "apply_schematic_ops",
         }
         _, handlers = get_tools_for_profile("agentic")
@@ -270,8 +269,7 @@ class TestOpInverseClosure:
 _TOOL_REVERSAL: dict[str, str] = {
     # Schematic op batch — per-op closure guarded by TestOpInverseClosure.
     "apply_schematic_ops": "per-op inverse (see TestOpInverseClosure)",
-    # Schematic standalone writes whose inverse is an apply_schematic_ops op.
-    "add_component": "remove_component op",
+    # Schematic standalone write whose inverse is an apply_schematic_ops op.
     "connect": "remove_wire op",
     # Self-inverse standalone edits (re-invoke with the prior value/state).
     "set_component_value": "re-set to prior value",
