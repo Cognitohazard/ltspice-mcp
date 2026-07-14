@@ -50,6 +50,10 @@ No Makefile. CI: `.github/workflows/publish.yml` (test + publish to PyPI on vers
 
 These are read by people outside this repo's internal process — keep internal jargon out of them. Do **not** use, in code comments, docstrings, commit messages, or branch names: severity codes (P0–P3), internal codenames for stress-test findings (e.g. J-KILL, J-MAXPAR), backlog item numbers (`open_followups` item N), or stress-test/audit version numbers (v9/v10/v14). Name a branch for what it changes, not the internal batch it came from (`fix/asc-export-lock`, not `fix/v14-audit-batch`). Describe the actual behavior, condition, or bug in plain technical terms instead. Internal planning docs and the backlog may use that shorthand; shipped code, git history, and branch names may not.
 
+## spicelib bugs
+
+spicelib is a pinned third-party dependency we cannot fix in place, so we work around its bugs and remove the workaround once upstream is fixed. **Whenever you hit a spicelib bug or limitation** — a wrong parse, a hang/infinite loop, a silently dropped field, an unapplied header value — **record it in `.claude/plans/spicelib_bugs.md`** as a self-contained, upstream-PR-ready section: summary, affected code + version, reproduction, impact, proposed fix, a suggested upstream test, and a cross-reference to our workaround and the test that pins it. Do this even when you also ship a workaround — the doc is the record of what to delete once upstream lands, and the reproduction is what lets someone (us or upstream) confirm the fix. Follow the format of the existing entries.
+
 ## Architecture
 
 All source lives under `src/ltspice_mcp/`.
