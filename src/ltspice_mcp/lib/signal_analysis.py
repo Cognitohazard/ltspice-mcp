@@ -861,7 +861,7 @@ def analyze_disturbance_response(
     t = np.asarray(t, dtype=float)
     y = np.asarray(y, dtype=float)
     if len(t) < 3:
-        raise ValueError("disturbance_response needs at least 3 samples in the window.")
+        raise ValueError("Disturbance response needs at least 3 samples in the window.")
     if settle_band is not None and settle_band <= 0:
         raise ValueError("settle_band must be positive.")
     if settle_band is None and settle_band_pct <= 0:

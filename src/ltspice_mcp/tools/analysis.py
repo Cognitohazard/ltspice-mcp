@@ -11,7 +11,7 @@ return derived metrics. Organized by what the tool answers:
 
     Waveform metrics (transient only, reject AC):
         edge_metrics        — rise/fall time + slew rate
-        pulse_response      — overshoot/undershoot/settling
+        transient_response  — step settling or disturbance recovery
         timing_between      — signed delay between two signals
         periodic_metrics    — period/frequency/duty/jitter
 
@@ -98,11 +98,9 @@ from ltspice_mcp.lib.result_observations import (
     relay_observations,
 )
 from ltspice_mcp.lib.signal_analysis import (
-    DisturbanceResponseOutput,
     EdgeMetricsOutput,
     MeasurementStatsEntry,
     PeriodicMetricsOutput,
-    PulseResponseOutput,
     ThdOutput,
     TimingBetweenOutput,
     analyze_disturbance_response,
@@ -646,7 +644,7 @@ class SimulationSummaryInput(ToolInput):
         "min/max is the useful worst-case reading. t_start/t_end are rejected "
         "— pass them via query_value at specific frequencies instead.\n\n"
         "Related tools: for rise/fall times use edge_metrics; for "
-        "overshoot/settling use pulse_response; for period/duty use "
+        "overshoot/settling use transient_response(mode='step'); for period/duty use "
         "periodic_metrics; to aggregate .MEAS values across a sweep "
         "use measurement_stats."
     ),
@@ -2736,6 +2734,88 @@ class DisturbanceResponseInput(ToolInput):
     format: FormatField = Field(default=None, description="'json' or 'text'")
 
 
+TransientResponseMode = Literal["step", "disturbance"]
+
+
+class TransientResponseInput(ToolInput):
+    mode: TransientResponseMode = Field(
+        description=(
+            "Response to measure: 'step' for a transition that ends at a new "
+            "steady level, or 'disturbance' for an excursion that returns to "
+            "its pre-event baseline."
+        )
+    )
+    raw_file: str | None = Field(
+        default=None,
+        description="Path to .raw transient result file. Pass this OR ``job_id`` (a job run), not both.",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Analyze a specific run of a completed sweep/MC (or single) job instead "
+            "of a raw_file path; pair with ``run_index``."
+        ),
+    )
+    run_index: int = Field(
+        default=0,
+        description="0-based run to analyze when ``job_id`` is given (default 0).",
+    )
+    signal: str = Field(description="Signal name (e.g. 'V(out)')")
+    step: int = Field(default=0, description="Step index for .step sweeps")
+    t_start: str | None = Field(
+        default=None,
+        description=(
+            "Window start in SPICE notation. For mode='step', place it at the "
+            "stimulus edge. For mode='disturbance', place it at or just before "
+            "the disturbance edge because recovery_time is measured from here."
+        ),
+    )
+    t_end: str | None = Field(
+        default=None,
+        description="Window end in SPICE notation; include enough tail to observe settling or recovery.",
+    )
+    initial_value: float | None = Field(
+        default=None,
+        description=(
+            "mode='step' only: pre-step steady value. Auto = mean of the first 10% of the window."
+        ),
+    )
+    final_value: float | None = Field(
+        default=None,
+        description=(
+            "mode='step' only: post-step steady value. Auto = mean of the last 10% of the window."
+        ),
+    )
+    settling_tolerance_pct: float = Field(
+        default=2.0,
+        description=(
+            "mode='step' only: settling band as percent of |final - initial| (default 2%)."
+        ),
+    )
+    baseline: float | None = Field(
+        default=None,
+        description=(
+            "mode='disturbance' only: pre-disturbance output level. Auto = mean "
+            "of the leading 10% of the window."
+        ),
+    )
+    settle_band: float | None = Field(
+        default=None,
+        description=(
+            "mode='disturbance' only: absolute recovery tolerance in signal "
+            "units; overrides settle_band_pct."
+        ),
+    )
+    settle_band_pct: float = Field(
+        default=2.0,
+        description=(
+            "mode='disturbance' only: recovery tolerance as percent of "
+            "|baseline| when settle_band is omitted (default 2%)."
+        ),
+    )
+    format: FormatField = Field(default=None, description="'json' or 'text'")
+
+
 class TimingBetweenInput(ToolInput):
     raw_file: str | None = Field(
         default=None,
@@ -2857,14 +2937,6 @@ class EdgeMetricsResponse(EdgeMetricsOutput):
     signal: str
 
 
-class PulseResponseResponse(PulseResponseOutput):
-    signal: str
-
-
-class DisturbanceResponseResponse(DisturbanceResponseOutput):
-    signal: str
-
-
 class TimingBetweenResponse(TimingBetweenOutput):
     signal_a: str
     signal_b: str
@@ -2930,7 +3002,7 @@ class MeasurementStatsResponse(TypedDict):
         "otherwise you get the first edge in the full waveform, which is "
         "often the power-up artifact. Use edge_index only when multiple "
         "edges in the window are intentional.\n\n"
-        "For settling/overshoot after the edge, use pulse_response. "
+        "For settling/overshoot after the edge, use transient_response(mode='step'). "
         "For delay between two signals' edges, use timing_between."
     ),
     input_model=EdgeMetricsInput,
@@ -2974,41 +3046,7 @@ async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
     return await _finish_metric(lines, data, raw_path, args.format)
 
 
-@registry.tool(
-    name="pulse_response",
-    description=(
-        "Use when you need step-response quality metrics: overshoot %, "
-        "undershoot %, settling time, peak value and peak time. Inputs a "
-        "transient .raw covering ONE step transition — ideally with the "
-        "stimulus edge near t_start and enough tail to see settling.\n\n"
-        "Returns: direction (rising/falling), initial/steady-state values, "
-        "peak (absolute and pct), settling_time (to within "
-        "settling_tolerance_pct band). settling_time is null in four cases, kept "
-        "distinct in the text and quality flags: 'never (within window)', "
-        "'undefined (full-pulse window)', 'unknown' when the trailing window is "
-        "too noisy to trust the final value (still ringing), and 'unknown' when "
-        "the signal entered the settle band only just before the window end (the "
-        "auto final value comes from that same short tail) — pass final_value "
-        "for either unknown, tighten t_start around the step edge, or extend "
-        "the window.\n\n"
-        "Definitions: overshoot is excursion BEYOND final in the step "
-        "direction; undershoot is excursion beyond initial opposite the "
-        "step direction. overshoot_pct = 0 means MEASURED overdamped, not "
-        "missing data. settling_tolerance_pct defaults to 2% of "
-        "|final - initial|; 1% and 5% are also common.\n\n"
-        "If the auto-detected initial/final (mean of first/last 10% of "
-        "window) is contaminated by ringing, pass explicit initial_value/"
-        "final_value. Rejects AC analysis.\n\n"
-        "For just rise/fall time without overshoot, use edge_metrics. For a "
-        "disturbance that returns to its own level — a mid-run load step, line "
-        "step, or injected glitch on a regulated output (net step ≈ 0, so step "
-        "metrics here would be meaningless) — use disturbance_response."
-    ),
-    input_model=PulseResponseInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=PulseResponseResponse,
-)
+# Internal compute adapter — exposed publicly via transient_response(mode="step").
 async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
     axis, wave, raw_path = await _load_real_signal(
         args.raw_file, args.signal, args.step, state, job_id=args.job_id, run_index=args.run_index
@@ -3067,33 +3105,8 @@ async def handle_pulse_response(args: PulseResponseInput, state: SessionState):
     return await _finish_metric(lines, data, raw_path, args.format)
 
 
-@registry.tool(
-    name="disturbance_response",
-    description=(
-        "Use for a regulated output under a load/line transient (LDO/PMIC): "
-        "measures droop and overshoot relative to the pre-disturbance baseline "
-        "and the time to recover to within a settle band of it. This is the "
-        "complement of pulse_response, which correctly nulls its step metrics "
-        "when the output returns to its own level (net step ≈ 0).\n\n"
-        "Set t_start at or just before the load-step edge — recovery_time is "
-        "measured from t_start, and the baseline auto-derives from the leading "
-        "10% of the window (pass ``baseline`` explicitly otherwise). The settle "
-        "band is ``settle_band`` (absolute) or ``settle_band_pct`` of |baseline| "
-        "(default 2%).\n\n"
-        "Returns baseline, min/max excursions with their times, max_droop, "
-        "max_overshoot, and recovery_time. recovery_time is null when the output "
-        "never re-enters the band before the window ends (extend the window) or "
-        "when the band is undefined (baseline ≈ 0 with no absolute settle_band) — "
-        "the reason is in ``warnings``. min_value/max_value are the raw worst-case "
-        "samples; droop/overshoot are clamped to ≥ 0 (positive-rail convention). "
-        "Rejects AC analysis; for a single step edge that doesn't return to its "
-        "start use pulse_response."
-    ),
-    input_model=DisturbanceResponseInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=DisturbanceResponseResponse,
-)
+# Internal compute adapter — exposed publicly via
+# transient_response(mode="disturbance").
 async def handle_disturbance_response(args: DisturbanceResponseInput, state: SessionState):
     axis, wave, raw_path = await _load_real_signal(
         args.raw_file, args.signal, args.step, state, job_id=args.job_id, run_index=args.run_index
@@ -3125,6 +3138,67 @@ async def handle_disturbance_response(args: DisturbanceResponseInput, state: Ses
     if data.get("quality"):
         lines.append(f"Quality flags: {', '.join(data['quality'])}")
     return await _finish_metric(lines, data, raw_path, args.format)
+
+
+@registry.tool(
+    name="transient_response",
+    description=(
+        "Transient event-response analysis selected by `mode`. Use "
+        "mode='step' when the signal ends at a new steady level: returns "
+        "overshoot, undershoot, peak value/time, and settling time; "
+        "initial_value, final_value, and settling_tolerance_pct apply only to "
+        "this mode. Use mode='disturbance' when a regulated output deviates "
+        "from and returns to its pre-event level: returns baseline-relative "
+        "droop/overshoot and recovery time; baseline, settle_band, and "
+        "settle_band_pct apply only to this mode.\n\n"
+        "Choose a window around one event and include enough tail to observe "
+        "settling or recovery. For only rise/fall time and slew rate, use "
+        "edge_metrics. If the output returns to its starting level, use "
+        "mode='disturbance'; if it remains at a new level, use mode='step'. "
+        "Warnings and quality flags include any recovery guidance needed when "
+        "a metric is unavailable. Rejects non-transient analyses."
+    ),
+    input_model=TransientResponseInput,
+    annotations=RO_ANNOTATIONS,
+    profiles=("full", "agentic"),
+)
+async def handle_transient_response(
+    args: TransientResponseInput, state: SessionState
+) -> types.CallToolResult:
+    """Dispatch to the selected transient response compute adapter."""
+    if args.mode == "step":
+        return await handle_pulse_response(
+            PulseResponseInput(
+                raw_file=args.raw_file,
+                job_id=args.job_id,
+                run_index=args.run_index,
+                signal=args.signal,
+                step=args.step,
+                t_start=args.t_start,
+                t_end=args.t_end,
+                initial_value=args.initial_value,
+                final_value=args.final_value,
+                settling_tolerance_pct=args.settling_tolerance_pct,
+                format=args.format,
+            ),
+            state,
+        )
+    return await handle_disturbance_response(
+        DisturbanceResponseInput(
+            raw_file=args.raw_file,
+            job_id=args.job_id,
+            run_index=args.run_index,
+            signal=args.signal,
+            step=args.step,
+            t_start=args.t_start,
+            t_end=args.t_end,
+            baseline=args.baseline,
+            settle_band=args.settle_band,
+            settle_band_pct=args.settle_band_pct,
+            format=args.format,
+        ),
+        state,
+    )
 
 
 @registry.tool(
