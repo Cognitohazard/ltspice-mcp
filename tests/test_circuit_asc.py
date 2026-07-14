@@ -287,8 +287,10 @@ class TestAddComponent:
         text = _result_text(result)
         assert "Added R2" in text
         assert "2k" in text
-        assert result.structuredContent["reference"] == "R2"
-        assert "pins" in result.structuredContent
+        data = result.structuredContent
+        assert data is not None
+        assert data["reference"] == "R2"
+        assert "pins" in data
 
     async def test_add_duplicate(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="already exists"):
@@ -1513,6 +1515,45 @@ class TestRemoveComponentNoFalseOrphans:
 class TestApplySchematicOps:
     """apply_schematic_ops batches add/connect/label/directive."""
 
+    async def test_add_component_result_includes_placed_geometry_and_overlap_warnings(
+        self, asc_state: SessionState
+    ):
+        from ltspice_mcp.tools.circuit import (
+            CreateSchematicInput,
+            handle_create_schematic,
+        )
+
+        await handle_create_schematic(CreateSchematicInput(name="batch_geometry"), asc_state)
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="batch_geometry.asc",
+                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
+                    {
+                        "op": "add_component",
+                        "reference": "R1",
+                        "symbol": "res",
+                        "x": 100,
+                        "y": 100,
+                    },
+                    {
+                        "op": "add_component",
+                        "reference": "R2",
+                        "symbol": "res",
+                        "x": 100,
+                        "y": 100,
+                    },
+                ],
+            ),
+            asc_state,
+        )
+
+        data = result.structuredContent
+        assert data is not None
+        added = data["results"][1]
+        assert added["pins"]
+        assert added["bounding_box"] == {"x": 84, "y": 52, "width": 32, "height": 96}
+        assert added["warnings"] == ["Overlaps R1 bounding box"]
+
     async def test_basic_transaction(self, asc_state: SessionState, work_dir: Path):
         from ltspice_mcp.tools.circuit import (
             CreateSchematicInput,
@@ -2291,7 +2332,9 @@ class TestAddComponentFloatingFilter:
             AddComponentInput(path="build.asc", reference="R2", symbol="res", x=400, y=100),
             asc_state,
         )
-        vw = res.structuredContent.get("validation_warnings", [])
+        data = res.structuredContent
+        assert data is not None
+        vw = data.get("validation_warnings", [])
         refs = {w["ref"] for w in vw}
         assert refs <= {"R2"}
         assert "R1" not in refs
@@ -2482,7 +2525,9 @@ class TestAddComponentRealSymbols:
             )
             assert f"Added {ref}" in _result_text(result)
             # Geometry comes from parsing the real .asy; empty pins = a broken parse.
-            assert result.structuredContent["pins"]
+            data = result.structuredContent
+            assert data is not None
+            assert data["pins"]
 
     async def test_real_resistor_pins_are_a_b(self, real_state: SessionState):
         # The fixture res uses numeric pins 1/2; the real LTspice res uses A/B.

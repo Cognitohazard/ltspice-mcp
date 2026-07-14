@@ -75,7 +75,7 @@ DOC_PATHS = (
     "skills/ngspice/SKILL.md",
 )
 
-# Tool names that existed before the v0.2.0 consolidation and no longer do.
+# Tool names that existed before the consolidations and no longer do.
 # Their functionality moved into other tools (bode_metrics modes, query_value
 # step addressing, simulation_summary, find_model, edit_directive); a doc that
 # still names them as tools sends users chasing ghosts.
@@ -91,6 +91,8 @@ REMOVED_TOOL_NAMES = (
     "get_measurements",
     "get_simulation_summary",
     "schematic_from_netlist",
+    "pulse_response",
+    "disturbance_response",
 )
 
 
@@ -134,7 +136,7 @@ class TestStaleToolNamesInDocs:
             "Docs reference tools that no longer exist:\n"
             + "\n".join(failures)
             + "\nPoint at the absorbing tool instead (bode_metrics modes, "
-            "query_value step_axis/step_value, simulation_summary, "
+            "query_value step_axis/step_value, transient_response modes, simulation_summary, "
             "find_model, edit_directive)."
         )
 
