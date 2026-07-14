@@ -73,8 +73,9 @@ def _step_response(arguments: Mapping[str, str]) -> types.GetPromptResult:
         "1. Drive the input with a step (a PULSE/PWL source) and set a `.tran` run long "
         "enough for the output to settle.\n"
         "2. validate_netlist, then run_simulation.\n"
-        f"3. Use edge_metrics or pulse_response on the output{target} for rise time, "
-        "overshoot, and settling time; plot_waveform to visualize.\n"
+        f"3. Use edge_metrics on the output{target} for rise time and "
+        "transient_response(mode='step') for overshoot and settling time; "
+        "plot_waveform to visualize.\n"
         "Report rise time, overshoot %, and settling time."
     )
     return _text_result("Measure a step response", text)

@@ -40,6 +40,7 @@ from ltspice_mcp.tools.analysis import (
     StabilityMetricsInput,
     ThdInput,
     TimingBetweenInput,
+    TransientResponseInput,
     _filter_operating_point,
     _split_ratio,
     _trace_device,
@@ -66,6 +67,7 @@ from ltspice_mcp.tools.analysis import (
     handle_stability_metrics,
     handle_thd,
     handle_timing_between,
+    handle_transient_response,
 )
 from ltspice_mcp.tools.circuit import (
     StepGetInput,
@@ -921,6 +923,7 @@ class TestPulseResponse:
             state_no_sim,
         )
         sc = result.structuredContent
+        assert sc is not None
         assert sc["direction"] == "rising"
         assert sc["overshoot_pct"] > 0
         assert sc["initial_value"] == 0.0
@@ -962,9 +965,12 @@ class TestPulseResponse:
             state_no_sim,
         )
         sc = result.structuredContent
+        assert sc is not None
         assert sc["settling_time"] is None
         assert "settling_final_value_from_noisy_tail" in sc["quality"]
-        text = result.content[0].text
+        item = result.content[0]
+        assert isinstance(item, types.TextContent)
+        text = item.text
         assert "unknown" in text.lower()
         assert "never (within window)" not in text
 
@@ -987,9 +993,12 @@ class TestPulseResponse:
             state_no_sim,
         )
         sc = result.structuredContent
+        assert sc is not None
         assert sc["settling_time"] is None
         assert "settling_dwell_near_window_end" in sc["quality"]
-        text = result.content[0].text
+        item = result.content[0]
+        assert isinstance(item, types.TextContent)
+        text = item.text
         assert "unknown" in text.lower()
         assert "never (within window)" not in text
 
@@ -3315,10 +3324,106 @@ class TestDisturbanceResponseTool:
             state_no_sim,
         )
         sc = result.structuredContent
+        assert sc is not None
         assert sc["signal"] == "V(out)"
         assert sc["baseline"] == pytest.approx(3.3, abs=1e-6)
         assert sc["max_droop"] == pytest.approx(0.1, abs=2e-4)
         assert sc["recovery_time"] == pytest.approx(1.835e-3, abs=5e-5)
+
+
+@pytest.mark.asyncio
+class TestTransientResponseDispatch:
+    async def test_step_mode_dispatches_shared_and_step_fields(
+        self, state_no_sim: SessionState, monkeypatch: pytest.MonkeyPatch
+    ):
+        captured: PulseResponseInput | None = None
+        sentinel = object()
+
+        async def fake_step(args: PulseResponseInput, state: SessionState):
+            nonlocal captured
+            captured = args
+            assert state is state_no_sim
+            return sentinel
+
+        monkeypatch.setattr("ltspice_mcp.tools.analysis.handle_pulse_response", fake_step)
+        result = await handle_transient_response(
+            TransientResponseInput(
+                mode="step",
+                raw_file="step.raw",
+                signal="V(out)",
+                step=2,
+                t_start="1m",
+                t_end="2m",
+                initial_value=0.0,
+                final_value=3.3,
+                settling_tolerance_pct=1.0,
+                format="json",
+            ),
+            state_no_sim,
+        )
+
+        assert result is sentinel
+        assert captured is not None
+        assert captured.model_dump() == {
+            "raw_file": "step.raw",
+            "job_id": None,
+            "run_index": 0,
+            "signal": "V(out)",
+            "step": 2,
+            "t_start": "1m",
+            "t_end": "2m",
+            "initial_value": 0.0,
+            "final_value": 3.3,
+            "settling_tolerance_pct": 1.0,
+            "format": "json",
+        }
+
+    async def test_disturbance_mode_dispatches_shared_and_disturbance_fields(
+        self, state_no_sim: SessionState, monkeypatch: pytest.MonkeyPatch
+    ):
+        captured: DisturbanceResponseInput | None = None
+        sentinel = object()
+
+        async def fake_disturbance(args: DisturbanceResponseInput, state: SessionState):
+            nonlocal captured
+            captured = args
+            assert state is state_no_sim
+            return sentinel
+
+        monkeypatch.setattr(
+            "ltspice_mcp.tools.analysis.handle_disturbance_response", fake_disturbance
+        )
+        result = await handle_transient_response(
+            TransientResponseInput(
+                mode="disturbance",
+                job_id="mc_1",
+                run_index=4,
+                signal="V(vout)",
+                t_start="10u",
+                t_end="50u",
+                baseline=1.8,
+                settle_band=0.01,
+                settle_band_pct=0.5,
+                format="text",
+            ),
+            state_no_sim,
+        )
+
+        assert result is sentinel
+        assert captured is not None
+        assert captured.model_dump() == {
+            "raw_file": None,
+            "job_id": "mc_1",
+            "run_index": 4,
+            "signal": "V(vout)",
+            "step": 0,
+            "t_start": "10u",
+            "t_end": "50u",
+            "baseline": 1.8,
+            "settle_band": 0.01,
+            "settle_band_pct": 0.5,
+            "format": "text",
+        }
 
 
 @pytest.mark.asyncio

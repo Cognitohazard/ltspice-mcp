@@ -41,7 +41,7 @@ scripts directly. MCP applies in specific contexts:
 - **Structured analysis as the default.** The analysis tools return the
   numbers an agent reasons over — `bode_metrics` for -3 dB points,
   slopes, and crossings; `signal_stats` / `edge_metrics` /
-  `pulse_response` for transient shape — as schema-typed results, so the
+  `transient_response(mode="step"|"disturbance")` for transient shape — as schema-typed results, so the
   common questions are answered without reading anything off an image.
   Decimated raw-waveform egress ships as `get_waveform` (a min/max
   stat-envelope for seeing shape); rendered plots remain roadmapped. Both
@@ -66,8 +66,8 @@ Python, and there's an extra process to maintain.
 |SPICEAssistant (arxiv 2507.10639)|none|N/A|measurement extractors|N/A — research only|
 |LTspice GUI|interactive|interactive|GUI-driven|N/A|
 
-Geometry-aware editing tools — `connect`, `add_component`,
-`apply_schematic_ops` (whose ops include `move_component`,
+Geometry-aware editing tools — `connect` and `apply_schematic_ops`
+(whose ops include `add_component`, `move_component`,
 `add_net_label` with `pin="M3.S"`, `remove_net_label`, and
 `remove_wire`) — work against pin coordinates, bounding
 boxes, and named-net topology: `connect` refuses diagonal wires,
@@ -80,9 +80,11 @@ boxes looked up before an edit, not validators of one.
 ### Standalone tool vs. apply_schematic_ops op
 
 A schematic mutation earns a standalone MCP tool only when its result
-returns information the model acts on (structured output the next call
-consumes — `add_component`'s pin geometry and bounding box, `connect`'s
-routing result). An ack-only mutation — one that just confirms "done" —
+returns information the model acts on and cannot already be obtained through
+the batch surface (`connect`'s routing result). Component placement belongs to
+`apply_schematic_ops`: its `add_component` op returns the placed pins, bounding
+box, and overlap warnings, while `symbol_info` provides the non-destructive
+preview. An ack-only mutation — one that just confirms "done" —
 lives only as an `apply_schematic_ops` op: a standalone tool's schema
 costs the model context whether or not it is ever called, and that cost
 is only earned by a useful return. The MCP guidance is fewer, more
@@ -122,8 +124,9 @@ shipped mechanisms instead:
 
 - **Validate-before-write refusals** — `connect` refuses invalid
   geometry before the file is touched, with itemized error text naming
-  the conflicting segments, pins, or labels; `add_component` places the
-  part and returns its pin positions plus non-blocking overlap warnings.
+  the conflicting segments, pins, or labels; the `apply_schematic_ops`
+  `add_component` op places the part and returns its pin positions plus
+  non-blocking overlap warnings.
 - **`reset_schematic`** — reverts an `.asc` to the byte snapshot taken
   before its first in-session mutation; the recovery hatch when an
   edit sequence went wrong.
@@ -378,8 +381,8 @@ Key `lib/` modules:
 
 |profile|tool count|use case|
 |-|-|-|
-|`full` (default)|51|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
-|`agentic`|43|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
+|`full` (default)|49|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
+|`agentic`|41|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
 
 The `agentic` profile drops 8 tools: the five netlist-editing wrappers
 (`create_netlist`, `read_circuit`, `set_component_value`, `parameter`,
@@ -394,10 +397,10 @@ LTspice `.step`. It keeps simulation lifecycle,
 binary `.raw` parsing and analysis, batch run/results, library search
 (`find_model`), and the schematic toolset an agent cannot replicate
 by editing text — geometry-aware editing with orthogonal routing and
-pin-collision/junction checks: `create_schematic`, `add_component`,
-`apply_schematic_ops`, `connect`, `export_netlist`,
+pin-collision/junction checks: `create_schematic`, `apply_schematic_ops`,
+`connect`, `export_netlist`,
 `reset_schematic`, `symbol_info`, `component_info`, `trace_net`. The
-ack-only mutations (`move_component`, `remove_component`,
+`add_component` placement and the ack-only mutations (`move_component`, `remove_component`,
 `set_component_attribute`, `add_net_label`, `remove_net_label`,
 `remove_wire`) are `apply_schematic_ops` ops, not standalone tools.
 
