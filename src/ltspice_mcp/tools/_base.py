@@ -343,6 +343,10 @@ class RegisteredTool:
     handler: Callable
     input_model: type[ToolInput] | None
     profiles: frozenset[str]
+    # Deprecated former names that still dispatch to this tool but are NOT
+    # advertised in the tool list (keeps a rename back-compatible without
+    # growing the tool surface).
+    aliases: frozenset[str] = frozenset()
 
 
 def _strip_titles(node: Any) -> Any:
@@ -533,6 +537,7 @@ class ToolRegistry:
         output_schema: dict[str, Any] | None = None,
         output_model: type | None = None,
         meta: dict[str, Any] | None = None,
+        aliases: tuple[str, ...] = (),
     ) -> Callable[[Callable], Callable]:
         """Register a tool and derive its schema from the input model.
 
@@ -585,6 +590,7 @@ class ToolRegistry:
                     handler=wrapped,
                     input_model=input_model,
                     profiles=frozenset(profiles),
+                    aliases=frozenset(aliases),
                 )
             )
             return wrapped
@@ -597,7 +603,9 @@ class ToolRegistry:
         Lets the dispatcher tell a profile-filtered tool (exists, hidden by the
         active profile) apart from a genuinely unknown name.
         """
-        return {rt.definition.name for rt in self._registered}
+        return {rt.definition.name for rt in self._registered} | {
+            a for rt in self._registered for a in rt.aliases
+        }
 
     def get_for_profile(self, profile: str) -> tuple[list[types.Tool], dict[str, RegisteredTool]]:
         """Return the tool list and dispatch map for a profile."""
@@ -608,6 +616,21 @@ class ToolRegistry:
             if effective_profile in registered.profiles:
                 tool_defs.append(registered.definition)
                 tool_dispatch[registered.definition.name] = registered
+        # Second pass: deprecated aliases dispatch to their tool but are not
+        # listed in tool_defs. Done AFTER all definition names so a real tool
+        # name always wins; a collision with a real name or another tool's
+        # alias is a registration bug we surface loudly, never silently drop.
+        for registered in self._registered:
+            if effective_profile not in registered.profiles:
+                continue
+            for alias in registered.aliases:
+                existing = tool_dispatch.get(alias)
+                if existing is not None and existing is not registered:
+                    raise ValueError(
+                        f"Alias {alias!r} of tool {registered.definition.name!r} collides "
+                        f"with an existing tool name or alias ({existing.definition.name!r})"
+                    )
+                tool_dispatch[alias] = registered
         return tool_defs, tool_dispatch
 
 
@@ -973,6 +996,12 @@ _RE_EXISTING_WRITE = re.compile(rb"(?im)^[ \t]*(?:write|wrdata)\b")
 # ``quit``/``exit`` end control-script execution; a command placed after one
 # would never run, so the injected ``write`` must land before the LAST one.
 _RE_QUIT_EXIT = re.compile(rb"(?im)^[ \t]*(?:quit|exit)\b.*$")
+# A tail (from just after a quit/exit line to the block's .endc) that is only
+# blank lines and ``*`` comments — i.e. the quit/exit was the block's LAST
+# statement. Used to tell a script-ending trailing quit from one nested in an
+# if/while (which must NOT anchor the injected write, or it lands inside that
+# conditional and never runs on the success path).
+_RE_TRIVIAL_TAIL = re.compile(rb"(?m)\A(?:[ \t]*(?:\*.*)?(?:\n|\Z))*\Z")
 
 
 def inject_ngspice_control_write(
@@ -1062,8 +1091,15 @@ def inject_ngspice_control_write(
         return netlist_path
     write_line = f"write {raw_path}\n".encode()
 
+    # Insert before .endc, UNLESS the block's last statement is an
+    # unconditional trailing quit/exit — a write after that would never run. A
+    # quit/exit nested in an if/while is not the last statement (an ``end`` and
+    # possibly more follow it), so anchoring on it is skipped: the write goes
+    # before .endc and runs on the normal path.
+    insert_at = body_end
     quit_matches = list(_RE_QUIT_EXIT.finditer(data, body_start, body_end))
-    insert_at = quit_matches[-1].start() if quit_matches else body_end
+    if quit_matches and _RE_TRIVIAL_TAIL.match(data[quit_matches[-1].end() : body_end]):
+        insert_at = quit_matches[-1].start()
     augmented = data[:insert_at] + write_line + data[insert_at:]
 
     run_path = netlist_path.with_name(

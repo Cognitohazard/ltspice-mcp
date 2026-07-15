@@ -3489,7 +3489,7 @@ class NoiseIntegralInput(ToolInput):
     format: FormatField = Field(default=None, description="'json' or 'text'")
 
 
-_RE_NOISE_HEAD = re.compile(r"^\.noise\s+(?P<out>\S+)\s+(?P<src>\S+)", re.IGNORECASE)
+_RE_NOISE_HEAD = re.compile(r"^[ \t]*\.noise\s+(?P<out>\S+)\s+(?P<src>\S+)", re.IGNORECASE)
 
 
 def _noise_input_source_unit(netlist: Path | None) -> str | None:
@@ -3502,9 +3502,10 @@ def _noise_input_source_unit(netlist: Path | None) -> str | None:
     no prefix at all. Reads the deck's own ``.NOISE`` line as ground truth —
     a source name starting with V is a voltage source ("V"), I a current
     source ("A"), case-insensitively. Returns None when the deck is
-    unavailable, has no ``.NOISE`` directive, or the source name starts with
-    neither: the caller then falls back to the existing trace-derived unit
-    rather than inventing one.
+    unavailable, has no ``.NOISE`` directive, or the answer is ambiguous —
+    more than one ``.NOISE`` directive that don't agree on the source type, or
+    an unrecognized source prefix: the caller then falls back to the existing
+    trace-derived unit rather than guessing which directive produced this raw.
     """
     if netlist is None:
         return None
@@ -3514,16 +3515,19 @@ def _noise_input_source_unit(netlist: Path | None) -> str | None:
         cards = cards_from_path(netlist).cards
     except Exception:
         return None
+    units: set[str | None] = set()
     for card in cards:
         m = _RE_NOISE_HEAD.match(card.body)
         if not m:
             continue
         prefix = m.group("src")[:1].upper()
-        if prefix == "V":
-            return "V"
-        if prefix == "I":
-            return "A"
-        return None
+        units.add("V" if prefix == "V" else "A" if prefix == "I" else None)
+    # Resolve only when every .NOISE directive agrees on one recognized type;
+    # otherwise it's ambiguous and we let the trace-derived unit stand.
+    if units == {"V"}:
+        return "V"
+    if units == {"A"}:
+        return "A"
     return None
 
 
