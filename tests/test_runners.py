@@ -17,7 +17,7 @@ import pytest
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.montecarlo_runner import MonteCarloRunner
 from ltspice_mcp.lib.proc_kill import simulator_executable_names
-from ltspice_mcp.lib.runner_base import discard_logopinfo_netlist
+from ltspice_mcp.lib.runner_base import discard_generated_netlist
 from ltspice_mcp.lib.sim_runner import (
     SimulationRunner,
     _link_or_copy,
@@ -2387,22 +2387,30 @@ class TestGateRunnerOnCancel:
         assert bj.error is None
 
 
-class TestDiscardLogopinfoNetlist:
-    """``discard_logopinfo_netlist`` deletes a generated '.options logopinfo'
-    copy (run in each batch runner's finally + the single-sim cleanup), and only
-    the marked copy — never the user's own deck (no marker) or a None path."""
+class TestDiscardGeneratedNetlist:
+    """``discard_generated_netlist`` deletes a generated per-job netlist copy
+    (an '.options logopinfo' injection or an ngspice '.control' write
+    injection — run in each batch runner's finally + the single-sim cleanup),
+    and only a marked copy — never the user's own deck (no marker) or a None
+    path."""
 
-    def test_discards_marked_copy(self, work_dir: Path):
+    def test_discards_logopinfo_marked_copy(self, work_dir: Path):
         copy = work_dir / ".n.sweep_x.logopinfo.cir"
         copy.write_text("* aug\n.op\n.options logopinfo\n.end\n")
-        discard_logopinfo_netlist(copy)
+        discard_generated_netlist(copy)
+        assert not copy.exists()
+
+    def test_discards_ngspice_control_write_marked_copy(self, work_dir: Path):
+        copy = work_dir / ".n.sim_x.ctrlwrite.cir"
+        copy.write_text("* aug\n.control\nrun\nwrite\n.endc\n.end\n")
+        discard_generated_netlist(copy)
         assert not copy.exists()
 
     def test_keeps_user_netlist_without_marker(self, work_dir: Path):
         user = work_dir / "n.cir"
         user.write_text("* user\n.op\n.end\n")
-        discard_logopinfo_netlist(user)
+        discard_generated_netlist(user)
         assert user.exists()
 
     def test_none_is_noop(self):
-        discard_logopinfo_netlist(None)  # must not raise
+        discard_generated_netlist(None)  # must not raise

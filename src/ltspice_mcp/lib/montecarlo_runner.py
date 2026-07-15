@@ -44,7 +44,7 @@ from ltspice_mcp.lib.runner_base import (
     DEFAULT_MAX_PARALLEL,
     BatchRunnerBase,
     batch_run_filename,
-    discard_logopinfo_netlist,
+    discard_generated_netlist,
 )
 from ltspice_mcp.lib.spice_lex import SpiceCard, emit, lex
 from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end as _ops_inject_card
@@ -513,7 +513,7 @@ class MonteCarloRunner(BatchRunnerBase):
             self._mark_batch_failed(batch_job, state, e, kind="Monte Carlo")
         finally:
             self._cleanup(batch_job.job_id)
-            await asyncio.to_thread(discard_logopinfo_netlist, batch_job.run_netlist)
+            await asyncio.to_thread(discard_generated_netlist, batch_job.run_netlist)
 
     def _handle_run_completion(
         self,
