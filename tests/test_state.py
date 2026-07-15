@@ -61,8 +61,12 @@ class TestSessionStateCreate:
         state = SessionState.create(config, {})
         assert len(state.tool_defs) > 0
         assert len(state.tool_dispatch) > 0
-        # Full profile — all tools
-        assert len(state.tool_defs) == len(state.tool_dispatch)
+        # Full profile — every advertised tool dispatches; the dispatch map may
+        # also carry deprecated aliases absent from tool_defs (RegisteredTool.aliases).
+        def_names = {t.name for t in state.tool_defs}
+        assert def_names <= set(state.tool_dispatch)
+        alias_only = set(state.tool_dispatch) - def_names
+        assert all(name in state.tool_dispatch[name].aliases for name in alias_only)
 
     def test_create_populates_tool_defs_agentic(self, work_dir: Path):
         config = ServerConfig(
@@ -74,7 +78,10 @@ class TestSessionStateCreate:
         agentic_defs, _ = get_tools_for_profile("agentic")
         agentic_names = {tool_def.name for tool_def in agentic_defs}
         assert len(state.tool_defs) == len(agentic_names)
-        assert set(state.tool_dispatch.keys()) == agentic_names
+        # tool_dispatch = advertised names plus any deprecated aliases.
+        assert agentic_names <= set(state.tool_dispatch)
+        alias_only = set(state.tool_dispatch) - agentic_names
+        assert all(name in state.tool_dispatch[name].aliases for name in alias_only)
 
 
 class TestSessionStateShutdown:

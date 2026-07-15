@@ -128,6 +128,20 @@ class TestInjectNgspiceControlWrite:
         text = run.read_text()
         assert text.index("write ") < text.index("quit")
 
+    def test_conditional_quit_does_not_anchor_the_write(self, tmp_path: Path):
+        # A quit nested in an if is NOT the block's script-ending statement.
+        # Anchoring on it would bury the write inside the conditional, so it
+        # would never run on the normal (condition-false) path — the exact bug
+        # this feature exists to prevent. The write must land before .endc,
+        # i.e. AFTER the conditional quit, not before it.
+        deck = self._DECK.replace(".endc", "if $foo\nquit\nend\n.endc")
+        src = self._write(tmp_path, deck)
+        out_dir = self._out_dir(tmp_path)
+        run = inject_ngspice_control_write(src, NGspiceSimulator, "job1", out_dir)
+        text = run.read_text()
+        assert text.index("write ") > text.index("quit")
+        assert text.index("write ") < text.index(".endc")
+
     def test_case_insensitive_control_and_endc(self, tmp_path: Path):
         deck = self._DECK.replace(".control", ".CONTROL").replace(".endc", ".ENDC")
         src = self._write(tmp_path, deck)

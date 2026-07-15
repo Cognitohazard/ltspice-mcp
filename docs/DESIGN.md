@@ -66,11 +66,11 @@ Python, and there's an extra process to maintain.
 |SPICEAssistant (arxiv 2507.10639)|none|N/A|measurement extractors|N/A — research only|
 |LTspice GUI|interactive|interactive|GUI-driven|N/A|
 
-Geometry-aware editing tools — `connect` and `apply_schematic_ops`
+Geometry-aware editing tools — `wire_pins` and `apply_schematic_ops`
 (whose ops include `add_component`, `move_component`,
 `add_net_label` with `pin="M3.S"`, `remove_net_label`, and
 `remove_wire`) — work against pin coordinates, bounding
-boxes, and named-net topology: `connect` refuses diagonal wires,
+boxes, and named-net topology: `wire_pins` refuses diagonal wires,
 pin collisions, wire-junction overlaps, and named-net shorts before
 touching the file, and every standalone tool returns geometry the agent
 can use in its next call. `symbol_info` and `component_info` are the
@@ -81,7 +81,7 @@ boxes looked up before an edit, not validators of one.
 
 A schematic mutation earns a standalone MCP tool only when its result
 returns information the model acts on and cannot already be obtained through
-the batch surface (`connect`'s routing result). Component placement belongs to
+the batch surface (`wire_pins`'s routing result). Component placement belongs to
 `apply_schematic_ops`: its `add_component` op returns the placed pins, bounding
 box, and overlap warnings, while `symbol_info` provides the non-destructive
 preview. An ack-only mutation — one that just confirms "done" —
@@ -102,7 +102,7 @@ standalone too.
 
 Mutating tools validate before writing and refuse states they can
 prove invalid.
-`connect` is the model: a refusal raises an error whose itemized text
+`wire_pins` is the model: a refusal raises an error whose itemized text
 names the specific segments, pins, or labels that blocked the write so
 the agent can pick a new waypoint instead of guessing.
 
@@ -122,7 +122,7 @@ decision.
 There is no `dry_run` / preview parameter. Safe mutation rests on three
 shipped mechanisms instead:
 
-- **Validate-before-write refusals** — `connect` refuses invalid
+- **Validate-before-write refusals** — `wire_pins` refuses invalid
   geometry before the file is touched, with itemized error text naming
   the conflicting segments, pins, or labels; the `apply_schematic_ops`
   `add_component` op places the part and returns its pin positions plus
@@ -398,7 +398,7 @@ binary `.raw` parsing and analysis, batch run/results, library search
 (`find_model`), and the schematic toolset an agent cannot replicate
 by editing text — geometry-aware editing with orthogonal routing and
 pin-collision/junction checks: `create_schematic`, `apply_schematic_ops`,
-`connect`, `export_netlist`,
+`wire_pins`, `export_netlist`,
 `reset_schematic`, `symbol_info`, `component_info`, `trace_net`. The
 `add_component` placement and the ack-only mutations (`move_component`, `remove_component`,
 `set_component_attribute`, `add_net_label`, `remove_net_label`,

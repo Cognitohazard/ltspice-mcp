@@ -359,16 +359,6 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     # other; start_simulation deletes the copy once spicelib has staged the run.
     # job.netlist stays the user's original path; only the simulator reads the copy.
     run_path = inject_logopinfo(netlist_path, default_simulator, job_id)
-    if is_ngspice(default_simulator):
-        # A `.control` script replaces ngspice's default raw output (ngspice
-        # runtime behavior, not a spicelib bug — see inject_ngspice_control_write's
-        # docstring), so a scripted deck otherwise produces no raw for the
-        # analysis tools to read. Mutually exclusive with the LTspice injection
-        # above by simulator, so chaining on run_path is safe either way.
-        output_folder = await resolve_output_folder(
-            state, netlist_path, simulator=default_simulator
-        )
-        run_path = inject_ngspice_control_write(run_path, default_simulator, job_id, output_folder)
 
     job = SimulationJob(
         job_id=job_id,
@@ -390,6 +380,18 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
         runner = await _get_or_create_runner(
             state, netlist_path, simulator_class=default_simulator
         )
+        if is_ngspice(default_simulator):
+            # A `.control` script replaces ngspice's default raw output (ngspice
+            # runtime behavior, not a spicelib bug — see inject_ngspice_control_write's
+            # docstring), so a scripted deck otherwise produces no raw for the
+            # analysis tools to read. Reuse the runner's already-resolved output
+            # folder rather than resolving it a second time (each resolve re-reads
+            # and re-scans the deck). Mutually exclusive with the LTspice injection
+            # above by simulator, so chaining on run_path is safe; synchronous, so
+            # it preserves the no-await submit-ordering rule.
+            run_path = inject_ngspice_control_write(
+                run_path, default_simulator, job_id, runner.output_folder
+            )
         state.add_job(job)
         job.task = asyncio.create_task(runner.start_simulation(run_path, job, state))
         started = True
@@ -629,6 +631,17 @@ def _read_log_only_payload(log_file: Path) -> tuple[list[str], list[str], dict, 
     return diagnostics["warnings"], diagnostics["errors"], measurements, failed
 
 
+def _attach_alias_fields(data: dict, job: SimulationJob) -> None:
+    """Record the job's output_basename alias paths as facts (null when absent).
+
+    Both keys are always present once an alias was requested: a caller that
+    asked for one and got none must see that as a fact, not silence. A log-only
+    run has no raw, so its ``output_alias_raw`` is null via the same idiom.
+    """
+    data["output_alias_raw"] = str(job.output_alias_raw) if job.output_alias_raw else None
+    data["output_alias_log"] = str(job.output_alias_log) if job.output_alias_log else None
+
+
 async def _log_only_response(
     job: SimulationJob,
     duration: float,
@@ -687,10 +700,7 @@ async def _log_only_response(
     if failed:
         data["failed_measurements"] = failed
     if job.output_basename:
-        # No raw for a log-only run, so only the log side can ever alias —
-        # output_alias_raw is always null here, but still present as a fact.
-        data["output_alias_raw"] = None
-        data["output_alias_log"] = str(job.output_alias_log) if job.output_alias_log else None
+        _attach_alias_fields(data, job)
         if job.output_alias_note:
             hint = f"{hint} Output alias: {job.output_alias_note}"
             data["hint"] = hint
@@ -867,10 +877,7 @@ def _format_success_response(job: SimulationJob, summary: dict, fmt: str | None 
     if summary.get("point_count") is not None:
         data["point_count"] = summary["point_count"]
     if job.output_basename:
-        # Always present (even null) once requested — a caller that asked
-        # for an alias and got none must see that as a fact, not silence.
-        data["output_alias_raw"] = str(job.output_alias_raw) if job.output_alias_raw else None
-        data["output_alias_log"] = str(job.output_alias_log) if job.output_alias_log else None
+        _attach_alias_fields(data, job)
         if job.output_alias_note:
             data["hint"] = f"output_basename alias: {job.output_alias_note}"
             text += f"\n\nOutput alias: {job.output_alias_note}"

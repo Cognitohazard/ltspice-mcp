@@ -1,7 +1,7 @@
 """Regressions for the post-op validation pass.
 
 Pins the structured ``validation_warnings`` payload returned by mutating
-.asc handlers (apply_schematic_ops, connect, add_component) and the
+.asc handlers (apply_schematic_ops, wire_pins, add_component) and the
 text-message warnings on move_component / remove_component. Enforces the
 project's validate-before-write doctrine.
 """
@@ -18,17 +18,17 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.circuit import (
     AddComponentInput,
     ApplySchematicOpsInput,
-    ConnectInput,
     CreateSchematicInput,
     MoveComponentInput,
     RemoveComponentInput,
     WaypointInput,
+    WirePinsInput,
     handle_add_component,
     handle_apply_schematic_ops,
-    handle_connect,
     handle_create_schematic,
     handle_move_component,
     handle_remove_component,
+    handle_wire_pins,
 )
 
 # ---------------------------------------------------------------------------
@@ -57,7 +57,7 @@ class TestPostOpWarningsHelper:
         self, asc_state: SessionState, work_dir: Path
     ) -> None:
         await handle_create_schematic(CreateSchematicInput(name="clean"), asc_state)
-        # Apply a single connect that touches both endpoints — both pins
+        # Apply a single wire_pins op that touches both endpoints — both pins
         # belong to the same wire, no duplicates, no labels.
         result = await handle_apply_schematic_ops(
             ApplySchematicOpsInput(
@@ -169,8 +169,8 @@ class TestApplySchematicOpsValidation:
 
     async def test_duplicate_wire_detected(self, asc_state: SessionState, work_dir: Path) -> None:
         await handle_create_schematic(CreateSchematicInput(name="dupwire"), asc_state)
-        # Place R1 and R2, then connect each pair the same way twice.
-        # The second connect will duplicate the first wire.
+        # Place R1 and R2, then wire_pins each pair the same way twice.
+        # The second wire_pins will duplicate the first wire.
         result = await handle_apply_schematic_ops(
             ApplySchematicOpsInput(
                 path="dupwire.asc",
@@ -189,14 +189,14 @@ class TestApplySchematicOpsValidation:
                         "x": 200,
                         "y": 100,
                     },
-                    # Two connects with the same waypoint plan → duplicate segments.
+                    # Two wire_pins ops with the same waypoint plan → duplicate segments.
                     {
-                        "op": "connect",
+                        "op": "wire_pins",
                         "from_pin": "R1.1",
                         "to_pin": "R2.1",
                     },
                     {
-                        "op": "connect",
+                        "op": "wire_pins",
                         "from_pin": "R1.1",
                         "to_pin": "R2.1",
                     },
@@ -278,7 +278,7 @@ class TestAddComponentValidation:
     ) -> None:
         # A just-placed component has every pin floating by construction, so a
         # floating-pin advisory here is 100% noise. add_component must NOT emit
-        # it — that reporting belongs to connect (a pin still floating after
+        # it — that reporting belongs to wire_pins (a pin still floating after
         # wiring is actionable) and validate_netlist (the end-of-build gate).
         result = await handle_add_component(
             AddComponentInput(
@@ -296,16 +296,16 @@ class TestAddComponentValidation:
 
 
 # ---------------------------------------------------------------------------
-# connect — wire routes don't introduce duplicates of their own
+# wire_pins — wire routes don't introduce duplicates of their own
 # ---------------------------------------------------------------------------
 
 
-class TestConnectValidation:
-    async def test_connect_returns_validation_field_when_warnings_exist(
+class TestWirePinsValidation:
+    async def test_wire_pins_returns_validation_field_when_warnings_exist(
         self, asc_state: SessionState, work_dir: Path
     ) -> None:
         await handle_create_schematic(CreateSchematicInput(name="conn"), asc_state)
-        # Place two resistors so a connect leaves two outer pins floating.
+        # Place two resistors so a wire_pins call leaves two outer pins floating.
         await handle_add_component(
             AddComponentInput(path="conn.asc", reference="R1", symbol="res", x=100, y=100),
             asc_state,
@@ -314,33 +314,33 @@ class TestConnectValidation:
             AddComponentInput(path="conn.asc", reference="R2", symbol="res", x=200, y=100),
             asc_state,
         )
-        result = await handle_connect(
-            ConnectInput(path="conn.asc", from_pin="R1.1", to_pin="R2.1"),
+        result = await handle_wire_pins(
+            WirePinsInput(path="conn.asc", from_pin="R1.1", to_pin="R2.1"),
             asc_state,
         )
         data = result.structuredContent
         assert data is not None
-        # After the connect, R1 pin 1 and R2 pin 1 are wired; their other
+        # After the wire_pins call, R1 pin 1 and R2 pin 1 are wired; their other
         # pins (1.2 and 2.2) remain floating, so the field is populated.
         assert "validation_warnings" in data
         floating = [w for w in data["validation_warnings"] if w["kind"] == "floating_pin"]
         assert floating, "expected at least one floating pin after partial wire"
 
-    async def test_connect_scopes_floating_pins_to_touched_components(
+    async def test_wire_pins_scopes_floating_pins_to_touched_components(
         self, asc_state: SessionState, work_dir: Path
     ) -> None:
-        # Regression: connect used to re-echo floating-pin warnings for EVERY
+        # Regression: wire_pins used to re-echo floating-pin warnings for EVERY
         # not-yet-wired component on each call. It must now report only pins of
         # the components it touched, so an untouched R3 placed earlier doesn't
-        # add noise to an unrelated connect.
+        # add noise to an unrelated wire_pins call.
         await handle_create_schematic(CreateSchematicInput(name="scope"), asc_state)
         for ref, x in (("R1", 100), ("R2", 200), ("R3", 400)):
             await handle_add_component(
                 AddComponentInput(path="scope.asc", reference=ref, symbol="res", x=x, y=100),
                 asc_state,
             )
-        result = await handle_connect(
-            ConnectInput(path="scope.asc", from_pin="R1.1", to_pin="R2.1"),
+        result = await handle_wire_pins(
+            WirePinsInput(path="scope.asc", from_pin="R1.1", to_pin="R2.1"),
             asc_state,
         )
         data = result.structuredContent
@@ -352,12 +352,12 @@ class TestConnectValidation:
         # Only the touched components' still-floating pins are reported.
         assert floating_refs and floating_refs <= {"R1", "R2"}
 
-    async def test_connect_through_endpoint_pin_refused(
+    async def test_wire_pins_through_endpoint_pin_refused(
         self, asc_state: SessionState, work_dir: Path
     ) -> None:
         # F1: a waypoint routing a wire through the OTHER pin of an endpoint
         # component used to be silently allowed (skip_refs exempted the whole
-        # component), shorting it while connect reported success.
+        # component), shorting it while wire_pins reported success.
         await handle_create_schematic(CreateSchematicInput(name="short_check"), asc_state)
         # res fixture: placed at (x, y) -> pins at (x, y-48) and (x, y+48).
         await handle_add_component(
@@ -371,8 +371,8 @@ class TestConnectValidation:
         # Route R1.1 (100,52) -> R2.2 (300,148); the corner (100,148) lands
         # exactly on R1.2, shorting R1 across its own terminals.
         with pytest.raises(NetlistError, match=r"R1\.2"):
-            await handle_connect(
-                ConnectInput(
+            await handle_wire_pins(
+                WirePinsInput(
                     path="short_check.asc",
                     from_pin="R1.1",
                     to_pin="R2.2",
@@ -653,7 +653,7 @@ class TestReadabilityWarnings:
                         "x": 200,
                         "y": 100,
                     },
-                    {"op": "connect", "from_pin": "R1.1", "to_pin": "R2.1"},
+                    {"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R2.1"},
                 ],
                 stop_on_error=False,
             ),

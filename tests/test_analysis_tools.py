@@ -43,6 +43,7 @@ from ltspice_mcp.tools.analysis import (
     TimingBetweenInput,
     TransientResponseInput,
     _filter_operating_point,
+    _noise_input_source_unit,
     _split_ratio,
     _trace_device,
     handle_ac_structure,
@@ -3082,6 +3083,56 @@ class TestNoiseIntegralHandler:
         assert sc is not None
         assert sc["unit"] == "V"
         assert any("Could not verify" in w for w in sc["warnings"])
+
+
+class TestNoiseInputSourceUnit:
+    """Pure-function coverage for the .NOISE input-source unit resolver."""
+
+    def _deck(self, tmp_path: Path, body: str) -> Path:
+        p = tmp_path / "noise.cir"
+        p.write_text(body)
+        return p
+
+    def test_voltage_source(self, tmp_path: Path):
+        deck = self._deck(tmp_path, "V1 in 0 AC 1\n.NOISE V(out) V1 dec 10 1 100k\n.end\n")
+        assert _noise_input_source_unit(deck) == "V"
+
+    def test_current_source(self, tmp_path: Path):
+        deck = self._deck(tmp_path, "I1 in 0 AC 1\n.NOISE V(out) I1 dec 10 1 100k\n.end\n")
+        assert _noise_input_source_unit(deck) == "A"
+
+    def test_indented_directive_resolves(self, tmp_path: Path):
+        # Leading whitespace before .NOISE must not defeat the match.
+        deck = self._deck(tmp_path, "I1 in 0 AC 1\n    .NOISE V(out) I1 dec 10 1 100k\n.end\n")
+        assert _noise_input_source_unit(deck) == "A"
+
+    def test_conflicting_directives_are_ambiguous(self, tmp_path: Path):
+        # Two .NOISE lines disagreeing on source type -> can't tell which
+        # produced this raw, so fall back rather than guess.
+        deck = self._deck(
+            tmp_path,
+            "V1 in 0 AC 1\nI1 in 0 AC 1\n"
+            ".NOISE V(out) V1 dec 10 1 100k\n.NOISE V(out) I1 dec 10 1 100k\n.end\n",
+        )
+        assert _noise_input_source_unit(deck) is None
+
+    def test_agreeing_directives_resolve(self, tmp_path: Path):
+        deck = self._deck(
+            tmp_path,
+            "V1 in 0 AC 1\n.NOISE V(a) V1 dec 10 1 100k\n.NOISE V(b) V1 dec 10 1 1k\n.end\n",
+        )
+        assert _noise_input_source_unit(deck) == "V"
+
+    def test_unrecognized_prefix_is_none(self, tmp_path: Path):
+        deck = self._deck(tmp_path, "R1 in 0 1k\n.NOISE V(out) R1 dec 10 1 100k\n.end\n")
+        assert _noise_input_source_unit(deck) is None
+
+    def test_no_directive_is_none(self, tmp_path: Path):
+        deck = self._deck(tmp_path, "V1 in 0 AC 1\nR1 in out 1k\n.end\n")
+        assert _noise_input_source_unit(deck) is None
+
+    def test_missing_netlist_is_none(self):
+        assert _noise_input_source_unit(None) is None
 
 
 @pytest.mark.asyncio

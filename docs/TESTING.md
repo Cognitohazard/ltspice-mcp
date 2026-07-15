@@ -56,10 +56,10 @@ an undo *capability* exists, not that state round-trips byte-for-byte (e.g.
 `reset_schematic` is the recovery hatch for those). Each op in the `SchematicOp`
 union is either paired with an inverse op that exists, or declared self-inverse
 (re-applying it with the prior arguments reverts it). The pairing table is a
-*forcing function*: a new `add_*` / `connect` / `create` op with no entry fails
+*forcing function*: a new `add_*` / `wire_pins` / `create` op with no entry fails
 the test, so shipping a one-way mutation becomes a reviewed decision instead of
 an accident. This is the check that, run earlier, would have failed the day
-`add_net_label` shipped without `remove_net_label` and `connect` without
+`add_net_label` shipped without `remove_net_label` and `wire_pins` without
 `remove_wire`. Building the pairing table surfaced one missing inverse —
 `add_directive` had no `remove_directive` op — which was added alongside the check.
 
