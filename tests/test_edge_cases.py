@@ -340,19 +340,19 @@ class TestAcBandwidthMetrics:
 
 
 # ---------------------------------------------------------------------------
-# handle_connect silently produces zero-wire connections for self-loops
+# handle_wire_pins silently produces zero-wire connections for self-loops
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-class TestConnectZeroLength:
+class TestWirePinsZeroLength:
     async def test_self_loop_rejected(self, asc_state, asc_file):
         from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import ConnectInput, handle_connect
+        from ltspice_mcp.tools.circuit import WirePinsInput, handle_wire_pins
 
         with pytest.raises(NetlistError, match="same coordinate"):
-            await handle_connect(
-                ConnectInput(path=asc_file.name, from_pin="R1.1", to_pin="R1.1"),
+            await handle_wire_pins(
+                WirePinsInput(path=asc_file.name, from_pin="R1.1", to_pin="R1.1"),
                 asc_state,
             )
 

@@ -12,7 +12,6 @@ from ltspice_mcp.tools.circuit import (
     ApplySchematicOpsInput,
     CircuitReadInput,
     ComponentInfoInput,
-    ConnectInput,
     CreateSchematicInput,
     DiffCircuitInput,
     EditDirectiveInput,
@@ -26,13 +25,13 @@ from ltspice_mcp.tools.circuit import (
     TraceNetInput,
     ValidateNetlistInput,
     WaypointInput,
+    WirePinsInput,
     _build_on_wire_predicate,
     _point_on_segment,
     handle_add_component,
     handle_add_net_label,
     handle_apply_schematic_ops,
     handle_component_info,
-    handle_connect,
     handle_create_schematic,
     handle_diff_circuit,
     handle_edit_directive,
@@ -46,6 +45,7 @@ from ltspice_mcp.tools.circuit import (
     handle_symbol_info,
     handle_trace_net,
     handle_validate_netlist,
+    handle_wire_pins,
 )
 
 
@@ -512,15 +512,15 @@ class TestEditDirectiveCommentKind:
 
 
 @pytest.mark.asyncio
-class TestConnect:
+class TestWirePins:
     async def test_diagonal_rejected(self, asc_state: SessionState, asc_file: Path):
         # First add a unique net label, then try a diagonal route to it
         await handle_add_net_label(
             NetLabelInput(path=asc_file.name, net="X", x=100, y=200), asc_state
         )
         with pytest.raises(NetlistError, match="not orthogonal"):
-            await handle_connect(
-                ConnectInput(
+            await handle_wire_pins(
+                WirePinsInput(
                     path=asc_file.name,
                     from_pin="net:filtered",
                     to_pin="net:X",
@@ -531,8 +531,8 @@ class TestConnect:
 
     async def test_multiple_ground_labels_error(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="Multiple '0'") as exc_info:
-            await handle_connect(
-                ConnectInput(
+            await handle_wire_pins(
+                WirePinsInput(
                     path=asc_file.name,
                     from_pin="net:filtered",
                     to_pin="net:0",
@@ -556,8 +556,8 @@ class TestConnect:
             NetLabelInput(path=asc_file.name, net="SIG", x=300, y=200), asc_state
         )
         with pytest.raises(NetlistError, match="Multiple 'SIG'") as exc_info:
-            await handle_connect(
-                ConnectInput(
+            await handle_wire_pins(
+                WirePinsInput(
                     path=asc_file.name,
                     from_pin="net:filtered",
                     to_pin="net:SIG",
@@ -568,8 +568,8 @@ class TestConnect:
 
     async def test_invalid_pin_format(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="Invalid pin reference"):
-            await handle_connect(
-                ConnectInput(
+            await handle_wire_pins(
+                WirePinsInput(
                     path=asc_file.name,
                     from_pin="badformat",
                     to_pin="net:0",
@@ -579,8 +579,8 @@ class TestConnect:
 
     async def test_unknown_component(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="not found"):
-            await handle_connect(
-                ConnectInput(
+            await handle_wire_pins(
+                WirePinsInput(
                     path=asc_file.name,
                     from_pin="ZZZ.A",
                     to_pin="net:0",
@@ -590,8 +590,8 @@ class TestConnect:
 
     async def test_missing_net_label(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="Net label"):
-            await handle_connect(
-                ConnectInput(
+            await handle_wire_pins(
+                WirePinsInput(
                     path=asc_file.name,
                     from_pin="net:nonexistent",
                     to_pin="net:0",
@@ -601,8 +601,8 @@ class TestConnect:
 
     async def test_pin_unknown(self, asc_state: SessionState, asc_file: Path):
         with pytest.raises(NetlistError, match="not found"):
-            await handle_connect(
-                ConnectInput(
+            await handle_wire_pins(
+                WirePinsInput(
                     path=asc_file.name,
                     from_pin="R1.ZZ",
                     to_pin="net:0",
@@ -663,11 +663,11 @@ NMOS_PIN_POSITIONS: dict[str, dict[str, tuple[int, int]]] = {
 
 @pytest.mark.asyncio
 class TestOrientationPlacementAndRouting:
-    """add_component(rotation=...) -> cached editor -> _resolve_pin -> connect
+    """add_component(rotation=...) -> cached editor -> _resolve_pin -> wire_pins
     must agree on absolute pin coordinates for every rotation AND mirror.
     Wire endpoints on disk are checked against hand-computed positions, so a
     sign error in any orientation transform fails here — not just an
-    inconsistency between add_component and connect."""
+    inconsistency between add_component and wire_pins."""
 
     @pytest.mark.parametrize("rotation", sorted(NMOS_PIN_POSITIONS))
     async def test_pin_map_and_wire_endpoint(
@@ -698,11 +698,11 @@ class TestOrientationPlacementAndRouting:
             asc_state,
         )
 
-        # connect re-resolves M1.G from the cached editor's stored placement,
+        # wire_pins re-resolves M1.G from the cached editor's stored placement,
         # so the wire endpoint proves the rotation survived the round trip.
         gx, gy = NMOS_PIN_POSITIONS[rotation]["G"]
-        connected = await handle_connect(
-            ConnectInput(
+        connected = await handle_wire_pins(
+            WirePinsInput(
                 path="orient.asc",
                 from_pin="M1.G",
                 to_pin="R9.1",
@@ -768,7 +768,7 @@ class TestArchetypeBuildCoverage:
         # Wire the LAST terminal (a non-positional name — N / NC- — on the
         # 4-terminal sources, which the positional-pin nmos orientation test
         # never reaches) to a passive load. This is the load-bearing part: the
-        # terminal must resolve by NAME through connect's pin lookup and the wire
+        # terminal must resolve by NAME through wire_pins's pin lookup and the wire
         # must persist to disk at the geometry coordinate — not merely be
         # reported in memory. The load sits collinear and outward from the pin
         # (left if the pin is on the body's left half, else right), so the single
@@ -781,8 +781,8 @@ class TestArchetypeBuildCoverage:
             AddComponentInput(path=asc.name, reference="RL", symbol="res", x=out_x, y=py + 48),
             asc_state,
         )  # res pin 1 = (0,-48) offset -> (out_x, py), collinear with X1.{name}
-        connected = await handle_connect(
-            ConnectInput(path=asc.name, from_pin=f"X1.{name}", to_pin="RL.1"),
+        connected = await handle_wire_pins(
+            WirePinsInput(path=asc.name, from_pin=f"X1.{name}", to_pin="RL.1"),
             asc_state,
         )
         assert connected.structuredContent is not None
@@ -791,8 +791,8 @@ class TestArchetypeBuildCoverage:
 
 
 @pytest.mark.asyncio
-class TestConnectPersistsWires:
-    """connect's success path must actually write WIRE records to disk —
+class TestWirePinsPersistsWires:
+    """wire_pins's success path must actually write WIRE records to disk —
     the rejection-path tests above only prove it validates."""
 
     async def test_wire_written_and_persisted(self, asc_state: SessionState, work_dir: Path):
@@ -809,8 +809,8 @@ class TestConnectPersistsWires:
         before = _wire_segments(asc)
         assert before == []  # add_component places no wires
 
-        result = await handle_connect(
-            ConnectInput(path="wire_persist.asc", from_pin="R1.2", to_pin="R2.1"),
+        result = await handle_wire_pins(
+            WirePinsInput(path="wire_persist.asc", from_pin="R1.2", to_pin="R2.1"),
             asc_state,
         )
         assert "Connected R1.2 to R2.1" in _result_text(result)
@@ -827,7 +827,7 @@ class TestConnectPersistsWires:
 @pytest.mark.asyncio
 class TestSchematicReadability:
     """Readability eval for a schematic built the way the guide recommends:
-    apply_schematic_ops + connect for the signal path, add_net_label only for
+    apply_schematic_ops + wire_pins for the signal path, add_net_label only for
     the ground/global nets. The result must come out WIRED — not 'net-label
     soup', where every component pin floats on its own same-named FLAG and there
     are no wires. This is the regression guard for the blind spot that let a
@@ -842,7 +842,7 @@ class TestSchematicReadability:
 
         await handle_create_schematic(CreateSchematicInput(name="readable"), asc_state)
         # A 3-resistor chain stacked on x=200: the two internal junctions are
-        # wired by connect; only the two terminal nets (in, ground) get a label.
+        # wired by wire_pins; only the two terminal nets (in, ground) get a label.
         # Fixture res pins: 1=(0,-48), 2=(0,48), so Rn at (200, y) has pins at
         # (200, y-48) and (200, y+48).
         result = await handle_apply_schematic_ops(
@@ -870,8 +870,8 @@ class TestSchematicReadability:
                         "x": 200,
                         "y": 600,
                     },
-                    {"op": "connect", "from_pin": "R1.2", "to_pin": "R2.1"},
-                    {"op": "connect", "from_pin": "R2.2", "to_pin": "R3.1"},
+                    {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.1"},
+                    {"op": "wire_pins", "from_pin": "R2.2", "to_pin": "R3.1"},
                     {"op": "add_net_label", "net": "in", "pin": "R1.1"},
                     {"op": "add_net_label", "net": "0", "pin": "R3.2"},
                 ],
@@ -1429,12 +1429,12 @@ class TestFloatingLabelWarning:
 
 # Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
-class TestNetConflictInConnect:
-    """connect detects shorts between two named nets."""
+class TestNetConflictInWirePins:
+    """wire_pins detects shorts between two named nets."""
 
     async def test_refuses_named_net_short(self, asc_state: SessionState):
         # Build a clean schematic with two resistors on disjoint named nets,
-        # then try to connect them.
+        # then try to wire them together.
         from ltspice_mcp.tools.circuit import (
             CreateSchematicInput,
             handle_create_schematic,
@@ -1471,8 +1471,8 @@ class TestNetConflictInConnect:
             asc_state,
         )
         with pytest.raises(NetlistError, match="Net-label conflict"):
-            await handle_connect(
-                ConnectInput(
+            await handle_wire_pins(
+                WirePinsInput(
                     path="net_conflict_test.asc",
                     from_pin="R1.1",
                     to_pin="R2.1",
@@ -1513,7 +1513,7 @@ class TestRemoveComponentNoFalseOrphans:
 # Relocated regression coverage from a retired test module.
 @pytest.mark.asyncio
 class TestApplySchematicOps:
-    """apply_schematic_ops batches add/connect/label/directive."""
+    """apply_schematic_ops batches add/wire_pins/label/directive."""
 
     async def test_add_component_result_includes_placed_geometry_and_overlap_warnings(
         self, asc_state: SessionState
@@ -1553,6 +1553,54 @@ class TestApplySchematicOps:
         assert added["pins"]
         assert added["bounding_box"] == {"x": 84, "y": 52, "width": 32, "height": 96}
         assert added["warnings"] == ["Overlaps R1 bounding box"]
+
+    async def test_connect_op_alias_still_wires_pins(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        """The deprecated op discriminator "connect" parses as _OpWirePins
+        (Literal["wire_pins", "connect"]) and applies exactly like "wire_pins"
+        — it must still wire the pins and persist the wire to disk."""
+        from ltspice_mcp.tools.circuit import (
+            CreateSchematicInput,
+            handle_create_schematic,
+        )
+
+        await handle_create_schematic(CreateSchematicInput(name="op_alias"), asc_state)
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="op_alias.asc",
+                ops=[  # type: ignore[arg-type]  # pydantic validates dicts
+                    {
+                        "op": "add_component",
+                        "reference": "R1",
+                        "symbol": "res",
+                        "x": 100,
+                        "y": 100,
+                    },
+                    {
+                        "op": "add_component",
+                        "reference": "R2",
+                        "symbol": "res",
+                        "x": 200,
+                        "y": 100,
+                    },
+                    {"op": "connect", "from_pin": "R1.1", "to_pin": "R2.1"},
+                ],
+            ),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        assert data["failed_count"] == 0
+        wire_result = data["results"][2]
+        assert wire_result["ok"] is True
+        # The result echoes back the discriminator the caller sent.
+        assert wire_result["op"] == "connect"
+        assert wire_result["wire_count"] == 1
+
+        # Fixture res pins: 1=(0,-48) -> R1.1=(100,52), R2.1=(200,52).
+        segments = _wire_segments(work_dir / "op_alias.asc")
+        assert _has_segment(segments, (100, 52), (200, 52)), segments
 
     async def test_basic_transaction(self, asc_state: SessionState, work_dir: Path):
         from ltspice_mcp.tools.circuit import (
@@ -1797,7 +1845,7 @@ class TestRemoveWireAndNetLabelOps:
                         "x": 128,
                         "y": 320,
                     },
-                    {"op": "connect", "from_pin": "R1.2", "to_pin": "C1.1"},
+                    {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "C1.1"},
                     {"op": "add_net_label", "net": "in", "pin": "R1.1"},
                     {"op": "add_net_label", "net": "spare", "x": 512, "y": 512},
                 ],
@@ -2068,7 +2116,7 @@ class TestAddNetLabelOpValidation:
 
         await handle_create_schematic(CreateSchematicInput(name="lbl_dup"), asc_state)
         # Same name on two distinct (unwired) pins: not a short (the netlist merges
-        # same-name labels into one net) — the only cost is that a later connect
+        # same-name labels into one net) — the only cost is that a later wire_pins
         # can't disambiguate, which the warning states without a scare.
         res = await handle_apply_schematic_ops(
             ApplySchematicOpsInput(
@@ -2091,7 +2139,7 @@ class TestAddNetLabelOpValidation:
         assert op2["ok"] is True
         warns = op2.get("warnings", [])
         # Reframed: names the duplicate but says it merges correctly and only
-        # connect is ambiguous — no "short"/"will error" scare.
+        # wire_pins is ambiguous — no "short"/"will error" scare.
         assert any("already labels a net" in w and "ambiguous" in w for w in warns)
 
 
@@ -2124,7 +2172,7 @@ class TestMoveRemoveOpWarnings:
                         "x": 200,
                         "y": 400,
                     },
-                    {"op": "connect", "from_pin": "R1.2", "to_pin": "R2.1"},
+                    {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "R2.1"},
                 ],
             ),
             asc_state,
@@ -2187,7 +2235,7 @@ class TestMoveRemoveOpWarnings:
 # Relocated regression coverage from a retired test module.
 class TestMidSegmentLabelDetected:
     """A label sitting mid-segment on a wire used to be invisible
-    to ``connect``'s endpoint-only label compare. The fix is segment-
+    to ``wire_pins``'s endpoint-only label compare. The fix is segment-
     aware: the trace dragon-swallows interest points that lie on a wire
     even if they're not at an endpoint.
     """

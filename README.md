@@ -205,7 +205,7 @@ Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempot
 | `set_component_value` | Set one component value, or batch-set many via a `values` dict |
 | `parameter` | Read all `.PARAM` values or set one |
 | `edit_directive` | Add or remove SPICE directives (`.tran`, `.ac`, `.lib`, ...) |
-| `connect` | Wire two pins by reference with waypoint routing; validates pin collisions, junctions, diagonals |
+| `wire_pins` | Wire two pins by reference with waypoint routing; validates pin collisions, junctions, diagonals (formerly `connect`, kept as a deprecated alias) |
 | `symbol_info` | Symbol pin positions, directions, bounding box, description |
 | `component_info` | Placed component pin positions, bounding box, attributes |
 | `export_netlist` | Export `.asc` to `.net` via LTspice (with diff against previous export) |

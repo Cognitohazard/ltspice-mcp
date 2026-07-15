@@ -232,7 +232,7 @@ _LTSPICE_ATTR_CANONICAL: dict[str, str] = {n.lower(): n for n in _LTSPICE_ATTR_N
 # nothing asking for readability defaults to it — and the result reads as a
 # wiring list, not a schematic. Stating the goal is what flips that default.
 SCHEMATIC_WIRING_NORM = (
-    "Draw wires for connections (connect) — reserve net-labels for ground, "
+    "Draw wires for connections (wire_pins) — reserve net-labels for ground, "
     "power rails, and genuinely distant nets. Tagging every pin with a net-label "
     "simulates correctly but reads as a wiring list, not a schematic; aim for a "
     "layout a human can follow at a glance."
@@ -642,7 +642,7 @@ def _net_partition(
     FLAGs placed mid-segment.
 
     ``extra_segments`` lets the caller include not-yet-committed wire
-    segments (e.g. the route ``connect`` is about to add) so checks operate
+    segments (e.g. the route ``wire_pins`` is about to add) so checks operate
     on the post-route net layout. Shared by ``_trace_nets`` (labels-per-net)
     and ``trace_net`` (full net membership).
     """
@@ -943,11 +943,12 @@ def _scope_floating_pin_warnings(warnings: list[dict], refs: set[str]) -> list[d
 
     ``_post_op_warnings`` returns the whole schematic's floating pins on every
     call, so during an incremental build it re-emits every not-yet-wired pin —
-    O(n²) noise that buries the one actionable warning. ``connect`` (the sole
-    caller) scopes floating-pin warnings to its two touched refs while letting
-    the shorts / junction-overlap warnings it *can* create pass through. Bare
-    placement via the ``add_component`` op raises no floating-pin advisory at
-    all — every pin is floating by construction — so it doesn't call this.
+    O(n²) noise that buries the one actionable warning. ``handle_wire_pins``
+    (the sole caller) scopes floating-pin warnings to its two touched refs
+    while letting the shorts / junction-overlap warnings it *can* create pass
+    through. Bare placement via the ``add_component`` op raises no
+    floating-pin advisory at all — every pin is floating by construction —
+    so it doesn't call this.
     """
     return [w for w in warnings if w.get("kind") != "floating_pin" or w.get("ref") in refs]
 
@@ -1037,7 +1038,7 @@ class SetComponentValueInput(ToolInput):
             "Single mode only: rewrite the component's node connectivity to this "
             "ordered list (e.g. ['in', 'out', '0']) — the fix for a wrong or "
             "typo'd connection. Requires 'reference'; .cir/.net only (on a .asc, "
-            "wire pins with connect). Not combined with 'value'/'values' — set the "
+            "use wire_pins instead). Not combined with 'value'/'values' — set the "
             "value in a separate call."
         ),
     )
@@ -1201,7 +1202,7 @@ class WaypointInput(StrictModel):
     y: int = Field(description="Y coordinate of waypoint")
 
 
-class ConnectInput(ToolInput):
+class WirePinsInput(ToolInput):
     path: str = Field(description="Path to .asc schematic")
     from_pin: str = Field(
         description="Source pin as 'Reference.Pin' (e.g., 'M1.D', 'VDD.+') or 'net:name' for a net label"
@@ -1889,7 +1890,7 @@ async def handle_set_component_value(
         if _is_asc(file_path):
             raise NetlistError(
                 "Node connectivity on a .asc schematic is set by wiring, not a node "
-                "list — use connect to wire pins (and trace_net to inspect a net). "
+                "list — use wire_pins (and trace_net to inspect a net). "
                 "'nodes' applies to .cir/.net only."
             )
         return await _set_component_nodes_netlist(file_path, reference, args.nodes, state)
@@ -2802,7 +2803,7 @@ async def handle_add_component(
         )
         # add_component adds no wires or labels, so every pin of the just-placed
         # component is floating by construction — a 100%-noise advisory. Leave
-        # floating-pin reporting to connect (a pin still floating after wiring is
+        # floating-pin reporting to wire_pins (a pin still floating after wiring is
         # actionable) and validate_netlist (the end-of-build gate); the pin
         # positions are already in this response.
 
@@ -2947,7 +2948,7 @@ async def handle_export_netlist(
         "session — a recovery escape hatch for when a sequence of edits went wrong. "
         "The server snapshots each .asc file's bytes just before its first in-session "
         "mutation (component placement through apply_schematic_ops, "
-        "set_component_value, move_component, connect, "
+        "set_component_value, move_component, wire_pins, "
         "apply_schematic_ops, etc.); this restores that snapshot exactly and drops it "
         "(so a later edit establishes a fresh restore point). Because component placement is a "
         "trigger, the first placement on a freshly created schematic snapshots the "
@@ -3222,7 +3223,7 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
     if net != "0":
         # Duplicate non-ground label name. This is NOT a short: the netlist merges
         # same-name labels into one net, which is a valid (often simpler) way to
-        # tie distant nets. The only downstream cost is that connect(net=...) can't
+        # tie distant nets. The only downstream cost is that wire_pins(net=...) can't
         # disambiguate which label to route to — so surface that, not a scare.
         for lbl in editor.labels:
             if lbl.text == net:
@@ -3230,7 +3231,7 @@ def _add_net_label_checks(editor: AscEditor, net: str, x: int, y: int) -> list[s
                     f"'{net}' already labels a net at ({int(lbl.coord.X)},"
                     f"{int(lbl.coord.Y)}); the netlist merges the two into one net "
                     "(this is correct — a valid way to tie distant nets). Only a "
-                    f"later connect(net='{net}') is ambiguous with duplicate labels — "
+                    f"later wire_pins(net='{net}') is ambiguous with duplicate labels — "
                     "connect to a component pin (Ref.Pin) instead."
                 )
                 break
@@ -3315,13 +3316,16 @@ class _ConnectPlan(NamedTuple):
 
 
 @registry.tool(
-    name="connect",
+    name="wire_pins",
+    aliases=("connect",),
     description=(
-        "Connect two component pins with wire(s). Resolves pin positions automatically. "
-        "Waypoints define the wire route through intermediate points. "
-        "For a straight horizontal or vertical connection, waypoints can be omitted."
+        "Draw a wire between two component pins (by reference), auto-routing an orthogonal "
+        "path and resolving pin positions automatically. This is a schematic wiring op, not a "
+        "network/server connection. Waypoints route the wire through intermediate points; for a "
+        "straight horizontal or vertical run, omit them. (Formerly named 'connect', still "
+        "accepted as a deprecated alias.)"
     ),
-    input_model=ConnectInput,
+    input_model=WirePinsInput,
     annotations=types.ToolAnnotations(
         readOnlyHint=False,
         destructiveHint=False,
@@ -3361,7 +3365,7 @@ class _ConnectPlan(NamedTuple):
         },
     },
 )
-async def handle_connect(args: ConnectInput, state: SessionState) -> types.CallToolResult:
+async def handle_wire_pins(args: WirePinsInput, state: SessionState) -> types.CallToolResult:
     """Connect two pins with auto-routed or waypoint-guided wires."""
     asc_path = safe_path(args.path, state)
     _require_asc(asc_path)
@@ -3374,9 +3378,9 @@ async def handle_connect(args: ConnectInput, state: SessionState) -> types.CallT
         plan = _plan_connect_route(ed, args.from_pin, args.to_pin, args.waypoints)
         for sx1, sy1, sx2, sy2 in plan.segments:
             ed.wires.append(Line(Point(sx1, sy1), Point(sx2, sy2)))
-        # Scope floating-pin advisories to the components this connect touched;
-        # the shorts / junction-overlap warnings connect can create still pass
-        # through. rsplit matches _resolve_pin's ref/pin split convention.
+        # Scope floating-pin advisories to the components this wire_pins call
+        # touched; the shorts / junction-overlap warnings wire_pins can create
+        # still pass through. rsplit matches _resolve_pin's ref/pin split convention.
         touched_refs = {
             pin.rsplit(".", 1)[0] for pin in (args.from_pin, args.to_pin) if "." in pin
         }
@@ -3431,8 +3435,9 @@ def _plan_connect_route(
     validation failure (zero-length route, diagonal segment, pin
     collision, wire-junction overlap, named-net short).
 
-    Shared by ``handle_connect`` and the ``connect`` op of
-    ``apply_schematic_ops`` so both paths apply identical safety checks.
+    Shared by ``handle_wire_pins`` and the ``wire_pins`` op of
+    ``apply_schematic_ops`` (``connect`` accepted as a deprecated alias for
+    both) so both paths apply identical safety checks.
     """
     component_geo = _collect_component_geometry(editor)
     existing_wires = [(int(w.V1.X), int(w.V1.Y), int(w.V2.X), int(w.V2.Y)) for w in editor.wires]
@@ -3539,7 +3544,7 @@ def _plan_connect_route(
     # ``(px, py) in endpoints`` check below), NOT by whole component: the
     # OTHER pin of an endpoint component still lies on the route and must be
     # flagged — otherwise a waypoint landing on it silently shorts the
-    # component while connect reports success. ``skip_refs`` stays in the
+    # component while wire_pins reports success. ``skip_refs`` stays in the
     # bbox-crossing *warning* loop, where exempting an endpoint component is
     # reasonable.
     for cg in component_geo:
@@ -3691,16 +3696,16 @@ class CreateSchematicInput(ToolInput):
     name="create_schematic",
     description=(
         "Create an empty .asc schematic ready for incremental editing via "
-        "apply_schematic_ops add_component ops, the connect tool, and "
+        "apply_schematic_ops add_component ops, the wire_pins tool, and "
         "apply_schematic_ops add_net_label ops for ground/net flags. "
         "Tip: prefer ``create_netlist`` + .cir for design iteration; "
         "use this only when a visual schematic is the deliverable."
         " Prefer apply_schematic_ops for multi-step builds (one transaction); "
-        "wire signal nets with connect; label grounds — and any net a "
+        "wire signal nets with wire_pins; label grounds — and any net a "
         ".meas/B-source references by name — via apply_schematic_ops add_net_label "
         "ops at pins; "
         "repeating a same-name label ties distant nets (the netlist merges them "
-        "into one net — then target pins as Ref.Pin in connect, since net:NAME "
+        "into one net — then target pins as Ref.Pin in wire_pins, since net:NAME "
         "is ambiguous with duplicates). "
         "Don't hand-edit the .asc. Full layout guidance: the spice://guide resource."
     ),
@@ -3747,11 +3752,11 @@ async def handle_create_schematic(
     checklist = (
         f"{SCHEMATIC_WIRING_NORM}\n\n"
         "Layout checklist (full playbook: spice://guide):"
-        "\n- Wire signal nets with connect — orthogonal only, waypoints for bends, "
+        "\n- Wire signal nets with wire_pins — orthogonal only, waypoints for bends, "
         "route outside component bodies."
         '\n- Ground: an apply_schematic_ops add_net_label op (net="0", pin="Ref.pin") '
         "at each ground pin; don't wire to a shared ground flag."
-        "\n- Wire nearby signal nets with connect; for distant nets, repeating a "
+        "\n- Wire nearby signal nets with wire_pins; for distant nets, repeating a "
         "same-name add_net_label op ties them without routing — the netlist merges "
         "same-name labels into one net (not a short). Also label any net you "
         "reference by name in a .meas/.param/B-source (e.g. V(vref)), or it exports "
@@ -3803,7 +3808,7 @@ class TraceNetInput(ToolInput):
         "Follows both wires (segment-aware — catches labels placed mid-wire) and "
         "same-name FLAGs (LTspice's name-based nets). Use it to answer 'what's on "
         "net X', to confirm "
-        "a connect landed, or to spot an accidental short (a net carrying two "
+        "a wire_pins call landed, or to spot an accidental short (a net carrying two "
         "different non-ground labels)."
     ),
     input_model=TraceNetInput,
@@ -4853,8 +4858,9 @@ class _OpAddNetLabel(StrictModel):
     y: int | None = None
 
 
-class _OpConnect(StrictModel):
-    op: Literal["connect"]
+class _OpWirePins(StrictModel):
+    # "connect" is the deprecated former name, still accepted.
+    op: Literal["wire_pins", "connect"]
     from_pin: str
     to_pin: str
     waypoints: list[WaypointInput] = Field(default_factory=list)
@@ -4870,7 +4876,7 @@ class _OpRemoveNetLabel(StrictModel):
 class _OpRemoveWire(StrictModel):
     op: Literal["remove_wire"]
     # Exact-segment form: all four endpoints (either direction). This is the
-    # precise inverse of a single connect segment — it removes only that
+    # precise inverse of a single wire_pins segment — it removes only that
     # segment. If the schematic holds several byte-identical copies of the
     # segment (double-drawn wires), ALL of them are removed in one op; the
     # result's `removed` count says how many.
@@ -4880,7 +4886,7 @@ class _OpRemoveWire(StrictModel):
     y2: int | None = None
     # Incident-point form: every segment touching this coordinate. Broader than
     # the segment form — at a shared node it also drops wires from other
-    # connections, so prefer the segment form to undo one specific connect.
+    # connections, so prefer the segment form to undo one specific wire_pins call.
     pin: str | None = None
     x: int | None = None
     y: int | None = None
@@ -4915,7 +4921,7 @@ SchematicOp = (
     | _OpAddNetLabel
     | _OpRemoveNetLabel
     | _OpRemoveWire
-    | _OpConnect
+    | _OpWirePins
     | _OpAddDirective
     | _OpRemoveDirective
 )
@@ -5122,12 +5128,12 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
             raise NetlistError("No matching wire segment found to remove.")
         return {"op": "remove_wire", "removed": removed}
 
-    if isinstance(op, _OpConnect):
+    if isinstance(op, _OpWirePins):
         plan = _plan_connect_route(editor, op.from_pin, op.to_pin, op.waypoints)
         for sx1, sy1, sx2, sy2 in plan.segments:
             editor.wires.append(Line(Point(sx1, sy1), Point(sx2, sy2)))
         return {
-            "op": "connect",
+            "op": op.op,
             "from_pin": op.from_pin,
             "to_pin": op.to_pin,
             "wire_count": len(plan.segments),
@@ -5200,14 +5206,15 @@ def _collapse_result_warnings(results: list[dict[str, object]]) -> None:
         "the end. Component-placement results include pins, bounding boxes, "
         "and overlap warnings for use by later routing ops. Cuts the typical "
         "25+ tool calls to build a real circuit "
-        "(add_component × N + connect × N + add_net_label × N + edit_directive "
+        "(add_component × N + wire_pins × N + add_net_label × N + edit_directive "
         "× N) down to a single round-trip. This is also the home for the "
         "ack-only schematic mutations that have no standalone tool, so they do "
         "not each cost a separate tool slot.\n\n"
         "Supported ops (each tagged via the ``op`` field): ``add_component``, "
         "``set_component_value``, ``set_component_attribute``, "
         "``remove_component``, ``move_component``, ``add_net_label``, "
-        "``remove_net_label``, ``remove_wire``, ``connect``, ``add_directive``, "
+        "``remove_net_label``, ``remove_wire``, ``wire_pins`` (alias "
+        "``connect``), ``add_directive``, "
         "``remove_directive``.\n\n"
         "By default, the first op that raises aborts the whole transaction "
         "and nothing is written to disk. Set ``stop_on_error=false`` to run "

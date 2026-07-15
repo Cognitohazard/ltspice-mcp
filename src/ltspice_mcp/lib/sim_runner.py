@@ -40,11 +40,12 @@ def generate_job_id() -> str:
     return generate_id("sim")
 
 
-# A hardlink alias (same filesystem, the common case for the run's own output
-# folder) costs no extra disk regardless of size. Only a genuine cross-device
-# folder falls back to a copy, and only below this size — the fallback exists
-# for small logs; duplicating a multi-GB raw just to give it a friendly name
-# isn't worth doubling disk usage, so above this it skips instead.
+# A hardlink alias costs no extra disk regardless of size, and the alias always
+# lands in the source's own output folder (same filesystem), so a hardlink is
+# the expected path. The copy fallback only fires on a filesystem that can't
+# hardlink at all (e.g. WSL DrvFs on /mnt/c), and only below this size — the
+# fallback exists for small logs; duplicating a multi-GB raw just to give it a
+# friendly name isn't worth doubling disk usage, so above this it skips instead.
 _ALIAS_COPY_SIZE_LIMIT = 100 * 1024 * 1024  # 100 MB
 
 
@@ -64,8 +65,8 @@ def _link_or_copy(source: Path, dest: Path) -> tuple[Path | None, str | None]:
     as ``source`` means a concurrent sibling (or an earlier call) already
     created this exact alias, which is success, not a collision; a
     different inode is a genuine foreign file, which is skipped. The copy
-    fallback (cross-device only) keeps a plain pre-check: that path is the
-    rare fallback and the same race there is far narrower.
+    fallback (hardlink-unsupported filesystems only) keeps a plain pre-check:
+    that path is the rare fallback and the same race there is far narrower.
     """
     try:
         os.link(source, dest)
@@ -79,7 +80,7 @@ def _link_or_copy(source: Path, dest: Path) -> tuple[Path | None, str | None]:
             return dest, None
         return None, f"{dest.name} already exists"
     except OSError:
-        pass  # cross-device or unsupported — fall through to the copy path
+        pass  # filesystem can't hardlink — fall through to the copy path
     if dest.exists():
         return None, f"{dest.name} already exists"
     try:
@@ -87,12 +88,24 @@ def _link_or_copy(source: Path, dest: Path) -> tuple[Path | None, str | None]:
     except OSError as e:
         return None, f"could not stat {source.name}: {e}"
     if size > _ALIAS_COPY_SIZE_LIMIT:
-        return None, f"{source.name} is {size / 1e6:.0f} MB, too large to copy across filesystems"
+        return None, (
+            f"{source.name} is {size / 1e6:.0f} MB, too large to copy "
+            "(this filesystem can't hardlink)"
+        )
     try:
         shutil.copy2(source, dest)
         return dest, None
     except OSError as e:
         return None, f"could not copy {source.name}: {e}"
+
+
+def _alias_recorded(job: SimulationJob) -> bool:
+    """True once the job has settled an alias path or a skip note for either artifact."""
+    return (
+        job.output_alias_raw is not None
+        or job.output_alias_log is not None
+        or job.output_alias_note is not None
+    )
 
 
 async def ensure_output_alias(job: SimulationJob, state: SessionState) -> None:
@@ -113,13 +126,8 @@ async def ensure_output_alias(job: SimulationJob, state: SessionState) -> None:
     neither artifact yet (not actually completed). A log-only completion
     (no raw — see ``collect_run_outcome``) still gets its log aliased.
     """
-    already_attempted = (
-        job.output_alias_raw is not None
-        or job.output_alias_log is not None
-        or job.output_alias_note is not None
-    )
     anchor = job.raw_file or job.log_file
-    if not job.output_basename or anchor is None or already_attempted:
+    if not job.output_basename or anchor is None or _alias_recorded(job):
         return
     folder = anchor.parent
     base = job.output_basename
@@ -133,6 +141,17 @@ async def ensure_output_alias(job: SimulationJob, state: SessionState) -> None:
         alias_log, note_log = await asyncio.to_thread(
             _link_or_copy, job.log_file, folder / f"{base}.log"
         )
+    # A concurrent caller (run_simulation's wait path vs a racing check_job) can
+    # reach here for the same job before either records a result — both pass the
+    # ``_alias_recorded`` guard above. The re-check + assignment below run with
+    # no await between them, so on the single event loop they are atomic: a
+    # caller that actually produced an alias always wins, and one that only has a
+    # skip never overwrites an alias another already settled. (The hardlink path
+    # is already race-safe via samefile; this closes the copy-fallback's plain
+    # exists-precheck, which could otherwise record a false "already exists".)
+    produced_alias = alias_raw is not None or alias_log is not None
+    if _alias_recorded(job) and not produced_alias:
+        return
     job.output_alias_raw = alias_raw
     job.output_alias_log = alias_log
     job.output_alias_note = (

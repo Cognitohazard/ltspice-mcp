@@ -19,11 +19,15 @@ class TestDispatchTable:
         assert not missing, f"Tools defined but not dispatched: {missing}"
 
     def test_no_extra_handlers(self):
-        """No dispatch entries without a matching tool definition."""
+        """Every dispatch entry either matches a tool definition, or is a
+        deprecated alias declared on the tool it dispatches to (see
+        RegisteredTool.aliases — e.g. 'connect' dispatching to 'wire_pins').
+        Anything else is a stray handler with no definition or alias."""
         defs, handlers = get_tools_for_profile("full")
         defined = {tool_def.name for tool_def in defs}
         extra = set(handlers.keys()) - defined
-        assert not extra, f"Dispatched but no definition: {extra}"
+        unexplained = {name for name in extra if name not in handlers[name].aliases}
+        assert not unexplained, f"Dispatched but no definition or alias: {unexplained}"
 
     def test_all_handlers_callable(self):
         _, handlers = get_tools_for_profile("full")
@@ -44,6 +48,28 @@ class TestDispatchTable:
             except ValidationError:
                 continue
             raise AssertionError(f"{name} accepted empty args despite required fields {required}")
+
+
+class TestToolAliases:
+    """Deprecated former tool names (e.g. 'connect' -> 'wire_pins') stay
+    callable but are not advertised — they dispatch through tool_dispatch
+    without a matching entry in tool_defs (RegisteredTool.aliases)."""
+
+    def test_connect_dispatches_to_wire_pins_handler(self):
+        defs, handlers = get_tools_for_profile("full")
+        def_names = {tool_def.name for tool_def in defs}
+        assert "wire_pins" in def_names
+        assert "connect" not in def_names, "alias must not be advertised in tool_defs"
+        assert "connect" in handlers, "alias must still resolve via tool_dispatch"
+        assert handlers["connect"] is handlers["wire_pins"], (
+            "the 'connect' alias must dispatch to the exact same registration "
+            "(same handler) as 'wire_pins'"
+        )
+
+    def test_connect_alias_present_in_agentic_profile_too(self):
+        _, handlers = get_tools_for_profile("agentic")
+        assert "connect" in handlers
+        assert handlers["connect"] is handlers["wire_pins"]
 
 
 class TestToolSchemas:
@@ -67,13 +93,21 @@ class TestToolSchemas:
 
 class TestToolProfiles:
     def test_full_profile_returns_all_dispatch_entries(self):
+        """Every tool definition has a dispatch entry; the dispatch map may
+        also carry deprecated aliases that are intentionally absent from the
+        definition list (see RegisteredTool.aliases)."""
         defs, handlers = get_tools_for_profile("full")
-        assert {tool_def.name for tool_def in defs} == set(handlers.keys())
+        def_names = {tool_def.name for tool_def in defs}
+        assert def_names <= set(handlers.keys())
+        alias_only = set(handlers.keys()) - def_names
+        assert all(name in handlers[name].aliases for name in alias_only)
 
     def test_agentic_profile_returns_subset(self):
         defs, handlers = get_tools_for_profile("agentic")
         agentic_names = {tool_def.name for tool_def in defs}
-        assert agentic_names == set(handlers.keys())
+        assert agentic_names <= set(handlers.keys())
+        alias_only = set(handlers.keys()) - agentic_names
+        assert all(name in handlers[name].aliases for name in alias_only)
 
     def test_agentic_is_strict_subset_of_full(self):
         full_defs, _ = get_tools_for_profile("full")
@@ -171,10 +205,10 @@ class TestDestructiveAnnotations:
 _SELF_INVERSE = "<self>"
 
 # Declared inverse for every schematic op. This table is a forcing function, not
-# documentation: a new add_*/connect/create op with no entry fails
+# documentation: a new add_*/wire_pins/create op with no entry fails
 # test_every_op_has_a_declared_inverse, so shipping a one-way mutation becomes a
 # reviewed decision instead of an accident. The schematic editor once shipped
-# add_net_label without remove_net_label and connect without remove_wire — both
+# add_net_label without remove_net_label and wire_pins without remove_wire — both
 # invisible to happy-path stress tests because a missing capability has no code
 # path to walk. This suite walks the op *surface* instead, where absence shows.
 _DECLARED_INVERSES: dict[str, str] = {
@@ -182,8 +216,8 @@ _DECLARED_INVERSES: dict[str, str] = {
     "remove_component": "add_component",
     "add_net_label": "remove_net_label",
     "remove_net_label": "add_net_label",
-    "connect": "remove_wire",
-    "remove_wire": "connect",
+    "wire_pins": "remove_wire",
+    "remove_wire": "wire_pins",
     "add_directive": "remove_directive",
     "remove_directive": "add_directive",
     "set_component_value": _SELF_INVERSE,
@@ -191,14 +225,27 @@ _DECLARED_INVERSES: dict[str, str] = {
     "move_component": _SELF_INVERSE,
 }
 
+# Deprecated ``op`` discriminator aliases: a second literal value that
+# deserializes to the SAME model as its primary name (``_OpWirePins.op`` is
+# ``Literal["wire_pins", "connect"]``). An alias is the same mutation under
+# an old spelling, so it shares its primary's declared inverse rather than
+# getting its own _DECLARED_INVERSES entry; test_every_alias_resolves_to_a_
+# declared_op still forces a linkage to exist so a stray/typo'd alias can't
+# silently escape the closure guard.
+_OP_ALIASES: dict[str, str] = {
+    "connect": "wire_pins",
+}
+
 
 def _schematic_op_literals() -> set[str]:
     """The ``op`` discriminator strings in the SchematicOp union, derived from
-    the union itself so the test cannot silently miss a newly added op."""
+    the union itself so the test cannot silently miss a newly added op. A
+    member's ``op`` field may carry more than one literal (``_OpWirePins``'s
+    is ``Literal["wire_pins", "connect"]`` — the deprecated alias shares the
+    model), so this collects every literal per member rather than assuming one."""
     literals: set[str] = set()
     for member in typing.get_args(SchematicOp):
-        (literal,) = typing.get_args(member.model_fields["op"].annotation)
-        literals.add(literal)
+        literals.update(typing.get_args(member.model_fields["op"].annotation))
     return literals
 
 
@@ -215,10 +262,11 @@ class TestOpInverseClosure:
     property over the op union catches it the moment the asymmetry lands."""
 
     def test_every_op_has_a_declared_inverse(self):
-        """Each op in the union must classify its inverse in _DECLARED_INVERSES.
-        A new op with no entry fails here, forcing the author to add an inverse
-        op (or declare it self-inverse) rather than ship a one-way mutation."""
-        undeclared = _schematic_op_literals() - _DECLARED_INVERSES.keys()
+        """Each op in the union must classify its inverse in _DECLARED_INVERSES,
+        or be a declared alias of one that does (_OP_ALIASES). A new op with no
+        entry fails here, forcing the author to add an inverse op (or declare
+        it self-inverse) rather than ship a one-way mutation."""
+        undeclared = _schematic_op_literals() - _DECLARED_INVERSES.keys() - _OP_ALIASES.keys()
         assert not undeclared, (
             f"Schematic ops with no declared inverse: {sorted(undeclared)}. "
             "Add an inverse op to the SchematicOp union (mirroring "
@@ -226,6 +274,22 @@ class TestOpInverseClosure:
             "_DECLARED_INVERSES, or map it to _SELF_INVERSE if re-applying it "
             "with the prior arguments undoes it."
         )
+
+    def test_every_alias_resolves_to_a_declared_op(self):
+        """Every _OP_ALIASES entry must be a real literal in the union and
+        must resolve to a primary op that IS in _DECLARED_INVERSES — an alias
+        pointing at an unrecognized or undeclared primary name would silently
+        escape the inverse-closure guard above."""
+        literals = _schematic_op_literals()
+        for alias, primary in _OP_ALIASES.items():
+            assert alias in literals, (
+                f"Alias {alias!r} is declared in _OP_ALIASES but is not a real "
+                "op literal in the SchematicOp union."
+            )
+            assert primary in _DECLARED_INVERSES, (
+                f"Alias {alias!r} resolves to {primary!r}, which has no "
+                "declared inverse in _DECLARED_INVERSES."
+            )
 
     def test_no_stale_inverse_entries(self):
         """_DECLARED_INVERSES must not name ops that no longer exist — a stale
@@ -236,7 +300,7 @@ class TestOpInverseClosure:
     def test_paired_inverses_exist_in_the_union(self):
         """Every named (non-self) inverse must be a real op in the union — the
         check that would have failed on add_net_label-without-remove_net_label
-        and connect-without-remove_wire."""
+        and wire_pins-without-remove_wire."""
         ops = _schematic_op_literals()
         for op, inverse in _DECLARED_INVERSES.items():
             if inverse == _SELF_INVERSE:
@@ -270,7 +334,7 @@ _TOOL_REVERSAL: dict[str, str] = {
     # Schematic op batch — per-op closure guarded by TestOpInverseClosure.
     "apply_schematic_ops": "per-op inverse (see TestOpInverseClosure)",
     # Schematic standalone write whose inverse is an apply_schematic_ops op.
-    "connect": "remove_wire op",
+    "wire_pins": "remove_wire op",
     # Self-inverse standalone edits (re-invoke with the prior value/state).
     "set_component_value": "re-set to prior value",
     "parameter": "re-set to prior value, or delete=true to undo an added param",
