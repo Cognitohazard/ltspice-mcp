@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Literal
@@ -17,7 +18,7 @@ from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.log_parser import extract_error_context, parse_success_summary
 from ltspice_mcp.lib.mcp_logging import mcp_log
 from ltspice_mcp.lib.runner_base import discard_logopinfo_netlist
-from ltspice_mcp.lib.sim_runner import SimulationRunner, generate_job_id
+from ltspice_mcp.lib.sim_runner import SimulationRunner, ensure_output_alias, generate_job_id
 from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice, no_simulator_message
 from ltspice_mcp.lib.spice_validator import estimate_analysis_points
 from ltspice_mcp.state import (
@@ -163,6 +164,11 @@ _SIM_RESULT_FIELDS_SCHEMA: dict[str, dict] = {
     # levers, batch redirect, hidden-jobs note) and the timeout log excerpt.
     "hint": HINT_SCHEMA,
     "log_excerpt": {"type": "string"},
+    # Present only when the run requested an output_basename: the alias path
+    # actually created, or null if it was skipped (a name collision, or a
+    # hardlink failure on a raw too large to copy) — see "hint" for why.
+    "output_alias_raw": {"type": ["string", "null"]},
+    "output_alias_log": {"type": ["string", "null"]},
 }
 
 
@@ -192,10 +198,39 @@ class RunSimulationInput(ToolInput):
         default=False,
         description="Force synchronous execution. Blocks until completion or hard timeout.",
     )
+    output_basename: str | None = Field(
+        default=None,
+        description=(
+            "Optional friendly name for this run's outputs: aliases the job's "
+            "canonical {job_id}.raw/.log (in the stable runs folder) as "
+            "'{output_basename}.raw'/'.log' alongside them. Letters, digits, "
+            "'_', '-' only — no path separators or extension; the server "
+            "names the file. If a file with that name already exists, the "
+            "alias is skipped (not overwritten) and reported via "
+            "output_alias_raw/output_alias_log + hint in the response."
+        ),
+    )
     format: Literal["json", "text"] | None = Field(
         default=None,
         description=FORMAT_DESCRIPTION,
     )
+
+
+_RE_SAFE_BASENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def _validate_output_basename(basename: str | None) -> None:
+    """Reject anything that isn't a bare filename stem.
+
+    No path separators, no ``..``, no extension — the server names the
+    alias (``{basename}.raw`` / ``{basename}.log``); the caller only picks
+    the stem.
+    """
+    if basename is not None and not _RE_SAFE_BASENAME.match(basename):
+        raise SimulationError(
+            f"Invalid output_basename {basename!r}: letters, digits, '_', '-' "
+            "only, no path separators or extension."
+        )
 
 
 class CheckJobInput(ToolInput):
@@ -297,6 +332,7 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     # Cheap path validation first, so a bad path reports as such even when no
     # simulator is configured.
     resolve_netlist_path(netlist_str, state)
+    _validate_output_basename(args.output_basename)
 
     default_simulator = resolve_run_simulator(args.simulator, state)
 
@@ -331,6 +367,7 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
         # runner transitions to "running" and emits 'started'.
         status="queued",
         started_at=now(),
+        output_basename=args.output_basename,
     )
     # Runner first, then register + create_task with no await between —
     # submit-ordering rule, see the concurrency contract in tools/_base.py.
@@ -513,6 +550,10 @@ async def _finished_job_response(
     deadline watchdog.
     """
     if job.status == "completed":
+        # Settle any requested output_basename alias before this job is
+        # reported anywhere — see ensure_output_alias's docstring for why
+        # this can't just be fired off from the completion callback.
+        await ensure_output_alias(job, state)
         if job.raw_file is None:
             # Log-only completion: a clean exit that wrote results (if any)
             # to the log rather than a raw file — see collect_run_outcome.
@@ -543,7 +584,7 @@ async def _finished_job_response(
         if suggestions:
             summary["suggestions"] = suggestions
         await mcp_log("info", f"Simulation completed: {job.netlist.name} ({duration:.1f}s)")
-        return _format_success_response(job.job_id, summary, fmt)
+        return _format_success_response(job, summary, fmt)
     elif job.status == "failed":
         await mcp_log("error", f"Simulation failed: {job.netlist.name} — {job.error or 'unknown'}")
         return _failed_response(job, duration, state, fmt)
@@ -634,6 +675,14 @@ async def _log_only_response(
         data["measurements"] = measurements
     if failed:
         data["failed_measurements"] = failed
+    if job.output_basename:
+        # No raw for a log-only run, so only the log side can ever alias —
+        # output_alias_raw is always null here, but still present as a fact.
+        data["output_alias_raw"] = None
+        data["output_alias_log"] = str(job.output_alias_log) if job.output_alias_log else None
+        if job.output_alias_note:
+            hint = f"{hint} Output alias: {job.output_alias_note}"
+            data["hint"] = hint
 
     meas_note = f"\nMeasurements parsed from log: {len(measurements)}" if measurements else ""
     text = (
@@ -720,7 +769,7 @@ def _failed_response(job, duration: float, state: SessionState, fmt: str | None)
     )
 
 
-def _format_success_response(job_id: str, summary: dict, fmt: str | None = None):
+def _format_success_response(job: SimulationJob, summary: dict, fmt: str | None = None):
     """Format simulation success response with structured data.
 
     Summary shape comes from ``parse_success_summary``, which now
@@ -728,6 +777,7 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
     ``range``, ``measurements``, ``fourier``, and ``meas_errors`` on top
     of the legacy ``signals``/``step_count``/``sim_type`` fields.
     """
+    job_id = job.job_id
     # Format signal list (first 20 signals)
     signals = summary.get("signals", [])
     signal_list = []
@@ -805,6 +855,14 @@ def _format_success_response(job_id: str, summary: dict, fmt: str | None = None)
             data[key] = summary[key]
     if summary.get("point_count") is not None:
         data["point_count"] = summary["point_count"]
+    if job.output_basename:
+        # Always present (even null) once requested — a caller that asked
+        # for an alias and got none must see that as a fact, not silence.
+        data["output_alias_raw"] = str(job.output_alias_raw) if job.output_alias_raw else None
+        data["output_alias_log"] = str(job.output_alias_log) if job.output_alias_log else None
+        if job.output_alias_note:
+            data["hint"] = f"output_basename alias: {job.output_alias_note}"
+            text += f"\n\nOutput alias: {job.output_alias_note}"
     return format_response(text, data, fmt)
 
 
@@ -912,6 +970,10 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
             )
         return format_response(text, data, fmt)
     elif job.status == "completed":
+        # Settle any requested output_basename alias before reporting — see
+        # ensure_output_alias's docstring for why this is awaited here
+        # rather than fired from the completion callback.
+        await ensure_output_alias(job, state)
         duration = (
             services.job_duration_seconds(
                 job.started_at, job.completed_at, label=f"sim job {job.job_id}"
@@ -944,7 +1006,7 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
         suggestions = services.suggestions_from_errors(summary.get("errors"), state.libraries)
         if suggestions:
             summary["suggestions"] = suggestions
-        return _format_success_response(job_id, summary, fmt)
+        return _format_success_response(job, summary, fmt)
     elif job.status == "failed":
         duration = (
             services.job_duration_seconds(

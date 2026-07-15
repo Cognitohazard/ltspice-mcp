@@ -3489,6 +3489,44 @@ class NoiseIntegralInput(ToolInput):
     format: FormatField = Field(default=None, description="'json' or 'text'")
 
 
+_RE_NOISE_HEAD = re.compile(r"^\.noise\s+(?P<out>\S+)\s+(?P<src>\S+)", re.IGNORECASE)
+
+
+def _noise_input_source_unit(netlist: Path | None) -> str | None:
+    """SI unit implied by a ``.NOISE`` directive's input-source refdes.
+
+    ``.NOISE <output> <src> ...`` names the source inoise is referred to, but
+    the trace name alone doesn't say whether that source is voltage or
+    current: LTspice always spells the trace ``V(inoise)`` even when
+    ``<src>`` is a current source, and ngspice's ``inoise_spectrum`` carries
+    no prefix at all. Reads the deck's own ``.NOISE`` line as ground truth —
+    a source name starting with V is a voltage source ("V"), I a current
+    source ("A"), case-insensitively. Returns None when the deck is
+    unavailable, has no ``.NOISE`` directive, or the source name starts with
+    neither: the caller then falls back to the existing trace-derived unit
+    rather than inventing one.
+    """
+    if netlist is None:
+        return None
+    try:
+        from ltspice_mcp.lib.spice_lex import cards_from_path
+
+        cards = cards_from_path(netlist).cards
+    except Exception:
+        return None
+    for card in cards:
+        m = _RE_NOISE_HEAD.match(card.body)
+        if not m:
+            continue
+        prefix = m.group("src")[:1].upper()
+        if prefix == "V":
+            return "V"
+        if prefix == "I":
+            return "A"
+        return None
+    return None
+
+
 @registry.tool(
     name="noise_integral",
     description=(
@@ -3535,6 +3573,23 @@ async def handle_noise_integral(args: NoiseIntegralInput, state: SessionState):
     data = await _run_metric(raw_path, integrate_noise, freqs, density, f_lo, f_hi)
 
     unit = trace_unit(raw, signal)
+    if "inoise" in signal.lower():
+        # trace_unit() alone can't distinguish a voltage- from a
+        # current-referred inoise trace (see _noise_input_source_unit); check
+        # the deck's .NOISE line when a job_id makes it reachable.
+        netlist = None
+        if args.job_id:
+            with contextlib.suppress(Exception):
+                netlist = (await services.resolve_job_async(args.job_id, state)).netlist
+        resolved = _noise_input_source_unit(netlist)
+        if resolved is not None:
+            unit = resolved
+        else:
+            data.setdefault("warnings", []).append(
+                "Could not verify the input-referred noise unit against the "
+                f"deck's .NOISE source; assuming {unit or 'V'!r}. Pass job_id "
+                "so the .NOISE line can be checked (V-source -> V, I-source -> A)."
+            )
     data["signal"] = signal
     data["unit"] = unit or ""
     data["density_unit"] = f"{unit}/√Hz" if unit else "amplitude/√Hz"

@@ -356,6 +356,37 @@ class TestCheckJob:
         jobs = result.structuredContent["jobs"]
         assert jobs and all("job_type" in entry for entry in jobs)
 
+    async def test_completed_with_output_basename_surfaces_alias(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        # An async run_simulation call that requested output_basename doesn't
+        # settle the alias until someone reports the completion — check_job
+        # must trigger (and await) that settlement, not just read stale fields.
+        raw = work_dir / "j1.raw"
+        log = work_dir / "j1.log"
+        raw.write_text("d")
+        log.write_text("l")
+        job = _make_job(state_no_sim, status="completed", raw_file=raw, log_file=log)
+        job.output_basename = "myrun"
+        stub_summary = {
+            "sim_type": "Transient",
+            "duration": 1.0,
+            "step_count": 1,
+            "raw_file": str(raw),
+            "log_file": str(log),
+            "signals": ["time"],
+            "warnings": [],
+        }
+        monkeypatch.setattr(
+            "ltspice_mcp.tools.simulation.parse_success_summary",
+            lambda *a, **k: stub_summary,
+        )
+        result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert data["output_alias_raw"] == str(work_dir / "myrun.raw")
+        assert data["output_alias_log"] == str(work_dir / "myrun.log")
+
 
 class TestSimResultSchemaDeclarations:
     """Schema keys must stay declared — the validator allows extra keys, so only
@@ -380,6 +411,29 @@ class TestSimResultSchemaDeclarations:
         assert schema is not None
         assert "suggestions" in schema["properties"]
 
+    def test_run_simulation_and_check_job_declare_output_alias_fields(self):
+        from ltspice_mcp.tools import get_tools_for_profile
+
+        _, dispatch = get_tools_for_profile("full")
+        for tool_name in ("run_simulation", "check_job"):
+            schema = dispatch[tool_name].definition.outputSchema
+            assert schema is not None
+            assert "output_alias_raw" in schema["properties"]
+            assert "output_alias_log" in schema["properties"]
+
+
+def _stub_job(job_id: str = "j1", **overrides) -> SimulationJob:
+    """A minimal completed SimulationJob for _format_success_response tests,
+    which only reads job_id and the output_alias_* fields off it."""
+    return SimulationJob(
+        job_id=job_id,
+        netlist=Path("/tmp/x.cir"),
+        simulator="FakeSim",
+        status="completed",
+        started_at=now(),
+        **overrides,
+    )
+
 
 class TestFormatSuccessResponse:
     def test_basic(self):
@@ -394,7 +448,7 @@ class TestFormatSuccessResponse:
             "signals": ["time", "V(out)"],
             "warnings": [],
         }
-        result = _format_success_response("j1", summary, None)
+        result = _format_success_response(_stub_job(), summary, None)
         text = _text_of(result)
         assert "Transient" in text
         assert "V(out)" in text
@@ -419,7 +473,7 @@ class TestFormatSuccessResponse:
                 "2n3905": [{"name": "2N3904", "score": 0.9, "source_path": "/libs/bjt.lib"}]
             },
         }
-        result = _format_success_response("j1", summary, None)
+        result = _format_success_response(_stub_job(), summary, None)
         assert result.structuredContent is not None
         assert result.structuredContent["suggestions"]["2n3905"][0]["name"] == "2N3904"
 
@@ -436,7 +490,7 @@ class TestFormatSuccessResponse:
             "signals": ["time"],
             "warnings": [],
         }
-        result = _format_success_response("j1", summary, None)
+        result = _format_success_response(_stub_job(), summary, None)
         assert result.structuredContent is not None
         assert "suggestions" not in result.structuredContent
 
@@ -454,11 +508,74 @@ class TestFormatSuccessResponse:
             "warnings": ["w1"],
             "errors": ["e1"],
         }
-        result = _format_success_response("j1", summary, None)
+        result = _format_success_response(_stub_job(), summary, None)
         text = _text_of(result)
         assert "and 10 more" in text
         assert "Errors:" in text
         assert "Warnings:" in text
+
+    def test_no_basename_omits_alias_fields(self):
+        # A run that never requested a friendly name shouldn't clutter the
+        # response with alias fields.
+        from ltspice_mcp.tools.simulation import _format_success_response
+
+        summary = {
+            "sim_type": "Transient",
+            "duration": 1.5,
+            "step_count": 1,
+            "raw_file": "/tmp/x.raw",
+            "log_file": "/tmp/x.log",
+            "signals": ["time"],
+            "warnings": [],
+        }
+        result = _format_success_response(_stub_job(), summary, None)
+        assert result.structuredContent is not None
+        assert "output_alias_raw" not in result.structuredContent
+        assert "output_alias_log" not in result.structuredContent
+
+    def test_settled_alias_surfaced(self):
+        from ltspice_mcp.tools.simulation import _format_success_response
+
+        summary = {
+            "sim_type": "Transient",
+            "duration": 1.5,
+            "step_count": 1,
+            "raw_file": "/tmp/x.raw",
+            "log_file": "/tmp/x.log",
+            "signals": ["time"],
+            "warnings": [],
+        }
+        job = _stub_job(
+            output_basename="myrun",
+            output_alias_raw=Path("/tmp/myrun.raw"),
+            output_alias_log=Path("/tmp/myrun.log"),
+        )
+        result = _format_success_response(job, summary, None)
+        assert result.structuredContent is not None
+        assert result.structuredContent["output_alias_raw"] == "/tmp/myrun.raw"
+        assert result.structuredContent["output_alias_log"] == "/tmp/myrun.log"
+        assert "hint" not in result.structuredContent
+
+    def test_skipped_alias_reported_as_null_plus_hint(self):
+        # Requesting output_basename but getting no alias must be a visible
+        # fact (null + why), never silent.
+        from ltspice_mcp.tools.simulation import _format_success_response
+
+        summary = {
+            "sim_type": "Transient",
+            "duration": 1.5,
+            "step_count": 1,
+            "raw_file": "/tmp/x.raw",
+            "log_file": "/tmp/x.log",
+            "signals": ["time"],
+            "warnings": [],
+        }
+        job = _stub_job(output_basename="clash", output_alias_note="raw: myrun.raw already exists")
+        result = _format_success_response(job, summary, None)
+        assert result.structuredContent is not None
+        assert result.structuredContent["output_alias_raw"] is None
+        assert "already exists" in result.structuredContent["hint"]
+        assert "already exists" in _text_of(result)
 
 
 @pytest.mark.asyncio
@@ -593,6 +710,48 @@ class TestRunSimulationStubbed:
         # Unblock the deadline watchdog the async path arms, so no task is
         # left pending at loop teardown.
         next(iter(state_with_sim.jobs.values())).done_event.set()
+        await asyncio.sleep(0)
+
+    async def test_rejects_invalid_output_basename(
+        self, state_with_sim: SessionState, sample_netlist: Path
+    ):
+        with pytest.raises(SimulationError, match="output_basename"):
+            await handle_run_simulation(
+                RunSimulationInput(netlist=sample_netlist.name, output_basename="../evil"),
+                state_with_sim,
+            )
+        # Rejected before a job was ever registered.
+        assert state_with_sim.jobs == {}
+
+    @pytest.mark.parametrize("bad", ["../evil", "a/b", "a.b", "", ".hidden"])
+    async def test_rejects_unsafe_basenames(
+        self, state_with_sim: SessionState, sample_netlist: Path, bad: str
+    ):
+        with pytest.raises(SimulationError, match="output_basename"):
+            await handle_run_simulation(
+                RunSimulationInput(netlist=sample_netlist.name, output_basename=bad),
+                state_with_sim,
+            )
+
+    async def test_valid_output_basename_recorded_on_job(
+        self, state_with_sim: SessionState, sample_netlist: Path
+    ):
+        fake_runner = MagicMock()
+        fake_runner.start_simulation = AsyncMock()
+        with patch(
+            "ltspice_mcp.tools.simulation._get_or_create_runner",
+            return_value=fake_runner,
+        ):
+            await handle_run_simulation(
+                RunSimulationInput(
+                    netlist=sample_netlist.name, timeout=60, output_basename="my-run_1"
+                ),
+                state_with_sim,
+            )
+        job = next(iter(state_with_sim.jobs.values()))
+        assert job.output_basename == "my-run_1"
+        # Unblock the deadline watchdog the async path arms.
+        job.done_event.set()
         await asyncio.sleep(0)
 
     async def test_runner_creation_failure_deletes_logopinfo_sibling(

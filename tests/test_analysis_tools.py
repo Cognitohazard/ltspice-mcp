@@ -15,7 +15,8 @@ import pytest
 from mcp import types
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.state import BatchJob, SessionState
+from ltspice_mcp.lib import now
+from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
 from ltspice_mcp.tools.analysis import (
     AcStructureInput,
     BodeMetricsInput,
@@ -3024,6 +3025,63 @@ class TestNoiseIntegralHandler:
         raw = _stage_recorded(work_dir, "ltspice_tran_rc")
         with pytest.raises(ResultError, match="noise"):
             await handle_noise_integral(NoiseIntegralInput(raw_file=str(raw)), state_no_sim)
+
+    def _inoise_raw_mock(self) -> MagicMock:
+        freq = np.logspace(1, 5, 20)
+        return _make_raw_mock(
+            plotname="Noise Spectral Density",
+            trace_names=["frequency", "V(onoise)", "V(inoise)"],
+            axis=freq,
+            waves={
+                "frequency": freq,
+                "V(onoise)": np.full_like(freq, 1e-8),
+                "V(inoise)": np.full_like(freq, 1e-9),
+            },
+        )
+
+    async def test_inoise_unit_from_current_source(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # .NOISE's input source is I1 (a current source) — the trace is still
+        # named "V(inoise)" (LTspice's naming quirk), so the unit must come
+        # from the deck's .NOISE line, not the trace name.
+        deck = work_dir / "noise_i.cir"
+        deck.write_text("Rtest out 0 1k\nI1 out 0 DC 0\n.NOISE V(out) I1 dec 10 1 100k\n.end\n")
+        raw_file = work_dir / "noise_i.raw"
+        _inject_raw_mock(state_no_sim, raw_file, self._inoise_raw_mock())
+        job = SimulationJob(
+            job_id="jnoise",
+            netlist=deck,
+            simulator="LTspice",
+            status="completed",
+            started_at=now(),
+            completed_at=now() + timedelta(seconds=1),
+            raw_file=raw_file,
+        )
+        state_no_sim.jobs["jnoise"] = job
+
+        res = await handle_noise_integral(
+            NoiseIntegralInput(job_id="jnoise", signal="V(inoise)"), state_no_sim
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        assert sc["unit"] == "A"
+
+    async def test_inoise_unit_unverified_without_job(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        # No job_id -> no deck to check -> falls back to the (possibly wrong)
+        # trace-derived unit, but must say so rather than claim certainty.
+        raw_file = work_dir / "noise_bare.raw"
+        _inject_raw_mock(state_no_sim, raw_file, self._inoise_raw_mock())
+
+        res = await handle_noise_integral(
+            NoiseIntegralInput(raw_file=str(raw_file), signal="V(inoise)"), state_no_sim
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        assert sc["unit"] == "V"
+        assert any("Could not verify" in w for w in sc["warnings"])
 
 
 @pytest.mark.asyncio

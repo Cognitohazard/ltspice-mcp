@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import os
+import shutil
 from pathlib import Path
 from typing import NamedTuple
 
@@ -36,6 +38,108 @@ logger = logging.getLogger(__name__)
 def generate_job_id() -> str:
     """Generate unique job ID for simulation tracking."""
     return generate_id("sim")
+
+
+# A hardlink alias (same filesystem, the common case for the run's own output
+# folder) costs no extra disk regardless of size. Only a genuine cross-device
+# folder falls back to a copy, and only below this size — the fallback exists
+# for small logs; duplicating a multi-GB raw just to give it a friendly name
+# isn't worth doubling disk usage, so above this it skips instead.
+_ALIAS_COPY_SIZE_LIMIT = 100 * 1024 * 1024  # 100 MB
+
+
+def _link_or_copy(source: Path, dest: Path) -> tuple[Path | None, str | None]:
+    """Best-effort alias of ``source`` at ``dest``. Never overwrites a
+    foreign ``dest``. Returns ``(alias_path, None)`` on success or
+    ``(None, reason)`` when the alias was skipped — a skip is always a
+    reported fact, never a silent no-op.
+
+    The hardlink path has no ``exists()``-then-``link`` precheck: that would
+    be a TOCTOU race against a concurrent caller aliasing the SAME job (the
+    wait path and a simultaneous check_job can both reach here before either
+    has recorded a result — see ``ensure_output_alias``), which would let
+    one succeed and the other misreport a real alias as a skipped
+    collision. Instead ``os.link`` is itself the atomic check: on
+    ``FileExistsError``, ``dest`` is resolved by identity — the same inode
+    as ``source`` means a concurrent sibling (or an earlier call) already
+    created this exact alias, which is success, not a collision; a
+    different inode is a genuine foreign file, which is skipped. The copy
+    fallback (cross-device only) keeps a plain pre-check: that path is the
+    rare fallback and the same race there is far narrower.
+    """
+    try:
+        os.link(source, dest)
+        return dest, None
+    except FileExistsError:
+        try:
+            is_ours = os.path.samefile(source, dest)
+        except OSError:
+            is_ours = False
+        if is_ours:
+            return dest, None
+        return None, f"{dest.name} already exists"
+    except OSError:
+        pass  # cross-device or unsupported — fall through to the copy path
+    if dest.exists():
+        return None, f"{dest.name} already exists"
+    try:
+        size = source.stat().st_size
+    except OSError as e:
+        return None, f"could not stat {source.name}: {e}"
+    if size > _ALIAS_COPY_SIZE_LIMIT:
+        return None, f"{source.name} is {size / 1e6:.0f} MB, too large to copy across filesystems"
+    try:
+        shutil.copy2(source, dest)
+        return dest, None
+    except OSError as e:
+        return None, f"could not copy {source.name}: {e}"
+
+
+async def ensure_output_alias(job: SimulationJob, state: SessionState) -> None:
+    """Create a completed job's requested ``output_basename`` alias, once.
+
+    Deliberately NOT triggered from the completion callback: that runs on a
+    worker thread and firing the alias write there (fire-and-forget) would
+    race a caller that's about to report the same completion synchronously
+    (the wait path in ``handle_run_simulation``) — the response could show
+    no alias a moment before one actually landed. Instead this is awaited by
+    whichever caller is about to surface a completed job first (that wait
+    path, and ``check_job``), so the alias — or the fact that it was skipped
+    — is always settled by the time either reports it.
+
+    Idempotent: a job that already has an alias path or a skip note recorded
+    is left alone, so repeated check_job polls don't re-copy on every call.
+    No-op when no ``output_basename`` was requested, or the job produced
+    neither artifact yet (not actually completed). A log-only completion
+    (no raw — see ``collect_run_outcome``) still gets its log aliased.
+    """
+    already_attempted = (
+        job.output_alias_raw is not None
+        or job.output_alias_log is not None
+        or job.output_alias_note is not None
+    )
+    anchor = job.raw_file or job.log_file
+    if not job.output_basename or anchor is None or already_attempted:
+        return
+    folder = anchor.parent
+    base = job.output_basename
+    alias_raw, note_raw = None, None
+    if job.raw_file is not None:
+        alias_raw, note_raw = await asyncio.to_thread(
+            _link_or_copy, job.raw_file, folder / f"{base}.raw"
+        )
+    alias_log, note_log = None, None
+    if job.log_file is not None:
+        alias_log, note_log = await asyncio.to_thread(
+            _link_or_copy, job.log_file, folder / f"{base}.log"
+        )
+    job.output_alias_raw = alias_raw
+    job.output_alias_log = alias_log
+    job.output_alias_note = (
+        "; ".join(f"{label}: {n}" for label, n in (("raw", note_raw), ("log", note_log)) if n)
+        or None
+    )
+    state.persist_job(job)
 
 
 # Terminal statuses reached by killing a live simulator (vs. a clean finish).
@@ -308,6 +412,12 @@ class SimulationRunner(RunnerBase):
                 job.log_file,
             )
             transition(job, "completed", state=state, raw_size_bytes=outcome.raw_size)
+            # The output-basename alias is NOT created here: a fire-and-forget
+            # worker-thread write would race the wait-path response building
+            # right after this same completion. Instead ``ensure_output_alias``
+            # is awaited by whichever caller reports the finished job first
+            # (the wait path in handle_run_simulation, or check_job) — see
+            # its docstring.
 
     async def kill(self, job_id: str) -> None:
         """Kill the spice process for a job without touching job status.

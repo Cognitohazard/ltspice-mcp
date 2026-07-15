@@ -261,6 +261,14 @@ class SimulationJob:
         error: Error message if simulation failed
         task: RunTask from spicelib
         done_event: Event signaled when simulation completes
+        output_basename: Caller-requested friendly stem for an output alias
+            (None = no alias requested); see output_alias_raw/log.
+        output_alias_raw: Path to the {output_basename}.raw alias, once
+            created (None if not requested, not yet created, or skipped —
+            see output_alias_note).
+        output_alias_log: Same as output_alias_raw for the .log alias.
+        output_alias_note: Why an alias was skipped (e.g. a name collision),
+            or None if nothing was skipped.
     """
 
     job_id: str
@@ -279,3 +287,7 @@ class SimulationJob:
     # Same contract as BatchJob.owner_pid: which server process owns this
     # job (0 = unknown). Persisted so parallel sessions can check liveness.
     owner_pid: int = field(default_factory=os.getpid)
+    output_basename: str | None = None
+    output_alias_raw: Path | None = None
+    output_alias_log: Path | None = None
+    output_alias_note: str | None = None
