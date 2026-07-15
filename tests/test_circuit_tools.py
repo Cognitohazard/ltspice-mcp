@@ -1319,12 +1319,12 @@ class TestSetComponentNodes:
                 state_no_sim,
             )
 
-    async def test_nodes_on_asc_points_at_connect(
+    async def test_nodes_on_asc_points_at_wire_pins(
         self, state_no_sim: SessionState, work_dir: Path
     ):
         asc = work_dir / "sch.asc"
         asc.write_text("Version 4\nSHEET 1 880 680\nSYMBOL res 100 100 R0\nSYMATTR InstName R1\n")
-        with pytest.raises(NetlistError, match="connect"):
+        with pytest.raises(NetlistError, match="wire_pins"):
             await handle_set_component_value(
                 {"path": asc.name, "reference": "R1", "nodes": ["in", "out"]},
                 state_no_sim,
