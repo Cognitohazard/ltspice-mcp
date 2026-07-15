@@ -498,3 +498,200 @@ class TestApplySchematicOpsRollback:
         text = result.content[0].text  # type: ignore[union-attr]
         assert "R1" not in text
         assert "R2" not in text
+
+
+class TestReadabilityWarnings:
+    """label_over_component and the wiring profile — the readability surface
+    that distinguishes a routed schematic from net-label soup (every pin
+    tagged, no wires drawn)."""
+
+    async def test_label_over_component_detected(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        await handle_create_schematic(CreateSchematicInput(name="labover"), asc_state)
+        place_ops: list[Any] = [
+            {"op": "add_component", "reference": "R1", "symbol": "res", "x": 100, "y": 100},
+        ]
+        placed = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(path="labover.asc", ops=place_ops, stop_on_error=False),
+            asc_state,
+        )
+        bb = placed.structuredContent["results"][0]["bounding_box"]  # type: ignore[index]
+        # bbox centre is strict-interior and (for res) not a pin coordinate.
+        cx = bb["x"] + bb["width"] // 2
+        cy = bb["y"] + bb["height"] // 2
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="labover.asc",
+                ops=[{"op": "add_net_label", "net": "BURIED", "x": cx, "y": cy}],  # type: ignore[arg-type]
+                stop_on_error=False,
+            ),
+            asc_state,
+        )
+        warnings = result.structuredContent.get("validation_warnings", [])  # type: ignore[union-attr]
+        over = [w for w in warnings if w["kind"] == "label_over_component"]
+        assert any(w.get("ref") == "R1" for w in over), warnings
+
+    async def test_label_on_foreign_pin_inside_overlapping_bbox_not_flagged(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        # R2's pin lands strictly inside R1's (overlapping) bounding box. A label
+        # there is on a real pin — the flag pattern — and must NOT be reported
+        # against R1, even though it is not one of R1's own pins. Guards the
+        # global pin-exclusion (a per-component check would false-positive here).
+        await handle_create_schematic(CreateSchematicInput(name="foreignpin"), asc_state)
+        place_ops: list[Any] = [
+            {"op": "add_component", "reference": "R1", "symbol": "res", "x": 100, "y": 100},
+            {"op": "add_component", "reference": "R2", "symbol": "res", "x": 100, "y": 120},
+        ]
+        placed = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(path="foreignpin.asc", ops=place_ops, stop_on_error=False),
+            asc_state,
+        )
+        results = placed.structuredContent["results"]  # type: ignore[index]
+        r1_bb = results[0]["bounding_box"]
+        inside = [
+            p
+            for p in results[1]["pins"]
+            if r1_bb["x"] < p["x"] < r1_bb["x"] + r1_bb["width"]
+            and r1_bb["y"] < p["y"] < r1_bb["y"] + r1_bb["height"]
+        ]
+        assert inside, (r1_bb, results[1]["pins"])  # precondition for the test
+        target = inside[0]
+        label_ops: list[Any] = [
+            {"op": "add_net_label", "net": "0", "x": target["x"], "y": target["y"]},
+        ]
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(path="foreignpin.asc", ops=label_ops, stop_on_error=False),
+            asc_state,
+        )
+        warnings = result.structuredContent.get("validation_warnings", [])  # type: ignore[union-attr]
+        assert not [
+            w
+            for w in warnings
+            if w["kind"] == "label_over_component"
+            and (w["x"], w["y"]) == (target["x"], target["y"])
+        ], warnings
+
+    async def test_label_on_bbox_boundary_not_flagged(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        # A label exactly on the bbox boundary (and not a pin) is not "inside" —
+        # guards the strict `<` interior test against a `<=` regression.
+        await handle_create_schematic(CreateSchematicInput(name="boundary"), asc_state)
+        place_ops: list[Any] = [
+            {"op": "add_component", "reference": "R1", "symbol": "res", "x": 100, "y": 100},
+        ]
+        placed = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(path="boundary.asc", ops=place_ops, stop_on_error=False),
+            asc_state,
+        )
+        bb = placed.structuredContent["results"][0]["bounding_box"]  # type: ignore[index]
+        # Left edge, vertical midpoint: on the boundary, not a pin (res pins are
+        # at the top/bottom mid-x).
+        label_ops: list[Any] = [
+            {"op": "add_net_label", "net": "EDGE", "x": bb["x"], "y": bb["y"] + bb["height"] // 2},
+        ]
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(path="boundary.asc", ops=label_ops, stop_on_error=False),
+            asc_state,
+        )
+        warnings = result.structuredContent.get("validation_warnings", [])  # type: ignore[union-attr]
+        assert not [w for w in warnings if w["kind"] == "label_over_component"], warnings
+
+    async def test_wiring_profile_flags_net_label_soup(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        # One resistor with both pins tagged by a net-label and no wires: the
+        # soup signature — pins_label_only > 0, wire_segments == 0.
+        await handle_create_schematic(CreateSchematicInput(name="soup"), asc_state)
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="soup.asc",
+                ops=[  # type: ignore[arg-type]
+                    {
+                        "op": "add_component",
+                        "reference": "R1",
+                        "symbol": "res",
+                        "x": 100,
+                        "y": 100,
+                    },
+                    # res at (100,100) has pins at (100,52) and (100,148).
+                    {"op": "add_net_label", "net": "IN", "x": 100, "y": 52},
+                    {"op": "add_net_label", "net": "OUT", "x": 100, "y": 148},
+                ],
+                stop_on_error=False,
+            ),
+            asc_state,
+        )
+        wiring = result.structuredContent["wiring"]  # type: ignore[index]
+        assert wiring["wire_segments"] == 0
+        assert wiring["pins_total"] == 2
+        assert wiring["pins_wired"] == 0
+        assert wiring["pins_label_only"] == 2
+
+    async def test_wiring_profile_counts_wired_pins(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        # Two resistors joined by a drawn wire → those pins count as wired.
+        await handle_create_schematic(CreateSchematicInput(name="wired"), asc_state)
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="wired.asc",
+                ops=[  # type: ignore[arg-type]
+                    {
+                        "op": "add_component",
+                        "reference": "R1",
+                        "symbol": "res",
+                        "x": 100,
+                        "y": 100,
+                    },
+                    {
+                        "op": "add_component",
+                        "reference": "R2",
+                        "symbol": "res",
+                        "x": 200,
+                        "y": 100,
+                    },
+                    {"op": "connect", "from_pin": "R1.1", "to_pin": "R2.1"},
+                ],
+                stop_on_error=False,
+            ),
+            asc_state,
+        )
+        wiring = result.structuredContent["wiring"]  # type: ignore[index]
+        assert wiring["wire_segments"] >= 1
+        assert wiring["pins_total"] == 4  # two resistors, two pins each
+        # Only the two connected pins sit on the wire; the other two float.
+        assert wiring["pins_wired"] == 2
+        assert wiring["pins_label_only"] == 0
+
+    async def test_label_inside_two_overlapping_boxes_reports_both(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        # A non-pin label strictly inside two overlapping component boxes must
+        # surface BOTH components — no early break may hide the second.
+        await handle_create_schematic(CreateSchematicInput(name="twobox"), asc_state)
+        place_ops: list[Any] = [
+            {"op": "add_component", "reference": "R1", "symbol": "res", "x": 100, "y": 100},
+            {"op": "add_component", "reference": "R2", "symbol": "res", "x": 108, "y": 100},
+        ]
+        placed = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(path="twobox.asc", ops=place_ops, stop_on_error=False),
+            asc_state,
+        )
+        r1 = placed.structuredContent["results"][0]["bounding_box"]  # type: ignore[index]
+        r2 = placed.structuredContent["results"][1]["bounding_box"]  # type: ignore[index]
+        # Centre of the overlap region: strictly inside both boxes, not a pin.
+        ox1, ox2 = max(r1["x"], r2["x"]), min(r1["x"] + r1["width"], r2["x"] + r2["width"])
+        oy1, oy2 = max(r1["y"], r2["y"]), min(r1["y"] + r1["height"], r2["y"] + r2["height"])
+        lx, ly = (ox1 + ox2) // 2, (oy1 + oy2) // 2
+        assert ox1 < lx < ox2 and oy1 < ly < oy2  # precondition for the test
+        label_ops: list[Any] = [{"op": "add_net_label", "net": "MID", "x": lx, "y": ly}]
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(path="twobox.asc", ops=label_ops, stop_on_error=False),
+            asc_state,
+        )
+        warnings = result.structuredContent.get("validation_warnings", [])  # type: ignore[union-attr]
+        over_refs = {w["ref"] for w in warnings if w["kind"] == "label_over_component"}
+        assert over_refs == {"R1", "R2"}, warnings
