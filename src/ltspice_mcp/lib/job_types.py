@@ -116,11 +116,18 @@ class SweepConfig:
     """Configuration for a multi-dimensional parameter sweep.
 
     Attributes:
-        netlist: Path to the netlist to sweep (bound at config creation)
+        netlist: Path to the runnable netlist to sweep (bound at config
+            creation; an .asc source is already exported/sanitized for the
+            simulator that was default when configured)
+        source_netlist: The original netlist argument as given to
+            configure_sweep, so a run can re-prepare it for a per-batch
+            simulator override (see run_sweep). Empty for configs made before
+            this field existed — callers fall back to ``netlist``.
         dimensions: List of sweep axes (one per varied parameter)
     """
 
     netlist: Path
+    source_netlist: str = ""
     dimensions: list[SweepDimension] = field(default_factory=list)
 
 
@@ -146,6 +153,7 @@ class MonteCarloConfig:
     """
 
     netlist: Path
+    source_netlist: str = ""
     type_tolerances: dict[str, tuple[float, str]] = field(default_factory=dict)
     component_overrides: dict[str, tuple[float, str]] = field(default_factory=dict)
     num_runs: int = 100

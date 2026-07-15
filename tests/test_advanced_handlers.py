@@ -406,7 +406,7 @@ class TestRunSweep:
 
         entered = asyncio.Event()
 
-        async def hanging_resolve(state, netlist_path=None):
+        async def hanging_resolve(state, netlist_path=None, simulator=None):
             entered.set()
             await asyncio.Event().wait()  # suspend until cancelled
 
@@ -645,7 +645,7 @@ class TestBatchLogopinfoInjection:
     BatchJob (run_netlist) and the runner reads it as the source deck."""
 
     @staticmethod
-    async def _fake_resolve(state, netlist_path=None):
+    async def _fake_resolve(state, netlist_path=None, simulator=None):
         return Path(netlist_path).parent if netlist_path else Path(".")
 
     async def test_sweep_sets_run_netlist(
@@ -1033,3 +1033,168 @@ class TestFormatBatchTextHelpers:
         text = _format_batch_raw_text(data)
         assert "6.6667" in text
         assert "N/A" not in text
+
+
+@pytest.mark.asyncio
+class TestBatchSimulatorOverride:
+    """run_sweep / run_montecarlo accept a per-batch ``simulator=`` override
+    selecting which detected simulator the whole batch runs on — mirroring
+    run_simulation's per-run override."""
+
+    @staticmethod
+    def _resolve(state, netlist_path=None, simulator=None):
+        return Path(netlist_path).parent if netlist_path else Path(".")
+
+    async def _make_sweep_config(self, state: SessionState, netlist_name: str) -> str:
+        await handle_configure_sweep(
+            ConfigureSweepInput(
+                netlist=netlist_name,
+                parameters=[
+                    SweepParameter(name="R1", type="component", start=1, stop=10, points=3)
+                ],
+            ),
+            state,
+        )
+        return next(iter(state.sweep_configs.keys()))
+
+    async def test_sweep_override_flows_to_runner_job_and_output_folder(
+        self, state_no_sim: SessionState, sample_netlist: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        fake_sim = type("FakeSim", (), {})
+        other_sim = type("OtherSim", (), {})
+        state_no_sim.available_simulators = {"fake": fake_sim, "other": other_sim}
+        state_no_sim.default_simulator = fake_sim
+        config_id = await self._make_sweep_config(state_no_sim, sample_netlist.name)
+
+        monkeypatch.setattr(advanced, "inject_logopinfo", lambda p, sim, jid: p)
+        resolve = AsyncMock(side_effect=self._resolve)
+        monkeypatch.setattr(advanced, "resolve_output_folder", resolve)
+        fake_runner = MagicMock()
+        fake_runner.start_sweep = AsyncMock()
+        get_runner = MagicMock(return_value=fake_runner)
+        monkeypatch.setattr(state_no_sim.runners, "get_sweep_runner", get_runner)
+
+        await handle_run_sweep(RunBatchInput(config_id=config_id, simulator="other"), state_no_sim)
+        job = next(iter(state_no_sim.batch_jobs.values()))
+        assert job.simulator == "OtherSim"
+        assert get_runner.call_args.kwargs["simulator_class"] is other_sim
+        # The output-folder resolver must get the OVERRIDE simulator, not the
+        # session default, or WSL+LTspice routing keys off the wrong simulator.
+        assert resolve.call_args.kwargs["simulator"] is other_sim
+        if job.task:
+            await job.task
+
+    async def test_montecarlo_override_flows_to_runner_job_and_output_folder(
+        self, state_no_sim: SessionState, sample_netlist: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        fake_sim = type("FakeSim", (), {})
+        other_sim = type("OtherSim", (), {})
+        state_no_sim.available_simulators = {"fake": fake_sim, "other": other_sim}
+        state_no_sim.default_simulator = fake_sim
+        await handle_configure_montecarlo(
+            ConfigureMonteCarloInput(
+                netlist=sample_netlist.name,
+                tolerances=[MonteCarloTolerance(ref="R", tolerance=0.05)],
+                num_runs=5,
+            ),
+            state_no_sim,
+        )
+        config_id = next(iter(state_no_sim.mc_configs.keys()))
+
+        monkeypatch.setattr(advanced, "inject_logopinfo", lambda p, sim, jid: p)
+        resolve = AsyncMock(side_effect=self._resolve)
+        monkeypatch.setattr(advanced, "resolve_output_folder", resolve)
+        fake_runner = MagicMock()
+        fake_runner.start_montecarlo = AsyncMock()
+        get_runner = MagicMock(return_value=fake_runner)
+        monkeypatch.setattr(state_no_sim.runners, "get_mc_runner", get_runner)
+
+        await handle_run_montecarlo(
+            RunBatchInput(config_id=config_id, simulator="other"), state_no_sim
+        )
+        job = next(iter(state_no_sim.batch_jobs.values()))
+        assert job.simulator == "OtherSim"
+        assert get_runner.call_args.kwargs["simulator_class"] is other_sim
+        assert resolve.call_args.kwargs["simulator"] is other_sim
+        if job.task:
+            await job.task
+
+    async def test_sweep_unknown_simulator_raises(
+        self, state_no_sim: SessionState, sample_netlist: Path
+    ):
+        state_no_sim.available_simulators = {"fake": type("FakeSim", (), {})}
+        state_no_sim.default_simulator = state_no_sim.available_simulators["fake"]
+        config_id = await self._make_sweep_config(state_no_sim, sample_netlist.name)
+        with pytest.raises(SimulationError, match="not available"):
+            await handle_run_sweep(
+                RunBatchInput(config_id=config_id, simulator="xyce"), state_no_sim
+            )
+
+    async def test_override_reprepares_netlist_from_source_and_surfaces_preflight(
+        self, state_no_sim: SessionState, sample_netlist: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # A config's netlist was prepared for the configure-time default. An
+        # override must re-prepare from the ORIGINAL source for the chosen
+        # simulator (else e.g. an .asc keeps LTspice's .backanno and ngspice
+        # fails) and surface that simulator's ngspice pre-flight warnings.
+        fake_sim = type("FakeSim", (), {})
+        other_sim = type("OtherSim", (), {})
+        state_no_sim.available_simulators = {"fake": fake_sim, "other": other_sim}
+        state_no_sim.default_simulator = fake_sim
+        config_id = await self._make_sweep_config(state_no_sim, sample_netlist.name)
+
+        # configure already ran resolve_runnable_netlist for real; mock only the
+        # run-time re-resolution so we can inspect its args.
+        reprepared = sample_netlist.with_name("reprepared.net")
+        reresolve = AsyncMock(return_value=reprepared)
+        monkeypatch.setattr(advanced, "resolve_runnable_netlist", reresolve)
+        monkeypatch.setattr(advanced, "inject_logopinfo", lambda p, sim, jid: p)
+        monkeypatch.setattr(
+            advanced, "resolve_output_folder", AsyncMock(side_effect=self._resolve)
+        )
+        monkeypatch.setattr(
+            advanced, "_ngspice_preflight_warnings", lambda nl, st, sim=None: ["ng batch note"]
+        )
+        fake_runner = MagicMock()
+        fake_runner.start_sweep = AsyncMock()
+        monkeypatch.setattr(state_no_sim.runners, "get_sweep_runner", lambda **k: fake_runner)
+
+        result = await handle_run_sweep(
+            RunBatchInput(config_id=config_id, simulator="other"), state_no_sim
+        )
+        # Re-prepared from the original source string for the override simulator.
+        assert reresolve.call_args.args[0] == sample_netlist.name
+        assert reresolve.call_args.kwargs["simulator"] is other_sim
+        job = next(iter(state_no_sim.batch_jobs.values()))
+        assert job.netlist == reprepared
+        # Run-time pre-flight warnings surface on the response.
+        assert result.structuredContent["warnings"] == ["ng batch note"]
+        if job.task:
+            await job.task
+
+    async def test_no_override_reuses_prepared_netlist(
+        self, state_no_sim: SessionState, sample_netlist: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Without an override the run reuses the config's already-prepared
+        # netlist and does NOT re-resolve at run time (the common, zero-cost path).
+        state_no_sim.available_simulators = {"fake": type("FakeSim", (), {})}
+        state_no_sim.default_simulator = state_no_sim.available_simulators["fake"]
+        config_id = await self._make_sweep_config(state_no_sim, sample_netlist.name)
+        config = state_no_sim.sweep_configs[config_id]
+
+        reresolve = AsyncMock(side_effect=AssertionError("re-resolved without an override"))
+        monkeypatch.setattr(advanced, "resolve_runnable_netlist", reresolve)
+        monkeypatch.setattr(advanced, "inject_logopinfo", lambda p, sim, jid: p)
+        monkeypatch.setattr(
+            advanced, "resolve_output_folder", AsyncMock(side_effect=self._resolve)
+        )
+        fake_runner = MagicMock()
+        fake_runner.start_sweep = AsyncMock()
+        monkeypatch.setattr(state_no_sim.runners, "get_sweep_runner", lambda **k: fake_runner)
+
+        result = await handle_run_sweep(RunBatchInput(config_id=config_id), state_no_sim)
+        job = next(iter(state_no_sim.batch_jobs.values()))
+        assert job.netlist == config.netlist
+        assert "warnings" not in result.structuredContent
+        if job.task:
+            await job.task

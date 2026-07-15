@@ -760,6 +760,12 @@ def _post_op_warnings(editor: AscEditor) -> list[dict]:
       (in either order). Pure noise, costs nothing to drop.
     - ``dangling_label`` — a net label whose coordinate is neither on a
       wire nor at any component pin.
+    - ``label_over_component`` — a net label whose coordinate falls strictly
+      inside a component's bounding box while sitting on no component's pin.
+      Surfaces the anchor-in-box fact only: the axis-aligned box also spans
+      leads and empty corners, so this is not a guarantee the rendered glyph
+      overlaps the drawn symbol. A label on a pin (any component's) — the normal
+      ground-flag pattern — is on a box boundary and is excluded.
     - ``stacked_directive`` — two or more directive/comment text objects at
       the exact same anchor, rendering on top of each other. Exact-coordinate
       match only (no font-metric guessing), so this never fires on a
@@ -769,8 +775,12 @@ def _post_op_warnings(editor: AscEditor) -> list[dict]:
     session; intended for callers to surface in their response payload.
     """
     pins: list[tuple[str, str, int, int]] = []
+    comp_boxes: list[tuple[str, BBox]] = []
     for entry in _collect_component_geometry(editor):
         ref = entry["ref"]
+        comp_boxes.append(
+            (ref, BBox.from_origin_size(entry["x"], entry["y"], entry["width"], entry["height"]))
+        )
         for p in entry["pins"]:
             pins.append((ref, p["name"], p["x"], p["y"]))
 
@@ -840,6 +850,32 @@ def _post_op_warnings(editor: AscEditor) -> list[dict]:
             }
         )
 
+    for lbl in editor.labels:
+        coord = (int(lbl.coord.X), int(lbl.coord.Y))
+        # A label on ANY component's pin is the normal flag pattern (pins sit on
+        # symbol outlines) — never report it, even when it also lands inside a
+        # different, overlapping component's box.
+        if coord in pin_count_at:
+            continue
+        for ref, box in comp_boxes:
+            # Strict interior only: a coordinate on the box boundary — where pins
+            # and leads sit — is not "inside". No break: with overlapping boxes a
+            # label can be inside more than one, and each is a distinct fact.
+            if box.x1 < coord[0] < box.x2 and box.y1 < coord[1] < box.y2:
+                warnings.append(
+                    {
+                        "kind": "label_over_component",
+                        "label": lbl.text,
+                        "ref": ref,
+                        "x": coord[0],
+                        "y": coord[1],
+                        "message": (
+                            f"Label '{lbl.text}' at ({coord[0]},{coord[1]}) is inside "
+                            f"{ref}'s bounding box"
+                        ),
+                    }
+                )
+
     directive_anchor_count: dict[tuple[int, int], int] = {}
     for d in editor.directives:
         anchor = (int(d.coord.X), int(d.coord.Y))
@@ -860,6 +896,46 @@ def _post_op_warnings(editor: AscEditor) -> list[dict]:
             )
 
     return warnings
+
+
+def _wiring_profile(editor: AscEditor) -> dict[str, int]:
+    """Neutral whole-schematic connectivity counts: are connections drawn as
+    wires or carried by net-labels?
+
+    Lets a caller tell a routed schematic from net-label soup (every pin
+    tagged with a flag, no wires drawn — simulates identically but reads as a
+    wiring list, not a schematic). Facts only, no verdict (see
+    ``lib/result_observations.py``): a high ``pins_label_only`` with
+    ``wire_segments`` near zero is the soup signature, but net-labels are also
+    the right tool for ground/power/genuinely distant nets — the model judges,
+    this only counts. A pin counts as wired if a wire passes through it, else
+    label-only if a flag sits on it; pins that are floating or directly
+    abutting another pin fall into neither. ``pins_total`` is every pin over
+    components with resolvable symbol geometry (unknown symbols are skipped) —
+    the denominator that makes the two classified counts interpretable.
+    """
+    segments = [((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires]
+    on_wire = _build_on_wire_predicate(segments)
+    label_coords = {(int(lbl.coord.X), int(lbl.coord.Y)) for lbl in editor.labels}
+
+    pins_total = 0
+    pins_wired = 0
+    pins_label_only = 0
+    for entry in _collect_component_geometry(editor):
+        for p in entry["pins"]:
+            pins_total += 1
+            coord = (p["x"], p["y"])
+            if on_wire(coord):
+                pins_wired += 1
+            elif coord in label_coords:
+                pins_label_only += 1
+
+    return {
+        "wire_segments": len(segments),
+        "pins_total": pins_total,
+        "pins_wired": pins_wired,
+        "pins_label_only": pins_label_only,
+    }
 
 
 def _scope_floating_pin_warnings(warnings: list[dict], refs: set[str]) -> list[dict]:
@@ -5201,6 +5277,22 @@ def _collapse_result_warnings(results: list[dict[str, object]]) -> None:
                 },
             },
             "validation_warnings": VALIDATION_WARNINGS_SCHEMA,
+            "wiring": {
+                "type": "object",
+                "description": (
+                    "Connectivity counts over components with resolvable geometry, "
+                    "for the caller to interpret: pins_total pins in all, of which "
+                    "pins_wired have a wire passing through them and pins_label_only "
+                    "carry a net-label but no wire (the rest are floating or abut "
+                    "another pin directly). wire_segments is the drawn-wire count."
+                ),
+                "properties": {
+                    "wire_segments": {"type": "integer"},
+                    "pins_total": {"type": "integer"},
+                    "pins_wired": {"type": "integer"},
+                    "pins_label_only": {"type": "integer"},
+                },
+            },
         },
         "required": ["path", "applied_count", "failed_count", "saved", "results"],
     },
@@ -5222,6 +5314,7 @@ async def handle_apply_schematic_ops(
     abort_reason: str | None = None
 
     validation_warnings: list[dict] = []
+    wiring: dict[str, int] | None = None
     async with _edit_guard(asc_path):
         editor = _get_asc_editor(asc_path, state)
         # A dry run makes no on-disk mutation, so the reset snapshot is moot.
@@ -5252,6 +5345,7 @@ async def handle_apply_schematic_ops(
                 # and discard the in-memory mutations (evict so the next caller
                 # re-reads the untouched file from disk).
                 validation_warnings = _post_op_warnings(editor)
+                wiring = _wiring_profile(editor)
                 state.editors.invalidate(asc_path)
             elif args.stop_on_error and failed:
                 # Evict from cache so the next caller re-reads from disk; the
@@ -5260,6 +5354,7 @@ async def handle_apply_schematic_ops(
                 state.editors.invalidate(asc_path)
             else:
                 validation_warnings = _post_op_warnings(editor)
+                wiring = _wiring_profile(editor)
                 _atomic_save_editor(editor, asc_path)
                 state.editors.invalidate(asc_path)
                 saved = True
@@ -5305,5 +5400,12 @@ async def handle_apply_schematic_ops(
     }
     if validation_warnings:
         data["validation_warnings"] = validation_warnings
+    if wiring is not None:
+        data["wiring"] = wiring
+        summary_lines.append(
+            f"Wiring: {wiring['wire_segments']} wire segment(s); of "
+            f"{wiring['pins_total']} pins, {wiring['pins_wired']} on wires and "
+            f"{wiring['pins_label_only']} by net-label only."
+        )
     summary_lines.extend(_validation_warnings_lines(validation_warnings))
     return format_response("\n".join(summary_lines), data, args.format)

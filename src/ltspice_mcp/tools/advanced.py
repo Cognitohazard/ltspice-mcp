@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from math import prod
+from pathlib import Path
 from typing import Literal
 
 from mcp import types
@@ -45,8 +46,8 @@ from ltspice_mcp.tools._base import (
     inject_logopinfo,
     pagination_metadata,
     registry,
-    require_simulator,
     resolve_output_folder,
+    resolve_run_simulator,
     resolve_runnable_netlist,
 )
 
@@ -110,6 +111,14 @@ class RunBatchInput(ToolInput):
     )
     max_parallel: int | None = Field(
         default=None, description="Max concurrent simulations (default: server config)"
+    )
+    simulator: str | None = Field(
+        default=None,
+        description=(
+            "Run the whole batch on this detected simulator (e.g. 'ltspice', "
+            "'ngspice') instead of the session default. server_status lists the "
+            "detected simulators."
+        ),
     )
 
 
@@ -418,22 +427,76 @@ def _resolve_mc_ref(ref: str) -> tuple[str, bool]:
     return (ref, False)
 
 
-def _ngspice_preflight_warnings(netlist_path, state: SessionState) -> list[str]:
+def _ngspice_preflight_warnings(
+    netlist_path, state: SessionState, simulator: type | None = None
+) -> list[str]:
     """ngspice batch-mode warnings for a base netlist (.meas/.four skipped).
 
     Reuses the single-run pre-flight so the sweep/MC paths surface the same
     ".meas skipped under -b -r batch mode" warning instead of silently
     dropping measurements. A ``.step`` blocker is downgraded to a warning here
     (batch substitutes parameters per-run, so it isn't fatal at config time).
+
+    ``simulator`` is the class the batch will run on (default: session
+    default). A per-batch override runs this again at run time so the warnings
+    reflect the simulator actually chosen, not the one that was default when the
+    config was created.
     """
-    if state.default_simulator is None:
+    sim = simulator or state.default_simulator
+    if sim is None:
         return []
     from ltspice_mcp.errors import SimulationError
 
     try:
-        return services.ngspice_preflight_warnings(netlist_path, state.default_simulator)
+        return services.ngspice_preflight_warnings(netlist_path, sim)
     except SimulationError as e:
         return [str(e)]
+
+
+async def _prepare_batch_netlist(
+    config, requested_simulator: str | None, resolved_simulator: type, state: SessionState
+) -> tuple[Path, list[str]]:
+    """The runnable netlist + ngspice pre-flight warnings for a batch run.
+
+    No per-batch override → reuse the path the config already exported/sanitized
+    for the configure-time default. An override may target a simulator whose
+    preparation differs (e.g. ngspice needs the LTspice ``.backanno`` stripped
+    from an exported ``.asc``), so re-prepare from the original source and re-run
+    the ngspice pre-flight for the chosen simulator. Shared by run_sweep and
+    run_montecarlo; ``config`` is a SweepConfig or MonteCarloConfig.
+    """
+    if requested_simulator is None:
+        return config.netlist, []
+    runnable = await resolve_runnable_netlist(
+        config.source_netlist or str(config.netlist), state, simulator=resolved_simulator
+    )
+    return runnable, _ngspice_preflight_warnings(runnable, state, resolved_simulator)
+
+
+def _batch_started_response(
+    kind: str, job_id: str, total_runs: int, warnings: list[str]
+) -> types.CallToolResult:
+    """Uniform 'batch started' response for run_sweep / run_montecarlo.
+
+    Any ``warnings`` (e.g. the run-time ngspice pre-flight) go on both channels —
+    the structured ``warnings`` field and the text — so a structured-only client
+    still sees them.
+    """
+    hint = f"Use batch_results('{job_id}') to monitor progress"
+    data: dict = {"job_id": job_id, "total_runs": total_runs, "hint": hint}
+    warn_text = ""
+    if warnings:
+        data["warnings"] = warnings
+        warn_text = "\n\nWarnings:\n" + "\n".join(f"  - {w}" for w in warnings)
+    return format_response(
+        f"{kind} started\n"
+        f"Job ID: {job_id}\n"
+        f"Total runs: {total_runs}\n\n"
+        f"{hint}\n"
+        f"Use batch_results('{job_id}', signal='...') to query results"
+        f"{warn_text}",
+        data,
+    )
 
 
 def _netlist_component_refs(netlist_path) -> set[str]:
@@ -636,7 +699,7 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
         (dim.name, dim.resolved_values()) for dim in dimensions
     ]
 
-    config = SweepConfig(netlist=netlist_path, dimensions=dimensions)
+    config = SweepConfig(netlist=netlist_path, source_netlist=netlist_str, dimensions=dimensions)
     config_id = generate_config_id("sweep")
     state.sweep_configs[config_id] = config
 
@@ -713,6 +776,7 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
             "job_id": {"type": "string"},
             "total_runs": {"type": "integer"},
             "hint": HINT_SCHEMA,
+            "warnings": WARNINGS_SCHEMA,
         },
     },
 )
@@ -740,7 +804,10 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
             f"Use configure_sweep() to create a sweep configuration first"
         )
 
-    require_simulator(state)
+    default_simulator = resolve_run_simulator(args.simulator, state)
+    runnable_netlist, batch_warnings = await _prepare_batch_netlist(
+        config, args.simulator, default_simulator, state
+    )
 
     # Compute total runs
     dim_sizes = []
@@ -749,14 +816,11 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
         dim_sizes.append(len(values))
     total_runs = prod(dim_sizes) if dim_sizes else 0
 
-    default_simulator = state.default_simulator
-    assert default_simulator is not None  # guaranteed by require_simulator above
-
     job_id = generate_batch_job_id("sweep")
     batch_job = BatchJob(
         job_id=job_id,
         job_type="sweep",
-        netlist=config.netlist,
+        netlist=runnable_netlist,
         total_runs=total_runs,
         simulator=default_simulator.__name__,
         sweep_config=config,
@@ -765,8 +829,8 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
     # so each run's log exposes per-device op points for operating_point to read
     # back by name. No-op for ngspice / non-.op decks. The runner reads this as
     # its source and deletes it when the batch finishes.
-    run_path = inject_logopinfo(config.netlist, default_simulator, job_id)
-    if str(run_path) != str(config.netlist):
+    run_path = inject_logopinfo(runnable_netlist, default_simulator, job_id)
+    if str(run_path) != str(runnable_netlist):
         batch_job.run_netlist = run_path
     # Runner first, then register + create_task with no await between —
     # submit-ordering rule, see the concurrency contract in tools/_base.py.
@@ -778,7 +842,9 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
         runner = state.runners.get_sweep_runner(
             loop=asyncio.get_running_loop(),
             simulator_class=default_simulator,
-            output_folder=await resolve_output_folder(state, config.netlist),
+            output_folder=await resolve_output_folder(
+                state, runnable_netlist, simulator=default_simulator
+            ),
             max_parallel=max_parallel or state.config.max_parallel_sims,
         )
         state.add_batch_job(batch_job)
@@ -792,15 +858,7 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
         f"Sweep job started: job_id={job_id}, config_id={config_id}, total_runs={total_runs}"
     )
 
-    hint = f"Use batch_results('{job_id}') to monitor progress"
-    return format_response(
-        f"Sweep started\n"
-        f"Job ID: {job_id}\n"
-        f"Total runs: {total_runs}\n\n"
-        f"{hint}\n"
-        f"Use batch_results('{job_id}', signal='...') to query results",
-        {"job_id": job_id, "total_runs": total_runs, "hint": hint},
-    )
+    return _batch_started_response("Sweep", job_id, total_runs, batch_warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -946,6 +1004,7 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
 
     config = MonteCarloConfig(
         netlist=netlist_path,
+        source_netlist=netlist_str,
         type_tolerances=type_tolerances,
         component_overrides=component_overrides,
         num_runs=num_runs,
@@ -1093,6 +1152,7 @@ async def handle_configure_montecarlo(args: ConfigureMonteCarloInput, state: Ses
             "job_id": {"type": "string"},
             "total_runs": {"type": "integer"},
             "hint": HINT_SCHEMA,
+            "warnings": WARNINGS_SCHEMA,
         },
     },
 )
@@ -1120,16 +1180,16 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
             f"Use configure_montecarlo() to create a Monte Carlo configuration first"
         )
 
-    require_simulator(state)
-
-    default_simulator = state.default_simulator
-    assert default_simulator is not None  # guaranteed by require_simulator above
+    default_simulator = resolve_run_simulator(args.simulator, state)
+    runnable_netlist, batch_warnings = await _prepare_batch_netlist(
+        config, args.simulator, default_simulator, state
+    )
 
     job_id = generate_batch_job_id("mc")
     batch_job = BatchJob(
         job_id=job_id,
         job_type="montecarlo",
-        netlist=config.netlist,
+        netlist=runnable_netlist,
         total_runs=config.num_runs,
         simulator=default_simulator.__name__,
         mc_config=config,
@@ -1138,8 +1198,8 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
     # so each run's log exposes per-device op points for operating_point to read
     # back by name. No-op for ngspice / non-.op decks. The runner reads this as
     # its source and deletes it when the batch finishes.
-    run_path = inject_logopinfo(config.netlist, default_simulator, job_id)
-    if str(run_path) != str(config.netlist):
+    run_path = inject_logopinfo(runnable_netlist, default_simulator, job_id)
+    if str(run_path) != str(runnable_netlist):
         batch_job.run_netlist = run_path
     # Runner first, then register + create_task with no await between —
     # submit-ordering rule, see the concurrency contract in tools/_base.py.
@@ -1151,7 +1211,9 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
         runner = state.runners.get_mc_runner(
             loop=asyncio.get_running_loop(),
             simulator_class=default_simulator,
-            output_folder=await resolve_output_folder(state, config.netlist),
+            output_folder=await resolve_output_folder(
+                state, runnable_netlist, simulator=default_simulator
+            ),
             max_parallel=max_parallel or state.config.max_parallel_sims,
         )
         state.add_batch_job(batch_job)
@@ -1166,15 +1228,7 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
         f"total_runs={config.num_runs}"
     )
 
-    hint = f"Use batch_results('{job_id}') to monitor progress"
-    return format_response(
-        f"Monte Carlo started\n"
-        f"Job ID: {job_id}\n"
-        f"Total runs: {config.num_runs}\n\n"
-        f"{hint}\n"
-        f"Use batch_results('{job_id}', signal='...') to query results",
-        {"job_id": job_id, "total_runs": config.num_runs, "hint": hint},
-    )
+    return _batch_started_response("Monte Carlo", job_id, config.num_runs, batch_warnings)
 
 
 # ---------------------------------------------------------------------------

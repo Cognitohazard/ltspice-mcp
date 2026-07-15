@@ -99,6 +99,17 @@ PWL file=<filename>
 .meas TRAN energy INTEG V(out)*I(R1)
 ```
 
+**Prefer `.meas` for any scalar it can express.** A `.meas` is computed by the
+simulator (robust) and lives in the deck (reproducible, re-runnable in the
+LTspice GUI); its results come back through `measurement_stats`. The post-hoc
+analysis tools (`bode_metrics`, `signal_stats`, `thd`, …) parse the `.raw`
+in-process — a fragility surface `.meas` avoids — so reach for them for derived
+metrics `.meas` can't express (FFT/THD, structural Bode, arbitrary windowed
+stats) or to skip a re-run, not as a default substitute for a scalar a `.meas`
+would compute. Exception: ngspice skips `.meas` under the server's `-b -r`
+batch mode — on ngspice, read the trace with the analysis tools or use a
+dot-less `meas` inside a `.control` block (see the ngspice skill).
+
 **Finding the frequency/time OF a maximum (argmax):** a single `.meas` cannot
 return the x-location of a peak — `.meas AC fpeak MAX mag(V(out))` gives the
 peak *value*, not its frequency. Use two directives (capture the peak, then
@@ -484,6 +495,7 @@ must show no multi-label shorts. Review the result with `read_circuit`.
 - **Vertical wires must not pass through component bodies to reach a bus.** When connecting a drain to a horizontal bus, jog the wire horizontally outside the bbox first, then route vertically to the bus. Example for PMOS M180 diode connection: route drain (400,256) → right to (448,256) → up to (448,144) → along bus to label, NOT straight up through the body at x=400.
 - **Leave room for buses between tiers.** The minimum 128-unit tier spacing must account for bounding box height plus bus clearance. For PMOS M180 (bbox height 96), if VDD rail is at y=128 and PMOS origins at y=288: bbox occupies y=192–288, bus fits at y=144–160 (between rail and bbox top).
 - **Heed `connect` warnings and errors**: the tool refuses diagonal wires, pin collisions, and wire junction overlaps. Non-blocking warnings (long runs, bbox crossings) should still be addressed.
+- **Read the `wiring` profile `apply_schematic_ops` returns.** It reports `pins_wired` and `pins_label_only` out of `pins_total`. `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires — which reads as a wiring list, not a routed schematic (whether it even nets up as intended then rests on the label *names*, which the profile does not check). Draw wires with `connect` for local nets; reserve net-labels for ground, power rails, and genuinely distant nets. Also heed the `label_over_component` validation warning (a net-label whose anchor fell inside a symbol's bounding box).
 
 **Ground and net labels:**
 - **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `apply_schematic_ops` `add_net_label` op. Never route wires to a distant ground flag.
