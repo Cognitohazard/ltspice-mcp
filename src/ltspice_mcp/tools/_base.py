@@ -22,7 +22,7 @@ from ltspice_mcp.errors import NetlistError, SimulationError
 from ltspice_mcp.lib.filelock import DEFAULT_TIMEOUT, file_lock
 from ltspice_mcp.lib.job_store import SIDECAR_DIRNAME
 from ltspice_mcp.lib.pathutil import resolve_safe_path
-from ltspice_mcp.lib.runner_base import LOGOPINFO_MARKER
+from ltspice_mcp.lib.runner_base import LOGOPINFO_MARKER, NGSPICE_CONTROL_WRITE_MARKER
 from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.state import SessionState
 
@@ -953,6 +953,121 @@ def inject_logopinfo(netlist_path: Path, simulator: type, job_id: str) -> Path:
 
     run_path = netlist_path.with_name(
         f".{netlist_path.stem}.{job_id}{LOGOPINFO_MARKER}{netlist_path.suffix}"
+    )
+    try:
+        run_path.write_bytes(augmented)
+    except OSError:
+        return netlist_path
+    return run_path
+
+
+# A ``.control``...``.endc`` block, case-insensitive. Group 1 is the body —
+# everything between the ``.control`` line and the ``.endc`` line — so
+# ``match.end(1)`` is exactly where the ``.endc`` line begins (the fallback
+# insertion point when the block has no ``quit``/``exit``).
+_RE_CONTROL_BLOCK = re.compile(rb"(?ims)^[ \t]*\.control\b[^\n]*\n(.*?)^[ \t]*\.endc\b[^\n]*$")
+# A ``write``/``wrdata`` command starting a line, anywhere in the deck — not
+# just inside the block, since a script could call either from a subckt or a
+# second block this pass doesn't otherwise recognize.
+_RE_EXISTING_WRITE = re.compile(rb"(?im)^[ \t]*(?:write|wrdata)\b")
+# ``quit``/``exit`` end control-script execution; a command placed after one
+# would never run, so the injected ``write`` must land before the LAST one.
+_RE_QUIT_EXIT = re.compile(rb"(?im)^[ \t]*(?:quit|exit)\b.*$")
+
+
+def inject_ngspice_control_write(
+    netlist_path: Path, simulator: type, job_id: str, output_folder: Path
+) -> Path:
+    """Return a runnable netlist with a ``write`` injected into its
+    ``.control`` block, for ngspice decks that drive their own analyses via
+    scripting.
+
+    This is ngspice runtime behavior, not a spicelib bug: a ``.control``
+    block replaces the raw ngspice would otherwise write from the ``-r
+    <rawfile>`` switch spicelib always passes — the script runs instead, and
+    unless it calls ``write``/``wrdata`` itself, no raw file is ever
+    produced. ``collect_run_outcome`` already classifies that as a clean
+    log-only completion (not a failure), but nothing then exists for
+    get_waveform/signal_stats/etc. to read. Injecting a canonical ``write
+    <rawpath>`` gives the deck a raw at the exact path the runner expects for
+    this job, so the existing raw>0 code path (raw_parser + every analysis
+    tool) picks it up unchanged — no new parser, no new tool.
+
+    Limitation: a bare ``write`` captures ngspice's current/last plot only. A
+    script that runs multiple analyses, or writes per Monte-Carlo iteration
+    inside a loop, needs its own explicit writes to capture each one — guard
+    (c) below leaves any deck that already writes its own output alone
+    rather than duplicating or fighting it. A second, unrelated limitation:
+    ngspice's ``write`` parser cannot handle a target containing whitespace
+    at all — neither quoting nor backslash-escaping works, both fail with
+    "No such file or directory" (verified empirically). So a run whose
+    output folder path contains a space can't get an auto-injected write
+    either (guard (d)) — that run just stays log-only, same as today.
+
+    Guards (all required, or the original path is returned unchanged):
+    (a) ngspice only (LTspice has no ``.control``; ``inject_logopinfo``
+        covers its own op-point injection separately).
+    (b) exactly one ``.control``...``.endc`` block (ambiguous otherwise —
+        e.g. which block's last analysis is "the" result).
+    (c) no existing ``write``/``wrdata`` anywhere in the deck — never
+        override a user who already captures their own output.
+    (d) the write target has no whitespace (see the limitation above).
+
+    The ``write`` target is the ABSOLUTE path ``{output_folder}/{job_id}.raw``
+    — the same path spicelib's own (suppressed) ``-r`` would use, since it
+    derives the rawfile from the staged netlist's own path via
+    ``.with_suffix('.raw')``. It must be absolute: the runner's SimRunner
+    passes no ``cwd``, so ngspice inherits the MCP server's own working
+    directory, not the output folder — a relative ``write`` target would land
+    there instead. Written UNQUOTED — see the whitespace limitation above.
+    Inserted before the block's LAST ``quit``/``exit`` (if any) so it
+    actually runs — those commands end script execution, so a ``write``
+    placed after one would never fire; otherwise inserted just before
+    ``.endc``.
+
+    Same per-job sibling-file technique as ``inject_logopinfo`` (see its
+    docstring): append-only into a leading-dot, ``job_id``-stamped copy so
+    the user's deck is never touched and relative ``.include``/``.lib``
+    paths still resolve. Returns the original path when injection doesn't
+    apply or the sibling can't be written.
+
+    Scope: single runs only. A sweep/Monte-Carlo batch's per-sub-run raw
+    naming isn't static the way a one-shot job's is, so this is not wired
+    into those batch paths.
+    """
+    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+    if not (isinstance(simulator, type) and issubclass(simulator, NGspiceSimulator)):
+        return netlist_path
+    if netlist_path.suffix.lower() not in (".cir", ".net", ".sp"):
+        return netlist_path
+    try:
+        data = netlist_path.read_bytes()
+    except OSError:
+        return netlist_path
+
+    if _RE_EXISTING_WRITE.search(data):
+        return netlist_path
+    blocks = list(_RE_CONTROL_BLOCK.finditer(data))
+    if len(blocks) != 1:
+        return netlist_path
+    block = blocks[0]
+    body_start, body_end = block.start(1), block.end(1)
+
+    raw_path = (output_folder / f"{job_id}.raw").as_posix()
+    # ngspice's `write` parser cannot handle a spaced target at all — not
+    # quoted, not escaped (verified empirically) — so a spaced output folder
+    # can't get an auto-injected write; that run just stays log-only.
+    if any(c.isspace() for c in raw_path):
+        return netlist_path
+    write_line = f"write {raw_path}\n".encode()
+
+    quit_matches = list(_RE_QUIT_EXIT.finditer(data, body_start, body_end))
+    insert_at = quit_matches[-1].start() if quit_matches else body_end
+    augmented = data[:insert_at] + write_line + data[insert_at:]
+
+    run_path = netlist_path.with_name(
+        f".{netlist_path.stem}.{job_id}{NGSPICE_CONTROL_WRITE_MARKER}{netlist_path.suffix}"
     )
     try:
         run_path.write_bytes(augmented)
