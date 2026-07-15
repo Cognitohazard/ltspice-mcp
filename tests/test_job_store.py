@@ -129,6 +129,63 @@ class TestSaveLoad:
         assert restored.raw_file == original.raw_file
         assert restored.done_event.is_set()  # terminal → pre-set
 
+    def test_roundtrip_sim_job_output_alias_fields(self, tmp_path: Path) -> None:
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        original = _sim_job(circuit, raw_file=tmp_path / "rc.raw")
+        original.output_basename = "myrun"
+        original.output_alias_raw = tmp_path / "myrun.raw"
+        original.output_alias_log = tmp_path / "myrun.log"
+        original.output_alias_note = None
+        job_store.save_job(original)
+
+        sim_jobs, _ = job_store.load_jobs_for_circuit(circuit)
+        restored = sim_jobs[0]
+        assert restored.output_basename == "myrun"
+        assert restored.output_alias_raw == tmp_path / "myrun.raw"
+        assert restored.output_alias_log == tmp_path / "myrun.log"
+        assert restored.output_alias_note is None
+
+    def test_roundtrip_sim_job_output_alias_skip_note(self, tmp_path: Path) -> None:
+        # A skipped alias (collision, or a hardlink failure on a too-large
+        # raw) must round-trip too — the "why" is as much a fact as the path.
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        original = _sim_job(circuit, raw_file=tmp_path / "rc.raw")
+        original.output_basename = "clash"
+        original.output_alias_note = "raw: clash.raw already exists"
+        job_store.save_job(original)
+
+        sim_jobs, _ = job_store.load_jobs_for_circuit(circuit)
+        restored = sim_jobs[0]
+        assert restored.output_alias_raw is None
+        assert restored.output_alias_note == "raw: clash.raw already exists"
+
+    def test_pre_alias_record_loads_with_no_basename(self, tmp_path: Path) -> None:
+        # A record predating these fields is missing the keys entirely (they
+        # were added additively within schema v2) — must load as "no alias
+        # requested", not crash on a missing key.
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        job_store.save_job(_sim_job(circuit, raw_file=tmp_path / "rc.raw"))
+        f = next(job_store.sidecar_dir(circuit).glob("*.json"))
+        record = json.loads(f.read_text())
+        for key in (
+            "output_basename",
+            "output_alias_raw",
+            "output_alias_log",
+            "output_alias_note",
+        ):
+            record.pop(key, None)
+        f.write_text(json.dumps(record))
+
+        sim_jobs, _ = job_store.load_jobs_for_circuit(circuit)
+        restored = sim_jobs[0]
+        assert restored.output_basename is None
+        assert restored.output_alias_raw is None
+        assert restored.output_alias_log is None
+        assert restored.output_alias_note is None
+
     def test_roundtrip_batch_job(self, tmp_path: Path) -> None:
         circuit = tmp_path / "amp.cir"
         circuit.write_text("")

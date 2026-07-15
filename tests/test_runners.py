@@ -7,6 +7,7 @@ pure logic operating on BatchJob/SimulationJob state.
 """
 
 import asyncio
+import os
 import time
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -17,7 +18,13 @@ from ltspice_mcp.lib import now
 from ltspice_mcp.lib.montecarlo_runner import MonteCarloRunner
 from ltspice_mcp.lib.proc_kill import simulator_executable_names
 from ltspice_mcp.lib.runner_base import discard_logopinfo_netlist
-from ltspice_mcp.lib.sim_runner import SimulationRunner, collect_run_outcome, generate_job_id
+from ltspice_mcp.lib.sim_runner import (
+    SimulationRunner,
+    _link_or_copy,
+    collect_run_outcome,
+    ensure_output_alias,
+    generate_job_id,
+)
 from ltspice_mcp.lib.sweep_runner import SweepRunner
 from ltspice_mcp.state import BatchJob, MonteCarloConfig, SessionState, SimulationJob, SweepConfig
 
@@ -333,6 +340,152 @@ class TestSimulationRunnerHandleCompletion:
                 pytest.fail("partial raw not removed")
             time.sleep(0.01)
         assert fail_log.exists()
+
+
+class TestLinkOrCopy:
+    def test_hardlink_success(self, work_dir: Path):
+        src = work_dir / "src.raw"
+        src.write_bytes(b"data")
+        dest = work_dir / "alias.raw"
+        alias, note = _link_or_copy(src, dest)
+        assert alias == dest
+        assert note is None
+        assert dest.read_bytes() == b"data"
+
+    def test_skips_and_never_overwrites_an_existing_dest(self, work_dir: Path):
+        src = work_dir / "src.raw"
+        src.write_bytes(b"data")
+        dest = work_dir / "alias.raw"
+        dest.write_bytes(b"pre-existing")
+        alias, note = _link_or_copy(src, dest)
+        assert alias is None
+        assert note is not None and "already exists" in note
+        assert dest.read_bytes() == b"pre-existing"
+
+    def test_dest_already_our_own_hardlink_is_success_not_a_collision(self, work_dir: Path):
+        # TOCTOU guard: ensure_output_alias awaits between its idempotency
+        # check and recording the result, so two concurrent callers for the
+        # SAME job (e.g. the wait path and a simultaneous check_job) can both
+        # reach _link_or_copy. Whichever runs second must see its own alias
+        # (same inode as source) as success, not misreport a real alias as a
+        # collision skip.
+        src = work_dir / "src.raw"
+        src.write_bytes(b"data")
+        dest = work_dir / "alias.raw"
+        os.link(src, dest)  # simulate the concurrent sibling call's alias
+        alias, note = _link_or_copy(src, dest)
+        assert alias == dest
+        assert note is None
+
+    def test_falls_back_to_copy_when_link_fails(self, work_dir: Path, monkeypatch):
+        src = work_dir / "src.raw"
+        src.write_bytes(b"data")
+        dest = work_dir / "alias.raw"
+        monkeypatch.setattr(
+            "ltspice_mcp.lib.sim_runner.os.link",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("cross-device link")),
+        )
+        alias, note = _link_or_copy(src, dest)
+        assert alias == dest
+        assert note is None
+        assert dest.read_bytes() == b"data"
+
+    def test_skips_large_file_instead_of_copying(self, work_dir: Path, monkeypatch):
+        # A hardlink failure on a file over the size cap must not fall back to
+        # a full copy — duplicating a multi-GB raw to satisfy a friendly name
+        # isn't worth doubling disk usage.
+        src = work_dir / "src.raw"
+        src.write_bytes(b"0123456789")
+        dest = work_dir / "alias.raw"
+        monkeypatch.setattr(
+            "ltspice_mcp.lib.sim_runner.os.link",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("cross-device link")),
+        )
+        monkeypatch.setattr("ltspice_mcp.lib.sim_runner._ALIAS_COPY_SIZE_LIMIT", 5)
+        alias, note = _link_or_copy(src, dest)
+        assert alias is None
+        assert note is not None and "too large" in note
+        assert not dest.exists()
+
+
+class TestEnsureOutputAlias:
+    @pytest.mark.asyncio
+    async def test_creates_raw_and_log_aliases(self, state_no_sim: SessionState, work_dir: Path):
+        job = _make_job(state_no_sim, work_dir, status="completed", job_id="alias_ok")
+        job.output_basename = "myrun"
+        job.raw_file = work_dir / f"{job.job_id}.raw"
+        job.raw_file.write_bytes(b"rawdata")
+        job.log_file = work_dir / f"{job.job_id}.log"
+        job.log_file.write_text("log")
+
+        await ensure_output_alias(job, state_no_sim)
+
+        assert job.output_alias_raw == work_dir / "myrun.raw"
+        assert job.output_alias_log == work_dir / "myrun.log"
+        assert job.output_alias_note is None
+
+    @pytest.mark.asyncio
+    async def test_log_only_completion_aliases_the_log_not_a_raw(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        job = _make_job(state_no_sim, work_dir, status="completed", job_id="alias_logonly")
+        job.output_basename = "opnow"
+        job.raw_file = None
+        job.log_file = work_dir / f"{job.job_id}.log"
+        job.log_file.write_text("log-only")
+
+        await ensure_output_alias(job, state_no_sim)
+
+        assert job.output_alias_raw is None
+        assert job.output_alias_log == work_dir / "opnow.log"
+        assert job.output_alias_note is None
+
+    @pytest.mark.asyncio
+    async def test_collision_is_skipped_and_recorded_as_a_note(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        job = _make_job(state_no_sim, work_dir, status="completed", job_id="alias_clash")
+        job.output_basename = "clash"
+        job.raw_file = work_dir / f"{job.job_id}.raw"
+        job.raw_file.write_bytes(b"x")
+        (work_dir / "clash.raw").write_bytes(b"someone else's file")
+
+        await ensure_output_alias(job, state_no_sim)
+
+        assert job.output_alias_raw is None
+        assert job.output_alias_note is not None and "already exists" in job.output_alias_note
+        # The pre-existing file at the alias path must survive untouched.
+        assert (work_dir / "clash.raw").read_bytes() == b"someone else's file"
+
+    @pytest.mark.asyncio
+    async def test_no_basename_is_a_noop(self, state_no_sim: SessionState, work_dir: Path):
+        job = _make_job(state_no_sim, work_dir, status="completed", job_id="alias_none")
+        job.raw_file = work_dir / f"{job.job_id}.raw"
+        job.raw_file.write_bytes(b"data")
+
+        await ensure_output_alias(job, state_no_sim)
+
+        assert job.output_alias_raw is None
+        assert job.output_alias_note is None
+
+    @pytest.mark.asyncio
+    async def test_second_call_does_not_redo_a_settled_alias(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        job = _make_job(state_no_sim, work_dir, status="completed", job_id="alias_idempotent")
+        job.output_basename = "clash"
+        job.raw_file = work_dir / f"{job.job_id}.raw"
+        job.raw_file.write_bytes(b"x")
+        (work_dir / "clash.raw").write_bytes(b"pre-existing")
+
+        await ensure_output_alias(job, state_no_sim)
+        assert job.output_alias_note is not None
+
+        def _boom(*a, **k):
+            raise AssertionError("should not re-attempt an already-settled alias")
+
+        monkeypatch.setattr("ltspice_mcp.lib.sim_runner._link_or_copy", _boom)
+        await ensure_output_alias(job, state_no_sim)  # must not raise
 
 
 class TestSimulationRunnerCancel:
