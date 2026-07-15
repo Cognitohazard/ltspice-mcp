@@ -545,12 +545,14 @@ def _x_instance_is_fet_like(card: SpiceCard) -> bool:
         "Use configure_montecarlo instead for statistical yield/spread. NOT for a "
         "bias sweep: a native `.dc Vds Vgs` (e.g. a gm/ID characterization) goes "
         "in one deck + run_simulation + export_waveform, not here — this is for "
-        "per-value SEPARATE runs (corners, L/W, .lib model swaps). Likewise a "
-        "plain one-parameter sweep on LTspice is usually better as a native "
-        "`.step param` in the deck (one run, one stepped raw — query_value/"
-        "bode_metrics read steps directly); use this pipeline when the simulator "
-        "has no `.step` (ngspice), when each point needs its own isolated "
-        "raw/log, or for the multi-dimension cross products above."
+        "per-value SEPARATE runs (corners, L/W, .lib model swaps). Prefer this "
+        "pipeline for the multi-dimension cross products above, for ngspice "
+        "(no native `.step`), or whenever each point needs its own isolated "
+        "raw/log — run_sweep executes the points in parallel. A plain "
+        "one-parameter sweep on LTspice can also be done as a native `.step "
+        "param` in the deck (one run, one stepped raw — query_value/bode_metrics "
+        "read steps directly) if you don't need per-point isolation or "
+        "parallel execution."
     ),
     input_model=ConfigureSweepInput,
     annotations=types.ToolAnnotations(
@@ -759,8 +761,15 @@ async def handle_configure_sweep(args: ConfigureSweepInput, state: SessionState)
 @registry.tool(
     name="run_sweep",
     description=(
-        "Execute a previously configured parameter sweep asynchronously and "
-        "return a job_id immediately."
+        "Execute a previously configured parameter sweep (from configure_sweep) "
+        "asynchronously and return a job_id immediately. Points run in parallel, "
+        "bounded by the server's max_parallel_sims (or this call's `max_parallel` "
+        "override) — each point gets its own isolated raw/log rather than sharing "
+        "one stepped raw. check_job reports progress as completed_runs/"
+        "total_runs/failed_runs; read results via batch_results, or address a "
+        "single point like a standalone raw via query_value/bode_metrics with "
+        "job_id+run_index. Pass `simulator=` to run the whole batch on a "
+        "different detected simulator than the session default."
     ),
     input_model=RunBatchInput,
     annotations=types.ToolAnnotations(

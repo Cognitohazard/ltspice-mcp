@@ -121,6 +121,12 @@ def _serialize_sim_job(job: SimulationJob) -> dict:
         "raw_file": str(job.raw_file) if job.raw_file else None,
         "log_file": str(job.log_file) if job.log_file else None,
         "error": job.error,
+        # Additive within schema v2: older records lack these; readers treat
+        # a missing key as "no alias requested" (the pre-alias behavior).
+        "output_basename": job.output_basename,
+        "output_alias_raw": str(job.output_alias_raw) if job.output_alias_raw else None,
+        "output_alias_log": str(job.output_alias_log) if job.output_alias_log else None,
+        "output_alias_note": job.output_alias_note,
     }
 
 
@@ -291,6 +297,8 @@ def _deserialize_sim_job(data: dict) -> SimulationJob:
         started = _now()
     raw_file = Path(data["raw_file"]) if data.get("raw_file") else None
     log_file = Path(data["log_file"]) if data.get("log_file") else None
+    alias_raw = Path(data["output_alias_raw"]) if data.get("output_alias_raw") else None
+    alias_log = Path(data["output_alias_log"]) if data.get("output_alias_log") else None
     job = SimulationJob(
         job_id=str(data["job_id"]),
         netlist=Path(str(data["netlist"])),
@@ -304,6 +312,10 @@ def _deserialize_sim_job(data: dict) -> SimulationJob:
         # The record's pid, NOT ours: a loaded job belongs to whichever
         # process persisted it (0 when the record predates the pid field).
         owner_pid=pid or 0,
+        output_basename=data.get("output_basename"),
+        output_alias_raw=alias_raw,
+        output_alias_log=alias_log,
+        output_alias_note=data.get("output_alias_note"),
     )
     # A loaded terminal job's work is over — pre-trigger the done event so
     # callers that await it don't block forever. (A parallel session's live
