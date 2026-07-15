@@ -43,6 +43,7 @@ from ltspice_mcp.tools._base import (
     require_simulator,
     resolve_netlist_path,
     resolve_output_folder,
+    resolve_run_simulator,
     resolve_runnable_netlist,
     text_response,
 )
@@ -297,20 +298,7 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     # simulator is configured.
     resolve_netlist_path(netlist_str, state)
 
-    if args.simulator is not None:
-        sim_cls = state.available_simulators.get(args.simulator.lower())
-        if sim_cls is None:
-            raise SimulationError(
-                f"Simulator '{args.simulator}' is not available on this server "
-                f"(detected: {list(state.available_simulators)}). server_status "
-                "lists the detected simulators.",
-                show_hint=False,
-            )
-        default_simulator = sim_cls
-    else:
-        require_simulator(state)
-        assert state.default_simulator is not None  # guaranteed by require_simulator
-        default_simulator = state.default_simulator
+    default_simulator = resolve_run_simulator(args.simulator, state)
 
     # Simulator resolved BEFORE the .asc export so an ngspice target gets the
     # sanitized export (LTspice's .backanno / µ / § would abort ngspice).

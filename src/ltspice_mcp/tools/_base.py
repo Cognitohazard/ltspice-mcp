@@ -164,6 +164,7 @@ VALIDATION_WARNING_KINDS: tuple[str, ...] = (
     "floating_pin",
     "duplicate_wire",
     "dangling_label",
+    "label_over_component",
 )
 
 VALIDATION_WARNINGS_SCHEMA: dict[str, Any] = {
@@ -658,6 +659,30 @@ def require_simulator(state: SessionState) -> None:
     """Raise SimulationError if no simulator is available."""
     if state.default_simulator is None:
         raise SimulationError(no_simulator_message())
+
+
+def resolve_run_simulator(requested: str | None, state: SessionState) -> type:
+    """Resolve a per-run ``simulator=`` override to its simulator class, or fall
+    back to the session default when ``requested`` is None.
+
+    Shared by run_simulation, run_sweep, and run_montecarlo so a caller can pick
+    which detected simulator a run/batch executes on. Raises SimulationError if
+    the requested name is not among the detected simulators, or (via
+    ``require_simulator``) if none is available at all.
+    """
+    if requested is not None:
+        sim_cls = state.available_simulators.get(requested.lower())
+        if sim_cls is None:
+            raise SimulationError(
+                f"Simulator '{requested}' is not available on this server "
+                f"(detected: {list(state.available_simulators)}). server_status "
+                "lists the detected simulators.",
+                show_hint=False,
+            )
+        return sim_cls
+    require_simulator(state)
+    assert state.default_simulator is not None  # guaranteed by require_simulator
+    return state.default_simulator
 
 
 def resolve_netlist_path(netlist_str: str, state: SessionState) -> Path:
