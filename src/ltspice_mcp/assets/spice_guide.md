@@ -708,6 +708,16 @@ wrdata output.txt V(out)          $ save as CSV-like text
 .endc
 ```
 
+**No `write`/`wrdata` in your script?** A `.control` block replaces ngspice's
+default raw output, so a script that never calls `write`/`wrdata` produces no
+rawfile even though the run completes cleanly. `run_simulation` auto-injects
+a `write <rawpath>` before `.endc` when it detects this (exactly one
+`.control` block, no existing `write`/`wrdata` in the deck), so results still
+reach `get_waveform`/`signal_stats`/etc. That injected write only captures
+the current/last plot — a script running multiple analyses, or writing
+per-iteration in a Monte Carlo loop, still needs its own `write`/`wrdata`
+calls; any `write`/`wrdata` already in the script disables the auto-injection.
+
 **Variables vs vectors — a critical distinction:**
 - `set` creates string/shell variables: `set myvar = "hello"` — access `$myvar`.
 - `let` creates numeric vectors: `let x = 2*pi` — access `$&x` to get a number.

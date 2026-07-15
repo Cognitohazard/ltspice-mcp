@@ -41,6 +41,12 @@ _RUNNO_RE = re.compile(r"_(\d+)$")
 # and both sides move together.
 LOGOPINFO_MARKER = ".logopinfo"
 
+# Same idea for a generated ngspice ".control" write-injection copy (built by
+# tools._base.inject_ngspice_control_write).
+NGSPICE_CONTROL_WRITE_MARKER = ".ctrlwrite"
+
+_GENERATED_NETLIST_MARKERS = (LOGOPINFO_MARKER, NGSPICE_CONTROL_WRITE_MARKER)
+
 # Fallback concurrency cap used when a caller doesn't pass ``max_parallel``.
 # The real cap comes from ``config.max_parallel_sims``; this default only
 # applies to direct runner construction (mostly tests). Every runner
@@ -48,11 +54,12 @@ LOGOPINFO_MARKER = ".logopinfo"
 DEFAULT_MAX_PARALLEL = 4
 
 
-def discard_logopinfo_netlist(path: Path | None) -> None:
-    """Delete a generated '.options logopinfo' netlist copy. No-op when ``path``
-    is None or lacks the marker, so this can only ever remove the generated copy,
-    never the user's own deck."""
-    if path is not None and LOGOPINFO_MARKER in path.name:
+def discard_generated_netlist(path: Path | None) -> None:
+    """Delete a generated per-job netlist copy (an ``.options logopinfo``
+    injection or an ngspice ``.control`` write injection). No-op when ``path``
+    is None or carries neither marker, so this can only ever remove a
+    generated copy, never the user's own deck."""
+    if path is not None and any(marker in path.name for marker in _GENERATED_NETLIST_MARKERS):
         with contextlib.suppress(OSError):
             path.unlink()
 

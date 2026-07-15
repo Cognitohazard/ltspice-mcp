@@ -26,7 +26,7 @@ from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executa
 from ltspice_mcp.lib.runner_base import (
     DEFAULT_MAX_PARALLEL,
     RunnerBase,
-    discard_logopinfo_netlist,
+    discard_generated_netlist,
 )
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
@@ -356,12 +356,13 @@ class SimulationRunner(RunnerBase):
                     job.error = f"Submission failed: {e}"
                     transition(job, "failed", state=state, error=job.error, phase="submission")
         finally:
-            # A generated runnable (a logopinfo-augmented copy) was passed instead
-            # of the user's own netlist; spicelib has already staged it into the
-            # run folder by now (_prepare_sim runs synchronously inside run()), so
-            # the per-job source copy is no longer needed. The marker guard inside
-            # the helper makes this incapable of touching the user's file.
-            await asyncio.to_thread(discard_logopinfo_netlist, netlist_path)
+            # A generated runnable (a logopinfo- or ngspice control-write-
+            # augmented copy) was passed instead of the user's own netlist;
+            # spicelib has already staged it into the run folder by now
+            # (_prepare_sim runs synchronously inside run()), so the per-job
+            # source copy is no longer needed. The marker guard inside the
+            # helper makes this incapable of touching the user's file.
+            await asyncio.to_thread(discard_generated_netlist, netlist_path)
 
     def _handle_completion(self, job_id: str, outcome: RunOutcome, state: SessionState) -> None:
         """Finalize a simulation's state once spicelib reports it's done.

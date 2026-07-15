@@ -20,7 +20,7 @@ from ltspice_mcp.lib.montecarlo import (
     extract_mosfet_instances,
     find_mismatch_rule,
 )
-from ltspice_mcp.lib.runner_base import discard_logopinfo_netlist
+from ltspice_mcp.lib.runner_base import discard_generated_netlist
 from ltspice_mcp.lib.spice_lex import SpiceCard, lex
 from ltspice_mcp.lib.spice_lex_views import InstanceLine
 from ltspice_mcp.lib.sweep_utils import (
@@ -861,7 +861,7 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
         started = True
     finally:
         if not started:
-            discard_logopinfo_netlist(batch_job.run_netlist)
+            discard_generated_netlist(batch_job.run_netlist)
 
     logger.info(
         f"Sweep job started: job_id={job_id}, config_id={config_id}, total_runs={total_runs}"
@@ -1230,7 +1230,7 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
         started = True
     finally:
         if not started:
-            discard_logopinfo_netlist(batch_job.run_netlist)
+            discard_generated_netlist(batch_job.run_netlist)
 
     logger.info(
         f"Monte Carlo job started: job_id={job_id}, config_id={config_id}, "

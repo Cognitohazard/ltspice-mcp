@@ -17,7 +17,7 @@ from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.log_parser import extract_error_context, parse_success_summary
 from ltspice_mcp.lib.mcp_logging import mcp_log
-from ltspice_mcp.lib.runner_base import discard_logopinfo_netlist
+from ltspice_mcp.lib.runner_base import discard_generated_netlist
 from ltspice_mcp.lib.sim_runner import SimulationRunner, ensure_output_alias, generate_job_id
 from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice, no_simulator_message
 from ltspice_mcp.lib.spice_validator import estimate_analysis_points
@@ -40,6 +40,7 @@ from ltspice_mcp.tools._base import (
     format_observations,
     format_response,
     inject_logopinfo,
+    inject_ngspice_control_write,
     registry,
     require_simulator,
     resolve_netlist_path,
@@ -358,6 +359,16 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     # other; start_simulation deletes the copy once spicelib has staged the run.
     # job.netlist stays the user's original path; only the simulator reads the copy.
     run_path = inject_logopinfo(netlist_path, default_simulator, job_id)
+    if is_ngspice(default_simulator):
+        # A `.control` script replaces ngspice's default raw output (ngspice
+        # runtime behavior, not a spicelib bug — see inject_ngspice_control_write's
+        # docstring), so a scripted deck otherwise produces no raw for the
+        # analysis tools to read. Mutually exclusive with the LTspice injection
+        # above by simulator, so chaining on run_path is safe either way.
+        output_folder = await resolve_output_folder(
+            state, netlist_path, simulator=default_simulator
+        )
+        run_path = inject_ngspice_control_write(run_path, default_simulator, job_id, output_folder)
 
     job = SimulationJob(
         job_id=job_id,
@@ -373,7 +384,7 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
     # submit-ordering rule, see the concurrency contract in tools/_base.py.
     # If anything raises before start_simulation arms its own cleanup (e.g.
     # _get_or_create_runner failing on WSL cmd.exe interop or a read-only dir),
-    # delete the generated logopinfo sibling so the error path leaves no orphan.
+    # delete the generated sibling so the error path leaves no orphan.
     started = False
     try:
         runner = await _get_or_create_runner(
@@ -384,7 +395,7 @@ async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
         started = True
     finally:
         if not started:
-            discard_logopinfo_netlist(run_path)
+            discard_generated_netlist(run_path)
     await mcp_log(
         "info", f"Simulation started: {netlist_path.name} ({default_simulator.__name__})"
     )
