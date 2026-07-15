@@ -290,6 +290,42 @@ async def test_transient_runs_and_parses(ngspice_state: SessionState, work_dir: 
     assert "Transient" in sc["sim_type"]
 
 
+async def test_control_script_deck_produces_readable_raw(
+    ngspice_state: SessionState, work_dir: Path
+):
+    # A `.control` block replaces ngspice's default raw output; without the
+    # server's injected `write` this deck (which never writes its own
+    # output) would leave nothing for the analysis tools to read even though
+    # the run completes cleanly. See inject_ngspice_control_write.
+    net = _write(
+        work_dir,
+        "ctrl_step.cir",
+        "* rc step via control script\n"
+        "V1 in 0 PULSE(0 1 0 1n 1n 1 2)\n"
+        "R1 in out 1k\n"
+        "C1 out 0 1u\n"
+        ".tran 1u 5m\n"
+        ".control\n"
+        "run\n"
+        ".endc\n"
+        ".end\n",
+    )
+    res = await handle_run_simulation(RunSimulationInput(netlist=net, wait=True), ngspice_state)
+    sc = res.structuredContent
+    assert sc is not None
+    assert sc["status"] == "completed"
+    assert any(s.lower() == "v(out)" for s in sc["signals"])
+
+    qres = await handle_query_value(
+        QueryValueInput(raw_file=sc["raw_file"], signal="v(out)", at="5m"),
+        ngspice_state,
+    )
+    qsc = qres.structuredContent
+    assert qsc is not None
+    # 5 RC of a 1k/1uF step response: nearly fully charged.
+    assert qsc["value"] > 0.9
+
+
 async def test_dc_sweep_endpoint_value(ngspice_state: SessionState, work_dir: Path):
     # .dc sweep of a 1k/1k divider: at V1=5 the output must be exactly half.
     # Exercises the DC branch of sim-type detection AND a real numeric value
