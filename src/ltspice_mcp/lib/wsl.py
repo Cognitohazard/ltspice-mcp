@@ -137,12 +137,22 @@ def _resolve_win_env(var: str) -> Path | None:
             timeout=_WSL_INTEROP_TIMEOUT_S,
             stdin=subprocess.DEVNULL,
         )
-        resolved: Path | None = Path(wsl_result.stdout.strip())
+        resolved = Path(wsl_result.stdout.strip())
     except Exception as e:
         # Broad by design: a hung cmd.exe/wslpath (TimeoutExpired) must not
         # wedge startup — treat any failure, timeout included, as unresolved.
-        logger.debug(f"Could not resolve Windows %{var}%: {e}")
-        resolved = None
+        # Warn (not debug) to match to_windows_path. The consequence depends
+        # on the variable (%LOCALAPPDATA% degrades LTspice detection and .asc
+        # symbols; %TEMP% only drops the output dir to a fixed fallback), so
+        # name the variable and let the caller's behavior speak.
+        # Do NOT cache the failure — cache only successes below — so a later
+        # call can retry after a transient timeout (callers hit this once at
+        # startup, so an uncached failure costs nothing).
+        logger.warning(
+            f"Could not resolve Windows %{var}% via cmd.exe interop; features "
+            f"that depend on it will degrade or fall back this session: {e}"
+        )
+        return None
     _win_env_cache[var] = resolved
     return resolved
 
@@ -307,9 +317,16 @@ def kill_windows_ltspice_by_token(token: str) -> int:
         return 0
 
     name_filter = " or ".join(f"Name='{name}'" for name in _LTSPICE_PROCESS_NAMES)
+    # Anchor the token at a run-filename boundary, mirroring the Linux twin
+    # proc_kill._token_in_arg: the staged deck is ``{job_id}.{ext}`` (single
+    # runs) or ``{job_id}_{n}.{ext}`` (batch sub-runs), so the id is always
+    # followed by '.' or '_'. Requiring that boundary keeps a job id from
+    # matching a longer id it happens to prefix. The token is validated above,
+    # so it carries no PowerShell wildcard metacharacters.
+    token_filter = f"$_.CommandLine -like '*{token}.*' -or $_.CommandLine -like '*{token}_*'"
     ps_script = (
         f'Get-CimInstance Win32_Process -Filter "{name_filter}" '
-        f"| Where-Object {{ $_.CommandLine -like '*{token}*' }} "
+        f"| Where-Object {{ {token_filter} }} "
         "| ForEach-Object { $_.ProcessId }"
     )
     try:
