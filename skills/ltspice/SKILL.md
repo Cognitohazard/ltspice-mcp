@@ -220,7 +220,7 @@ R1 in out {mc(10k, 0.1)}         ; uniform dist, 10k +/-10%
 - `Gfarad` — default parallel conductance on capacitors (1e-12). Disable: `.options Gfarad=0`
 - `DampInductors` — default parallel resistance on inductors (ON). Disable: `.options DampInductors=0`
 - `Gfloat` — shunt conductance on floating nodes (1e-12 default)
-- Inductor coupling factor K cannot reach exactly 1.0 — max is `1-1n`
+- Inductor coupling factor K may be exactly `1.0` — the LTspice docs recommend starting at 1 to avoid leakage ringing; use a value just under 1 only if `uic` on `.tran` causes trouble at K=±1
 
 ### .options Flags (LTspice-specific)
 
@@ -315,7 +315,7 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 - **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `apply_schematic_ops` `add_net_label` op. Never route wires to a distant ground flag.
 - **One ground per pin**: Each component's ground connection gets its own `add_net_label` op at the pin's coordinates — do not share ground flags between components.
 - **Do not use `wire_pins` with `net:0`** when multiple ground labels exist — the tool errors on ambiguous net references. Place ground flags directly at pin coordinates with an `add_net_label` op (`net="0", pin="M3.S"`) — no wire needed when the flag is on the pin.
-- **Named nets (VDD, outp, etc.)**: Use a single label per unique net name. Connect components to it via `wire_pins` with `net:NAME` or waypoints.
+- **Named nets (VDD, outp, etc.)**: Repeating the same net label at distant pins is the idiomatic way to tie them — the netlister merges same-name labels into one net (correct, not a short), no routing needed. Wire nearby pins with `wire_pins`. Caveat: once a name carries duplicate labels, `wire_pins` with `net:NAME` is ambiguous — target a component pin (`Ref.Pin`) instead.
 
 **Sources:**
 - **Voltage source polarity**: `+` pin is at the top (smaller y), `-` at bottom. For VDD sources, `+` connects to the supply rail, `-` to ground.

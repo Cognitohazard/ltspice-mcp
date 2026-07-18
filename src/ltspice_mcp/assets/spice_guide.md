@@ -108,7 +108,8 @@ metrics `.meas` can't express (FFT/THD, structural Bode, arbitrary windowed
 stats) or to skip a re-run, not as a default substitute for a scalar a `.meas`
 would compute. Exception: ngspice skips `.meas` under the server's `-b -r`
 batch mode — on ngspice, read the trace with the analysis tools or use a
-dot-less `meas` inside a `.control` block (see the ngspice skill).
+dot-less `meas` inside a `.control` block (see the `.meas`-under-batch note in
+the ngspice section below; also the ngspice skill).
 
 **Finding the frequency/time OF a maximum (argmax):** a single `.meas` cannot
 return the x-location of a peak — `.meas AC fpeak MAX mag(V(out))` gives the
@@ -658,17 +659,22 @@ X1 input output myfilter rval=1k cval=1n
 
 - Parameters on the `.subckt` line do NOT need a `params:` keyword — just
   `name=value` after the nodes.
-- `.lib <filename> [section]` — the section name is **optional**. A bare `.lib
-  models.lib` loads the whole file (verified: LTspice lists it under "Files
-  loaded" and the models resolve). `.lib file section` pulls just that `.lib
-  section … .endl` block. `.lib` differs from `.include` in scope (`.lib` skips
-  global-scope circuit elements), not in whether a section is required.
-  **Caveat — sectioned `.lib` under this server's default ngspice mode:** spicelib
-  runs ngspice in a mixed LTspice/PSPICE-compatibility mode (`ngbehavior=kiltpsa`)
-  whose `lt`/`ps` tokens split a sectioned `.lib <file> <section>` (the PDK corner
-  idiom) into two plain includes and drop the section — the run fails with "could
-  not find include file". Set `[simulator] ngbehavior = "hsa"` in `ltspice-mcp.toml`
-  (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart to parse the section correctly.
+- `.lib` loading depends on ngspice's compatibility mode, and no single `.lib`
+  form works in every mode — so for unconditional whole-file inclusion use
+  `.include <file>`, which resolves in every mode (verified on ngspice-42). If
+  you use `.lib`:
+  - **ngspice-native modes** (`hsa`, plain default): `.lib <file> <section>`
+    pulls just that `.lib section … .endl` block; a bare `.lib <file>` with no
+    section does NOT load the file's models.
+  - **This server's default `kiltpsa`** (a mixed LTspice/PSPICE-compatibility
+    mode) inverts this: a bare `.lib <file>` loads an unsectioned file, but a
+    sectioned `.lib <file> <section>` (the PDK corner idiom) is mis-split by the
+    `lt`/`ps` tokens into two plain includes that drop the section — the run
+    fails with "could not find include file". Set `[simulator] ngbehavior =
+    "hsa"` in `ltspice-mcp.toml` (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart to
+    parse the section correctly.
+  `.lib` also differs from `.include` in scope — it skips global-scope circuit
+  elements.
 - `.param` inside subcircuits is local scope (masks globals). Nesting to 10 levels.
 - Subcircuit and model names are global — must be unique across the netlist.
 
