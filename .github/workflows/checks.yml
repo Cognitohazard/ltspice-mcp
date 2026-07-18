@@ -43,6 +43,40 @@ jobs:
       - name: Install ngspice (enables the real-ngspice e2e tier)
         run: sudo apt-get update && sudo apt-get install -y ngspice
 
+      # Coverage is gated here rather than in the pytest addopts so the repo's
+      # documented single-file debug commands (e.g. `uv run pytest
+      # tests/test_pathutil.py`) don't fail on a whole-package coverage floor.
+      - name: Test
+        run: uv run pytest tests/ -v --cov=ltspice_mcp --cov-fail-under=80
+
+  check-windows:
+    # Windows native is a supported platform with win32-only code (the msvcrt
+    # advisory-lock branch in lib/filelock.py) and Windows-aware tests that the
+    # Linux matrix above never exercises. One runner on the matrix's middle
+    # interpreter guards those paths — this proves platform correctness, not
+    # every interpreter version.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Pin Python 3.12
+        run: uv python pin "3.12"
+
+      # No lint step: ruff results are platform-independent and already
+      # enforced on the Linux job — this job exists for win32 code paths.
+      # No coverage gate here: ngspice is not installed on this runner (the
+      # real-ngspice e2e tier is Linux-only above), so its tests skip and the
+      # whole-package coverage would fall below the threshold for reasons
+      # unrelated to Windows correctness. The 80% floor is enforced on the
+      # Linux job; this job proves the win32 code paths and Windows-aware tests.
       - name: Test
         run: uv run pytest tests/ -v
 

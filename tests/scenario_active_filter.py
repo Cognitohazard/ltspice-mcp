@@ -51,8 +51,26 @@ def text(result) -> str:
     return result.content[0].text
 
 
+def structured(result) -> dict:
+    return result.structuredContent or {}
+
+
 def ok(result) -> bool:
     return not result.isError and not text(result).startswith("ERROR:")
+
+
+# Steps that produced a tool error despite being expected to succeed; the
+# script exits nonzero when any accumulate, so a rotted call can't hide
+# behind pretty printing.
+FAILURES: list[str] = []
+
+
+def expect_ok(result, label: str) -> bool:
+    if ok(result):
+        return True
+    FAILURES.append(f"{label}: {text(result)[:200]}")
+    print(f"  FAIL ({label}): {text(result)}")
+    return False
 
 
 def heading(msg: str):
@@ -178,6 +196,11 @@ async def run():
         # Step 6: Run simulation (needs LTspice)
         # ----------------------------------------------------------
         step(6, "Run simulation")
+        # Artifacts are job-id-named ({job_id}.raw/.log in the runner's output
+        # folder), NOT {netlist stem}.* — the analysis step must address
+        # results via the job_id / paths the run response reports.
+        sim_job_id: str | None = None
+        sim_raw_file: str | None = None
         if not has_simulator:
             print("  SKIPPED: No simulator available")
             print("  (Install LTspice and set simulator.path in ltspice-mcp.toml)")
@@ -187,42 +210,47 @@ async def run():
                 {"netlist": "sallen_key_lpf.cir", "wait": True},
                 read_timeout_seconds=SIM_TIMEOUT,
             )
-            if ok(r):
+            if expect_ok(r, "run_simulation"):
                 print(f"  Simulation complete:\n{textwrap.indent(text(r), '    ')}")
+                sim_job_id = structured(r).get("job_id")
+                sim_raw_file = structured(r).get("raw_file")
             else:
-                print(f"  FAIL: {text(r)}")
                 has_simulator = False
 
         # ----------------------------------------------------------
         # Step 7: Analyze results (needs completed sim)
         # ----------------------------------------------------------
         step(7, "Analyze results")
-        if not has_simulator:
+        if not has_simulator or sim_job_id is None:
             print("  SKIPPED: No simulation results available")
         else:
-            # Measurements from log
+            # Measurements aggregated from the run's own log (job-addressed)
             r = await session.call_tool(
-                "ltspice_measurements",
-                {"log_file": "sallen_key_lpf.log"},
+                "measurement_stats",
+                {"job_id": sim_job_id},
                 read_timeout_seconds=TIMEOUT,
             )
-            print(f"  Measurements:\n{textwrap.indent(text(r), '    ')}")
+            if expect_ok(r, "measurement_stats"):
+                print(f"  Measurements:\n{textwrap.indent(text(r), '    ')}")
 
-            # Simulation summary
-            r = await session.call_tool(
-                "simulation_summary",
-                {"raw_file": "sallen_key_lpf.raw"},
-                read_timeout_seconds=TIMEOUT,
-            )
-            print(f"  Summary:\n{textwrap.indent(text(r), '    ')}")
+            # Simulation summary reads the raw path the run reported
+            if sim_raw_file:
+                r = await session.call_tool(
+                    "simulation_summary",
+                    {"raw_file": sim_raw_file},
+                    read_timeout_seconds=TIMEOUT,
+                )
+                if expect_ok(r, "simulation_summary"):
+                    print(f"  Summary:\n{textwrap.indent(text(r), '    ')}")
 
-            # Signal stats at output
+            # Signal stats at output (job-addressed)
             r = await session.call_tool(
                 "signal_stats",
-                {"raw_file": "sallen_key_lpf.raw", "signal": "V(out)"},
+                {"job_id": sim_job_id, "signal": "V(out)"},
                 read_timeout_seconds=TIMEOUT,
             )
-            print(f"  V(out) stats:\n{textwrap.indent(text(r), '    ')}")
+            if expect_ok(r, "signal_stats"):
+                print(f"  V(out) stats:\n{textwrap.indent(text(r), '    ')}")
 
         # ----------------------------------------------------------
         # Step 8: Configure parameter sweep
@@ -325,7 +353,11 @@ async def run():
 
         # ----------------------------------------------------------
         heading("Scenario complete!")
-        if has_simulator:
+        if FAILURES:
+            print(f"  {len(FAILURES)} step(s) FAILED:")
+            for f in FAILURES:
+                print(f"    - {f}")
+        elif has_simulator:
             print("  All steps executed with real simulation.")
         else:
             print("  Circuit editing steps passed.")
@@ -336,3 +368,5 @@ async def run():
 
 if __name__ == "__main__":
     asyncio.run(run())
+    if FAILURES:
+        sys.exit(1)
