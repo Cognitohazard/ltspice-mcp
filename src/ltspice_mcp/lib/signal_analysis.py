@@ -1101,7 +1101,18 @@ def analyze_periodic(
     periods = np.diff(rising_arr)
     period_mean = float(np.mean(periods))
     period_std = float(np.std(periods, ddof=0)) if len(periods) > 1 else 0.0
-    frequency = 1.0 / period_mean if period_mean > 0 else float("nan")
+    if period_mean <= 0:
+        # Only possible when the time axis carries duplicate or non-monotonic
+        # samples (crossings at identical timestamps). Every metric below —
+        # not just frequency — is meaningless on such an axis, so fail loudly
+        # instead of emitting NaN/garbage numbers that contradict the
+        # declared all-finite result shape.
+        raise ValueError(
+            "Rising-edge spacing is zero or negative — the windowed time axis "
+            "contains duplicate or non-monotonic timestamps, so no period can "
+            "be measured. Check the window bounds and the source data."
+        )
+    frequency = 1.0 / period_mean
 
     # Ringing or glitches near the threshold add extra crossings per cycle, so
     # the edge count — and thus the reported frequency — can be ~2x the true

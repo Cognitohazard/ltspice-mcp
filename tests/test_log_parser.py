@@ -420,6 +420,39 @@ class TestParseSuccessSummary:
         # log warnings should be collected
         assert any("heads up" in w for w in result["warnings"])
 
+    # A header that promises binary data and then truncates makes spicelib
+    # raise (plain ASCII garbage parses "successfully" as a zero-trace raw —
+    # that sibling case is covered by the corrupt-raw diagnosis tests).
+    _TRUNCATED_RAW = (
+        b"Title: t\nDate: d\nPlotname: Transient Analysis\nFlags: real\n"
+        b"No. Variables: 3\nNo. Points: 100\nVariables:\n\t0\ttime\ttime\n"
+        b"\t1\tV(a)\tvoltage\n\t2\tV(b)\tvoltage\nBinary:\n"
+    ) + b"\x01\x02"
+
+    def test_unparseable_raw_is_surfaced_not_hidden(self, tmp_path: Path):
+        # A raw that exists but can't be parsed must reach the response as a
+        # fact (errors + a coverage observation) — a degraded summary with
+        # zero signals rendering as clean success is data loss dressed up.
+        raw = tmp_path / "x.raw"
+        raw.write_bytes(self._TRUNCATED_RAW)
+        log = tmp_path / "x.log"
+        log.write_text("Total elapsed time: 0.1 seconds.\n")
+        result = parse_success_summary(raw, log, duration=1.0)
+        assert any("could not be parsed" in e for e in result.get("errors", []))
+        obs = result.get("observations", [])
+        assert any(o.get("code") == "raw_parse_failed" for o in obs)
+        assert all(o.get("kind") == "coverage" for o in obs if o.get("code") == "raw_parse_failed")
+
+    def test_unparseable_raw_keeps_log_errors_alongside(self, tmp_path: Path):
+        raw = tmp_path / "x.raw"
+        raw.write_bytes(self._TRUNCATED_RAW)
+        log = tmp_path / "x.log"
+        log.write_text("Fatal Error: something exploded\n")
+        result = parse_success_summary(raw, log, duration=1.0)
+        errors = result.get("errors", [])
+        assert any("could not be parsed" in e for e in errors)
+        assert any("something exploded" in e for e in errors)
+
 
 class TestParseMeasurements:
     def test_invalid_log_raises(self, tmp_path: Path):
