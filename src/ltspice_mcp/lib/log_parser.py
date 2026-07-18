@@ -18,6 +18,7 @@ from spicelib.log.semi_dev_op_reader import opLogReader
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text
+from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.spice_validator import validate_directive
 
 logger = logging.getLogger(__name__)
@@ -947,13 +948,29 @@ def parse_success_summary(
             value_scan = "skipped_large"
     except Exception as e:
         logger.warning(f"Could not parse raw file {raw_file}: {e}")
-        # No raw — surface what diagnostics we can from the log alone.
+        # The raw exists but could not be read. That fact must reach the
+        # response, not just the server's stderr: without it the degraded
+        # summary below (sim_type Unknown, zero signals) renders as a clean
+        # success and the agent has no way to know the data was never read.
+        result["errors"] = [f"Raw file could not be parsed: {type(e).__name__}: {e}"]
+        result["observations"] = [
+            {
+                "code": "raw_parse_failed",
+                "kind": "coverage",
+                "detail": (
+                    "The .raw file exists but could not be parsed; signals, range, "
+                    "and point counts below reflect NO data from this run. "
+                    f"Parser error: {type(e).__name__}: {e}"
+                ),
+            }
+        ]
+        # Surface what diagnostics we can from the log alongside it.
         if log_file.exists():
             try:
                 diagnostics = extract_log_diagnostics(log_file)
                 result["warnings"] = diagnostics["warnings"]
                 if diagnostics["errors"]:
-                    result["errors"] = diagnostics["errors"]
+                    result["errors"] = [*result["errors"], *diagnostics["errors"]]
             except Exception as log_e:
                 logger.warning(f"Could not parse log file {log_file}: {log_e}")
         return result
@@ -974,9 +991,8 @@ def parse_success_summary(
     # Diagnostics truncation (preserved from the legacy contract).
     for key in ("warnings", "errors"):
         items = result.get(key) or []
-        if len(items) > _MAX_DIAGNOSTICS:
-            result[f"{key}_truncated"] = len(items)
-            result[key] = items[:_MAX_DIAGNOSTICS]
+        if items:
+            cap_list(result, key, items, _MAX_DIAGNOSTICS)
 
     return result
 

@@ -5,6 +5,23 @@ Used throughout the analysis tools to accept human-friendly frequency and time v
 """
 
 import re
+from typing import Any
+
+
+def cap_list(payload: dict[str, Any], key: str, items: list, cap: int) -> None:
+    """Attach ``items`` under ``key``, bounded, with explicit truncation.
+
+    The structured channel's one truncation convention: when the list exceeds
+    ``cap``, the first ``cap`` entries are attached and ``{key}_truncated``
+    carries the TOTAL count — a capped list is a surfaced fact, never silent.
+    Callers guard emptiness themselves (whether an empty list is attached or
+    omitted is a per-payload contract).
+    """
+    if len(items) > cap:
+        payload[key] = items[:cap]
+        payload[f"{key}_truncated"] = len(items)
+    else:
+        payload[key] = items
 
 # SPICE scale factors. Matching is case-insensitive to follow SPICE convention
 # (LTspice, ngspice, qspice all treat suffixes as case-insensitive).
