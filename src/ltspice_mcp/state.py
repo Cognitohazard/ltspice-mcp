@@ -112,6 +112,11 @@ class SessionState:
     resolved (``services._resolve_result_file``) and read by ``load_raw`` —
     a per-run simulator override's raw must not parse with the session
     default's dialect. Paths never resolved through a job aren't listed."""
+    client_log_level: str | None = field(default=None, repr=False)
+    """Minimum log level the client requested via logging/setLevel, or None
+    when the client never set one (send everything — the pre-setLevel
+    default). Registering the setLevel handler is also what makes the SDK
+    declare the logging capability in the initialize result."""
 
     @property
     def raw_dialect(self) -> str | None:

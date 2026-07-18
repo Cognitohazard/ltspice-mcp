@@ -1,12 +1,13 @@
 """MCP server instance with lifespan management and tool dispatch."""
 
 import asyncio
+import base64
 import logging
 import os
 import sys
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager, suppress
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from mcp import types
 from mcp.server.lowlevel import Server
@@ -511,10 +512,13 @@ async def call_tool(name: str, arguments: dict | None):
 
     # Set up MCP protocol logging for this request.
     # Handlers and services call mcp_log() which reads this ContextVar —
-    # no server/session reference needed downstream.
+    # no server/session reference needed downstream. Messages below the
+    # client's requested minimum level (logging/setLevel) are not sent.
     session = server.request_context.session
 
     async def _log(level: str, msg: str) -> None:
+        if _below_client_log_level(level, state.client_log_level):
+            return
         await session.send_log_message(level=level, data=msg, logger="ltspice-mcp")  # type: ignore[arg-type]
 
     set_log_fn(_log)
@@ -544,9 +548,15 @@ async def call_tool(name: str, arguments: dict | None):
         # matches), return them as structuredContent with isError=True so
         # clients can parse them without regex'ing the text message.
         if e.suggestions:
+            # Mirror the hint into structuredContent (self-sufficiency
+            # contract): structured-aware clients drop the text channel, so a
+            # text-only hint would be invisible exactly where it's needed.
+            structured: dict[str, Any] = {"error": str(e), "suggestions": e.suggestions}
+            if hint:
+                structured["hint"] = hint
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=text)],
-                structuredContent={"error": str(e), "suggestions": e.suggestions},
+                structuredContent=structured,
                 isError=True,
             )
         if hint:
@@ -560,6 +570,44 @@ async def call_tool(name: str, arguments: dict | None):
         # an unexpected failure diagnosable. Full traceback still goes to logs.
         logger.exception(f"Unexpected error in tool {name}")
         raise RuntimeError(f"Internal error in {name}: {type(e).__name__}: {e}") from e
+
+
+# MCP log severities, ascending RFC-5424 rank (the protocol's LoggingLevel).
+_LOG_SEVERITY = {
+    "debug": 0,
+    "info": 1,
+    "notice": 2,
+    "warning": 3,
+    "error": 4,
+    "critical": 5,
+    "alert": 6,
+    "emergency": 7,
+}
+
+
+def _below_client_log_level(level: str, client_min: str | None) -> bool:
+    """True when ``level`` is below the client's requested minimum.
+
+    No minimum set (client never called logging/setLevel) or an unknown level
+    string sends the message — filtering is an opt-in narrowing, never a
+    silent drop of something we can't rank.
+    """
+    if client_min is None:
+        return False
+    rank = _LOG_SEVERITY.get(level)
+    floor = _LOG_SEVERITY.get(client_min)
+    if rank is None or floor is None:
+        return False
+    return rank < floor
+
+
+@server.set_logging_level()
+async def set_logging_level(level: types.LoggingLevel) -> None:
+    """Store the client's minimum log level; also declares the logging
+    capability (the SDK only advertises it when this handler exists, and
+    without it spec-conforming clients drop our notifications/message)."""
+    state = _get_state(server)
+    state.client_log_level = level
 
 
 @server.list_resources()
@@ -622,9 +670,13 @@ async def read_resource(uri: AnyUrl) -> Iterable[ReadResourceContents]:
                 )
             )
         elif isinstance(item, types.BlobResourceContents):
+            # Decode to bytes: the SDK's create_content dispatches on type —
+            # bytes are re-encoded into a proper BlobResourceContents, while a
+            # base64 *str* would be emitted as TextResourceContents whose text
+            # is raw base64 tagged with a binary mime type.
             converted.append(
                 ReadResourceContents(
-                    content=item.blob,
+                    content=base64.b64decode(item.blob),
                     mime_type=item.mimeType,
                 )
             )
