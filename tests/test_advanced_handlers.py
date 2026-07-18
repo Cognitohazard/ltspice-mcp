@@ -797,7 +797,11 @@ class TestBatchLogopinfoInjection:
 @pytest.mark.asyncio
 class TestGetBatchResults:
     async def test_unknown_job(self, state_no_sim: SessionState):
-        with pytest.raises(BatchJobError):
+        # JobNotFoundError (not BatchJobError) so the dispatch layer's
+        # list-known-jobs recovery hint fires for stale batch ids too.
+        from ltspice_mcp.errors import JobNotFoundError
+
+        with pytest.raises(JobNotFoundError, match="Batch job not found"):
             await handle_batch_results(GetBatchResultsInput(job_id="missing"), state_no_sim)
 
     async def test_status_running(self, state_no_sim: SessionState):
@@ -926,6 +930,30 @@ class TestFormatBatchTextHelpers:
             }
         )
         assert "30s" in text
+
+    def test_capped_convergence_list_counts_against_true_total(self):
+        # structuredContent caps the flagged-run list; the text must count
+        # against the *_truncated total, or "400 flagged" renders as "25".
+        from ltspice_mcp.tools.advanced import _format_batch_status_text
+
+        text = _format_batch_status_text(
+            {
+                "job_id": "b1",
+                "job_type": "montecarlo",
+                "status": "completed",
+                "total_runs": 400,
+                "successful": 400,
+                "failed_runs": 0,
+                "duration": 12.0,
+                "netlist": "x.cir",
+                "convergence_warnings": [
+                    {"run_index": i, "markers": ["gmin stepping"]} for i in range(25)
+                ],
+                "convergence_warnings_truncated": 400,
+            }
+        )
+        assert "400 of 400 run(s)" in text
+        assert "+390 more" in text
 
     def test_status_failed(self):
         from ltspice_mcp.tools.advanced import _format_batch_status_text

@@ -313,3 +313,49 @@ class TestServerDispatch:
         assert result.structuredContent is not None
         names = [r["name"] for r in result.structuredContent["results"]]
         assert "2N2222" in names
+
+
+class TestClientLogLevelFilter:
+    def test_no_level_set_sends_everything(self):
+        from ltspice_mcp.server import _below_client_log_level
+
+        assert _below_client_log_level("debug", None) is False
+        assert _below_client_log_level("emergency", None) is False
+
+    def test_below_floor_filtered_at_and_above_sent(self):
+        from ltspice_mcp.server import _below_client_log_level
+
+        assert _below_client_log_level("debug", "warning") is True
+        assert _below_client_log_level("info", "warning") is True
+        assert _below_client_log_level("warning", "warning") is False
+        assert _below_client_log_level("error", "warning") is False
+
+    def test_unknown_levels_never_filtered(self):
+        from ltspice_mcp.server import _below_client_log_level
+
+        assert _below_client_log_level("verbose", "warning") is False
+        assert _below_client_log_level("info", "chatty") is False
+
+    def test_set_level_handler_registered_declares_capability(self):
+        # Registering the SetLevelRequest handler is what makes the SDK
+        # declare the logging capability in the initialize result — without
+        # it, spec-conforming clients drop notifications/message entirely.
+        from mcp import types as mcp_types
+
+        from ltspice_mcp.server import server
+
+        assert mcp_types.SetLevelRequest in server.request_handlers
+
+
+class TestConfigureToolAnnotationHonesty:
+    def test_configure_tools_not_marked_idempotent(self):
+        # Every call mints a fresh config_id (MC additionally draws fresh
+        # entropy with seed=None), so an auto-retrying client must not treat
+        # these as idempotent.
+        from ltspice_mcp.tools._base import registry
+
+        for tool_name in ("configure_sweep", "configure_montecarlo"):
+            reg = registry.get_for_profile("full")[1][tool_name]
+            annotations = reg.definition.annotations
+            assert annotations is not None
+            assert annotations.idempotentHint is False, tool_name

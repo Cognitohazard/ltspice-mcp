@@ -62,7 +62,7 @@ from ltspice_mcp.lib.ac_analysis import (
     unwrap_phase_safe,
 )
 from ltspice_mcp.lib.ac_structure import AcStructureResult, analyze_ac_structure
-from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.format import cap_list, parse_spice_value
 from ltspice_mcp.lib.job_store import SIDECAR_DIRNAME
 from ltspice_mcp.lib.log_parser import (
     extract_log_diagnostics,
@@ -405,7 +405,14 @@ def _effective_raw_path(
     # to "") must count as absent, else it slips past and safe_path("") resolves
     # to the working dir → a confusing "not a valid .raw" error downstream.
     if bool(raw_file) == bool(job_id):
-        raise ResultError("Pass exactly one of 'raw_file' or 'job_id'.")
+        # Complete redirect, so no generic hint: the analysis tools read an
+        # existing result — a caller holding only a netlist runs it first.
+        raise ResultError(
+            "Pass exactly one of 'raw_file' or 'job_id'. Analysis tools read "
+            "an existing result — if you only have a netlist, run_simulation "
+            "produces the job_id/raw to analyze.",
+            show_hint=False,
+        )
     if job_id:
         # Route through resolve_raw_file (not resolve_run directly): it records
         # state.raw_dialect_hints for this raw, so a later load_raw/raw_dialect_for
@@ -2359,6 +2366,10 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
             "point_count": {"type": "integer"},
             "step_count": {"type": "integer"},
             "signals": {"type": "array", "items": {"type": "string"}},
+            # Present only when the trace list was capped for the structured
+            # channel; carries the TOTAL trace count. Full list stays
+            # addressable via the spice://results/{job_id}/signals resource.
+            "signals_truncated": {"type": "integer"},
             # Ambient / nominal temperature the simulator ran at (°C), when the
             # log records it — a provenance fact for temp-sensitive tasks.
             "temp_c": {"type": "number"},
@@ -2518,9 +2529,15 @@ def _format_summary_text(summary: dict, ac_metrics: dict | None) -> str:
         lines.append(f"Temperature: {summary['temp_c']:g} °C{tnom_note}")
     lines.append("")
 
-    lines.append(f"Signals ({len(summary['signals'])}):")
+    total_signals = summary.get("signals_truncated", len(summary["signals"]))
+    lines.append(f"Signals ({total_signals}):")
     for signal in summary["signals"]:
         lines.append(f"  - {signal}")
+    if total_signals > len(summary["signals"]):
+        lines.append(
+            f"  ... and {total_signals - len(summary['signals'])} more "
+            "(full list: the spice://results/{job_id}/signals resource)"
+        )
     lines.append("")
 
     if "measurements" in summary:
@@ -4049,8 +4066,7 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
         else:
             # Explicit truncation, never silent: a 400-run Monte Carlo table
             # floods the caller's context for no aggregate value.
-            payload["per_run"] = per_run[:_MAX_PER_RUN_ROWS]
-            payload["per_run_truncated"] = len(per_run)
+            cap_list(payload, "per_run", per_run, _MAX_PER_RUN_ROWS)
             caveats.append(
                 f"per_run table truncated to {_MAX_PER_RUN_ROWS} of {len(per_run)} "
                 "rows; pass include_per_run=true for the full table."
