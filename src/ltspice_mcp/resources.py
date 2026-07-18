@@ -13,11 +13,13 @@ from dataclasses import dataclass
 from functools import lru_cache
 from importlib.resources import files
 from typing import Any
+from urllib.parse import quote, unquote
 
 from mcp import types
 from pydantic import AnyUrl
 
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, services
+from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.plot_html import (
     WIDGET_MIME_TYPE,
@@ -55,12 +57,18 @@ class ResourceRouter:
         return decorator
 
     def dispatch(self, uri_str: str, state: SessionState) -> types.ReadResourceResult:
-        """Dispatch a URI to the first matching route."""
+        """Dispatch a URI to the first matching route.
+
+        Captured template params are percent-decoded: the SDK validates
+        resources/read URIs as AnyUrl, which percent-encodes spaces and
+        non-ASCII on ingest ("rc filter.cir" arrives as "rc%20filter.cir"),
+        so the raw capture would never match a real filename on disk.
+        """
         for route in self._routes:
             match = route.pattern.fullmatch(uri_str)
             if match is None:
                 continue
-            params = match.groupdict()
+            params = {k: unquote(v) for k, v in match.groupdict().items()}
             return route.handler(uri_str, params, state)
         raise ValueError(f"Unknown resource URI: {uri_str}")
 
@@ -260,8 +268,11 @@ def _read_netlists_list(
     """List all netlist files in the working directory."""
     del params
     working_dir = state.working_dir
+    # quote(): a listed URI must round-trip through the client's AnyUrl
+    # normalization and back through dispatch's unquote — a raw space or 'µ'
+    # here would list a resource the read path can never serve.
     netlists = [
-        {"name": f.name, "uri": f"spice://netlists/{f.name}"}
+        {"name": f.name, "uri": f"spice://netlists/{quote(f.name)}"}
         for f in working_dir.iterdir()
         if f.is_file() and f.suffix.lower() in NETLIST_EXTENSIONS
     ]
@@ -270,15 +281,43 @@ def _read_netlists_list(
     return _make_result(uri_str, json.dumps(data, indent=2))
 
 
+# Netlists are text files; anything over this is not a netlist being browsed,
+# it's a mis-aimed URI (e.g. a multi-GB .raw) being decoded wholesale into a
+# Python string and flushed into the client's context window.
+_NETLIST_RESOURCE_CAP_BYTES = 16 * 1024 * 1024
+
+
 @_router.route("spice://netlists/{filename}")
 def _read_netlist_content(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
-    """Read the full text of a specific netlist file."""
+    """Read the full text of a specific netlist file.
+
+    Decodes via ``read_spice_text`` — the same BOM-sniffing/UTF-16/cp1252
+    path every tool-side netlist read uses (LTspice writes UTF-16 LE
+    artifacts; a hard-coded utf-8 read returned NUL-riddled mojibake for
+    them, diverging from what read_circuit shows for the same file).
+    """
     filename = params["filename"]
     resolved = resolve_safe_path(filename, state.config.allowed_paths)
+    if resolved.suffix.lower() not in NETLIST_EXTENSIONS:
+        allowed = ", ".join(sorted(NETLIST_EXTENSIONS))
+        raise ValueError(
+            f"Not a netlist file: {filename!r}. This resource serves netlist "
+            f"text ({allowed}); simulation artifacts are read via their tools "
+            "(get_waveform / simulation_summary), not as text resources."
+        )
     try:
-        text = resolved.read_text(encoding="utf-8", errors="replace")
+        size = resolved.stat().st_size
+    except FileNotFoundError:
+        raise ValueError(f"Netlist file not found: {filename!r}") from None
+    if size > _NETLIST_RESOURCE_CAP_BYTES:
+        raise ValueError(
+            f"Netlist file too large to serve as a text resource: {filename!r} "
+            f"exceeds {_NETLIST_RESOURCE_CAP_BYTES // (1024 * 1024)} MB."
+        )
+    try:
+        text = read_spice_text(resolved)
     except FileNotFoundError:
         raise ValueError(f"Netlist file not found: {filename!r}") from None
     return _make_result(uri_str, text, mime="text/plain")

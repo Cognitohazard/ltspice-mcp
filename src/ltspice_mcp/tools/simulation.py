@@ -144,6 +144,9 @@ _SIM_RESULT_FIELDS_SCHEMA: dict[str, dict] = {
     "raw_file": {"type": "string"},
     "log_file": {"type": "string"},
     "signals": {"type": "array", "items": {"type": "string"}},
+    # Present only when the trace list was capped for the structured channel;
+    # carries the TOTAL trace count. Full list: spice://results/{job}/signals.
+    "signals_truncated": {"type": "integer"},
     "warnings": WARNINGS_SCHEMA,
     "errors": {"type": "array", "items": {"type": "string"}},
     "meas_errors": MEAS_ERRORS_SCHEMA,
@@ -803,13 +806,16 @@ def _format_success_response(job: SimulationJob, summary: dict, fmt: str | None 
     of the legacy ``signals``/``step_count``/``sim_type`` fields.
     """
     job_id = job.job_id
-    # Format signal list (first 20 signals)
+    # Format signal list (first 20 signals). The structured list may itself
+    # be capped — signals_truncated then carries the TRUE total, and both
+    # channels must count against it, not the capped list.
     signals = summary.get("signals", [])
+    total_signals = summary.get("signals_truncated", len(signals))
     signal_list = []
     for sig in signals[:20]:
         signal_list.append(f"  - {sig}")
-    if len(signals) > 20:
-        signal_list.append(f"  ... and {len(signals) - 20} more")
+    if total_signals > 20:
+        signal_list.append(f"  ... and {total_signals - 20} more")
 
     signal_text = "\n".join(signal_list) if signal_list else "  (none)"
 
@@ -849,7 +855,7 @@ def _format_success_response(job: SimulationJob, summary: dict, fmt: str | None 
         f"Steps: {summary['step_count']}\n"
         f"Raw file: {summary['raw_file']}\n"
         f"Log file: {summary['log_file']}\n\n"
-        f"Available signals ({len(signals)}):\n{signal_text}{diagnostics_text}"
+        f"Available signals ({total_signals}):\n{signal_text}{diagnostics_text}"
     )
 
     data = {
@@ -875,6 +881,7 @@ def _format_success_response(job: SimulationJob, summary: dict, fmt: str | None 
         "range",
         "failed_measurements",
         "suggestions",
+        "signals_truncated",
     ):
         if summary.get(key):
             data[key] = summary[key]

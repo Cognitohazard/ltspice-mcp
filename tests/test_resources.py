@@ -96,3 +96,41 @@ class TestReadResource:
     def test_netlist_path_escape_blocked(self, state_no_sim: SessionState):
         with pytest.raises(ValueError, match="Unknown resource URI"):
             handle_read_resource("spice://netlists/../../etc/passwd", state_no_sim)
+
+
+class TestNetlistResourceHardening:
+    def test_space_in_filename_round_trips_through_listing(self, state_no_sim: SessionState):
+        # Listed URIs are percent-encoded (clients normalize via AnyUrl, which
+        # would encode a raw space anyway) and dispatch percent-decodes, so
+        # the exact URI the listing hands out must be readable.
+        f = state_no_sim.working_dir / "rc filter.cir"
+        f.write_text("* spaced\nR1 in out 1k\n.end\n")
+        listing = _text(handle_read_resource("spice://netlists/", state_no_sim).contents[0])
+        assert "spice://netlists/rc%20filter.cir" in listing
+        result = handle_read_resource("spice://netlists/rc%20filter.cir", state_no_sim)
+        assert "R1 in out 1k" in _text(result.contents[0])
+
+    def test_utf16_netlist_decodes_cleanly(self, state_no_sim: SessionState):
+        # LTspice writes UTF-16 LE artifacts; the resource must use the same
+        # BOM-sniffing decode as the tool channel, not a hard-coded utf-8 read
+        # that renders every character interleaved with NULs.
+        f = state_no_sim.working_dir / "utf16.cir"
+        f.write_bytes("* µ-title\nR1 in out 1k\n.end\n".encode("utf-16-le"))
+        text = _text(handle_read_resource("spice://netlists/utf16.cir", state_no_sim).contents[0])
+        assert "R1 in out 1k" in text
+        assert "\x00" not in text
+
+    def test_non_netlist_extension_rejected(self, state_no_sim: SessionState):
+        f = state_no_sim.working_dir / "big.raw"
+        f.write_bytes(b"\x00\x01binary")
+        with pytest.raises(ValueError, match="Not a netlist file"):
+            handle_read_resource("spice://netlists/big.raw", state_no_sim)
+
+    def test_oversize_netlist_rejected(self, state_no_sim: SessionState, monkeypatch):
+        import ltspice_mcp.resources as resources_mod
+
+        f = state_no_sim.working_dir / "huge.cir"
+        f.write_text("* padding\n" + "x" * 256)
+        monkeypatch.setattr(resources_mod, "_NETLIST_RESOURCE_CAP_BYTES", 64)
+        with pytest.raises(ValueError, match="too large"):
+            handle_read_resource("spice://netlists/huge.cir", state_no_sim)

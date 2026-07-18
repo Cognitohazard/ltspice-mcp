@@ -24,6 +24,7 @@ from ltspice_mcp.lib.batch_results import (
     filter_runs_by_params,
     get_progress_snapshot,
 )
+from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.library_manager import LibraryManager
 from ltspice_mcp.lib.log_parser import (
     extract_missing_refs,
@@ -221,7 +222,11 @@ async def resolve_batch_job_async(job_id: str, state: SessionState) -> BatchJob:
     try:
         job = await resolve_job_async(job_id, state)
     except JobNotFoundError:
-        raise BatchJobError(f"Batch job not found: {job_id}") from None
+        # Re-raise as JobNotFoundError (not BatchJobError): the dispatch
+        # layer's recovery hint (list jobs via check_job; the id may be
+        # stale/evicted) is keyed on the exception type, and a stale batch id
+        # is exactly the case that needs it.
+        raise JobNotFoundError(f"Batch job not found: {job_id}") from None
     if isinstance(job, SimulationJob):
         raise BatchJobError(
             f"Job '{job_id}' is a single simulation job — read its results with "
@@ -256,9 +261,12 @@ def resolve_batch_job(job_id: str, state: SessionState) -> BatchJob:
     try:
         job = resolve_job(job_id, state)
     except JobNotFoundError:
-        # Batch tools historically say "Batch job not found"; keep that
-        # surface text — this is the one remaining not-found translation.
-        raise BatchJobError(f"Batch job not found: {job_id}") from None
+        # Keep the historical "Batch job not found" surface text but keep the
+        # TYPE JobNotFoundError: the dispatch layer's list-known-jobs recovery
+        # hint is keyed on the exception type, and BatchJobError has no hint —
+        # the translation used to dead-end the most common batch failure mode
+        # (an id from a previous session) while the single-sim path recovered.
+        raise JobNotFoundError(f"Batch job not found: {job_id}") from None
     if isinstance(job, SimulationJob):
         # Point only at tools that accept a job id: check_job (status +
         # completion results) and query_value (job_id + run_index for a
@@ -456,6 +464,27 @@ def raw_dialect_for(raw_path: Path, state: SessionState) -> str | None:
     return state.raw_dialect_hints.get(raw_path, state.raw_dialect)
 
 
+# Hard wall-clock bound on one raw parse. A raw is an untrusted simulator
+# artifact parsed through a third-party library — a shape spicelib didn't
+# anticipate can loop indefinitely (it has: the ngspice noise-raw multi-plot
+# loop, since guarded in raw_parser). Offloading protects the loop from a
+# SLOW parse; only a deadline protects the session from a RUNAWAY one — this
+# fails the one call instead of wedging its worker thread forever. Generous:
+# multi-GB DrvFs parses land in tens of seconds, not minutes.
+RAW_PARSE_TIMEOUT_S = 120.0
+
+# Paths whose last parse hit the deadline, by monotonic expiry time. Gates
+# retries: an abandoned worker still holds the cache's per-path parse lock,
+# so an immediate retry would only park ANOTHER executor thread on that lock
+# — repeated retries against a truly wedged file could drain the shared
+# executor and stall unrelated to_thread work. During cooldown the retry
+# fails fast on the loop instead; after it, one fresh attempt is allowed
+# (worst case the leak grows by one thread per cooldown period, not per
+# call). Read/written only on the event loop with no await between check and
+# store, so no lock is needed.
+_wedged_raw_paths: dict[Path, float] = {}
+
+
 async def load_raw(raw_path: Path, state: SessionState) -> RawRead:
     """Load and cache a ``RawRead`` instance without blocking the event loop.
 
@@ -463,16 +492,48 @@ async def load_raw(raw_path: Path, state: SessionState) -> RawRead:
     the loop per call, accepted as far cheaper than a thread hop for the
     guaranteed-hit patterns (``bode_metrics all_steps`` re-enters this once
     per step of the same raw). On miss or stale entry the probe and parse
-    run in a worker thread via ``asyncio.to_thread``. The parsed value is
-    immutable and the cache store is lock-guarded, so cancellation leaves
-    the cache consistent: a worker that has started runs to completion
-    (at worst storing a benign extra cache entry), and work cancelled
-    before the executor picks it up never begins.
+    run in a worker thread via ``asyncio.to_thread``, bounded by
+    ``RAW_PARSE_TIMEOUT_S``. The parsed value is immutable and the cache
+    store is lock-guarded, so cancellation leaves the cache consistent: a
+    worker that has started runs to completion (at worst storing a benign
+    extra cache entry), and work cancelled before the executor picks it up
+    never begins. On deadline expiry the worker thread is abandoned (Python
+    can't kill it) and the path enters a retry cooldown (see
+    ``_wedged_raw_paths``) so hammering the same file cannot leak a thread
+    per call.
     """
     cached = state.results.peek(raw_path)
     if cached is not None:
         return cached
-    return await asyncio.to_thread(load_raw_sync, raw_path, state)
+    now_mono = asyncio.get_running_loop().time()
+    wedged_until = _wedged_raw_paths.get(raw_path)
+    if wedged_until is not None:
+        if now_mono < wedged_until:
+            raise ResultError(
+                f"Parsing {raw_path.name} recently exceeded the "
+                f"{RAW_PARSE_TIMEOUT_S:.0f}s deadline and its worker is still "
+                "abandoned; retries are paused for "
+                f"{wedged_until - now_mono:.0f}s more so a wedged file can't "
+                "drain the worker pool. Check the file (size, mtime, source "
+                "simulator) before retrying."
+            )
+        del _wedged_raw_paths[raw_path]
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(load_raw_sync, raw_path, state),
+            timeout=RAW_PARSE_TIMEOUT_S,
+        )
+    except TimeoutError:
+        _wedged_raw_paths[raw_path] = (
+            asyncio.get_running_loop().time() + RAW_PARSE_TIMEOUT_S
+        )
+        raise ResultError(
+            f"Parsing {raw_path.name} exceeded {RAW_PARSE_TIMEOUT_S:.0f}s and was "
+            "abandoned — the file may be corrupt in a way that wedges the parser, "
+            "or on a stalled mount. The file was not modified; retries are "
+            f"paused for {RAW_PARSE_TIMEOUT_S:.0f}s, then one fresh attempt is "
+            "allowed."
+        ) from None
 
 
 def load_raw_sync(raw_path: Path, state: SessionState) -> RawRead:
@@ -697,8 +758,7 @@ async def get_batch_status(batch_job: BatchJob) -> dict[str, Any]:
     if batch_job.error is not None:
         out["error"] = batch_job.error
     convergence = await asyncio.to_thread(scan_batch_convergence, batch_job)
-    if convergence:
-        out["convergence_warnings"] = convergence
+    attach_convergence(out, convergence)
     return out
 
 
@@ -714,6 +774,24 @@ _CONVERGENCE_FLAG_SUBSTRINGS: tuple[str, ...] = (
     "singular matrix",
     "time step too small",
 )
+
+
+# Structured-channel cap for convergence_warnings. The full list stays cached
+# on the BatchJob and the text channel already caps its display at 10, but
+# structuredContent is re-sent on EVERY terminal check_job/batch_results read
+# — a 400-run Monte Carlo where most runs trip a gmin/source-stepping marker
+# would re-ship ~400 near-identical objects per poll.
+_CONVERGENCE_STRUCTURED_CAP = 25
+
+
+def attach_convergence(out: dict[str, Any], convergence: list[dict[str, Any]]) -> None:
+    """Attach convergence warnings to a structured payload, bounded.
+
+    Thin domain wrapper over ``cap_list`` (the one truncation convention):
+    an empty scan attaches nothing — absence of the key IS the all-clear.
+    """
+    if convergence:
+        cap_list(out, "convergence_warnings", convergence, _CONVERGENCE_STRUCTURED_CAP)
 
 
 def scan_batch_convergence(batch_job: BatchJob) -> list[dict[str, Any]]:
@@ -865,8 +943,7 @@ async def get_batch_signal_data(
             "limit": limit,
         }
         _copy_present(out_raw, page_stats, "step_collapsed_runs", "step_unknown_runs")
-        if convergence:
-            out_raw["convergence_warnings"] = convergence
+        attach_convergence(out_raw, convergence)
         return out_raw
 
     batch_stats = await asyncio.to_thread(
@@ -890,8 +967,7 @@ async def get_batch_signal_data(
         "min_case_run": batch_stats["min_case_run"],
     }
     _copy_present(out, batch_stats, "step_collapsed_runs", "step_unknown_runs")
-    if convergence:
-        out["convergence_warnings"] = convergence
+    attach_convergence(out, convergence)
     return out
 
 
