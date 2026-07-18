@@ -144,18 +144,6 @@ def state_with_sim(config: ServerConfig) -> SessionState:
     return SessionState.create(config, available={"fake": FakeSim})
 
 
-@pytest.fixture(autouse=True)
-def _reset_runners():
-    """No-op: runners now live on SessionState instances (RunnerManager).
-
-    Each test creates a fresh SessionState with a fresh RunnerManager,
-    so there are no module-level globals to reset. This fixture is kept
-    as a guard — if runner management ever regresses to globals, tests
-    will still pass.
-    """
-    return
-
-
 @pytest.fixture(scope="session")
 def asc_symbols() -> Iterator[Path]:
     """Register tiny .asy fixture symbols with AscEditor (class-level).
@@ -208,7 +196,6 @@ def sample_netlist(work_dir: Path) -> Path:
 # ---------------------------------------------------------------------------
 # Output-schema conformance hook
 # ---------------------------------------------------------------------------
-
 
 @pytest.fixture(scope="session", autouse=True)
 def _enforce_output_schema_conformance():
@@ -289,6 +276,13 @@ def _enforce_output_schema_conformance():
     # just the defining module. The module set is derived from the
     # registered handlers themselves so a new tool module can't silently
     # escape conformance checking.
+    #
+    # Known limitation: only bindings literally named format_response /
+    # json_response are patched — an aliased import (``from _base import
+    # format_response as fr``) or a module-local wrapper would escape the
+    # check. tests/test_conformance_hook_armed.py proves the patch chain is
+    # live for the canonical binding; it cannot prove no alias exists. Keep
+    # the canonical names when adding tool modules.
     import sys as _sys
 
     saved = []

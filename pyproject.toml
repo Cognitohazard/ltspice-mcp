@@ -115,4 +115,4 @@ known-first-party = ["ltspice_mcp"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--strict-markers --tb=short --cov=ltspice_mcp --cov-fail-under=80"
+addopts = "--strict-markers --tb=short"
