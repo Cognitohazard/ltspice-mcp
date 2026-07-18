@@ -105,7 +105,7 @@ PWL(t1 v1 t2 v2 ...)
 **Gotchas:**
 - RISE/FALL/CROSS numbering starts at **1**, not 0.
 - If TRIG event never occurs, measurement silently fails.
-- `.meas` does NOT work in batch mode (`-b`) when combined with `-r rawfile` — data is streamed to disk and not available for analysis. Use interactive mode or a `.control` block instead.
+- `.meas` is refused when batch mode (`-b`) is combined with `-r rawfile` — the invocation `run_simulation` uses. ngspice prints `No .measure possible in batch mode (-b) with -r rawfile set!` and computes nothing. Recovery: move the measurement into a `.control ... run ... .endc` block written as the DOT-LESS `meas` command — e.g. `meas tran vmax MAX V(out)` (a dotted `.meas` inside `.control` is not a valid command and silently does nothing). The result prints to the run's log.
 - `param` and `par` are not available inside `.control` blocks — use `let` instead.
 
 ### General Pitfalls
@@ -211,8 +211,9 @@ X1 input output myfilter rval=1k cval=1n
 
 **Key differences from LTspice:**
 - Parameters on `.subckt` line do NOT need `params:` keyword — just `name=value` after nodes.
-- `.lib <filename> <section>` — requires a section name. **Omitting the section silently loads nothing** (no error!). For unconditional inclusion, use `.include` instead.
-  - **PDK corners under this MCP:** ngspice runs here in spicelib's default compatibility mode (`ngbehavior='kiltpsa'`), whose `lt`/`ps` tokens split a sectioned `.lib <file> <section>` into two plain includes — dropping the corner section, so it surfaces as a missing include (`could not find include file`). For standard-SPICE / PDK decks, set `[simulator] ngbehavior = "hsa"` in `ltspice-mcp.toml` (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart the server; `run_simulation` emits this hint when a failed run matches the pattern.
+- `.lib` behavior is compatibility-mode dependent, and no single `.lib` form works in every mode — so for unconditional whole-file inclusion use `.include <file>`, which resolves in every ngspice mode (verified on ngspice-42). If you use `.lib`:
+  - **ngspice-native modes** (`hsa`, plain default): `.lib <file> <section>` loads the named `.lib section … .endl` block; a bare `.lib <file>` with no section does NOT load the file's models.
+  - **This server's default `kiltpsa`** (a PSPICE-family mode) inverts this: a bare `.lib <file>` loads an unsectioned file, but a sectioned `.lib <file> <section>` (the PDK corner-select idiom) is mis-split by the `lt`/`ps` tokens into two plain includes that drop the section, surfacing as a missing include (`could not find include file`). Set `[simulator] ngbehavior = "hsa"` in `ltspice-mcp.toml` (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart the server to parse the section; `run_simulation` emits this hint when a failed run matches the pattern.
 - `.param` inside subcircuits is local scope (masks globals). Nesting up to 10 levels.
 - Subcircuit and model names are global — must be unique across the entire netlist.
 
@@ -380,7 +381,7 @@ Use `rshunt` for "no DC path to ground" errors. Use `rseries` when inductors par
 
 ### XSPICE
 
-Mixed-signal simulation with code models (requires XSPICE-enabled build):
+Mixed-signal simulation with code models. A-devices (the `A` prefix) ARE the XSPICE code-model primitives, and XSPICE is enabled by default in the official/stock ngspice builds — no custom build needed. Only the experimental `XSPICE_EXP` extras (e.g. the capacitor/inductor code models) require a custom build.
 
 ```spice
 A1 [in] [out] lut1
@@ -399,8 +400,8 @@ Digital nodes use `[name]` bracket syntax for buses.
 - **MOSFET bulk terminal**: required (4 pins), not auto-connected
 - **GND node**: must explicitly tie to 0 or use `.global`
 - No `startup` keyword in `.tran`
-- No A-devices (mixed-signal primitives) — use XSPICE instead
+- A-devices ARE the XSPICE code-model primitives (the `A` prefix) — available in stock/official builds (XSPICE enabled by default); only `XSPICE_EXP` extras need a custom build
 - No Unicode mu issue — ngspice preserves `u` as-is
 - `.func` definitions cannot be recursive — causes hang, not error
 - Different `.raw` file format (all doubles vs LTspice mixed precision)
-- `.backanno` needed for current probing in post-processing
+- `.backanno` is LTspice-only — ngspice rejects it (`unimplemented dot command '.backanno'`) and aborts the run. Probe currents with `.options savecurrents` (or `.probe`) instead
