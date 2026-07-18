@@ -87,6 +87,25 @@ def _validated_profile(value: str, source: str) -> str | None:
     return None
 
 
+def _validated_string_list(
+    value: object, field_name: str, source: str = "config"
+) -> list[str] | None:
+    """Return *value* if it is a genuine list of strings, else warn and return None.
+
+    Guards the list-of-strings TOML fields against the common mistake of writing
+    a bare scalar (``allowed_paths = "/home/me"`` instead of ``["/home/me"]``).
+    A scalar string is iterable, so ``[Path(p) for p in value]`` would silently
+    expand it character-wise into one-character Paths (including ``Path("/")``
+    for every slash) rather than failing — which, for a sandbox path list, would
+    widen the sandbox to the whole filesystem. Callers keep their default when
+    this returns None.
+    """
+    if isinstance(value, list) and all(isinstance(x, str) for x in value):
+        return value
+    logger.warning("%s: %s must be a list of strings; ignoring %r", source, field_name, value)
+    return None
+
+
 @dataclass
 class ServerConfig:
     """Configuration for the LTSpice MCP server.
@@ -209,14 +228,11 @@ class ServerConfig:
                 if "path" in toml_data["simulator"] and toml_data["simulator"]["path"]:
                     config_dict["simulator_exe"] = Path(toml_data["simulator"]["path"])
                 if "enabled" in toml_data["simulator"]:
-                    raw = toml_data["simulator"]["enabled"]
-                    if isinstance(raw, list) and all(isinstance(x, str) for x in raw):
-                        config_dict["enabled_simulators"] = [x.strip().lower() for x in raw]
-                    else:
-                        logger.warning(
-                            "config: simulator.enabled must be a list of strings; ignoring %r",
-                            raw,
-                        )
+                    names = _validated_string_list(
+                        toml_data["simulator"]["enabled"], "simulator.enabled"
+                    )
+                    if names is not None:
+                        config_dict["enabled_simulators"] = [x.strip().lower() for x in names]
                 if "ngbehavior" in toml_data["simulator"]:
                     raw = toml_data["simulator"]["ngbehavior"]
                     if isinstance(raw, str):
@@ -228,9 +244,11 @@ class ServerConfig:
                         )
 
             if "security" in toml_data and "allowed_paths" in toml_data["security"]:
-                config_dict["allowed_paths"] = [
-                    Path(p) for p in toml_data["security"]["allowed_paths"]
-                ]
+                paths = _validated_string_list(
+                    toml_data["security"]["allowed_paths"], "security.allowed_paths"
+                )
+                if paths is not None:
+                    config_dict["allowed_paths"] = [Path(p) for p in paths]
 
             if "simulation" in toml_data:
                 if "max_parallel" in toml_data["simulation"]:
@@ -259,9 +277,11 @@ class ServerConfig:
                     )
 
             if "schematic" in toml_data and "symbol_paths" in toml_data["schematic"]:
-                config_dict["symbol_paths"] = [
-                    Path(p) for p in toml_data["schematic"]["symbol_paths"]
-                ]
+                paths = _validated_string_list(
+                    toml_data["schematic"]["symbol_paths"], "schematic.symbol_paths"
+                )
+                if paths is not None:
+                    config_dict["symbol_paths"] = [Path(p) for p in paths]
 
             if (
                 "tools" in toml_data
