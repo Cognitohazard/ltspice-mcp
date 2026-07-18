@@ -620,6 +620,7 @@ def _read_log_only_payload(log_file: Path) -> tuple[list[str], list[str], dict, 
     if not log_file.exists():
         return [], [], {}, []
     diagnostics = extract_log_diagnostics(log_file)
+    warnings = list(diagnostics["warnings"])
     measurements: dict = {}
     failed: list[str] = []
     try:
@@ -628,7 +629,10 @@ def _read_log_only_payload(log_file: Path) -> tuple[list[str], list[str], dict, 
         failed = meas["failed_measurements"]
     except Exception as e:
         logger.debug("parse_measurements failed for %s: %s", log_file, e)
-    return diagnostics["warnings"], diagnostics["errors"], measurements, failed
+        # A log-only run's results ARE its measurements — a parse failure here
+        # silently returning {} would read as "the run measured nothing".
+        warnings.append(f"Measurements could not be parsed from the log: {type(e).__name__}: {e}")
+    return warnings, diagnostics["errors"], measurements, failed
 
 
 def _attach_alias_fields(data: dict, job: SimulationJob) -> None:

@@ -1013,3 +1013,108 @@ class TestQueryValueRejectsNaNInf:
                 QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="inf"),
                 state_no_sim,
             )
+
+
+# ---------------------------------------------------------------------------
+# paginate() must floor limit — limit=0 produced a never-advancing next_offset
+# ---------------------------------------------------------------------------
+
+
+class TestPaginateLimitFloor:
+    class _Args:
+        def __init__(self, offset=0, limit=50):
+            self.offset = offset
+            self.limit = limit
+
+    def test_limit_zero_is_floored_and_advances(self):
+        from ltspice_mcp.tools._base import paginate, pagination_metadata
+
+        page, total, offset, limit = paginate(list(range(10)), self._Args(limit=0))
+        assert limit == 1 and page == [0]
+        meta = pagination_metadata(total, offset, limit)
+        assert meta["has_more"] is True
+        assert meta["next_offset"] == 1  # advances — no livelock
+
+    def test_negative_limit_is_floored(self):
+        from ltspice_mcp.tools._base import paginate
+
+        page, _, _, limit = paginate(list(range(10)), self._Args(offset=2, limit=-5))
+        assert limit == 1 and page == [2]
+
+    def test_cap_still_applies(self):
+        from ltspice_mcp.tools._base import paginate
+
+        _, _, _, limit = paginate(list(range(100)), self._Args(limit=999))
+        assert limit == 50
+
+
+# ---------------------------------------------------------------------------
+# Non-finite floats must be scrubbed to null WITH a warning, not silently
+# nulled by the JSON serializer while the text channel says "nan"
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizePayloadNonFinite:
+    def test_nan_scrubbed_with_warning(self):
+        from ltspice_mcp.tools._base import sanitize_payload
+
+        out = sanitize_payload({"value": float("nan"), "unit": "V"})
+        assert out["value"] is None
+        assert any("Non-finite" in w and "value" in w for w in out["warnings"])
+
+    def test_inf_in_nested_list_scrubbed(self):
+        from ltspice_mcp.tools._base import sanitize_payload
+
+        out = sanitize_payload({"rows": [{"y": [1.0, float("inf"), 3.0]}]})
+        assert out["rows"][0]["y"] == [1.0, None, 3.0]
+        assert len(out["warnings"]) == 1
+
+    def test_finite_payload_returned_unchanged_same_object(self):
+        from ltspice_mcp.tools._base import sanitize_payload
+
+        data = {"value": 1.25, "rows": [1.0, 2.0], "name": "x"}
+        assert sanitize_payload(data) is data  # copy-on-write: no hit, no copy
+
+    def test_existing_warnings_preserved(self):
+        from ltspice_mcp.tools._base import sanitize_payload
+
+        out = sanitize_payload({"value": float("-inf"), "warnings": ["prior"]})
+        assert out["warnings"][0] == "prior" and len(out["warnings"]) == 2
+
+    def test_many_hits_capped_not_thousands_of_paths(self):
+        from ltspice_mcp.tools._base import sanitize_payload
+
+        out = sanitize_payload({"data": [float("nan")] * 500})
+        assert out["data"] == [None] * 500
+        (note,) = out["warnings"]
+        assert "and 490 more" in note
+
+    def test_format_response_applies_scrub(self):
+        from ltspice_mcp.tools._base import format_response
+
+        res = format_response("Value: nan", {"value": float("nan")})
+        assert res.structuredContent is not None
+        assert res.structuredContent["value"] is None
+        assert "warnings" in res.structuredContent
+
+
+# ---------------------------------------------------------------------------
+# resolve_netlist_path must let PathSecurityError reach the dispatch layer's
+# sandbox-guidance branch instead of re-wrapping it as SimulationError
+# ---------------------------------------------------------------------------
+
+
+class TestResolveNetlistPathSecurityError:
+    def test_path_security_error_propagates(self, state_no_sim):
+        from ltspice_mcp.errors import PathSecurityError
+        from ltspice_mcp.tools._base import resolve_netlist_path
+
+        with pytest.raises(PathSecurityError):
+            resolve_netlist_path("/etc/passwd", state_no_sim)
+
+    def test_other_failures_still_wrapped(self, state_no_sim, work_dir):
+        from ltspice_mcp.errors import SimulationError
+        from ltspice_mcp.tools._base import resolve_netlist_path
+
+        with pytest.raises(SimulationError, match="not found"):
+            resolve_netlist_path(str(work_dir / "missing.cir"), state_no_sim)
