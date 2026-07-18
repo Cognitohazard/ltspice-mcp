@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import logging
+import math
 import re
 import types as _stdlib_types
 import typing
@@ -18,7 +19,7 @@ from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 from mcp import types
 from pydantic import BaseModel, ConfigDict
 
-from ltspice_mcp.errors import NetlistError, SimulationError
+from ltspice_mcp.errors import NetlistError, PathSecurityError, SimulationError
 from ltspice_mcp.lib.filelock import DEFAULT_TIMEOUT, file_lock
 from ltspice_mcp.lib.job_store import SIDECAR_DIRNAME
 from ltspice_mcp.lib.pathutil import resolve_safe_path
@@ -45,10 +46,78 @@ def text_response(text: str) -> types.CallToolResult:
     )
 
 
+# Most named key paths one scrub warning lists — a fully-NaN trace array
+# should produce one warning naming a few paths plus a count, not thousands.
+_SCRUB_NAMED_PATHS = 10
+
+
+def _scrub_non_finite(obj: Any, path: str, stats: dict[str, Any]) -> Any:
+    """Replace non-finite floats with None, copy-on-write, recording key paths.
+
+    Returns ``obj`` itself when nothing changed so unchanged payloads cost no
+    copies. ``stats`` accumulates ``total`` hits and the first few ``named``
+    paths.
+    """
+    if isinstance(obj, float):
+        if math.isfinite(obj):
+            return obj
+        stats["total"] += 1
+        if len(stats["named"]) < _SCRUB_NAMED_PATHS:
+            stats["named"].append(path or "<root>")
+        return None
+    if isinstance(obj, dict):
+        out: dict | None = None
+        for k, v in obj.items():
+            nv = _scrub_non_finite(v, f"{path}.{k}" if path else str(k), stats)
+            if nv is not v:
+                if out is None:
+                    out = dict(obj)
+                out[k] = nv
+        return out if out is not None else obj
+    if isinstance(obj, list):
+        out_l: list | None = None
+        for i, v in enumerate(obj):
+            nv = _scrub_non_finite(v, f"{path}[{i}]", stats)
+            if nv is not v:
+                if out_l is None:
+                    out_l = list(obj)
+                out_l[i] = nv
+        return out_l if out_l is not None else obj
+    return obj
+
+
+def sanitize_payload(data: dict[str, Any]) -> dict[str, Any]:
+    """Null out non-finite floats and surface the substitution as a warning.
+
+    NaN/Inf are not JSON: pydantic silently serializes them as null on the
+    wire while the text channel prints "nan" — the two channels contradict
+    each other exactly on degenerate results. Per the emit-a-null-over-a-
+    meaningless-number doctrine (lib/result_observations.py), substitute null
+    OURSELVES and say so, naming the affected keys, so the substitution is a
+    surfaced fact instead of a serializer accident.
+    """
+    stats: dict[str, Any] = {"total": 0, "named": []}
+    scrubbed = _scrub_non_finite(data, "", stats)
+    if not stats["total"]:
+        return data
+    unnamed = stats["total"] - len(stats["named"])
+    note = (
+        f"Non-finite values (NaN/Inf) at {', '.join(stats['named'])}"
+        + (f" and {unnamed} more" if unnamed else "")
+        + " were replaced with null; the underlying samples are not finite."
+    )
+    # Any hit already forced a fresh top-level dict via copy-on-write.
+    existing = scrubbed.get("warnings")
+    scrubbed["warnings"] = [*existing, note] if isinstance(existing, list) else [note]
+    return scrubbed
+
+
 def json_response(data: Any) -> types.CallToolResult:
     """Return data as JSON text + structuredContent."""
+    if isinstance(data, dict):
+        data = sanitize_payload(data)
     return types.CallToolResult(
-        content=[types.TextContent(type="text", text=json.dumps(data, indent=2))],
+        content=[types.TextContent(type="text", text=json.dumps(data, indent=2, allow_nan=False))],
         structuredContent=data,
     )
 
@@ -79,7 +148,8 @@ def format_response(
     # non-dict mappings (rare, but cheap to support) also work.
     payload: dict[str, Any] = dict(data) if not isinstance(data, dict) else data
     if fmt == "json":
-        return json_response(payload)
+        return json_response(payload)  # sanitizes internally — don't walk twice
+    payload = sanitize_payload(payload)
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=text)],
         structuredContent=payload,
@@ -657,7 +727,11 @@ def paginate(
     """
     total = len(items)
     offset = max(0, min(int(getattr(arguments, "offset", 0)), total))
-    limit = min(int(getattr(arguments, "limit", cap)), cap)
+    # Floor as well as cap: limit=0 would otherwise report has_more=true with
+    # next_offset == offset — a pagination loop that never advances — and a
+    # negative limit would mis-slice. Server-side clamping (not rejection) is
+    # the documented contract for out-of-range limits.
+    limit = max(1, min(int(getattr(arguments, "limit", cap)), cap))
     return items[offset : offset + limit], total, offset, limit
 
 
@@ -709,9 +783,17 @@ def resolve_run_simulator(requested: str | None, state: SessionState) -> type:
 
 
 def resolve_netlist_path(netlist_str: str, state: SessionState) -> Path:
-    """Resolve and validate a netlist path. Raises SimulationError on failure."""
+    """Resolve and validate a netlist path. Raises SimulationError on failure.
+
+    PathSecurityError propagates unchanged: the dispatch layer has a dedicated
+    branch that appends the sandbox-widening guidance (allowed paths, the TOML
+    knob, the restart requirement) — re-wrapping it as SimulationError would
+    replace that guidance with a misdirecting simulator hint.
+    """
     try:
         netlist_path = safe_path(netlist_str, state)
+    except PathSecurityError:
+        raise
     except Exception as e:
         raise SimulationError(f"Invalid netlist path: {e}") from e
     if not netlist_path.exists():

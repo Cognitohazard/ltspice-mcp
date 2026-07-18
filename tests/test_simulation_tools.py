@@ -27,7 +27,12 @@ class TestSimulationWithoutSimulator:
             )
 
     async def test_run_path_escape(self, state_no_sim: SessionState):
-        with pytest.raises(SimulationError):
+        # PathSecurityError must propagate unchanged so the dispatch layer can
+        # append the sandbox-widening guidance (re-wrapping it as
+        # SimulationError used to bury that behind a simulator hint).
+        from ltspice_mcp.errors import PathSecurityError
+
+        with pytest.raises(PathSecurityError):
             await handle_run_simulation(RunSimulationInput(netlist="/etc/passwd"), state_no_sim)
 
     async def test_asc_without_ltspice_names_exe_knob(

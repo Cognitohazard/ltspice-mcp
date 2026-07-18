@@ -187,10 +187,13 @@ def _reject_non_transient(raw) -> None:
     """
     sim_type = detect_sim_type(raw)
     if is_ac_analysis(sim_type) or is_dc_analysis(sim_type) or is_noise_analysis(sim_type):
+        # show_hint=False: the redirect above is the complete guidance — the
+        # generic verify-with-check_job hint would misdirect (errors.py contract).
         raise ResultError(
             f"This tool requires transient analysis (.tran) data; got {sim_type!r}. "
             "For a .DC sweep use query_value or signal_stats; for frequency-domain "
-            "(.AC / .noise) use bode_metrics or signal_stats."
+            "(.AC / .noise) use bode_metrics or signal_stats.",
+            show_hint=False,
         )
 
 
@@ -3923,8 +3926,15 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
     if args.job_id is not None:
         job = await services.resolve_job_async(args.job_id, state)
         if isinstance(job, BatchJob):
-            flat_values, run_count, axis_map, run_diags, per_run, at_map = (
-                _aggregate_job_measurements(job)
+            # Offloaded: the walk parses one .log per run through spicelib —
+            # hundreds of unbounded parses on a large Monte Carlo batch, which
+            # must not stall the event loop. Off-loop reads of the job are safe
+            # here: the walk snapshots run_results keys up front and per-run
+            # entries are write-once at run completion; a run landing mid-walk
+            # is at worst omitted, which the partial-aggregate caveat below
+            # already surfaces.
+            flat_values, run_count, axis_map, run_diags, per_run, at_map = await asyncio.to_thread(
+                _aggregate_job_measurements, job
             )
             # A partial aggregate is a measurement assumption the caller must
             # see: a still-running batch silently reading as final stats was a
@@ -3965,12 +3975,12 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
             # ``resolve_log_file`` gates on completed status like every other
             # job-id-addressed read; the path is a trusted server artifact.
             log_path = services.resolve_log_file(args.job_id, state)
-            flat_values, axis_map, steps_label, at_map = _aggregate_log_measurements(
-                log_path, netlist=job.netlist
+            flat_values, axis_map, steps_label, at_map = await asyncio.to_thread(
+                _aggregate_log_measurements, log_path, job.netlist
             )
     elif args.log_file is not None:
-        flat_values, axis_map, steps_label, at_map = _aggregate_log_measurements(
-            safe_path(args.log_file, state)
+        flat_values, axis_map, steps_label, at_map = await asyncio.to_thread(
+            _aggregate_log_measurements, safe_path(args.log_file, state)
         )
     else:  # unreachable — earlier guard rejects this combination
         raise ResultError("Provide either ``log_file`` or ``job_id``.")
@@ -4124,9 +4134,11 @@ async def _load_ac_signal(
     raw = await services.load_raw(raw_path, state)
     sim_type = detect_sim_type(raw)
     if not is_ac_analysis(sim_type):
+        # show_hint=False: precise redirect; the generic hint would misdirect.
         raise ResultError(
             f"This tool requires AC analysis data; got {sim_type!r}. "
-            "Use signal_stats (transient) or run a .AC sweep first."
+            "Use signal_stats (transient) or run a .AC sweep first.",
+            show_hint=False,
         )
     services.validate_step(raw, step)
     axis = np.asarray(raw.get_axis(step=step))
