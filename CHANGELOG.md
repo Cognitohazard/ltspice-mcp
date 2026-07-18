@@ -72,7 +72,7 @@ tool-surface changes.
   - Circuit-file mutations and `.asc` exports take a cross-process file lock
     (sidecar `.ltspice-mcp/locks/`), so concurrent edits of the same file
     from two sessions serialize on the latest content instead of silently
-    losing one session's edit. Pin/route geometry (`connect`,
+    losing one session's edit. Pin/route geometry (`wire_pins`,
     `add_net_label`, `remove_component`) resolves inside the lock, so it
     reflects a peer's just-completed move; exports lock the sidecar `.net`
     they overwrite as well as the `.asc`. A still-held lock surfaces as a
@@ -85,14 +85,13 @@ tool-surface changes.
     summaries report this server's own live job as `running` too.
   - `psutil` is now a direct dependency (already installed as a spicelib
     transitive).
-- `disturbance_response` — a transient tool for a regulated output under a
-  load/line step (LDO/PMIC), where the output returns to its own level so
-  `pulse_response` correctly nulls its step metrics. Measures droop and
-  overshoot against the pre-disturbance baseline (explicit or auto from the
-  leading window) and the recovery time back into a settle band. Reports null
-  recovery — with the reason in `warnings` — when the output never re-enters the
-  band or the band is undefined (zero baseline, no absolute band). Available in
-  both tool profiles.
+- `transient_response` gains `mode="disturbance"` — for a regulated output under
+  a load/line step (LDO/PMIC), where the output returns to its own level so the
+  step mode correctly nulls its metrics. Measures droop and overshoot against the
+  pre-disturbance baseline (explicit or auto from the leading window) and the
+  recovery time back into a settle band. Reports null recovery — with the reason
+  in `warnings` — when the output never re-enters the band or the band is
+  undefined (zero baseline, no absolute band). Available in both tool profiles.
 - `return_loss` — reflection metrics (Γ magnitude/phase, return loss in dB,
   VSWR) from an AC impedance trace measured under the documented 1 A probe,
   against a reference `z0` (default 50 Ω). Evaluates a given frequency or scans
@@ -219,7 +218,7 @@ tool-surface changes.
 - `thd` labels its per-harmonic magnitudes with the signal's native `unit`
   (V/A); the ratios, percentages, and dB stay dimensionless.
 - Net-label guidance across `create_schematic`, its checklist hint, and the
-  `connect` conflict error now names the `apply_schematic_ops` `add_net_label`
+  `wire_pins` conflict error now names the `apply_schematic_ops` `add_net_label`
   op rather than implying a standalone `add_net_label` tool exists.
 - `get_waveform` (and the other axis-backed analysis tools) point a no-axis
   error at the `.dc` conversion when the result is a stepped `.op` collapsed to
@@ -236,10 +235,12 @@ tool-surface changes.
   magnitude — wrap in `abs()`; verified against LTspice) and how to steer
   bistable circuits (bandgaps, mirrors, latches) to the intended DC root when
   `.nodeset` alone won't.
-- `pulse_response` points at `disturbance_response` for a load/line step that
-  returns to its own level (the reference was one-directional — agents at the
-  buck-load-step moment found `pulse_response`, read its limitation, and never
-  discovered the tool built for exactly that case).
+- `pulse_response` and the load/line-step analysis were consolidated into
+  `transient_response(mode="step"|"disturbance")` with no aliases: `mode="step"`
+  is the former `pulse_response`, `mode="disturbance"` the regulated-output
+  droop/overshoot/recovery analysis. A single tool with a `mode` selector
+  replaces the two names, so an agent at a buck-load-step no longer has to
+  discover a separate tool.
 - Auto-generated and example config files no longer write a live
   `max_parallel = 4` key — it is now a comment documenting the real default
   (number of CPU cores, capped at 8). The written key silently pinned every
@@ -264,12 +265,15 @@ tool-surface changes.
   installable from PyPI first — a published alias can no longer resolve an
   older canonical package under a newer alias version.
 
+- The `connect` schematic-wiring tool was renamed `wire_pins`; `connect` is kept
+  as a deprecated dispatch alias — it still resolves to the same handler but is
+  not listed in the tool definitions.
 - The SPICE guide's named-nets rule now matches the runtime guidance: repeating
   a same-name net label validly ties distant pins (the netlist merges same-name
-  labels into one net); with duplicate labels, `connect` should target a
+  labels into one net); with duplicate labels, `wire_pins` should target a
   component pin rather than `net:NAME`. `create_schematic`'s tool description
   states the same idiom.
-- `connect`'s duplicate-label error now names the actual net in its guidance
+- `wire_pins`'s duplicate-label error now names the actual net in its guidance
   instead of a canned `net='0'`/`M3.S` example.
 - The `format` parameter description documents that `'text'` is the default and
   that structured content is identical for both formats.
@@ -350,8 +354,9 @@ tool-surface changes.
 - The per-schematic export-diff cache is bounded (LRU, 64 schematics) instead
   of growing without limit over a long session.
 
-- `pulse_response` no longer reports a definite `settling_time` when the signal
-  entered the settle band only just before the window ends and the final value
+- `transient_response(mode="step")` no longer reports a definite `settling_time`
+  when the signal entered the settle band only just before the window ends and
+  the final value
   was auto-derived from that same short tail — indistinguishable from a
   still-ringing waveform paused on a plateau (e.g. a transmission-line
   staircase). Requires in-band dwell of at least 1.5× the nominal trailing
