@@ -533,6 +533,24 @@ class TestBuildSummaryWiring:
         summary = build_simulation_summary(raw, None, value_scan="skipped_large")
         assert any(o["code"] == "value_scan_skipped" for o in summary["observations"])
 
+    def test_signals_list_capped_with_explicit_truncation(self):
+        # A device-heavy raw (hundreds of traces) must not re-ship its whole
+        # name list in structuredContent on every poll: capped + total count.
+        names = ["time"] + [f"V(n{i})" for i in range(149)]
+        raw = _make_raw_mock(names, np.array([0.0, 1.0]), {})
+        summary = build_simulation_summary(raw, None)
+        assert len(summary["signals"]) == 100
+        assert summary["signals"] == names[:100]
+        assert summary["signals_truncated"] == 150
+
+    def test_small_signals_list_not_truncated(self):
+        raw = _make_raw_mock(
+            ["time", "V(out)"], np.array([0.0, 1.0]), {"V(out)": np.array([0.0, 1.0])}
+        )
+        summary = build_simulation_summary(raw, None)
+        assert summary["signals"] == ["time", "V(out)"]
+        assert "signals_truncated" not in summary
+
     def test_source_amplitudes_kwarg_arms_the_trigger(self):
         # Pins the build_simulation_summary -> surface_observations hand-off:
         # dropping the kwarg leaves every direct-function test green while the

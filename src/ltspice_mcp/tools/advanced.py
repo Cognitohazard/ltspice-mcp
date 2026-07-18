@@ -558,7 +558,11 @@ def _x_instance_is_fet_like(card: SpiceCard) -> bool:
     annotations=types.ToolAnnotations(
         readOnlyHint=False,
         destructiveHint=False,
-        idempotentHint=True,
+        # Not idempotent: every call mints a fresh config_id and appends to
+        # session state (and MC with seed=None draws fresh entropy) — a client
+        # that auto-retries "idempotent" tools would accumulate orphan configs
+        # and lose track of which id it actually ran.
+        idempotentHint=False,
         openWorldHint=False,
     ),
     profiles=("full", "agentic"),
@@ -883,7 +887,8 @@ async def handle_run_sweep(args: RunBatchInput, state: SessionState):
     annotations=types.ToolAnnotations(
         readOnlyHint=False,
         destructiveHint=False,
-        idempotentHint=True,
+        # Not idempotent — same rationale as configure_sweep's annotation above.
+        idempotentHint=False,
         openWorldHint=False,
     ),
     profiles=("full", "agentic"),
@@ -1335,6 +1340,14 @@ async def handle_run_montecarlo(args: RunBatchInput, state: SessionState):
                     "required": ["run_index", "markers"],
                 },
             },
+            "convergence_warnings_truncated": {
+                "type": "integer",
+                "description": (
+                    "Total flagged-run count when convergence_warnings was "
+                    "capped for the structured channel (the list carries the "
+                    "first entries only). Absent when the list is complete."
+                ),
+            },
         },
     },
 )
@@ -1429,10 +1442,14 @@ def _format_batch_status_text(data: dict) -> str:
         )
         flagged = data.get("convergence_warnings") or []
         if flagged:
+            # The structured list may itself be capped; the *_truncated key
+            # then carries the true flagged-run total — count against that,
+            # or a 400-run MC reads as "25 of 400" with "+15 more".
+            flagged_total = data.get("convergence_warnings_truncated", len(flagged))
             run_ids = ", ".join(str(f["run_index"]) for f in flagged[:10])
-            more = "" if len(flagged) <= 10 else f", … (+{len(flagged) - 10} more)"
+            more = "" if flagged_total <= 10 else f", … (+{flagged_total - 10} more)"
             text += (
-                f"\n\nWarning: {len(flagged)} of {data['total_runs']} run(s) hit "
+                f"\n\nWarning: {flagged_total} of {data['total_runs']} run(s) hit "
                 f"convergence fallbacks (Gmin/source stepping or worse) — bias "
                 f"point may be degenerate. Run indices: {run_ids}{more}"
             )

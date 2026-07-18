@@ -20,6 +20,7 @@ import numpy as np
 from spicelib.log.ltsteps import LTSpiceLogReader
 from spicelib.raw.raw_read import RawRead
 
+from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.log_parser import (
     extract_log_diagnostics,
     is_op_stepping_failure,
@@ -582,6 +583,11 @@ def _raw_node_data_is_finite(raw: RawRead, trace_names: list[str], step: int) ->
     return checked > 0
 
 
+# Structured-channel cap for the summary's signal-name list (see the
+# truncation note at the attachment site in ``build_simulation_summary``).
+_SIGNALS_STRUCTURED_CAP = 100
+
+
 def build_simulation_summary(
     raw: RawRead,
     log_path: Path | None,
@@ -658,8 +664,13 @@ def build_simulation_summary(
         "range": range_info,
         "point_count": point_count,
         "step_count": step_count,
-        "signals": trace_names,
     }
+    # Cap the structured signal list: a device-heavy raw (.save all @m*[*],
+    # PDK-level node dumps) can carry hundreds-to-thousands of trace names,
+    # and this summary is re-sent on every run_simulation completion and
+    # check_job poll. The full list stays addressable via the
+    # spice://results/{job_id}/signals resource.
+    cap_list(summary, "signals", trace_names, _SIGNALS_STRUCTURED_CAP)
 
     if log_path and log_path.exists():
         from ltspice_mcp.lib.log_parser import (

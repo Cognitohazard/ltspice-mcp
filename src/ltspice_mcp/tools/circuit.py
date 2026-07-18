@@ -4397,6 +4397,42 @@ def _components_and_directives(path: Path) -> tuple[dict[str, str], set[str], st
     input_model=DiffCircuitInput,
     annotations=RO_ANNOTATIONS,
     profiles=("full", "agentic"),
+    output_schema={
+        "type": "object",
+        "properties": {
+            "path_a": {"type": "string"},
+            "path_b": {"type": "string"},
+            "components_added": {"type": "array", "items": {"type": "string"}},
+            "components_removed": {"type": "array", "items": {"type": "string"}},
+            "components_changed": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "reference": {"type": "string"},
+                        "before": {"type": "string"},
+                        "after": {"type": "string"},
+                    },
+                    "required": ["reference", "before", "after"],
+                },
+            },
+            "directives_added": {"type": "array", "items": {"type": "string"}},
+            "directives_removed": {"type": "array", "items": {"type": "string"}},
+            # A parse failure on either file rides here — the added/removed
+            # lists are untrustworthy until it's resolved.
+            "warnings": WARNINGS_SCHEMA,
+        },
+        "required": [
+            "path_a",
+            "path_b",
+            "components_added",
+            "components_removed",
+            "components_changed",
+            "directives_added",
+            "directives_removed",
+            "warnings",
+        ],
+    },
 )
 async def handle_diff_circuit(args: DiffCircuitInput, state: SessionState) -> types.CallToolResult:
     """Structural diff between two circuit files."""

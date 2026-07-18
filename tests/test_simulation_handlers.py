@@ -455,6 +455,30 @@ class TestFormatSuccessResponse:
         assert result.structuredContent is not None
         assert result.structuredContent["status"] == "completed"
 
+    def test_capped_signal_list_reports_true_total_in_both_channels(self):
+        # A capped summary carries signals_truncated = TRUE total; the
+        # response must copy it into structuredContent and count the text
+        # channel against it — otherwise 100 capped names present as the
+        # complete set, the silent truncation the cap exists to prevent.
+        from ltspice_mcp.tools.simulation import _format_success_response
+
+        summary = {
+            "sim_type": "Transient",
+            "duration": 1.5,
+            "step_count": 1,
+            "raw_file": "/tmp/x.raw",
+            "log_file": "/tmp/x.log",
+            "signals": [f"V(n{i})" for i in range(100)],
+            "signals_truncated": 523,
+            "warnings": [],
+        }
+        result = _format_success_response(_stub_job(), summary, None)
+        assert result.structuredContent is not None
+        assert result.structuredContent["signals_truncated"] == 523
+        text = _text_of(result)
+        assert "Available signals (523)" in text
+        assert "... and 503 more" in text
+
     def test_suggestions_reach_structured_content(self):
         # Unresolved-reference fuzzy matches computed on the completed-run path
         # must be copied into structuredContent — structured-aware clients drop

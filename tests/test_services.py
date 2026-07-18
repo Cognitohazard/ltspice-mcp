@@ -86,7 +86,9 @@ class TestResolveJob:
         assert bj.job_id == "b1"
 
     def test_resolve_batch_job_not_found(self, state_no_sim: SessionState):
-        with pytest.raises(BatchJobError, match="Batch job not found: missing"):
+        # JobNotFoundError (not BatchJobError): the dispatch layer's
+        # list-known-jobs recovery hint is keyed on the exception type.
+        with pytest.raises(JobNotFoundError, match="Batch job not found: missing"):
             services.resolve_batch_job("missing", state_no_sim)
 
     def test_resolve_batch_job_sim_id_redirects(self, state_no_sim: SessionState):
@@ -700,3 +702,114 @@ class TestBatchConvergenceSurfacing:
 
         assert "convergence_warnings" not in data
         assert bj.convergence_warnings == []
+
+
+class TestAttachConvergenceCap:
+    def _entries(self, n: int) -> list[dict]:
+        return [{"run_index": i, "markers": ["gmin stepping"]} for i in range(n)]
+
+    def test_small_list_attached_whole(self):
+        out: dict = {}
+        services.attach_convergence(out, self._entries(5))
+        assert len(out["convergence_warnings"]) == 5
+        assert "convergence_warnings_truncated" not in out
+
+    def test_large_list_capped_with_total(self):
+        # structuredContent is re-sent on every terminal read; a 400-run MC
+        # must not re-ship 400 near-identical objects per poll.
+        out: dict = {}
+        services.attach_convergence(out, self._entries(400))
+        assert len(out["convergence_warnings"]) == 25
+        assert out["convergence_warnings_truncated"] == 400
+        assert out["convergence_warnings"][0]["run_index"] == 0
+
+    def test_empty_list_attaches_nothing(self):
+        out: dict = {}
+        services.attach_convergence(out, [])
+        assert out == {}
+
+
+class TestBatchNotFoundIsJobNotFound:
+    # The sync twin is pinned by TestResolveJob::test_resolve_batch_job_not_found.
+    @pytest.mark.asyncio
+    async def test_resolve_batch_job_async_unknown_id(self, state_no_sim: SessionState):
+        # Type must stay JobNotFoundError (the dispatch layer's list-known-jobs
+        # recovery hint is keyed on it); text keeps the batch phrasing.
+        with pytest.raises(JobNotFoundError, match="Batch job not found"):
+            await services.resolve_batch_job_async("batch_bogus", state_no_sim)
+
+
+class TestLoadRawParseDeadline:
+    @pytest.mark.asyncio
+    async def test_wedged_parse_fails_the_call_not_the_session(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        # The parse thread is untrusted third-party code; a wedged parse must
+        # fail THIS call with a clear error instead of hanging the caller.
+        # The Event lets teardown release the abandoned worker immediately —
+        # a bare sleep would serially delay executor shutdown by its length.
+        import threading
+
+        raw = work_dir / "wedged.raw"
+        raw.write_bytes(b"x")
+        release = threading.Event()
+
+        def _slow(path, state):
+            # Quiet return: the deadline already abandoned this worker's
+            # future; raising here would only log an unretrieved exception.
+            release.wait(5.0)
+            return MagicMock()
+
+        monkeypatch.setattr(services, "load_raw_sync", _slow)
+        monkeypatch.setattr(services, "RAW_PARSE_TIMEOUT_S", 0.05)
+        try:
+            with pytest.raises(ResultError, match="exceeded"):
+                await services.load_raw(raw, state_no_sim)
+        finally:
+            release.set()
+            services._wedged_raw_paths.pop(raw, None)
+
+    @pytest.mark.asyncio
+    async def test_retry_during_cooldown_fails_fast_without_new_worker(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        # A wedged path enters a retry cooldown: hammering it must not park
+        # one more executor thread per call on the still-held parse lock.
+        import threading
+
+        raw = work_dir / "wedged2.raw"
+        raw.write_bytes(b"x")
+        release = threading.Event()
+        calls = {"n": 0}
+
+        def _slow(path, state):
+            calls["n"] += 1
+            release.wait(5.0)
+            return MagicMock()
+
+        monkeypatch.setattr(services, "load_raw_sync", _slow)
+        monkeypatch.setattr(services, "RAW_PARSE_TIMEOUT_S", 0.05)
+        try:
+            with pytest.raises(ResultError, match="exceeded"):
+                await services.load_raw(raw, state_no_sim)
+            assert calls["n"] == 1
+            with pytest.raises(ResultError, match="paused"):
+                await services.load_raw(raw, state_no_sim)
+            assert calls["n"] == 1  # no second worker spawned
+        finally:
+            release.set()
+            services._wedged_raw_paths.pop(raw, None)
+
+    @pytest.mark.asyncio
+    async def test_normal_parse_unaffected_by_deadline(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = FIXTURES_DIR / "recorded" / "ltspice_tran_rc.raw"
+        if not raw.exists():
+            pytest.skip("recorded fixture missing")
+        import shutil
+
+        local = work_dir / "ok.raw"
+        shutil.copy2(raw, local)
+        loaded = await services.load_raw(local, state_no_sim)
+        assert loaded.get_trace_names()
