@@ -11,8 +11,9 @@ import bisect
 import contextlib
 import importlib
 import io
+import itertools
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Callable
 from collections.abc import Set as AbstractSet
 from contextlib import asynccontextmanager
@@ -3422,6 +3423,134 @@ async def handle_wire_pins(args: WirePinsInput, state: SessionState) -> types.Ca
     return format_response("\n".join(result_lines), data, None)
 
 
+def _merge_collinear_runs(
+    segments: list[tuple[int, int, int, int]],
+    node_coords: set[tuple[int, int]],
+) -> list[tuple[int, int, int, int]]:
+    """Collapse straight runs of collinear wire segments into single segments,
+    mirroring LTspice's netlist-time wire merge.
+
+    A vertex breaks a run — stays its own node — when it is a pin coordinate
+    (``node_coords``) or a corner/junction (its incident segment ends are not
+    exactly two ends of one orientation). Only pure pass-through vertices
+    (degree-2, both ends collinear, not a pin) are merged across. This is what
+    makes a *collinear* waypoint disappear: an in-line bend leaves only bare
+    pass-through vertices, so the run collapses back to one segment; a bend that
+    turns a corner leaves the corner vertices as breaks, so its segments stay
+    split. Verticals (``x1==x2``) and horizontals (``y1==y2``) are merged
+    per-line by interval union split at breaks; any diagonal passes through
+    unchanged.
+    """
+    ends: dict[tuple[int, int], list[str]] = defaultdict(list)
+    verticals: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    horizontals: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    merged: list[tuple[int, int, int, int]] = []
+    for x1, y1, x2, y2 in segments:
+        if (x1, y1) == (x2, y2):
+            continue  # zero-length record (hand-corrupted WIRE) — nothing to merge
+        if x1 == x2:
+            verticals[x1].append((min(y1, y2), max(y1, y2)))
+            ends[(x1, y1)].append("V")
+            ends[(x2, y2)].append("V")
+        elif y1 == y2:
+            horizontals[y1].append((min(x1, x2), max(x1, x2)))
+            ends[(x1, y1)].append("H")
+            ends[(x2, y2)].append("H")
+        else:
+            merged.append((x1, y1, x2, y2))  # diagonal — passed through as-is
+
+    def _breaks(coord: tuple[int, int]) -> bool:
+        es = ends.get(coord, [])
+        return coord in node_coords or len(es) != 2 or len(set(es)) != 1
+
+    def _emit(intervals: list[tuple[int, int]], cuts: set[int], vertical: bool, line: int) -> None:
+        intervals.sort()
+        runs: list[list[int]] = []
+        for lo, hi in intervals:
+            if runs and lo <= runs[-1][1]:
+                runs[-1][1] = max(runs[-1][1], hi)
+            else:
+                runs.append([lo, hi])
+        for lo, hi in runs:
+            pts = sorted({lo, hi} | {c for c in cuts if lo < c < hi})
+            for a, b in itertools.pairwise(pts):
+                merged.append((line, a, line, b) if vertical else (a, line, b, line))
+
+    for x, iv in verticals.items():
+        cuts = {y for (cx, y) in ends if cx == x and _breaks((cx, y))}
+        _emit(iv, cuts, vertical=True, line=x)
+    for y, iv in horizontals.items():
+        cuts = {x for (x, cy) in ends if cy == y and _breaks((x, cy))}
+        _emit(iv, cuts, vertical=False, line=y)
+    return merged
+
+
+def _pin_owners(
+    component_geo: list[dict],
+) -> dict[tuple[int, int], list[tuple[str, str]]]:
+    """Map each pin coordinate to its ``(ref, pin_name)`` owners.
+
+    The same shape :func:`_net_partition` builds (available there as
+    ``part.pin_owners``); use this where only the pin-owner view is needed and
+    no full net partition is on hand. ``component_geo`` is
+    :func:`_collect_component_geometry` output.
+    """
+    owners: dict[tuple[int, int], list[tuple[str, str]]] = {}
+    for cg in component_geo:
+        for pin in cg["pins"]:
+            owners.setdefault((pin["x"], pin["y"]), []).append((cg["ref"], pin["name"]))
+    return owners
+
+
+def _wire_segments(editor: AscEditor) -> list[tuple[int, int, int, int]]:
+    """Every wire as a flat ``(x1, y1, x2, y2)`` integer tuple."""
+    return [(int(w.V1.X), int(w.V1.Y), int(w.V2.X), int(w.V2.Y)) for w in editor.wires]
+
+
+def _same_instance_dropped_segments(
+    pin_owners: dict[tuple[int, int], list[tuple[str, str]]],
+    segments: list[tuple[int, int, int, int]],
+) -> list[dict]:
+    """Wire segments LTspice discards from the exported netlist.
+
+    LTspice drops a wire run whose two ends both land exactly on pins of the
+    SAME single component instance (verified against LTspice 26 ``-netlist``:
+    such a run never reaches the netlist, so the two pins stay on separate nodes
+    and the drawn tie has no electrical effect). Two routes still get kept, and
+    both were confirmed against LTspice 26: a run spanning two *different*
+    instances, and a same-instance tie that turns a corner OUT OF LINE with the
+    two pins. A waypoint that stays *collinear* with the pins does NOT survive —
+    LTspice merges the in-line segments back into one and drops it — so the
+    segments are collinear-merged (:func:`_merge_collinear_runs`) before this
+    check, which is what catches an all-in-line waypoint route as well as the
+    bare direct wire. A net label on one pin does not rescue the run either.
+
+    Returns one dict per dropped run with ``segment`` (the merged ``(x1, y1, x2,
+    y2)`` tuple), ``ref`` (the shared instance), and ``pins`` (the two pin
+    names on that instance), ordered deterministically. ``pin_owners`` maps each
+    pin coordinate to its ``(ref, pin_name)`` owners (:func:`_pin_owners` and
+    :func:`_net_partition` both build this shape).
+    """
+    dropped: list[dict] = []
+    for seg in _merge_collinear_runs(list(segments), set(pin_owners)):
+        sx1, sy1, sx2, sy2 = seg
+        if (sx1, sy1) == (sx2, sy2):
+            continue  # defensive: a collapsed/zero-length run is not a tie
+        owners_a = pin_owners.get((sx1, sy1), [])
+        owners_b = pin_owners.get((sx2, sy2), [])
+        if not owners_a or not owners_b:
+            continue  # an end is a bare vertex/waypoint, not a pin — kept
+        refs_a = {r for r, _ in owners_a}
+        refs_b = {r for r, _ in owners_b}
+        if len(refs_a | refs_b) != 1:
+            continue  # the run bridges two distinct instances — kept
+        ref = next(iter(refs_a))
+        pin_a, pin_b = owners_a[0][1], owners_b[0][1]
+        dropped.append({"segment": seg, "ref": ref, "pins": (pin_a, pin_b)})
+    dropped.sort(key=lambda d: (d["ref"], d["segment"]))
+    return dropped
+
+
 def _plan_connect_route(
     editor: AscEditor,
     from_pin: str,
@@ -3440,7 +3569,7 @@ def _plan_connect_route(
     both) so both paths apply identical safety checks.
     """
     component_geo = _collect_component_geometry(editor)
-    existing_wires = [(int(w.V1.X), int(w.V1.Y), int(w.V2.X), int(w.V2.Y)) for w in editor.wires]
+    existing_wires = _wire_segments(editor)
 
     x1, y1 = _resolve_pin(from_pin, editor)
     x2, y2 = _resolve_pin(to_pin, editor)
@@ -3525,6 +3654,29 @@ def _plan_connect_route(
                     f"{sorted(new_labels)} to the merged net). Reroute "
                     "to avoid the labelled wire."
                 )
+
+    # Same-instance self-loop — refused first because, like the net-label
+    # conflict above, it's a "wrong intent" error: a wire tying two pins of one
+    # component (directly, or through a collinear waypoint that merges back into
+    # a straight wire) is dropped by LTspice at netlist time (see
+    # _same_instance_dropped_segments), so reporting the tie as connected would
+    # be a lie. The fix is a route change, so surface it before route geometry.
+    dropped = _same_instance_dropped_segments(_pin_owners(component_geo), segments)
+    if dropped:
+        ref = dropped[0]["ref"]
+        pin_a, pin_b = dropped[0]["pins"]
+        raise NetlistError(
+            f"Refused to connect {from_pin} to {to_pin}: this is a same-instance "
+            f"wire — it ties two pins of the same component {ref} ({ref}.{pin_a} "
+            f"and {ref}.{pin_b}). LTspice drops such a wire from the exported "
+            f"netlist, so the tie would have no electrical effect. To tie two pins "
+            f"of one component: route the wire so it bends OUT OF LINE with the two "
+            f"pins (a waypoint that stays collinear with them is merged back into a "
+            f"straight wire and still dropped; the bend must leave that line), or "
+            f"drop the wire and give both pins the same net label via the "
+            f"apply_schematic_ops add_net_label op (same-name labels merge into one "
+            f"net)."
+        )
 
     for sx1, sy1, sx2, sy2 in segments:
         if sx1 != sx2 and sy1 != sy2:
@@ -3842,6 +3994,7 @@ class TraceNetInput(ToolInput):
                 },
             },
             "is_shorted": {"type": "boolean"},
+            "warnings": WARNINGS_SCHEMA,
         },
     },
 )
@@ -3931,13 +4084,33 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
     pins.sort(key=lambda p: (p["reference"], p["pin"]))
     coords = sorted(member_coords)
 
-    data = {
+    # LTspice drops a wire segment joining two pins of one component instance,
+    # so a net whose shape here depends on such a segment over-reports what
+    # LTspice will actually netlist. Surface each dropped segment on this net as
+    # a fact (not a verdict) — the model decides whether the tie was intended.
+    net_segments = [
+        s
+        for s in _wire_segments(editor)
+        if (s[0], s[1]) in member_coords and (s[2], s[3]) in member_coords
+    ]
+    warnings = [
+        f"{d['ref']}.{d['pins'][0]} and {d['ref']}.{d['pins'][1]} are joined by a "
+        f"wire between two pins of the same component; LTspice drops that wire from "
+        f"the netlist, so this connection may not exist in simulation. Reroute the "
+        f"wire to bend out of line with the two pins, or label both pins with the "
+        f"same net name."
+        for d in _same_instance_dropped_segments(part.pin_owners, net_segments)
+    ]
+
+    data: dict = {
         "start": {"x": x, "y": y},
         "labels": sorted(labels),
         "pins": pins,
         "coordinates": [{"x": cx, "y": cy} for cx, cy in coords],
         "is_shorted": is_shorted,
     }
+    if warnings:
+        data["warnings"] = warnings
 
     net_name = ", ".join(sorted(labels)) if labels else "<unnamed>"
     lines = [f"Net at ({x},{y}): {net_name}"]
@@ -3949,6 +4122,8 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
         lines.append("  (no component pins on this net)")
     if is_shorted:
         lines.append(f"  WARNING: net carries multiple labels {named} — likely a short.")
+    for w in warnings:
+        lines.append(f"  WARNING: {w}")
     return format_response("\n".join(lines), data, args.format)
 
 
@@ -4087,6 +4262,33 @@ def _asc_topology_issues(editor: AscEditor) -> list[dict]:
                 "directive": "",
                 "message": w["message"],
                 "suggestion": fix,
+            }
+        )
+
+    # Same-instance dropped wires: a segment joining two pins of one component
+    # instance is discarded by LTspice at netlist time, so the drawn tie has no
+    # electrical effect. Warning-level — the schematic is well-formed, but the
+    # connectivity it depicts diverges from what LTspice will simulate.
+    all_segments = _wire_segments(editor)
+    for d in _same_instance_dropped_segments(part.pin_owners, all_segments):
+        ref = d["ref"]
+        pin_a, pin_b = d["pins"]
+        issues.append(
+            {
+                "severity": "warning",
+                "line": None,
+                "directive": f"wire: {ref}.{pin_a}-{ref}.{pin_b}",
+                "message": (
+                    f"Same-instance wire: a wire ties {ref}.{pin_a} to "
+                    f"{ref}.{pin_b}. LTspice drops a wire between two pins of one "
+                    f"component from the exported netlist, so the tie has no "
+                    f"electrical effect."
+                ),
+                "suggestion": (
+                    "Reroute the wire to bend out of line with the two pins (a "
+                    "collinear waypoint is merged away and still dropped), or label "
+                    "both pins with the same net name."
+                ),
             }
         )
 
