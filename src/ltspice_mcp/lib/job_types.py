@@ -269,6 +269,12 @@ class SimulationJob:
         output_alias_log: Same as output_alias_raw for the .log alias.
         output_alias_note: Why an alias was skipped (e.g. a name collision),
             or None if nothing was skipped.
+        observations: Structured facts to surface on a failed response beyond
+            the error string (e.g. a missing-required-raw reconciliation note
+            when the simulator exited cleanly but wrote no .raw the deck
+            required). Transient — derived at completion, not persisted; the
+            error string carries the same context in text form across a reload.
+            None means nothing to surface.
     """
 
     job_id: str
@@ -282,6 +288,10 @@ class SimulationJob:
     raw_file: Path | None = None
     log_file: Path | None = None
     error: str | None = None
+    # Each dict is result_observations.Observation-shaped; kept as list[dict]
+    # (not list[Observation]) because that TypedDict is total=False, so keyed
+    # access on it trips reportTypedDictNotRequiredAccess at every read site.
+    observations: list[dict] | None = field(default=None, repr=False)
     task: Any | None = None
     done_event: asyncio.Event = field(default_factory=asyncio.Event)
     # Same contract as BatchJob.owner_pid: which server process owns this

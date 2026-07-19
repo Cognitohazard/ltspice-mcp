@@ -247,6 +247,39 @@ class TestCheckJob:
         assert any(o["code"] == "no_raw_output" for o in data["observations"])
         assert "log-only" in result.content[0].text
 
+    async def test_check_job_surfaces_missing_required_raw_in_both_channels(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A clean exit that produced no raw the deck required is a FAILURE, not a
+        log-only completion. check_job (which shares _failed_response with
+        run_simulation) surfaces the missing-raw observation in structuredContent
+        and the reduced-.save workaround in BOTH the text and structured error."""
+        from ltspice_mcp.lib.sim_runner import collect_run_outcome
+
+        deck = work_dir / "reduced_save.cir"
+        deck.write_text(
+            "* rc\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.tran 1u 1m\n.save V(out)\n.end\n"
+        )
+        log = work_dir / "clean.log"
+        log.write_text("Circuit: rc\nDirect Newton iteration converged.\n")
+        # Classify through the real code path, then record it on the job the way
+        # _handle_completion does (status/error/observations) and read it back.
+        outcome = collect_run_outcome(str(work_dir / "missing.raw"), str(log), deck)
+        job = _make_job(state_no_sim, status="failed", log_file=log)
+        job.error = outcome.error
+        job.observations = list(outcome.observations)
+
+        result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
+        data = result.structuredContent
+        text = result.content[0].text
+        assert data is not None
+        assert data["status"] == "failed"
+        assert any(o["code"] == "missing_required_raw" for o in data["observations"])
+        # The reduced-.save workaround and the missing-artifact fact must ride in
+        # BOTH channels — structured-aware clients drop the text channel.
+        assert "no .raw" in data["error"] and "no .raw" in text
+        assert ".save" in data["error"] and ".save" in text
+
     async def test_completed_missing_log_raises(self, state_no_sim: SessionState, work_dir: Path):
         raw = work_dir / "x.raw"
         raw.write_text("d")
