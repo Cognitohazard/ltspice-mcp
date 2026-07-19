@@ -610,6 +610,131 @@ class TestWirePins:
                 asc_state,
             )
 
+    async def test_same_instance_tie_refused(self, asc_state: SessionState, work_dir: Path):
+        # A direct wire between two pins of ONE component is dropped by LTspice
+        # at netlist time (verified against LTspice 26 -netlist: both pins stay
+        # on separate NC nodes), so we must refuse rather than report a tie that
+        # won't exist electrically. Fixture res pins: 1=(200,152), 2=(200,248).
+        asc = work_dir / "self_tie.asc"
+        asc.write_text("Version 4\nSHEET 1 880 680\n")
+        await handle_add_component(
+            AddComponentInput(path="self_tie.asc", reference="R1", symbol="res", x=200, y=200),
+            asc_state,
+        )
+        with pytest.raises(NetlistError, match="same-instance wire") as exc_info:
+            await handle_wire_pins(
+                WirePinsInput(path="self_tie.asc", from_pin="R1.1", to_pin="R1.2"),
+                asc_state,
+            )
+        msg = str(exc_info.value)
+        # Names the actual instance/pins and both remedies (waypoint / net label).
+        assert "R1.1" in msg and "R1.2" in msg
+        assert "waypoint" in msg and "net label" in msg
+        # Nothing was written — the refusal happens before any save.
+        assert _wire_segments(asc) == []
+
+    async def test_same_instance_tie_allowed_through_waypoint(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # The documented remedy must actually work: bending the tie through a
+        # waypoint means no single segment joins the two pins directly, so
+        # LTspice keeps it. This is the escape hatch the refusal points at.
+        asc = work_dir / "self_tie_wp.asc"
+        asc.write_text("Version 4\nSHEET 1 880 680\n")
+        await handle_add_component(
+            AddComponentInput(path="self_tie_wp.asc", reference="R1", symbol="res", x=200, y=200),
+            asc_state,
+        )
+        result = await handle_wire_pins(
+            WirePinsInput(
+                path="self_tie_wp.asc",
+                from_pin="R1.1",
+                to_pin="R1.2",
+                waypoints=[{"x": 300, "y": 152}, {"x": 300, "y": 248}],  # type: ignore[list-item]
+            ),
+            asc_state,
+        )
+        assert result.structuredContent is not None
+        assert result.structuredContent["wire_count"] == 3
+        # No segment directly joins the two pins, so none is dropped by LTspice.
+        assert len(_wire_segments(asc)) == 3
+
+    async def test_same_instance_collinear_waypoint_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # A waypoint that stays COLLINEAR with the two pins does NOT rescue the
+        # tie: LTspice merges the in-line segments back into one straight wire
+        # and drops it (verified against LTspice 26). Detection collinear-merges
+        # the route, so this must still be refused. Fixture res pins are on
+        # x=200; (200,200) is their in-line midpoint.
+        asc = work_dir / "self_tie_collinear.asc"
+        asc.write_text("Version 4\nSHEET 1 880 680\n")
+        await handle_add_component(
+            AddComponentInput(
+                path="self_tie_collinear.asc", reference="R1", symbol="res", x=200, y=200
+            ),
+            asc_state,
+        )
+        with pytest.raises(NetlistError, match="same-instance wire") as exc_info:
+            await handle_wire_pins(
+                WirePinsInput(
+                    path="self_tie_collinear.asc",
+                    from_pin="R1.1",
+                    to_pin="R1.2",
+                    waypoints=[{"x": 200, "y": 200}],  # type: ignore[list-item]
+                ),
+                asc_state,
+            )
+        assert "out of line" in str(exc_info.value).lower()
+        assert _wire_segments(asc) == []
+
+    async def test_cross_instance_wire_not_refused(self, asc_state: SessionState, work_dir: Path):
+        # Guard against over-refusal: a wire between pins of TWO DIFFERENT
+        # instances is a normal net LTspice keeps, and must still be allowed.
+        asc = work_dir / "cross.asc"
+        asc.write_text("Version 4\nSHEET 1 880 680\n")
+        await handle_add_component(
+            AddComponentInput(path="cross.asc", reference="R1", symbol="res", x=200, y=200),
+            asc_state,
+        )
+        await handle_add_component(
+            AddComponentInput(path="cross.asc", reference="R2", symbol="res", x=200, y=400),
+            asc_state,
+        )
+        result = await handle_wire_pins(
+            WirePinsInput(path="cross.asc", from_pin="R1.2", to_pin="R2.1"),
+            asc_state,
+        )
+        assert result.structuredContent is not None
+        assert result.structuredContent["wire_count"] == 1
+
+    async def test_apply_ops_same_instance_wire_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # The apply_schematic_ops wire op shares _plan_connect_route, so the
+        # refusal must reach the batch surface too.
+        asc = work_dir / "self_tie_ops.asc"
+        asc.write_text("Version 4\nSHEET 1 880 680\n")
+        await handle_add_component(
+            AddComponentInput(path="self_tie_ops.asc", reference="R1", symbol="res", x=200, y=200),
+            asc_state,
+        )
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="self_tie_ops.asc",
+                ops=[
+                    # pydantic validates dicts
+                    {"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R1.2"},  # type: ignore[arg-type]
+                ],
+            ),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        assert data["saved"] is False
+        assert data["results"][0]["ok"] is False
+        assert "same-instance wire" in data["results"][0]["error"]
+
 
 def _wire_segments(asc_path: Path) -> list[tuple[tuple[int, int], tuple[int, int]]]:
     """Parse WIRE records from an .asc on disk (sync read, keeps blocking
@@ -2344,6 +2469,75 @@ class TestTraceNet:
         with pytest.raises(NetlistError, match="Nothing found"):
             await handle_trace_net(TraceNetInput(path="empty.asc", x=500, y=500), asc_state)
 
+    async def test_same_instance_wire_surfaced_as_warning(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # An inherited .asc can already contain a same-instance tie a hand edit
+        # drew (our wire_pins now refuses to create one). trace_net must not
+        # silently report a connection LTspice drops — it surfaces the fact.
+        # Fixture res pins: 1=(200,152), 2=(200,248); the WIRE ties them directly.
+        asc = work_dir / "self_tie_trace.asc"
+        asc.write_text(
+            "Version 4\nSHEET 1 880 680\n"
+            "WIRE 200 152 200 248\n"
+            "SYMBOL res 200 200 R0\n"
+            "SYMATTR InstName R1\n"
+            "SYMATTR Value 1k\n"
+        )
+        res = await handle_trace_net(
+            TraceNetInput(path="self_tie_trace.asc", pin="R1.1"), asc_state
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        warnings = sc.get("warnings", [])
+        assert len(warnings) == 1, sc
+        assert "R1.1" in warnings[0] and "R1.2" in warnings[0]
+        assert "LTspice drops" in warnings[0]
+        # The text channel mirrors the structured warning (self-sufficiency).
+        assert "LTspice drops" in _result_text(res)
+
+    async def test_collinear_multi_segment_tie_surfaced_as_warning(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # A same-instance tie drawn as TWO collinear segments meeting at an
+        # in-line vertex ((200,200)) is what LTspice merges + drops. trace_net
+        # collinear-merges before checking, so it must still surface the fact —
+        # a per-segment check alone would miss this (neither segment joins two
+        # pins directly).
+        asc = work_dir / "collinear_trace.asc"
+        asc.write_text(
+            "Version 4\nSHEET 1 880 680\n"
+            "WIRE 200 152 200 200\n"
+            "WIRE 200 200 200 248\n"
+            "SYMBOL res 200 200 R0\n"
+            "SYMATTR InstName R1\n"
+            "SYMATTR Value 1k\n"
+        )
+        res = await handle_trace_net(
+            TraceNetInput(path="collinear_trace.asc", pin="R1.1"), asc_state
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        warnings = sc.get("warnings", [])
+        assert len(warnings) == 1, sc
+        assert "R1.1" in warnings[0] and "R1.2" in warnings[0]
+
+    async def test_zero_length_wire_no_self_warning(self, asc_state: SessionState, work_dir: Path):
+        # A hand-corrupted zero-length WIRE record sitting on a pin must not
+        # produce a self-referential "R1.1 and R1.1 joined" warning.
+        asc = work_dir / "zero_len.asc"
+        asc.write_text(
+            "Version 4\nSHEET 1 880 680\n"
+            "WIRE 200 152 200 152\n"
+            "SYMBOL res 200 200 R0\n"
+            "SYMATTR InstName R1\n"
+            "SYMATTR Value 1k\n"
+        )
+        res = await handle_trace_net(TraceNetInput(path="zero_len.asc", pin="R1.1"), asc_state)
+        sc = res.structuredContent
+        assert sc is not None
+        assert sc.get("warnings", []) == []
+
 
 # Relocated regression coverage from a retired test module.
 class TestOnWirePredicate:
@@ -2496,6 +2690,32 @@ class TestValidateNetlistAscTopology:
             if i["severity"] == "error" and "short" in i["message"].lower()
         ]
         assert shorts == [], data["issues"]
+
+    async def test_same_instance_wire_flagged_as_warning(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # A wire tying two pins of one component (fixture res pins 1=(200,152),
+        # 2=(200,248)) is dropped by LTspice — validate must warn that the drawn
+        # connectivity diverges from what LTspice will simulate.
+        (work_dir / "self_tie.asc").write_text(
+            "Version 4\nSHEET 1 880 680\n"
+            "WIRE 200 152 200 248\n"
+            "SYMBOL res 200 200 R0\n"
+            "SYMATTR InstName R1\n"
+            "SYMATTR Value 1k\n"
+        )
+        result = await handle_validate_netlist(
+            ValidateNetlistInput(path="self_tie.asc"), asc_state
+        )
+        data = result.structuredContent
+        assert data is not None
+        same_inst = [
+            i
+            for i in data["issues"]
+            if i["severity"] == "warning" and "same-instance wire" in i["message"].lower()
+        ]
+        assert len(same_inst) == 1, data["issues"]
+        assert "R1.1" in same_inst[0]["message"] and "R1.2" in same_inst[0]["message"]
 
 
 def _real_symbol_dir() -> str | None:
