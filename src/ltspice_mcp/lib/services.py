@@ -524,9 +524,7 @@ async def load_raw(raw_path: Path, state: SessionState) -> RawRead:
             timeout=RAW_PARSE_TIMEOUT_S,
         )
     except TimeoutError:
-        _wedged_raw_paths[raw_path] = (
-            asyncio.get_running_loop().time() + RAW_PARSE_TIMEOUT_S
-        )
+        _wedged_raw_paths[raw_path] = asyncio.get_running_loop().time() + RAW_PARSE_TIMEOUT_S
         raise ResultError(
             f"Parsing {raw_path.name} exceeded {RAW_PARSE_TIMEOUT_S:.0f}s and was "
             "abandoned — the file may be corrupt in a way that wedges the parser, "
