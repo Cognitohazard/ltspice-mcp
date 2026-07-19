@@ -15,6 +15,9 @@ wheels/
 # Claude Code
 .claude/
 
+# Codex reads the local AGENTS.md symlink to CLAUDE.md.
+AGENTS.md
+
 .mcp.json
 
 # CodeGraphContext (MCP) local index config
