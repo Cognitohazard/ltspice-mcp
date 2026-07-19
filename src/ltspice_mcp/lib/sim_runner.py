@@ -10,6 +10,7 @@ from typing import NamedTuple
 from spicelib.sim.sim_runner import SimRunner
 
 from ltspice_mcp.lib import now
+from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_types import (
     NON_TERMINAL_LIVE_STATUSES,
@@ -28,6 +29,7 @@ from ltspice_mcp.lib.runner_base import (
     RunnerBase,
     discard_generated_netlist,
 )
+from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
 from ltspice_mcp.state import SessionState
@@ -180,10 +182,120 @@ class RunOutcome(NamedTuple):
     """Failure message (with log excerpt) when the run failed; None otherwise.
     ``error is None and raw_size == 0`` is the log-only completion: a clean
     simulator exit whose results (if any) live in the log, not a raw file."""
+    observations: tuple[dict, ...] = ()
+    """Structured facts to surface alongside a failure — currently the
+    missing-required-raw reconciliation note on a clean exit that produced no
+    .raw the deck's analysis required. Empty for every other outcome."""
 
 
-def collect_run_outcome(raw_file: str, log_file: str) -> RunOutcome:
+# Analysis directives whose primary results are written to the binary .raw
+# waveform file. A deck carrying one of these expects a raw; a clean simulator
+# exit (exit 0, no error diagnostics) that produced none is data loss, not a
+# log-only run. Post-processing directives (.meas/.four) produce no raw on their
+# own, and ngspice's .control-scripted analyses are dot-less commands
+# (``tran``/``ac``) that never match these dotted tokens — so a .control deck
+# reads as "no raw required" and its legitimate log-only completion is preserved.
+_RAW_PRODUCING_ANALYSES: frozenset[str] = frozenset(f".{k}" for k in ANALYSIS_KINDS)
+
+
+def deck_requests_raw(netlist: Path | None) -> tuple[list[str], bool]:
+    """Inspect a deck for a raw-producing analysis and a ``.save`` directive.
+
+    Returns ``(analyses, has_save)`` — the raw-producing analysis directives
+    the deck carries (empty when none), and whether it sets a ``.save`` list.
+    Line-based and best-effort: an absent path or a read error returns
+    ``([], False)`` so a deck we can't inspect never turns a real log-only run
+    into a spurious failure. Only top-level dotted directives are considered, so
+    a ``.control`` block's dot-less ``tran``/``save`` commands are ignored.
+
+    A deck carrying a ``.control`` block reads as requesting no raw regardless of
+    any top-level analysis: an ngspice ``.control`` script owns the run's output
+    (results go to the log), so a no-raw outcome is the legitimate log-only idiom
+    — the server normally injects a ``write`` to also produce a raw, but a
+    skipped injection must still read as log-only, not a failure.
+    """
+    if netlist is None:
+        return [], False
+    try:
+        text = read_spice_text(netlist)
+    except OSError:
+        return [], False
+    analyses: list[str] = []
+    has_save = False
+    has_control = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("."):
+            continue
+        head = stripped.split(None, 1)[0].lower()
+        if head == ".control":
+            has_control = True
+        elif head in _RAW_PRODUCING_ANALYSES:
+            if head not in analyses:
+                analyses.append(head)
+        elif head == ".save":
+            has_save = True
+    if has_control:
+        return [], has_save
+    return analyses, has_save
+
+
+def _missing_required_raw_outcome(
+    log_file: str, log_path: Path, analyses: list[str], has_save: bool
+) -> RunOutcome:
+    """Failure outcome for a clean exit that produced no raw the deck required.
+
+    Names the missing artifact as a reconciliation observation and, when the
+    deck carries a ``.save`` directive, points at the known reduced-``.save``
+    workaround (LTspice 26.0.2 has been observed to exit 0 without writing a
+    ``.raw`` when the ``.save`` list is reduced — a full ``.save`` list runs
+    fine). A short log excerpt rides along for context.
+    """
+    analysis_str = "/".join(analyses)
+    excerpt = extract_error_context(log_path, max_lines=20)
+    if has_save:
+        workaround = (
+            " The deck sets a '.save' list; LTspice 26.0.2 has been observed to "
+            "exit 0 without writing a .raw when the .save list is reduced. Remove "
+            "the .save directive (or list every probed node) and re-run — the "
+            "full .save list is the known workaround."
+        )
+    else:
+        workaround = (
+            " The simulator reported no error, so a re-run may succeed; if it "
+            "recurs, check the analysis directive and any .save list."
+        )
+    excerpt_block = f"\n\nLog excerpt:\n{excerpt}" if excerpt else ""
+    error = (
+        f"Simulation exited cleanly but produced no .raw waveform file, which the "
+        f"deck's {analysis_str} analysis requires — the waveform results are "
+        f"absent.{workaround}{excerpt_block}"
+    )
+    observation = {
+        "code": "missing_required_raw",
+        "kind": "reconciliation",
+        "detail": (
+            f"The deck requested a {analysis_str} analysis but the simulator "
+            "exited without writing a .raw file; waveform results are absent."
+        ),
+        "evidence": {
+            "expected_artifact": "raw",
+            "analyses": analyses,
+            "reduced_save_list": has_save,
+        },
+    }
+    return RunOutcome("", log_file, 0, error, observations=(observation,))
+
+
+def collect_run_outcome(raw_file: str, log_file: str, netlist: Path | None = None) -> RunOutcome:
     """Stat/read a finished run's artifacts and classify the outcome.
+
+    ``netlist`` is the deck that was run: when a clean exit produced no raw, it
+    decides whether that is a legitimate log-only run (no raw-producing analysis
+    directive — an ngspice ``.control`` script, a deck with no analysis card) or
+    a failure (the deck's ``.tran``/``.ac``/``.dc``/``.noise``/``.op`` analysis
+    required a raw that is missing). Omitted only by direct callers that don't
+    need that discrimination (their no-raw clean-log runs read as log-only).
 
     Must run on a worker thread, never the event loop: the log read below is
     unbounded file I/O that can stall on a pathological abort log or a hung
@@ -229,7 +341,15 @@ def collect_run_outcome(raw_file: str, log_file: str) -> RunOutcome:
         errors = extract_log_diagnostics(log_path)["errors"]
         non_rung = [e for e in errors if not is_op_stepping_failure(e)]
         if not non_rung and not op_ladder_exhausted(errors):
-            return RunOutcome("", log_file, 0, None)
+            # A clean exit with no raw is only legitimate when the deck asked
+            # for no raw-producing analysis. If it did request one (.tran/.ac/
+            # .dc/.noise/.op), the missing raw is data loss dressed as success
+            # (LTspice 26.0.2 exits 0 with no raw under a reduced .save list) —
+            # surface it as a failure with a missing-artifact observation.
+            analyses, has_save = deck_requests_raw(netlist)
+            if not analyses:
+                return RunOutcome("", log_file, 0, None)
+            return _missing_required_raw_outcome(log_file, log_path, analyses, has_save)
 
     if log_exists:
         context = extract_error_context(log_path, max_lines=20)
@@ -306,6 +426,7 @@ class SimulationRunner(RunnerBase):
                 outcome = collect_run_outcome(
                     str(raw_file) if raw_file else "",
                     str(log_file) if log_file else "",
+                    job.netlist,
                 )
             except Exception as e:  # spicelib swallows callback exceptions;
                 # a raise here would leave the job dangling forever.
@@ -422,6 +543,11 @@ class SimulationRunner(RunnerBase):
 
         if outcome.error is not None:
             job.error = outcome.error
+            # Structured facts (e.g. the missing-required-raw note) travel to the
+            # failed response via the job so both run_simulation and check_job
+            # surface them identically; the error string carries the same context
+            # in text. None when the outcome surfaced no structured observation.
+            job.observations = list(outcome.observations) or None
             logger.warning("Simulation %s failed: %s", job_id, job.error)
             transition(job, "failed", state=state, error=job.error, phase="execution")
         else:

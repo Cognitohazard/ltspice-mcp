@@ -770,6 +770,13 @@ def _failed_response(job, duration: float, state: SessionState, fmt: str | None)
     """
     error_msg = job.error or "Unknown error"
     data = {"job_id": job.job_id, "status": "failed", "duration": duration, "error": error_msg}
+    # Structured facts recorded at completion (e.g. a missing-required-raw
+    # reconciliation note) ride in structuredContent — clients that render only
+    # structuredContent drop the text channel, and the error string alone can't
+    # be introspected as a fact. Same job object on both the run_simulation and
+    # check_job paths, so both surface it identically.
+    if job.observations:
+        data["observations"] = job.observations
     if job.log_file and job.log_file.exists():
         if "Log excerpt:" not in error_msg:
             excerpt = extract_error_context(job.log_file, max_lines=20)
