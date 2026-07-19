@@ -3476,11 +3476,19 @@ def _merge_collinear_runs(
             for a, b in itertools.pairwise(pts):
                 merged.append((line, a, line, b) if vertical else (a, line, b, line))
 
+    # A component pin on the interior of a run is a junction too — LTspice splits
+    # the wire there — but it is not a wire endpoint, so it never appears in
+    # ``ends`` and a break test over ``ends`` alone would miss it. Add every pin
+    # sitting on the line as a cut candidate; ``_emit`` keeps only those strictly
+    # inside a run's span, so a pin at a run end (already a natural node) or off
+    # any run adds nothing.
     for x, iv in verticals.items():
         cuts = {y for (cx, y) in ends if cx == x and _breaks((cx, y))}
+        cuts |= {py for (px, py) in node_coords if px == x}
         _emit(iv, cuts, vertical=True, line=x)
     for y, iv in horizontals.items():
         cuts = {x for (x, cy) in ends if cy == y and _breaks((x, cy))}
+        cuts |= {px for (px, py) in node_coords if py == y}
         _emit(iv, cuts, vertical=False, line=y)
     return merged
 
