@@ -6,6 +6,7 @@ import pytest
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.log_parser import (
+    _FAMILY_EXAMPLE_CAP,
     count_op_iterations,
     extract_error_context,
     extract_log_diagnostics,
@@ -884,6 +885,123 @@ class TestDiagnosticsDedupe:
         log = tmp_path / "single.log"
         log.write_text("Error: just once\n")
         assert extract_log_diagnostics(log)["errors"] == ["Error: just once"]
+
+
+# Three consecutive "Ignoring unknown model parameter" blocks, verbatim from a
+# real GF180 PDK run (t02/nomcp/ldo18.log): identical file and message, three
+# different .lib line numbers, each with its own source/caret snippet. The real
+# log repeats the whole set once per device instance (110 lines total); trimming
+# to three blocks exercises the near-duplicate family without the bulk. Trailing
+# whitespace is dropped — the block collector strips it, so it never reaches the
+# stored diagnostic or the family key.
+_GF180_IGNORE_BLOCKS = (
+    r"C:\Projects\ltspice\models\gf180mcu\sm141064_ltspice.lib(47381): "
+    "Ignoring unknown model parameter. This may or may not be a problem.\n"
+    "+level = 1                     tlevc = 1                      tref = 25\n"
+    "                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"
+    r"C:\Projects\ltspice\models\gf180mcu\sm141064_ltspice.lib(47383): "
+    "Ignoring unknown model parameter. This may or may not be a problem.\n"
+    "+vaf = 208.8                   ikf = 1.025275E-3              nkf = 0.4\n"
+    "+ise = 2.7E-16                 ne = 1.64                     br = 8.372E-3\n"
+    "                                                              "
+    "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"
+    r"C:\Projects\ltspice\models\gf180mcu\sm141064_ltspice.lib(47394): "
+    "Ignoring unknown model parameter. This may or may not be a problem.\n"
+    "+tr = 0                        ptf = 0                        cbcp = 0\n"
+    "+cbep = 0                      ccsp = 0\n"
+    "                                                              "
+    "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"
+)
+
+
+class TestModelParamFamilyCollapse:
+    """Near-duplicate ``filepath(line): message`` blocks — same file and
+    message, different .lib line per unknown model parameter — collapse to one
+    entry with a line manifest and a total count. Exact-duplicate collapse
+    can't reach them (each block differs by line number and source snippet), so
+    a real GF180 run left ~a dozen near-identical entries burying any fatal
+    line. Fixtures are distilled from the real ldo18.log content."""
+
+    def test_family_collapses_to_one_entry_with_manifest(self, tmp_path: Path):
+        log = tmp_path / "gf180.log"
+        log.write_text(_GF180_IGNORE_BLOCKS)
+        errors = extract_log_diagnostics(log)["errors"]
+        assert len(errors) == 1
+        entry = errors[0]
+        assert "Ignoring unknown model parameter" in entry
+        # Every distinct line number survives in the manifest — no location
+        # dropped silently.
+        for line_no in ("47381", "47383", "47394"):
+            assert line_no in entry
+        assert "3 occurrences total" in entry
+
+    def test_count_includes_exact_repeats(self, tmp_path: Path):
+        """The real log repeats each block once per device instance. The family
+        count is the total occurrences (blocks x instances), with each distinct
+        line still listed once in the manifest."""
+        log = tmp_path / "gf180x2.log"
+        log.write_text(_GF180_IGNORE_BLOCKS * 2)
+        errors = extract_log_diagnostics(log)["errors"]
+        assert len(errors) == 1
+        assert "6 occurrences total" in errors[0]
+        for line_no in ("47381", "47383", "47394"):
+            assert line_no in errors[0]
+
+    def test_distinct_fatal_line_not_buried(self, tmp_path: Path):
+        """Collapsing the benign family surfaces a genuine fatal line that the
+        dozen near-duplicates would otherwise bury."""
+        log = tmp_path / "gf180_fatal.log"
+        log.write_text(
+            _GF180_IGNORE_BLOCKS * 3
+            + "Fatal Error: Unknown subcircuit called in: xu1 n1 n2 gf_missing\n"
+        )
+        errors = extract_log_diagnostics(log)["errors"]
+        assert len(errors) == 2
+        assert any("Unknown subcircuit" in e for e in errors)
+        assert sum("occurrences total" in e for e in errors) == 1
+
+    def test_distinct_message_not_merged(self, tmp_path: Path):
+        """Grouping keys on (file, message): a genuinely different message stays
+        its own entry, so a distinct diagnostic is never lost to the collapse."""
+        log = tmp_path / "mixed.log"
+        log.write_text(
+            _GF180_IGNORE_BLOCKS + "/tmp/foo.cir(12): syntax error in .meas\n"
+            ".meas TRAN bad WHEN bogus\n"
+            "                ^^^^^\n"
+        )
+        errors = extract_log_diagnostics(log)["errors"]
+        assert len(errors) == 2
+        assert any("syntax error in .meas" in e for e in errors)
+        assert any("occurrences total" in e for e in errors)
+
+    def test_manifest_truncates_at_cap(self, tmp_path: Path):
+        """A large PDK deck flags the same model parameter at far more than a
+        dozen .lib lines. The manifest lists the first _FAMILY_EXAMPLE_CAP line
+        numbers and surfaces the rest as a '+N more' tail — bounded the way
+        cap_list bounds the diagnostics list, never silently dropped."""
+        n = _FAMILY_EXAMPLE_CAP + 3
+        # Each block is message + source + caret (verbatim shapes from the real
+        # GF180 log); the caret terminates the block so consecutive blocks stay
+        # separate. Only the .lib line number varies, one per parameter.
+        blocks = "".join(
+            rf"C:\Projects\ltspice\models\gf180mcu\sm141064_ltspice.lib({47000 + i}): "
+            "Ignoring unknown model parameter. This may or may not be a problem.\n"
+            "+kf = 0                        af = 1\n"
+            "                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"
+            for i in range(n)
+        )
+        log = tmp_path / "big_family.log"
+        log.write_text(blocks)
+        errors = extract_log_diagnostics(log)["errors"]
+        assert len(errors) == 1
+        entry = errors[0]
+        # First _FAMILY_EXAMPLE_CAP distinct line numbers are listed.
+        for i in range(_FAMILY_EXAMPLE_CAP):
+            assert str(47000 + i) in entry
+        # The overflow line numbers are truncated behind the tail, not dropped.
+        assert f"+{n - _FAMILY_EXAMPLE_CAP} more" in entry
+        assert str(47000 + _FAMILY_EXAMPLE_CAP) not in entry
+        assert f"{n} occurrences total" in entry
 
 
 class TestExcerptFatalAnchors:

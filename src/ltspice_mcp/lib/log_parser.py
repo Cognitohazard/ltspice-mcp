@@ -744,23 +744,109 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
     }
 
 
-def _collapse_repeats(items: list[str]) -> list[str]:
-    """Collapse exact-duplicate diagnostic lines into one entry with a count.
+# A ``filepath(line): message`` diagnostic (matches the same shape _RE_FILE_ERROR
+# classifies). The line number varies per model parameter while the file and
+# message are identical, so a PDK model library emits the same complaint at
+# dozens of different lines. Grouping on (file, message) — ignoring the line
+# number and the source/caret block — lets a whole such family collapse to one
+# entry; the line numbers survive as a bounded manifest. The path group is
+# non-greedy so it binds the FIRST ``(N):`` — the real file:line prefix — and
+# a message that embeds another ``(N):`` (a nested-include note) stays whole in
+# ``msg`` instead of splitting the manifest at the wrong number.
+_RE_FILE_LINE_PREFIX = re.compile(r"^(?P<path>.+?)\((?P<line>\d+)\):\s+(?P<msg>.+)$")
 
-    Model-parameter complaints repeat once per device instance — a PDK deck
-    can emit the same "unknown model parameter" line dozens of times per run,
-    burying the one fatal line in the relay. First occurrence keeps its
-    position; duplicates annotate it with ``(repeated N times)``.
+# How many distinguishing line numbers to list in a collapsed family before
+# truncating with a ``(+N more)`` tail — bounds a huge family's manifest the
+# same way ``cap_list`` bounds the diagnostics list itself.
+_FAMILY_EXAMPLE_CAP = 12
+
+
+def _file_line_family(item: str) -> tuple[str, str] | None:
+    """The ``(path, message)`` family of a ``filepath(line):`` diagnostic block.
+
+    ``None`` for any diagnostic that isn't a file-line block (bare warnings,
+    convergence phrases, etc.), so those never group with each other. Matched
+    on the block's first line only — the source/caret lines that follow vary
+    with the line number and are not part of the family key.
+    """
+    m = _RE_FILE_LINE_PREFIX.match(item.split("\n", 1)[0])
+    if m is None:
+        return None
+    return (m.group("path"), m.group("msg"))
+
+
+def _render_file_line_family(members: list[str], counts: Counter[str]) -> str:
+    """Render a near-duplicate ``filepath(line):`` family as one entry.
+
+    Shows the first block verbatim (one representative, with its source/caret
+    context), then appends the total occurrence count and a bounded list of the
+    distinct line numbers the message fired on — so no location is dropped
+    silently. No severity is added: the representative block is relayed exactly
+    as the simulator wrote it.
+    """
+    total = sum(counts[m] for m in members)
+    line_numbers: list[str] = []
+    seen: set[str] = set()
+    for m in members:
+        pm = _RE_FILE_LINE_PREFIX.match(m.split("\n", 1)[0])
+        if pm is None:
+            continue
+        ln = pm.group("line")
+        if ln not in seen:
+            seen.add(ln)
+            line_numbers.append(ln)
+    shown = ", ".join(line_numbers[:_FAMILY_EXAMPLE_CAP])
+    if len(line_numbers) > _FAMILY_EXAMPLE_CAP:
+        shown += f", +{len(line_numbers) - _FAMILY_EXAMPLE_CAP} more"
+    return f"{members[0]}\n(same message at lines {shown}; {total} occurrences total)"
+
+
+def _collapse_repeats(items: list[str]) -> list[str]:
+    """Collapse repeated diagnostic lines into one entry with a count.
+
+    A PDK deck repeats a benign model-parameter complaint dozens of times per
+    run; without collapsing them the one fatal line is buried in the relay.
+    Two shapes are compressed:
+
+    - Exact duplicates (identical line/block) → first occurrence keeps its
+      position, annotated ``(repeated N times)``.
+    - Near-duplicate ``filepath(line): message`` blocks that share the same file
+      and message but point at different lines (one per unknown model
+      parameter) → collapsed to the first block plus a bounded manifest of the
+      other line numbers and a total count. Grouping is keyed on (file,
+      message), so genuinely distinct messages are never merged and no location
+      is dropped silently.
     """
     counts = Counter(items)
-    out: list[str] = []
-    emitted: set[str] = set()
+
+    # First-seen order of distinct items, and the file-line family of each.
+    order: list[str] = []
+    seen: set[str] = set()
     for item in items:
-        if item in emitted:
+        if item not in seen:
+            seen.add(item)
+            order.append(item)
+
+    members: dict[tuple[str, str], list[str]] = {}
+    for item in order:
+        fam = _file_line_family(item)
+        if fam is not None:
+            members.setdefault(fam, []).append(item)
+
+    out: list[str] = []
+    emitted_families: set[tuple[str, str]] = set()
+    for item in order:
+        fam = _file_line_family(item)
+        # Non file-line diagnostics, and single-member families, keep the
+        # exact-duplicate behavior: emit once with a repeat count.
+        if fam is None or len(members[fam]) == 1:
+            n = counts[item]
+            out.append(item if n == 1 else f"{item} (repeated {n} times)")
             continue
-        emitted.add(item)
-        n = counts[item]
-        out.append(item if n == 1 else f"{item} (repeated {n} times)")
+        if fam in emitted_families:
+            continue
+        emitted_families.add(fam)
+        out.append(_render_file_line_family(members[fam], counts))
     return out
 
 
