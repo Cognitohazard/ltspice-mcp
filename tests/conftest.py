@@ -197,6 +197,7 @@ def sample_netlist(work_dir: Path) -> Path:
 # Output-schema conformance hook
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="session", autouse=True)
 def _enforce_output_schema_conformance():
     """Validate every structuredContent emitted during the suite against the
