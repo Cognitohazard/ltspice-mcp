@@ -253,8 +253,8 @@ class TestCheckJob:
         """A clean exit that produced no raw the deck required is a FAILURE, not a
         log-only completion. check_job (which shares _failed_response with
         run_simulation) surfaces the missing-raw observation in structuredContent
-        and the reduced-.save workaround in BOTH the text and structured error."""
-        from ltspice_mcp.lib.sim_runner import collect_run_outcome
+        and the .save workaround in BOTH the text and structured error."""
+        from ltspice_mcp.lib.sim_runner import collect_run_outcome, deck_requests_raw
 
         deck = work_dir / "reduced_save.cir"
         deck.write_text(
@@ -264,7 +264,9 @@ class TestCheckJob:
         log.write_text("Circuit: rc\nDirect Newton iteration converged.\n")
         # Classify through the real code path, then record it on the job the way
         # _handle_completion does (status/error/observations) and read it back.
-        outcome = collect_run_outcome(str(work_dir / "missing.raw"), str(log), deck)
+        outcome = collect_run_outcome(
+            str(work_dir / "missing.raw"), str(log), deck_requests_raw(deck)
+        )
         job = _make_job(state_no_sim, status="failed", log_file=log)
         job.error = outcome.error
         job.observations = list(outcome.observations)
@@ -275,7 +277,7 @@ class TestCheckJob:
         assert data is not None
         assert data["status"] == "failed"
         assert any(o["code"] == "missing_required_raw" for o in data["observations"])
-        # The reduced-.save workaround and the missing-artifact fact must ride in
+        # The .save workaround and the missing-artifact fact must ride in
         # BOTH channels — structured-aware clients drop the text channel.
         assert "no .raw" in data["error"] and "no .raw" in text
         assert ".save" in data["error"] and ".save" in text
