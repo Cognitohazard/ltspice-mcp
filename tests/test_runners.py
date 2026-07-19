@@ -302,6 +302,82 @@ class TestSimulationRunnerHandleCompletion:
         assert job.status == "failed"
         assert job.error is not None and "no output" in job.error
 
+    def test_clean_exit_no_raw_with_required_analysis_fails(
+        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A clean exit (exit 0, no error diagnostics) that wrote no raw is a
+        FAILURE when the deck requested a raw-producing analysis: LTspice 26.0.2
+        exits 0 with no .raw under a reduced .save list, and reporting that as a
+        completed empty run is data loss dressed as success."""
+        job = _make_job(state_no_sim, work_dir)
+        deck = work_dir / "reduced_save.cir"
+        deck.write_text(
+            "* rc\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.tran 1u 1m\n.save V(out)\n.end\n"
+        )
+        log = work_dir / "clean.log"
+        log.write_text("Circuit: rc\nDirect Newton iteration converged.\n")
+        outcome = collect_run_outcome(str(work_dir / "missing.raw"), str(log), deck)
+        assert outcome.error is not None and "no .raw" in outcome.error
+        # The missing artifact is named as a structured observation, and the
+        # reduced-.save workaround rides in the error text.
+        assert any(o["code"] == "missing_required_raw" for o in outcome.observations)
+        assert ".save" in outcome.error
+        sim_runner._handle_completion(job.job_id, outcome, state_no_sim)
+        assert job.status == "failed"
+        assert job.observations and job.observations[0]["code"] == "missing_required_raw"
+
+    def test_clean_exit_no_raw_no_analysis_stays_log_only(
+        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A deck with no raw-producing analysis directive that exits cleanly with
+        no raw is still a legitimate log-only completion, not a failure."""
+        job = _make_job(state_no_sim, work_dir)
+        deck = work_dir / "noanalysis.cir"
+        deck.write_text("* netlist only\nV1 in 0 1\nR1 in 0 1k\n.end\n")
+        log = work_dir / "clean.log"
+        log.write_text("No errors.\n")
+        outcome = collect_run_outcome(str(work_dir / "missing.raw"), str(log), deck)
+        assert outcome.error is None
+        sim_runner._handle_completion(job.job_id, outcome, state_no_sim)
+        assert job.status == "completed"
+        assert job.raw_file is None
+
+    def test_clean_exit_no_raw_control_deck_stays_log_only(
+        self, sim_runner: SimulationRunner, state_no_sim: SessionState, work_dir: Path
+    ):
+        """An ngspice .control deck owns its output (results in the log), so a
+        no-raw outcome is the legitimate log-only idiom even with a top-level
+        .tran — the server normally injects a `write`, but a skipped injection
+        must still read as log-only, not a spurious missing-raw failure."""
+        job = _make_job(state_no_sim, work_dir)
+        deck = work_dir / "control.cir"
+        deck.write_text(
+            "* control deck\nV1 in 0 1\nR1 in out 1k\n.tran 1u 1m\n"
+            ".control\nrun\nprint v(out)\n.endc\n.end\n"
+        )
+        log = work_dir / "clean.log"
+        log.write_text("v(out) = 0.5\n")
+        outcome = collect_run_outcome(str(work_dir / "missing.raw"), str(log), deck)
+        assert outcome.error is None
+        sim_runner._handle_completion(job.job_id, outcome, state_no_sim)
+        assert job.status == "completed"
+        assert job.raw_file is None
+
+    def test_missing_raw_without_save_still_fails_without_save_hint(self, work_dir: Path):
+        """The failure fires for any raw-producing analysis, not just reduced
+        .save decks; without a .save directive the reduced-.save workaround is
+        not claimed (evidence.reduced_save_list is False)."""
+        deck = work_dir / "nosave.cir"
+        deck.write_text("* rc\nV1 in 0 1\nR1 in out 1k\n.ac dec 10 1 1meg\n.end\n")
+        log = work_dir / "clean.log"
+        log.write_text("converged\n")
+        outcome = collect_run_outcome(str(work_dir / "missing.raw"), str(log), deck)
+        assert outcome.error is not None
+        obs = outcome.observations[0]
+        assert obs["code"] == "missing_required_raw"
+        assert obs["evidence"]["reduced_save_list"] is False
+        assert obs["evidence"]["analyses"] == [".ac"]
+
     def test_unreadable_raw_is_failure_not_log_only(self, work_dir: Path):
         """A raw whose stat fails for a reason other than absence (permissions,
         a flaky mount) must surface as a failure with the path preserved, not
