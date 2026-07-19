@@ -198,6 +198,38 @@ class RunOutcome(NamedTuple):
 _RAW_PRODUCING_ANALYSES: frozenset[str] = frozenset(f".{k}" for k in ANALYSIS_KINDS)
 
 
+# Directives that pull another file into the deck. ``deck_requests_raw`` follows
+# these best-effort so an analysis or ``.save`` that lives only in an included
+# file is still seen. The ``.lib file section`` form uses the file token (the
+# section name is irrelevant to this scan).
+_INCLUDE_DIRECTIVES: frozenset[str] = frozenset({".include", ".inc", ".lib"})
+
+# Include-following is depth-bounded (a deck can't drag the scanner through an
+# unbounded chain) and cycle-guarded (a file reachable more than once is visited
+# once). Three levels covers real PDK nesting without turning a scan into a
+# file-tree walk. Breadth is not bounded, so a deck pulling in a large .lib chain
+# adds some submission latency — acceptable because the scan runs off the event
+# loop on an author's own deck, not on untrusted simulator output.
+_MAX_INCLUDE_DEPTH = 3
+
+
+def _include_target(rest: str) -> str | None:
+    """The filename an ``.include``/``.inc``/``.lib`` argument points at.
+
+    ``rest`` is the directive line past its head. A quoted path is taken whole
+    (SPICE allows spaces inside quotes); an unquoted argument is its first
+    whitespace-delimited token, which for the ``.lib file section`` form is the
+    file (the section name is dropped). Returns None when no target is present.
+    """
+    rest = rest.strip()
+    if not rest:
+        return None
+    if rest[0] in "\"'":
+        end = rest.find(rest[0], 1)
+        return rest[1:end] if end != -1 else None
+    return rest.split(None, 1)[0]
+
+
 def deck_requests_raw(netlist: Path | None) -> tuple[list[str], bool]:
     """Inspect a deck for a raw-producing analysis and a ``.save`` directive.
 
@@ -208,6 +240,15 @@ def deck_requests_raw(netlist: Path | None) -> tuple[list[str], bool]:
     into a spurious failure. Only top-level dotted directives are considered, so
     a ``.control`` block's dot-less ``tran``/``save`` commands are ignored.
 
+    Scanning a file stops at its ``.end`` line: everything after it is inert in
+    SPICE, so a stray ``.tran`` there creates no requirement and a dead
+    ``.control`` there does not disarm one. ``.include``/``.inc``/``.lib``
+    references are followed best-effort — resolved against the deck's own
+    directory, depth-bounded and cycle-guarded, with a missing or unreadable
+    target skipped silently — so an analysis or ``.save`` that lives only in an
+    included file is still seen while an uninspectable include never adds a
+    requirement.
+
     A deck carrying a ``.control`` block reads as requesting no raw regardless of
     any top-level analysis: an ngspice ``.control`` script owns the run's output
     (results go to the log), so a no-raw outcome is the legitimate log-only idiom
@@ -216,25 +257,47 @@ def deck_requests_raw(netlist: Path | None) -> tuple[list[str], bool]:
     """
     if netlist is None:
         return [], False
-    try:
-        text = read_spice_text(netlist)
-    except OSError:
-        return [], False
     analyses: list[str] = []
     has_save = False
     has_control = False
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("."):
-            continue
-        head = stripped.split(None, 1)[0].lower()
-        if head == ".control":
-            has_control = True
-        elif head in _RAW_PRODUCING_ANALYSES:
-            if head not in analyses:
-                analyses.append(head)
-        elif head == ".save":
-            has_save = True
+    seen: set[Path] = set()
+
+    def scan(path: Path, depth: int) -> None:
+        nonlocal has_save, has_control
+        if depth > _MAX_INCLUDE_DEPTH:
+            return
+        try:
+            key = path.resolve()
+        except OSError:
+            return
+        if key in seen:
+            return
+        seen.add(key)
+        try:
+            text = read_spice_text(path)
+        except OSError:
+            return
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("."):
+                continue
+            parts = stripped.split(None, 1)
+            head = parts[0].lower()
+            if head == ".end":
+                break  # text past .end is inert — stop scanning this file
+            if head == ".control":
+                has_control = True
+            elif head in _RAW_PRODUCING_ANALYSES:
+                if head not in analyses:
+                    analyses.append(head)
+            elif head == ".save":
+                has_save = True
+            elif head in _INCLUDE_DIRECTIVES and len(parts) > 1:
+                target = _include_target(parts[1])
+                if target is not None:
+                    scan(path.parent / target, depth + 1)
+
+    scan(netlist, 0)
     if has_control:
         return [], has_save
     return analyses, has_save
@@ -246,19 +309,21 @@ def _missing_required_raw_outcome(
     """Failure outcome for a clean exit that produced no raw the deck required.
 
     Names the missing artifact as a reconciliation observation and, when the
-    deck carries a ``.save`` directive, points at the known reduced-``.save``
-    workaround (LTspice 26.0.2 has been observed to exit 0 without writing a
-    ``.raw`` when the ``.save`` list is reduced — a full ``.save`` list runs
-    fine). A short log excerpt rides along for context.
+    deck carries a ``.save`` directive, points at the known ``.save`` workaround.
+    The code knows only that a ``.save`` list is present, not whether it omits
+    probed nodes, so the hint is stated conditionally: LTspice 26.0.2 has been
+    observed to exit 0 without writing a ``.raw`` when a ``.save`` list omits
+    nodes the analysis probes — a full ``.save`` list runs fine. A short log
+    excerpt rides along for context.
     """
     analysis_str = "/".join(analyses)
     excerpt = extract_error_context(log_path, max_lines=20)
     if has_save:
         workaround = (
-            " The deck sets a '.save' list; LTspice 26.0.2 has been observed to "
-            "exit 0 without writing a .raw when the .save list is reduced. Remove "
-            "the .save directive (or list every probed node) and re-run — the "
-            "full .save list is the known workaround."
+            " The deck sets a '.save' list; if it omits nodes the analysis "
+            "probes, LTspice 26.0.2 has been observed to exit 0 without writing "
+            "a .raw. List every probed node in the .save (or remove the .save "
+            "directive) and re-run — a full .save list is the known workaround."
         )
     else:
         workaround = (
@@ -281,21 +346,25 @@ def _missing_required_raw_outcome(
         "evidence": {
             "expected_artifact": "raw",
             "analyses": analyses,
-            "reduced_save_list": has_save,
+            "has_save_list": has_save,
         },
     }
     return RunOutcome("", log_file, 0, error, observations=(observation,))
 
 
-def collect_run_outcome(raw_file: str, log_file: str, netlist: Path | None = None) -> RunOutcome:
+def collect_run_outcome(
+    raw_file: str, log_file: str, requirements: tuple[list[str], bool] | None = None
+) -> RunOutcome:
     """Stat/read a finished run's artifacts and classify the outcome.
 
-    ``netlist`` is the deck that was run: when a clean exit produced no raw, it
-    decides whether that is a legitimate log-only run (no raw-producing analysis
-    directive — an ngspice ``.control`` script, a deck with no analysis card) or
-    a failure (the deck's ``.tran``/``.ac``/``.dc``/``.noise``/``.op`` analysis
-    required a raw that is missing). Omitted only by direct callers that don't
-    need that discrimination (their no-raw clean-log runs read as log-only).
+    ``requirements`` is the deck's ``(analyses, has_save)`` as captured at
+    submission by ``deck_requests_raw`` — passed in, never re-derived here, so a
+    deck edited (or a shared exported .net overwritten) between submission and
+    completion cannot change how this run is classified. When a clean exit
+    produced no raw, non-empty ``analyses`` make the missing raw a failure (the
+    deck's ``.tran``/``.ac``/``.dc``/``.noise``/``.op`` required a raw that is
+    absent); ``None`` (the direct-caller default) reads any no-raw clean exit as
+    a legitimate log-only run.
 
     Must run on a worker thread, never the event loop: the log read below is
     unbounded file I/O that can stall on a pathological abort log or a hung
@@ -344,9 +413,11 @@ def collect_run_outcome(raw_file: str, log_file: str, netlist: Path | None = Non
             # A clean exit with no raw is only legitimate when the deck asked
             # for no raw-producing analysis. If it did request one (.tran/.ac/
             # .dc/.noise/.op), the missing raw is data loss dressed as success
-            # (LTspice 26.0.2 exits 0 with no raw under a reduced .save list) —
-            # surface it as a failure with a missing-artifact observation.
-            analyses, has_save = deck_requests_raw(netlist)
+            # (LTspice 26.0.2 exits 0 with no raw when a .save list omits probed
+            # nodes) — surface it as a failure with a missing-artifact
+            # observation. Requirements were snapshotted at submission, so this
+            # verdict reflects the deck as it ran, not a possibly-edited re-read.
+            analyses, has_save = requirements if requirements is not None else ([], False)
             if not analyses:
                 return RunOutcome("", log_file, 0, None)
             return _missing_required_raw_outcome(log_file, log_path, analyses, has_save)
@@ -418,15 +489,25 @@ class SimulationRunner(RunnerBase):
         """
         job_id = job.job_id
 
+        # Snapshot of the staged deck's raw requirements, filled on the worker
+        # thread the instant before submission (see submit_sim). Classifying at
+        # completion by re-reading the deck could see it edited — or its shared
+        # exported .net overwritten by a concurrent export — mid-run and
+        # misclassify a clean no-raw exit in either direction; the deck as
+        # submitted is ground truth. Stays None until submitted, which reads as
+        # log-only (the fail-safe default) if no callback ever fires.
+        requirements: list[tuple[list[str], bool] | None] = [None]
+
         def completion_callback(raw_file: Path | None, log_file: Path | None) -> None:
             # Collect all filesystem facts HERE, on spicelib's worker thread.
             # The bridged handler runs on the event loop, where a stalled
-            # read would freeze every in-flight request in the process.
+            # read would freeze every in-flight request in the process. The
+            # deck's requirements are the submission-time snapshot, not a re-read.
             try:
                 outcome = collect_run_outcome(
                     str(raw_file) if raw_file else "",
                     str(log_file) if log_file else "",
-                    job.netlist,
+                    requirements[0],
                 )
             except Exception as e:  # spicelib swallows callback exceptions;
                 # a raise here would leave the job dangling forever.
@@ -440,6 +521,11 @@ class SimulationRunner(RunnerBase):
             )
 
         def submit_sim() -> SimRunner:
+            # Capture the requirements before run(): a fast ngspice sim can fire
+            # the completion callback synchronously inside run(), so the snapshot
+            # must be taken first. netlist_path is the deck actually staged for
+            # this run (the augmented copy when injected, else the user's deck).
+            requirements[0] = deck_requests_raw(netlist_path)
             runner = self._build_sim_runner()
             # LTspice rejects files without a .cir/.net/.sp extension.
             ext = netlist_path.suffix or ".net"

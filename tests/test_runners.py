@@ -22,6 +22,7 @@ from ltspice_mcp.lib.sim_runner import (
     SimulationRunner,
     _link_or_copy,
     collect_run_outcome,
+    deck_requests_raw,
     ensure_output_alias,
     generate_job_id,
 )
@@ -316,10 +317,12 @@ class TestSimulationRunnerHandleCompletion:
         )
         log = work_dir / "clean.log"
         log.write_text("Circuit: rc\nDirect Newton iteration converged.\n")
-        outcome = collect_run_outcome(str(work_dir / "missing.raw"), str(log), deck)
+        outcome = collect_run_outcome(
+            str(work_dir / "missing.raw"), str(log), deck_requests_raw(deck)
+        )
         assert outcome.error is not None and "no .raw" in outcome.error
         # The missing artifact is named as a structured observation, and the
-        # reduced-.save workaround rides in the error text.
+        # .save workaround rides in the error text.
         assert any(o["code"] == "missing_required_raw" for o in outcome.observations)
         assert ".save" in outcome.error
         sim_runner._handle_completion(job.job_id, outcome, state_no_sim)
@@ -336,7 +339,9 @@ class TestSimulationRunnerHandleCompletion:
         deck.write_text("* netlist only\nV1 in 0 1\nR1 in 0 1k\n.end\n")
         log = work_dir / "clean.log"
         log.write_text("No errors.\n")
-        outcome = collect_run_outcome(str(work_dir / "missing.raw"), str(log), deck)
+        outcome = collect_run_outcome(
+            str(work_dir / "missing.raw"), str(log), deck_requests_raw(deck)
+        )
         assert outcome.error is None
         sim_runner._handle_completion(job.job_id, outcome, state_no_sim)
         assert job.status == "completed"
@@ -357,25 +362,29 @@ class TestSimulationRunnerHandleCompletion:
         )
         log = work_dir / "clean.log"
         log.write_text("v(out) = 0.5\n")
-        outcome = collect_run_outcome(str(work_dir / "missing.raw"), str(log), deck)
+        outcome = collect_run_outcome(
+            str(work_dir / "missing.raw"), str(log), deck_requests_raw(deck)
+        )
         assert outcome.error is None
         sim_runner._handle_completion(job.job_id, outcome, state_no_sim)
         assert job.status == "completed"
         assert job.raw_file is None
 
     def test_missing_raw_without_save_still_fails_without_save_hint(self, work_dir: Path):
-        """The failure fires for any raw-producing analysis, not just reduced
-        .save decks; without a .save directive the reduced-.save workaround is
-        not claimed (evidence.reduced_save_list is False)."""
+        """The failure fires for any raw-producing analysis, not just decks with a
+        .save list; without a .save directive the .save workaround is not claimed
+        (evidence.has_save_list is False)."""
         deck = work_dir / "nosave.cir"
         deck.write_text("* rc\nV1 in 0 1\nR1 in out 1k\n.ac dec 10 1 1meg\n.end\n")
         log = work_dir / "clean.log"
         log.write_text("converged\n")
-        outcome = collect_run_outcome(str(work_dir / "missing.raw"), str(log), deck)
+        outcome = collect_run_outcome(
+            str(work_dir / "missing.raw"), str(log), deck_requests_raw(deck)
+        )
         assert outcome.error is not None
         obs = outcome.observations[0]
         assert obs["code"] == "missing_required_raw"
-        assert obs["evidence"]["reduced_save_list"] is False
+        assert obs["evidence"]["has_save_list"] is False
         assert obs["evidence"]["analyses"] == [".ac"]
 
     def test_unreadable_raw_is_failure_not_log_only(self, work_dir: Path):
@@ -416,6 +425,55 @@ class TestSimulationRunnerHandleCompletion:
                 pytest.fail("partial raw not removed")
             time.sleep(0.01)
         assert fail_log.exists()
+
+
+class TestDeckRequestsRaw:
+    """deck_requests_raw's scanner scope: scanning stops at .end, and
+    .include/.inc/.lib references are followed best-effort."""
+
+    def test_analysis_only_in_include_is_detected(self, work_dir: Path):
+        """An analysis directive living only in an included file is still found."""
+        (work_dir / "sub.inc").write_text(".tran 1u 1m\n")
+        deck = work_dir / "top.cir"
+        deck.write_text("* top\nV1 in 0 1\nR1 in 0 1k\n.include sub.inc\n.end\n")
+        assert deck_requests_raw(deck) == ([".tran"], False)
+
+    def test_lib_section_form_follows_the_file_token(self, work_dir: Path):
+        """The `.lib file section` two-token form resolves the file, not the section."""
+        (work_dir / "corner.lib").write_text(".ac dec 10 1 1meg\n")
+        deck = work_dir / "top.cir"
+        deck.write_text("* top\n.lib corner.lib tt\n.end\n")
+        assert deck_requests_raw(deck) == ([".ac"], False)
+
+    def test_control_after_end_does_not_disarm(self, work_dir: Path):
+        """A dead .control past .end is inert — it must not turn a real .tran
+        requirement into a log-only (empty) result."""
+        deck = work_dir / "top.cir"
+        deck.write_text(
+            "* top\nV1 in 0 1\nR1 in out 1k\n.tran 1u 1m\n.end\n.control\nrun\n.endc\n"
+        )
+        assert deck_requests_raw(deck) == ([".tran"], False)
+
+    def test_analysis_after_end_creates_no_requirement(self, work_dir: Path):
+        """An analysis directive past .end is inert and must not be required."""
+        deck = work_dir / "top.cir"
+        deck.write_text("* top\nV1 in 0 1\nR1 in 0 1k\n.end\n.tran 1u 1m\n")
+        assert deck_requests_raw(deck) == ([], False)
+
+    def test_include_cycle_terminates(self, work_dir: Path):
+        """A self-referential include chain must not hang; the analysis reached
+        through it is still found."""
+        (work_dir / "a.inc").write_text(".include b.inc\n")
+        (work_dir / "b.inc").write_text(".include a.inc\n.tran 1u 1m\n")
+        deck = work_dir / "top.cir"
+        deck.write_text("* top\n.include a.inc\n.end\n")
+        assert deck_requests_raw(deck) == ([".tran"], False)
+
+    def test_missing_include_is_skipped(self, work_dir: Path):
+        """An unreadable include adds no requirement (fail-safe direction)."""
+        deck = work_dir / "top.cir"
+        deck.write_text("* top\nV1 in 0 1\nR1 in 0 1k\n.include nope.inc\n.end\n")
+        assert deck_requests_raw(deck) == ([], False)
 
 
 class TestLinkOrCopy:
@@ -680,6 +738,50 @@ class TestSimulationRunnerKillWsl:
         user.write_text("* user\n.op\n.end\n")
         await runner.start_simulation(user, job, state_no_sim)
         assert user.exists()
+
+    @pytest.mark.asyncio
+    async def test_requirements_snapshotted_at_submission_not_completion(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch
+    ):
+        # The deck's raw requirements are captured when the run is submitted, not
+        # re-read at completion: a deck edited (or its shared export overwritten)
+        # between submit and completion must not change how the outcome is
+        # classified. Here a .tran deck is submitted, then rewritten analysis-free
+        # before the completion callback fires with a clean, no-raw result. The run
+        # must still classify as a missing-required-raw FAILURE (reflecting the
+        # SUBMITTED deck) — a completion-time re-read would wrongly read the edited
+        # deck as an analysis-free, log-only success.
+        runner = SimulationRunner(
+            loop=asyncio.get_running_loop(),
+            simulator_class=FakeSim,
+            output_folder=work_dir,
+            max_parallel=2,
+        )
+        captured: dict = {}
+        monkeypatch.setattr(
+            runner,
+            "_build_sim_runner",
+            lambda: MagicMock(run=MagicMock(side_effect=lambda *a, **k: captured.update(k))),
+        )
+        deck = work_dir / "toctou.cir"
+        deck.write_text("* rc\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.tran 1u 1m\n.end\n")
+        job = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_toctou")
+        job.netlist = deck
+        await runner.start_simulation(deck, job, state_no_sim)
+        assert "callback" in captured  # submitted, so requirements are snapshotted
+
+        # Edit the deck AFTER submission: drop the .tran so a completion-time
+        # re-read would see an analysis-free, log-only deck.
+        deck.write_text("* rc\nV1 in 0 1\nR1 in out 1k\n.end\n")
+
+        log = work_dir / "sim_toctou.log"
+        log.write_text("Circuit: rc\nDirect Newton iteration converged.\n")
+        # Fire the recorded completion callback with a clean exit that wrote no
+        # raw (the missing.raw path does not exist).
+        captured["callback"](work_dir / "missing.raw", log)
+        await _wait_for(lambda: job.completed_at is not None)
+        assert job.status == "failed"
+        assert job.observations and job.observations[0]["code"] == "missing_required_raw"
 
     @pytest.mark.asyncio
     async def test_cancel_marks_terminal_before_kill(

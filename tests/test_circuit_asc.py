@@ -708,6 +708,46 @@ class TestWirePins:
         assert result.structuredContent is not None
         assert result.structuredContent["wire_count"] == 1
 
+    async def test_route_over_own_pin_interior_refused_as_same_instance(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # Routing R1.1 to a DIFFERENT instance (R2.1) via a waypoint that takes the
+        # first segment straight down through R1.2 puts R1's own second pin on that
+        # segment's interior. LTspice splits the wire at that pin, so the R1.1->R1.2
+        # sub-run is a dropped same-instance tie. The whole-route endpoints are
+        # cross-instance (R1.1/R2.1), so only the interior-pin cut exposes the tie —
+        # and because same-instance is checked before pin-collision, the refusal
+        # names it as a same-instance wire, not a "passes through" collision.
+        asc = work_dir / "route_over_own_pin.asc"
+        asc.write_text("Version 4\nSHEET 1 880 680\n")
+        await handle_add_component(
+            AddComponentInput(
+                path="route_over_own_pin.asc", reference="R1", symbol="res", x=200, y=200
+            ),
+            asc_state,
+        )
+        await handle_add_component(
+            AddComponentInput(
+                path="route_over_own_pin.asc", reference="R2", symbol="res", x=400, y=400
+            ),
+            asc_state,
+        )
+        # R1.1=(200,152), R1.2=(200,248), R2.1=(400,352). Route:
+        # (200,152)->(200,352)->(400,352); the first leg passes over R1.2.
+        with pytest.raises(NetlistError, match="same-instance wire") as exc_info:
+            await handle_wire_pins(
+                WirePinsInput(
+                    path="route_over_own_pin.asc",
+                    from_pin="R1.1",
+                    to_pin="R2.1",
+                    waypoints=[{"x": 200, "y": 352}],  # type: ignore[list-item]
+                ),
+                asc_state,
+            )
+        msg = str(exc_info.value)
+        assert "R1.1" in msg and "R1.2" in msg
+        assert _wire_segments(asc) == []
+
     async def test_apply_ops_same_instance_wire_refused(
         self, asc_state: SessionState, work_dir: Path
     ):
@@ -2534,6 +2574,61 @@ class TestTraceNet:
             "SYMATTR Value 1k\n"
         )
         res = await handle_trace_net(TraceNetInput(path="zero_len.asc", pin="R1.1"), asc_state)
+        sc = res.structuredContent
+        assert sc is not None
+        assert sc.get("warnings", []) == []
+
+    async def test_same_instance_subsegment_over_interior_pin_surfaced(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # A wire from R1.1 runs straight DOWN through R1.2 and past it to a bare
+        # end (200,300). R1.2 sits on the run's interior, where LTspice splits the
+        # wire — so the R1.1->R1.2 sub-run is a same-instance tie LTspice drops.
+        # The interior pin is not a wire endpoint, so a cut built from endpoints
+        # alone would miss it and report no tie; the pin-on-interior cut splits the
+        # run there and surfaces the dropped sub-segment. Fixture res pins:
+        # 1=(200,152), 2=(200,248).
+        asc = work_dir / "interior_self_tie.asc"
+        asc.write_text(
+            "Version 4\nSHEET 1 880 680\n"
+            "WIRE 200 152 200 300\n"
+            "SYMBOL res 200 200 R0\n"
+            "SYMATTR InstName R1\n"
+            "SYMATTR Value 1k\n"
+        )
+        res = await handle_trace_net(
+            TraceNetInput(path="interior_self_tie.asc", pin="R1.1"), asc_state
+        )
+        sc = res.structuredContent
+        assert sc is not None
+        warnings = sc.get("warnings", [])
+        assert len(warnings) == 1, sc
+        assert "R1.1" in warnings[0] and "R1.2" in warnings[0]
+        assert "LTspice drops" in warnings[0]
+
+    async def test_foreign_interior_pin_yields_no_false_same_instance_warning(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        # A straight run between R1's two pins (200,152)->(200,248) would read as a
+        # dropped self-tie — EXCEPT a foreign pin R2.2 sits on its interior at
+        # (200,200). LTspice splits the wire at that pin, so the run becomes two
+        # cross-instance segments (R1.1->R2.2, R2.2->R1.2) that LTspice keeps.
+        # The interior-pin cut must split there too, so no false same-instance
+        # warning is raised. R2 placed at (200,152): pins 1=(200,104), 2=(200,200).
+        asc = work_dir / "foreign_interior.asc"
+        asc.write_text(
+            "Version 4\nSHEET 1 880 680\n"
+            "WIRE 200 152 200 248\n"
+            "SYMBOL res 200 200 R0\n"
+            "SYMATTR InstName R1\n"
+            "SYMATTR Value 1k\n"
+            "SYMBOL res 200 152 R0\n"
+            "SYMATTR InstName R2\n"
+            "SYMATTR Value 2k\n"
+        )
+        res = await handle_trace_net(
+            TraceNetInput(path="foreign_interior.asc", pin="R1.1"), asc_state
+        )
         sc = res.structuredContent
         assert sc is not None
         assert sc.get("warnings", []) == []
