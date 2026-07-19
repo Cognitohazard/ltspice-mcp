@@ -23,6 +23,7 @@ def cap_list(payload: dict[str, Any], key: str, items: list, cap: int) -> None:
     else:
         payload[key] = items
 
+
 # SPICE scale factors. Matching is case-insensitive to follow SPICE convention
 # (LTspice, ngspice, qspice all treat suffixes as case-insensitive).
 # Order matters: longer suffixes must come first so 'Meg' matches before 'm'.
