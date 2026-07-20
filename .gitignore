@@ -39,3 +39,6 @@ ltspice-mcp.toml
 
 # packaged Desktop Extensions (build artifacts)
 *.mcpb
+
+# git worktrees kept inside the project (branch checkouts, never committed)
+worktrees/
