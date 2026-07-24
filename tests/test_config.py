@@ -18,6 +18,8 @@ class TestServerConfig:
         assert config.simulator_exe is None
         assert config.max_parallel_sims == min(os.cpu_count() or 4, 8)
         assert config.default_timeout == 300.0
+        assert config.analysis_budget_s == 60.0
+        assert config.result_set_ttl_hours == 24.0
         assert config.log_level == "INFO"
 
     def test_max_parallel_defaults_to_capped_core_count(self, monkeypatch: pytest.MonkeyPatch):
@@ -121,6 +123,18 @@ class TestServerConfig:
         content = path.read_text()
         assert "ltspice" in content
         assert "allowed_paths" in content
+        assert "analysis_budget_s" in content
+        assert "result_set_ttl_hours" in content
+
+    def test_analysis_budget_and_result_ttl_load_from_toml(
+        self,
+        work_dir: Path,
+    ):
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text("[analysis]\nanalysis_budget_s = 12.5\nresult_set_ttl_hours = 48\n")
+        config = ServerConfig.load(toml_path)
+        assert config.analysis_budget_s == 12.5
+        assert config.result_set_ttl_hours == 48.0
 
     def test_generated_config_does_not_pin_max_parallel(
         self, work_dir: Path, monkeypatch: pytest.MonkeyPatch

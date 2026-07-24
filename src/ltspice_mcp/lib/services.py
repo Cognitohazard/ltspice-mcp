@@ -9,10 +9,12 @@ logic. All functions raise domain exceptions rather than returning error text.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, NoReturn, TypeVar
 
@@ -35,6 +37,7 @@ from ltspice_mcp.lib.log_parser import (
     parse_measurements,
     read_log_text,
 )
+from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead, get_step_count
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
 from ltspice_mcp.state import (
@@ -428,6 +431,61 @@ class AnalysisSource:
     identity: dict[str, Any] | None
     trusted_job_artifact: bool
 
+    @classmethod
+    def for_raw(cls, raw_path: Path) -> AnalysisSource:
+        """The log/netlist companions of ``raw_path``, resolved through one seam.
+
+        When the consolidated path injected a task-local source for this raw, its
+        netlist and dialect win and its log is filled with the sibling ``.log``
+        when it carries none. A direct read (no matching injected source) gets
+        the sibling ``.log`` and no netlist — the uniform fallback every read
+        shares. ``log`` is always a concrete path (existence not guaranteed);
+        ``netlist`` is present only when a producing job supplied one.
+        """
+        injected = current_analysis_source()
+        if injected is not None and injected.raw == raw_path:
+            log = injected.log if injected.log is not None else raw_path.with_suffix(".log")
+            return replace(injected, log=log)
+        return cls(
+            raw=raw_path,
+            log=raw_path.with_suffix(".log"),
+            netlist=None,
+            dialect=None,
+            identity=None,
+            trusted_job_artifact=False,
+        )
+
+
+_analysis_source: contextvars.ContextVar[AnalysisSource | None] = contextvars.ContextVar(
+    "ltspice-mcp.analysis-source",
+    default=None,
+)
+_analysis_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "ltspice-mcp.analysis-deadline",
+    default=None,
+)
+
+
+@contextlib.contextmanager
+def analysis_source_context(
+    source: AnalysisSource,
+    *,
+    deadline: float | None = None,
+):
+    """Inject a trusted source and optional monotonic deadline into adapters."""
+    source_token = _analysis_source.set(source)
+    deadline_token = _analysis_deadline.set(deadline)
+    try:
+        yield
+    finally:
+        _analysis_deadline.reset(deadline_token)
+        _analysis_source.reset(source_token)
+
+
+def current_analysis_source() -> AnalysisSource | None:
+    """Return the task-local adapter source, if the consolidated path set one."""
+    return _analysis_source.get()
+
 
 def resolve_experiment_run(
     job_id: str,
@@ -483,12 +541,13 @@ def resolve_analysis_source(
     *,
     injected: AnalysisSource | RunContext | None = None,
 ) -> AnalysisSource:
-    """Shared analysis-source seam.
+    """Resolve an adapter source without weakening the legacy completion gate.
 
-    The trusted injection path is available now. Direct legacy argument
-    resolution will move here with the analysis-adapter integration.
+    Consolidated callers inject a pre-resolved source, so trusted artifacts
+    never pass through ``safe_path`` and experiment cases never re-enter
+    ``resolve_run``.  Direct callers use the same completed-only legacy
+    resolver as before.
     """
-    del args, state
     if isinstance(injected, AnalysisSource):
         return injected
     if isinstance(injected, RunContext):
@@ -500,7 +559,66 @@ def resolve_analysis_source(
             identity=injected.identity,
             trusted_job_artifact=True,
         )
-    raise ResultError("Direct analysis-source resolution is not wired until analyze_results")
+    contextual = current_analysis_source()
+    if contextual is not None:
+        return contextual
+
+    raw_file = getattr(args, "raw_file", None)
+    log_file = getattr(args, "log_file", None)
+    job_id = getattr(args, "job_id", None)
+    run_index = int(getattr(args, "run_index", 0))
+    if hasattr(args, "raw_file") and bool(raw_file) == bool(job_id):
+        raise ResultError(
+            "Pass exactly one of 'raw_file' or 'job_id'. Analysis tools read "
+            "an existing result — if you only have a netlist, run_simulation "
+            "produces the job_id/raw to analyze.",
+            show_hint=False,
+        )
+    if job_id:
+        run = resolve_run(job_id, state, run_index)
+        if run.raw_file is None:
+            raise ResultError(f"Job {job_id!r} run {run_index} has no raw file")
+        job = resolve_job(job_id, state)
+        state.raw_dialect_hints[run.raw_file] = dialect_for_job(job, state)
+        legacy_netlist = legacy_job_netlist(job, operation="Analysis")
+        return AnalysisSource(
+            raw=run.raw_file,
+            log=run.log_file,
+            netlist=legacy_netlist,
+            dialect=dialect_for_job(job, state),
+            identity={
+                "case_id": None,
+                "run_index": run.index,
+                "assignments": dict(run.params),
+                "circuit": legacy_netlist.stem,
+                "deck_sha256": None,
+                "step_index": None,
+                "step_values": {},
+            },
+            trusted_job_artifact=True,
+        )
+    if raw_file:
+        raw = resolve_safe_path(str(raw_file), state.config.allowed_paths)
+        sibling = raw.with_suffix(".log")
+        return AnalysisSource(
+            raw=raw,
+            log=sibling if sibling.is_file() else None,
+            netlist=None,
+            dialect=raw_dialect_for(raw, state),
+            identity=None,
+            trusted_job_artifact=False,
+        )
+    if log_file:
+        log = resolve_safe_path(str(log_file), state.config.allowed_paths)
+        return AnalysisSource(
+            raw=log.with_suffix(".raw"),
+            log=log,
+            netlist=None,
+            dialect=None,
+            identity=None,
+            trusted_job_artifact=False,
+        )
+    raise ResultError("Provide one analysis source: raw_file, log_file, or job_id")
 
 
 def legacy_job_netlist(job: Job, *, operation: str) -> Path:
@@ -696,28 +814,42 @@ async def bounded_parse(
     whose abandoned worker may still be running cannot consume another worker
     through a different result-reading path until the cooldown expires.
     """
-    now_mono = asyncio.get_running_loop().time()
+    loop = asyncio.get_running_loop()
+    now_mono = loop.time()
+    cooldown_s = timeout_s
+    call_deadline = _analysis_deadline.get()
+    if call_deadline is not None:
+        timeout_s = min(timeout_s, max(0.0, call_deadline - now_mono))
+    if timeout_s <= 0:
+        raise ResultError(f"Parsing {path.name} exceeded the analysis item deadline")
     wedged_until = _wedged_raw_paths.get(path)
     if wedged_until is not None:
         if now_mono < wedged_until:
             raise ResultError(
-                f"Parsing {path.name} recently exceeded the "
-                f"{timeout_s:.0f}s deadline and its worker is still "
-                "abandoned; retries are paused for "
+                f"Parsing {path.name} recently exceeded its deadline and "
+                "its worker is still abandoned; retries are paused for "
                 f"{wedged_until - now_mono:.0f}s more so a wedged file can't "
                 "drain the worker pool. Check the file (size, mtime, source "
                 "simulator) before retrying."
             )
         del _wedged_raw_paths[path]
     try:
-        return await asyncio.wait_for(asyncio.to_thread(thunk), timeout_s)
+        task = asyncio.create_task(asyncio.to_thread(thunk))
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout_s)
+        except TimeoutError:
+            # The worker cannot be killed.  Shielding keeps its completion
+            # independent of the timeout and this callback consumes a late
+            # exception so it cannot become an unhandled task warning.
+            task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+            raise
     except TimeoutError:
-        _wedged_raw_paths[path] = asyncio.get_running_loop().time() + timeout_s
+        _wedged_raw_paths[path] = loop.time() + cooldown_s
         raise ResultError(
-            f"Parsing {path.name} exceeded {timeout_s:.0f}s and was "
+            f"Parsing {path.name} exceeded {timeout_s:.3g}s and was "
             "abandoned — the file may be corrupt in a way that wedges the parser, "
             "or on a stalled mount. The file was not modified; retries are "
-            f"paused for {timeout_s:.0f}s, then one fresh attempt is "
+            f"paused for {cooldown_s:.0f}s, then one fresh attempt is "
             "allowed."
         ) from None
 

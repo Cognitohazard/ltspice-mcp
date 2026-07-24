@@ -3,7 +3,7 @@
 from ltspice_mcp.tools._base import registry
 
 # Importing these modules triggers @registry.tool registrations.
-from . import advanced, analysis, circuit, library, simulation, status  # noqa: F401
+from . import advanced, analysis, analyze, circuit, library, simulation, status  # noqa: F401
 
 
 def get_tools_for_profile(profile: str):

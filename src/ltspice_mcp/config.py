@@ -174,6 +174,12 @@ class ServerConfig:
     max_points_returned: int = 10000
     """Maximum waveform data points to return."""
 
+    analysis_budget_s: float = 60.0
+    """Whole-call work budget for ``analyze_results``."""
+
+    result_set_ttl_hours: float = 24.0
+    """Retention for raw-path-only immutable analysis result sets."""
+
     log_level: str = "INFO"
     """Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)."""
 
@@ -269,8 +275,15 @@ class ServerConfig:
                 if "max_raw_mb" in toml_data["simulation"]:
                     config_dict["max_raw_mb"] = toml_data["simulation"]["max_raw_mb"]
 
-            if "analysis" in toml_data and "max_points" in toml_data["analysis"]:
-                config_dict["max_points_returned"] = toml_data["analysis"]["max_points"]
+            if "analysis" in toml_data:
+                if "max_points" in toml_data["analysis"]:
+                    config_dict["max_points_returned"] = toml_data["analysis"]["max_points"]
+                if "analysis_budget_s" in toml_data["analysis"]:
+                    config_dict["analysis_budget_s"] = toml_data["analysis"]["analysis_budget_s"]
+                if "result_set_ttl_hours" in toml_data["analysis"]:
+                    config_dict["result_set_ttl_hours"] = toml_data["analysis"][
+                        "result_set_ttl_hours"
+                    ]
 
             if "logging" in toml_data and "level" in toml_data["logging"]:
                 level = str(toml_data["logging"]["level"]).upper()
@@ -345,6 +358,24 @@ class ServerConfig:
                 10_000_000,
                 source="config",
             )
+            _validate_numeric(
+                config_dict,
+                "analysis_budget_s",
+                float,
+                0,
+                3600,
+                exclusive_min=True,
+                source="config",
+            )
+            _validate_numeric(
+                config_dict,
+                "result_set_ttl_hours",
+                float,
+                0,
+                87600,
+                exclusive_min=True,
+                source="config",
+            )
 
         if env_sim := os.getenv("LTSPICE_MCP_SIMULATOR"):
             config_dict["simulator"] = env_sim
@@ -390,6 +421,24 @@ class ServerConfig:
         )
         _load_bounded_env(
             "LTSPICE_MCP_MAX_POINTS", config_dict, "max_points_returned", int, 1, 10_000_000
+        )
+        _load_bounded_env(
+            "LTSPICE_MCP_ANALYSIS_BUDGET_S",
+            config_dict,
+            "analysis_budget_s",
+            float,
+            0,
+            3600,
+            exclusive_min=True,
+        )
+        _load_bounded_env(
+            "LTSPICE_MCP_RESULT_SET_TTL_HOURS",
+            config_dict,
+            "result_set_ttl_hours",
+            float,
+            0,
+            87600,
+            exclusive_min=True,
         )
         _load_bounded_env(
             "LTSPICE_MCP_MAX_ESTIMATED_POINTS",
@@ -519,6 +568,10 @@ def generate_default_config(path: Path) -> None:
     analysis = table()
     analysis.add(comment("Maximum waveform data points to return per trace"))
     analysis.add("max_points", 10000)
+    analysis.add(comment("Whole-call work budget for analyze_results, in seconds"))
+    analysis.add("analysis_budget_s", 60.0)
+    analysis.add(comment("Retention for raw-path-only analysis result sets, in hours"))
+    analysis.add("result_set_ttl_hours", 24.0)
     doc.add("analysis", analysis)
     doc.add(nl())
 

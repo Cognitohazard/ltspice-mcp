@@ -103,11 +103,11 @@ class DisturbanceResponseOutput(TypedDict):
 class TimingBetweenOutput(TypedDict):
     """Return shape of :func:`analyze_timing_between`.
 
-    ``t_a``/``t_b``/``delay`` describe the FIRST crossing of each signal
-    (kept for the one-shot step/propagation case, and the only pairing that
-    can go negative when b leads a). The ``pair_*``/``delay_*`` fields
-    aggregate over ALL sequential edge pairs — what dead-time / minimum
-    off-time audits over a pulse train need.
+    ``t_a``/``t_b``/``delay`` describe the selected same-index crossing of
+    each signal (the first by default, and the only pairing that can go
+    negative when b leads a). The ``pair_*``/``delay_*`` fields aggregate
+    over ALL sequential edge pairs — what dead-time / minimum off-time
+    audits over a pulse train need.
     """
 
     t_a: float
@@ -955,8 +955,9 @@ def analyze_timing_between(
     threshold_pct: float = 50.0,
     direction_a: str = "rising",
     direction_b: str = "rising",
+    nth: int = 1,
 ) -> TimingBetweenOutput:
-    """Time delay between first threshold crossings of two signals on a shared axis.
+    """Time delay between selected threshold crossings on a shared axis.
 
     Thresholds are per-signal (default 50% of each signal's own range in the
     window) — intentional for asymmetric CMOS where V_in and V_out have
@@ -975,6 +976,8 @@ def analyze_timing_between(
         raise ValueError(f"direction_b must be 'rising' or 'falling', got {direction_b!r}")
     if not (0 <= threshold_pct <= 100):
         raise ValueError(f"threshold_pct must be in [0, 100], got {threshold_pct}")
+    if nth < 1:
+        raise ValueError(f"nth must be >= 1, got {nth}")
 
     def _auto_threshold(y: np.ndarray, name: str) -> float:
         lo = float(np.min(y))
@@ -992,13 +995,16 @@ def analyze_timing_between(
     crossings_a = _interp_crossings(t, ya, thresh_a, direction=direction_a)
     crossings_b = _interp_crossings(t, yb, thresh_b, direction=direction_b)
 
-    if not crossings_a:
-        raise ValueError(f"No {direction_a} crossing of signal_a at threshold {thresh_a:.6g}")
-    if not crossings_b:
-        raise ValueError(f"No {direction_b} crossing of signal_b at threshold {thresh_b:.6g}")
+    index = nth - 1
+    if index >= len(crossings_a) or index >= len(crossings_b):
+        raise ValueError(
+            f"nth={nth} is unavailable: found {len(crossings_a)} {direction_a} "
+            f"crossing(s) of signal_a and {len(crossings_b)} {direction_b} "
+            "crossing(s) of signal_b"
+        )
 
-    t_a = crossings_a[0]
-    t_b = crossings_b[0]
+    t_a = crossings_a[index]
+    t_b = crossings_b[index]
 
     # All-edges pairing: each A crossing consumes the first unused B crossing
     # at or after it. A pulse train's dead-time / minimum-off audit needs the
@@ -1020,7 +1026,7 @@ def analyze_timing_between(
         warnings.append(
             f"signal_a has {len(crossings_a)} {direction_a} and signal_b "
             f"{len(crossings_b)} {direction_b} crossing(s) in window; "
-            "t_a/t_b/delay use the first of each — read delay_min/delay_max "
+            f"t_a/t_b/delay use crossing {nth} of each — read delay_min/delay_max "
             "for the aggregate over all edge pairs"
         )
 

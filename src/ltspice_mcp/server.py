@@ -369,6 +369,13 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     for allowed_path in config.allowed_paths:
         logger.info(f"  - {allowed_path.resolve()}")
 
+    # Immutable analysis sets are cheap to scan and are cleaned at startup as
+    # well as on each write. Job-backed sets follow job-record retention;
+    # raw-only sets follow the configured TTL.
+    from ltspice_mcp.lib import result_store
+
+    await asyncio.to_thread(result_store.cleanup, state.working_dir)
+
     # Eager-load persisted jobs for the top-N recently-touched circuits so
     # first-tool-call latency on those circuits doesn't surprise the user.
     # Circuits outside this budget fall back to lazy load on first tool call.
