@@ -886,12 +886,17 @@ def _run_item(case: ExperimentCase) -> dict[str, Any]:
 def _runs_page(cases: list[ExperimentCase]) -> dict[str, Any]:
     page, total, offset, limit = paginate(cases, None, cap=_RUN_PAGE_LIMIT)
     pagination = pagination_metadata(total, offset, limit)
-    return {
+    data: dict[str, Any] = {
         "items": [_run_item(case) for case in page],
         "total": pagination["total"],
         "returned": len(page),
         "truncated": pagination["has_more"],
     }
+    if pagination["has_more"]:
+        # Same "o:<offset>" grammar jobs(action="runs") decodes; the shared
+        # receipt assembly reads this key to build the continuation hint.
+        data["next_cursor"] = f"o:{offset + len(page)}"
+    return data
 
 
 def _terminal_outcome(job: ExperimentJob) -> str:
