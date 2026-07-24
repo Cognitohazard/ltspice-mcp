@@ -153,6 +153,9 @@ class ServerConfig:
     128) when the box can take it.
     """
 
+    max_experiment_cases: int = 1024
+    """Maximum expanded cases accepted by one ``run_experiments`` call."""
+
     default_timeout: float = 300.0
     """Simulation timeout in seconds."""
 
@@ -253,6 +256,10 @@ class ServerConfig:
             if "simulation" in toml_data:
                 if "max_parallel" in toml_data["simulation"]:
                     config_dict["max_parallel_sims"] = toml_data["simulation"]["max_parallel"]
+                if "max_experiment_cases" in toml_data["simulation"]:
+                    config_dict["max_experiment_cases"] = toml_data["simulation"][
+                        "max_experiment_cases"
+                    ]
                 if "timeout" in toml_data["simulation"]:
                     config_dict["default_timeout"] = toml_data["simulation"]["timeout"]
                 if "max_estimated_points" in toml_data["simulation"]:
@@ -311,6 +318,14 @@ class ServerConfig:
             _validate_numeric(config_dict, "max_parallel_sims", int, 1, 128, source="config")
             _validate_numeric(
                 config_dict,
+                "max_experiment_cases",
+                int,
+                1,
+                1_000_000,
+                source="config",
+            )
+            _validate_numeric(
+                config_dict,
                 "default_timeout",
                 float,
                 0,
@@ -355,6 +370,14 @@ class ServerConfig:
 
         _load_bounded_env(
             "LTSPICE_MCP_MAX_PARALLEL", config_dict, "max_parallel_sims", int, 1, 128
+        )
+        _load_bounded_env(
+            "LTSPICE_MCP_MAX_EXPERIMENT_CASES",
+            config_dict,
+            "max_experiment_cases",
+            int,
+            1,
+            1_000_000,
         )
         _load_bounded_env(
             "LTSPICE_MCP_TIMEOUT",
@@ -477,6 +500,9 @@ def generate_default_config(path: Path) -> None:
     sim_conf.add(comment("Maximum number of concurrent simulations."))
     sim_conf.add(comment("Default: number of CPU cores, capped at 8. Uncomment to override."))
     sim_conf.add(comment("max_parallel = 4"))
+    sim_conf.add(nl())
+    sim_conf.add(comment("Maximum cases after run_experiments variation expansion."))
+    sim_conf.add("max_experiment_cases", 1024)
     sim_conf.add(nl())
     sim_conf.add(comment("Default simulation timeout in seconds"))
     sim_conf.add("timeout", 300.0)
