@@ -73,6 +73,7 @@ class ExperimentRunRequest:
     cases: list[ExperimentCase]
     sources: list[SourceRecord]
     simulator: str
+    job_id: str | None = None
     declared: int | None = None
     canonicalizer_version: int = CANONICALIZER_VERSION
     max_parallel: int | None = None
@@ -162,7 +163,8 @@ class ExperimentRunner(RunnerBase):
         capacity = request.max_parallel if request.max_parallel is not None else self.max_parallel
         if capacity < 1:
             raise SimulationError("max_parallel must be at least 1")
-        job_id = generate_id("exp")
+        job_id = request.job_id or generate_id("exp")
+        experiment_store.validate_job_id(job_id)
         control_token = secrets.token_urlsafe(32)
         store_path = experiment_store.record_path(job_id, request.state.working_dir)
         case_ids = [case.case_id for case in request.cases]

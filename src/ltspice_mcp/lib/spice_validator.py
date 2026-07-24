@@ -524,7 +524,7 @@ _TRAILING_MODEL_PREFIXES = frozenset({"D", "J", "M", "O", "Q", "S", "U", "W", "Z
 # V(...) / I(...) probe references inside expression text on instance
 # cards (B/E/G bodies, behavioural params). Probed identifiers are
 # connections too — they feed the suppressor set, never a terminal count.
-_PROBE_REF_RE = re.compile(r"\b[VI]\s*\(([^()]*)\)", re.IGNORECASE)
+PROBE_REF_RE = re.compile(r"\b[VI]\s*\(([^()]*)\)", re.IGNORECASE)
 
 
 def _instance_terminals(inst: InstanceLine) -> tuple[list[str], list[str]]:
@@ -694,7 +694,7 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
                     continue
                 record(card.scope, node, inst.ref, card)
             suppressed.update(tok.lower() for tok in rest)
-            for probe in _PROBE_REF_RE.finditer(card.body):
+            for probe in PROBE_REF_RE.finditer(card.body):
                 for part in probe.group(1).split(","):
                     name = part.strip()
                     if name:
@@ -702,7 +702,7 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
         elif card.kind in ("directive", "meas"):
             # A node that exists only to be probed by a .meas/.print/.plot/.save
             # is intentional, not dangling — suppress it like instance probe refs.
-            for probe in _PROBE_REF_RE.finditer(card.body):
+            for probe in PROBE_REF_RE.finditer(card.body):
                 for part in probe.group(1).split(","):
                     name = part.strip()
                     if name:
@@ -825,7 +825,7 @@ def validate_netlist_directive_refs(cards: list[SpiceCard]) -> list[dict[str, ob
         # .func defines a formal-parameter expression; its V(formal) is not a node.
         if card.kind == "directive" and card.body.lstrip().lower().startswith(".func"):
             continue
-        for probe in _PROBE_REF_RE.finditer(card.body):
+        for probe in PROBE_REF_RE.finditer(card.body):
             kind = probe.group(0)[0].upper()  # 'V' or 'I'
             for part in probe.group(1).split(","):
                 name = part.strip()
