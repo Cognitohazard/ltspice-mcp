@@ -5,7 +5,10 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import re
+import secrets
+from collections.abc import Mapping
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
@@ -46,6 +49,10 @@ JOBS_SUBDIR = "jobs"
 EXPERIMENT_POINTERS_SUBDIR = "experiments"
 REQUESTS_SUBDIR = "requests"
 LOCKS_SUBDIR = "locks"
+CANCELLATIONS_SUBDIR = "cancellations"
+
+CANCELLATION_SCHEMA = "ltspice-mcp/experiment-cancellation"
+CANCELLATION_SCHEMA_VERSION = 1
 
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _LIVE_STATUSES = frozenset({"queued", "running", "analyzing"})
@@ -100,6 +107,62 @@ def request_index_path(request_id: str, working_dir: Path) -> Path:
 def request_lock_target(request_id: str, working_dir: Path) -> Path:
     """Target whose ``file_lock`` sidecar is ``request-{digest}.lock``."""
     return working_store_root(working_dir) / LOCKS_SUBDIR / f"request-{request_digest(request_id)}"
+
+
+def cancellation_path(job_id: str, working_dir: Path) -> Path:
+    """Contained durable cancellation marker for one experiment."""
+    validate_job_id(job_id)
+    return working_store_root(working_dir) / CANCELLATIONS_SUBDIR / f"{job_id}.json"
+
+
+def cancellation_lock_target(job_id: str, working_dir: Path) -> Path:
+    """Cross-process gate shared by cancellation and case submission."""
+    validate_job_id(job_id)
+    return working_store_root(working_dir) / LOCKS_SUBDIR / f"cancel-{job_id}"
+
+
+def cancellation_requested(job_id: str, working_dir: Path) -> bool:
+    """Whether an authorized durable cancellation marker exists."""
+    return cancellation_path(job_id, working_dir).is_file()
+
+
+def cancel_authorized(job: ExperimentJob, control_token: str | None) -> bool:
+    """Whether this process or the supplied control token may cancel ``job``."""
+    return job.owner_pid == os.getpid() or (
+        control_token is not None
+        and bool(job.control_token)
+        and secrets.compare_digest(control_token, job.control_token)
+    )
+
+
+def request_cancellation(
+    job_id: str,
+    working_dir: Path,
+    control_token: str,
+) -> ExperimentJob | None:
+    """Authorize and durably request cancellation under the submission gate.
+
+    The marker contains no authority token. The latest persisted coordinator
+    record is re-read while the cross-process gate is held so a stale in-memory
+    view cannot authorize cancellation.
+    """
+    with file_lock(cancellation_lock_target(job_id, working_dir)):
+        job = load_job(job_id, working_dir, own_is_alive=True)
+        if job is None:
+            return None
+        if not cancel_authorized(job, control_token):
+            raise PermissionError(f"Cancellation is not authorized for experiment job {job_id}")
+        atomic_write_json(
+            cancellation_path(job_id, working_dir),
+            schema_envelope(
+                CANCELLATION_SCHEMA,
+                CANCELLATION_SCHEMA_VERSION,
+                kind="experiment_cancellation",
+                job_id=job_id,
+                requested_at=now().isoformat(),
+            ),
+        )
+        return job
 
 
 def pointer_dir(circuit_path: Path) -> Path:
@@ -515,8 +578,15 @@ def load_job(
 def load_pointer_jobs(
     circuit_path: Path,
     working_dir: Path,
+    prefer: Mapping[str, ExperimentJob] | None = None,
 ) -> tuple[list[ExperimentJob], list[dict[str, Any]]]:
-    """Resolve a circuit's pointers to validated working-store records."""
+    """Resolve a circuit's pointers to validated working-store records.
+
+    ``prefer`` maps job ids to live registry instances (snapshotted on the
+    event loop by the caller): a job this process owns is returned from
+    there instead of disk, because its most recent transitions may still be
+    in a pending fire-and-forget persist.
+    """
     jobs: list[ExperimentJob] = []
     observations: list[dict[str, Any]] = []
     target_dir = pointer_dir(circuit_path)
@@ -534,6 +604,10 @@ def load_pointer_jobs(
             ):
                 raise ValueError("unsupported experiment pointer schema")
             job_id = validate_job_id(str(data.get("job_id", "")))
+            live = prefer.get(job_id) if prefer else None
+            if live is not None:
+                jobs.append(live)
+                continue
             target_raw = data.get("target")
             if not isinstance(target_raw, str):
                 raise TypeError("pointer target is missing")
@@ -572,5 +646,8 @@ def delete_job(job: ExperimentJob, working_dir: Path) -> None:
         if index is not None and index.get("job_id") == job.job_id:
             with contextlib.suppress(FileNotFoundError):
                 index_path.unlink()
-        with contextlib.suppress(FileNotFoundError):
-            job.store_path.unlink()
+        with file_lock(cancellation_lock_target(job.job_id, working_dir)):
+            with contextlib.suppress(FileNotFoundError):
+                job.store_path.unlink()
+            with contextlib.suppress(FileNotFoundError):
+                cancellation_path(job.job_id, working_dir).unlink()

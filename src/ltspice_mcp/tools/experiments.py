@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 from mcp import types
-from pydantic import Field
+from pydantic import Field, model_validator
 
-from ltspice_mcp.errors import PathSecurityError, SimulationError
-from ltspice_mcp.lib import experiment_store
+from ltspice_mcp.errors import (
+    JobNotFoundError,
+    LTSpiceMCPError,
+    PathSecurityError,
+    SimulationError,
+)
+from ltspice_mcp.lib import experiment_store, job_store, recent, services
 from ltspice_mcp.lib.deck_staging import (
     DeckStagingError,
     resolve_experiment_paths,
@@ -21,17 +27,25 @@ from ltspice_mcp.lib.deck_staging import (
 )
 from ltspice_mcp.lib.experiment_runner import (
     CANONICALIZER_VERSION,
+    ExperimentCancellationError,
     ExperimentReceipt,
     ExperimentRunRequest,
     IdempotencyConflictError,
     canonical_fingerprint,
 )
 from ltspice_mcp.lib.experiment_types import (
+    TERMINAL_CASE_STATUSES,
     Completeness,
     ExperimentCase,
     ExperimentJob,
     ManifestEntry,
     SourceRecord,
+)
+from ltspice_mcp.lib.job_types import (
+    NON_TERMINAL_LIVE_STATUSES,
+    TERMINAL_STATUSES,
+    BatchJob,
+    SimulationJob,
 )
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
 from ltspice_mcp.lib.simulator import simulator_dialect
@@ -779,7 +793,7 @@ async def _dwell_and_respond(
 
 def _job_payload(
     job: ExperimentJob,
-    control_token: str,
+    control_token: str | None,
     *,
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
@@ -805,7 +819,6 @@ def _job_payload(
     data: dict[str, Any] = {
         "job_id": job.job_id,
         "request_id": job.request_id,
-        "control_token": control_token,
         "status": job.status,
         "outcome": outcome,
         "source": [_source_payload(source) for source in job.sources],
@@ -820,6 +833,8 @@ def _job_payload(
         "artifacts": list(job.artifacts),
         "hint": hint,
     }
+    if control_token is not None:
+        data["control_token"] = control_token
     if job.analysis.status != "not_requested":
         data["analysis"] = {
             "status": job.analysis.status,
@@ -1064,3 +1079,1042 @@ def _empty_payload(request_id: str) -> dict[str, Any]:
         "artifacts": [],
         "hint": "",
     }
+
+
+# ---------------------------------------------------------------------------
+# Consolidated jobs control plane
+# ---------------------------------------------------------------------------
+
+
+_JOBS_PAGE_LIMIT = 50
+_FOREIGN_WAIT_POLL_S = 2.0
+_ADDRESSED_JOB_ACTIONS = frozenset({"status", "wait", "cancel", "runs"})
+
+Job = SimulationJob | BatchJob | ExperimentJob
+
+
+class JobsInput(ToolInput):
+    """Action-specific inputs for the consolidated jobs control plane."""
+
+    action: Literal["status", "wait", "cancel", "list", "runs"]
+    job_id: str | None = Field(default=None, min_length=1)
+    request_id: str | None = Field(default=None, min_length=1)
+    timeout_s: float = Field(default=60.0, ge=0.0, le=300.0)
+    wait_for: Literal["all", "runs"] = "all"
+    control_token: str | None = Field(default=None, min_length=1)
+    circuit: str | None = None
+    limit: int = Field(default=_JOBS_PAGE_LIMIT, ge=1, le=_JOBS_PAGE_LIMIT)
+    cursor: str | None = None
+
+    @model_validator(mode="after")
+    def validate_action_fields(self) -> Self:
+        """Require one selector and reject fields that do not belong to an action."""
+        selected = int(self.job_id is not None) + int(self.request_id is not None)
+        if self.action in _ADDRESSED_JOB_ACTIONS and selected != 1:
+            raise ValueError(
+                f"jobs action {self.action!r} requires exactly one of job_id or request_id"
+            )
+        if self.action == "list" and selected:
+            raise ValueError("jobs action 'list' does not accept job_id or request_id")
+
+        allowed_fields = {
+            "status": {"action", "job_id", "request_id"},
+            "wait": {
+                "action",
+                "job_id",
+                "request_id",
+                "timeout_s",
+                "wait_for",
+            },
+            "cancel": {
+                "action",
+                "job_id",
+                "request_id",
+                "control_token",
+            },
+            "list": {"action", "circuit", "limit", "cursor"},
+            "runs": {"action", "job_id", "request_id", "cursor"},
+        }[self.action]
+        unexpected = self.model_fields_set - allowed_fields
+        if unexpected:
+            raise ValueError(
+                f"jobs action {self.action!r} does not accept: {', '.join(sorted(unexpected))}"
+            )
+        return self
+
+
+_JOBS_ERROR_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"},
+        "stage": {"type": "string"},
+        "retryable": {"type": "boolean"},
+        "commit_state": {
+            "type": "string",
+            "enum": ["not_started", "committed", "unknown"],
+        },
+        "item_id": {"type": "string"},
+    },
+    "required": ["code", "message", "stage", "retryable", "commit_state"],
+}
+
+_JOBS_COMMON_PROPERTIES: dict[str, Any] = {
+    "outcome": {
+        "type": "string",
+        "enum": ["complete", "partial", "failed", "in_progress"],
+    },
+    "observations": {"type": "array", "items": _OBSERVATION_SCHEMA},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "failures": {"type": "array", "items": _FAILURE_SCHEMA},
+    "hint": {"type": "string"},
+    "error": _JOBS_ERROR_SCHEMA,
+}
+
+_JOBS_COMMON_REQUIRED = [
+    "action",
+    "outcome",
+    "observations",
+    "warnings",
+    "failures",
+    "hint",
+]
+
+_JOBS_PAGE_PROPERTIES: dict[str, Any] = {
+    "items": {"type": "array"},
+    "total": {"type": "integer"},
+    "returned": {"type": "integer"},
+    "truncated": {"type": "boolean"},
+    "next_cursor": {"type": "string"},
+}
+
+_JOBS_RECEIPT_PROPERTIES: dict[str, Any] = {
+    "job_id": {"type": ["string", "null"]},
+    "request_id": {"type": ["string", "null"]},
+    "job_type": {"type": "string"},
+    "status": {"type": "string"},
+    "analysis_status": {"type": "string"},
+    "dialect": {"type": ["string", "null"]},
+    "source": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["source"],
+    "completeness": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["completeness"],
+    "lint": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["lint"],
+    "runs": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["runs"],
+    "analysis": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["analysis"],
+    "artifacts": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["artifacts"],
+}
+
+_JOBS_RECEIPT_REQUIRED = [
+    "job_id",
+    "request_id",
+    "job_type",
+    "status",
+    "analysis_status",
+    "dialect",
+    "source",
+    "completeness",
+    "lint",
+    "runs",
+    "artifacts",
+]
+
+_KILL_RECEIPT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "case_id": {"type": "string"},
+        "run_index": {"type": "integer"},
+        "prior_status": {"type": "string"},
+        "status": {"type": "string"},
+    },
+    "required": ["case_id", "run_index", "prior_status", "status"],
+}
+
+_CIRCUIT_GROUP_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string"},
+        "exists": {"type": "boolean"},
+        "last_activity": {"type": ["string", "null"]},
+        "status_counts": {
+            "type": "object",
+            "additionalProperties": {"type": "integer"},
+        },
+        "interrupted_job_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+    },
+    "required": [
+        "path",
+        "exists",
+        "last_activity",
+        "status_counts",
+        "interrupted_job_ids",
+    ],
+}
+
+_RUN_RECORD_SCHEMA = RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["runs"]["properties"]["items"][
+    "items"
+]
+
+
+def _jobs_receipt_schema(action: Literal["status", "wait"]) -> dict[str, Any]:
+    properties = {
+        "action": {"const": action},
+        **_JOBS_COMMON_PROPERTIES,
+        **_JOBS_RECEIPT_PROPERTIES,
+    }
+    required = [*_JOBS_COMMON_REQUIRED, *_JOBS_RECEIPT_REQUIRED]
+    if action == "wait":
+        properties["timed_out"] = {"type": "boolean"}
+        required.append("timed_out")
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
+def _jobs_page_schema(
+    action: Literal["cancel", "list", "runs"],
+    item_schema: dict[str, Any],
+    *,
+    addressed: bool,
+) -> dict[str, Any]:
+    properties = {
+        "action": {"const": action},
+        **_JOBS_COMMON_PROPERTIES,
+        **_JOBS_PAGE_PROPERTIES,
+    }
+    properties["items"] = {"type": "array", "items": item_schema}
+    required = [*_JOBS_COMMON_REQUIRED, "items", "total", "returned", "truncated"]
+    if addressed:
+        properties.update(
+            {
+                "job_id": {"type": ["string", "null"]},
+                "request_id": {"type": ["string", "null"]},
+                "status": {"type": "string"},
+            }
+        )
+        required.extend(["job_id", "request_id", "status"])
+    if action == "runs":
+        properties["dialect"] = {"type": ["string", "null"]}
+        required.append("dialect")
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
+JOBS_OUTPUT_SCHEMA: dict[str, Any] = {
+    "discriminator": {"propertyName": "action"},
+    "oneOf": [
+        _jobs_receipt_schema("status"),
+        _jobs_receipt_schema("wait"),
+        _jobs_page_schema("cancel", _KILL_RECEIPT_SCHEMA, addressed=True),
+        _jobs_page_schema("list", _CIRCUIT_GROUP_SCHEMA, addressed=False),
+        _jobs_page_schema("runs", _RUN_RECORD_SCHEMA, addressed=True),
+    ],
+}
+
+
+@dataclass(frozen=True)
+class _CircuitGroupsRead:
+    groups: list[dict[str, Any]]
+    observations: list[dict[str, Any]]
+
+
+class _JobsActionError(Exception):
+    """Call-level jobs error with a stable machine-readable code."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        stage: str,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.stage = stage
+        self.retryable = retryable
+
+
+def _decode_jobs_cursor(cursor: str | None) -> int:
+    if cursor is None:
+        return 0
+    prefix, separator, raw_offset = cursor.partition(":")
+    if separator != ":" or prefix != "o" or not raw_offset.isdecimal():
+        raise _JobsActionError(
+            "invalid_cursor",
+            "Invalid jobs cursor; use the opaque next_cursor returned by the prior page",
+            stage="pagination",
+        )
+    return int(raw_offset)
+
+
+def _jobs_page(
+    items: list[dict[str, Any]],
+    *,
+    cursor: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    offset = min(_decode_jobs_cursor(cursor), len(items))
+    page = items[offset : offset + limit]
+    truncated = offset + len(page) < len(items)
+    data: dict[str, Any] = {
+        "items": page,
+        "total": len(items),
+        "returned": len(page),
+        "truncated": truncated,
+    }
+    if truncated:
+        data["next_cursor"] = f"o:{offset + len(page)}"
+    return data
+
+
+def _jobs_unpaged(items: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "items": items,
+        "total": len(items),
+        "returned": len(items),
+        "truncated": False,
+    }
+
+
+def _without_control_tokens(value: Any) -> Any:
+    """Recursively remove cancel authority from every jobs response channel."""
+    if isinstance(value, dict):
+        return {
+            key: _without_control_tokens(item)
+            for key, item in value.items()
+            if key != "control_token"
+        }
+    if isinstance(value, list):
+        return [_without_control_tokens(item) for item in value]
+    return value
+
+
+async def _resolve_jobs_target(args: JobsInput, state: SessionState) -> Job:
+    job_id = args.job_id
+    if job_id is None:
+        assert args.request_id is not None
+        index = await asyncio.to_thread(
+            experiment_store.load_request_index,
+            args.request_id,
+            state.working_dir,
+        )
+        if index is None:
+            raise JobNotFoundError(
+                f"No experiment job is indexed for request_id {args.request_id!r}"
+            )
+        raw_job_id = index.get("job_id")
+        if not isinstance(raw_job_id, str):
+            raise JobNotFoundError(
+                f"The request index for {args.request_id!r} does not name a valid job"
+            )
+        job_id = raw_job_id
+    return await services.resolve_job_async(job_id, state)
+
+
+def _job_type_name(job: Job) -> str:
+    if isinstance(job, ExperimentJob):
+        return "experiment"
+    if isinstance(job, BatchJob):
+        return job.job_type
+    return "single"
+
+
+def _analysis_status(job: Job) -> str:
+    return job.analysis.status if isinstance(job, ExperimentJob) else "not_requested"
+
+
+def _jobs_outcome(job: Job) -> Literal["complete", "partial", "failed", "in_progress"]:
+    if job.status in NON_TERMINAL_LIVE_STATUSES:
+        return "in_progress"
+    if job.status in {"failed", "timeout", "interrupted"}:
+        return "failed"
+    if job.status in {"completed_with_failures", "cancelled"}:
+        return "partial"
+    return "complete"
+
+
+def _legacy_run_status(job: SimulationJob, raw_file: Path | None) -> str:
+    if job.status == "completed":
+        return "produced"
+    if raw_file is not None and job.status in {"failed", "timeout", "interrupted"}:
+        return "produced"
+    return job.status
+
+
+def _run_records(
+    job: Job,
+    state: SessionState,
+    *,
+    dialect: str | None,
+) -> list[dict[str, Any]]:
+    if isinstance(job, ExperimentJob):
+        return [_run_item(case) for case in sorted(job.cases, key=lambda item: item.run_index)]
+
+    records: list[dict[str, Any]] = []
+    for run in services.runs_of(job):
+        if run.raw_file is not None:
+            state.raw_dialect_hints[run.raw_file] = dialect
+        if isinstance(job, BatchJob):
+            status = "produced" if run.raw_file is not None else "failed"
+        else:
+            status = _legacy_run_status(job, run.raw_file)
+        records.append(
+            {
+                "case_id": f"{job.job_id}-case-{run.index:04d}",
+                "run_index": run.index,
+                "circuit": str(job.netlist),
+                "assignments": dict(run.params),
+                "status": status,
+                "raw": str(run.raw_file) if run.raw_file is not None else None,
+                "log": str(run.log_file) if run.log_file is not None else None,
+            }
+        )
+    return records
+
+
+def _legacy_completeness(
+    job: SimulationJob | BatchJob,
+    records: list[dict[str, Any]],
+) -> dict[str, int]:
+    expanded = job.total_runs if isinstance(job, BatchJob) else 1
+    produced = sum(item["status"] == "produced" for item in records)
+    if isinstance(job, BatchJob):
+        failed = min(job.failed_runs, expanded - produced)
+        submitted = min(job.completed_runs, expanded)
+    else:
+        failed = int(job.status in {"failed", "timeout", "interrupted"} and not produced)
+        submitted = int(job.status != "queued")
+    remaining = max(0, expanded - produced - failed)
+    cancelled = remaining if job.status == "cancelled" else 0
+    if job.status == "interrupted":
+        failed += remaining
+    return {
+        "declared": expanded,
+        "expanded": expanded,
+        "submitted": submitted,
+        "produced": produced,
+        "failed": failed,
+        "cancelled": cancelled,
+        "skipped": 0,
+    }
+
+
+def _legacy_failures(
+    job: SimulationJob | BatchJob,
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    failures = [
+        {
+            "case_id": item["case_id"],
+            "code": "run_failed",
+            "message": "The legacy run did not produce a raw result",
+        }
+        for item in records
+        if item["status"] == "failed"
+    ]
+    if job.error and not failures:
+        failures.append(
+            {
+                "case_id": f"{job.job_id}-case-0000",
+                "code": job.status,
+                "message": job.error,
+            }
+        )
+    return failures
+
+
+def _legacy_source(
+    job: SimulationJob | BatchJob,
+    *,
+    dialect: str | None,
+) -> dict[str, Any]:
+    return {
+        "circuit": job.netlist.stem,
+        "path": str(job.netlist),
+        "sha256": "",
+        "staged_deck": str(job.netlist),
+        "manifest": [],
+        "linter_version": "",
+        "simulator": job.simulator,
+        "dialect": dialect,
+    }
+
+
+def _receipt_snapshot(
+    action: Literal["status", "wait"],
+    job: Job,
+    state: SessionState,
+    *,
+    timed_out: bool | None = None,
+) -> dict[str, Any]:
+    if isinstance(job, ExperimentJob):
+        data = _job_payload(job, None)
+        data["job_type"] = "experiment"
+        data["dialect"] = services.dialect_for_job(job, state)
+    else:
+        dialect = services.dialect_for_job(job, state)
+        records = _run_records(job, state, dialect=dialect)
+        observations = list(job.observations or []) if isinstance(job, SimulationJob) else []
+        data = {
+            "job_id": job.job_id,
+            "request_id": None,
+            "job_type": _job_type_name(job),
+            "status": job.status,
+            "outcome": _jobs_outcome(job),
+            "source": [_legacy_source(job, dialect=dialect)],
+            "completeness": _legacy_completeness(job, records),
+            "lint": [],
+            "runs": _jobs_page(records, cursor=None, limit=_JOBS_PAGE_LIMIT),
+            "failures": _legacy_failures(job, records),
+            "observations": observations,
+            "warnings": [],
+            "artifacts": [],
+            "hint": "",
+            "dialect": dialect,
+        }
+    data["action"] = action
+    data["analysis_status"] = _analysis_status(job)
+    if timed_out is not None:
+        data["timed_out"] = timed_out
+    if job.status in NON_TERMINAL_LIVE_STATUSES:
+        data["hint"] = (
+            f"Job {job.job_id} is still {job.status}; continue with "
+            f"jobs(action='wait', job_id='{job.job_id}')."
+        )
+    elif data["runs"]["truncated"]:
+        data["hint"] = (
+            f"Run records are paged; continue with jobs(action='runs', "
+            f"job_id='{job.job_id}', cursor={data['runs']['next_cursor']!r})."
+        )
+    elif not data.get("hint"):
+        data["hint"] = f"Job {job.job_id} is {job.status}."
+    return data
+
+
+def _runs_finished(job: Job, wait_for: Literal["all", "runs"]) -> bool:
+    if isinstance(job, ExperimentJob) and wait_for == "runs":
+        return job.runs_done_event.is_set() or all(
+            case.status in TERMINAL_CASE_STATUSES for case in job.cases
+        )
+    return job.done_event.is_set() or job.status in TERMINAL_STATUSES
+
+
+async def _wait_for_jobs_target(
+    job: Job,
+    state: SessionState,
+    *,
+    timeout_s: float,
+    wait_for: Literal["all", "runs"],
+) -> tuple[Job, bool]:
+    if _runs_finished(job, wait_for):
+        return job, False
+
+    if job.owner_pid == os.getpid():
+        if isinstance(job, ExperimentJob):
+            runner = state.runners.get_experiment_runner_for(job)
+            if runner is None:
+                return job, True
+            await runner.wait(job, timeout_s, wait_for=wait_for)
+            current = state.all_jobs.get(job.job_id, job)
+            return current, not _runs_finished(current, wait_for)
+        try:
+            await asyncio.wait_for(job.done_event.wait(), timeout_s)
+        except TimeoutError:
+            return job, True
+        current = state.all_jobs.get(job.job_id, job)
+        return current, not _runs_finished(current, wait_for)
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    current = job
+    while True:
+        current = await state.job_registry.refresh_foreign_job_async(current)
+        if _runs_finished(current, wait_for):
+            return current, False
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return current, True
+        await asyncio.sleep(min(_FOREIGN_WAIT_POLL_S, remaining))
+
+
+def _activity_timestamp(job: ExperimentJob) -> str:
+    activity = job.completed_at or job.started_at
+    return activity.isoformat()
+
+
+def _collect_circuit_groups(
+    state: SessionState,
+    circuit: Path | None,
+    own_experiments: dict[str, ExperimentJob],
+) -> _CircuitGroupsRead:
+    """Blocking recent-index, legacy-summary, and experiment-pointer join.
+
+    ``own_experiments`` is a registry snapshot taken on the event loop —
+    this process's live jobs are counted from it, not from possibly-lagging
+    disk records.
+    """
+    recent_entries = recent.load(prune_missing=False)
+    recent_by_path: dict[str, str | None] = {}
+    for entry in recent_entries:
+        raw_path = entry.get("path")
+        if not isinstance(raw_path, str):
+            continue
+        try:
+            resolved = str(Path(raw_path).resolve())
+        except OSError:
+            resolved = raw_path
+        recent_by_path[resolved] = (
+            entry.get("last_touched") if isinstance(entry.get("last_touched"), str) else None
+        )
+
+    if circuit is not None:
+        candidates = [(circuit, recent_by_path.get(str(circuit)))]
+    else:
+        candidates = []
+        seen: set[str] = set()
+        for entry in recent_entries:
+            raw_path = entry.get("path")
+            if not isinstance(raw_path, str):
+                continue
+            candidate = Path(raw_path)
+            try:
+                key = str(candidate.resolve())
+            except OSError:
+                key = raw_path
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append((candidate, recent_by_path.get(key)))
+
+    groups: list[dict[str, Any]] = []
+    observations: list[dict[str, Any]] = []
+    for circuit_path, last_touched in candidates:
+        legacy = job_store.summarize_circuit(circuit_path)
+        experiment_jobs, pointer_observations = experiment_store.load_pointer_jobs(
+            circuit_path,
+            state.working_dir,
+            prefer=own_experiments,
+        )
+        try:
+            resolved_circuit = circuit_path.resolve()
+        except OSError:
+            resolved_circuit = circuit_path
+        experiment_jobs = [
+            experiment
+            for experiment in experiment_jobs
+            if any(
+                (source.path.resolve() if source.path.exists() else source.path)
+                == resolved_circuit
+                for source in experiment.sources
+            )
+        ]
+        observations.extend(pointer_observations)
+        counts = dict(legacy.get("status_counts") or {})
+        interrupted = list(legacy.get("interrupted_job_ids") or [])
+        activities = [last_touched] if last_touched is not None else []
+        for experiment in experiment_jobs:
+            counts[experiment.status] = counts.get(experiment.status, 0) + 1
+            if experiment.status == "interrupted":
+                interrupted.append(experiment.job_id)
+            activities.append(_activity_timestamp(experiment))
+        groups.append(
+            {
+                "path": str(circuit_path),
+                "exists": bool(legacy.get("exists")),
+                "last_activity": max(activities) if activities else None,
+                "status_counts": counts,
+                "interrupted_job_ids": sorted(set(interrupted)),
+            }
+        )
+    return _CircuitGroupsRead(groups=groups, observations=observations)
+
+
+def _merge_registry_observations(
+    state: SessionState,
+    observations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    seen = {
+        (item.get("code"), item.get("detail"))
+        for item in state.job_registry.observations
+        if isinstance(item, dict)
+    }
+    for observation in observations:
+        key = (observation.get("code"), observation.get("detail"))
+        if key not in seen:
+            state.job_registry.observations.append(observation)
+            seen.add(key)
+    return [dict(item) for item in state.job_registry.observations if isinstance(item, dict)]
+
+
+def _cancel_receipts_for_legacy(
+    job: SimulationJob | BatchJob,
+    prior_status: str,
+    prior_run_indices: set[int],
+) -> list[dict[str, Any]]:
+    if isinstance(job, SimulationJob):
+        return [
+            {
+                "case_id": f"{job.job_id}-case-0000",
+                "run_index": 0,
+                "prior_status": prior_status,
+                "status": job.status,
+            }
+        ]
+    return [
+        {
+            "case_id": f"{job.job_id}-case-{run_index:04d}",
+            "run_index": run_index,
+            "prior_status": "queued",
+            "status": job.status,
+        }
+        for run_index in range(job.total_runs)
+        if run_index not in prior_run_indices
+    ]
+
+
+_FOREIGN_CANCEL_ACK_WAIT_S = 10.0
+
+
+async def _await_foreign_experiment_cancellation(
+    job: ExperimentJob,
+    state: SessionState,
+) -> ExperimentJob:
+    """Poll briefly for the owner to act on the durable cancellation barrier.
+
+    The barrier itself is the contract's acknowledgement (no further case
+    enters submission); this bounded wait only improves the receipt detail.
+    On expiry the latest snapshot is returned — its non-terminal statuses
+    are the honest answer.
+    """
+    current = job
+    deadline = asyncio.get_running_loop().time() + _FOREIGN_CANCEL_ACK_WAIT_S
+    while current.status not in TERMINAL_STATUSES:
+        if asyncio.get_running_loop().time() >= deadline:
+            break
+        await asyncio.sleep(0.5)
+        refreshed = await state.job_registry.refresh_foreign_job_async(current)
+        if not isinstance(refreshed, ExperimentJob):
+            raise _JobsActionError(
+                "cancel_failed",
+                f"Experiment job {job.job_id} changed kind while cancellation was pending",
+                stage="cancellation",
+            )
+        current = refreshed
+    return current
+
+
+async def _cancel_jobs_target(
+    job: Job,
+    args: JobsInput,
+    state: SessionState,
+) -> list[dict[str, Any]]:
+    if job.status in TERMINAL_STATUSES:
+        return []
+
+    if isinstance(job, ExperimentJob):
+        if not experiment_store.cancel_authorized(job, args.control_token):
+            raise _JobsActionError(
+                "cancel_not_authorized",
+                (
+                    f"Cancellation is not authorized for experiment job {job.job_id}; "
+                    "use the control token returned by its original submission or replay"
+                ),
+                stage="authorization",
+            )
+        runner = state.runners.get_experiment_runner_for(job)
+        if runner is None:
+            if job.owner_pid == os.getpid():
+                raise _JobsActionError(
+                    "cancel_unavailable",
+                    (
+                        f"Experiment job {job.job_id} belongs to this process, but its "
+                        "coordinator is no longer live; cancellation was not acknowledged"
+                    ),
+                    stage="cancellation",
+                    retryable=True,
+                )
+            prior = {
+                case.case_id: (case.run_index, case.status)
+                for case in job.cases
+                if case.status not in TERMINAL_CASE_STATUSES
+            }
+            token = args.control_token
+            if token is None:
+                raise _JobsActionError(
+                    "cancel_not_authorized",
+                    f"Job {job.job_id} is owned by another live process; cancelling it "
+                    "requires the control_token from its submission receipt",
+                    stage="cancellation",
+                )
+            persisted = await asyncio.to_thread(
+                experiment_store.request_cancellation,
+                job.job_id,
+                state.working_dir,
+                token,
+            )
+            if persisted is None:
+                raise JobNotFoundError(f"Job not found: {job.job_id}")
+            finished = await _await_foreign_experiment_cancellation(job, state)
+            final_by_case = {case.case_id: case.status for case in finished.cases}
+            return [
+                {
+                    "case_id": case_id,
+                    "run_index": run_index,
+                    "prior_status": prior_status,
+                    "status": final_by_case.get(case_id, "cancelled"),
+                }
+                for case_id, (run_index, prior_status) in prior.items()
+            ]
+        receipts = await runner.cancel(job, control_token=args.control_token)
+        run_indices = {case.case_id: case.run_index for case in job.cases}
+        return [
+            {
+                **receipt,
+                "run_index": run_indices[receipt["case_id"]],
+            }
+            for receipt in receipts
+        ]
+
+    if job.owner_pid != os.getpid():
+        raise _JobsActionError(
+            "cancel_not_authorized",
+            (
+                f"Legacy job {job.job_id} is owned by another process and legacy jobs "
+                "have no transferable control token; cancellation was not attempted"
+            ),
+            stage="authorization",
+        )
+
+    prior_status = job.status
+    prior_run_indices = (
+        {run.index for run in services.runs_of(job)} if isinstance(job, BatchJob) else set()
+    )
+    from ltspice_mcp.tools.simulation import CancelJobInput, handle_cancel_job
+
+    await handle_cancel_job(CancelJobInput(job_id=job.job_id), state)
+    return _cancel_receipts_for_legacy(job, prior_status, prior_run_indices)
+
+
+def _jobs_error_payload(
+    args: JobsInput,
+    *,
+    code: str,
+    message: str,
+    stage: str,
+    retryable: bool,
+) -> dict[str, Any]:
+    common: dict[str, Any] = {
+        "action": args.action,
+        "outcome": "failed",
+        "observations": [],
+        "warnings": [],
+        "failures": [],
+        "hint": message,
+        "error": {
+            "code": code,
+            "message": message,
+            "stage": stage,
+            "retryable": retryable,
+            "commit_state": "not_started",
+        },
+    }
+    if args.action in {"status", "wait"}:
+        common.update(
+            {
+                "job_id": args.job_id,
+                "request_id": args.request_id,
+                "job_type": "unknown",
+                "status": "unknown",
+                "analysis_status": "not_requested",
+                "dialect": None,
+                "source": [],
+                "completeness": asdict(Completeness()),
+                "lint": [],
+                "runs": _jobs_page([], cursor=None, limit=_JOBS_PAGE_LIMIT),
+                "artifacts": [],
+            }
+        )
+        if args.action == "wait":
+            common["timed_out"] = False
+        return common
+    common.update(_jobs_unpaged([]))
+    if args.action in {"cancel", "runs"}:
+        common.update(
+            {
+                "job_id": args.job_id,
+                "request_id": args.request_id,
+                "status": "unknown",
+            }
+        )
+    if args.action == "runs":
+        common["dialect"] = None
+    return common
+
+
+def _jobs_error_details(exc: Exception) -> tuple[str, str, bool]:
+    if isinstance(exc, _JobsActionError):
+        return exc.code, exc.stage, exc.retryable
+    if isinstance(exc, JobNotFoundError):
+        return "job_not_found", "resolution", False
+    if isinstance(exc, PathSecurityError):
+        return "path_denied", "resolution", False
+    if isinstance(exc, ExperimentCancellationError):
+        code = "cancel_not_authorized" if "not authorized" in str(exc).lower() else "cancel_failed"
+        return code, "cancellation", False
+    if isinstance(exc, PermissionError):
+        return "cancel_not_authorized", "authorization", False
+    if isinstance(exc, LTSpiceMCPError):
+        return "jobs_failed", "execution", False
+    if isinstance(exc, (OSError, ValueError)):
+        return "jobs_failed", "execution", True
+    return "jobs_failed", "execution", False
+
+
+@registry.tool(
+    name="jobs",
+    description=(
+        "Control durable jobs by job_id or experiment request_id: read status, "
+        "wait for runs or attached analysis, cancel with owner/token authority, "
+        "list recent circuit groups, or page run records."
+    ),
+    input_model=JobsInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+    profiles=("consolidated",),
+    output_schema=JOBS_OUTPUT_SCHEMA,
+)
+async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolResult:
+    """Execute one jobs control-plane action with an action-discriminated response."""
+    is_error = False
+    try:
+        if args.action == "list":
+            circuit = (
+                await asyncio.to_thread(safe_path, args.circuit, state)
+                if args.circuit is not None
+                else None
+            )
+            own_experiments = {
+                job_id: job
+                for job_id, job in state.all_jobs.items()
+                if isinstance(job, ExperimentJob)
+            }
+            loaded = await asyncio.to_thread(
+                _collect_circuit_groups, state, circuit, own_experiments
+            )
+            observations = _merge_registry_observations(state, loaded.observations)
+            data = {
+                "action": "list",
+                "outcome": "complete",
+                **_jobs_page(loaded.groups, cursor=args.cursor, limit=args.limit),
+                "observations": observations,
+                "warnings": [],
+                "failures": [],
+                "hint": (
+                    "Recent circuit groups are ordered by the recent-circuits index."
+                    if circuit is None
+                    else f"Persisted job summary for {circuit}."
+                ),
+            }
+            text = f"Listed {data['returned']} of {data['total']} circuit group(s)"
+        else:
+            job = await _resolve_jobs_target(args, state)
+            request_id = job.request_id if isinstance(job, ExperimentJob) else None
+            if args.action == "status":
+                data = _receipt_snapshot("status", job, state)
+                text = f"Job {job.job_id}: {job.status}"
+            elif args.action == "wait":
+                job, timed_out = await _wait_for_jobs_target(
+                    job,
+                    state,
+                    timeout_s=args.timeout_s,
+                    wait_for=args.wait_for,
+                )
+                data = _receipt_snapshot(
+                    "wait",
+                    job,
+                    state,
+                    timed_out=timed_out,
+                )
+                text = (
+                    f"Wait for job {job.job_id} timed out at status {job.status}"
+                    if timed_out
+                    else f"Job {job.job_id} reached {args.wait_for} terminality"
+                )
+            elif args.action == "runs":
+                dialect = services.dialect_for_job(job, state)
+                records = _run_records(job, state, dialect=dialect)
+                page = _jobs_page(
+                    records,
+                    cursor=args.cursor,
+                    limit=_JOBS_PAGE_LIMIT,
+                )
+                data = {
+                    "action": "runs",
+                    "outcome": _jobs_outcome(job),
+                    "job_id": job.job_id,
+                    "request_id": request_id,
+                    "status": job.status,
+                    "dialect": dialect,
+                    **page,
+                    "observations": [],
+                    "warnings": [],
+                    "failures": [],
+                    "hint": (
+                        "Use next_cursor to continue the run page."
+                        if page["truncated"]
+                        else f"Returned all recorded runs for job {job.job_id}."
+                    ),
+                }
+                text = f"Returned {data['returned']} of {data['total']} run record(s)"
+            else:
+                receipts = await _cancel_jobs_target(job, args, state)
+                job = state.all_jobs.get(job.job_id, job)
+                data = {
+                    "action": "cancel",
+                    "outcome": "complete",
+                    "job_id": job.job_id,
+                    "request_id": request_id,
+                    "status": job.status,
+                    **_jobs_unpaged(receipts),
+                    "observations": [],
+                    "warnings": [],
+                    "failures": [],
+                    "hint": (
+                        f"Job {job.job_id} was already terminal; no cancellation was needed."
+                        if not receipts
+                        else (
+                            f"Cancellation of job {job.job_id} is acknowledged; no further "
+                            "case can enter submission."
+                        )
+                    ),
+                }
+                text = f"Cancellation acknowledged for job {job.job_id}"
+    except Exception as exc:
+        code, stage, retryable = _jobs_error_details(exc)
+        data = _jobs_error_payload(
+            args,
+            code=code,
+            message=str(exc),
+            stage=stage,
+            retryable=retryable,
+        )
+        text = str(exc)
+        is_error = True
+
+    data = _without_control_tokens(data)
+    result = format_response(text, data)
+    result.isError = is_error
+    return result

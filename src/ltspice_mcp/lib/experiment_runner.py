@@ -7,7 +7,6 @@ import contextlib
 import hashlib
 import json
 import logging
-import os
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -112,6 +111,7 @@ class _Execution:
     futures: dict[str, asyncio.Future[RunOutcome]] = field(default_factory=dict)
     case_tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
     deadline_task: asyncio.Task[None] | None = None
+    external_cancel_task: asyncio.Task[None] | None = None
     case_event_count: int = 0
 
 
@@ -397,6 +397,9 @@ class ExperimentRunner(RunnerBase):
         job = execution.job
         request = execution.request
         try:
+            execution.external_cancel_task = self.loop.create_task(
+                self._external_cancel_watch(execution)
+            )
             transition(job, "running", state=request.state, total_cases=len(job.cases))
             for case in job.cases:
                 if case.status in TERMINAL_CASE_STATUSES:
@@ -469,8 +472,36 @@ class ExperimentRunner(RunnerBase):
                 execution.deadline_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await execution.deadline_task
+            if execution.external_cancel_task is not None:
+                execution.external_cancel_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await execution.external_cancel_task
             if not execution.retained_slots:
                 self._executions.pop(job.job_id, None)
+
+    async def _external_cancel_watch(self, execution: _Execution) -> None:
+        """Observe durable cancellation requests made by another server process."""
+        while not execution.job.done_event.is_set():
+            requested = await asyncio.to_thread(
+                experiment_store.cancellation_requested,
+                execution.job.job_id,
+                execution.request.state.working_dir,
+            )
+            if requested:
+                execution.job.observations.append(
+                    {
+                        "code": "external_cancellation_requested",
+                        "kind": "execution",
+                        "detail": (
+                            "A server process holding the experiment control token "
+                            "requested cancellation through the durable job store."
+                        ),
+                    }
+                )
+                self._request_stop(execution, "cancelled")
+                execution.request.state.persist_job(execution.job)
+                return
+            await asyncio.sleep(0.5)
 
     async def _deadline_watch(self, execution: _Execution, deadline_s: float) -> None:
         if deadline_s <= 0:
@@ -488,6 +519,30 @@ class ExperimentRunner(RunnerBase):
         )
         self._request_stop(execution, "job_deadline")
 
+    def _submit_case_under_cancel_gate(
+        self,
+        execution: _Execution,
+        case: ExperimentCase,
+        suffix: str,
+    ) -> bool:
+        """Submit only if no cross-process cancellation marker won the gate."""
+        working_dir = execution.request.state.working_dir
+        with file_lock(
+            experiment_store.cancellation_lock_target(execution.job.job_id, working_dir)
+        ):
+            if experiment_store.cancellation_requested(execution.job.job_id, working_dir):
+                return False
+        self.submit_netlist(
+            case.staged_deck,
+            f"{case.run_token}{suffix}",
+            lambda outcome: self._handle_case_completion(
+                execution.job.job_id,
+                case.case_id,
+                outcome,
+            ),
+        )
+        return True
+
     async def _run_case(self, execution: _Execution, case: ExperimentCase) -> None:
         acquired = False
         try:
@@ -500,23 +555,27 @@ class ExperimentRunner(RunnerBase):
                 self._release_slot(execution, case.case_id)
                 return
 
-            case.status = "submitted"
-            case.submitted_at = now()
-            self._checkpoint_case_transition(execution)
             future: asyncio.Future[RunOutcome] = self.loop.create_future()
             execution.futures[case.case_id] = future
             suffix = case.staged_deck.suffix or ".net"
             try:
-                await asyncio.to_thread(
-                    self.submit_netlist,
-                    case.staged_deck,
-                    f"{case.run_token}{suffix}",
-                    lambda outcome: self._handle_case_completion(
-                        execution.job.job_id,
-                        case.case_id,
-                        outcome,
-                    ),
+                submitted = await asyncio.to_thread(
+                    self._submit_case_under_cancel_gate,
+                    execution,
+                    case,
+                    suffix,
                 )
+                if not submitted:
+                    self._request_stop(
+                        execution,
+                        "cancelled",
+                        exclude_case_id=case.case_id,
+                    )
+                    self._release_slot(execution, case.case_id)
+                    return
+                case.status = "submitted"
+                case.submitted_at = now()
+                self._checkpoint_case_transition(execution)
                 case.status = "running"
                 self._checkpoint_case_transition(execution)
             except Exception as exc:
@@ -769,6 +828,8 @@ class ExperimentRunner(RunnerBase):
         self,
         execution: _Execution,
         reason: Literal["cancelled", "job_deadline"],
+        *,
+        exclude_case_id: str | None = None,
     ) -> None:
         if execution.stop_reason is None:
             execution.stop_reason = reason
@@ -778,7 +839,7 @@ class ExperimentRunner(RunnerBase):
                 continue
             self._terminalize_stopped_case(execution, case)
             task = execution.case_tasks.get(case.case_id)
-            if task is not None:
+            if task is not None and case.case_id != exclude_case_id:
                 task.cancel()
 
     def _terminalize_stopped_case(
@@ -896,12 +957,7 @@ class ExperimentRunner(RunnerBase):
         control_token: str | None = None,
     ) -> list[dict[str, Any]]:
         """Stop further submissions and kill active cases when authorized."""
-        authorized = job.owner_pid == os.getpid() or (
-            control_token is not None
-            and bool(job.control_token)
-            and secrets.compare_digest(control_token, job.control_token)
-        )
-        if not authorized:
+        if not experiment_store.cancel_authorized(job, control_token):
             raise ExperimentCancellationError(
                 f"Cancellation is not authorized for experiment job {job.job_id}"
             )
