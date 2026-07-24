@@ -15,15 +15,12 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import asdict
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import psutil
-
-from ltspice_mcp.lib import atomic_write_json, parse_iso_datetime
+from ltspice_mcp.lib import parse_iso_datetime
+from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_types import (
     NON_TERMINAL_LIVE_STATUSES,
     TERMINAL_STATUSES,
@@ -32,6 +29,12 @@ from ltspice_mcp.lib.job_types import (
     SimulationJob,
     SweepConfig,
     SweepDimension,
+)
+from ltspice_mcp.lib.store_common import (
+    accept_schema,
+    atomic_write_json,
+    owner_alive,
+    pid_of,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,28 +52,6 @@ SCHEMA_VERSION = 2
 # migration function lands in ``_MIGRATIONS``.
 SUPPORTED_VERSIONS: frozenset[int] = frozenset({1, 2})
 INTERRUPTED_STATUS = "interrupted"
-
-
-def _migrate(data: dict, from_version: int) -> dict:
-    """Upgrade a loaded record from ``from_version`` to ``SCHEMA_VERSION``.
-
-    Applies each step in the chain ``_MIGRATIONS[v](data)``. When adding a
-    new schema version, bump ``SCHEMA_VERSION``, add the current version to
-    ``SUPPORTED_VERSIONS``, and register a migration function here.
-    Migrations MUST be idempotent-safe: if called twice on the same dict
-    they should not corrupt it.
-    """
-    current = from_version
-    while current < SCHEMA_VERSION:
-        migrate_fn = _MIGRATIONS.get(current)
-        if migrate_fn is None:
-            raise ValueError(
-                f"No migration path from schema_version {current} to {SCHEMA_VERSION}"
-            )
-        data = migrate_fn(data)
-        current += 1
-    data["schema_version"] = SCHEMA_VERSION
-    return data
 
 
 def _migrate_v1_to_v2(data: dict) -> dict:
@@ -94,14 +75,6 @@ def sidecar_dir(circuit_path: Path) -> Path:
 
 def _job_file(job_id: str, dir_: Path) -> Path:
     return dir_ / f"{job_id}.json"
-
-
-def _json_default(obj: Any) -> Any:
-    if isinstance(obj, Path):
-        return str(obj)
-    if isinstance(obj, datetime):
-        return obj.isoformat()
-    raise TypeError(f"Not JSON-serializable: {type(obj).__name__}")
 
 
 def _serialize_sim_job(job: SimulationJob) -> dict:
@@ -176,7 +149,7 @@ def save_job(job: SimulationJob | BatchJob) -> Path:
     """Persist a job to its circuit's sidecar directory. Returns the file path."""
     target_dir = sidecar_dir(job.netlist)
     path = _job_file(job.job_id, target_dir)
-    atomic_write_json(path, serialize_job(job), default=_json_default)
+    atomic_write_json(path, serialize_job(job))
     logger.debug("Persisted job %s to %s", job.job_id, path)
     return path
 
@@ -190,37 +163,6 @@ def delete_job(job: SimulationJob | BatchJob) -> None:
         return
 
 
-def _pid_of(data: dict) -> int | None:
-    """Owning-server pid from a job record, or None if absent/invalid."""
-    pid = data.get("pid")
-    return pid if isinstance(pid, int) and pid > 0 else None
-
-
-def _owner_alive(pid: int | None, *, own_is_alive: bool = False) -> bool:
-    """Whether the record's owning server process is still running.
-
-    ``own_is_alive`` decides how a record carrying OUR pid reads, because
-    the right answer depends on the caller. Registry loading passes False:
-    a record we're loading isn't in our registry, so a matching pid can only
-    be a recycled one — dead owner. Disk-level summaries pass True: there
-    the overwhelmingly common own-pid case is this server's genuinely
-    running job (which registry loading never sees — it dedups against
-    in-memory jobs first).
-
-    Liveness only — a pid recycled by an unrelated process also reads as
-    alive until it exits; compare process create_time against the job's
-    started_at if that ever matters in practice.
-    """
-    if not pid:
-        return False
-    if pid == os.getpid():
-        return own_is_alive
-    try:
-        return psutil.pid_exists(pid)
-    except Exception:
-        return False
-
-
 def _finalize_loaded_status(
     raw_status: str, owner_pid: int | None = None, *, own_is_alive: bool = False
 ) -> tuple[str, bool]:
@@ -229,10 +171,10 @@ def _finalize_loaded_status(
     Returns (effective_status, was_interrupted). Running/queued jobs whose
     owning process is gone come back as ``interrupted``; if the owner is
     still alive (a parallel server session's live job), the status stands
-    as written. ``own_is_alive`` is forwarded to ``_owner_alive`` — see its
+    as written. ``own_is_alive`` is forwarded to ``owner_alive`` — see its
     docstring for which callers pass True.
     """
-    if raw_status in NON_TERMINAL_LIVE_STATUSES and not _owner_alive(
+    if raw_status in NON_TERMINAL_LIVE_STATUSES and not owner_alive(
         owner_pid, own_is_alive=own_is_alive
     ):
         return INTERRUPTED_STATUS, True
@@ -246,49 +188,19 @@ def _accept_schema(data: dict, source: Path) -> bool:
     current-schema shape without special-casing versions. Returns False for
     unsupported versions or schemas (caller should skip that record).
     """
-    schema = data.get("schema")
-    if schema != SCHEMA:
-        logger.warning(
-            "Skipping job file %s: unexpected schema %r (expected %s)",
-            source,
-            schema,
-            SCHEMA,
-        )
-        return False
-
-    raw_version = data.get("schema_version")
-    if raw_version is None:
-        logger.warning("Skipping job file %s: missing schema_version", source)
-        return False
-    if not isinstance(raw_version, int):
-        logger.warning(
-            "Skipping job file %s: schema_version must be an integer, got %r",
-            source,
-            raw_version,
-        )
-        return False
-
-    if raw_version == SCHEMA_VERSION:
-        return True
-    if raw_version in SUPPORTED_VERSIONS and raw_version < SCHEMA_VERSION:
-        try:
-            _migrate(data, raw_version)
-        except ValueError as e:
-            logger.warning("Skipping job file %s: %s", source, e)
-            return False
-        return True
-
-    logger.warning(
-        "Skipping job file %s: unsupported schema_version %d (this build reads %s)",
+    return accept_schema(
+        data,
         source,
-        raw_version,
-        sorted(SUPPORTED_VERSIONS),
+        schema=SCHEMA,
+        current_version=SCHEMA_VERSION,
+        supported_versions=SUPPORTED_VERSIONS,
+        migrations=_MIGRATIONS,
+        logger=logger,
     )
-    return False
 
 
 def _deserialize_sim_job(data: dict) -> SimulationJob:
-    pid = _pid_of(data)
+    pid = pid_of(data)
     status, interrupted = _finalize_loaded_status(str(data.get("status", INTERRUPTED_STATUS)), pid)
     started = parse_iso_datetime(data.get("started_at"))
     if started is None:
@@ -364,7 +276,7 @@ def _deserialize_mc_config(data: dict | None) -> MonteCarloConfig | None:
 
 
 def _deserialize_batch_job(data: dict) -> BatchJob:
-    pid = _pid_of(data)
+    pid = pid_of(data)
     status, interrupted = _finalize_loaded_status(str(data.get("status", INTERRUPTED_STATUS)), pid)
     started = parse_iso_datetime(data.get("started_at"))
     if started is None:
@@ -406,7 +318,7 @@ def _deserialize_batch_job(data: dict) -> BatchJob:
     return bj
 
 
-def _load_job_file(path: Path) -> SimulationJob | BatchJob | None:
+def _load_job_file(path: Path) -> SimulationJob | BatchJob | ExperimentJob | None:
     """Read + schema-check + deserialize one sidecar record, or None.
 
     Unreadable, unsupported-schema, and malformed files log a warning and
@@ -418,6 +330,19 @@ def _load_job_file(path: Path) -> SimulationJob | BatchJob | None:
     except (OSError, json.JSONDecodeError) as e:
         logger.warning("Skipping unreadable job file %s: %s", path, e)
         return None
+    if data.get("kind") == "experiment":
+        try:
+            from ltspice_mcp.lib import experiment_store
+
+            working_dir = path.parent.parent.parent
+            return experiment_store.load_job_from_path(
+                path,
+                working_dir,
+                own_is_alive=True,
+            )
+        except Exception as e:
+            logger.warning("Skipping malformed experiment job file %s: %s", path, e)
+            return None
     if not _accept_schema(data, path):
         return None
     try:
@@ -452,7 +377,7 @@ def load_jobs_for_circuit(
     return sim_jobs, batch_jobs
 
 
-def load_job(job_id: str, netlist: Path) -> SimulationJob | BatchJob | None:
+def load_job(job_id: str, netlist: Path) -> SimulationJob | BatchJob | ExperimentJob | None:
     """Load one job record by id from its circuit's sidecar, or None.
 
     Used to refresh this session's view of a job owned by a parallel server
@@ -506,7 +431,7 @@ def summarize_circuit(circuit_path: Path) -> dict[str, Any]:
             # always THIS server's live job (not a recycled pid), so the
             # summary reports it as running.
             status, _ = _finalize_loaded_status(
-                str(data.get("status", "unknown")), _pid_of(data), own_is_alive=True
+                str(data.get("status", "unknown")), pid_of(data), own_is_alive=True
             )
             counts[status] = counts.get(status, 0) + 1
             total += 1

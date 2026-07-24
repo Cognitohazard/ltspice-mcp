@@ -463,7 +463,11 @@ async def _resolve_artifact_dest(
         out_path = (dest_anchor / filename).resolve()
     else:
         if job_id:
-            dest_anchor = (await services.resolve_job_async(job_id, state)).netlist.parent
+            job = await services.resolve_job_async(job_id, state)
+            dest_anchor = services.legacy_job_netlist(
+                job,
+                operation="Legacy artifact export",
+            ).parent
         else:
             dest_anchor = safe_path(raw_file, state).parent  # type: ignore[arg-type]
         # Sidecar next to the anchor — but if the anchor is already inside a
@@ -2428,7 +2432,11 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
     requested = None
     source_amplitudes = None
     if args.job_id:
-        job_netlist = (await services.resolve_job_async(args.job_id, state)).netlist
+        job = await services.resolve_job_async(args.job_id, state)
+        job_netlist = services.legacy_job_netlist(
+            job,
+            operation="simulation_summary",
+        )
         requested, source_amplitudes = await asyncio.to_thread(
             deck_observation_inputs, job_netlist
         )
@@ -3603,8 +3611,14 @@ async def handle_noise_integral(args: NoiseIntegralInput, state: SessionState):
         # the deck's .NOISE line when a job_id makes it reachable.
         netlist = None
         if args.job_id:
+            resolved_job = None
             with contextlib.suppress(Exception):
-                netlist = (await services.resolve_job_async(args.job_id, state)).netlist
+                resolved_job = await services.resolve_job_async(args.job_id, state)
+            if resolved_job is not None:
+                netlist = services.legacy_job_netlist(
+                    resolved_job,
+                    operation="noise_integral",
+                )
         resolved = _noise_input_source_unit(netlist)
         if resolved is not None:
             unit = resolved
@@ -3942,6 +3956,7 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
     caveats: list[str] = []
     if args.job_id is not None:
         job = await services.resolve_job_async(args.job_id, state)
+        job_netlist = services.legacy_job_netlist(job, operation="measurement_stats")
         if isinstance(job, BatchJob):
             # Offloaded: the walk parses one .log per run through spicelib —
             # hundreds of unbounded parses on a large Monte Carlo batch, which
@@ -3993,7 +4008,7 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
             # job-id-addressed read; the path is a trusted server artifact.
             log_path = services.resolve_log_file(args.job_id, state)
             flat_values, axis_map, steps_label, at_map = await asyncio.to_thread(
-                _aggregate_log_measurements, log_path, job.netlist
+                _aggregate_log_measurements, log_path, job_netlist
             )
     elif args.log_file is not None:
         flat_values, axis_map, steps_label, at_map = await asyncio.to_thread(

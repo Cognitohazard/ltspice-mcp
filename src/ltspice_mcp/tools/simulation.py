@@ -15,6 +15,7 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import ResultError, SimulationError
 from ltspice_mcp.lib import now, services
 from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.log_parser import extract_error_context, parse_success_summary
 from ltspice_mcp.lib.mcp_logging import mcp_log
@@ -24,6 +25,7 @@ from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice, no_simulat
 from ltspice_mcp.lib.spice_validator import estimate_analysis_points
 from ltspice_mcp.state import (
     NON_TERMINAL_LIVE_STATUSES,
+    TERMINAL_STATUSES,
     BatchJob,
     SessionState,
     SimulationJob,
@@ -283,7 +285,9 @@ class CheckJobInput(ToolInput):
         Literal[
             "running",
             "queued",
+            "analyzing",
             "completed",
+            "completed_with_failures",
             "failed",
             "timeout",
             "cancelled",
@@ -1035,6 +1039,10 @@ def _format_success_response(job: SimulationJob, summary: dict, fmt: str | None 
                         "job_type": {"type": "string"},
                         "status": {"type": "string"},
                         "netlist": {"type": "string"},
+                        "sources": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "started_at": {"type": "string"},
                         "duration": {"type": "number"},
                     },
@@ -1058,6 +1066,8 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
     # (sweep/MC) jobs get a concise status here pointing at the richer
     # per-run view in batch_results.
     resolved = await services.resolve_job_async(job_id, state)
+    if isinstance(resolved, ExperimentJob):
+        services.reject_experiment_job(resolved, "check_job", state)
     if isinstance(resolved, BatchJob):
         return _check_batch_job(resolved, fmt)
     job = resolved
@@ -1172,6 +1182,13 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
             data,
             fmt,
         )
+    elif job.status in TERMINAL_STATUSES:
+        data = _terminal_job_data(job, job.status)
+        return format_response(
+            f"Job {job_id} ended with status: {job.status}\nNetlist: {job.netlist}",
+            data,
+            fmt,
+        )
     else:
         data = {"job_id": job_id, "status": job.status}
         return format_response(f"Job {job_id} has unexpected status: {job.status}", data, fmt)
@@ -1241,12 +1258,12 @@ def _check_batch_job(batch_job: BatchJob, fmt: str | None = None):
 
 
 def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = None):
-    """List simulation jobs (single + batch) with optional status filter."""
+    """List all registered job kinds with an optional status filter."""
     status_filter = arguments.status
 
     # The union store holds every job (single-run and sweep/MC batch), so
     # check_job is a complete view of "what jobs exist".
-    all_jobs: list[SimulationJob | BatchJob] = state.job_registry.refreshed_jobs()
+    all_jobs: list[SimulationJob | BatchJob | ExperimentJob] = state.job_registry.refreshed_jobs()
 
     # Determine which jobs to show
     if status_filter == "all":
@@ -1269,15 +1286,16 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
             )
             empty_data["hint"] = message
         elif all_jobs:
-            # Default view shows only queued/running; terminal jobs are hidden.
+            # Default view shows only live jobs; terminal jobs are hidden.
             # Say so and how to widen, so a just-completed run isn't read as
             # "nothing exists". Mirrored into the data dict as a hint:
             # structured-content clients never see the text channel, and
             # {jobs: [], count: 0} alone reads as "nothing exists".
             message = (
-                f"No active jobs (queued/running). {len(all_jobs)} finished job(s) are "
+                f"No active jobs (queued/running/analyzing). {len(all_jobs)} finished job(s) are "
                 'hidden — pass status="all" to list them, or a specific status '
-                "(completed, failed, timeout, cancelled, interrupted)."
+                "(completed, completed_with_failures, failed, timeout, cancelled, "
+                "interrupted)."
             )
             empty_data["hint"] = message
         else:
@@ -1314,20 +1332,30 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
             emit_duration = False
 
         started_str = job.started_at.strftime("%Y-%m-%d %H:%M")
-        netlist_name = job.netlist.name
+        if isinstance(job, ExperimentJob):
+            netlist_name = f"{len(job.sources)} circuit(s)"
+        else:
+            netlist_name = job.netlist.name
         if len(netlist_name) > 20:
             netlist_name = netlist_name[:17] + "..."
 
         lines.append(
             f"{job.job_id:<28} | {job.status:<10} | {netlist_name:<20} | {started_str:<17} | {duration_str}"
         )
-        entry = {
+        entry: dict = {
             "job_id": job.job_id,
-            "job_type": getattr(job, "job_type", "single"),
+            "job_type": (
+                "experiment"
+                if isinstance(job, ExperimentJob)
+                else getattr(job, "job_type", "single")
+            ),
             "status": job.status,
-            "netlist": str(job.netlist),
             "started_at": job.started_at.isoformat(),
         }
+        if isinstance(job, ExperimentJob):
+            entry["sources"] = [str(source.path) for source in job.sources]
+        else:
+            entry["netlist"] = str(job.netlist)
         if emit_duration:
             entry["duration"] = duration
         jobs_data.append(entry)
@@ -1360,6 +1388,8 @@ async def handle_cancel_job(args: CancelJobInput, state: SessionState) -> types.
     job_id = args.job_id
 
     job = await services.resolve_job_async(job_id, state)
+    if isinstance(job, ExperimentJob):
+        services.reject_experiment_job(job, "cancel_job", state)
 
     # Check if job is running
     if job.status not in NON_TERMINAL_LIVE_STATUSES:

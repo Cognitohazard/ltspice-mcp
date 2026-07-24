@@ -1,10 +1,10 @@
 """Centralized runner lifecycle management.
 
-Owns SimulationRunner, SweepRunner, and MonteCarloRunner instances.
+Owns simulation, batch, Monte Carlo, and experiment runner instances.
 Replaces the fragile module-level singleton pattern where each tool module
 independently checked for staleness (event loop, simulator, output folder).
 
-All three runners share the same constructor signature and staleness
+All runners share the same constructor signature and staleness
 conditions. This class provides a single invalidation mechanism.
 """
 
@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from ltspice_mcp.lib.runner_base import DEFAULT_MAX_PARALLEL
 
 if TYPE_CHECKING:
+    from ltspice_mcp.lib.experiment_runner import ExperimentRunner
     from ltspice_mcp.lib.montecarlo_runner import MonteCarloRunner
     from ltspice_mcp.lib.sim_runner import SimulationRunner
     from ltspice_mcp.lib.sweep_runner import SweepRunner
@@ -29,6 +30,7 @@ _RUNNER_IMPORTS: dict[str, tuple[str, str]] = {
     "sim": ("ltspice_mcp.lib.sim_runner", "SimulationRunner"),
     "sweep": ("ltspice_mcp.lib.sweep_runner", "SweepRunner"),
     "mc": ("ltspice_mcp.lib.montecarlo_runner", "MonteCarloRunner"),
+    "experiment": ("ltspice_mcp.lib.experiment_runner", "ExperimentRunner"),
 }
 
 
@@ -155,6 +157,13 @@ class RunnerManager:
         """Return a cached ``SimulationRunner`` if present (see ``_get_existing``)."""
         return self._get_existing("sim", simulator)
 
+    def get_experiment_runner_for(self, job: Any) -> ExperimentRunner | None:
+        """Return the live coordinator that owns an experiment job."""
+        for (kind, _cls, _folder), runner in self._runners.items():
+            if kind == "experiment" and runner.owns_experiment_job(job.job_id):
+                return runner
+        return None
+
     def get_sim_runner(
         self,
         loop: asyncio.AbstractEventLoop,
@@ -184,3 +193,19 @@ class RunnerManager:
     ) -> MonteCarloRunner:
         """Get or create a MonteCarloRunner."""
         return self._get_or_create("mc", loop, simulator_class, output_folder, max_parallel)
+
+    def get_experiment_runner(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        simulator_class: type,
+        output_folder: Path,
+        max_parallel: int = DEFAULT_MAX_PARALLEL,
+    ) -> ExperimentRunner:
+        """Get or create an ExperimentRunner."""
+        return self._get_or_create(
+            "experiment",
+            loop,
+            simulator_class,
+            output_folder,
+            max_parallel,
+        )

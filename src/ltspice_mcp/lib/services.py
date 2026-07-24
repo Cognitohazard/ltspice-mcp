@@ -12,19 +12,21 @@ import asyncio
 import logging
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Literal, NoReturn, TypeVar
 
 from spicelib import AscEditor, SpiceEditor
 from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import BatchJobError, JobNotFoundError, ResultError, SimulationError
-from ltspice_mcp.lib import job_store, recent
+from ltspice_mcp.lib import experiment_store, job_store, recent
 from ltspice_mcp.lib.batch_results import (
     compute_batch_stats,
     filter_runs_by_params,
     get_progress_snapshot,
 )
+from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.library_manager import LibraryManager
 from ltspice_mcp.lib.log_parser import (
@@ -191,7 +193,24 @@ def ngbehavior_lib_hint(
     )
 
 
-def resolve_job(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
+Job = SimulationJob | BatchJob | ExperimentJob
+
+
+def _experiment_was_reconciled(job: ExperimentJob) -> bool:
+    return any(item.get("code") == "server_restarted" for item in job.observations)
+
+
+def _load_experiment_direct(job_id: str, state: SessionState) -> ExperimentJob | None:
+    try:
+        experiment_store.validate_job_id(job_id)
+    except ValueError as exc:
+        raise ResultError(str(exc)) from None
+    if not state.job_registry.persist_enabled:
+        return None
+    return experiment_store.load_job(job_id, state.working_dir, own_is_alive=True)
+
+
+def resolve_job(job_id: str, state: SessionState) -> Job:
     """Look up any job by id in the union job store.
 
     Raises ``JobNotFoundError`` for an unknown id — the one place that
@@ -199,14 +218,24 @@ def resolve_job(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
     """
     job = state.all_jobs.get(job_id)
     if job is None:
-        raise JobNotFoundError(f"Job not found: {job_id}")
+        job = _load_experiment_direct(job_id, state)
+        if job is None:
+            raise JobNotFoundError(f"Job not found: {job_id}")
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            state.job_registry.jobs[job.job_id] = job
+        if _experiment_was_reconciled(job):
+            state.persist_job(job)
     # A parallel session's live job is only ever updated by its owner; pull
     # the owner's latest persisted state so status checks and result reads
     # here don't stay frozen at "running". No-op for this session's own jobs.
     return state.job_registry.refresh_foreign_job(job)
 
 
-async def resolve_job_async(job_id: str, state: SessionState) -> SimulationJob | BatchJob:
+async def resolve_job_async(job_id: str, state: SessionState) -> Job:
     """Loop-safe ``resolve_job``: offload the foreign-job sidecar re-read.
 
     Use from async handlers so the parallel-session refresh (a sidecar read
@@ -215,7 +244,22 @@ async def resolve_job_async(job_id: str, state: SessionState) -> SimulationJob |
     """
     job = state.all_jobs.get(job_id)
     if job is None:
-        raise JobNotFoundError(f"Job not found: {job_id}")
+        try:
+            experiment_store.validate_job_id(job_id)
+        except ValueError as exc:
+            raise ResultError(str(exc)) from None
+        if state.job_registry.persist_enabled:
+            job = await asyncio.to_thread(
+                experiment_store.load_job,
+                job_id,
+                state.working_dir,
+                own_is_alive=True,
+            )
+        if job is None:
+            raise JobNotFoundError(f"Job not found: {job_id}")
+        state.job_registry.jobs[job.job_id] = job
+        if _experiment_was_reconciled(job):
+            state.persist_job(job)
     return await state.job_registry.refresh_foreign_job_async(job)
 
 
@@ -235,6 +279,11 @@ async def resolve_batch_job_async(job_id: str, state: SessionState) -> BatchJob:
             "check_job (status + completion summary) or query_value (job_id + "
             "run_index) for a signal value."
         )
+    if isinstance(job, ExperimentJob):
+        raise BatchJobError(
+            f"Job '{job_id}' is an experiment job (status={job.status!r}); "
+            "legacy batch_results accepts only sweep and Monte Carlo jobs."
+        )
     return job
 
 
@@ -250,6 +299,11 @@ def resolve_simulation_job(job_id: str, state: SessionState) -> SimulationJob:
         raise SimulationError(
             f"Job '{job_id}' is a {job.job_type} batch job — "
             "use batch_results for its per-run results."
+        )
+    if isinstance(job, ExperimentJob):
+        raise SimulationError(
+            f"Job '{job_id}' is an experiment job (status={job.status!r}); "
+            "legacy single-simulation result readers do not accept experiment jobs."
         )
     return job
 
@@ -279,6 +333,11 @@ def resolve_batch_job(job_id: str, state: SessionState) -> BatchJob:
             "check_job (status + completion summary) or query_value (job_id + "
             "run_index) for a signal value."
         )
+    if isinstance(job, ExperimentJob):
+        raise BatchJobError(
+            f"Job '{job_id}' is an experiment job (status={job.status!r}); "
+            "legacy batch_results accepts only sweep and Monte Carlo jobs."
+        )
     return job
 
 
@@ -293,7 +352,7 @@ def _as_path(p: object) -> Path | None:
     return p if isinstance(p, Path) else Path(str(p))
 
 
-def runs_of(job: SimulationJob | BatchJob) -> list[RunRef]:
+def runs_of(job: Job) -> list[RunRef]:
     """Project any job into a uniform list of result runs (the read-model seam).
 
     A single-run job is the degenerate batch-of-one: one ``RunRef`` at index 0.
@@ -303,6 +362,11 @@ def runs_of(job: SimulationJob | BatchJob) -> list[RunRef]:
     """
     if isinstance(job, SimulationJob):
         return [RunRef(0, _as_path(job.raw_file), _as_path(job.log_file), {})]
+    if isinstance(job, ExperimentJob):
+        raise ResultError(
+            f"Experiment job {job.job_id!r} uses case-addressed results; "
+            "legacy RunRef resolution is not available."
+        )
     return [
         RunRef(
             index=idx,
@@ -325,6 +389,11 @@ def resolve_run(job_id: str, state: SessionState, run_index: int = 0) -> RunRef:
     present (batch run indices can be non-contiguous after a mid-batch failure).
     """
     job = resolve_job(job_id, state)
+    if isinstance(job, ExperimentJob):
+        raise ResultError(
+            f"Job {job_id!r} is an experiment job (status={job.status!r}); "
+            "resolve an experiment case through RunContext instead."
+        )
     if job.status != "completed":
         raise ResultError(f"Job {job_id!r} is not completed (status={job.status!r})")
     runs = {r.index: r for r in runs_of(job)}
@@ -335,6 +404,136 @@ def resolve_run(job_id: str, state: SessionState, run_index: int = 0) -> RunRef:
             f"Run index {run_index} out of range for job {job_id!r}; valid indices: {sorted(runs)}"
         )
     return runs[run_index]
+
+
+@dataclass(frozen=True)
+class RunContext:
+    """Trusted, case-addressed experiment result and its provenance identity."""
+
+    raw: Path
+    log: Path | None
+    netlist: Path
+    dialect: str | None
+    identity: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AnalysisSource:
+    """Resolved source injected into analysis adapters by the consolidated path."""
+
+    raw: Path
+    log: Path | None
+    netlist: Path | None
+    dialect: str | None
+    identity: dict[str, Any] | None
+    trusted_job_artifact: bool
+
+
+def resolve_experiment_run(
+    job_id: str,
+    state: SessionState,
+    *,
+    run_index: int | None = None,
+    case_id: str | None = None,
+) -> RunContext:
+    """Resolve a produced experiment case from any terminal experiment job."""
+    job = resolve_job(job_id, state)
+    if not isinstance(job, ExperimentJob):
+        raise ResultError(f"Job {job_id!r} is not an experiment job")
+    if job.status not in TERMINAL_STATUSES:
+        raise ResultError(f"Experiment job {job_id!r} is not terminal (status={job.status!r})")
+    if case_id is None and run_index is None:
+        run_index = 0
+    matches = [
+        case
+        for case in job.cases
+        if (case_id is not None and case.case_id == case_id)
+        or (case_id is None and case.run_index == run_index)
+    ]
+    if not matches:
+        selector = f"case_id={case_id!r}" if case_id is not None else f"run_index={run_index}"
+        raise ResultError(f"Experiment job {job_id!r} has no case matching {selector}")
+    case = matches[0]
+    if case.status != "produced" or case.raw_file is None:
+        raise ResultError(
+            f"Experiment case {case.case_id!r} did not produce a raw result "
+            f"(status={case.status!r})"
+        )
+    identity: dict[str, Any] = {
+        "case_id": case.case_id,
+        "run_index": case.run_index,
+        "assignments": dict(case.assignments),
+        "circuit": case.circuit,
+        "deck_sha256": case.deck_sha256,
+        "step_index": case.step_index,
+        "step_values": dict(case.step_values),
+    }
+    return RunContext(
+        raw=case.raw_file,
+        log=case.log_file,
+        netlist=case.staged_deck,
+        dialect=dialect_for_job(job, state),
+        identity=identity,
+    )
+
+
+def resolve_analysis_source(
+    args: Any,
+    state: SessionState,
+    *,
+    injected: AnalysisSource | RunContext | None = None,
+) -> AnalysisSource:
+    """Shared analysis-source seam.
+
+    The trusted injection path is available now. Direct legacy argument
+    resolution will move here with the analysis-adapter integration.
+    """
+    del args, state
+    if isinstance(injected, AnalysisSource):
+        return injected
+    if isinstance(injected, RunContext):
+        return AnalysisSource(
+            raw=injected.raw,
+            log=injected.log,
+            netlist=injected.netlist,
+            dialect=injected.dialect,
+            identity=injected.identity,
+            trusted_job_artifact=True,
+        )
+    raise ResultError("Direct analysis-source resolution is not wired until analyze_results")
+
+
+def legacy_job_netlist(job: Job, *, operation: str) -> Path:
+    """Return a legacy job's netlist or reject experiments explicitly."""
+    if isinstance(job, ExperimentJob):
+        raise ResultError(
+            f"{operation} does not accept experiment job {job.job_id!r} "
+            f"(status={job.status!r}); use its case-addressed analysis path."
+        )
+    return job.netlist
+
+
+def reject_experiment_job(
+    job: ExperimentJob,
+    tool_name: Literal["check_job", "cancel_job"],
+    state: SessionState,
+) -> NoReturn:
+    """Raise a profile-aware legacy-tool redirect for an experiment job."""
+    redirect = ""
+    if "jobs" in state.tool_dispatch:
+        if tool_name == "check_job":
+            redirect = (
+                f" Use jobs(action='status', job_id='{job.job_id}') for its experiment receipt."
+            )
+        else:
+            redirect = (
+                f" Use jobs(action='cancel', job_id='{job.job_id}', control_token=...) instead."
+            )
+    raise SimulationError(
+        f"Job {job.job_id} is an experiment job (status: {job.status}); "
+        f"{tool_name} only accepts legacy simulation and batch jobs.{redirect}",
+        show_hint=False,
+    )
 
 
 def ngspice_preflight_warnings(netlist_path: Path, simulator_class: type) -> list[str]:
@@ -423,7 +622,7 @@ def resolve_log_file(job_id: str, state: SessionState, run_index: int = 0) -> Pa
     return _resolve_result_file(job_id, state, "log_file", "log", run_index=run_index)
 
 
-def simulator_class_for_job(job: SimulationJob | BatchJob, state: SessionState) -> type | None:
+def simulator_class_for_job(job: Job, state: SessionState) -> type | None:
     """The configured simulator class matching ``job.simulator``, or None.
 
     Jobs record the class ``__name__`` (e.g. ``"LTspiceWSL"``); with per-run
@@ -438,7 +637,7 @@ def simulator_class_for_job(job: SimulationJob | BatchJob, state: SessionState) 
     return None
 
 
-def dialect_for_job(job: SimulationJob | BatchJob, state: SessionState) -> str | None:
+def dialect_for_job(job: Job, state: SessionState) -> str | None:
     """Raw dialect for the simulator ``job`` actually ran on.
 
     A per-run simulator override can differ from the session default (and a

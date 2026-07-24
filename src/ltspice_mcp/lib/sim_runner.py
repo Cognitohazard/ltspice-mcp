@@ -5,34 +5,33 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import NamedTuple
-
-from spicelib.sim.sim_runner import SimRunner
 
 from ltspice_mcp.lib import now
-from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_types import (
     NON_TERMINAL_LIVE_STATUSES,
     TERMINAL_STATUSES,
     SimulationJob,
 )
-from ltspice_mcp.lib.log_parser import (
-    extract_error_context,
-    extract_log_diagnostics,
-    is_op_stepping_failure,
-    op_ladder_exhausted,
-)
-from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.runner_base import (
     DEFAULT_MAX_PARALLEL,
     RunnerBase,
+    RunOutcome,
+    collect_run_outcome,
+    deck_requests_raw,
     discard_generated_netlist,
 )
-from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS
 from ltspice_mcp.lib.sweep_utils import generate_id
-from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
 from ltspice_mcp.state import SessionState
+
+__all__ = [
+    "RunOutcome",
+    "SimulationRunner",
+    "collect_run_outcome",
+    "deck_requests_raw",
+    "ensure_output_alias",
+    "generate_job_id",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -170,266 +169,6 @@ async def ensure_output_alias(job: SimulationJob, state: SessionState) -> None:
 _KILLED_STATUSES = ("cancelled", "timeout")
 
 
-class RunOutcome(NamedTuple):
-    """Filesystem-derived facts about a finished run, collected off the loop."""
-
-    raw_file: str
-    """Path of the produced raw, or "" when no raw data exists."""
-    log_file: str
-    """Path of the produced log, or "" when spicelib reported none."""
-    raw_size: int
-    error: str | None
-    """Failure message (with log excerpt) when the run failed; None otherwise.
-    ``error is None and raw_size == 0`` is the log-only completion: a clean
-    simulator exit whose results (if any) live in the log, not a raw file."""
-    observations: tuple[dict, ...] = ()
-    """Structured facts to surface alongside a failure — currently the
-    missing-required-raw reconciliation note on a clean exit that produced no
-    .raw the deck's analysis required. Empty for every other outcome."""
-
-
-# Analysis directives whose primary results are written to the binary .raw
-# waveform file. A deck carrying one of these expects a raw; a clean simulator
-# exit (exit 0, no error diagnostics) that produced none is data loss, not a
-# log-only run. Post-processing directives (.meas/.four) produce no raw on their
-# own, and ngspice's .control-scripted analyses are dot-less commands
-# (``tran``/``ac``) that never match these dotted tokens — so a .control deck
-# reads as "no raw required" and its legitimate log-only completion is preserved.
-_RAW_PRODUCING_ANALYSES: frozenset[str] = frozenset(f".{k}" for k in ANALYSIS_KINDS)
-
-
-# Directives that pull another file into the deck. ``deck_requests_raw`` follows
-# these best-effort so an analysis or ``.save`` that lives only in an included
-# file is still seen. The ``.lib file section`` form uses the file token (the
-# section name is irrelevant to this scan).
-_INCLUDE_DIRECTIVES: frozenset[str] = frozenset({".include", ".inc", ".lib"})
-
-# Include-following is depth-bounded (a deck can't drag the scanner through an
-# unbounded chain) and cycle-guarded (a file reachable more than once is visited
-# once). Three levels covers real PDK nesting without turning a scan into a
-# file-tree walk. Breadth is not bounded, so a deck pulling in a large .lib chain
-# adds some submission latency — acceptable because the scan runs off the event
-# loop on an author's own deck, not on untrusted simulator output.
-_MAX_INCLUDE_DEPTH = 3
-
-
-def _include_target(rest: str) -> str | None:
-    """The filename an ``.include``/``.inc``/``.lib`` argument points at.
-
-    ``rest`` is the directive line past its head. A quoted path is taken whole
-    (SPICE allows spaces inside quotes); an unquoted argument is its first
-    whitespace-delimited token, which for the ``.lib file section`` form is the
-    file (the section name is dropped). Returns None when no target is present.
-    """
-    rest = rest.strip()
-    if not rest:
-        return None
-    if rest[0] in "\"'":
-        end = rest.find(rest[0], 1)
-        return rest[1:end] if end != -1 else None
-    return rest.split(None, 1)[0]
-
-
-def deck_requests_raw(netlist: Path | None) -> tuple[list[str], bool]:
-    """Inspect a deck for a raw-producing analysis and a ``.save`` directive.
-
-    Returns ``(analyses, has_save)`` — the raw-producing analysis directives
-    the deck carries (empty when none), and whether it sets a ``.save`` list.
-    Line-based and best-effort: an absent path or a read error returns
-    ``([], False)`` so a deck we can't inspect never turns a real log-only run
-    into a spurious failure. Only top-level dotted directives are considered, so
-    a ``.control`` block's dot-less ``tran``/``save`` commands are ignored.
-
-    Scanning a file stops at its ``.end`` line: everything after it is inert in
-    SPICE, so a stray ``.tran`` there creates no requirement and a dead
-    ``.control`` there does not disarm one. ``.include``/``.inc``/``.lib``
-    references are followed best-effort — resolved against the deck's own
-    directory, depth-bounded and cycle-guarded, with a missing or unreadable
-    target skipped silently — so an analysis or ``.save`` that lives only in an
-    included file is still seen while an uninspectable include never adds a
-    requirement.
-
-    A deck carrying a ``.control`` block reads as requesting no raw regardless of
-    any top-level analysis: an ngspice ``.control`` script owns the run's output
-    (results go to the log), so a no-raw outcome is the legitimate log-only idiom
-    — the server normally injects a ``write`` to also produce a raw, but a
-    skipped injection must still read as log-only, not a failure.
-    """
-    if netlist is None:
-        return [], False
-    analyses: list[str] = []
-    has_save = False
-    has_control = False
-    seen: set[Path] = set()
-
-    def scan(path: Path, depth: int) -> None:
-        nonlocal has_save, has_control
-        if depth > _MAX_INCLUDE_DEPTH:
-            return
-        try:
-            key = path.resolve()
-        except OSError:
-            return
-        if key in seen:
-            return
-        seen.add(key)
-        try:
-            text = read_spice_text(path)
-        except OSError:
-            return
-        for line in text.splitlines():
-            stripped = line.strip()
-            if not stripped.startswith("."):
-                continue
-            parts = stripped.split(None, 1)
-            head = parts[0].lower()
-            if head == ".end":
-                break  # text past .end is inert — stop scanning this file
-            if head == ".control":
-                has_control = True
-            elif head in _RAW_PRODUCING_ANALYSES:
-                if head not in analyses:
-                    analyses.append(head)
-            elif head == ".save":
-                has_save = True
-            elif head in _INCLUDE_DIRECTIVES and len(parts) > 1:
-                target = _include_target(parts[1])
-                if target is not None:
-                    scan(path.parent / target, depth + 1)
-
-    scan(netlist, 0)
-    if has_control:
-        return [], has_save
-    return analyses, has_save
-
-
-def _missing_required_raw_outcome(
-    log_file: str, log_path: Path, analyses: list[str], has_save: bool
-) -> RunOutcome:
-    """Failure outcome for a clean exit that produced no raw the deck required.
-
-    Names the missing artifact as a reconciliation observation and, when the
-    deck carries a ``.save`` directive, points at the known ``.save`` workaround.
-    The code knows only that a ``.save`` list is present, not whether it omits
-    probed nodes, so the hint is stated conditionally: LTspice 26.0.2 has been
-    observed to exit 0 without writing a ``.raw`` when a ``.save`` list omits
-    nodes the analysis probes — a full ``.save`` list runs fine. A short log
-    excerpt rides along for context.
-    """
-    analysis_str = "/".join(analyses)
-    excerpt = extract_error_context(log_path, max_lines=20)
-    if has_save:
-        workaround = (
-            " The deck sets a '.save' list; if it omits nodes the analysis "
-            "probes, LTspice 26.0.2 has been observed to exit 0 without writing "
-            "a .raw. List every probed node in the .save (or remove the .save "
-            "directive) and re-run — a full .save list is the known workaround."
-        )
-    else:
-        workaround = (
-            " The simulator reported no error, so a re-run may succeed; if it "
-            "recurs, check the analysis directive and any .save list."
-        )
-    excerpt_block = f"\n\nLog excerpt:\n{excerpt}" if excerpt else ""
-    error = (
-        f"Simulation exited cleanly but produced no .raw waveform file, which the "
-        f"deck's {analysis_str} analysis requires — the waveform results are "
-        f"absent.{workaround}{excerpt_block}"
-    )
-    observation = {
-        "code": "missing_required_raw",
-        "kind": "reconciliation",
-        "detail": (
-            f"The deck requested a {analysis_str} analysis but the simulator "
-            "exited without writing a .raw file; waveform results are absent."
-        ),
-        "evidence": {
-            "expected_artifact": "raw",
-            "analyses": analyses,
-            "has_save_list": has_save,
-        },
-    }
-    return RunOutcome("", log_file, 0, error, observations=(observation,))
-
-
-def collect_run_outcome(
-    raw_file: str, log_file: str, requirements: tuple[list[str], bool] | None = None
-) -> RunOutcome:
-    """Stat/read a finished run's artifacts and classify the outcome.
-
-    ``requirements`` is the deck's ``(analyses, has_save)`` as captured at
-    submission by ``deck_requests_raw`` — passed in, never re-derived here, so a
-    deck edited (or a shared exported .net overwritten) between submission and
-    completion cannot change how this run is classified. When a clean exit
-    produced no raw, non-empty ``analyses`` make the missing raw a failure (the
-    deck's ``.tran``/``.ac``/``.dc``/``.noise``/``.op`` required a raw that is
-    absent); ``None`` (the direct-caller default) reads any no-raw clean exit as
-    a legitimate log-only run.
-
-    Must run on a worker thread, never the event loop: the log read below is
-    unbounded file I/O that can stall on a pathological abort log or a hung
-    network/DrvFs mount, and a stalled event loop freezes every in-flight
-    request in the server process, not just this job.
-    """
-    log_path = Path(log_file)
-    # spicelib signals a simulator failure (nonzero exit) by renaming the log
-    # to ``.fail`` and passing no real raw path ("" or "."). Relay that
-    # verdict — it is the simulator's own exit status.
-    sim_failed = raw_file in ("", ".") or log_path.suffix == ".fail"
-    raw_size = 0
-    if not sim_failed:
-        try:
-            raw_size = Path(raw_file).stat().st_size
-        except FileNotFoundError:
-            raw_size = 0
-        except OSError as e:
-            # The raw exists (or at least isn't provably absent) but can't be
-            # statted — permissions, a flaky mount. That is an artifact-access
-            # failure, not a log-only run; keep the path so the caller can
-            # diagnose it instead of reporting a false success.
-            return RunOutcome(
-                raw_file, log_file, 0, f"Simulation finished but its raw file is unreadable: {e}"
-            )
-    if raw_size > 0:
-        return RunOutcome(raw_file, log_file, raw_size, None)
-
-    try:
-        log_exists = bool(log_file) and log_path.exists()
-    except OSError:
-        log_exists = False
-
-    # Clean exit but no raw data: a deck driven by a .control script (ngspice)
-    # legitimately prints its results to the log and writes no raw at all.
-    # When the log parses free of errors, that's a completed log-only run,
-    # not a failure. An OP "gmin stepping failed" rung on its own is a
-    # recoverable mid-ladder step (ngspice tries the next method and may solve),
-    # not a terminal error — with no raw to gate on (unlike build_simulation_
-    # summary's raw-validity check), keep the run failed only if a genuine
-    # terminal error is present OR the whole stepping ladder was exhausted.
-    if not sim_failed and log_exists:
-        errors = extract_log_diagnostics(log_path)["errors"]
-        non_rung = [e for e in errors if not is_op_stepping_failure(e)]
-        if not non_rung and not op_ladder_exhausted(errors):
-            # A clean exit with no raw is only legitimate when the deck asked
-            # for no raw-producing analysis. If it did request one (.tran/.ac/
-            # .dc/.noise/.op), the missing raw is data loss dressed as success
-            # (LTspice 26.0.2 exits 0 with no raw when a .save list omits probed
-            # nodes) — surface it as a failure with a missing-artifact
-            # observation. Requirements were snapshotted at submission, so this
-            # verdict reflects the deck as it ran, not a possibly-edited re-read.
-            analyses, has_save = requirements if requirements is not None else ([], False)
-            if not analyses:
-                return RunOutcome("", log_file, 0, None)
-            return _missing_required_raw_outcome(log_file, log_path, analyses, has_save)
-
-    if log_exists:
-        context = extract_error_context(log_path, max_lines=20)
-        error = f"Simulation failed (no output generated)\n\nLog excerpt:\n{context}"
-    else:
-        error = "Simulation failed (no output generated, log file missing)"
-    return RunOutcome("" if sim_failed else raw_file, log_file, 0, error)
-
-
 class SimulationRunner(RunnerBase):
     """Runs one spicelib simulation per job; bridges callbacks to asyncio.
 
@@ -489,64 +228,6 @@ class SimulationRunner(RunnerBase):
         """
         job_id = job.job_id
 
-        # Snapshot of the staged deck's raw requirements, filled on the worker
-        # thread the instant before submission (see submit_sim). Classifying at
-        # completion by re-reading the deck could see it edited — or its shared
-        # exported .net overwritten by a concurrent export — mid-run and
-        # misclassify a clean no-raw exit in either direction; the deck as
-        # submitted is ground truth. Stays None until submitted, which reads as
-        # log-only (the fail-safe default) if no callback ever fires.
-        requirements: list[tuple[list[str], bool] | None] = [None]
-
-        def completion_callback(raw_file: Path | None, log_file: Path | None) -> None:
-            # Collect all filesystem facts HERE, on spicelib's worker thread.
-            # The bridged handler runs on the event loop, where a stalled
-            # read would freeze every in-flight request in the process. The
-            # deck's requirements are the submission-time snapshot, not a re-read.
-            try:
-                outcome = collect_run_outcome(
-                    str(raw_file) if raw_file else "",
-                    str(log_file) if log_file else "",
-                    requirements[0],
-                )
-            except Exception as e:  # spicelib swallows callback exceptions;
-                # a raise here would leave the job dangling forever.
-                outcome = RunOutcome("", "", 0, f"Simulation failed (outcome collection: {e})")
-            self._bridge(
-                self._handle_completion,
-                job_id,
-                outcome,
-                state,
-                context=f"sim job {job_id}",
-            )
-
-        def submit_sim() -> SimRunner:
-            # Capture the requirements before run(): a fast ngspice sim can fire
-            # the completion callback synchronously inside run(), so the snapshot
-            # must be taken first. netlist_path is the deck actually staged for
-            # this run (the augmented copy when injected, else the user's deck).
-            requirements[0] = deck_requests_raw(netlist_path)
-            runner = self._build_sim_runner()
-            # LTspice rejects files without a .cir/.net/.sp extension.
-            ext = netlist_path.suffix or ".net"
-            runner.run(
-                str(netlist_path),
-                run_filename=f"{job_id}{ext}",
-                callback=completion_callback,
-                callback_on_error=True,
-                # Capture the simulator's stdout/stderr into a sibling
-                # ``.exe.log`` so ngspice's stdout-only diagnostics (which
-                # bypass the ``-o`` log) are visible to extract_log_diagnostics.
-                exe_log=True,
-            )
-            logger.info(
-                "Submitted simulation job %s: netlist=%s, simulator=%s",
-                job_id,
-                netlist_path,
-                self.simulator_class.__name__,
-            )
-            return runner
-
         # Acquire a concurrency slot before launching. If ``max_parallel`` sims
         # are already running, this awaits and the job stays "queued" until a
         # slot frees — the missing global gate that let N>max_parallel run.
@@ -567,7 +248,19 @@ class SimulationRunner(RunnerBase):
                 # If the callback fires first and finds the job in "queued" state,
                 # the queued→completed transition is illegal.
                 transition(job, "running", state=state, simulator=job.simulator)
-                runner = await asyncio.to_thread(submit_sim)
+                ext = netlist_path.suffix or ".net"
+                runner = await asyncio.to_thread(
+                    self.submit_netlist,
+                    netlist_path,
+                    f"{job_id}{ext}",
+                    lambda outcome: self._handle_completion(job_id, outcome, state),
+                )
+                logger.info(
+                    "Submitted simulation job %s: netlist=%s, simulator=%s",
+                    job_id,
+                    netlist_path,
+                    self.simulator_class.__name__,
+                )
                 if job.status not in TERMINAL_STATUSES:
                     job.task = runner
                 # If terminal already (cancel raced the submit), the submitted
@@ -713,20 +406,7 @@ class SimulationRunner(RunnerBase):
         parallel server session's simulators can never be collateral.
         (spicelib's name-global ``kill_all_spice`` is deliberately not used.)
         """
-        try:
-            killed = kill_windows_ltspice_by_token(job_id)
-            if killed:
-                logger.info("Killed %d Windows sim process(es) for %s", killed, job_id)
-        except Exception as e:
-            logger.warning("WSL process kill for %s failed: %s", job_id, e)
-        try:
-            killed = kill_simulator_by_token(
-                job_id, simulator_executable_names(self.simulator_class)
-            )
-            if killed:
-                logger.info("Killed %d local sim process(es) for %s", killed, job_id)
-        except Exception as e:
-            logger.warning("Scoped process kill for %s failed: %s", job_id, e)
+        self._kill_by_token(job_id)
 
     async def cancel(self, job: SimulationJob, state: SessionState | None = None) -> None:
         """Cancel a running simulation and record the cancelled state.

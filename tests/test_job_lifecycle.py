@@ -22,6 +22,7 @@ from ltspice_mcp.lib.job_lifecycle import (
     STATUS_TO_EVENT,
     TERMINAL_STATUSES,
     VALID_BATCH_TRANSITIONS,
+    VALID_EXPERIMENT_TRANSITIONS,
     VALID_SIM_TRANSITIONS,
     InvalidTransitionError,
     recover,
@@ -207,6 +208,14 @@ class TestStateMachineStructure:
                 assert target in STATUS_TO_EVENT, (
                     f"batch transition {source} → {target} lands on a status with no event mapping"
                 )
+        for source, targets in VALID_EXPERIMENT_TRANSITIONS.items():
+            for target in targets:
+                if target in special:
+                    continue
+                assert target in STATUS_TO_EVENT, (
+                    f"experiment transition {source} → {target} lands on a "
+                    "status with no event mapping"
+                )
 
     def test_terminal_statuses_have_no_outgoing(self) -> None:
         """TERMINAL_STATUSES must not appear as sources with outgoing edges.
@@ -220,14 +229,19 @@ class TestStateMachineStructure:
         for source, targets in VALID_BATCH_TRANSITIONS.items():
             if source in TERMINAL_STATUSES:
                 assert not targets, f"batch terminal status {source} has outgoing edges: {targets}"
+        for source, targets in VALID_EXPERIMENT_TRANSITIONS.items():
+            if source in TERMINAL_STATUSES:
+                assert not targets, (
+                    f"experiment terminal status {source} has outgoing edges: {targets}"
+                )
 
     def test_no_status_writes_outside_lifecycle_module(self) -> None:
-        """Production code must not mutate ``job.status`` directly.
+        """Production code must not mutate a top-level job status directly.
 
-        The chokepoint is ``transition()`` / ``recover()``. This test
-        greps the src tree (excluding job_lifecycle.py itself, which
-        defines the chokepoint) and fails if any file still writes
-        status directly.
+        The chokepoint is ``transition()`` / ``recover()``. Experiment case
+        and attached-analysis stage statuses are subordinate records owned by
+        the coordinator, not job lifecycle states, so their local writes are
+        excluded.
         """
         import ast
 
@@ -250,6 +264,12 @@ class TestStateMachineStructure:
                     continue
                 for t in targets:
                     if isinstance(t, ast.Attribute) and t.attr == "status":
+                        if py.name == "experiment_runner.py":
+                            owner = t.value
+                            if (isinstance(owner, ast.Name) and owner.id == "case") or (
+                                isinstance(owner, ast.Attribute) and owner.attr == "analysis"
+                            ):
+                                continue
                         offenders.append(
                             f"  {py.relative_to(root.parent.parent)}:"
                             f"{node.lineno}: {ast.unparse(node)}"

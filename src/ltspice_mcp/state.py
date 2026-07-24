@@ -18,6 +18,7 @@ from mcp import types
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.cache import FileCache
+from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.job_types import (
     NON_TERMINAL_LIVE_STATUSES,
@@ -49,6 +50,7 @@ __all__ = [
     "NON_TERMINAL_LIVE_STATUSES",
     "TERMINAL_STATUSES",
     "BatchJob",
+    "ExperimentJob",
     "MonteCarloConfig",
     "RunRef",
     "SessionState",
@@ -75,7 +77,7 @@ class SessionState:
         editors: Cache of parsed SpiceEditor instances
         results: Cache of parsed RawRead instances
         libraries: Loaded component libraries
-        runners: RunnerManager (sim/sweep/MC runner lifecycle)
+        runners: RunnerManager (sim/sweep/MC/experiment runner lifecycle)
         working_dir: Base directory for relative paths
         tool_defs / tool_dispatch: Profile-filtered MCP tool exposure
         sweep_configs / mc_configs: Saved configs keyed by config_id
@@ -148,7 +150,10 @@ class SessionState:
         diagnostics = diagnostics if diagnostics is not None else []
         default = select_default_simulator(available, config, diagnostics)
         tool_defs, tool_dispatch = get_tools_for_profile(config.tool_profile)
-        registry = JobRegistry(persist_enabled=config.persist_jobs)
+        registry = JobRegistry(
+            persist_enabled=config.persist_jobs,
+            working_dir=config.working_dir,
+        )
 
         return cls(
             config=config,
@@ -184,7 +189,12 @@ class SessionState:
         return self.job_registry.batch_jobs
 
     @property
-    def all_jobs(self) -> dict[str, "SimulationJob | BatchJob"]:
+    def experiment_jobs(self) -> MutableMapping[str, ExperimentJob]:
+        """Type-filtered view of experiment coordinator jobs."""
+        return self.job_registry.experiment_jobs
+
+    @property
+    def all_jobs(self) -> dict[str, "SimulationJob | BatchJob | ExperimentJob"]:
         """The union job store — every job regardless of run type."""
         return self.job_registry.jobs
 
@@ -194,7 +204,18 @@ class SessionState:
     def add_batch_job(self, batch_job: BatchJob) -> None:
         self.job_registry.add_batch_job(batch_job)
 
-    def persist_job(self, job: "SimulationJob | BatchJob") -> None:
+    def add_experiment_job(
+        self,
+        experiment_job: ExperimentJob,
+        *,
+        already_persisted: bool = False,
+    ) -> None:
+        self.job_registry.add_experiment_job(
+            experiment_job,
+            already_persisted=already_persisted,
+        )
+
+    def persist_job(self, job: "SimulationJob | BatchJob | ExperimentJob") -> None:
         self.job_registry.persist_job(job)
 
     def persist_batch_progress(self, batch_job: BatchJob) -> None:
