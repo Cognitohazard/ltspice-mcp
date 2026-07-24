@@ -521,7 +521,9 @@ class TestCaseConcurrencyAndTimeouts:
         assert await runner.wait(receipt.job, 1)
         assert receipt.job.cases[0].failure_code == "run_timeout"
         assert receipt.job.cases[0].raw_file is None
-        assert runner._executions.get(receipt.job.job_id) is None
+        # Execution cleanup runs after done_event, past the watcher-task
+        # cancellation awaits — poll instead of asserting synchronously.
+        await _wait_for(lambda: runner._executions.get(receipt.job.job_id) is None)
         assert not await asyncio.to_thread(raw.exists)
 
     async def test_all_zombie_capacity_fails_queued_cases_without_overlaunch(
