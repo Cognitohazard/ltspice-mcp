@@ -130,12 +130,13 @@ class TestErrorHints:
                         f"filtered tool {tool_name}"
                     )
 
-    def test_all_error_types_have_both_hints(self):
-        """Every entry in _ERROR_HINTS should have both full and agentic variants."""
+    def test_all_error_types_have_all_profile_hints(self):
+        """Every _ERROR_HINTS entry carries a full, agentic, and consolidated variant."""
         from ltspice_mcp.server import _ERROR_HINTS
 
-        for err_type, pair in _ERROR_HINTS.items():
-            assert isinstance(pair, tuple), f"{err_type.__name__}: hint is not a tuple"
-            assert len(pair) == 2, f"{err_type.__name__}: expected 2-tuple"
-            assert pair[0], f"{err_type.__name__}: full hint is empty"
-            assert pair[1], f"{err_type.__name__}: agentic hint is empty"
+        for err_type, hint in _ERROR_HINTS.items():
+            assert isinstance(hint, tuple), f"{err_type.__name__}: hint is not a tuple"
+            assert len(hint) == 3, f"{err_type.__name__}: expected a 3-field hint"
+            assert hint.full, f"{err_type.__name__}: full hint is empty"
+            assert hint.agentic, f"{err_type.__name__}: agentic hint is empty"
+            assert hint.consolidated, f"{err_type.__name__}: consolidated hint is empty"

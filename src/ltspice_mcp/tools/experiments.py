@@ -386,7 +386,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         readOnlyHint=False,
         destructiveHint=False,
         idempotentHint=True,
-        openWorldHint=False,
+        openWorldHint=True,
     ),
     profiles=("consolidated",),
     output_schema=RUN_EXPERIMENTS_OUTPUT_SCHEMA,
