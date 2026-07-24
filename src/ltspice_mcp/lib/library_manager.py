@@ -104,6 +104,24 @@ def _shared_prefix_len(a: str, b: str) -> int:
     return n
 
 
+# Process-wide (mtime, size) cache of parsed library files, so callers that
+# parse a library file by path repeatedly — e.g. the inspect model queries
+# enumerating or searching the same .lib across paged calls — reuse one parse
+# instead of re-reading and re-lexing it every time. The values are immutable
+# and re-derivable, so bounded LRU eviction is safe.
+_library_file_cache: FileCache[LibraryIndex] = FileCache(maxsize=64)
+
+
+def parse_library_file_cached(path: Path) -> LibraryIndex:
+    """Parse a library file through a shared (mtime, size) cache.
+
+    Public accessor over the same ``FileCache``-backed parse the built-in
+    library index uses, for any caller that parses a library file by path more
+    than once. A stale entry (the file's mtime or size changed) re-parses.
+    """
+    return _library_file_cache.get(path, parse_library_file)
+
+
 class LibraryManager:
     """Manage loaded SPICE libraries for the session.
 

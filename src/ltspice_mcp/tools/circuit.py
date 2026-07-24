@@ -1755,6 +1755,24 @@ async def handle_list_components(args: ListComponentsInput, state: SessionState)
     return format_response(result, data, fmt)
 
 
+def netlist_card_value(card: SpiceCard) -> str:
+    """Display value for one netlist instance card, or ``"<unparseable>"``.
+
+    Rejects a card whose body survived lexing but carries a broken ``k=v``
+    remnant; otherwise the typed ``InstanceLine`` view yields the element-class
+    display value. Shared by the netlist ``list_components`` path and the
+    ``inspect`` component queries so the two agree on what a value is.
+    """
+    from ltspice_mcp.lib.spice_lex_views import InstanceLine, body_has_stray_kv_remnant
+
+    if body_has_stray_kv_remnant(card.body):
+        return "<unparseable>"
+    try:
+        return InstanceLine.from_card(card).display_value()
+    except Exception:
+        return "<unparseable>"
+
+
 async def _list_components_netlist(
     args: ListComponentsInput, file_path: Path, fmt
 ) -> types.CallToolResult:
@@ -1766,11 +1784,7 @@ async def _list_components_netlist(
     """
     from ltspice_mcp.lib.encoding import read_spice_text
     from ltspice_mcp.lib.spice_lex import lex
-    from ltspice_mcp.lib.spice_lex_views import (
-        InstanceLine,
-        body_has_stray_kv_remnant,
-        instances_by_ref,
-    )
+    from ltspice_mcp.lib.spice_lex_views import instances_by_ref
 
     try:
         content = read_spice_text(file_path)
@@ -1779,20 +1793,12 @@ async def _list_components_netlist(
     cards = lex(content).cards
     refs_to_card = instances_by_ref(cards)
 
-    def _value_of(card: SpiceCard) -> str:
-        if body_has_stray_kv_remnant(card.body):
-            return "<unparseable>"
-        try:
-            return InstanceLine.from_card(card).display_value()
-        except Exception:
-            return "<unparseable>"
-
     reference = args.reference
     if reference is not None:
         match = refs_to_card.get(reference.lower())
         if match is None:
             raise NetlistError(f"Component '{reference}' not found")
-        value = _value_of(match)
+        value = netlist_card_value(match)
         data = {"reference": reference, "value": value}
         return format_response(f"{reference} = {value}", data, fmt)
 
@@ -1823,7 +1829,7 @@ async def _list_components_netlist(
     comp_lines: list[str] = []
     for ref in page:
         card = refs_to_card.get(ref.lower())
-        value = _value_of(card) if card is not None else ""
+        value = netlist_card_value(card) if card is not None else ""
         comp_list.append({"reference": ref, "value": value})
         comp_lines.append(f"{ref}  {value}")
 
