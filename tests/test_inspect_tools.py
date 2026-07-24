@@ -55,6 +55,12 @@ async def _run(state: SessionState, queries: list[dict]) -> list[dict]:
     result = await handle_inspect(args, state)
     data = _schema(result)
     assert data["count"] == len(queries)
+    # Call-level outcome invariant (design section 2): complete iff every query
+    # succeeded, partial the moment any one isolates a failure. A per-item
+    # failure is never a call-level failure, so isError stays false throughout.
+    any_failed = any(not item["ok"] for item in data["results"])
+    assert data["outcome"] == ("partial" if any_failed else "complete")
+    assert result.isError is False
     return data["results"]
 
 
