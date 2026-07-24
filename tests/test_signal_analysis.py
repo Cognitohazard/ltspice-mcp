@@ -734,6 +734,27 @@ class TestAnalyzeTimingBetween:
         assert result["delay_min"] == pytest.approx(result["delay"], abs=1e-9)
         assert result["warnings"] == []
 
+    def test_nth_selects_same_index_crossings(self):
+        t = np.linspace(0, 1, 100001)
+        ya = ((t >= 0.1) & (t < 0.2)) | ((t >= 0.5) & (t < 0.6))
+        yb = ((t >= 0.2) & (t < 0.3)) | ((t >= 0.65) & (t < 0.75))
+        result = analyze_timing_between(
+            t,
+            ya.astype(float),
+            yb.astype(float),
+            nth=2,
+        )
+        assert result["t_a"] == pytest.approx(0.5, abs=1e-3)
+        assert result["t_b"] == pytest.approx(0.65, abs=1e-3)
+        assert result["delay"] == pytest.approx(0.15, abs=1e-3)
+
+    def test_nth_rejects_missing_crossing(self):
+        t = np.linspace(0, 1, 10001)
+        ya = np.where(t < 0.3, 0.0, 1.0)
+        yb = np.where(t < 0.5, 0.0, 1.0)
+        with pytest.raises(ValueError, match="nth=2 is unavailable"):
+            analyze_timing_between(t, ya, yb, nth=2)
+
 
 # ---------------------------------------------------------------------------
 # analyze_periodic

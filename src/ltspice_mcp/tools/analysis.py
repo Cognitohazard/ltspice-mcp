@@ -30,8 +30,10 @@ import csv
 import json
 import math
 import re
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Literal, NoReturn, NotRequired, TypedDict
 
 import numpy as np
@@ -216,8 +218,8 @@ def _guarded_axis(raw, step: int, raw_path: Path | None = None) -> np.ndarray:
     except Exception as e:
         hint = "Use operating_point for a .op result."
         if raw_path is not None:
-            log_path = raw_path.with_suffix(".log")
-            if log_path.exists():
+            log_path = services.AnalysisSource.for_raw(raw_path).log
+            if log_path is not None and log_path.exists():
                 log_steps, op_iters = scan_op_step_log(log_path)
                 if max(len(log_steps), op_iters) > 1:
                     param = next(iter(log_steps[0].keys()), "param") if log_steps else "<param>"
@@ -401,6 +403,13 @@ def _effective_raw_path(
     may legitimately live outside ``allowed_paths`` (e.g. a WSL temp dir). This is
     what lets a sweep/MC run be analyzed by the same tools as a standalone raw.
     """
+    injected = services.current_analysis_source()
+    if injected is not None:
+        return services.resolve_analysis_source(
+            SimpleNamespace(raw_file=raw_file, job_id=job_id, run_index=run_index),
+            state,
+        ).raw
+
     # Truthiness, not identity: an empty/whitespace raw_file (StrictModel strips
     # to "") must count as absent, else it slips past and safe_path("") resolves
     # to the working dir → a confusing "not a valid .raw" error downstream.
@@ -413,15 +422,11 @@ def _effective_raw_path(
             "produces the job_id/raw to analyze.",
             show_hint=False,
         )
-    if job_id:
-        # Route through resolve_raw_file (not resolve_run directly): it records
-        # state.raw_dialect_hints for this raw, so a later load_raw/raw_dialect_for
-        # parses it with the dialect of the simulator the job actually ran on, not
-        # the session default. Every job-addressed analysis tool resolves here, so
-        # a per-run simulator override was otherwise silently parsed as the default.
-        return services.resolve_raw_file(job_id, state, run_index)
-    assert raw_file  # truthy per the guard above
-    return safe_path(raw_file, state)
+    source = services.resolve_analysis_source(
+        SimpleNamespace(raw_file=raw_file, job_id=job_id, run_index=run_index),
+        state,
+    )
+    return source.raw
 
 
 def _run_meta(job_id: str | None, run_index: int, state: SessionState) -> dict | None:
@@ -1252,6 +1257,9 @@ def _build_and_write(
     te: float | None,
     complex_format: str,
     out_path: Path,
+    should_abort: Callable[[], bool] | None = None,
+    steps_to_export: list[int] | None = None,
+    step_log_path: Path | None = None,
 ) -> dict:
     """Assemble tidy/long rows for every step, render CSV, write it atomically.
 
@@ -1268,7 +1276,7 @@ def _build_and_write(
     # from the sibling .log (same source query_value(step_axis=) uses).
     # parse_step_iterations returns [] for a missing/unreadable log.
     step_dicts: list[dict[str, float]] = (
-        parse_step_iterations(raw_path.with_suffix(".log")) if stepped else []
+        parse_step_iterations(step_log_path or raw_path.with_suffix(".log")) if stepped else []
     )
 
     header: list[str] | None = None
@@ -1285,7 +1293,8 @@ def _build_and_write(
     # the temp and leaves the destination untouched.
     with atomic_write(out_path) as f:
         csv_writer = csv.writer(f)
-        for step in range(n_steps):
+        selected_steps = steps_to_export if steps_to_export is not None else list(range(n_steps))
+        for step in selected_steps:
             axis = _guarded_axis(raw, step)
             lo, hi = _window_indices(axis, ts, te)
             if lo >= hi:
@@ -1330,11 +1339,27 @@ def _build_and_write(
                     if step < len(step_dicts)
                     else ""
                 )
-                csv_writer.writerows(
-                    [step, label, *values] for values in zip(*columns, strict=True)
-                )
+                rows = ([step, label, *values] for values in zip(*columns, strict=True))
             else:
-                csv_writer.writerows(zip(*columns, strict=True))
+                rows = zip(*columns, strict=True)
+            chunk: list = []
+            for row in rows:
+                chunk.append(row)
+                if len(chunk) >= 4096:
+                    if should_abort is not None and should_abort():
+                        raise ResultError(
+                            "CSV artifact exceeded its analysis item deadline; "
+                            "narrow the window or export fewer signals."
+                        )
+                    csv_writer.writerows(chunk)
+                    chunk.clear()
+            if chunk:
+                if should_abort is not None and should_abort():
+                    raise ResultError(
+                        "CSV artifact exceeded its analysis item deadline; "
+                        "narrow the window or export fewer signals."
+                    )
+                csv_writer.writerows(chunk)
             row_count += len(axis_w)
             if row_count > _EXPORT_MAX_ROWS:
                 raise ResultError(
@@ -1353,7 +1378,7 @@ def _build_and_write(
         "row_count": row_count,
         "column_count": len(header),
         "columns": header,
-        "n_steps": n_steps,
+        "n_steps": len(selected_steps),
         "window_used": [win_lo, win_hi] if win_lo is not None else [],
         "non_finite": non_finite,
         "had_complex": had_complex,
@@ -2027,7 +2052,9 @@ _SOLVE_FAILURE_PHRASES = (
 )
 
 
-def _read_log_warnings(raw_path: Path) -> tuple[list[str], list[str]]:
+def _read_log_warnings(
+    raw_path: Path, log_path: Path | None = None
+) -> tuple[list[str], list[str]]:
     """``(unrecognized-variable warnings, run-level solve-failure lines)`` from
     the sibling ``.log``.
 
@@ -2037,7 +2064,7 @@ def _read_log_warnings(raw_path: Path) -> tuple[list[str], list[str]]:
     is run-wide: a singular/non-converged solve taints every value, so a read
     relays it whatever trace was asked for.
     """
-    log_path = raw_path.with_suffix(".log")
+    log_path = log_path or raw_path.with_suffix(".log")
     if not log_path.exists():
         return [], []
     diags = extract_log_diagnostics(log_path)
@@ -2070,7 +2097,8 @@ async def _query_log_warnings(raw_path: Path, signal: str) -> list[str]:
     unrecognized-variable message (only when the queried trace IS the bogus one,
     matched by its ``@dev[param]`` token or the resolved name) plus any run-level
     solve-failure lines. Shared by both query_value paths."""
-    unrecognized, solve_failures = await asyncio.to_thread(_read_log_warnings, raw_path)
+    log_path = services.AnalysisSource.for_raw(raw_path).log
+    unrecognized, solve_failures = await asyncio.to_thread(_read_log_warnings, raw_path, log_path)
     sig_warns = [w for w in unrecognized if _unrecognized_matches(w, signal)]
     warnings: list[str] = []
     if sig_warns:
@@ -2121,7 +2149,8 @@ async def _solve_failures(raw_path: Path) -> list[str]:
     from the sibling ``.log``. A failed-but-completed solve taints EVERY value
     in the raw, not one trace, so any read tool relays these regardless of the
     signal asked for. Empty when the solve finished clean or there's no ``.log``."""
-    return (await asyncio.to_thread(_read_log_warnings, raw_path))[1]
+    log_path = services.AnalysisSource.for_raw(raw_path).log
+    return (await asyncio.to_thread(_read_log_warnings, raw_path, log_path))[1]
 
 
 async def _finish_metric(
@@ -2220,8 +2249,11 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     # the session default. Don't clobber a value the raw gave.
     raw_dialect = services.raw_dialect_for(raw_path, state)
     if raw_dialect != "ngspice":
-        log_op_points = await asyncio.to_thread(
-            read_device_op_points, raw_path.with_suffix(".log")
+        log_path = services.AnalysisSource.for_raw(raw_path).log
+        log_op_points = (
+            await asyncio.to_thread(read_device_op_points, log_path)
+            if log_path is not None
+            else {}
         )
         if log_op_points:
             di = op_data.setdefault("device_op_points", {})
@@ -2406,16 +2438,17 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
 )
 async def handle_simulation_summary(args: SimulationSummaryInput, state: SessionState):
     """Get comprehensive simulation summary."""
-    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
+    source = services.resolve_analysis_source(args, state)
+    raw_path = source.raw
     fmt = args.format
-    log_path = None
-    if args.log_file is not None:
+    log_path = source.log
+    if args.log_file is not None and services.current_analysis_source() is None:
         log_path = safe_path(args.log_file, state)
-    else:
+    elif log_path is None:
         # Callers shouldn't have to pass both ``raw_file`` and the adjacent
         # ``.log``; derive the log path from the raw path when it's not given.
-        derived = raw_path.with_suffix(".log")
-        if derived.exists():
+        derived = services.AnalysisSource.for_raw(raw_path).log
+        if derived is not None and derived.exists():
             log_path = derived
 
     raw = await services.load_raw(raw_path, state)
@@ -2431,28 +2464,28 @@ async def handle_simulation_summary(args: SimulationSummaryInput, state: Session
     # no netlist to trust, so those observations stay unarmed on that path.
     requested = None
     source_amplitudes = None
-    if args.job_id:
-        job = await services.resolve_job_async(args.job_id, state)
-        job_netlist = services.legacy_job_netlist(
-            job,
-            operation="simulation_summary",
-        )
+    if source.netlist is not None:
         requested, source_amplitudes = await asyncio.to_thread(
-            deck_observation_inputs, job_netlist
+            deck_observation_inputs, source.netlist
         )
 
     try:
         # ``raw`` here is fully loaded (services.load_raw reads all traces), so
         # the value scan is affordable and surfaces NaN/extreme-value facts.
-        summary = build_simulation_summary(
-            raw,
-            log_path,
-            None,
-            step=args.step,
-            value_scan="scan",
-            requested=requested,
-            source_amplitudes=source_amplitudes,
+        summary = await services.bounded_parse(
+            raw_path,
+            lambda: build_simulation_summary(
+                raw,
+                log_path,
+                None,
+                step=args.step,
+                value_scan="scan",
+                requested=requested,
+                source_amplitudes=source_amplitudes,
+            ),
         )
+    except ResultError:
+        raise
     except Exception as e:
         # Suppress the generic ResultError hint — it points at simulation_summary,
         # which is the tool that just failed (self-referential).
@@ -2879,6 +2912,11 @@ class TimingBetweenInput(ToolInput):
     )
     direction_a: Literal["rising", "falling"] = Field(default="rising")
     direction_b: Literal["rising", "falling"] = Field(default="rising")
+    nth: int = Field(
+        default=1,
+        ge=1,
+        description="1-based same-index threshold crossing to use for t_a/t_b/delay.",
+    )
     format: FormatField = Field(default=None, description="'json' or 'text'")
 
 
@@ -3236,8 +3274,9 @@ async def handle_transient_response(
         "e.g. input-to-output delay, clock-to-Q, dead-time between gate "
         "drives. Inputs one transient .raw containing both signals on a "
         "shared time axis.\n\n"
-        "Returns: signed delay = t_b - t_a where t_a and t_b are the FIRST "
-        "threshold crossings of signal_a and signal_b in the window "
+        "Returns: signed delay = t_b - t_a where t_a and t_b are the selected "
+        "same-index threshold crossings of signal_a and signal_b in the window "
+        "(first by default; select another with nth) "
         "(negative delay means signal_b leads signal_a), PLUS aggregates "
         "over ALL sequential edge pairs — pair_count, delay_min/max/mean and "
         "the times of the extremes — for dead-time / minimum-off audits "
@@ -3298,6 +3337,7 @@ async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
         threshold_pct=args.threshold_pct,
         direction_a=args.direction_a,
         direction_b=args.direction_b,
+        nth=args.nth,
     )
     data["signal_a"] = args.signal_a
     data["signal_b"] = args.signal_b
@@ -3609,8 +3649,8 @@ async def handle_noise_integral(args: NoiseIntegralInput, state: SessionState):
         # trace_unit() alone can't distinguish a voltage- from a
         # current-referred inoise trace (see _noise_input_source_unit); check
         # the deck's .NOISE line when a job_id makes it reachable.
-        netlist = None
-        if args.job_id:
+        netlist = services.AnalysisSource.for_raw(raw_path).netlist
+        if netlist is None and args.job_id:
             resolved_job = None
             with contextlib.suppress(Exception):
                 resolved_job = await services.resolve_job_async(args.job_id, state)
@@ -3954,7 +3994,16 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
     at_map: dict[str, list[float | None]] = {}
     per_run: list[dict] = []
     caveats: list[str] = []
-    if args.job_id is not None:
+    injected = services.current_analysis_source()
+    if injected is not None:
+        if injected.log is None:
+            raise ResultError("This source has no log artifact for measurement results.")
+        log_path = injected.log
+        flat_values, axis_map, steps_label, at_map = await services.bounded_parse(
+            log_path,
+            lambda: _aggregate_log_measurements(log_path, injected.netlist),
+        )
+    elif args.job_id is not None:
         job = await services.resolve_job_async(args.job_id, state)
         job_netlist = services.legacy_job_netlist(job, operation="measurement_stats")
         if isinstance(job, BatchJob):
@@ -3965,8 +4014,16 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
             # entries are write-once at run completion; a run landing mid-walk
             # is at worst omitted, which the partial-aggregate caveat below
             # already surfaces.
-            flat_values, run_count, axis_map, run_diags, per_run, at_map = await asyncio.to_thread(
-                _aggregate_job_measurements, job
+            (
+                flat_values,
+                run_count,
+                axis_map,
+                run_diags,
+                per_run,
+                at_map,
+            ) = await services.bounded_parse(
+                job_netlist,
+                lambda: _aggregate_job_measurements(job),
             )
             # A partial aggregate is a measurement assumption the caller must
             # see: a still-running batch silently reading as final stats was a
@@ -4007,12 +4064,16 @@ async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionSt
             # ``resolve_log_file`` gates on completed status like every other
             # job-id-addressed read; the path is a trusted server artifact.
             log_path = services.resolve_log_file(args.job_id, state)
-            flat_values, axis_map, steps_label, at_map = await asyncio.to_thread(
-                _aggregate_log_measurements, log_path, job_netlist
+            flat_values, axis_map, steps_label, at_map = await services.bounded_parse(
+                log_path,
+                lambda: _aggregate_log_measurements(log_path, job_netlist),
             )
     elif args.log_file is not None:
-        flat_values, axis_map, steps_label, at_map = await asyncio.to_thread(
-            _aggregate_log_measurements, safe_path(args.log_file, state)
+        log_path = services.resolve_analysis_source(args, state).log
+        assert log_path is not None
+        flat_values, axis_map, steps_label, at_map = await services.bounded_parse(
+            log_path,
+            lambda: _aggregate_log_measurements(log_path),
         )
     else:  # unreachable — earlier guard rejects this combination
         raise ResultError("Provide either ``log_file`` or ``job_id``.")
