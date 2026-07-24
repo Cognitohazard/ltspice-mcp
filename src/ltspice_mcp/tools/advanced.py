@@ -28,6 +28,7 @@ from ltspice_mcp.lib.sweep_utils import (
     generate_config_id,
 )
 from ltspice_mcp.state import (
+    TERMINAL_STATUSES,
     BatchJob,
     MonteCarloConfig,
     SessionState,
@@ -1481,6 +1482,12 @@ def _format_batch_status_text(data: dict) -> str:
             f"The server stopped while this batch was running; "
             f"{data['completed_runs']} of {data['total_runs']} run(s) completed before the "
             f"interruption. {_batch_status_hint(data)}"
+        )
+    if status in TERMINAL_STATUSES:
+        return (
+            f"Batch job {data['job_id']} ended with status {status}\n"
+            f"Type: {data['job_type']}\n"
+            f"Completed {data['completed_runs']} of {data['total_runs']} run(s)."
         )
     raise BatchJobError(f"Batch job {data['job_id']} has unexpected status: {status}")
 

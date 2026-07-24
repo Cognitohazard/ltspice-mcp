@@ -20,6 +20,7 @@ from pydantic import AnyUrl
 
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, services
 from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.plot_html import (
     WIDGET_MIME_TYPE,
@@ -327,7 +328,7 @@ def _read_netlist_content(
 def _read_results_list(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
-    """List all simulation and batch jobs with their status."""
+    """List simulation, batch, and experiment jobs with their status."""
     del params
     items: list[dict] = []
 
@@ -344,6 +345,26 @@ def _read_results_list(
                     "simulator": job.simulator,
                     "status": job.status,
                     "started_at": job.started_at.isoformat() if job.started_at else None,
+                    "completed_at": (job.completed_at.isoformat() if job.completed_at else None),
+                }
+            )
+        elif isinstance(job, ExperimentJob):
+            items.append(
+                {
+                    "job_id": job.job_id,
+                    "type": "experiment",
+                    "sources": [str(source.path) for source in job.sources],
+                    "status": job.status,
+                    "completeness": {
+                        "declared": job.completeness.declared,
+                        "expanded": job.completeness.expanded,
+                        "submitted": job.completeness.submitted,
+                        "produced": job.completeness.produced,
+                        "failed": job.completeness.failed,
+                        "cancelled": job.completeness.cancelled,
+                        "skipped": job.completeness.skipped,
+                    },
+                    "started_at": job.started_at.isoformat(),
                     "completed_at": (job.completed_at.isoformat() if job.completed_at else None),
                 }
             )

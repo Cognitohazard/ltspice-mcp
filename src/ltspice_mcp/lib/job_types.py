@@ -40,12 +40,19 @@ from ltspice_mcp.lib import now
 # and any partial outputs are preserved but the job cannot resume
 # in-process (recovery promotes it via lib.job_lifecycle.recover).
 TERMINAL_STATUSES: frozenset[str] = frozenset(
-    {"completed", "failed", "timeout", "cancelled", "interrupted"}
+    {
+        "completed",
+        "completed_with_failures",
+        "failed",
+        "timeout",
+        "cancelled",
+        "interrupted",
+    }
 )
 
 # Statuses that only make sense while a runner owns the job. Seeing one
 # in a persisted record means the prior server died mid-run.
-NON_TERMINAL_LIVE_STATUSES: frozenset[str] = frozenset({"queued", "running"})
+NON_TERMINAL_LIVE_STATUSES: frozenset[str] = frozenset({"queued", "running", "analyzing"})
 
 
 @dataclass
