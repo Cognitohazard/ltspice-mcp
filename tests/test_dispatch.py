@@ -446,6 +446,21 @@ class TestSchemaPostProcessing:
             schema_str = json.dumps(tool_def.inputSchema)
             assert "$ref" not in schema_str, f"{tool_def.name}: schema contains un-inlined $ref"
 
+    def test_output_schema_top_level_is_object(self):
+        """MCP requires outputSchema to be an object schema at the top level.
+
+        Claude Code's client validates this literally and rejects the ENTIRE
+        tools/list response when any one tool violates it, disabling every
+        tool on the server for that session."""
+        for tool_def in _all_profile_defs():
+            schema = tool_def.outputSchema
+            if schema is None:
+                continue
+            assert schema.get("type") == "object", (
+                f"{tool_def.name}: outputSchema top-level type is "
+                f"{schema.get('type')!r}; MCP requires 'object'"
+            )
+
     def test_nested_model_inlining(self):
         """Tools with nested models should have schemas fully inlined."""
         defs, _ = get_tools_for_profile("full")

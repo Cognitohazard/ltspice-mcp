@@ -1309,6 +1309,9 @@ def _jobs_page_schema(
 
 
 JOBS_OUTPUT_SCHEMA: dict[str, Any] = {
+    # MCP requires outputSchema to be an object schema at the top level;
+    # Claude Code rejects the whole tools/list response when it is not.
+    "type": "object",
     "discriminator": {"propertyName": "action"},
     "oneOf": [
         _jobs_receipt_schema("status"),
