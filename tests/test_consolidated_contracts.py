@@ -7,13 +7,14 @@ callable pagination, isError vs per-item failure isolation, stable error codes,
 and the bounded-parse routing of every untrusted raw/log parse. A seventh tool
 or a regression in any of the six trips one of these.
 
-Note on shipped variance (documented, not asserted uniformly): the outcome
-vocabulary differs by tool (run_experiments/jobs use complete|partial|failed|
-in_progress; analyze_results uses success|partial|failed; verify_circuit uses
-ok|problems|error; edit_schematic uses committed|validated|failed|error;
-inspect is a per-item batch with no call-level outcome). These are ratified
-per-unit decisions; the battery asserts the structural contracts that DO hold
-across the surface.
+Uniform envelope (asserted, not merely documented): all six tools carry a
+call-level ``outcome`` drawn from the single ratified vocabulary
+``complete|partial|failed|in_progress`` — no per-tool dialect survives. Every
+outcome enum a tool declares must be a subset of that vocabulary, and every
+top-level error object must carry the full ``{code, message, stage, retryable,
+commit_state}`` envelope on the failure paths that declare one. inspect is a
+per-item read batch: its call-level outcome is ``complete`` when every query
+succeeds and ``partial`` when any isolates a failure.
 """
 
 from __future__ import annotations
@@ -42,6 +43,10 @@ CONSOLIDATED_TOOLS = (
     "verify_circuit",
     "inspect",
 )
+
+# The single ratified outcome vocabulary (design section 2). No per-tool dialect
+# is allowed: every outcome enum any of the six declares must be a subset.
+CONTRACT_OUTCOMES = frozenset({"complete", "partial", "failed", "in_progress"})
 
 
 def _registered() -> dict[str, Any]:
@@ -152,9 +157,9 @@ class TestChannelSeparation:
 
 
 class TestOutcomeEnvelope:
-    """Five tools carry a call-level outcome; inspect is the per-item exception."""
+    """All six tools carry a call-level outcome from the one ratified vocabulary."""
 
-    @pytest.mark.parametrize("name", [t for t in CONSOLIDATED_TOOLS if t != "inspect"])
+    @pytest.mark.parametrize("name", CONSOLIDATED_TOOLS)
     def test_declares_a_non_empty_outcome_enum(self, name: str):
         schema = _output_schemas()[name]
         enums = [
@@ -165,10 +170,21 @@ class TestOutcomeEnvelope:
         assert enums, f"{name}: no outcome property declared"
         assert all(e for e in enums), f"{name}: an outcome property has an empty enum"
 
-    def test_inspect_has_no_call_level_outcome(self):
-        # inspect is a pure read batch: failures isolate per query item, so it
-        # deliberately carries no top-level outcome (design section 2.6).
-        assert "outcome" not in _property_names(_output_schemas()["inspect"])
+    @pytest.mark.parametrize("name", CONSOLIDATED_TOOLS)
+    def test_outcome_enum_is_a_subset_of_the_ratified_vocabulary(self, name: str):
+        schema = _output_schemas()[name]
+        declared_something = False
+        for obj in _property_objects(schema):
+            enum = obj["properties"].get("outcome", {}).get("enum")
+            if not enum:
+                continue
+            declared_something = True
+            stray = set(enum) - CONTRACT_OUTCOMES
+            assert not stray, (
+                f"{name}: outcome enum declares {sorted(stray)} outside the ratified "
+                f"vocabulary {sorted(CONTRACT_OUTCOMES)}"
+            )
+        assert declared_something, f"{name}: no outcome enum declared"
 
 
 class TestErrorEnvelope:
@@ -183,23 +199,30 @@ class TestErrorEnvelope:
                 found.append(err)
         return found
 
+    _FULL_ENVELOPE = frozenset({"code", "message", "stage", "retryable", "commit_state"})
+
     @pytest.mark.parametrize("name", CONSOLIDATED_TOOLS)
-    def test_top_level_error_objects_carry_code_and_message(self, name: str):
+    def test_every_top_level_error_object_is_the_full_envelope(self, name: str):
+        # Uniform failure-shape contract: wherever a tool declares a top-level
+        # error object it carries the full {code, message, stage, retryable,
+        # commit_state} envelope, so a caller can decide whether re-submission
+        # is safe (design section 2). Tools that route failures through findings
+        # or per-item channels declare no top-level error object and pass vacuously.
         for err in self._top_error_objects(name):
             required = set(err.get("required", []))
-            assert {"code", "message"} <= required, (
-                f"{name}: a top-level error object omits code/message"
+            assert required >= self._FULL_ENVELOPE, (
+                f"{name}: error envelope missing fields (has {sorted(required)})"
             )
 
-    @pytest.mark.parametrize("name", ["run_experiments", "jobs"])
-    def test_execute_plane_error_is_the_full_envelope(self, name: str):
-        # The durable EXECUTE plane must state retryability and commit state so a
-        # caller can decide whether re-submission is safe (design section 2).
+    @pytest.mark.parametrize("name", ["run_experiments", "jobs", "edit_schematic"])
+    def test_write_and_execute_planes_declare_a_full_error_envelope(self, name: str):
+        # The durable EXECUTE plane and the transactional AUTHOR write both MUST
+        # surface a top-level error object, not just may (design section 2).
         errors = self._top_error_objects(name)
         assert errors, f"{name}: no top-level error object declared"
         for err in errors:
             required = set(err.get("required", []))
-            assert {"code", "message", "stage", "retryable", "commit_state"} <= required, (
+            assert required >= self._FULL_ENVELOPE, (
                 f"{name}: error envelope missing fields (has {sorted(required)})"
             )
 
@@ -243,7 +266,7 @@ class TestStableErrorCodesAndIsError:
         assert data is not None
         codes = {finding["rule_id"] for finding in data["findings"]}
         assert "path_denied" in codes
-        assert data["outcome"] == "error"
+        assert data["outcome"] == "failed"
 
     async def test_inspect_path_denied_isolates_to_the_item(self, state_no_sim):
         result = await handle_inspect(
@@ -256,6 +279,8 @@ class TestStableErrorCodesAndIsError:
         assert not result.isError
         data = result.structuredContent
         assert data is not None
+        # ...but it does move the call-level outcome to partial.
+        assert data["outcome"] == "partial"
         (item,) = data["results"]
         assert item["ok"] is False
         assert item["error"]["code"] == "path_denied"

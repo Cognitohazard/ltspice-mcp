@@ -84,7 +84,7 @@ async def _build_blank(state: SessionState, name: str, ops: list[dict], **kw) ->
 async def test_blank_build_parity_with_create_plus_apply(asc_state, work_dir):
     """base:"blank" produces the same .asc as create_schematic + apply_schematic_ops."""
     data = await _build_blank(asc_state, "parity_edit", _DIVIDER_OPS)
-    assert data["outcome"] == "committed"
+    assert data["outcome"] == "complete"
     assert data["commit_state"] == "committed"
 
     await handle_create_schematic(CreateSchematicInput(name="parity_apply"), asc_state)
@@ -118,7 +118,7 @@ async def test_existing_edit_requires_and_honors_sha(asc_state, work_dir):
             _edit_input(target="rev.asc", expected_sha256=sha0, ops=add_r3), asc_state
         )
     )
-    assert ok["outcome"] == "committed"
+    assert ok["outcome"] == "complete"
     assert ok["sha256"] != sha0
     assert "R3" in (work_dir / "rev.asc").read_text()
 
@@ -155,8 +155,12 @@ async def test_stale_sha_returns_revision_conflict(asc_state, work_dir):
             asc_state,
         )
     )
-    assert loser["outcome"] == "error"
+    assert loser["outcome"] == "failed"
     assert loser["error"]["code"] == "revision_conflict"
+    # Full error envelope: a revision conflict is retryable, nothing was written.
+    assert loser["error"]["stage"] == "revision_check"
+    assert loser["error"]["retryable"] is True
+    assert loser["error"]["commit_state"] == "not_started"
     assert loser["commit_state"] == "not_committed"
     # Nothing written: the file is unchanged and R4 never landed.
     assert _sha(work_dir / "conflict.asc") == sha1
@@ -217,7 +221,7 @@ async def test_parallel_session_revision_race(config, work_dir, asc_symbols):
             session_a,
         )
     )
-    assert a["outcome"] == "committed"
+    assert a["outcome"] == "complete"
 
     b = _assert_schema(
         await handle_edit_schematic(
@@ -237,7 +241,7 @@ async def test_parallel_session_revision_race(config, work_dir, asc_symbols):
             session_b,
         )
     )
-    assert b["outcome"] == "error"
+    assert b["outcome"] == "failed"
     assert b["error"]["code"] == "revision_conflict"
     assert "RB" not in (work_dir / "race.asc").read_text()
 
@@ -279,6 +283,12 @@ async def test_crash_before_rename_leaves_target_and_writes_draft(
     )
     assert data["outcome"] == "failed"
     assert data["commit_state"] == "not_committed"
+    # Full error envelope on the commit-failure path: a transient I/O fault is
+    # retryable and the failed commit phase is named from the stage bookkeeping.
+    assert data["error"]["code"] == "commit_failed"
+    assert data["error"]["retryable"] is True
+    assert data["error"]["commit_state"] == "not_started"
+    assert data["error"]["stage"] in {"stage_asc", "rename"}
     assert data["build_id"]  # echoed
     # Target untouched.
     assert _sha(work_dir / "crash.asc") == sha0
@@ -301,7 +311,7 @@ async def test_crash_after_rename_stays_committed(asc_state, work_dir, monkeypat
     data = await _build_blank(asc_state, "aftercommit", _DIVIDER_OPS, reference="ref.cir")
     # The rename succeeded, so the sheet is committed even though a post-rename
     # (reference-export) stage failed.
-    assert data["outcome"] == "committed"
+    assert data["outcome"] == "complete"
     assert data["commit_state"] == "committed"
     assert (work_dir / "aftercommit.asc").is_file()
     assert data["verification"]["export_error"]
@@ -365,7 +375,7 @@ async def test_dry_run_writes_nothing(asc_state, work_dir):
             asc_state,
         )
     )
-    assert data["outcome"] == "validated"
+    assert data["outcome"] == "complete"
     assert data["commit_state"] == "not_committed"
     # Every op validated, geometry computed, nothing written.
     assert data["wiring"]["pins_total"] == 6  # R1, R2, R3
@@ -394,7 +404,7 @@ async def test_dry_run_surfaces_all_op_failures(asc_state):
         )
     )
     # Both bad ops surface at once (dry run does not stop on the first).
-    assert data["outcome"] == "validated"
+    assert data["outcome"] == "complete"
     assert len(data["failures"]) == 2
 
 
@@ -612,6 +622,12 @@ async def test_bad_op_aborts_transaction_nothing_written(asc_state, work_dir):
     assert data["outcome"] == "failed"
     assert data["commit_state"] == "not_committed"
     assert data["failures"][0]["op"] == "set_component_value"
+    # Full error envelope: an op-application failure is a validation fault, so it
+    # is not retryable, and nothing was written.
+    assert data["error"]["code"] == "op_failed"
+    assert data["error"]["stage"] == "apply_ops"
+    assert data["error"]["retryable"] is False
+    assert data["error"]["commit_state"] == "not_started"
     assert not (work_dir / "abort.asc").exists()
 
 
@@ -635,7 +651,7 @@ async def test_archetype_scale_blank_build(asc_state, work_dir):
     data = await _build_blank(
         asc_state, "arch", _ARCHETYPE_OPS, return_views=["pin_legend"], view_limit=50
     )
-    assert data["outcome"] == "committed"
+    assert data["outcome"] == "complete"
     legend = {
         e["ref"]: {p["name"] for p in e["pins"]} for e in data["views"]["pin_legend"]["items"]
     }

@@ -1833,7 +1833,7 @@ _RESULT_ENTRY_SCHEMA: dict[str, Any] = {
 OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "outcome": {"type": "string", "enum": ["success", "partial", "failed"]},
+        "outcome": {"type": "string", "enum": ["complete", "partial", "failed"]},
         "coverage": {
             "type": "object",
             "properties": {
@@ -2281,7 +2281,7 @@ async def handle_analyze_results(
         if not results and failures and next_value is None
         else "partial"
         if failures or missing or next_value is not None
-        else "success"
+        else "complete"
     )
     coverage = {
         "runs_requested": runs_requested,

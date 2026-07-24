@@ -230,8 +230,10 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "outcome": {
             "type": "string",
-            "enum": ["committed", "validated", "failed", "error"],
+            "enum": ["complete", "partial", "failed", "in_progress"],
         },
+        # Edit-specific: the write state of the target sheet, kept at the top
+        # level (and mirrored into error.commit_state on failure envelopes).
         "commit_state": {"type": "string", "enum": ["committed", "not_committed"]},
         "target": {"type": "string"},
         "sha256": {"type": ["string", "null"]},
@@ -242,8 +244,14 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
             "properties": {
                 "code": {"type": "string"},
                 "message": {"type": "string"},
+                "stage": {"type": "string"},
+                "retryable": {"type": "boolean"},
+                "commit_state": {
+                    "type": "string",
+                    "enum": ["not_started", "committed", "unknown"],
+                },
             },
-            "required": ["code", "message"],
+            "required": ["code", "message", "stage", "retryable", "commit_state"],
         },
         "stages": {
             "type": "array",
@@ -596,6 +604,16 @@ def _apply_ops(
     return results, failures, abort_reason
 
 
+def _mirror_commit_state(commit_state: str) -> Literal["not_started", "committed", "unknown"]:
+    """Project the top-level commit_state onto the error envelope's enum.
+
+    The top-level field uses ``committed``/``not_committed``; the shared error
+    envelope uses ``not_started``/``committed``/``unknown``. A not-yet-written
+    sheet mirrors to ``not_started``.
+    """
+    return "committed" if commit_state == "committed" else "not_started"
+
+
 def _envelope(
     *,
     outcome: str,
@@ -630,6 +648,9 @@ def _envelope(
         "artifacts": artifacts or [],
     }
     if error is not None:
+        # Mirror the top-level commit_state into the error object so a failure
+        # envelope is self-describing without cross-referencing the top level.
+        error.setdefault("commit_state", _mirror_commit_state(commit_state))
         data["error"] = error
     if wiring is not None:
         data["wiring"] = wiring
@@ -702,7 +723,7 @@ async def handle_edit_schematic(
                     f"edit_schematic: revision_conflict on {target.name} — the file changed "
                     "since you read it. Re-read it and resubmit with the current sha256.",
                     _envelope(
-                        outcome="error",
+                        outcome="failed",
                         commit_state="not_committed",
                         target=target,
                         build_id=build_id,
@@ -715,6 +736,8 @@ async def handle_edit_schematic(
                                 f"expected_sha256 {expected} does not match the current "
                                 f"file ({current}); nothing was written."
                             ),
+                            "stage": "revision_check",
+                            "retryable": True,
                         },
                         hint="Re-read the target, then resubmit with its current sha256.",
                     ),
@@ -741,6 +764,12 @@ async def handle_edit_schematic(
                         base=args.base,
                         stages=stages,
                         failures=failures,
+                        error={
+                            "code": "op_failed",
+                            "message": abort_reason,
+                            "stage": "apply_ops",
+                            "retryable": False,
+                        },
                         hint="Fix the failing op and resubmit with the same expected_sha256.",
                     ),
                     args.format,
@@ -765,7 +794,7 @@ async def handle_edit_schematic(
                     f"edit_schematic (dry run) on {target.name}: {len(results)} ops validated; "
                     "nothing saved.",
                     _envelope(
-                        outcome="validated",
+                        outcome="complete",
                         commit_state="not_committed",
                         target=target,
                         build_id=build_id,
@@ -827,7 +856,7 @@ async def handle_edit_schematic(
             return format_response(
                 f"edit_schematic committed {target.name} (build {build_id}).",
                 _envelope(
-                    outcome="committed",
+                    outcome="complete",
                     commit_state="committed",
                     target=target,
                     build_id=build_id,
@@ -922,7 +951,13 @@ def _commit_failure_response(
             build_id=build_id,
             base=args.base,
             stages=stages,
-            error={"code": "commit_failed", "message": error},
+            error={
+                "code": "commit_failed",
+                "message": error,
+                # The failed commit phase is the last stage recorded before the abort.
+                "stage": stages[-1]["stage"] if stages else "commit",
+                "retryable": True,
+            },
             artifacts=artifacts,
             hint="The sheet was not modified; retry with the same expected_sha256.",
         ),

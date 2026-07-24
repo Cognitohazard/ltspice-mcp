@@ -229,7 +229,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "path": {"type": "string"},
         "kind": {"type": "string"},
-        "outcome": {"type": "string", "enum": ["ok", "problems", "error"]},
+        "outcome": {"type": "string", "enum": ["complete", "partial", "failed"]},
         "checks_run": {"type": "array", "items": {"type": "string"}},
         "checks_skipped": {"type": "array", "items": _CHECK_SKIPPED_SCHEMA},
         "findings": {"type": "array", "items": _FINDING_SCHEMA},
@@ -1110,12 +1110,12 @@ def _outcome(
     comparison: dict[str, Any] | None,
 ) -> str:
     if failures:
-        return "problems"
+        return "partial"
     if any(f["severity"] in ("error", "warning") for f in findings):
-        return "problems"
+        return "partial"
     if _comparison_mismatch(comparison):
-        return "problems"
-    return "ok"
+        return "partial"
+    return "complete"
 
 
 def _hint(data: dict[str, Any]) -> str:
@@ -1164,7 +1164,7 @@ def _base_data(path: str) -> dict[str, Any]:
     return {
         "path": path,
         "kind": "unknown",
-        "outcome": "error",
+        "outcome": "failed",
         "checks_run": [],
         "checks_skipped": [],
         "findings": [],

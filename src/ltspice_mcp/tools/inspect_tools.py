@@ -818,6 +818,10 @@ _ERROR_SCHEMA: dict[str, Any] = {
 _OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
+        # Call-level outcome over the per-item batch: complete when every query
+        # succeeded, partial when any query failed (failures isolate per item),
+        # failed only for a call-level fault (which also sets isError).
+        "outcome": {"type": "string", "enum": ["complete", "partial", "failed"]},
         "results": {
             "type": "array",
             "items": {
@@ -849,7 +853,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "error_count": {"type": "integer"},
         "hint": HINT_SCHEMA,
     },
-    "required": ["results", "count"],
+    "required": ["outcome", "results", "count"],
 }
 
 INSPECT_DESCRIPTION = (
@@ -921,6 +925,9 @@ async def handle_inspect(args: InspectInput, state: SessionState) -> types.CallT
         ok_count += 1
 
     data: dict[str, Any] = {
+        # Per-item failures isolate to their result and never fail the call, so
+        # the batch is "partial" when any query failed and "complete" otherwise.
+        "outcome": "partial" if error_count else "complete",
         "results": results,
         "count": len(results),
         "ok_count": ok_count,
