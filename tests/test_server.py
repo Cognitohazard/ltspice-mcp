@@ -103,6 +103,26 @@ class TestBuildInstructions:
         assert "Active simulators: LTspice (default), ngspice." in text
         assert "LTspice not detected" not in text
 
+    def test_consolidated_instructions_fit_client_budget(self):
+        """Claude Code truncates server instructions at 2048 chars; the tail
+        (the result-trust paragraph) must survive under every prefix shape."""
+        from ltspice_mcp.server import _INSTRUCTIONS_BUDGET
+
+        worst_cases = [
+            build_instructions({}, None, profile="consolidated"),
+            build_instructions({"ngspice": _NG}, _NG, profile="consolidated"),
+            build_instructions(
+                {"ltspice": _LT, "ngspice": _NG, "qspice": _LT, "xyce": _NG},
+                _LT,
+                profile="consolidated",
+            ),
+        ]
+        for text in worst_cases:
+            assert len(text) <= _INSTRUCTIONS_BUDGET, (
+                f"consolidated instructions {len(text)} chars > "
+                f"{_INSTRUCTIONS_BUDGET} client truncation budget"
+            )
+
 
 class TestConfigureAscEditor:
     """Symbol-path resolution. Every test mocks ``is_wsl`` (the suite runs on a

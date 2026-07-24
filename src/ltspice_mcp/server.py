@@ -462,24 +462,31 @@ Build or edit .asc with the schematic tools, never by hand (hand-writing forfeit
 # Instructions for the EXPERIMENTAL consolidated profile — six tools over
 # three planes. Terse, like SERVER_INSTRUCTIONS: the client re-reads it each
 # turn. Names only the six tools that profile exposes.
+# Kept under _INSTRUCTIONS_BUDGET including the runtime simulator prefix:
+# Claude Code silently truncates server instructions at 2048 chars, and the
+# tail (the result-trust paragraph) is the part that must survive.
 CONSOLIDATED_INSTRUCTIONS = """\
-This is the EXPERIMENTAL consolidated profile: six tools over three planes, for an agent with native file access on this machine (author and edit .cir/.net/.sp decks yourself with your own file tools; these tools run, analyze, gate, and do geometry-aware .asc editing).
+EXPERIMENTAL consolidated profile: six tools for an agent with native file access (author .cir/.net/.sp decks with your own file tools; these tools run, analyze, gate, and edit .asc schematics geometry-aware).
 
-EXECUTE — run_experiments: run one or more staged decks across declared variations (strict assignments and one random/Monte-Carlo variation); the required request_id makes submission durable and idempotent; quick jobs return inline, longer jobs return a receipt with a job_id. jobs: the control plane over those receipts — status, wait (long-poll), cancel (owner or control_token), list, and page run records, by job_id or request_id.
+EXECUTE — run_experiments: run staged decks across declared variations (strict assignments plus one random/Monte-Carlo); required request_id = durable, idempotent submission; quick jobs return inline, longer ones a receipt/job_id. jobs: status, wait (long-poll), cancel (owner/control_token), list, run-record pages; by job_id or request_id.
 
-UNDERSTAND — analyze_results: apply typed recipes to completed run or experiment sources; returns case/step-attributed values, attributed reductions, and spec verdicts; bounded and continuable via result_set_id + cursor. inspect: read-only queries — capabilities, symbols (list/detail), net trace, components, and models.
+UNDERSTAND — analyze_results: typed recipes over completed runs/experiments; case/step-attributed values, reductions, spec verdicts; continuable via result_set_id + cursor. inspect: read-only — capabilities, symbols, net trace, components, models.
 
-AUTHOR — edit_schematic: a typed op batch onto one .asc sheet (base:"blank" builds a whole circuit from empty; base:"existing" applies deltas); revision-guarded (pass expected_sha256 when the target exists) and transactional; returns geometry facts. verify_circuit: the read-side gate — lint/syntax, symbols, export, layout, quality, and compare (equivalence or structural diff), with an optional render.
+AUTHOR — edit_schematic: typed op batch on one .asc sheet (base "blank" builds from empty, "existing" applies deltas); transactional, revision-guarded (expected_sha256 for existing targets); returns geometry facts. verify_circuit: lint, symbols, export, layout, quality, compare (equivalence/structural diff), optional render.
 
-Canonical loops:
-  netlist:        write deck (your file tools) -> run_experiments -> analyze_results -> edit -> ...
-  schematic new:  inspect(symbols) -> edit_schematic{base:"blank", ops, reference, render} -> revise
-  schematic edit: read the .asc -> edit_schematic{ops, expected_sha256} -> verify_circuit
-  debug:          verify_circuit(lint) -> fix -> run_experiments -> analyze_results -> inspect(net)
-  long runs:      run_experiments (receipt) -> jobs(wait) -> analyze_results
+Loops:
+  netlist: write deck -> run_experiments -> analyze_results -> edit -> ...
+  schematic new: inspect(symbols) -> edit_schematic{base:"blank", ops, render} -> revise
+  schematic edit: read .asc -> edit_schematic{ops, expected_sha256} -> verify_circuit
+  debug: verify_circuit(lint) -> fix -> run_experiments -> analyze_results
+  long runs: run_experiments (receipt) -> jobs(wait) -> analyze_results
 
-A run can report terminal yet be degenerate (coerced value, skipped .meas): read the returned observations/warnings and per-item failures, never equate completed with correct. Match the recipe to the run type or analyze_results errors (AC metrics need a .AC run, transient metrics need .tran, and so on).
+A terminal run can still be degenerate (coerced value, skipped .meas): read observations/warnings and per-item failures — completed is not correct. Match recipe to run type (AC metrics need .AC, transient need .tran) or analyze_results errors.
 """
+
+# Claude Code's client truncates MCP server instructions at 2048 characters;
+# the runtime prefix (active-simulator line) must fit inside it too.
+_INSTRUCTIONS_BUDGET = 2048
 
 # Friendly display names for the detected-simulator line prepended to the
 # instructions at runtime (registry keys are lowercase).
@@ -497,7 +504,7 @@ def build_instructions(
     consolidated profile carries its own six-tool guide.
     """
     if not available:
-        active = no_simulator_message()
+        active = no_simulator_message(short=(profile == "consolidated"))
     else:
 
         def disp(name: str) -> str:
