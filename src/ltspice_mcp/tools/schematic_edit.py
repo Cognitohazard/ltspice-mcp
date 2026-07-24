@@ -38,7 +38,7 @@ from mcp import types
 from pydantic import Field
 from spicelib import AscEditor
 
-from ltspice_mcp.errors import NetlistError, PathSecurityError
+from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import _fsync_dir, _fsync_fd, atomic_write_bytes
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.netlist_graph import IncludeResolver, compare_graphs, parse_netlist_graph
@@ -49,9 +49,7 @@ from ltspice_mcp.lib.pin_legend import (
     find_label_only_pins,
     paginate_view,
 )
-from ltspice_mcp.lib.raster import render_image
-from ltspice_mcp.lib.schematic_renderer import render_svg
-from ltspice_mcp.lib.schematic_scene import SymbolResolver, build_scene
+from ltspice_mcp.lib.schematic_scene import build_scene
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
@@ -59,9 +57,12 @@ from ltspice_mcp.tools._base import (
     StrictModel,
     ToolInput,
     format_response,
+    make_include_resolver,
     registry,
+    render_scene_artifact,
     resolve_runnable_netlist,
     safe_path,
+    symbol_resolver_for,
 )
 from ltspice_mcp.tools.circuit import (
     _build_on_wire_predicate,
@@ -392,22 +393,6 @@ async def _export_asc_to_netlist(asc_copy: Path, state: SessionState) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _make_include_resolver(state: SessionState) -> IncludeResolver:
-    """An include resolver that routes every include/lib open through safe_path.
-
-    ID-28: the graph engine calls this before opening any include, so an in-deck
-    include that escapes the allowed roots is denied and never read.
-    """
-
-    def resolver(candidate: Path) -> Path | None:
-        try:
-            return safe_path(str(candidate), state)
-        except PathSecurityError:
-            return None
-
-    return resolver
-
-
 def _wiring_and_legend(
     editor, *, include_legend: bool
 ) -> tuple[dict[str, int], list[dict], list[dict]]:
@@ -441,30 +426,17 @@ def _wiring_and_legend(
     return profile, legend, label_only
 
 
-def _symbol_resolver_for(asc_path: Path) -> SymbolResolver:
-    """A render resolver rooted at the sheet's dir plus the server's .asy paths."""
-    project = [Path(p) for p in (AscEditor.custom_lib_paths or [])]
-    project += [Path(p) for p in (getattr(AscEditor, "simulator_lib_paths", None) or [])]
-    return SymbolResolver(local_dir=asc_path.parent, project_paths=project)
-
-
 def _render_view(
-    asc_path: Path, fmt: Literal["png", "svg"], scale: float, artifacts_dir: Path | None
+    asc_path: Path, fmt: Literal["png", "svg"], scale: float, artifacts_dir: Path
 ) -> dict:
     """Render ``asc_path`` to SVG (always) or PNG (when the raster extra is
-    present), writing an artifact when ``artifacts_dir`` is given."""
-    scene = build_scene(asc_path, resolver=_symbol_resolver_for(asc_path))
-    svg = render_svg(scene)
-    image = render_image(svg, image_format=fmt, scale=scale)
+    present), writing a content-hashed artifact under ``artifacts_dir``."""
+    scene = build_scene(asc_path, resolver=symbol_resolver_for(asc_path))
+    image, out_path, _ = render_scene_artifact(scene, artifacts_dir, image_format=fmt, scale=scale)
     view = dict(image.to_dict())
     if scene.diagnostics:
         view["diagnostics"] = list(scene.diagnostics)
-    if artifacts_dir is not None:
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
-        suffix = "png" if image.is_raster else "svg"
-        out = artifacts_dir / f"{asc_path.stem}.{suffix}"
-        atomic_write_bytes(out, image.data, durable=False)
-        view["path"] = str(out)
+    view["path"] = str(out_path)
     return view
 
 
@@ -575,7 +547,7 @@ async def _run_reference_stage(
             verification["export_error"] = str(exc)
             verification["equivalent"] = None
             return verification
-        resolver = _make_include_resolver(state)
+        resolver = make_include_resolver(state)
         comparison = await asyncio.to_thread(_compare_reference, ref_path, netlist_text, resolver)
         verification["equivalent"] = comparison.equivalent
         verification["structurally_equivalent"] = comparison.structurally_equivalent
