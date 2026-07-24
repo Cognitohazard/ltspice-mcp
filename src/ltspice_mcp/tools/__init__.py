@@ -2,8 +2,24 @@
 
 from ltspice_mcp.tools._base import registry
 
-# Importing these modules triggers @registry.tool registrations.
-from . import advanced, analysis, analyze, circuit, library, simulation, status  # noqa: F401
+# Importing these modules triggers @registry.tool registrations. The
+# consolidated-profile modules (analyze, experiments, inspect_tools,
+# schematic_edit, verify) import internals from the base modules at module
+# scope; the sorted order below already loads each dependency first — circuit
+# precedes inspect_tools/schematic_edit/verify, and analysis precedes analyze.
+from . import (  # noqa: F401
+    advanced,
+    analysis,
+    analyze,
+    circuit,
+    experiments,
+    inspect_tools,
+    library,
+    schematic_edit,
+    simulation,
+    status,
+    verify,
+)
 
 
 def get_tools_for_profile(profile: str):

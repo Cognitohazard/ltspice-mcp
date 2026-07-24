@@ -3,10 +3,26 @@
 import json
 import typing
 
+from mcp import types
 from pydantic import ValidationError
 
+from ltspice_mcp.config import VALID_PROFILES
 from ltspice_mcp.tools import get_tools_for_profile
 from ltspice_mcp.tools.circuit import SchematicOp
+
+
+def _all_profile_defs() -> list[types.Tool]:
+    """Union of tool definitions across every valid profile, deduped by name.
+
+    The reversal/reversibility guards must see tools that only a non-"full"
+    profile exposes (the six consolidated tools), so a one-way mutating tool
+    there can't ship without a reviewed _TOOL_REVERSAL entry (R1-F19)."""
+    seen: dict[str, types.Tool] = {}
+    for profile in VALID_PROFILES:
+        defs, _ = get_tools_for_profile(profile)
+        for tool_def in defs:
+            seen[tool_def.name] = tool_def
+    return list(seen.values())
 
 
 class TestDispatchTable:
@@ -361,6 +377,13 @@ _TOOL_REVERSAL: dict[str, str] = {
     "export_netlist": "derived export; source .asc untouched, output regenerable",
     "export_waveform": "derived export; source raw untouched, output regenerable",
     "plot_waveform": "derived render; source raw untouched, output regenerable",
+    # Consolidated profile (EXPERIMENTAL) — the six-tool surface. inspect is
+    # read-only and needs no entry; the other five are not read-only.
+    "run_experiments": "cancel via jobs; re-launch (idempotent by request_id)",
+    "jobs": "cancel action; re-launch the run to reverse a cancel",
+    "analyze_results": "derived artifacts; sources untouched, output regenerable",
+    "edit_schematic": "compensating op batch, or restore the file natively (file-access agent)",
+    "verify_circuit": "export_to:sidecar overwrites the .net, regenerable from the source; source untouched",
 }
 
 
@@ -372,7 +395,7 @@ class TestMutatingToolsAreReversible:
     directly via @registry.tool lives outside the SchematicOp union."""
 
     def test_every_mutating_tool_declares_a_reversal(self):
-        defs, _ = get_tools_for_profile("full")
+        defs = _all_profile_defs()
         mutating = {d.name for d in defs if not (d.annotations and d.annotations.readOnlyHint)}
         undeclared = mutating - _TOOL_REVERSAL.keys()
         assert not undeclared, (
@@ -383,8 +406,7 @@ class TestMutatingToolsAreReversible:
         )
 
     def test_no_stale_reversal_entries(self):
-        defs, _ = get_tools_for_profile("full")
-        names = {d.name for d in defs}
+        names = {d.name for d in _all_profile_defs()}
         stale = _TOOL_REVERSAL.keys() - names
         assert not stale, f"_TOOL_REVERSAL names tools not in the registry: {sorted(stale)}"
 

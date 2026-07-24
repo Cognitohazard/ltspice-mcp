@@ -172,10 +172,13 @@ def _configure_asc_editor(config: ServerConfig, available: dict) -> None:
 
 
 class _ErrorHint(NamedTuple):
-    """Profile-aware error hint: full references MCP tools, agentic gives direct guidance."""
+    """Profile-aware error hint. ``full`` references the full MCP tool set;
+    ``agentic`` gives direct file-edit guidance; ``consolidated`` references
+    only the six consolidated tools (never a tool that profile can't see)."""
 
     full: str
     agentic: str
+    consolidated: str
 
 
 # Error type → profile-aware hint appended to error messages.
@@ -191,6 +194,10 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
             "Try find_model to fuzzy-match against loaded libraries "
             "(catches typos), or load a library containing it and rerun."
         ),
+        consolidated=(
+            'Use inspect with a model query (mode:"search") to fuzzy-match '
+            "against loaded libraries, or add a .lib/.include for it to the deck."
+        ),
     ),
     _err.ConvergenceError: _ErrorHint(
         full=(
@@ -200,6 +207,12 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
             "  - Check component values for very large/small ratios"
         ),
         agentic=(
+            "Suggestions:\n"
+            "  - Add a .OPTIONS directive to the netlist "
+            "(e.g., .OPTIONS reltol=0.003 or .OPTIONS method=gear)\n"
+            "  - Check component values for very large/small ratios"
+        ),
+        consolidated=(
             "Suggestions:\n"
             "  - Add a .OPTIONS directive to the netlist "
             "(e.g., .OPTIONS reltol=0.003 or .OPTIONS method=gear)\n"
@@ -215,10 +228,16 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
             "This usually means a floating node or short circuit.\n"
             "Inspect the netlist for connectivity issues."
         ),
+        consolidated=(
+            "This usually means a floating node or short circuit.\n"
+            "Use inspect with a net query to trace connectivity, or read the "
+            "netlist directly."
+        ),
     ),
     _err.SimulationError: _ErrorHint(
         full="Use server_status to verify simulator availability.",
         agentic="Use server_status to verify simulator availability.",
+        consolidated=("Use inspect with a capabilities query to verify simulator availability."),
     ),
     _err.NetlistError: _ErrorHint(
         full=(
@@ -229,6 +248,10 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
             "Inspect the netlist file directly, or use "
             "list_components to verify component references."
         ),
+        consolidated=(
+            "Use verify_circuit to lint the file, or inspect its components — "
+            "or read the netlist directly."
+        ),
     ),
     _err.JobNotFoundError: _ErrorHint(
         full=(
@@ -237,6 +260,10 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
         ),
         agentic=(
             "Use check_job with no job_id to list known jobs — the id may be "
+            "mistyped, evicted, or from a previous server session."
+        ),
+        consolidated=(
+            'Use jobs with action:"list" to see known jobs — the id may be '
             "mistyped, evicted, or from a previous server session."
         ),
     ),
@@ -249,6 +276,10 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
             "Verify the simulation completed successfully with check_job, "
             "and check signal names with simulation_summary."
         ),
+        consolidated=(
+            'Verify the run reached a terminal state with jobs (action:"status"), '
+            "and read signals with analyze_results."
+        ),
     ),
     _err.LibraryError: _ErrorHint(
         full=("Use list_libraries to see loaded libraries, or load_library to load a new one."),
@@ -256,16 +287,29 @@ _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
             "Use find_model to fuzzy-match against loaded libraries, "
             "or add .lib directives to the netlist manually."
         ),
+        consolidated=(
+            'Use inspect with a model query (mode:"enumerate") to see loaded '
+            "libraries, or add .lib/.include directives to the netlist directly."
+        ),
     ),
 }
 
 
 def _get_error_hint(err_type: type[LTSpiceMCPError], profile: str) -> str | None:
-    """Get the appropriate error hint for the active tool profile."""
+    """Get the appropriate error hint for the active tool profile.
+
+    Each profile's hint names only tools that profile exposes: ``full`` the
+    full set, ``agentic`` direct file edits, ``consolidated`` only the six
+    consolidated tools. An unrecognized profile falls back to ``full``.
+    """
     hint = _ERROR_HINTS.get(err_type)
     if hint is None:
         return None
-    return hint.agentic if profile == "agentic" else hint.full
+    if profile == "agentic":
+        return hint.agentic
+    if profile == "consolidated":
+        return hint.consolidated
+    return hint.full
 
 
 def _path_reject_guidance(state: SessionState) -> str:
@@ -327,7 +371,9 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     # request is answered, and that request reads the same object, so the
     # client sees the dynamic line. Falls back to the static text if unset.
     if _dynamic_init_options is not None:
-        _dynamic_init_options.instructions = build_instructions(available, state.default_simulator)
+        _dynamic_init_options.instructions = build_instructions(
+            available, state.default_simulator, config.tool_profile
+        )
 
     logger.info("=== LTSpice MCP Server Starting ===")
     logger.info(f"Server name: {server.name}")
@@ -413,17 +459,42 @@ A run can report "completed" yet be degenerate (coerced value, skipped .meas) �
 Build or edit .asc with the schematic tools, never by hand (hand-writing forfeits wire_pins's orthogonal routing and its pin-collision/junction checks): create_schematic, apply_schematic_ops for component placement and other mutations, and wire_pins for signal nets. The apply_schematic_ops add_component op returns the symbol-specific pin names + coordinates — a resistor's are A/B, not 1/2. Wire signal nets with wire_pins — do NOT net-label them; put a ground flag at each ground pin with an apply_schematic_ops add_net_label op (net="0"). The full schematic-layout playbook (tier alignment, orientations, bus routing) is the spice://guide resource.
 """
 
+# Instructions for the EXPERIMENTAL consolidated profile — six tools over
+# three planes. Terse, like SERVER_INSTRUCTIONS: the client re-reads it each
+# turn. Names only the six tools that profile exposes.
+CONSOLIDATED_INSTRUCTIONS = """\
+This is the EXPERIMENTAL consolidated profile: six tools over three planes, for an agent with native file access on this machine (author and edit .cir/.net/.sp decks yourself with your own file tools; these tools run, analyze, gate, and do geometry-aware .asc editing).
+
+EXECUTE — run_experiments: run one or more staged decks across declared variations (strict assignments and one random/Monte-Carlo variation); the required request_id makes submission durable and idempotent; quick jobs return inline, longer jobs return a receipt with a job_id. jobs: the control plane over those receipts — status, wait (long-poll), cancel (owner or control_token), list, and page run records, by job_id or request_id.
+
+UNDERSTAND — analyze_results: apply typed recipes to completed run or experiment sources; returns case/step-attributed values, attributed reductions, and spec verdicts; bounded and continuable via result_set_id + cursor. inspect: read-only queries — capabilities, symbols (list/detail), net trace, components, and models.
+
+AUTHOR — edit_schematic: a typed op batch onto one .asc sheet (base:"blank" builds a whole circuit from empty; base:"existing" applies deltas); revision-guarded (pass expected_sha256 when the target exists) and transactional; returns geometry facts. verify_circuit: the read-side gate — lint/syntax, symbols, export, layout, quality, and compare (equivalence or structural diff), with an optional render.
+
+Canonical loops:
+  netlist:        write deck (your file tools) -> run_experiments -> analyze_results -> edit -> ...
+  schematic new:  inspect(symbols) -> edit_schematic{base:"blank", ops, reference, render} -> revise
+  schematic edit: read the .asc -> edit_schematic{ops, expected_sha256} -> verify_circuit
+  debug:          verify_circuit(lint) -> fix -> run_experiments -> analyze_results -> inspect(net)
+  long runs:      run_experiments (receipt) -> jobs(wait) -> analyze_results
+
+A run can report terminal yet be degenerate (coerced value, skipped .meas): read the returned observations/warnings and per-item failures, never equate completed with correct. Match the recipe to the run type or analyze_results errors (AC metrics need a .AC run, transient metrics need .tran, and so on).
+"""
+
 # Friendly display names for the detected-simulator line prepended to the
 # instructions at runtime (registry keys are lowercase).
 _SIM_DISPLAY = {"ltspice": "LTspice", "ngspice": "ngspice", "qspice": "QSPICE", "xyce": "Xyce"}
 
 
-def build_instructions(available: dict[str, type], default: type | None) -> str:
+def build_instructions(
+    available: dict[str, type], default: type | None, profile: str = "full"
+) -> str:
     """Prepend a line naming the actually-detected simulators to the static guide.
 
     The server is named for LTspice, so a client that only has ngspice would
     otherwise read the LTspice-centric name and the "symbols disabled" log as
-    degradation. Stating the active engine up front removes that ambiguity.
+    degradation. Stating the active engine up front removes that ambiguity. The
+    consolidated profile carries its own six-tool guide.
     """
     if not available:
         active = no_simulator_message()
@@ -444,7 +515,8 @@ def build_instructions(available: dict[str, type], default: type | None) -> str:
                 "symbol files and may be unavailable — simulation and analysis "
                 "run on the active engine and are unaffected.)"
             )
-    return f"{active}\n\n{SERVER_INSTRUCTIONS}"
+    body = CONSOLIDATED_INSTRUCTIONS if profile == "consolidated" else SERVER_INSTRUCTIONS
+    return f"{active}\n\n{body}"
 
 
 # The name is overridable so the thin alias packages (circuit-mcp, ngspice-mcp)

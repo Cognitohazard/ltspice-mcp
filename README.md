@@ -110,7 +110,7 @@ allowed_paths = ["."]    # sandbox: only these directories are accessible
 timeout = 300.0          # seconds
 
 [tools]
-profile = "full"         # or "agentic"
+profile = "full"         # or "agentic", or "consolidated" (experimental)
 
 [state]
 persist_jobs = true
@@ -140,8 +140,11 @@ Simulation output is automatically redirected to a Windows temp directory: LTspi
 |-|-|-|
 | `full` (default) | 49 | Any MCP client, automation, non-agent LLMs |
 | `agentic` | 41 | LLM agents with native file access (Read/Edit/Write) |
+| `consolidated` (experimental) | 6 | Agents with native file access, driving a small three-plane surface |
 
 The `agentic` profile drops netlist-editing wrappers and library session management — work a capable agent does through direct file edits — and keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, and the `.asc` geometry tools. The `skills/` directory (`skills/ltspice/SKILL.md`, `skills/ngspice/SKILL.md`) contains the domain knowledge that pairs with it: copy the relevant skill into your client's persistent-instructions location.
+
+The `consolidated` profile (**experimental**) collapses the surface to six tools over three planes — `run_experiments` and `jobs` (execute), `analyze_results` and `inspect` (understand), `edit_schematic` and `verify_circuit` (author) — for agents that author and edit netlists with their own file tools. It is a superset workflow layered on the same engine; `full` remains the default and nothing is removed from it.
 
 **Where it runs.** The server shells out to a local LTspice/ngspice and reads circuit files from disk, so it must run where the simulator and the files are. Two setups work: a local MCP host (Claude Desktop, Claude Code, Cursor, Gemini CLI, Codex, …) on your own machine, or a browser-based cloud agent whose sandbox can install ngspice and register the server (verified with Claude). LTspice is local-only (a Windows app); ngspice is open-source and works in either place. Consumer web chat with no sandbox has no simulator and no file access, so it can't run this server directly; bridge it to a machine you control (e.g. [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy)) if you want that UI.
 
