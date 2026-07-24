@@ -383,6 +383,7 @@ Key `lib/` modules:
 |-|-|-|
 |`full` (default)|49|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
 |`agentic`|41|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
+|`consolidated` (experimental)|6|File-access agents driving a three-plane surface: `run_experiments`/`jobs` (execute), `analyze_results`/`inspect` (understand), `edit_schematic`/`verify_circuit` (author)|
 
 The `agentic` profile drops 8 tools: the five netlist-editing wrappers
 (`create_netlist`, `read_circuit`, `set_component_value`, `parameter`,
@@ -403,6 +404,12 @@ pin-collision/junction checks: `create_schematic`, `apply_schematic_ops`,
 `add_component` placement and the ack-only mutations (`move_component`, `remove_component`,
 `set_component_attribute`, `add_net_label`, `remove_net_label`,
 `remove_wire`) are `apply_schematic_ops` ops, not standalone tools.
+
+The `consolidated` profile (**experimental**) is a clean-break six-tool
+surface for file-access agents, exposing none of the `full`/`agentic` tools:
+`run_experiments` and `jobs` (execute), `analyze_results` and `inspect`
+(understand), `edit_schematic` and `verify_circuit` (author). `full` stays the
+default and loses nothing; the default flip is deferred.
 
 Set via `[tools] profile` in `ltspice-mcp.toml` or the
 `LTSPICE_MCP_TOOL_PROFILE` env var. Error hints adapt to the active

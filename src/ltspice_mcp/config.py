@@ -14,8 +14,8 @@ from ltspice_mcp.lib import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
-ToolProfile = Literal["full", "agentic"]
-VALID_PROFILES: frozenset[str] = frozenset({"full", "agentic"})
+ToolProfile = Literal["full", "agentic", "consolidated"]
+VALID_PROFILES: frozenset[str] = frozenset({"full", "agentic", "consolidated"})
 VALID_LOG_LEVELS: frozenset[str] = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
 
@@ -189,7 +189,9 @@ class ServerConfig:
 
     tool_profile: ToolProfile = "full"
     """Tool profile: "full" exposes all tools, "agentic" exposes a subset
-    for LLM agents with native file access (Read/Edit/Write)."""
+    for LLM agents with native file access (Read/Edit/Write), and
+    "consolidated" (EXPERIMENTAL) exposes the six-tool surface for agents
+    with native file access on the server's filesystem."""
 
     persist_jobs: bool = True
     """Persist simulation/batch job metadata to ``.ltspice-mcp/jobs/`` next
@@ -577,7 +579,10 @@ def generate_default_config(path: Path) -> None:
 
     # Tools section
     tools_tbl = table()
-    tools_tbl.add(comment('Tool profile: "full" (all tools) or "agentic" (subset for LLM agents)'))
+    tools_tbl.add(comment('Tool profile: "full" (all tools), "agentic" (subset for LLM agents),'))
+    tools_tbl.add(
+        comment('or "consolidated" (EXPERIMENTAL six-tool surface for file-access agents)')
+    )
     tools_tbl.add(
         comment('"agentic" removes netlist-editing tools that capable agents handle natively')
     )

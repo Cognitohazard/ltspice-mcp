@@ -20,6 +20,7 @@ from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 from mcp import types
 from pydantic import BaseModel, ConfigDict
 
+from ltspice_mcp.config import VALID_PROFILES
 from ltspice_mcp.errors import NetlistError, PathSecurityError, SimulationError
 from ltspice_mcp.lib import atomic_write_bytes
 from ltspice_mcp.lib.filelock import DEFAULT_TIMEOUT, file_lock
@@ -728,7 +729,7 @@ class ToolRegistry:
 
     def get_for_profile(self, profile: str) -> tuple[list[types.Tool], dict[str, RegisteredTool]]:
         """Return the tool list and dispatch map for a profile."""
-        effective_profile = profile if profile in {"full", "agentic"} else "full"
+        effective_profile = profile if profile in VALID_PROFILES else "full"
         tool_defs: list[types.Tool] = []
         tool_dispatch: dict[str, RegisteredTool] = {}
         for registered in self._registered:

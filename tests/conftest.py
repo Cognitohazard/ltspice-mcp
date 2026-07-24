@@ -217,10 +217,17 @@ def _enforce_output_schema_conformance():
     import jsonschema
 
     import ltspice_mcp.tools as tools_pkg
+    from ltspice_mcp.config import VALID_PROFILES
     from ltspice_mcp.tools import _base as base_mod
     from ltspice_mcp.tools import get_tools_for_profile
 
-    _, dispatch = get_tools_for_profile("full")
+    # Merge every profile's dispatch so tools exposed only by a non-"full"
+    # profile (the six consolidated tools) can't evade the conformance hook.
+    # A tool registered in several profiles resolves to the same RegisteredTool.
+    dispatch: dict = {}
+    for _profile in VALID_PROFILES:
+        _, _prof_dispatch = get_tools_for_profile(_profile)
+        dispatch.update(_prof_dispatch)
     code_to_tool: dict = {}
     validators: dict = {}
     for name, reg in dispatch.items():
@@ -235,6 +242,23 @@ def _enforce_output_schema_conformance():
         code_to_tool[target.__code__] = name
         validators[name] = jsonschema.Draft202012Validator(reg.definition.outputSchema)
 
+    # Intermediate-emitter frames whose structuredContent must NOT be validated
+    # against the calling tool's schema. analyze_results delegates to compute
+    # handlers to read a value out of each one's CallToolResult; that emission is
+    # not analyze_results' returned envelope. When the delegate is a REGISTERED
+    # tool (signal_stats, bode_metrics, …) its own frame catches the emission and
+    # validates it against its own (matching) schema — correct. The two transient
+    # adapters are UNREGISTERED and analyze_results calls them directly, so the
+    # walk would otherwise fall through to analyze_results' schema; their normal
+    # dispatcher (transient_response) has no schema, so nothing validated them
+    # before. Stop the walk at exactly those two.
+    from ltspice_mcp.tools.analysis import handle_disturbance_response, handle_pulse_response
+
+    _skip_codes: set = {
+        getattr(fn, "__wrapped__", fn).__code__
+        for fn in (handle_pulse_response, handle_disturbance_response)
+    }
+
     def _validate(result) -> None:
         sc = result.structuredContent
         if sc is None:
@@ -243,6 +267,10 @@ def _enforce_output_schema_conformance():
         frame = sys._getframe(2)
         for _ in range(25):
             if frame is None:
+                return
+            if frame.f_code in _skip_codes:
+                # An unregistered compute adapter's intermediate emission — the
+                # delegating tool reads a value from it but does not return it.
                 return
             tool = code_to_tool.get(frame.f_code)
             if tool is not None:
