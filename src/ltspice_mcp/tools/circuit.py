@@ -3852,6 +3852,11 @@ class CreateSchematicInput(ToolInput):
     )
 
 
+def blank_sheet(width: int = 880, height: int = 680) -> str:
+    """The .asc body of an empty sheet (880x680 = LTspice's default extent)."""
+    return f"Version 4\nSHEET 1 {width} {height}\n"
+
+
 @registry.tool(
     name="create_schematic",
     description=(
@@ -3900,7 +3905,7 @@ async def handle_create_schematic(
         raise NetlistError(
             f"Sheet dimensions must be positive; got width={args.width}, height={args.height}"
         )
-    body = f"Version 4\nSHEET 1 {args.width} {args.height}\n"
+    body = blank_sheet(args.width, args.height)
     try:
         atomic_write_text(target_path, body, overwrite=args.overwrite, durable=False)
     except FileExistsError as e:
@@ -5444,6 +5449,39 @@ def _collapse_result_warnings(results: list[dict[str, object]]) -> None:
             del entry["warnings"]
 
 
+def _run_op_batch(
+    editor: AscEditor,
+    ops: list[SchematicOp],
+    asc_path: Path,
+    *,
+    stop_on_error: bool,
+) -> tuple[list[dict[str, object]], str | None]:
+    """Apply ``ops`` in order via ``_apply_op_inplace``; return (results, abort_reason).
+
+    One unified entry per attempted op — ``{index, op, ok, error, **op_result}``.
+    A ``NetlistError``/``ValueError`` marks that op ``ok=False`` with its message;
+    when ``stop_on_error`` is set the first failure aborts (``abort_reason`` set,
+    loop stops). Shared verbatim by ``apply_schematic_ops`` and ``edit_schematic``.
+    """
+    results: list[dict[str, object]] = []
+    abort_reason: str | None = None
+    for i, op in enumerate(ops):
+        entry: dict[str, object] = {"index": i, "op": op.op, "ok": True, "error": None}
+        try:
+            op_result = _apply_op_inplace(editor, op, asc_path)
+            entry.update({k: v for k, v in op_result.items() if k != "op"})
+        except (NetlistError, ValueError) as e:
+            entry["ok"] = False
+            entry["error"] = str(e)
+            results.append(entry)
+            if stop_on_error:
+                abort_reason = f"op #{i} ({op.op}) failed: {e}"
+                break
+            continue
+        results.append(entry)
+    return results, abort_reason
+
+
 @registry.tool(
     name="apply_schematic_ops",
     description=(
@@ -5561,8 +5599,6 @@ async def handle_apply_schematic_ops(
         raise NetlistError("ops list is empty — pass at least one op.")
 
     results: list[dict[str, object]] = []
-    applied = 0
-    failed = 0
     saved = False
     abort_reason: str | None = None
 
@@ -5574,24 +5610,12 @@ async def handle_apply_schematic_ops(
         if not args.dry_run:
             _snapshot_asc(asc_path, state)
         try:
-            for i, op in enumerate(args.ops):
-                entry: dict[str, object] = {"index": i, "op": op.op, "ok": True, "error": None}
-                try:
-                    op_result = _apply_op_inplace(editor, op, asc_path)
-                    entry.update({k: v for k, v in op_result.items() if k != "op"})
-                    applied += 1
-                except (NetlistError, ValueError) as e:
-                    entry["ok"] = False
-                    entry["error"] = str(e)
-                    failed += 1
-                    results.append(entry)
-                    # In a dry run, attempt every op so all problems surface at once.
-                    if args.stop_on_error and not args.dry_run:
-                        abort_reason = f"op #{i} ({op.op}) failed: {e}"
-                        break
-                    else:
-                        continue
-                results.append(entry)
+            # In a dry run, attempt every op so all problems surface at once.
+            results, abort_reason = _run_op_batch(
+                editor, args.ops, asc_path, stop_on_error=args.stop_on_error and not args.dry_run
+            )
+            applied = sum(1 for r in results if r["ok"])
+            failed = len(results) - applied
 
             if args.dry_run:
                 # Validate-only: surface the would-be warnings but save nothing
