@@ -44,6 +44,13 @@ dependencies = [
     "tomlkit>=0.14.0,<1.0",
 ]
 
+[project.optional-dependencies]
+# Rasterizing a rendered schematic to PNG. Optional because cairosvg pulls in
+# native Cairo libraries, and a server that never returns an image should not
+# carry them: without this extra a render still comes back, as SVG markup rather
+# than a bitmap (see lib/raster.py).
+raster = ["cairosvg>=2.7,<3.0"]
+
 [project.urls]
 Homepage = "https://github.com/cognitohazard/ltspice-mcp"
 Repository = "https://github.com/cognitohazard/ltspice-mcp"
@@ -64,6 +71,10 @@ packages = ["src/ltspice_mcp"]
 
 [dependency-groups]
 dev = [
+    # Ships as the optional 'raster' extra, but is a dev requirement: without it
+    # every rasterization test skips and the PNG render path would go unexercised
+    # in CI.
+    "cairosvg>=2.7,<3.0",
     "hypothesis>=6.152.4",
     "pyright>=1.1",
     "pytest>=9.0.2",

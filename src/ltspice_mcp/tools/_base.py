@@ -1,6 +1,7 @@
 """Shared utilities for tool handlers."""
 
 import asyncio
+import base64
 import contextlib
 import copy
 import hashlib
@@ -23,6 +24,7 @@ from ltspice_mcp.errors import NetlistError, PathSecurityError, SimulationError
 from ltspice_mcp.lib.filelock import DEFAULT_TIMEOUT, file_lock
 from ltspice_mcp.lib.job_store import SIDECAR_DIRNAME
 from ltspice_mcp.lib.pathutil import resolve_safe_path
+from ltspice_mcp.lib.raster import RenderedImage
 from ltspice_mcp.lib.runner_base import LOGOPINFO_MARKER, NGSPICE_CONTROL_WRITE_MARKER
 from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.state import SessionState
@@ -154,6 +156,49 @@ def format_response(
         content=[types.TextContent(type="text", text=text)],
         structuredContent=payload,
     )
+
+
+def image_response(
+    image: RenderedImage,
+    text: str,
+    data: Mapping[str, Any] | None = None,
+) -> types.CallToolResult:
+    """Return a rendered image plus the metadata describing it.
+
+    A raster is carried as an MCP image block, which is what a model actually
+    looks at. Vector output is carried as text instead: SVG is markup, and
+    ``image/svg+xml`` is not reliably rendered by clients, so sending it as an
+    image block would produce a blank space where a picture should be.
+
+    Self-sufficiency contract (as for :func:`format_response`): a client that
+    renders only ``structuredContent`` must still be able to act, so the image's
+    own description — format, scale actually applied, byte size, and any note
+    explaining a degraded result — is always mirrored there. That is what tells
+    a caller it asked for a PNG and received SVG, without decoding anything.
+    """
+    payload: dict[str, Any] = dict(data or {})
+    if "image" in payload:
+        raise ValueError(
+            "image_response owns the 'image' key in structuredContent; the "
+            "caller's data must not set it (rename the caller's key)"
+        )
+    payload["image"] = image.to_dict()
+    payload = sanitize_payload(payload)
+
+    content: list[Any] = []
+    if image.is_raster:
+        content.append(
+            types.ImageContent(
+                type="image",
+                data=base64.b64encode(image.data).decode("ascii"),
+                mimeType=image.mime_type,
+            )
+        )
+    else:
+        content.append(types.TextContent(type="text", text=image.data.decode("utf-8")))
+    content.append(types.TextContent(type="text", text=text))
+
+    return types.CallToolResult(content=content, structuredContent=payload)
 
 
 # ---------------------------------------------------------------------------
