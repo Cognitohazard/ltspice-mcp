@@ -225,6 +225,46 @@ class TestActionShapesAndTokenSecrecy:
         assert data["request_id"] == job.request_id
         assert data["analysis_status"] == "not_requested"
 
+    async def test_terminal_receipt_with_paged_runs_emits_working_cursor(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+    ):
+        """A terminal experiment with more cases than one inline page must
+        return a receipt (not crash) whose runs page carries a next_cursor
+        that jobs(action="runs") actually accepts."""
+        circuit = _circuit(work_dir)
+        job = _experiment(
+            work_dir,
+            circuit,
+            count=60,
+            status="completed",
+            case_status="produced",
+        )
+        _persist_experiment(job, work_dir)
+        state_no_sim.all_jobs[job.job_id] = job
+
+        for action in ("status", "wait"):
+            kwargs = {"timeout_s": 0} if action == "wait" else {}
+            data = _assert_jobs_schema(
+                await handle_jobs(_args(action, job_id=job.job_id, **kwargs), state_no_sim)
+            )
+            runs = data["runs"]
+            assert runs["truncated"] is True
+            assert runs["returned"] == 50
+            assert runs["total"] == 60
+            assert runs["next_cursor"] == "o:50"
+            assert runs["next_cursor"] in data["hint"]
+
+        follow = _assert_jobs_schema(
+            await handle_jobs(
+                _args("runs", job_id=job.job_id, cursor="o:50"),
+                state_no_sim,
+            )
+        )
+        assert follow["returned"] == 10
+        assert follow["truncated"] is False
+
     async def test_completed_with_failures_status_reports_partial_outcome(
         self,
         state_no_sim: SessionState,
