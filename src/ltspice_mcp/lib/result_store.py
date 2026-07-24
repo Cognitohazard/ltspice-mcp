@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import base64
-import binascii
 import contextlib
-import hashlib
 import json
 import logging
 import os
@@ -18,6 +15,11 @@ from typing import Any
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import now, parse_iso_datetime
+from ltspice_mcp.lib.cursor_codec import CursorError
+from ltspice_mcp.lib.cursor_codec import canonical_hash as canonical_hash
+from ltspice_mcp.lib.cursor_codec import canonical_json as canonical_json
+from ltspice_mcp.lib.cursor_codec import decode_cursor as _decode_body_cursor
+from ltspice_mcp.lib.cursor_codec import encode_cursor as _encode_body_cursor
 from ltspice_mcp.lib.deck_staging import sha256_file as sha256_file  # re-export
 from ltspice_mcp.lib.store_common import accept_schema, atomic_write_json, schema_envelope
 
@@ -47,20 +49,6 @@ def result_path(result_set_id: str, working_dir: Path) -> Path:
     if path.parent != root:
         raise ResultError(f"Invalid result_set_id: {result_set_id!r}")
     return path
-
-
-def canonical_json(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("utf-8")
-
-
-def canonical_hash(value: Any) -> str:
-    return hashlib.sha256(canonical_json(value)).hexdigest()
 
 
 def composite_digest(raw_sha256: str, log_sha256: str | None, log_present: bool) -> str:
@@ -276,34 +264,20 @@ def invalidate_for_job(working_dir: Path, job_id: str) -> int:
 
 
 def encode_cursor(item: ResultSet, position: int, *, intra_item: int = 0) -> str:
-    body = {
-        "result_set_id": item.result_set_id,
-        "position": position,
-        "intra_item": intra_item,
-        "work_hash": item.work_hash,
-    }
-    envelope = {"body": body, "check": canonical_hash(body)}
-    return base64.urlsafe_b64encode(canonical_json(envelope)).decode("ascii").rstrip("=")
+    return _encode_body_cursor(
+        {
+            "result_set_id": item.result_set_id,
+            "position": position,
+            "intra_item": intra_item,
+            "work_hash": item.work_hash,
+        }
+    )
 
 
 def _decode_cursor_body(cursor: str) -> dict[str, Any]:
     try:
-        padded = cursor + "=" * (-len(cursor) % 4)
-        data = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
-        body = data["body"]
-        if data["check"] != canonical_hash(body):
-            raise ValueError("checksum mismatch")
-        if not isinstance(body, dict):
-            raise TypeError("cursor body is not an object")
-        return body
-    except (
-        binascii.Error,
-        KeyError,
-        TypeError,
-        UnicodeDecodeError,
-        ValueError,
-        json.JSONDecodeError,
-    ) as exc:
+        return _decode_body_cursor(cursor)
+    except CursorError as exc:
         raise ResultError(f"Invalid analyze_results cursor: {exc}") from None
 
 
