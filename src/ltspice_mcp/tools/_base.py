@@ -21,11 +21,15 @@ from mcp import types
 from pydantic import BaseModel, ConfigDict
 
 from ltspice_mcp.errors import NetlistError, PathSecurityError, SimulationError
+from ltspice_mcp.lib import atomic_write_bytes
 from ltspice_mcp.lib.filelock import DEFAULT_TIMEOUT, file_lock
 from ltspice_mcp.lib.job_store import SIDECAR_DIRNAME
+from ltspice_mcp.lib.netlist_graph import IncludeResolver
 from ltspice_mcp.lib.pathutil import resolve_safe_path
-from ltspice_mcp.lib.raster import RenderedImage
+from ltspice_mcp.lib.raster import RenderedImage, render_image
 from ltspice_mcp.lib.runner_base import LOGOPINFO_MARKER, NGSPICE_CONTROL_WRITE_MARKER
+from ltspice_mcp.lib.schematic_renderer import render_svg
+from ltspice_mcp.lib.schematic_scene import Scene, SymbolResolver, default_stock_paths
 from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.state import SessionState
 
@@ -1420,3 +1424,83 @@ async def resolve_output_folder(
     if runs not in state.config.allowed_paths:
         state.config.allowed_paths.append(runs)
     return runs
+
+
+# ---------------------------------------------------------------------------
+# Schematic include-resolver + symbol-resolver + scene render (shared)
+# ---------------------------------------------------------------------------
+
+
+def make_include_resolver(state: SessionState) -> IncludeResolver:
+    """An include resolver that routes every include/lib open through safe_path.
+
+    The graph engine calls this before opening any include, so an in-deck include
+    that escapes the allowed roots is denied and never read.
+    """
+
+    def resolver(candidate: Path) -> Path | None:
+        try:
+            return safe_path(str(candidate), state)
+        except PathSecurityError:
+            return None
+
+    return resolver
+
+
+def symbol_resolver_for(asc_path: Path, state: SessionState | None = None) -> SymbolResolver:
+    """Resolver with the sheet's own dir first, then configured/stock libraries.
+
+    Mirrors the precedence the compiler and LTspice's own export use so a
+    schematic that resolves for them resolves here too. When ``state`` is given,
+    its configured ``symbol_paths`` take precedence over the stock libraries.
+    """
+    from spicelib import AscEditor
+
+    project: list[Path] = []
+    if state is not None:
+        project += [Path(p) for p in state.config.symbol_paths]
+    project += [Path(p) for p in (AscEditor.custom_lib_paths or [])]
+    project += [Path(p) for p in (getattr(AscEditor, "simulator_lib_paths", None) or [])]
+    return SymbolResolver(
+        local_dir=asc_path.parent, project_paths=project, stock_paths=default_stock_paths()
+    )
+
+
+def render_scene_artifact(
+    scene: Scene,
+    out_dir: Path,
+    *,
+    image_format: Literal["png", "svg"],
+    scale: float,
+    max_pixels: int | None = None,
+) -> tuple[RenderedImage, Path, bool]:
+    """Render a scene, bound its pixels, and write a content-hashed artifact.
+
+    Rasterizes to ``image_format`` at ``scale``; when ``max_pixels`` is set and a
+    raster exceeds it, re-renders at the largest scale that fits and flags
+    ``downscaled``. Writes ``<source-stem>.<sha8>.<suffix>`` into ``out_dir``
+    (created on demand). Returns ``(image, out_path, downscaled)``.
+    """
+    svg = render_svg(scene)
+    image = render_image(svg, image_format=image_format, scale=scale)
+    downscaled = False
+    if (
+        image.is_raster
+        and max_pixels is not None
+        and image.width
+        and image.height
+        and image.width * image.height > max_pixels
+    ):
+        factor = math.sqrt(max_pixels / (image.width * image.height))
+        reduced = max(0.1, round(scale * factor, 3))
+        if reduced < scale:
+            image = render_image(svg, image_format=image_format, scale=reduced)
+            downscaled = True
+
+    suffix = "png" if image.is_raster else "svg"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = (
+        out_dir / f"{scene.source.stem}.{hashlib.sha256(image.data).hexdigest()[:8]}.{suffix}"
+    )
+    atomic_write_bytes(out_path, image.data, durable=False)
+    return image, out_path, downscaled
