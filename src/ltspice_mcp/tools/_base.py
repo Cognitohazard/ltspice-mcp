@@ -1447,12 +1447,17 @@ def make_include_resolver(state: SessionState) -> IncludeResolver:
     return resolver
 
 
-def symbol_resolver_for(asc_path: Path, state: SessionState | None = None) -> SymbolResolver:
+def symbol_resolver_for(
+    asc_path: Path | None, state: SessionState | None = None
+) -> SymbolResolver:
     """Resolver with the sheet's own dir first, then configured/stock libraries.
 
     Mirrors the precedence the compiler and LTspice's own export use so a
     schematic that resolves for them resolves here too. When ``state`` is given,
     its configured ``symbol_paths`` take precedence over the stock libraries.
+    ``asc_path`` may be ``None`` for a vocabulary lookup with no schematic in
+    hand (``inspect(symbols)`` without a ``path``): the local dir is then simply
+    absent from the precedence and only the configured/stock libraries apply.
     """
     from spicelib import AscEditor
 
@@ -1462,7 +1467,9 @@ def symbol_resolver_for(asc_path: Path, state: SessionState | None = None) -> Sy
     project += [Path(p) for p in (AscEditor.custom_lib_paths or [])]
     project += [Path(p) for p in (getattr(AscEditor, "simulator_lib_paths", None) or [])]
     return SymbolResolver(
-        local_dir=asc_path.parent, project_paths=project, stock_paths=default_stock_paths()
+        local_dir=asc_path.parent if asc_path is not None else None,
+        project_paths=project,
+        stock_paths=default_stock_paths(),
     )
 
 
