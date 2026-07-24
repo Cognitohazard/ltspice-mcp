@@ -11,8 +11,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from spicelib import AscEditor, SpiceEditor
 from spicelib.raw.raw_read import RawRead
@@ -45,6 +46,7 @@ from ltspice_mcp.state import (
 logger = logging.getLogger(__name__)
 
 Editor = AscEditor | SpiceEditor
+T = TypeVar("T")
 
 
 def _suggestions_for_refs(
@@ -474,15 +476,51 @@ def raw_dialect_for(raw_path: Path, state: SessionState) -> str | None:
 RAW_PARSE_TIMEOUT_S = 120.0
 
 # Paths whose last parse hit the deadline, by monotonic expiry time. Gates
-# retries: an abandoned worker still holds the cache's per-path parse lock,
-# so an immediate retry would only park ANOTHER executor thread on that lock
-# — repeated retries against a truly wedged file could drain the shared
-# executor and stall unrelated to_thread work. During cooldown the retry
-# fails fast on the loop instead; after it, one fresh attempt is allowed
-# (worst case the leak grows by one thread per cooldown period, not per
-# call). Read/written only on the event loop with no await between check and
-# store, so no lock is needed.
+# retries: an abandoned worker cannot be killed, so immediate retries could
+# abandon more executor threads and eventually stall unrelated to_thread work.
+# During cooldown the retry fails fast on the loop instead; after it, one fresh
+# attempt is allowed (worst case the leak grows by one thread per cooldown
+# period, not per call). Read/written only on the event loop with no await
+# between check and store, so no lock is needed.
 _wedged_raw_paths: dict[Path, float] = {}
+
+
+async def bounded_parse(
+    path: Path,
+    thunk: Callable[[], T],
+    *,
+    timeout_s: float = RAW_PARSE_TIMEOUT_S,
+) -> T:
+    """Run one result parse off the event loop with a deadline and cooldown.
+
+    The cooldown is shared by every parser using this helper, so a raw file
+    whose abandoned worker may still be running cannot consume another worker
+    through a different result-reading path until the cooldown expires.
+    """
+    now_mono = asyncio.get_running_loop().time()
+    wedged_until = _wedged_raw_paths.get(path)
+    if wedged_until is not None:
+        if now_mono < wedged_until:
+            raise ResultError(
+                f"Parsing {path.name} recently exceeded the "
+                f"{timeout_s:.0f}s deadline and its worker is still "
+                "abandoned; retries are paused for "
+                f"{wedged_until - now_mono:.0f}s more so a wedged file can't "
+                "drain the worker pool. Check the file (size, mtime, source "
+                "simulator) before retrying."
+            )
+        del _wedged_raw_paths[path]
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(thunk), timeout_s)
+    except TimeoutError:
+        _wedged_raw_paths[path] = asyncio.get_running_loop().time() + timeout_s
+        raise ResultError(
+            f"Parsing {path.name} exceeded {timeout_s:.0f}s and was "
+            "abandoned — the file may be corrupt in a way that wedges the parser, "
+            "or on a stalled mount. The file was not modified; retries are "
+            f"paused for {timeout_s:.0f}s, then one fresh attempt is "
+            "allowed."
+        ) from None
 
 
 async def load_raw(raw_path: Path, state: SessionState) -> RawRead:
@@ -505,33 +543,11 @@ async def load_raw(raw_path: Path, state: SessionState) -> RawRead:
     cached = state.results.peek(raw_path)
     if cached is not None:
         return cached
-    now_mono = asyncio.get_running_loop().time()
-    wedged_until = _wedged_raw_paths.get(raw_path)
-    if wedged_until is not None:
-        if now_mono < wedged_until:
-            raise ResultError(
-                f"Parsing {raw_path.name} recently exceeded the "
-                f"{RAW_PARSE_TIMEOUT_S:.0f}s deadline and its worker is still "
-                "abandoned; retries are paused for "
-                f"{wedged_until - now_mono:.0f}s more so a wedged file can't "
-                "drain the worker pool. Check the file (size, mtime, source "
-                "simulator) before retrying."
-            )
-        del _wedged_raw_paths[raw_path]
-    try:
-        return await asyncio.wait_for(
-            asyncio.to_thread(load_raw_sync, raw_path, state),
-            timeout=RAW_PARSE_TIMEOUT_S,
-        )
-    except TimeoutError:
-        _wedged_raw_paths[raw_path] = asyncio.get_running_loop().time() + RAW_PARSE_TIMEOUT_S
-        raise ResultError(
-            f"Parsing {raw_path.name} exceeded {RAW_PARSE_TIMEOUT_S:.0f}s and was "
-            "abandoned — the file may be corrupt in a way that wedges the parser, "
-            "or on a stalled mount. The file was not modified; retries are "
-            f"paused for {RAW_PARSE_TIMEOUT_S:.0f}s, then one fresh attempt is "
-            "allowed."
-        ) from None
+    return await bounded_parse(
+        raw_path,
+        lambda: load_raw_sync(raw_path, state),
+        timeout_s=RAW_PARSE_TIMEOUT_S,
+    )
 
 
 def load_raw_sync(raw_path: Path, state: SessionState) -> RawRead:
