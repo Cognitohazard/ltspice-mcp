@@ -332,13 +332,22 @@ def install_hint() -> str:
     return "install ngspice (`sudo apt-get install -y ngspice`, or your distro's package manager)"
 
 
-def no_simulator_message() -> str:
+def no_simulator_message(short: bool = False) -> str:
     """Actionable 'no simulator detected' text shared by instructions and errors.
 
     Detection runs once at startup, so a simulator installed into a running
     sandbox is not picked up until the server is restarted — say so, or the
     agent installs ngspice and then loops on the same error.
+
+    ``short`` is the compact form for the consolidated profile's instructions,
+    which must fit a client-side truncation budget with the guide body intact.
     """
+    if short:
+        return (
+            f"No SPICE simulator detected — {install_hint()}, then restart this "
+            "MCP server (detection runs at startup). Authoring and .asc editing "
+            "still work."
+        )
     return (
         f"No SPICE simulator detected. To run simulations, {install_hint()}, then "
         "restart (reconnect) this MCP server so it re-detects — detection happens "
