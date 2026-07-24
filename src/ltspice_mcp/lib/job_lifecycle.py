@@ -23,6 +23,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from ltspice_mcp.lib import now
+from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES, BatchJob, SimulationJob
 from ltspice_mcp.lib.observability import JobEvent, emit_job_event
 
@@ -58,12 +59,45 @@ VALID_BATCH_TRANSITIONS: dict[str, frozenset[str]] = {
     "interrupted": frozenset(),
 }
 
+VALID_EXPERIMENT_TRANSITIONS: dict[str, frozenset[str]] = {
+    "queued": frozenset(
+        {
+            "running",
+            "completed",
+            "completed_with_failures",
+            "failed",
+            "cancelled",
+            "interrupted",
+        }
+    ),
+    "running": frozenset(
+        {
+            "analyzing",
+            "completed",
+            "completed_with_failures",
+            "failed",
+            "cancelled",
+            "interrupted",
+        }
+    ),
+    "analyzing": frozenset(
+        {"completed", "completed_with_failures", "failed", "cancelled", "interrupted"}
+    ),
+    "completed": frozenset(),
+    "completed_with_failures": frozenset(),
+    "failed": frozenset(),
+    "cancelled": frozenset(),
+    "interrupted": frozenset(),
+}
+
 # Which event name fires when a job enters a given status.
 # 'timeout' maps to 'failed' — it's a failure variant, not its own
 # event type in the external log schema.
 STATUS_TO_EVENT: dict[str, JobEvent] = {
     "running": "started",
+    "analyzing": "analyzing",
     "completed": "completed",
+    "completed_with_failures": "completed_with_failures",
     "failed": "failed",
     "cancelled": "cancelled",
     "timeout": "failed",
@@ -74,17 +108,23 @@ class InvalidTransitionError(ValueError):
     """Raised when code attempts a status change not in the transition table."""
 
 
-def _transitions_for(job: SimulationJob | BatchJob) -> dict[str, frozenset[str]]:
+def _transitions_for(
+    job: SimulationJob | BatchJob | ExperimentJob,
+) -> dict[str, frozenset[str]]:
     """Pick the correct transition table for a job's class."""
     if isinstance(job, SimulationJob):
         return VALID_SIM_TRANSITIONS
     if isinstance(job, BatchJob):
         return VALID_BATCH_TRANSITIONS
+    if isinstance(job, ExperimentJob):
+        return VALID_EXPERIMENT_TRANSITIONS
     raise TypeError(f"Unknown job type: {type(job).__name__}")
 
 
 def _apply(
-    job: SimulationJob | BatchJob, new_status: str, valid: dict[str, frozenset[str]]
+    job: SimulationJob | BatchJob | ExperimentJob,
+    new_status: str,
+    valid: dict[str, frozenset[str]],
 ) -> None:
     """Validate and apply a status change; set completed_at + done_event
     on terminal transitions.
@@ -111,7 +151,7 @@ def _apply(
 
 
 def transition(
-    job: SimulationJob | BatchJob,
+    job: SimulationJob | BatchJob | ExperimentJob,
     new_status: str,
     *,
     state: SessionState | None = None,
@@ -126,11 +166,16 @@ def transition(
     Raises ``InvalidTransitionError`` for same-status or out-of-table
     transitions.
     """
-    _apply(job, new_status, _transitions_for(job))
+    valid = _transitions_for(job)
+    event = STATUS_TO_EVENT.get(new_status)
+    if event is None and new_status in valid.get(job.status, frozenset()):
+        raise InvalidTransitionError(
+            f"status {new_status!r} is restart-only and has no event mapping"
+        )
+    _apply(job, new_status, valid)
     if state is not None:
         state.persist_job(job)
-    event = STATUS_TO_EVENT.get(new_status)
-    if event is None:
+    if event is None:  # Defensive: every valid runtime target must have a mapping.
         raise InvalidTransitionError(
             f"no event mapping for status {new_status!r}; update STATUS_TO_EVENT"
         )
@@ -172,3 +217,17 @@ def recover(
         recovered_as=new_status,
         **event_extra,
     )
+
+
+def reconcile_experiment_restart(
+    job: ExperimentJob,
+    new_status: str,
+) -> None:
+    """Apply the terminal status inferred while loading an abandoned experiment.
+
+    Restart reconciliation is persistence recovery, not a fresh runtime event.
+    The registry emits the discovery event after it installs the loaded job.
+    """
+    if new_status not in {"interrupted", "completed", "completed_with_failures"}:
+        raise InvalidTransitionError(f"invalid experiment restart outcome {new_status!r}")
+    _apply(job, new_status, VALID_EXPERIMENT_TRANSITIONS)

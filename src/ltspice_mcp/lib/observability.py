@@ -1,4 +1,4 @@
-"""Structured lifecycle events for simulation and batch jobs.
+"""Structured lifecycle events for simulation, batch, and experiment jobs.
 
 Emits machine-parseable log records on job state transitions — submit,
 start, completion, failure, cancellation, interrupted recovery. Logs go
@@ -7,11 +7,13 @@ them to a different sink from the usual debug/info stream.
 
 Each event carries:
     ts            ISO-8601 timestamp (UTC)
-    event         lifecycle state: submitted | started | completed
-                  | failed | cancelled | interrupted_recovered
-    kind          'sim' | 'sweep' | 'montecarlo'
+    event         lifecycle state: submitted | started | analyzing
+                  | completed | completed_with_failures | failed
+                  | cancelled | interrupted_recovered
+    kind          'sim' | 'sweep' | 'montecarlo' | 'experiment'
     job_id        job identifier
-    netlist       circuit file path
+    netlist       circuit file path for legacy jobs
+    sources       circuit paths for experiment jobs
     duration_s    wall-clock seconds from started_at to now (or None
                   when the event precedes ``started_at``)
     extra keys    anything passed via kwargs (e.g. error, run_index)
@@ -28,6 +30,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from ltspice_mcp.lib import now
+from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_types import BatchJob, SimulationJob
 
 logger = logging.getLogger("ltspice_mcp.events")
@@ -35,13 +38,15 @@ logger = logging.getLogger("ltspice_mcp.events")
 JobEvent = Literal[
     "submitted",
     "started",
+    "analyzing",
     "completed",
+    "completed_with_failures",
     "failed",
     "cancelled",
     "interrupted_recovered",
 ]
 
-JobKind = Literal["sim", "sweep", "montecarlo"]
+JobKind = Literal["sim", "sweep", "montecarlo", "experiment"]
 
 
 def _duration_seconds(started_at: datetime | None) -> float | None:
@@ -58,7 +63,7 @@ def _duration_seconds(started_at: datetime | None) -> float | None:
 
 def emit_job_event(
     event: JobEvent,
-    job: SimulationJob | BatchJob,
+    job: SimulationJob | BatchJob | ExperimentJob,
     *,
     kind: JobKind | None = None,
     **extra: Any,
@@ -76,15 +81,19 @@ def emit_job_event(
         "event": event,
         "kind": inferred_kind,
         "job_id": job.job_id,
-        "netlist": str(job.netlist),
         "duration_s": _duration_seconds(getattr(job, "started_at", None)),
     }
+    if isinstance(job, ExperimentJob):
+        payload["sources"] = [str(source.path) for source in job.sources]
+    else:
+        payload["netlist"] = str(job.netlist)
     payload.update(extra)
 
     # Human-readable summary in the message, structured dict in extra.
     suffix = ""
     if payload.get("duration_s") is not None and event in (
         "completed",
+        "completed_with_failures",
         "failed",
         "cancelled",
     ):
@@ -99,7 +108,7 @@ def emit_job_event(
     )
 
 
-def _infer_kind(job: SimulationJob | BatchJob) -> JobKind:
+def _infer_kind(job: SimulationJob | BatchJob | ExperimentJob) -> JobKind:
     """Map a job instance to its lifecycle ``kind`` string."""
     if isinstance(job, SimulationJob):
         return "sim"
@@ -108,4 +117,6 @@ def _infer_kind(job: SimulationJob | BatchJob) -> JobKind:
             return "sweep"
         if job.job_type == "montecarlo":
             return "montecarlo"
+    if isinstance(job, ExperimentJob):
+        return "experiment"
     raise TypeError(f"Cannot infer lifecycle kind for {type(job).__name__}")

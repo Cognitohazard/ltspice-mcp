@@ -656,11 +656,11 @@ class TestSimulationRunnerKillWsl:
         tokens: list[str] = []
         scoped: list[tuple[str, frozenset[str]]] = []
         monkeypatch.setattr(
-            "ltspice_mcp.lib.sim_runner.kill_windows_ltspice_by_token",
+            "ltspice_mcp.lib.runner_base.kill_windows_ltspice_by_token",
             lambda tok: tokens.append(tok) or 1,
         )
         monkeypatch.setattr(
-            "ltspice_mcp.lib.sim_runner.kill_simulator_by_token",
+            "ltspice_mcp.lib.runner_base.kill_simulator_by_token",
             lambda tok, names: scoped.append((tok, frozenset(names))) or 0,
         )
         await runner.kill(job.job_id)
@@ -796,7 +796,7 @@ class TestSimulationRunnerKillWsl:
         job = _make_job(state_no_sim, work_dir)  # status="running"
         status_at_kill: dict[str, str] = {}
         monkeypatch.setattr(
-            "ltspice_mcp.lib.sim_runner.kill_windows_ltspice_by_token",
+            "ltspice_mcp.lib.runner_base.kill_windows_ltspice_by_token",
             lambda tok: status_at_kill.setdefault("status", job.status) or 0,
         )
         await runner.cancel(job, state_no_sim)
@@ -999,13 +999,13 @@ class TestSimulationRunnerConcurrencyGate:
         # Both best-effort termination paths "fail": WSL taskkill confirms nothing,
         # and the scoped kill raises (and is swallowed).
         monkeypatch.setattr(
-            "ltspice_mcp.lib.sim_runner.kill_windows_ltspice_by_token", lambda tok: 0
+            "ltspice_mcp.lib.runner_base.kill_windows_ltspice_by_token", lambda tok: 0
         )
 
         def _kill_boom(tok, names):
             raise RuntimeError("kill boom")
 
-        monkeypatch.setattr("ltspice_mcp.lib.sim_runner.kill_simulator_by_token", _kill_boom)
+        monkeypatch.setattr("ltspice_mcp.lib.runner_base.kill_simulator_by_token", _kill_boom)
         a = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_fk_a")
         b = _make_job(state_no_sim, work_dir, status="queued", job_id="sim_fk_b")
         ta = loop.create_task(runner.start_simulation(a.netlist, a, state_no_sim))

@@ -1,15 +1,15 @@
-"""In-memory registry for simulation and batch jobs.
+"""In-memory registry for simulation, batch, and experiment jobs.
 
-Owns the single union ``jobs`` dict (job_id -> SimulationJob | BatchJob)
+Owns the single union ``jobs`` dict
 plus all disk-persistence coordination (sidecar writes, eviction,
 interrupted-job recovery). Split out of ``SessionState`` so the
 per-session container stays focused on simulator catalog, caches, and
 configuration.
 
 ``SessionState`` delegates its job-facing API to this class; call sites
-continue to use ``state.jobs``, ``state.add_job``, etc. The ``sim_jobs``
-and ``batch_jobs`` attributes are type-filtered writable views over the
-union store, so per-type call sites keep their old dict semantics.
+continue to use ``state.jobs``, ``state.add_job``, etc. The ``sim_jobs``,
+``batch_jobs``, and ``experiment_jobs`` attributes are type-filtered
+writable views over the union store.
 """
 
 from __future__ import annotations
@@ -19,10 +19,12 @@ import contextlib
 import logging
 import os
 from collections.abc import Iterator, MutableMapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TypeVar
 
+from ltspice_mcp.lib import now
+from ltspice_mcp.lib.experiment_types import TERMINAL_CASE_STATUSES, ExperimentJob
 from ltspice_mcp.lib.job_lifecycle import recover, transition
 from ltspice_mcp.lib.job_types import (
     NON_TERMINAL_LIVE_STATUSES,
@@ -36,9 +38,10 @@ logger = logging.getLogger(__name__)
 
 # Bound to the union job type so the typed views and per-type eviction stay
 # scoped to one job class at a time.
-J = TypeVar("J", bound=SimulationJob | BatchJob)
+Job = SimulationJob | BatchJob | ExperimentJob
+J = TypeVar("J", bound=Job)
 
-# Maximum finished jobs to retain per job type (single-sim, batch).
+# Maximum finished jobs to retain per job type (single-sim, batch, experiment).
 _MAX_FINISHED_JOBS = 200
 
 # LTspice .raw header magic. Classic files start with ASCII ``Title:``;
@@ -75,13 +78,14 @@ class _TypedJobView(MutableMapping[str, J]):
     union dict but reject values of the wrong job type, and ``del`` removes
     only entries of the view's type.
 
-    Rule for new code: use the typed view (``registry.sim_jobs`` /
-    ``registry.batch_jobs``) when the code is scoped to one job type; use
+    Rule for new code: use the typed view (``registry.sim_jobs``,
+    ``registry.batch_jobs``, or ``registry.experiment_jobs``) when the code
+    is scoped to one job type; use
     ``registry.jobs`` / ``state.all_jobs`` plus ``isinstance`` when handling
     either type.
     """
 
-    def __init__(self, store: dict[str, SimulationJob | BatchJob], job_type: type[J]) -> None:
+    def __init__(self, store: dict[str, Job], job_type: type[J]) -> None:
         self._store = store
         self._job_type = job_type
 
@@ -119,19 +123,21 @@ class _TypedJobView(MutableMapping[str, J]):
 
 @dataclass
 class JobRegistry:
-    """Tracks simulation and batch jobs with optional disk persistence.
+    """Tracks all job kinds with optional disk persistence.
 
     Attributes:
         persist_enabled: When True, sidecar files are written alongside
             circuits and evictions delete them. When False, the registry
             behaves as a pure in-memory store.
-        jobs: job_id -> SimulationJob | BatchJob — the single source of
-            truth for every job regardless of run type. ``sim_jobs`` /
-            ``batch_jobs`` are type-filtered views over it.
+        jobs: The single source of truth for every job regardless of run
+            type. ``sim_jobs``, ``batch_jobs``, and ``experiment_jobs`` are
+            type-filtered views over it.
     """
 
     persist_enabled: bool
-    jobs: dict[str, SimulationJob | BatchJob] = field(default_factory=dict)
+    working_dir: Path = field(default_factory=Path.cwd)
+    jobs: dict[str, Job] = field(default_factory=dict)
+    observations: list[dict] = field(default_factory=list)
     _loaded_circuits: set[Path] = field(default_factory=set, repr=False)
     """Resolved circuit paths whose persisted jobs have been loaded this session."""
     _pending_persist: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
@@ -139,10 +145,9 @@ class JobRegistry:
     _persist_locks: dict[str, asyncio.Lock] = field(default_factory=dict, repr=False)
     """Per-job-id locks serialising successive writes.
 
-    Cleared in ``_evict_from`` when a job is removed from memory — removing
-    them inside the write path would open a window where a new writer
-    allocates a fresh Lock while an existing holder still owns the old
-    one, defeating serialisation.
+    Eviction removes a lock only after earlier writes and the persisted-record
+    deletion have completed. Removing it inside a write would let a new writer
+    allocate a second lock while the old one is still held.
     """
 
     # ------------------------------------------------------------------
@@ -158,6 +163,11 @@ class JobRegistry:
     def batch_jobs(self) -> _TypedJobView[BatchJob]:
         """Writable view of the batch (sweep/MC) jobs in the union store."""
         return _TypedJobView(self.jobs, BatchJob)
+
+    @property
+    def experiment_jobs(self) -> _TypedJobView[ExperimentJob]:
+        """Writable view of multi-circuit experiment jobs."""
+        return _TypedJobView(self.jobs, ExperimentJob)
 
     # ------------------------------------------------------------------
     # Registration
@@ -177,15 +187,27 @@ class JobRegistry:
         self.persist_job(job)
         emit_job_event("submitted", job, total_runs=job.total_runs)
 
+    def add_experiment_job(
+        self,
+        job: ExperimentJob,
+        *,
+        already_persisted: bool = False,
+    ) -> None:
+        """Register an experiment after its durable receipt barrier."""
+        self.jobs[job.job_id] = job
+        self._evict_from(self.experiment_jobs)
+        if not already_persisted:
+            self.persist_job(job)
+        emit_job_event("submitted", job, total_cases=job.completeness.expanded)
+
     def _evict_from(self, jobs_view: MutableMapping[str, J]) -> None:
         """Evict oldest terminal jobs of one job type when over the limit.
 
         ``jobs_view`` is a typed view over the union store, so the cap is
-        enforced per job type (200 finished single-sim jobs AND 200 finished
-        batch jobs). When persistence is enabled, the on-disk record is
-        deleted alongside the in-memory entry so the two never drift. Any
-        per-job persistence lock is dropped here — safe once the job is out
-        of the store because no new ``persist_job`` calls can target it.
+        enforced per job type (200 finished jobs of each kind). When
+        persistence is enabled, the on-disk record is
+        deleted alongside the in-memory entry so the two never drift. Async
+        deletion drains earlier writes before it drops the per-job lock.
         """
         finished = [(jid, j) for jid, j in jobs_view.items() if j.status in TERMINAL_STATUSES]
         overflow = len(finished) - _MAX_FINISHED_JOBS
@@ -195,9 +217,19 @@ class JobRegistry:
         for jid, j in finished[:overflow]:
             del jobs_view[jid]
             self._delete_persisted(j)
-            self._persist_locks.pop(jid, None)
 
-    def refresh_foreign_job(self, job: SimulationJob | BatchJob) -> SimulationJob | BatchJob:
+    def _load_foreign_job_sync(self, job: Job) -> Job | None:
+        """Blocking store dispatch for refreshing one foreign-owned job."""
+        if isinstance(job, ExperimentJob):
+            from ltspice_mcp.lib import experiment_store
+
+            return experiment_store.load_job_from_path(job.store_path, self.working_dir)
+
+        from ltspice_mcp.lib import job_store
+
+        return job_store.load_job(job.job_id, job.netlist)
+
+    def refresh_foreign_job(self, job: Job) -> Job:
         """Re-read a parallel session's live job from its sidecar.
 
         A job loaded while its owning process was alive sits in this
@@ -215,9 +247,7 @@ class JobRegistry:
         ):
             return job
         try:
-            from ltspice_mcp.lib import job_store
-
-            fresh = job_store.load_job(job.job_id, job.netlist)
+            fresh = self._load_foreign_job_sync(job)
         except Exception as e:
             logger.debug("refresh_foreign_job %s: %s", job.job_id, e)
             return job
@@ -234,11 +264,13 @@ class JobRegistry:
         except RuntimeError:
             return fresh
         self.jobs[job.job_id] = fresh
+        if isinstance(fresh, ExperimentJob) and any(
+            item.get("code") == "server_restarted" for item in fresh.observations
+        ):
+            self.persist_job(fresh)
         return fresh
 
-    async def refresh_foreign_job_async(
-        self, job: SimulationJob | BatchJob
-    ) -> SimulationJob | BatchJob:
+    async def refresh_foreign_job_async(self, job: Job) -> Job:
         """Loop-safe ``refresh_foreign_job``: offload the sidecar re-read.
 
         Same contract as the sync version, but the single-file ``load_job``
@@ -253,9 +285,7 @@ class JobRegistry:
         ):
             return job
         try:
-            from ltspice_mcp.lib import job_store
-
-            fresh = await asyncio.to_thread(job_store.load_job, job.job_id, job.netlist)
+            fresh = await asyncio.to_thread(self._load_foreign_job_sync, job)
         except Exception as e:
             logger.debug("refresh_foreign_job %s: %s", job.job_id, e)
             return job
@@ -263,9 +293,13 @@ class JobRegistry:
             return job
         # On the loop here (awaited from a handler) — safe to swap the entry.
         self.jobs[job.job_id] = fresh
+        if isinstance(fresh, ExperimentJob) and any(
+            item.get("code") == "server_restarted" for item in fresh.observations
+        ):
+            self.persist_job(fresh)
         return fresh
 
-    def refreshed_jobs(self) -> list[SimulationJob | BatchJob]:
+    def refreshed_jobs(self) -> list[Job]:
         """Snapshot of every job, with parallel sessions' live jobs re-read.
 
         The listing surfaces (``check_job`` with no id, the results resource)
@@ -278,7 +312,7 @@ class JobRegistry:
     # Persistence
     # ------------------------------------------------------------------
 
-    def persist_job(self, job: SimulationJob | BatchJob) -> None:
+    def persist_job(self, job: Job) -> None:
         """Write a job's current state to its per-circuit sidecar file.
 
         When called from an asyncio event loop, the file IO is scheduled on
@@ -300,7 +334,7 @@ class JobRegistry:
         self._pending_persist.add(task)
         task.add_done_callback(self._pending_persist.discard)
 
-    async def _persist_async(self, job: SimulationJob | BatchJob) -> None:
+    async def _persist_async(self, job: Job) -> None:
         """Serialise writes for a single job id; swallow and log failures."""
         lock = self._persist_locks.get(job.job_id)
         if lock is None:
@@ -308,11 +342,16 @@ class JobRegistry:
         async with lock:
             await asyncio.to_thread(self._persist_sync, job)
 
-    def _persist_sync(self, job: SimulationJob | BatchJob) -> None:
+    def _persist_sync(self, job: Job) -> None:
         try:
-            from ltspice_mcp.lib import job_store
+            if isinstance(job, ExperimentJob):
+                from ltspice_mcp.lib import experiment_store
 
-            job_store.save_job(job)
+                experiment_store.save_job(job)
+            else:
+                from ltspice_mcp.lib import job_store
+
+                job_store.save_job(job)
         except Exception as e:
             # Persistence failures must never break simulation flow.
             logger.warning("Failed to persist job %s: %s", job.job_id, e)
@@ -334,14 +373,42 @@ class JobRegistry:
         if done == total or done % step == 0:
             self.persist_job(batch_job)
 
-    def _delete_persisted(self, job: SimulationJob | BatchJob) -> None:
+    def _delete_persisted(self, job: Job) -> None:
         """Remove a job's on-disk record (used on eviction)."""
         if not self.persist_enabled:
             return
         try:
-            from ltspice_mcp.lib import job_store
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._delete_persisted_sync(job)
+            self._persist_locks.pop(job.job_id, None)
+            return
+        task = loop.create_task(self._delete_persisted_async(job))
+        self._pending_persist.add(task)
+        task.add_done_callback(self._pending_persist.discard)
 
-            job_store.delete_job(job)
+    async def _delete_persisted_async(self, job: Job) -> None:
+        """Delete only after earlier writes for the same job have drained."""
+        lock = self._persist_locks.get(job.job_id)
+        if lock is None:
+            lock = self._persist_locks.setdefault(job.job_id, asyncio.Lock())
+        try:
+            async with lock:
+                await asyncio.to_thread(self._delete_persisted_sync, job)
+        finally:
+            self._persist_locks.pop(job.job_id, None)
+
+    def _delete_persisted_sync(self, job: Job) -> None:
+        """Blocking deletion half, including experiment request-index locking."""
+        try:
+            if isinstance(job, ExperimentJob):
+                from ltspice_mcp.lib import experiment_store
+
+                experiment_store.delete_job(job, self.working_dir)
+            else:
+                from ltspice_mcp.lib import job_store
+
+                job_store.delete_job(job)
         except Exception as e:
             logger.debug("Failed to delete persisted job %s: %s", job.job_id, e)
 
@@ -367,13 +434,20 @@ class JobRegistry:
         self._loaded_circuits.add(resolved)
         return resolved
 
-    @staticmethod
-    def _read_persisted_jobs(resolved: Path) -> tuple[list, list] | None:
+    def _read_persisted_jobs(
+        self,
+        resolved: Path,
+    ) -> tuple[list, list, list, list] | None:
         """File-read half of the load — offloadable (touches no registry state)."""
         try:
-            from ltspice_mcp.lib import job_store
+            from ltspice_mcp.lib import experiment_store, job_store
 
-            return job_store.load_jobs_for_circuit(resolved)
+            sim_jobs, batch_jobs = job_store.load_jobs_for_circuit(resolved)
+            experiment_jobs, observations = experiment_store.load_pointer_jobs(
+                resolved,
+                self.working_dir,
+            )
+            return sim_jobs, batch_jobs, experiment_jobs, observations
         except Exception as e:
             logger.warning("Failed to load persisted jobs for %s: %s", resolved, e)
             return None
@@ -426,6 +500,8 @@ class JobRegistry:
         self,
         sim_jobs: list[SimulationJob],
         batch_jobs: list[BatchJob],
+        experiment_jobs: list[ExperimentJob],
+        observations: list[dict],
     ) -> None:
         """Registry-mutation half of the load — loop-only (mutates ``self.jobs``)."""
         for sj in sim_jobs:
@@ -449,6 +525,22 @@ class JobRegistry:
             self.jobs[bj.job_id] = bj
             if bj.status == "interrupted":
                 emit_job_event("interrupted_recovered", bj, recovered_as="interrupted")
+        for experiment in experiment_jobs:
+            if experiment.job_id in self.jobs:
+                continue
+            self.jobs[experiment.job_id] = experiment
+            restarted = any(
+                item.get("code") == "server_restarted" for item in experiment.observations
+            )
+            if experiment.status == "interrupted" or restarted:
+                emit_job_event(
+                    "interrupted_recovered",
+                    experiment,
+                    recovered_as=experiment.status,
+                )
+            if restarted:
+                self.persist_job(experiment)
+        self.observations.extend(observations)
 
     def preload_recent(self, max_circuits: int = 10) -> int:
         """Eager-load persisted jobs for the ``max_circuits`` most recently
@@ -539,3 +631,55 @@ class JobRegistry:
                 batch_job.task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await batch_job.task
+
+        for experiment in list(self.experiment_jobs.values()):
+            runner = runners.get_experiment_runner_for(experiment)
+            if experiment.owner_pid == own_pid and runner is not None:
+                await runner.cancel(experiment)
+            elif (
+                experiment.status in NON_TERMINAL_LIVE_STATUSES and experiment.owner_pid == own_pid
+            ):
+                cancelled_at = now()
+                newly_cancelled = [
+                    case for case in experiment.cases if case.status not in TERMINAL_CASE_STATUSES
+                ]
+                experiment.cases = [
+                    (
+                        case
+                        if case.status in TERMINAL_CASE_STATUSES
+                        else replace(
+                            case,
+                            status="cancelled",
+                            failure_code="server_shutdown",
+                            error="Server shut down before this case completed",
+                            completed_at=cancelled_at,
+                        )
+                    )
+                    for case in experiment.cases
+                ]
+                experiment.completeness = replace(
+                    experiment.completeness,
+                    cancelled=(experiment.completeness.cancelled + len(newly_cancelled)),
+                )
+                experiment.failures.extend(
+                    {
+                        "case_id": case.case_id,
+                        "code": "server_shutdown",
+                        "message": "Server shut down before this case completed",
+                    }
+                    for case in newly_cancelled
+                )
+                if experiment.analysis.status in {"pending", "running"}:
+                    experiment.analysis = replace(
+                        experiment.analysis,
+                        status="cancelled",
+                        error="Server shut down before attached analysis completed",
+                        completed_at=cancelled_at,
+                    )
+                experiment.runs_done_event.set()
+                transition(experiment, "cancelled")
+                self.persist_job(experiment)
+            if experiment.task is not None and not experiment.task.done():
+                experiment.task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await experiment.task

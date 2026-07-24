@@ -19,13 +19,21 @@ import re
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from spicelib.sim.sim_runner import SimRunner
 
+from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES, BatchJob
+from ltspice_mcp.lib.log_parser import (
+    extract_error_context,
+    extract_log_diagnostics,
+    is_op_stepping_failure,
+    op_ladder_exhausted,
+)
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
+from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
 
 if TYPE_CHECKING:
@@ -52,6 +60,170 @@ _GENERATED_NETLIST_MARKERS = (LOGOPINFO_MARKER, NGSPICE_CONTROL_WRITE_MARKER)
 # applies to direct runner construction (mostly tests). Every runner
 # constructor and the RunnerManager factory methods share this one value.
 DEFAULT_MAX_PARALLEL = 4
+
+
+class RunOutcome(NamedTuple):
+    """Filesystem-derived facts about a finished run, collected off the loop."""
+
+    raw_file: str
+    log_file: str
+    raw_size: int
+    error: str | None
+    observations: tuple[dict, ...] = ()
+
+
+_RAW_PRODUCING_ANALYSES: frozenset[str] = frozenset(f".{kind}" for kind in ANALYSIS_KINDS)
+_INCLUDE_DIRECTIVES: frozenset[str] = frozenset({".include", ".inc", ".lib"})
+_MAX_INCLUDE_DEPTH = 3
+
+
+def _include_target(rest: str) -> str | None:
+    """Return the file token from an include or library directive."""
+    rest = rest.strip()
+    if not rest:
+        return None
+    if rest[0] in "\"'":
+        end = rest.find(rest[0], 1)
+        return rest[1:end] if end != -1 else None
+    return rest.split(None, 1)[0]
+
+
+def deck_requests_raw(netlist: Path | None) -> tuple[list[str], bool]:
+    """Snapshot a deck's raw-producing analyses and ``.save`` presence."""
+    if netlist is None:
+        return [], False
+    analyses: list[str] = []
+    has_save = False
+    has_control = False
+    seen: set[Path] = set()
+
+    def scan(path: Path, depth: int) -> None:
+        nonlocal has_save, has_control
+        if depth > _MAX_INCLUDE_DEPTH:
+            return
+        try:
+            key = path.resolve()
+        except OSError:
+            return
+        if key in seen:
+            return
+        seen.add(key)
+        try:
+            text = read_spice_text(path)
+        except OSError:
+            return
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("."):
+                continue
+            parts = stripped.split(None, 1)
+            head = parts[0].lower()
+            if head == ".end":
+                break
+            if head == ".control":
+                has_control = True
+            elif head in _RAW_PRODUCING_ANALYSES:
+                if head not in analyses:
+                    analyses.append(head)
+            elif head == ".save":
+                has_save = True
+            elif head in _INCLUDE_DIRECTIVES and len(parts) > 1:
+                target = _include_target(parts[1])
+                if target is not None:
+                    scan(path.parent / target, depth + 1)
+
+    scan(netlist, 0)
+    if has_control:
+        return [], has_save
+    return analyses, has_save
+
+
+def _missing_required_raw_outcome(
+    log_file: str,
+    log_path: Path,
+    analyses: list[str],
+    has_save: bool,
+) -> RunOutcome:
+    """Build the failure facts for an expected but absent raw artifact."""
+    analysis_str = "/".join(analyses)
+    excerpt = extract_error_context(log_path, max_lines=20)
+    if has_save:
+        workaround = (
+            " The deck sets a '.save' list; if it omits nodes the analysis "
+            "probes, LTspice 26.0.2 has been observed to exit 0 without writing "
+            "a .raw. List every probed node in the .save (or remove the .save "
+            "directive) and re-run — a full .save list is the known workaround."
+        )
+    else:
+        workaround = (
+            " The simulator reported no error, so a re-run may succeed; if it "
+            "recurs, check the analysis directive and any .save list."
+        )
+    excerpt_block = f"\n\nLog excerpt:\n{excerpt}" if excerpt else ""
+    error = (
+        "Simulation exited cleanly but produced no .raw waveform file, which the "
+        f"deck's {analysis_str} analysis requires — the waveform results are "
+        f"absent.{workaround}{excerpt_block}"
+    )
+    observation = {
+        "code": "missing_required_raw",
+        "kind": "reconciliation",
+        "detail": (
+            f"The deck requested a {analysis_str} analysis but the simulator "
+            "exited without writing a .raw file; waveform results are absent."
+        ),
+        "evidence": {
+            "expected_artifact": "raw",
+            "analyses": analyses,
+            "has_save_list": has_save,
+        },
+    }
+    return RunOutcome("", log_file, 0, error, observations=(observation,))
+
+
+def collect_run_outcome(
+    raw_file: str,
+    log_file: str,
+    requirements: tuple[list[str], bool] | None = None,
+) -> RunOutcome:
+    """Collect and classify completion artifacts on a worker thread."""
+    log_path = Path(log_file)
+    sim_failed = raw_file in ("", ".") or log_path.suffix == ".fail"
+    raw_size = 0
+    if not sim_failed:
+        try:
+            raw_size = Path(raw_file).stat().st_size
+        except FileNotFoundError:
+            raw_size = 0
+        except OSError as exc:
+            return RunOutcome(
+                raw_file,
+                log_file,
+                0,
+                f"Simulation finished but its raw file is unreadable: {exc}",
+            )
+    if raw_size > 0:
+        return RunOutcome(raw_file, log_file, raw_size, None)
+
+    try:
+        log_exists = bool(log_file) and log_path.exists()
+    except OSError:
+        log_exists = False
+    if not sim_failed and log_exists:
+        errors = extract_log_diagnostics(log_path)["errors"]
+        non_rung = [error for error in errors if not is_op_stepping_failure(error)]
+        if not non_rung and not op_ladder_exhausted(errors):
+            analyses, has_save = requirements if requirements is not None else ([], False)
+            if not analyses:
+                return RunOutcome("", log_file, 0, None)
+            return _missing_required_raw_outcome(log_file, log_path, analyses, has_save)
+
+    if log_exists:
+        context = extract_error_context(log_path, max_lines=20)
+        error = f"Simulation failed (no output generated)\n\nLog excerpt:\n{context}"
+    else:
+        error = "Simulation failed (no output generated, log file missing)"
+    return RunOutcome("" if sim_failed else raw_file, log_file, 0, error)
 
 
 def discard_generated_netlist(path: Path | None) -> None:
@@ -217,6 +389,69 @@ class RunnerBase:
             parallel_sims=self.max_parallel,
             timeout=_SIMRUNNER_TIMEOUT,
         )
+
+    def _kill_by_token(self, token: str, context_label: str = "") -> None:
+        """Best-effort blocking termination scoped to a command-line token."""
+        subject = f"{context_label} {token}".strip()
+        try:
+            killed = kill_windows_ltspice_by_token(token)
+            if killed:
+                logger.info("Killed %d Windows sim process(es) for %s", killed, subject)
+        except Exception as exc:
+            logger.warning("WSL process kill for %s failed: %s", subject, exc)
+        try:
+            killed = kill_simulator_by_token(
+                token,
+                simulator_executable_names(self.simulator_class),
+            )
+            if killed:
+                logger.info("Killed %d local sim process(es) for %s", killed, subject)
+        except Exception as exc:
+            logger.warning("Scoped process kill for %s failed: %s", subject, exc)
+
+    def submit_netlist(
+        self,
+        netlist: Path,
+        run_filename: str,
+        callback: Callable[[Any], Any],
+    ) -> SimRunner:
+        """Submit one deck and bridge its filesystem-derived outcome to the loop.
+
+        This is the job-agnostic single-run primitive shared by legacy
+        ``SimulationRunner`` jobs and experiment cases. It knows only the deck,
+        the simulator-facing filename, and an event-loop callback; registration,
+        lifecycle, persistence, and concurrency remain with its callers.
+
+        Call from a worker thread. The requirements snapshot and completion
+        artifact reads intentionally happen on spicelib's worker threads.
+        """
+        requirements = deck_requests_raw(netlist)
+
+        def completion_callback(raw_file: Path | None, log_file: Path | None) -> None:
+            try:
+                outcome = collect_run_outcome(
+                    str(raw_file) if raw_file else "",
+                    str(log_file) if log_file else "",
+                    requirements,
+                )
+            except Exception as exc:
+                outcome = RunOutcome(
+                    "",
+                    "",
+                    0,
+                    f"Simulation failed (outcome collection: {exc})",
+                )
+            self._bridge(callback, outcome, context=f"run {run_filename}")
+
+        runner = self._build_sim_runner()
+        runner.run(
+            str(netlist),
+            run_filename=run_filename,
+            callback=completion_callback,
+            callback_on_error=True,
+            exe_log=True,
+        )
+        return runner
 
     def _bridge(self, handler: Callable[..., Any], *args: Any, context: str = "") -> bool:
         """Schedule ``handler`` on the event loop from a worker thread.
