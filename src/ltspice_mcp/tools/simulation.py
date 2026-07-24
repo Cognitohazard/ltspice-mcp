@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 import time
+from functools import partial
 from pathlib import Path
 from typing import Literal
 
@@ -138,12 +139,29 @@ def _preflight_size_guard(netlist_path: Path, config: ServerConfig) -> str | Non
 # both surface the post-completion summary built by
 # ``build_simulation_summary`` plus the job-tracking fields.
 _SIM_RESULT_FIELDS_SCHEMA: dict[str, dict] = {
-    "sim_type": {"type": "string"},
+    "summary_available": {
+        "type": "boolean",
+        "description": (
+            "True when the inline completion summary was parsed; false when "
+            "the bounded parse hit its deadline or retry cooldown."
+        ),
+    },
+    "sim_type": {
+        "type": "string",
+        "description": "Present only when summary_available is true.",
+    },
     "duration": {"type": "number"},
-    "step_count": {"type": "integer"},
+    "step_count": {
+        "type": "integer",
+        "description": "Present only when summary_available is true.",
+    },
     "raw_file": {"type": "string"},
     "log_file": {"type": "string"},
-    "signals": {"type": "array", "items": {"type": "string"}},
+    "signals": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Present only when summary_available is true.",
+    },
     # Present only when the trace list was capped for the structured channel;
     # carries the TOTAL trace count. Full list: spice://results/{job}/signals.
     "signals_truncated": {"type": "integer"},
@@ -173,6 +191,23 @@ _SIM_RESULT_FIELDS_SCHEMA: dict[str, dict] = {
     # hardlink failure on a raw too large to copy) — see "hint" for why.
     "output_alias_raw": {"type": ["string", "null"]},
     "output_alias_log": {"type": ["string", "null"]},
+}
+
+_SIM_SUMMARY_CONDITION_SCHEMA = {
+    "if": {
+        "properties": {"summary_available": {"const": True}},
+        "required": ["summary_available"],
+    },
+    # Gates exactly the fields marked "Present only when summary_available is
+    # true" above; duration and the result paths are job-derived and appear
+    # on the unavailable branch too (paths omitted only when the job has none).
+    "then": {
+        "required": [
+            "sim_type",
+            "step_count",
+            "signals",
+        ]
+    },
 }
 
 
@@ -319,6 +354,7 @@ async def _get_or_create_runner(
             **_SIM_RESULT_FIELDS_SCHEMA,
             "error": {"type": "string"},
         },
+        "allOf": [_SIM_SUMMARY_CONDITION_SCHEMA],
     },
 )
 async def handle_run_simulation(args: RunSimulationInput, state: SessionState):
@@ -582,17 +618,16 @@ async def _finished_job_response(
                 f"Job {job.job_id} completed but result files are missing.\n"
                 f"raw_file: {job.raw_file}, log_file: {job.log_file}"
             )
-        # Offload the raw parse off the event-loop thread (heavy, untrusted
-        # I/O); dialect_for_job stays on the loop (cheap) before the hop, and
-        # parse_success_summary returns a dict, not a CallToolResult.
-        summary = await asyncio.to_thread(
-            parse_success_summary,
-            job.raw_file,
-            job.log_file,
-            duration,
-            dialect=services.dialect_for_job(job, state),
-            netlist=job.netlist,
-        )
+        try:
+            summary = await _bounded_success_summary(
+                job, job.raw_file, job.log_file, duration, state
+            )
+        except ResultError:
+            await mcp_log(
+                "warning",
+                f"Simulation completed but its inline summary was unavailable: {job.netlist.name}",
+            )
+            return _summary_unavailable_response(job, duration, fmt)
         if preflight_warnings:
             existing = summary.get("warnings") or []
             summary["warnings"] = preflight_warnings + existing
@@ -804,6 +839,63 @@ def _failed_response(job, duration: float, state: SessionState, fmt: str | None)
     )
 
 
+async def _bounded_success_summary(
+    job: SimulationJob,
+    raw_file: Path,
+    log_file: Path,
+    duration: float,
+    state: SessionState,
+) -> dict:
+    """Parse a completed run's summary through the shared raw-file deadline."""
+    parse = partial(
+        parse_success_summary,
+        raw_file,
+        log_file,
+        duration,
+        dialect=services.dialect_for_job(job, state),
+        netlist=job.netlist,
+    )
+    return await services.bounded_parse(
+        raw_file,
+        parse,
+        timeout_s=services.RAW_PARSE_TIMEOUT_S,
+    )
+
+
+def _summary_unavailable_response(
+    job: SimulationJob,
+    duration: float,
+    fmt: str | None,
+):
+    """Report a completed job without inventing fields from an unavailable parse."""
+    hint = f"Retry the summary later with simulation_summary(job_id='{job.job_id}')."
+    detail = f"The bounded completion-summary parse is unavailable for raw file {job.raw_file}."
+    data = {
+        "job_id": job.job_id,
+        "status": job.status,
+        "duration": duration,
+        "summary_available": False,
+        "observations": [
+            {
+                "code": "parse_deadline",
+                "kind": "coverage",
+                "detail": detail,
+            }
+        ],
+        "hint": hint,
+    }
+    files_note = _attach_result_files(data, job)
+    return format_response(
+        f"Simulation completed; inline summary unavailable\n"
+        f"Job ID: {job.job_id}\n"
+        f"Status: {job.status}\n"
+        f"Duration: {duration:.2f}s{files_note}\n\n"
+        f"{detail}\n{hint}",
+        data,
+        fmt,
+    )
+
+
 def _format_success_response(job: SimulationJob, summary: dict, fmt: str | None = None):
     """Format simulation success response with structured data.
 
@@ -868,6 +960,7 @@ def _format_success_response(job: SimulationJob, summary: dict, fmt: str | None 
     data = {
         "job_id": job_id,
         "status": "completed",
+        "summary_available": True,
         "sim_type": summary["sim_type"],
         "duration": summary["duration"],
         "step_count": summary["step_count"],
@@ -949,6 +1042,7 @@ def _format_success_response(job: SimulationJob, summary: dict, fmt: str | None 
             },
             "count": {"type": "integer"},
         },
+        "allOf": [_SIM_SUMMARY_CONDITION_SCHEMA],
     },
 )
 async def handle_check_job(args: CheckJobInput, state: SessionState):
@@ -1029,16 +1123,12 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
                 f"Job {job_id} completed but result files have been removed.\n"
                 f"raw: {job.raw_file.exists()}, log: {job.log_file.exists()}"
             )
-        # Offload the raw parse off the event-loop thread (heavy, untrusted I/O);
-        # dialect_for_job stays on the loop (cheap) before the hop.
-        summary = await asyncio.to_thread(
-            parse_success_summary,
-            job.raw_file,
-            job.log_file,
-            duration,
-            dialect=services.dialect_for_job(job, state),
-            netlist=job.netlist,
-        )
+        try:
+            summary = await _bounded_success_summary(
+                job, job.raw_file, job.log_file, duration, state
+            )
+        except ResultError:
+            return _summary_unavailable_response(job, duration, fmt)
         suggestions = services.suggestions_from_errors(summary.get("errors"), state.libraries)
         if suggestions:
             summary["suggestions"] = suggestions
