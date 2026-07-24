@@ -136,6 +136,9 @@ async def test_values_and_extrema_carry_outer_and_inner_identity(
         ],
         include={"per_run": {"limit": 10}},
     )
+    # A fully-analyzed single recipe over a valid raw reports the ratified
+    # success outcome (formerly "success").
+    assert data["outcome"] == "complete"
     record = data["results"]["vout"]["per_run"]["items"][0]
     for field in ("case_id", "run_index", "step_index", "step_values", "assignments"):
         assert field in record

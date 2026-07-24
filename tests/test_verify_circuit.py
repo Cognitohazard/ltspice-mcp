@@ -117,7 +117,7 @@ async def test_sp_dispatch(state_no_sim, work_dir):
     data = await _run(state_no_sim, path=str(deck))
     assert data["kind"] == "netlist"
     assert "syntax" in data["checks_run"]
-    assert data["outcome"] == "ok"
+    assert data["outcome"] == "complete"
 
 
 async def test_unsupported_kind_is_error(state_no_sim, work_dir):
@@ -125,7 +125,7 @@ async def test_unsupported_kind_is_error(state_no_sim, work_dir):
     result = await handle_verify_circuit(VerifyCircuitInput(path=str(bad)), state_no_sim)
     data = _assert_schema(result)
     assert result.isError is True
-    assert data["outcome"] == "error"
+    assert data["outcome"] == "failed"
 
 
 async def test_path_denied_is_error(state_no_sim):
@@ -144,7 +144,7 @@ async def test_syntax_finding_shape(state_no_sim, work_dir):
     # R with only one node is an element-arity fault the validator catches.
     deck = _write(work_dir, "bad.cir", "* bad\nR1 a 1k\n.end\n")
     data = await _run(state_no_sim, path=str(deck))
-    assert data["outcome"] == "problems"
+    assert data["outcome"] == "partial"
     assert data["findings"], "a one-node resistor should yield an arity finding"
     for f in data["findings"]:
         assert f["at"]["file"] == str(deck)
@@ -163,7 +163,7 @@ async def test_equivalence_identical_text_reference(state_no_sim, work_dir):
     assert "compare" in data["checks_run"]
     assert data["comparison"]["mode"] == "equivalence"
     assert data["comparison"]["equivalent"] is True
-    assert data["outcome"] == "ok"
+    assert data["outcome"] == "complete"
 
 
 async def test_equivalence_reordered(state_no_sim, work_dir):
@@ -178,7 +178,7 @@ async def test_equivalence_value_changed(state_no_sim, work_dir):
     ref = _write(work_dir, "ref.cir", _VALUE_CHANGED)
     data = await _run(state_no_sim, path=str(deck), reference=str(ref))
     assert data["comparison"]["equivalent"] is False
-    assert data["outcome"] == "problems"
+    assert data["outcome"] == "partial"
 
 
 async def test_equivalence_topology_changed(state_no_sim, work_dir):
@@ -202,7 +202,7 @@ async def test_structural_identical(state_no_sim, work_dir):
     )
     assert data["comparison"]["mode"] == "structural_diff"
     assert data["comparison"]["equivalent"] is True
-    assert data["outcome"] == "ok"
+    assert data["outcome"] == "complete"
 
 
 async def test_structural_reordered(state_no_sim, work_dir):
@@ -295,7 +295,7 @@ async def test_quality_silent_on_clean_sheet(state_no_sim, work_dir, asc_symbols
     asc = _write(work_dir, "clean.asc", _CLEAN_ASC)
     data = await _run(state_no_sim, path=str(asc), checks=["quality"])
     assert data["findings"] == []
-    assert data["outcome"] == "ok"
+    assert data["outcome"] == "complete"
 
 
 async def test_quality_fires_on_text_overlap(state_no_sim, work_dir, asc_symbols):
