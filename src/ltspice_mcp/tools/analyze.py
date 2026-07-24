@@ -1,0 +1,2322 @@
+"""Consolidated, bounded analysis over immutable result-source manifests."""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import math
+import os
+import statistics
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Literal
+
+import numpy as np
+from mcp import types
+from pydantic import Field, SkipValidation, model_validator
+
+from ltspice_mcp.errors import LTSpiceMCPError, ResultError
+from ltspice_mcp.lib import _fsync_dir, _fsync_fd, result_store, services
+from ltspice_mcp.lib.experiment_types import ExperimentJob
+from ltspice_mcp.lib.format import format_spice_value
+from ltspice_mcp.lib.job_store import JOBS_SUBDIR, SIDECAR_DIRNAME
+from ltspice_mcp.lib.log_parser import parse_step_iterations
+from ltspice_mcp.lib.raw_parser import get_step_count, safe_magnitude_db
+from ltspice_mcp.lib.recipes import (
+    AcStructureRecipe,
+    BodeCrossingRecipe,
+    BodeFilterRecipe,
+    BodePointRecipe,
+    BodeSlopeRecipe,
+    EdgesRecipe,
+    MeasurementsRecipe,
+    NoiseIntegralRecipe,
+    OperatingPointRecipe,
+    PeriodicRecipe,
+    PlotRecipe,
+    Recipe,
+    ResonanceRecipe,
+    ReturnLossRecipe,
+    SignalStatsRecipe,
+    StabilityRecipe,
+    SummaryRecipe,
+    ThdRecipe,
+    TimingRecipe,
+    TransientResponseRecipe,
+    ValueRecipe,
+    WaveformRecipe,
+    _KeyedRecipe,
+    _MultiRecipe,
+    _ScalarRecipe,
+    recipe_error,
+    validate_recipe,
+)
+from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools._base import (
+    StrictModel,
+    ToolInput,
+    format_response,
+    registry,
+    safe_path,
+)
+
+_ARTIFACT_SAFETY_FACTOR = 4.0
+_MIN_ITEM_DEADLINE_S = 0.05
+_PAGE_CAP = 100
+_FAIL_CASE_PAGE_CAP = 100
+_FAILURE_CAP = 100
+
+# Per-call digest memo keyed by (path, mtime_ns, size); one hash per unchanged
+# source across manifest build, precheck and postcheck.
+_DigestCache = dict[tuple[str, int, int], str]
+
+
+class CaseSelection(StrictModel):
+    case_ids: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _unique_cases(self) -> CaseSelection:
+        if len(set(self.case_ids)) != len(self.case_ids):
+            raise ValueError("case_ids must be unique")
+        return self
+
+
+class AnalyzeSourceInput(StrictModel):
+    job_id: str | None = None
+    raw_path: str | None = None
+    runs: Literal["all"] | list[int] | CaseSelection = "all"
+    label: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _one_source(self) -> AnalyzeSourceInput:
+        if bool(self.job_id) == bool(self.raw_path):
+            raise ValueError("provide exactly one of job_id or raw_path")
+        if isinstance(self.runs, list):
+            if not self.runs:
+                raise ValueError("runs must be 'all' or a non-empty list")
+            if any(index < 0 for index in self.runs) or len(set(self.runs)) != len(self.runs):
+                raise ValueError("run indices must be unique non-negative integers")
+        if isinstance(self.runs, CaseSelection) and self.raw_path is not None:
+            raise ValueError("case_ids selection is available only for experiment jobs")
+        return self
+
+
+class PerRunInclude(StrictModel):
+    limit: int = Field(default=50, ge=1, le=_PAGE_CAP)
+    cursor: str | None = None
+
+
+class AnalyzeInclude(StrictModel):
+    per_run: PerRunInclude | None = None
+    outliers: bool = False
+    signals_available: bool = False
+
+
+class ContinueInput(StrictModel):
+    result_set_id: str
+    cursor: str
+
+
+class AnalyzeResultsInput(ToolInput):
+    sources: list[AnalyzeSourceInput] | None = Field(default=None, max_length=64)
+    # SkipValidation preserves the strict A.2 union in JSON Schema while
+    # allowing the handler to validate each item independently.
+    recipes: list[SkipValidation[Recipe]] | None = Field(default=None, max_length=256)
+    group_by: list[str] = Field(default_factory=list)
+    include: AnalyzeInclude = Field(default_factory=AnalyzeInclude)
+    continuation: ContinueInput | None = Field(default=None, alias="continue")
+
+    @model_validator(mode="after")
+    def _new_or_continue(self) -> AnalyzeResultsInput:
+        if self.continuation is not None:
+            if self.sources is not None or self.recipes is not None:
+                raise ValueError("'continue' is mutually exclusive with sources/recipes")
+            return self
+        if not self.sources or not self.recipes:
+            raise ValueError("a new analysis requires non-empty sources and recipes")
+        labels = [source.label for source in self.sources]
+        if len(set(labels)) != len(labels):
+            raise ValueError("source labels must be unique")
+        keys = [
+            str(item.get("key", "")) if isinstance(item, dict) else str(getattr(item, "key", ""))
+            for item in self.recipes
+        ]
+        nonempty = [key for key in keys if key]
+        if len(set(nonempty)) != len(nonempty):
+            raise ValueError("recipe keys must be unique")
+        if len(set(self.group_by)) != len(self.group_by):
+            raise ValueError("group_by dimensions must be unique")
+        return self
+
+
+@dataclass(frozen=True)
+class _ResolvedRun:
+    manifest_id: str
+    label: str
+    source: services.AnalysisSource
+    job_id: str | None
+
+
+@dataclass
+class _PendingArtifact:
+    pending: Path
+    final: Path
+    content_type: str
+    manifest_id: str
+
+
+def _page(items: list[Any], offset: int = 0, limit: int = _PAGE_CAP) -> dict[str, Any]:
+    shown = items[offset : offset + limit]
+    next_offset = offset + len(shown)
+    return {
+        "items": shown,
+        "total": len(items),
+        "returned": len(shown),
+        "truncated": next_offset < len(items),
+        "next_cursor": None,
+    }
+
+
+# The canonical per-record identity keys. Reduced/spec attribution rows omit the
+# trailing provenance pair (their output schema forbids the extra keys), so they
+# pick the first five — a slice of the one list, never a parallel one.
+_IDENTITY_KEYS: tuple[str, ...] = (
+    "case_id",
+    "run_index",
+    "step_index",
+    "step_values",
+    "assignments",
+    "circuit",
+    "deck_sha256",
+)
+_ATTRIBUTION_KEYS: tuple[str, ...] = _IDENTITY_KEYS[:5]
+
+
+def _pick(source: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    """Project ``keys`` out of ``source`` (identity/attribution subsets)."""
+    return {key: source[key] for key in keys}
+
+
+def _identity(
+    source: services.AnalysisSource, step: int | None, values: dict[str, Any]
+) -> dict[str, Any]:
+    base = dict(source.identity or {})
+    return {
+        "case_id": base.get("case_id"),
+        "run_index": base.get("run_index", 0),
+        "step_index": step,
+        "step_values": values,
+        "assignments": dict(base.get("assignments") or {}),
+        "circuit": base.get("circuit"),
+        "deck_sha256": base.get("deck_sha256"),
+    }
+
+
+def _serialize_run(run: _ResolvedRun) -> dict[str, Any]:
+    return {
+        "manifest_id": run.manifest_id,
+        "label": run.label,
+        "raw": str(run.source.raw),
+        "log": str(run.source.log) if run.source.log else None,
+        "netlist": str(run.source.netlist) if run.source.netlist else None,
+        "dialect": run.source.dialect,
+        "identity": run.source.identity,
+        "trusted_job_artifact": run.source.trusted_job_artifact,
+        "job_id": run.job_id,
+    }
+
+
+def _deserialize_runs(item: result_store.ResultSet, state: SessionState) -> list[_ResolvedRun]:
+    runs: list[_ResolvedRun] = []
+    for data in item.inputs.get("resolved_runs", []):
+        raw = Path(data["raw"])
+        dialect = data.get("dialect")
+        state.raw_dialect_hints[raw] = dialect
+        runs.append(
+            _ResolvedRun(
+                manifest_id=str(data["manifest_id"]),
+                label=str(data["label"]),
+                source=services.AnalysisSource(
+                    raw=raw,
+                    log=Path(data["log"]) if data.get("log") else None,
+                    netlist=Path(data["netlist"]) if data.get("netlist") else None,
+                    dialect=dialect,
+                    identity=dict(data.get("identity") or {}),
+                    trusted_job_artifact=bool(data.get("trusted_job_artifact")),
+                ),
+                job_id=data.get("job_id"),
+            )
+        )
+    return runs
+
+
+def _legacy_record_path(job: Any) -> Path:
+    return job.netlist.parent / SIDECAR_DIRNAME / JOBS_SUBDIR / f"{job.job_id}.json"
+
+
+async def _resolve_sources(
+    inputs: list[AnalyzeSourceInput], state: SessionState
+) -> tuple[list[_ResolvedRun], list[dict[str, Any]], dict[str, str | None], list[dict[str, Any]]]:
+    runs: list[_ResolvedRun] = []
+    missing: list[dict[str, Any]] = []
+    source_jobs: dict[str, str | None] = {}
+    observations: list[dict[str, Any]] = []
+    for source_input in inputs:
+        if source_input.raw_path is not None:
+            requested_indices = {0} if source_input.runs == "all" else set(source_input.runs)
+            for index in sorted(requested_indices - {0}):
+                missing.append(
+                    {
+                        "label": source_input.label,
+                        "case_id": None,
+                        "run_index": index,
+                        "code": "run_not_found",
+                        "detail": "A raw_path source has exactly one outer run (index 0).",
+                    }
+                )
+            if 0 not in requested_indices:
+                continue
+            try:
+                raw = safe_path(source_input.raw_path, state)
+                resolved = services.resolve_analysis_source(
+                    SimpleNamespace(raw_file=str(raw), job_id=None, run_index=0),
+                    state,
+                )
+            except (LTSpiceMCPError, OSError) as exc:
+                missing.append(
+                    {
+                        "label": source_input.label,
+                        "case_id": None,
+                        "run_index": 0,
+                        "code": "source_unavailable",
+                        "detail": str(exc),
+                    }
+                )
+                continue
+            # Preserve the expected sibling-log path even while it is absent:
+            # an absent→present transition changes the composite manifest.
+            source = replace(
+                resolved,
+                log=raw.with_suffix(".log"),
+                identity={
+                    "case_id": None,
+                    "run_index": 0,
+                    "assignments": {},
+                    "circuit": raw.stem,
+                    "deck_sha256": None,
+                    "step_index": None,
+                    "step_values": {},
+                },
+            )
+            source = services.resolve_analysis_source(None, state, injected=source)
+            runs.append(
+                _ResolvedRun(
+                    f"{source_input.label}:0",
+                    source_input.label,
+                    source,
+                    None,
+                )
+            )
+            observations.append(
+                {
+                    "code": "raw_path_without_deck_provenance",
+                    "kind": "provenance",
+                    "detail": (
+                        f"Source {source_input.label!r} is a caller-supplied raw path; "
+                        "deck_sha256 is null because no producing job was supplied."
+                    ),
+                }
+            )
+            continue
+
+        assert source_input.job_id is not None
+        try:
+            job = await services.resolve_job_async(source_input.job_id, state)
+        except LTSpiceMCPError as exc:
+            missing.append(
+                {
+                    "label": source_input.label,
+                    "case_id": None,
+                    "run_index": None,
+                    "code": "source_unavailable",
+                    "detail": str(exc),
+                }
+            )
+            continue
+        record = job.store_path if isinstance(job, ExperimentJob) else _legacy_record_path(job)
+        source_jobs[job.job_id] = str(record) if record.is_file() else None
+
+        if isinstance(job, ExperimentJob):
+            if job.status not in services.TERMINAL_STATUSES:
+                missing.append(
+                    {
+                        "label": source_input.label,
+                        "case_id": None,
+                        "run_index": None,
+                        "code": "job_not_terminal",
+                        "detail": f"Experiment job {job.job_id!r} is not terminal",
+                    }
+                )
+                continue
+            if isinstance(source_input.runs, CaseSelection):
+                wanted = set(source_input.runs.case_ids)
+                selected = [case for case in job.cases if case.case_id in wanted]
+                found = {case.case_id for case in selected}
+                for case_id in sorted(wanted - found):
+                    missing.append(
+                        {
+                            "label": source_input.label,
+                            "case_id": case_id,
+                            "run_index": None,
+                            "code": "case_not_found",
+                        }
+                    )
+            elif isinstance(source_input.runs, list):
+                wanted_indices = set(source_input.runs)
+                selected = [case for case in job.cases if case.run_index in wanted_indices]
+                found_indices = {case.run_index for case in selected}
+                for index in sorted(wanted_indices - found_indices):
+                    missing.append(
+                        {
+                            "label": source_input.label,
+                            "case_id": None,
+                            "run_index": index,
+                            "code": "run_not_found",
+                        }
+                    )
+            else:
+                selected = list(job.cases)
+            for case in selected:
+                if case.status != "produced" or case.raw_file is None:
+                    missing.append(
+                        {
+                            "label": source_input.label,
+                            "case_id": case.case_id,
+                            "run_index": case.run_index,
+                            "code": "raw_not_produced",
+                            "detail": f"case status is {case.status!r}",
+                        }
+                    )
+                    continue
+                ctx = services.resolve_experiment_run(
+                    job.job_id,
+                    state,
+                    case_id=case.case_id,
+                )
+                resolved = services.resolve_analysis_source(None, state, injected=ctx)
+                state.raw_dialect_hints[resolved.raw] = resolved.dialect
+                runs.append(
+                    _ResolvedRun(
+                        f"{source_input.label}:{case.case_id}",
+                        source_input.label,
+                        resolved,
+                        job.job_id,
+                    )
+                )
+                await state.note_recent_circuit(case.circuit_path.resolve())
+            continue
+
+        # The shared seam preserves the legacy resolve_run completed-only gate;
+        # do not inspect trusted artifact paths directly here.
+        if source_input.runs == "all":
+            candidate_indices = [run.index for run in services.runs_of(job)]
+        elif isinstance(source_input.runs, list):
+            candidate_indices = source_input.runs
+        else:
+            missing.append(
+                {
+                    "label": source_input.label,
+                    "case_id": None,
+                    "run_index": None,
+                    "code": "case_selection_wrong_job_kind",
+                }
+            )
+            continue
+        for index in candidate_indices:
+            try:
+                source = services.resolve_analysis_source(
+                    SimpleNamespace(
+                        raw_file=None,
+                        job_id=job.job_id,
+                        run_index=index,
+                    ),
+                    state,
+                )
+            except LTSpiceMCPError as exc:
+                missing.append(
+                    {
+                        "label": source_input.label,
+                        "case_id": None,
+                        "run_index": index,
+                        "code": "run_unavailable",
+                        "detail": str(exc),
+                    }
+                )
+                continue
+            runs.append(
+                _ResolvedRun(
+                    f"{source_input.label}:{index}",
+                    source_input.label,
+                    source,
+                    job.job_id,
+                )
+            )
+        await state.note_recent_circuit(job.netlist.resolve())
+    return runs, missing, source_jobs, observations
+
+
+async def _digest(path: Path, deadline: float, cache: _DigestCache) -> str:
+    """Digest ``path``, memoized by (path, mtime, size) for this call.
+
+    A file whose mtime and size are unchanged since it was first digested is not
+    re-read — manifest creation, ID-13 precheck and postcheck share one hash per
+    unchanged source. A drifting file gets a fresh (mtime, size) key, so a real
+    change is always re-digested.
+    """
+    key: tuple[str, int, int] | None
+    try:
+        # A cheap metadata stat on the loop (like the sibling .is_file() checks
+        # here); the expensive hash read is what bounded_parse offloads.
+        stat = os.stat(path)
+        key = (str(path), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        key = None
+    if key is not None and key in cache:
+        return cache[key]
+    digest = await services.bounded_parse(
+        path,
+        lambda: result_store.sha256_file(path),
+        timeout_s=max(_MIN_ITEM_DEADLINE_S, deadline - asyncio.get_running_loop().time()),
+    )
+    if key is not None:
+        cache[key] = digest
+    return digest
+
+
+async def _manifest_for(run: _ResolvedRun, deadline: float, cache: _DigestCache) -> dict[str, Any]:
+    raw_sha = await _digest(run.source.raw, deadline, cache)
+    log_present = run.source.log is not None and run.source.log.is_file()
+    log_sha = (
+        await _digest(run.source.log, deadline, cache) if log_present and run.source.log else None
+    )
+    composite = result_store.composite_digest(raw_sha, log_sha, log_present)
+    return {
+        "manifest_id": run.manifest_id,
+        "label": run.label,
+        "raw_path": str(run.source.raw),
+        "raw_sha256": raw_sha,
+        "log_path": str(run.source.log) if run.source.log else None,
+        "log_present": log_present,
+        "log_sha256": log_sha,
+        "composite_sha256": composite,
+        "trusted_job_artifact": run.source.trusted_job_artifact,
+        "job_id": run.job_id,
+    }
+
+
+def _work_items(recipes: list[Any]) -> list[dict[str, Any]]:
+    work: list[dict[str, Any]] = []
+    for index, raw_recipe in enumerate(recipes):
+        payload = (
+            raw_recipe.model_dump(mode="json", by_alias=True)
+            if hasattr(raw_recipe, "model_dump")
+            else dict(raw_recipe)
+            if isinstance(raw_recipe, dict)
+            else {"metric": None, "key": f"recipe_{index}"}
+        )
+        work.append({"index": index, "recipe": payload})
+    return work
+
+
+def _request_hash(args: AnalyzeResultsInput) -> str:
+    assert args.sources is not None and args.recipes is not None
+    include = args.include.model_dump(mode="json")
+    if isinstance(include.get("per_run"), dict):
+        include["per_run"]["cursor"] = None
+    return result_store.canonical_hash(
+        {
+            "sources": [source.model_dump(mode="json") for source in args.sources],
+            "work": _work_items(list(args.recipes)),
+            "group_by": list(args.group_by),
+            "include": include,
+        }
+    )
+
+
+async def _create_result_set(
+    args: AnalyzeResultsInput, state: SessionState, deadline: float, cache: _DigestCache
+):
+    assert args.sources is not None and args.recipes is not None
+    runs, missing, source_jobs, observations = await _resolve_sources(args.sources, state)
+    manifests: list[dict[str, Any]] = []
+    for run in runs:
+        try:
+            manifests.append(await _manifest_for(run, deadline, cache))
+        except (LTSpiceMCPError, OSError) as exc:
+            manifests.append(
+                {
+                    "manifest_id": run.manifest_id,
+                    "label": run.label,
+                    "raw_path": str(run.source.raw),
+                    "log_path": str(run.source.log) if run.source.log else None,
+                    "trusted_job_artifact": run.source.trusted_job_artifact,
+                    "job_id": run.job_id,
+                    "digest_code": (
+                        "analysis_deadline"
+                        if "deadline" in str(exc).lower() or "exceeded" in str(exc).lower()
+                        else "source_unavailable"
+                    ),
+                    "digest_error": str(exc),
+                }
+            )
+    work = _work_items(list(args.recipes))
+    include = args.include.model_dump(mode="json")
+    if isinstance(include.get("per_run"), dict):
+        include["per_run"]["cursor"] = None
+    inputs = {
+        "working_dir": str(state.working_dir),
+        "sources": [source.model_dump(mode="json") for source in args.sources],
+        "group_by": list(args.group_by),
+        "include": include,
+        "request_hash": _request_hash(args),
+        "resolved_runs": [_serialize_run(run) for run in runs],
+        "missing": missing,
+        "observations": observations,
+    }
+    return await asyncio.to_thread(
+        result_store.create,
+        working_dir=state.working_dir,
+        inputs=inputs,
+        work=work,
+        source_manifests=manifests,
+        source_jobs=source_jobs,
+        ttl_hours=state.config.result_set_ttl_hours,
+    )
+
+
+async def _verify_direct_sources(
+    manifests: list[dict[str, Any]],
+    selected_ids: set[str],
+    deadline: float,
+    cache: _DigestCache,
+) -> dict[str, str]:
+    failures: dict[str, str] = {}
+    for manifest in manifests:
+        manifest_id = str(manifest["manifest_id"])
+        if (
+            manifest_id not in selected_ids
+            or manifest.get("trusted_job_artifact")
+            or manifest.get("digest_error")
+        ):
+            continue
+        try:
+            raw_path = Path(manifest["raw_path"])
+            raw_sha = await _digest(raw_path, deadline, cache)
+            log_path = Path(manifest["log_path"]) if manifest.get("log_path") else None
+            log_present = log_path is not None and log_path.is_file()
+            log_sha = (
+                await _digest(log_path, deadline, cache) if log_present and log_path else None
+            )
+            composite = result_store.composite_digest(raw_sha, log_sha, log_present)
+            if composite != manifest["composite_sha256"]:
+                failures[manifest_id] = "source_drift"
+        except (LTSpiceMCPError, OSError) as exc:
+            code = (
+                "analysis_deadline"
+                if "deadline" in str(exc).lower() or "exceeded" in str(exc).lower()
+                else "source_drift"
+            )
+            failures[manifest_id] = f"{code}: {exc}"
+    return failures
+
+
+def _spice(value: float | str | None) -> str | None:
+    if value is None:
+        return None
+    return format_spice_value(value)
+
+
+def _window_fields(window: Any) -> tuple[str | None, str | None]:
+    if window is None:
+        return None, None
+    return _spice(window.start), _spice(window.end)
+
+
+async def _step_plan(
+    recipe: Recipe,
+    source: services.AnalysisSource,
+    state: SessionState,
+    step_cache: dict[str, list[dict[str, Any]]],
+) -> list[tuple[int, dict[str, Any]]]:
+    raw = await services.load_raw(source.raw, state)
+    count = get_step_count(raw)
+    step_values: list[dict[str, Any]] = []
+    if source.log is not None and count > 1:
+        # One step-table parse per log path per call: many recipes over the same
+        # stepped run share it instead of re-parsing the log each time.
+        log_key = str(source.log)
+        if log_key in step_cache:
+            step_values = step_cache[log_key]
+        else:
+            step_values = await services.bounded_parse(
+                source.log,
+                lambda: parse_step_iterations(source.log),
+            )
+            step_cache[log_key] = step_values
+    if recipe.all_steps:
+        return [
+            (index, step_values[index] if index < len(step_values) else {})
+            for index in range(count)
+        ]
+    if recipe.step is None:
+        return [(0, step_values[0] if step_values else {})]
+    step_sel = recipe.step
+    candidates = [
+        (index, values) for index, values in enumerate(step_values) if step_sel.axis in values
+    ]
+    if not candidates:
+        raise ResultError(f"step axis {step_sel.axis!r} is not present in the source log")
+    try:
+        target = float(format_spice_value(step_sel.value))
+        index, values = min(
+            candidates,
+            key=lambda pair: abs(float(pair[1][step_sel.axis]) - target),
+        )
+    except (TypeError, ValueError):
+        index, values = next(
+            (pair for pair in candidates if str(pair[1][step_sel.axis]) == str(step_sel.value)),
+            candidates[0],
+        )
+    return [(index, values)]
+
+
+async def _adapter_value(
+    recipe: Recipe,
+    source: services.AnalysisSource,
+    step: int,
+    state: SessionState,
+) -> dict[str, Any]:
+    from ltspice_mcp.tools import analysis as an
+
+    raw_file = str(source.raw)
+
+    def structured(result: types.CallToolResult) -> dict[str, Any]:
+        return dict(result.structuredContent or {})
+
+    if isinstance(recipe, SummaryRecipe):
+        return structured(
+            await an.handle_simulation_summary(
+                an.SimulationSummaryInput(raw_file=raw_file, step=step),
+                state,
+            )
+        )
+    if isinstance(recipe, MeasurementsRecipe):
+        if source.log is None or not source.log.is_file():
+            raise ResultError("source has no log artifact for .MEAS results")
+        result = structured(
+            await an.handle_measurement_stats(
+                an.MeasurementStatsInput(
+                    log_file=str(source.log),
+                    histogram_bins=0,
+                    include_per_run=False,
+                ),
+                state,
+            )
+        )
+        if recipe.names is not None:
+            result["stats"] = {
+                name: entry
+                for name, entry in result.get("stats", {}).items()
+                if name in recipe.names
+            }
+        return result
+    if isinstance(recipe, ValueRecipe):
+        at = recipe.at
+        if at is None:
+            raw = await services.load_raw(source.raw, state)
+            services.validate_step(raw, step)
+            try:
+                axis = an._guarded_axis(raw, step, source.raw)
+            except ResultError:
+                operating_point = structured(
+                    await an.handle_operating_point(
+                        an.OperatingPointInput(raw_file=raw_file, step=step),
+                        state,
+                    )
+                )
+                flat: dict[str, Any] = {}
+                for bucket in ("voltages", "currents", "device_op_points"):
+                    values = operating_point.get(bucket)
+                    if isinstance(values, dict):
+                        flat.update(values)
+                match = next(
+                    (
+                        (name, value)
+                        for name, value in flat.items()
+                        if name.lower() == recipe.expr.lower()
+                    ),
+                    None,
+                )
+                if match is None:
+                    raise ResultError(
+                        f"{recipe.expr!r} is not present in this operating-point result"
+                    ) from None
+                name, value = match
+                return {
+                    "signal": name,
+                    "value": value,
+                    "unit": None,
+                    "warnings": operating_point.get("warnings", []),
+                }
+            if len(axis) != 1:
+                raise ResultError(
+                    "value.at is required when the selected run has more than one "
+                    "sample on its primary axis"
+                )
+            at = float(np.real(axis[0]))
+        return structured(
+            await an.handle_query_value(
+                an.QueryValueInput(
+                    raw_file=raw_file,
+                    signal=recipe.expr,
+                    at=_spice(at),
+                    step=step,
+                ),
+                state,
+            )
+        )
+    if isinstance(recipe, SignalStatsRecipe):
+        start, end = _window_fields(recipe.window)
+        return structured(
+            await an.handle_signal_stats(
+                an.SignalStatsInput(
+                    raw_file=raw_file,
+                    signal=recipe.signal,
+                    step=step,
+                    t_start=start,
+                    t_end=end,
+                ),
+                state,
+            )
+        )
+    if isinstance(recipe, EdgesRecipe):
+        start, end = _window_fields(recipe.window)
+        levels = recipe.levels
+        return structured(
+            await an.handle_edge_metrics(
+                an.EdgeMetricsInput(
+                    raw_file=raw_file,
+                    signal=recipe.signal,
+                    step=step,
+                    t_start=start,
+                    t_end=end,
+                    edge=recipe.edge,
+                    low_level=levels.low if levels else None,
+                    high_level=levels.high if levels else None,
+                ),
+                state,
+            )
+        )
+    if isinstance(recipe, TimingRecipe):
+        start, end = _window_fields(recipe.window)
+        value = structured(
+            await an.handle_timing_between(
+                an.TimingBetweenInput(
+                    raw_file=raw_file,
+                    signal_a=recipe.from_.signal,
+                    signal_b=recipe.to.signal,
+                    direction_a=recipe.from_.edge,
+                    direction_b=recipe.to.edge,
+                    threshold_a=recipe.from_.level,
+                    threshold_b=recipe.to.level,
+                    step=step,
+                    t_start=start,
+                    t_end=end,
+                    nth=recipe.nth,
+                ),
+                state,
+            )
+        )
+        return value
+    if isinstance(recipe, PeriodicRecipe):
+        start, end = _window_fields(recipe.window)
+        return structured(
+            await an.handle_periodic_metrics(
+                an.PeriodicMetricsInput(
+                    raw_file=raw_file,
+                    signal=recipe.signal,
+                    step=step,
+                    t_start=start,
+                    t_end=end,
+                ),
+                state,
+            )
+        )
+    if isinstance(recipe, TransientResponseRecipe):
+        start, end = _window_fields(recipe.window)
+        reference_observation: str | None = None
+        if recipe.mode == "disturbance":
+            assert recipe.input is not None
+            raw = await services.load_raw(source.raw, state)
+            reference = services.validate_signal(raw, recipe.input)
+            if start is None:
+                axis = an._guarded_axis(raw, step, source.raw)
+                wave = np.asarray(raw.get_wave(reference, step=step))
+                if np.iscomplexobj(wave) or len(wave) < 2:
+                    raise ResultError(
+                        "The disturbance reference input must be a real trace "
+                        "with at least two samples."
+                    )
+                edge_index = int(np.argmax(np.abs(np.diff(wave)))) + 1
+                start = _spice(float(axis[edge_index]))
+                reference_observation = (
+                    f"Disturbance window starts at {start}s, the largest transition "
+                    f"in reference input {reference!r}."
+                )
+        if recipe.mode == "step":
+            value = structured(
+                await an.handle_pulse_response(
+                    an.PulseResponseInput(
+                        raw_file=raw_file,
+                        signal=recipe.signal,
+                        step=step,
+                        t_start=start,
+                        t_end=end,
+                    ),
+                    state,
+                )
+            )
+        else:
+            value = structured(
+                await an.handle_disturbance_response(
+                    an.DisturbanceResponseInput(
+                        raw_file=raw_file,
+                        signal=recipe.signal,
+                        step=step,
+                        t_start=start,
+                        t_end=end,
+                    ),
+                    state,
+                )
+            )
+        if reference_observation is not None:
+            value.setdefault("warnings", []).append(reference_observation)
+        return value
+    if isinstance(recipe, ThdRecipe):
+        start, end = _window_fields(recipe.window)
+        return structured(
+            await an.handle_thd(
+                an.ThdInput(
+                    raw_file=raw_file,
+                    signal=recipe.signal,
+                    step=step,
+                    t_start=start,
+                    t_end=end,
+                    fundamental=_spice(recipe.fundamental_hz),
+                    n_harmonics=recipe.harmonics,
+                ),
+                state,
+            )
+        )
+    if isinstance(recipe, BodeFilterRecipe):
+        return structured(
+            await an.handle_bode_metrics(
+                an.BodeMetricsInput(
+                    raw_file=raw_file,
+                    signal=recipe.signal,
+                    mode="filter",
+                    step=step,
+                ),
+                state,
+            )
+        )
+    if isinstance(recipe, BodePointRecipe):
+        return structured(
+            await an.handle_bode_metrics(
+                an.BodeMetricsInput(
+                    raw_file=raw_file,
+                    signal=recipe.signal,
+                    mode="point",
+                    frequencies=[format_spice_value(recipe.at_hz)],
+                    step=step,
+                ),
+                state,
+            )
+        )
+    if isinstance(recipe, BodeCrossingRecipe):
+        quantity = "phase_deg" if recipe.phase_deg is not None else "magnitude_db"
+        level = recipe.phase_deg if recipe.phase_deg is not None else recipe.level_db
+        return structured(
+            await an.handle_bode_metrics(
+                an.BodeMetricsInput(
+                    raw_file=raw_file,
+                    signal=recipe.signal,
+                    mode="crossing",
+                    quantity=quantity,
+                    level=level,
+                    step=step,
+                ),
+                state,
+            )
+        )
+    if isinstance(recipe, BodeSlopeRecipe):
+        return structured(
+            await an.handle_bode_metrics(
+                an.BodeMetricsInput(
+                    raw_file=raw_file,
+                    signal=recipe.signal,
+                    mode="slope",
+                    f_low=_spice(recipe.from_hz),
+                    f_high=_spice(recipe.to_hz),
+                    step=step,
+                ),
+                state,
+            )
+        )
+    if isinstance(recipe, StabilityRecipe):
+        return structured(
+            await an.handle_stability_metrics(
+                an.StabilityMetricsInput(
+                    raw_file=raw_file,
+                    signal=recipe.signal,
+                    step=step,
+                ),
+                state,
+            )
+        )
+    if isinstance(recipe, AcStructureRecipe):
+        return structured(
+            await an.handle_ac_structure(
+                an.AcStructureInput(raw_file=raw_file, signal=recipe.signal, step=step),
+                state,
+            )
+        )
+    if isinstance(recipe, ResonanceRecipe):
+        return structured(
+            await an.handle_resonance(
+                an.ResonanceInput(raw_file=raw_file, signal=recipe.signal, step=step),
+                state,
+            )
+        )
+    if isinstance(recipe, ReturnLossRecipe):
+        return structured(
+            await an.handle_return_loss(
+                an.ReturnLossInput(
+                    raw_file=raw_file,
+                    signal=recipe.signal,
+                    z0=recipe.z0,
+                    step=step,
+                ),
+                state,
+            )
+        )
+    if isinstance(recipe, NoiseIntegralRecipe):
+        return structured(
+            await an.handle_noise_integral(
+                an.NoiseIntegralInput(
+                    raw_file=raw_file,
+                    signal=recipe.signal,
+                    f_start=_spice(recipe.from_hz),
+                    f_end=_spice(recipe.to_hz),
+                    step=step,
+                ),
+                state,
+            )
+        )
+    if isinstance(recipe, OperatingPointRecipe):
+        return structured(
+            await an.handle_operating_point(
+                an.OperatingPointInput(
+                    raw_file=raw_file,
+                    device=recipe.device,
+                    step=step,
+                ),
+                state,
+            )
+        )
+    raise ResultError(f"Recipe {recipe.metric!r} is not a scalar adapter recipe")
+
+
+def _artifact_estimate(recipe: Recipe, runs: list[_ResolvedRun]) -> float:
+    if not isinstance(recipe, WaveformRecipe) or recipe.format != "csv":
+        return 0.0
+    size = 0
+    for run in runs:
+        with contextlib.suppress(OSError):
+            size += run.source.raw.stat().st_size
+    return 0.05 + size / 25_000_000 * max(1, len(recipe.signals))
+
+
+async def _waveform(
+    recipe: WaveformRecipe,
+    run: _ResolvedRun,
+    step: int,
+    step_values: dict[str, Any],
+    state: SessionState,
+    item: result_store.ResultSet,
+    manifest: dict[str, Any],
+    item_deadline: float,
+    export_steps: list[int] | None = None,
+) -> tuple[dict[str, Any], list[_PendingArtifact]]:
+    from ltspice_mcp.tools import analysis as an
+
+    raw = await services.load_raw(run.source.raw, state)
+    start, end = _window_fields(recipe.window)
+    if recipe.format == "inline":
+        values: list[dict[str, Any]] = []
+        total_max = 0
+        point_limit = min(recipe.max_points, state.config.max_points_returned)
+        for signal_input in recipe.signals:
+            signal = services.validate_signal(raw, signal_input)
+            axis = an._guarded_axis(raw, step, run.source.raw)
+            wave = np.asarray(raw.get_wave(signal, step=step))
+            if start is not None or end is not None:
+                lo, hi = an._window_indices(
+                    axis,
+                    an._parse_time(start, "start"),
+                    an._parse_time(end, "end"),
+                )
+                axis, wave = axis[lo:hi], wave[lo:hi]
+            total_max = max(total_max, len(axis))
+            if len(axis) > point_limit:
+                if np.iscomplexobj(wave):
+                    x, mag = an.downsample_minmax(
+                        axis,
+                        safe_magnitude_db(wave),
+                        point_limit,
+                    )
+                    _, phase = an.downsample_minmax(
+                        axis,
+                        np.degrees(np.angle(wave)),
+                        point_limit,
+                    )
+                    series: Any = {
+                        "x": x.tolist(),
+                        "magnitude_db": mag.tolist(),
+                        "phase_deg": phase.tolist(),
+                    }
+                else:
+                    x, y = an.downsample_minmax(axis, wave, point_limit)
+                    series = {"x": x.tolist(), "y": y.tolist()}
+            elif np.iscomplexobj(wave):
+                series = {
+                    "x": axis.tolist(),
+                    "magnitude_db": safe_magnitude_db(wave).tolist(),
+                    "phase_deg": np.degrees(np.angle(wave)).tolist(),
+                }
+            else:
+                series = {"x": axis.tolist(), "y": wave.tolist()}
+            values.append({"signal": signal, **series})
+        return (
+            {
+                "format": "inline",
+                "series": values,
+                "points_returned": max(
+                    (len(series["x"]) for series in values),
+                    default=0,
+                ),
+                "points_total": total_max,
+                **_identity(run.source, step, step_values),
+            },
+            [],
+        )
+
+    trace_names = raw.get_trace_names()
+    axis_name = trace_names[0]
+    cols: list[str] = []
+    for requested in recipe.signals:
+        signal = services.validate_signal(raw, requested)
+        if signal == axis_name:
+            raise ResultError(f"{requested!r} is the sweep axis, not a signal")
+        if signal not in cols:
+            cols.append(signal)
+    _, analysis_type, _, _ = an._classify_analysis(raw)
+    recipe_hash = result_store.canonical_hash(recipe.model_dump(mode="json"))
+    pending, final = result_store.artifact_paths(
+        item,
+        recipe_key=recipe.key,
+        source_digest=manifest["composite_sha256"],
+        recipe_hash=recipe_hash,
+        suffix="csv",
+    )
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    facts = await asyncio.to_thread(
+        an._build_and_write,
+        raw,
+        run.source.raw,
+        cols,
+        get_step_count(raw),
+        analysis_type,
+        an._parse_time(start, "start"),
+        an._parse_time(end, "end"),
+        "mag_phase",
+        pending,
+        lambda: time.monotonic() >= item_deadline,
+        export_steps,
+        run.source.log,
+    )
+    return (
+        {
+            "format": "csv",
+            "artifact": {
+                "path": str(final),
+                "content_type": "text/csv",
+                "sha256": None,
+                "bytes": None,
+            },
+            "row_count": facts["row_count"],
+            **_identity(
+                run.source,
+                step if export_steps is None or len(export_steps) == 1 else None,
+                step_values if export_steps is None or len(export_steps) == 1 else {},
+            ),
+        },
+        [_PendingArtifact(pending, final, "text/csv", run.manifest_id)],
+    )
+
+
+async def _plot(
+    recipe: PlotRecipe,
+    run: _ResolvedRun,
+    steps: list[tuple[int, dict[str, Any]]],
+    state: SessionState,
+    item: result_store.ResultSet,
+    manifest: dict[str, Any],
+) -> tuple[dict[str, Any], list[_PendingArtifact]]:
+    from ltspice_mcp.tools import analysis as an
+
+    raw = await services.load_raw(run.source.raw, state)
+    trace_names = raw.get_trace_names()
+    axis_name = trace_names[0]
+    cols = [services.validate_signal(raw, signal) for signal in recipe.signals]
+    if axis_name in cols:
+        raise ResultError("The sweep axis cannot be plotted as a signal")
+    _, analysis_type, _, x_is_log = an._classify_analysis(raw)
+    recipe_hash = result_store.canonical_hash(recipe.model_dump(mode="json"))
+    pending, final = result_store.artifact_paths(
+        item,
+        recipe_key=recipe.key,
+        source_digest=manifest["composite_sha256"],
+        recipe_hash=recipe_hash,
+        suffix="html",
+    )
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    span = recipe.span
+    facts = await asyncio.to_thread(
+        an._build_plot_and_write,
+        raw,
+        run.source.raw,
+        cols,
+        [step for step, _ in steps],
+        [values for _, values in steps],
+        analysis_type,
+        x_is_log if recipe.log_x is None else recipe.log_x,
+        an._parse_time(_spice(span.start) if span else None, "span.start"),
+        an._parse_time(_spice(span.end) if span else None, "span.end"),
+        min(100_000, an._PLOT_MAX_POINTS_CEILING),
+        pending,
+        recipe.title or f"{run.source.raw.stem} — {analysis_type}",
+    )
+    return (
+        {
+            "artifact": {
+                "path": str(final),
+                "content_type": "text/html",
+                "sha256": None,
+                "bytes": None,
+            },
+            "series_count": facts["series_count"],
+            **_identity(
+                run.source,
+                steps[0][0] if len(steps) == 1 else None,
+                steps[0][1] if len(steps) == 1 else {},
+            ),
+        },
+        [_PendingArtifact(pending, final, "text/html", run.manifest_id)],
+    )
+
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+_MULTI_FIELDS: dict[str, dict[str, str]] = {
+    "signal_stats": {"stddev": "std"},
+    "edges": {
+        "rise_time": "transition_time",
+        "fall_time": "transition_time",
+        "edges_found": "num_edges_in_window",
+    },
+    "timing": {"from_time": "t_a", "to_time": "t_b"},
+    "periodic": {"duty_cycle": "duty_cycle_pct"},
+    "transient_response": {
+        "final_value": "steady_state_value",
+        "deviation": "max_droop",
+        "undershoot": "max_droop",
+        "overshoot": "max_overshoot",
+    },
+    "stability": {
+        "phase_margin_deg": "phase_margin_worst_deg",
+        "gain_margin_db": "gain_margin_worst_db",
+    },
+    "return_loss": {"reflection_coefficient": "gamma_mag"},
+}
+
+_SCALAR_FIELDS = {
+    "value": ("value", "magnitude_db"),
+    "thd": ("thd_pct",),
+    "bode_slope": ("slope_db_per_decade",),
+    "noise_integral": ("total_rms",),
+}
+
+
+def _bode_point_sample(value: dict[str, Any]) -> tuple[str, Any]:
+    """The first point's magnitude sits one level down under ``points``."""
+    points = value.get("points") or []
+    return "magnitude_db", (points[0].get("magnitude_db") if points else None)
+
+
+# Scalar metrics whose sample lives in a nested structure rather than a flat
+# top-level field. Keyed alongside _SCALAR_FIELDS so no discriminant is special
+# cased inside the loop.
+_SCALAR_NESTED: dict[str, Callable[[dict[str, Any]], tuple[str, Any]]] = {
+    "bode_point": _bode_point_sample,
+}
+
+
+def _measurements_flat(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        name: entry.get("mean")
+        for name, entry in value.get("stats", {}).items()
+        if isinstance(entry, dict)
+    }
+
+
+def _operating_point_flat(value: dict[str, Any]) -> dict[str, Any]:
+    flat: dict[str, Any] = {}
+    for bucket in ("voltages", "currents", "device_op_points"):
+        if isinstance(value.get(bucket), dict):
+            flat.update(value[bucket])
+    return flat
+
+
+# How each keyed metric flattens its value dict into a {name: number} map.
+_KEYED_EXTRACTORS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    "measurements": _measurements_flat,
+    "operating_point": _operating_point_flat,
+}
+
+
+def _samples(
+    recipe: Recipe, records: list[dict[str, Any]]
+) -> dict[str, list[tuple[dict[str, Any], float]]]:
+    # The reducer category is the base the recipe inherits (exactly one); a
+    # variable-length recipe matches none and yields no samples.
+    out: dict[str, list[tuple[dict[str, Any], float]]] = {}
+    for record in records:
+        value = record["value"]
+        if isinstance(recipe, _ScalarRecipe):
+            nested = _SCALAR_NESTED.get(recipe.metric)
+            if nested is not None:
+                field, candidate = nested(value)
+            else:
+                names = _SCALAR_FIELDS.get(recipe.metric, ())
+                field = next(
+                    (name for name in names if name in value), names[0] if names else "value"
+                )
+                candidate = value.get(field)
+            number = _number(candidate)
+            if number is not None:
+                out.setdefault(field, []).append((record, number))
+        elif isinstance(recipe, _MultiRecipe):
+            field = recipe.reduce_field
+            if field is None and recipe.spec is not None:
+                field = recipe.spec.field
+            if field:
+                actual = _MULTI_FIELDS.get(recipe.metric, {}).get(field, field)
+                number = _number(value.get(actual))
+                if number is not None:
+                    out.setdefault(field, []).append((record, number))
+        elif isinstance(recipe, _KeyedRecipe):
+            for name, candidate in _KEYED_EXTRACTORS[recipe.metric](value).items():
+                number = _number(candidate)
+                if number is not None:
+                    out.setdefault(name, []).append((record, number))
+    return out
+
+
+def _stat(name: str, values: list[float]) -> float | int | None:
+    ordered = sorted(values)
+    if name == "count":
+        return len(values)
+    if not values:
+        return None
+    if name == "min":
+        return ordered[0]
+    if name == "max":
+        return ordered[-1]
+    if name == "mean":
+        return statistics.fmean(values)
+    if name == "stddev":
+        return statistics.stdev(values) if len(values) > 1 else 0.0
+    fraction = 0.5 if name == "p50" else 0.9
+    position = fraction * (len(ordered) - 1)
+    low, high = math.floor(position), math.ceil(position)
+    return (
+        ordered[low]
+        if low == high
+        else ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+    )
+
+
+def _attribution(stat: str, samples: list[tuple[dict[str, Any], float]]) -> dict[str, Any]:
+    if stat not in {"min", "max"} or not samples:
+        return {
+            "case_id": None,
+            "run_index": None,
+            "step_index": None,
+            "step_values": {},
+            "assignments": {},
+        }
+    chosen = (min if stat == "min" else max)(samples, key=lambda pair: pair[1])[0]
+    return _pick(chosen, _ATTRIBUTION_KEYS)
+
+
+def _reduce(recipe: Recipe, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    stats = list(getattr(recipe, "reduce", []))
+    reduced: list[dict[str, Any]] = []
+    for field, field_samples in _samples(recipe, records).items():
+        values = [value for _, value in field_samples]
+        for stat in stats:
+            reduced.append(
+                {
+                    "field": field,
+                    "stat": stat,
+                    "value": _stat(stat, values),
+                    **_attribution(stat, field_samples),
+                }
+            )
+    return reduced
+
+
+def _spec(
+    recipe: Recipe,
+    records: list[dict[str, Any]],
+    *,
+    incomplete: bool,
+    include_outliers: bool,
+) -> dict[str, Any] | None:
+    limits = getattr(recipe, "spec", None)
+    if limits is None:
+        return None
+    samples_by_field = _samples(recipe, records)
+    field = limits.field or getattr(recipe, "reduce_field", None)
+    if field is None and len(samples_by_field) == 1:
+        field = next(iter(samples_by_field))
+    samples = samples_by_field.get(field or "", [])
+    failed: list[dict[str, Any]] = []
+    pass_count = 0
+    for record, value in samples:
+        passed = (limits.min is None or value >= limits.min) and (
+            limits.max is None or value <= limits.max
+        )
+        if passed:
+            pass_count += 1
+        else:
+            failed.append({"value": value, **_pick(record, _ATTRIBUTION_KEYS)})
+    if not samples or (incomplete and not limits.allow_incomplete):
+        verdict = "indeterminate"
+    else:
+        verdict = "fail" if failed else "pass"
+    result = {
+        "field": field,
+        "min": limits.min,
+        "max": limits.max,
+        "pass_count": pass_count,
+        "fail_count": len(failed),
+        "fail_cases": _page(failed, limit=_FAIL_CASE_PAGE_CAP),
+        "verdict": verdict,
+        "allow_incomplete": limits.allow_incomplete,
+    }
+    if include_outliers:
+        result["outliers"] = failed[:_FAIL_CASE_PAGE_CAP]
+    return result
+
+
+def _group_values(
+    recipe: Recipe, records: list[dict[str, Any]], dimensions: list[str]
+) -> list[dict[str, Any]]:
+    if not dimensions:
+        return []
+    grouped: dict[tuple[tuple[str, Any], ...], list[dict[str, Any]]] = {}
+    for record in records:
+        identity = record
+        assignments = identity["assignments"]
+        step_values = identity["step_values"]
+        values: list[tuple[str, Any]] = []
+        for dimension in dimensions:
+            if dimension == "circuit":
+                value = identity.get("circuit")
+            else:
+                value = assignments.get(dimension, step_values.get(dimension))
+            values.append((dimension, value))
+        grouped.setdefault(tuple(values), []).append(record)
+    return [
+        {
+            "by": dict(group),
+            "reduced": _reduce(recipe, group_records),
+            "count": len(group_records),
+        }
+        for group, group_records in grouped.items()
+    ]
+
+
+async def _evaluate_item(
+    recipe: Recipe,
+    runs: list[_ResolvedRun],
+    manifests: dict[str, dict[str, Any]],
+    state: SessionState,
+    item: result_store.ResultSet,
+    item_deadline: float,
+    step_cache: dict[str, list[dict[str, Any]]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[_PendingArtifact]]:
+    selected = set(recipe.sources or [run.label for run in runs])
+    selected_runs = [run for run in runs if run.label in selected]
+    records: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    pending: list[_PendingArtifact] = []
+    for run in selected_runs:
+        manifest = manifests[run.manifest_id]
+        if manifest.get("digest_error"):
+            failures.append(
+                {
+                    "code": manifest.get("digest_code", "source_unavailable"),
+                    "stage": "source_digest",
+                    "where": run.manifest_id,
+                    "message": manifest["digest_error"],
+                }
+            )
+            continue
+        try:
+            with services.analysis_source_context(run.source, deadline=item_deadline):
+                step_plan = await _step_plan(recipe, run.source, state, step_cache)
+                if isinstance(recipe, PlotRecipe):
+                    value, artifacts = await _plot(
+                        recipe,
+                        run,
+                        step_plan,
+                        state,
+                        item,
+                        manifest,
+                    )
+                    records.append(
+                        {
+                            "_manifest_id": run.manifest_id,
+                            "source": run.label,
+                            **_pick(value, _IDENTITY_KEYS),
+                            "value": value,
+                        }
+                    )
+                    pending.extend(artifacts)
+                    continue
+                if isinstance(recipe, WaveformRecipe) and recipe.format == "csv":
+                    step, step_values = step_plan[0]
+                    value, artifacts = await _waveform(
+                        recipe,
+                        run,
+                        step,
+                        step_values,
+                        state,
+                        item,
+                        manifest,
+                        item_deadline,
+                        [index for index, _ in step_plan],
+                    )
+                    records.append(
+                        {
+                            "_manifest_id": run.manifest_id,
+                            "source": run.label,
+                            **_pick(value, _IDENTITY_KEYS),
+                            "value": value,
+                        }
+                    )
+                    pending.extend(artifacts)
+                    continue
+                for step, step_values in step_plan:
+                    if isinstance(recipe, WaveformRecipe):
+                        value, artifacts = await _waveform(
+                            recipe,
+                            run,
+                            step,
+                            step_values,
+                            state,
+                            item,
+                            manifest,
+                            item_deadline,
+                        )
+                    else:
+                        value = await _adapter_value(recipe, run.source, step, state)
+                        artifacts = []
+                    identity = _identity(run.source, step, step_values)
+                    records.append(
+                        {
+                            "_manifest_id": run.manifest_id,
+                            "source": run.label,
+                            **identity,
+                            "value": value,
+                        }
+                    )
+                    pending.extend(artifacts)
+        except (LTSpiceMCPError, ValueError, OSError) as exc:
+            failures.append(
+                {
+                    "code": (
+                        "analysis_deadline"
+                        if "deadline" in str(exc).lower() or "exceeded" in str(exc).lower()
+                        else "recipe_failed"
+                    ),
+                    "stage": "analyze",
+                    "where": run.manifest_id,
+                    "message": str(exc),
+                }
+            )
+    return records, failures, pending
+
+
+def _rename_artifacts(pending: list[_PendingArtifact]) -> None:
+    for artifact in pending:
+        artifact.final.parent.mkdir(parents=True, exist_ok=True)
+        # Match the repo's atomic-write durability: flush the fully-written temp
+        # to stable storage, then the rename metadata after, so a crash between
+        # digest and publish can't surface a truncated artifact under its final
+        # name. The digest was already taken on this same byte content.
+        fd = os.open(artifact.pending, os.O_RDONLY)
+        try:
+            _fsync_fd(fd)
+        finally:
+            os.close(fd)
+        os.replace(artifact.pending, artifact.final)
+        _fsync_dir(artifact.final.parent)
+
+
+async def _publish(
+    pending: list[_PendingArtifact],
+    deadline: float,
+) -> list[dict[str, Any]]:
+    """Digest every complete temp under budget, then publish with rename."""
+    prepared: list[dict[str, Any]] = []
+    loop = asyncio.get_running_loop()
+    for artifact in pending:
+        digest = await services.bounded_parse(
+            artifact.pending,
+            lambda path=artifact.pending: result_store.sha256_file(path),
+            timeout_s=max(_MIN_ITEM_DEADLINE_S, deadline - loop.time()),
+        )
+        size = await asyncio.to_thread(lambda path=artifact.pending: path.stat().st_size)
+        prepared.append(
+            {
+                "path": str(artifact.final),
+                "content_type": artifact.content_type,
+                "sha256": digest,
+                "bytes": size,
+            }
+        )
+    await asyncio.to_thread(_rename_artifacts, pending)
+    return prepared
+
+
+def _remove_pending(pending: list[_PendingArtifact]) -> None:
+    for artifact in pending:
+        with contextlib.suppress(OSError):
+            artifact.pending.unlink()
+
+
+def _selected_manifest_ids(recipe: Recipe, runs: list[_ResolvedRun]) -> set[str]:
+    labels = set(recipe.sources or [run.label for run in runs])
+    return {run.manifest_id for run in runs if run.label in labels}
+
+
+def _result_entry(
+    recipe: Recipe,
+    records: list[dict[str, Any]],
+    failures: list[dict[str, Any]],
+    group_by: list[str],
+    missing: list[dict[str, Any]],
+    per_run_offset: int,
+    per_run_limit: int | None,
+    include_outliers: bool,
+) -> dict[str, Any]:
+    incomplete = bool(failures or missing)
+    entry: dict[str, Any] = {
+        "metric": recipe.metric,
+        "units": None,
+        "reduced": _reduce(recipe, records),
+        "warnings": [
+            warning
+            for record in records
+            for warning in record["value"].get("warnings", [])
+            if isinstance(warning, str)
+        ],
+    }
+    groups = _group_values(recipe, records, group_by)
+    if groups:
+        entry["groups"] = groups
+    spec = _spec(
+        recipe,
+        records,
+        incomplete=incomplete,
+        include_outliers=include_outliers,
+    )
+    if spec is not None:
+        entry["spec"] = spec
+    if per_run_limit is not None:
+        entry["per_run"] = _page(records, per_run_offset, per_run_limit)
+    elif not getattr(recipe, "reduce", []):
+        entry["values"] = records[:_PAGE_CAP]
+        if len(records) > _PAGE_CAP:
+            entry["warnings"].append(
+                f"{len(records) - _PAGE_CAP} value(s) omitted; request include.per_run "
+                "for callable pagination."
+            )
+    return entry
+
+
+def _source_hashes(item: result_store.ResultSet) -> list[dict[str, Any]]:
+    return [
+        {
+            key: manifest.get(key)
+            for key in (
+                "manifest_id",
+                "label",
+                "raw_path",
+                "raw_sha256",
+                "log_path",
+                "log_present",
+                "log_sha256",
+                "composite_sha256",
+                "job_id",
+            )
+        }
+        for manifest in item.source_manifests
+    ]
+
+
+_PAGE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "items": {"type": "array", "items": {"type": "object"}},
+        "total": {"type": "integer"},
+        "returned": {"type": "integer"},
+        "truncated": {"type": "boolean"},
+        "next_cursor": {"type": ["string", "null"]},
+    },
+    "required": ["items", "total", "returned", "truncated", "next_cursor"],
+    "additionalProperties": False,
+}
+
+_ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "source": {"type": "string"},
+        "case_id": {"type": ["string", "null"]},
+        "run_index": {"type": ["integer", "null"]},
+        "step_index": {"type": ["integer", "null"]},
+        "step_values": {"type": "object"},
+        "assignments": {"type": "object"},
+        "circuit": {"type": ["string", "null"]},
+        "deck_sha256": {"type": ["string", "null"]},
+        "value": {"type": "object"},
+    },
+    "required": [
+        "source",
+        "case_id",
+        "run_index",
+        "step_index",
+        "step_values",
+        "assignments",
+        "circuit",
+        "deck_sha256",
+        "value",
+    ],
+    "additionalProperties": False,
+}
+
+_REDUCED_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "field": {"type": "string"},
+        "stat": {"type": "string"},
+        "value": {"type": ["number", "integer", "null"]},
+        "case_id": {"type": ["string", "null"]},
+        "run_index": {"type": ["integer", "null"]},
+        "step_index": {"type": ["integer", "null"]},
+        "step_values": {"type": "object"},
+        "assignments": {"type": "object"},
+    },
+    "required": [
+        "field",
+        "stat",
+        "value",
+        "case_id",
+        "run_index",
+        "step_index",
+        "step_values",
+        "assignments",
+    ],
+    "additionalProperties": False,
+}
+
+_SPEC_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "field": {"type": ["string", "null"]},
+        "min": {"type": ["number", "null"]},
+        "max": {"type": ["number", "null"]},
+        "pass_count": {"type": "integer"},
+        "fail_count": {"type": "integer"},
+        "fail_cases": _PAGE_SCHEMA,
+        "verdict": {
+            "type": "string",
+            "enum": ["pass", "fail", "indeterminate"],
+        },
+        "allow_incomplete": {"type": "boolean"},
+        "outliers": {"type": "array", "items": {"type": "object"}},
+    },
+    "required": [
+        "field",
+        "min",
+        "max",
+        "pass_count",
+        "fail_count",
+        "fail_cases",
+        "verdict",
+        "allow_incomplete",
+    ],
+    "additionalProperties": False,
+}
+
+_RESULT_ENTRY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "metric": {"type": "string"},
+        "units": {"type": ["string", "object", "null"]},
+        "reduced": {"type": "array", "items": _REDUCED_SCHEMA},
+        "groups": {"type": "array", "items": {"type": "object"}},
+        "steps": {"type": "array", "items": {"type": "object"}},
+        "spec": _SPEC_SCHEMA,
+        "per_run": {
+            **_PAGE_SCHEMA,
+            "properties": {
+                **_PAGE_SCHEMA["properties"],
+                "items": {
+                    "type": "array",
+                    "items": _ATTRIBUTED_VALUE_SCHEMA,
+                },
+            },
+        },
+        "values": {
+            "type": "array",
+            "items": _ATTRIBUTED_VALUE_SCHEMA,
+        },
+        "warnings": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["metric", "units", "reduced", "warnings"],
+    "additionalProperties": False,
+}
+
+OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "outcome": {"type": "string", "enum": ["success", "partial", "failed"]},
+        "coverage": {
+            "type": "object",
+            "properties": {
+                "runs_requested": {"type": "integer"},
+                "runs_analyzed": {"type": "integer"},
+                "missing_cases": _PAGE_SCHEMA,
+            },
+            "required": ["runs_requested", "runs_analyzed", "missing_cases"],
+            "additionalProperties": False,
+        },
+        "results": {
+            "type": "object",
+            "additionalProperties": _RESULT_ENTRY_SCHEMA,
+        },
+        "observations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string"},
+                    "kind": {"type": "string"},
+                    "detail": {"type": "string"},
+                },
+                "required": ["code", "kind", "detail"],
+                "additionalProperties": True,
+            },
+        },
+        "failures": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string"},
+                    "stage": {"type": "string"},
+                    "where": {"type": "string"},
+                    "message": {"type": "string"},
+                },
+                "required": ["code", "stage", "where", "message"],
+                "additionalProperties": False,
+            },
+        },
+        "signals_available": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        "source_hashes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "manifest_id": {"type": "string"},
+                    "label": {"type": "string"},
+                    "raw_path": {"type": "string"},
+                    "raw_sha256": {"type": ["string", "null"]},
+                    "log_path": {"type": ["string", "null"]},
+                    "log_present": {"type": ["boolean", "null"]},
+                    "log_sha256": {"type": ["string", "null"]},
+                    "composite_sha256": {"type": ["string", "null"]},
+                    "job_id": {"type": ["string", "null"]},
+                },
+                "required": [
+                    "manifest_id",
+                    "label",
+                    "raw_path",
+                    "raw_sha256",
+                    "log_path",
+                    "log_present",
+                    "log_sha256",
+                    "composite_sha256",
+                    "job_id",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "result_set_id": {"type": "string"},
+        "cursor": {"type": ["string", "null"]},
+        "next": {
+            "type": ["object", "null"],
+            "properties": {
+                "result_set_id": {"type": "string"},
+                "cursor": {"type": "string"},
+            },
+            "required": ["result_set_id", "cursor"],
+            "additionalProperties": False,
+        },
+        "hint": {"type": "string"},
+    },
+    "required": [
+        "outcome",
+        "coverage",
+        "results",
+        "observations",
+        "failures",
+        "source_hashes",
+        "result_set_id",
+        "cursor",
+        "next",
+    ],
+    "additionalProperties": False,
+}
+
+
+@registry.tool(
+    name="analyze_results",
+    description=(
+        "Apply strict typed recipes to one or more completed simulation or "
+        "terminal experiment sources. Returns case/run/step-attributed values, "
+        "reductions and spec counts. Work is bounded; resume a partial response "
+        "with its result_set_id and cursor."
+    ),
+    input_model=AnalyzeResultsInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+    profiles=("consolidated",),
+    output_schema=OUTPUT_SCHEMA,
+)
+async def handle_analyze_results(
+    args: AnalyzeResultsInput, state: SessionState
+) -> types.CallToolResult:
+    loop = asyncio.get_running_loop()
+    call_started = loop.time()
+    call_deadline = call_started + state.config.analysis_budget_s
+    # Per-call caches: one file hash per (path, mtime, size); one step-table
+    # parse per log path. Shared across manifest build, verification and steps.
+    digest_cache: _DigestCache = {}
+    step_cache: dict[str, list[dict[str, Any]]] = {}
+
+    page_cursor = (
+        args.include.per_run.cursor
+        if args.continuation is None and args.include.per_run is not None
+        else None
+    )
+    if args.continuation is None and page_cursor is None:
+        item = await _create_result_set(args, state, call_deadline, digest_cache)
+        position = 0
+        intra_item = 0
+    elif args.continuation is not None:
+        item = await asyncio.to_thread(
+            result_store.load,
+            args.continuation.result_set_id,
+            state.working_dir,
+        )
+        position, intra_item = result_store.decode_cursor(args.continuation.cursor, item)
+    else:
+        assert page_cursor is not None
+        item = await asyncio.to_thread(
+            result_store.load,
+            result_store.cursor_result_set_id(page_cursor),
+            state.working_dir,
+        )
+        if item.inputs.get("request_hash") != _request_hash(args):
+            raise ResultError(
+                "The per_run cursor does not match these sources, recipes, grouping, "
+                "and include options."
+            )
+        position, intra_item = result_store.decode_cursor(page_cursor, item)
+
+    runs = _deserialize_runs(item, state)
+    manifests = {str(manifest["manifest_id"]): manifest for manifest in item.source_manifests}
+    missing = list(item.inputs.get("missing", []))
+    failures: list[dict[str, Any]] = []
+    observations = list(item.inputs.get("observations", []))
+    results: dict[str, Any] = {}
+    analyzed_identities: set[tuple[Any, Any, Any]] = set()
+    include = AnalyzeInclude.model_validate(item.inputs.get("include", {}))
+    group_by = list(item.inputs.get("group_by", []))
+    declared_labels = {
+        str(source.get("label"))
+        for source in item.inputs.get("sources", [])
+        if isinstance(source, dict)
+    }
+    work_done = False
+    deferred = False
+
+    def _skip(failure: dict[str, Any]) -> None:
+        """Record a per-recipe rejection and advance past it (item is done)."""
+        nonlocal position, intra_item, work_done
+        failures.append(failure)
+        position += 1
+        intra_item = 0
+        work_done = True
+
+    # ID-13 precheck (per call): verify every direct source once, before any
+    # recipe reads it. The shared digest cache makes this free for the sources a
+    # fresh set just hashed; a continuation re-checks them against the manifest.
+    precheck_deadline = loop.time() + max(_MIN_ITEM_DEADLINE_S, call_deadline - loop.time())
+    precheck = await _verify_direct_sources(
+        item.source_manifests,
+        {run.manifest_id for run in runs},
+        precheck_deadline,
+        digest_cache,
+    )
+
+    processed: list[dict[str, Any]] = []
+    all_pending: list[_PendingArtifact] = []
+    evaluated_ids: set[str] = set()
+
+    while position < len(item.work):
+        work_item = item.work[position]
+        raw_recipe = work_item["recipe"]
+        key = str(raw_recipe.get("key") or f"recipe_{work_item['index']}")
+        try:
+            recipe = validate_recipe(raw_recipe)
+        except (ValueError, TypeError) as exc:
+            _skip(
+                {
+                    "code": "recipe_invalid",
+                    "stage": "validate",
+                    "where": f"recipes[{work_item['index']}]",
+                    "message": recipe_error(exc),
+                }
+            )
+            continue
+
+        unknown_labels = set(recipe.sources or ()) - declared_labels
+        if unknown_labels:
+            _skip(
+                {
+                    "code": "recipe_invalid",
+                    "stage": "validate",
+                    "where": f"recipes[{work_item['index']}]",
+                    "message": (
+                        "recipe sources name unknown labels: " + ", ".join(sorted(unknown_labels))
+                    ),
+                }
+            )
+            continue
+
+        selected_runs = [
+            run for run in runs if recipe.sources is None or run.label in set(recipe.sources)
+        ]
+        estimate = _artifact_estimate(recipe, selected_runs)
+        remaining = call_deadline - loop.time()
+        if estimate > state.config.analysis_budget_s * _ARTIFACT_SAFETY_FACTOR:
+            _skip(
+                {
+                    "code": "artifact_too_large",
+                    "stage": "preflight",
+                    "where": key,
+                    "message": (
+                        "Artifact estimate exceeds the per-call safety bound; reduce "
+                        "max_points, narrow the window, or request fewer signals."
+                    ),
+                }
+            )
+            continue
+        if estimate > remaining and work_done:
+            deferred = True
+            break
+        if remaining <= 0 and work_done:
+            break
+        item_deadline = loop.time() + max(_MIN_ITEM_DEADLINE_S, remaining)
+        selected_ids = _selected_manifest_ids(recipe, runs)
+        precheck_failures = [
+            {
+                "code": code.split(":", 1)[0],
+                "stage": "source_precheck",
+                "where": manifest_id,
+                "message": code,
+            }
+            for manifest_id, code in precheck.items()
+            if manifest_id in selected_ids
+        ]
+        eligible_runs = [run for run in selected_runs if run.manifest_id not in precheck]
+
+        records, item_failures, pending = await _evaluate_item(
+            recipe,
+            eligible_runs,
+            manifests,
+            state,
+            item,
+            item_deadline,
+            step_cache,
+        )
+        item_failures[:0] = precheck_failures
+        evaluated_ids.update(run.manifest_id for run in eligible_runs)
+        all_pending.extend(pending)
+        unit: dict[str, Any] = {
+            "key": key,
+            "recipe": recipe,
+            "records": records,
+            "item_failures": item_failures,
+            "pending": pending,
+            "eligible_ids": {run.manifest_id for run in eligible_runs},
+            "per_run_offset": intra_item,
+            "position": position,
+            "paginates": False,
+        }
+        processed.append(unit)
+
+        # Per_run pagination: decided on record count so the break can stop the
+        # call here; the page and its cursor are built during assembly below.
+        per_run_limit = include.per_run.limit if include.per_run else None
+        if (
+            per_run_limit is not None
+            and (records or not item_failures)
+            and intra_item + per_run_limit < len(records)
+        ):
+            unit["paginates"] = True
+            intra_item += per_run_limit
+            work_done = True
+            break
+        position += 1
+        intra_item = 0
+        work_done = True
+
+    # ID-13 postcheck (per call): verify every evaluated source once, before any
+    # artifact is published or results are returned. Drift discards the records
+    # and artifacts derived from that source across every recipe that used it.
+    postcheck_deadline = loop.time() + max(_MIN_ITEM_DEADLINE_S, call_deadline - loop.time())
+    postcheck = await _verify_direct_sources(
+        item.source_manifests,
+        evaluated_ids,
+        postcheck_deadline,
+        digest_cache,
+    )
+    if postcheck:
+        failed_ids = set(postcheck)
+        drifted_pending = [
+            artifact for artifact in all_pending if artifact.manifest_id in failed_ids
+        ]
+        await asyncio.to_thread(_remove_pending, drifted_pending)
+        all_pending = [
+            artifact for artifact in all_pending if artifact.manifest_id not in failed_ids
+        ]
+        for unit in processed:
+            relevant = {
+                manifest_id: code
+                for manifest_id, code in postcheck.items()
+                if manifest_id in unit["eligible_ids"]
+            }
+            if not relevant:
+                continue
+            unit["records"] = [
+                record for record in unit["records"] if record["_manifest_id"] not in failed_ids
+            ]
+            unit["item_failures"].extend(
+                {
+                    "code": code.split(":", 1)[0],
+                    "stage": "source_postcheck",
+                    "where": manifest_id,
+                    "message": code,
+                }
+                for manifest_id, code in relevant.items()
+            )
+
+    # Publish every surviving artifact once, then merge the handles back into the
+    # records that reference them (shared dicts, so entries built below see them).
+    try:
+        handles = await _publish(all_pending, postcheck_deadline)
+    except (LTSpiceMCPError, OSError) as exc:
+        await asyncio.to_thread(_remove_pending, all_pending)
+        publish_code = (
+            "analysis_deadline"
+            if "deadline" in str(exc).lower() or "exceeded" in str(exc).lower()
+            else "artifact_publish_failed"
+        )
+        for unit in processed:
+            if unit["pending"]:
+                unit["item_failures"].append(
+                    {
+                        "code": publish_code,
+                        "stage": "publish",
+                        "where": unit["key"],
+                        "message": str(exc),
+                    }
+                )
+        handles = []
+    if handles:
+        by_path = {handle["path"]: handle for handle in handles}
+        for unit in processed:
+            for record in unit["records"]:
+                artifact = record["value"].get("artifact")
+                if isinstance(artifact, dict) and artifact["path"] in by_path:
+                    artifact.update(by_path[artifact["path"]])
+
+    for unit in processed:
+        key = unit["key"]
+        recipe = unit["recipe"]
+        records = unit["records"]
+        item_failures = unit["item_failures"]
+        for record in records:
+            record.pop("_manifest_id", None)
+        failures.extend(item_failures)
+        per_run_limit = include.per_run.limit if include.per_run else None
+        relevant_missing = [
+            case
+            for case in missing
+            if recipe.sources is None or case.get("label") in set(recipe.sources)
+        ]
+        entry = _result_entry(
+            recipe,
+            records,
+            item_failures,
+            group_by,
+            relevant_missing,
+            unit["per_run_offset"],
+            per_run_limit,
+            include.outliers,
+        )
+        if records or not item_failures:
+            results[key] = entry
+        for record in records:
+            analyzed_identities.add((record["source"], record["case_id"], record["run_index"]))
+        if (
+            unit["paginates"]
+            and key in results
+            and include.per_run is not None
+            and entry["per_run"]["truncated"]
+        ):
+            next_offset = unit["per_run_offset"] + entry["per_run"]["returned"]
+            entry["per_run"]["next_cursor"] = result_store.encode_cursor(
+                item, unit["position"], intra_item=next_offset
+            )
+
+    next_value: dict[str, str] | None = None
+    if position < len(item.work):
+        next_value = {
+            "result_set_id": item.result_set_id,
+            "cursor": result_store.encode_cursor(item, position, intra_item=intra_item),
+        }
+    failure_total = len(failures)
+    if failure_total > _FAILURE_CAP:
+        failures = failures[:_FAILURE_CAP]
+        observations.append(
+            {
+                "code": "failures_truncated",
+                "kind": "coverage",
+                "detail": (
+                    f"Returned {_FAILURE_CAP} of {failure_total} failure records; "
+                    "coverage and recipe result presence still reflect the full call."
+                ),
+            }
+        )
+    runs_requested = len(runs) + len(missing)
+    outcome = (
+        "failed"
+        if not results and failures and next_value is None
+        else "partial"
+        if failures or missing or next_value is not None
+        else "success"
+    )
+    coverage = {
+        "runs_requested": runs_requested,
+        "runs_analyzed": len(analyzed_identities),
+        "missing_cases": _page(missing),
+    }
+    data: dict[str, Any] = {
+        "outcome": outcome,
+        "coverage": coverage,
+        "results": results,
+        "observations": observations,
+        "failures": failures,
+        "source_hashes": _source_hashes(item),
+        "result_set_id": item.result_set_id,
+        "cursor": next_value["cursor"] if next_value is not None else None,
+        "next": next_value,
+    }
+    if include.signals_available:
+        available: dict[str, list[str]] = {}
+        for run in runs:
+            try:
+                raw = await services.load_raw(run.source.raw, state)
+                available[run.manifest_id] = list(raw.get_trace_names())
+            except LTSpiceMCPError:
+                available[run.manifest_id] = []
+        data["signals_available"] = available
+    if next_value is not None:
+        reason = "an artifact item was deferred intact" if deferred else "the call budget ended"
+        data["hint"] = (
+            f"Analysis is partial because {reason}; call analyze_results with "
+            f"continue={{result_set_id, cursor}} from 'next'."
+        )
+    text = (
+        f"analyze_results: {outcome}; {len(results)} recipe result(s), "
+        f"{failure_total} failure(s), "
+        f"{coverage['runs_analyzed']}/{runs_requested} run(s) analyzed"
+    )
+    return format_response(text, data)

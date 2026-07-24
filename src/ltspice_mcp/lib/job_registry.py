@@ -375,8 +375,6 @@ class JobRegistry:
 
     def _delete_persisted(self, job: Job) -> None:
         """Remove a job's on-disk record (used on eviction)."""
-        if not self.persist_enabled:
-            return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -399,16 +397,20 @@ class JobRegistry:
             self._persist_locks.pop(job.job_id, None)
 
     def _delete_persisted_sync(self, job: Job) -> None:
-        """Blocking deletion half, including experiment request-index locking."""
+        """Blocking deletion half, including dependent immutable result sets."""
         try:
-            if isinstance(job, ExperimentJob):
-                from ltspice_mcp.lib import experiment_store
+            if self.persist_enabled:
+                if isinstance(job, ExperimentJob):
+                    from ltspice_mcp.lib import experiment_store
 
-                experiment_store.delete_job(job, self.working_dir)
-            else:
-                from ltspice_mcp.lib import job_store
+                    experiment_store.delete_job(job, self.working_dir)
+                else:
+                    from ltspice_mcp.lib import job_store
 
-                job_store.delete_job(job)
+                    job_store.delete_job(job)
+            from ltspice_mcp.lib import result_store
+
+            result_store.invalidate_for_job(self.working_dir, job.job_id)
         except Exception as e:
             logger.debug("Failed to delete persisted job %s: %s", job.job_id, e)
 
