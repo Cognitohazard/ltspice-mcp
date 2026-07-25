@@ -40,6 +40,10 @@ class ExperimentPaths:
 
     staging_root: Path
     output_folder: Path
+    # True when these paths live on the Windows filesystem for a Windows
+    # simulator driven across the WSL boundary — that simulator needs any
+    # absolute path written into a deck spelled the Windows way.
+    windows_native: bool = False
 
 
 @dataclass
@@ -98,6 +102,7 @@ def resolve_experiment_paths(
         return ExperimentPaths(
             staging_root=base / "jobs" / job_id / "staged" / circuit_id,
             output_folder=base / "runs",
+            windows_native=True,
         )
 
     return ExperimentPaths(
@@ -113,6 +118,7 @@ def stage_deck(
     *,
     allow_live_includes: bool = False,
     max_depth: int = DEFAULT_INCLUDE_DEPTH,
+    windows_paths: bool = False,
 ) -> StagedDeck:
     """Copy a primary deck and its include/lib closure into ``staging_root``.
 
@@ -120,6 +126,10 @@ def stage_deck(
     absolute or cross-root reference is rewritten only in the staged copy so
     the simulator still consumes the snapshot. The authoring files are never
     modified.
+
+    ``windows_paths`` renders the root deck's rewritten references in Windows
+    form, for a Windows simulator reached across the WSL boundary: it cannot
+    open the ``/mnt/c/...`` spelling of the very file it is being handed.
     """
     if max_depth < 0:
         raise ValueError("max_depth must be non-negative")
@@ -132,6 +142,13 @@ def stage_deck(
             f"Primary deck {source} is outside the configured allowed roots",
             reference=str(source),
         )
+
+    def _render_absolute(path: Path) -> str:
+        if windows_paths:
+            from ltspice_mcp.lib import wsl
+
+            return wsl.to_windows_path(path)
+        return path.as_posix()
 
     staging_root.mkdir(parents=True, exist_ok=True)
     manifest: list[ManifestEntry] = []
@@ -260,24 +277,33 @@ def stage_deck(
                         section=reference.section,
                     )
                 )
-                expected = (destination.parent / _portable_relative(reference.raw_path)).resolve()
-                if (
-                    is_absolute_reference(reference.raw_path)
-                    or expected != actual_destination.resolve()
-                ):
+                if depth == 0:
                     # The root deck is what gets handed to the simulator, which
-                    # runs it from its own output folder — a reference relative
-                    # to the staging directory does not survive that move. Files
-                    # deeper in the bundle never move relative to each other, so
-                    # they stay relative and the bundle stays relocatable.
-                    if depth == 0:
-                        replacement = actual_destination.as_posix()
-                    else:
-                        replacement = Path(
-                            os.path.relpath(actual_destination, destination.parent)
-                        ).as_posix()
-                    _replace_reference(reference, replacement)
+                    # runs it from its own output folder — the deck moves and
+                    # its siblings do not. EVERY reference it carries must
+                    # therefore be absolute, including a plain same-directory
+                    # ".include core.inc": that one needs no rewrite to be
+                    # correct in the staging tree, which is exactly why it used
+                    # to survive staging and then die at run time.
+                    _replace_reference(reference, _render_absolute(actual_destination))
                     changed = True
+                else:
+                    # Deeper files never move relative to each other, so they
+                    # stay relative and the bundle stays relocatable.
+                    expected = (
+                        destination.parent / _portable_relative(reference.raw_path)
+                    ).resolve()
+                    if (
+                        is_absolute_reference(reference.raw_path)
+                        or expected != actual_destination.resolve()
+                    ):
+                        _replace_reference(
+                            reference,
+                            Path(
+                                os.path.relpath(actual_destination, destination.parent)
+                            ).as_posix(),
+                        )
+                        changed = True
 
             destination.parent.mkdir(parents=True, exist_ok=True)
             if changed:

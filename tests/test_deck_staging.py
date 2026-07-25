@@ -66,15 +66,30 @@ class TestManifestWalk:
         assert any(item["code"] == "live_include" for item in staged.observations)
 
     def test_relative_topology_is_preserved(self, tmp_path: Path):
+        """The staged tree mirrors the source layout, and files INSIDE it keep
+        referring to each other relatively so the bundle stays relocatable.
+
+        The root deck is the exception: it is copied out to the simulator's
+        output folder without its siblings, so its own references are absolute
+        (proved necessary by a run that failed with "File not found" on exactly
+        this shape)."""
         root = tmp_path / "root"
         deck = _write(root / "deck.cir", '.include "models/device.lib"\n.op\n.end\n')
-        _write(root / "models" / "device.lib", ".model DFAST D(Is=1e-12)\n")
+        _write(root / "models" / "device.lib", '.include "params.inc"\n.model DFAST D\n')
+        _write(root / "models" / "params.inc", ".param x=1\n")
 
         staged = stage_deck(deck, tmp_path / "stage", [root])
 
-        assert (staged.staged_deck.parent / "models" / "device.lib").is_file()
-        assert '.include "models/device.lib"' in staged.staged_deck.read_text()
+        staged_lib = staged.staged_deck.parent / "models" / "device.lib"
+        assert staged_lib.is_file()
         assert staged.text == staged.staged_deck.read_text()
+
+        reference = staged.staged_deck.read_text().splitlines()[0].split()[1].strip('"')
+        assert Path(reference).is_absolute()
+        assert Path(reference).resolve() == staged_lib.resolve()
+
+        # A file deeper in the bundle keeps its relative reference.
+        assert '"params.inc"' in staged_lib.read_text()
 
     def test_lib_section_is_recorded(self, tmp_path: Path):
         root = tmp_path / "root"
@@ -286,3 +301,44 @@ class TestFoundryPdkShapes:
         staged = stage_deck(deck, tmp_path / "stage", [root, pdk])
 
         assert len(staged.manifest) >= 5
+
+
+class TestRootDeckSurvivesTheRun:
+    """The staged root deck is handed to the simulator and run from the shared
+    output folder, leaving its siblings behind. Every reference it carries has
+    to resolve from there — including a plain same-directory include, which is
+    already correct inside the staging tree and so is easy to leave alone."""
+
+    def test_sibling_include_is_absolute_in_the_root_deck(self, tmp_path: Path):
+        root = tmp_path / "root"
+        _write(root / "core.inc", "R1 in out 1k\n")
+        deck = _write(root / "tb.cir", "V1 in 0 1\n.include core.inc\n.op\n.end\n")
+
+        staged = stage_deck(deck, tmp_path / "stage", [root])
+
+        reference = staged.staged_deck.read_text().splitlines()[1].split()[1].strip('"')
+        assert Path(reference).is_absolute(), (
+            f"root deck kept a staging-relative reference: {reference}"
+        )
+        assert Path(reference).exists()
+
+        # The move the runner actually performs.
+        elsewhere = tmp_path / "runs"
+        elsewhere.mkdir()
+        moved = elsewhere / "case_0.cir"
+        moved.write_text(staged.staged_deck.read_text())
+        assert (moved.parent / reference).exists(), "include broke when the deck moved"
+
+    def test_windows_paths_render_for_a_windows_simulator(self, tmp_path: Path):
+        """A Windows simulator reached across the WSL boundary cannot open the
+        /mnt/c spelling of the file it is handed."""
+        root = tmp_path / "root"
+        _write(root / "core.inc", "R1 in out 1k\n")
+        deck = _write(root / "tb.cir", "V1 in 0 1\n.include core.inc\n.op\n.end\n")
+
+        staged = stage_deck(deck, tmp_path / "stage", [root], windows_paths=True)
+
+        reference = staged.staged_deck.read_text().splitlines()[1].split()[1].strip('"')
+        assert "/" not in reference or reference[1:3] == ":\\", (
+            f"expected a Windows-form path, got {reference}"
+        )
