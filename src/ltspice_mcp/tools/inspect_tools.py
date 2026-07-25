@@ -25,7 +25,9 @@ Per-item isolation is the contract: a denied path, a tampered/stale cursor, an
 unknown ``kind``, or a malformed query fails **only that item** and carries a
 structured ``error``; every other query in the batch still returns. The
 paginated kinds (``symbols``/``net``/``components``/``model``) resume through an
-opaque, checksummed ``cursor``.
+opaque, checksummed ``cursor``; a ``.asc`` ``net`` pages two collections — pins
+and wire-vertex coordinates — under that one cursor, each advancing by its own
+offset, so paging until ``next_cursor`` is null reaches every row of both.
 
 Concurrency discipline (see the contract in ``tools/_base.py``): cached
 ``AscEditor`` access (the ``.asc`` net and component paths) stays on the event
@@ -49,7 +51,7 @@ from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.library_manager import _part_aware_score, parse_library_file_cached
 from ltspice_mcp.lib.lint_rules import linter_version
-from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_view
+from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.schematic_scene import SymbolResolver, default_stock_paths
 from ltspice_mcp.lib.simulator import current_ngbehavior, dialect_for_simulator_name
 from ltspice_mcp.lib.spice_lex import SpiceLexError, lex
@@ -81,9 +83,10 @@ from ltspice_mcp.tools.circuit import (
 # a cursor but no caller-facing limit knob, so the page is a server constant.
 _PAGE_SIZE = 100
 
-# Bounded arrays surfaced alongside a paginated field (facts, not the paged
-# collection): the .asc net trace's wire-vertex coordinates.
-_COORD_CAP = 500
+# Page size for the .asc net trace's wire-vertex coordinates — the second
+# collection of the net item, paged alongside its pins under the same cursor.
+# Larger than the pin page because a coordinate is two integers.
+_COORD_PAGE_SIZE = 500
 
 NETLIST_SUFFIXES = frozenset({".cir", ".net", ".sp"})
 
@@ -218,27 +221,59 @@ class InspectInput(ToolInput):
 # ---------------------------------------------------------------------------
 
 
+def _binding(kind: str, identity: dict[str, Any]) -> str:
+    """The cursor's view binding: the paginated ``kind`` plus this query's identity.
+
+    Folding a hash of ``identity`` into the binding means a cursor minted for one
+    query cannot resume a different one — a changed path/filter/prefix yields a
+    different binding, and the shared codec rejects the mismatch.
+    """
+    return f"{kind}:{canonical_hash(identity)}"
+
+
+def _invalid_cursor(exc: PageCursorError) -> _QueryError:
+    """A tampered, stale, or cross-query cursor, isolated to the one query."""
+    return _QueryError("invalid_cursor", f"cursor is invalid or stale: {exc}")
+
+
 def _paginate(
     items: list[Any], kind: str, identity: dict[str, Any], cursor: str | None
 ) -> dict[str, Any]:
-    """Page ``items`` through the shared paginator, bound to this query's identity.
-
-    The paginator's view ``kind`` folds a hash of ``identity`` into the cursor's
-    binding string (``"{kind}:{sig}"``), so a cursor minted for one query cannot
-    resume a different one — a changed path/filter/prefix yields a different
-    binding. A tampered, stale, or cross-query cursor surfaces from the shared
-    codec as a ``PageCursorError``, translated here to a per-item
-    ``invalid_cursor`` failure so it isolates to this one query.
-    """
-    binding = f"{kind}:{canonical_hash(identity)}"
+    """Page ``items`` through the shared paginator, bound to this query's identity."""
     try:
-        return paginate_view(items, binding, cursor=cursor, limit=_PAGE_SIZE)
+        return paginate_view(items, _binding(kind, identity), cursor=cursor, limit=_PAGE_SIZE)
     except PageCursorError as exc:
-        raise _QueryError("invalid_cursor", f"cursor is invalid or stale: {exc}") from exc
+        raise _invalid_cursor(exc) from exc
+
+
+def _paginate_pair(
+    primary: list[Any],
+    secondary: list[Any],
+    kind: str,
+    identity: dict[str, Any],
+    cursor: str | None,
+) -> dict[str, Any]:
+    """Page an item's two collections under its single cursor (both offsets ride in it)."""
+    try:
+        return paginate_pair(
+            primary,
+            secondary,
+            _binding(kind, identity),
+            cursor=cursor,
+            limit=_PAGE_SIZE,
+            secondary_limit=_COORD_PAGE_SIZE,
+        )
+    except PageCursorError as exc:
+        raise _invalid_cursor(exc) from exc
 
 
 def _page_meta(page: dict[str, Any]) -> dict[str, int | bool]:
-    """The paged-collection facts surfaced in each item's ``page`` field."""
+    """The paged-collection facts surfaced in each item's ``page`` field.
+
+    ``total``/``returned`` describe the item's primary collection; ``truncated``
+    means "this item has more" and always equals ``next_cursor`` being present,
+    so paging until the cursor is null never stops short of a second collection.
+    """
     return {
         "total": page["total"],
         "returned": page["returned"],
@@ -290,6 +325,7 @@ def _do_capabilities(state: SessionState) -> dict[str, Any]:
             "max_parallel_sims": state.config.max_parallel_sims,
             "default_timeout_s": state.config.default_timeout,
             "inspect_page_size": _PAGE_SIZE,
+            "inspect_coordinate_page_size": _COORD_PAGE_SIZE,
             "dwell": {
                 "run_experiments_wait_default_s": _RUN_EXPERIMENTS_WAIT_DEFAULT_S,
                 "run_experiments_wait_max_s": _RUN_EXPERIMENTS_WAIT_MAX_S,
@@ -552,9 +588,13 @@ async def _do_net(q: NetQuery, state: SessionState) -> dict[str, Any]:
     trace = await handle_trace_net(trace_input, state)
     tdata = trace.structuredContent or {}
     pins = list(tdata.get("pins", []))
-
-    page = _paginate(pins, "net", {"path": str(path), "at": q.at}, q.cursor)
     coords = list(tdata.get("coordinates", []))
+
+    # Pins and wire vertices are two independently long collections of one net,
+    # and the item carries one cursor — so both offsets ride in it and both
+    # advance. A coordinate window that restarted every page would re-serve the
+    # same vertices forever while claiming more existed.
+    page = _paginate_pair(pins, coords, "net.asc", {"path": str(path), "at": q.at}, q.cursor)
     data: dict[str, Any] = {
         "source": "schematic",
         "start": tdata.get("start"),
@@ -563,9 +603,17 @@ async def _do_net(q: NetQuery, state: SessionState) -> dict[str, Any]:
         "total_pins": page["total"],
         "returned": page["returned"],
         "is_shorted": tdata.get("is_shorted", False),
-        "coordinates": coords[:_COORD_CAP],
-        "coordinates_truncated": len(coords) > _COORD_CAP,
+        "coordinates": page["secondary_items"],
+        "total_coordinates": page["secondary_total"],
+        "returned_coordinates": page["secondary_returned"],
+        "coordinates_truncated": page["secondary_truncated"],
     }
+    if page["secondary_truncated"]:
+        data["hint"] = (
+            f"{page['secondary_returned']} of {page['secondary_total']} wire-vertex "
+            "coordinates returned; repeat this query with next_cursor for the rest "
+            "(one cursor advances pins and coordinates independently)."
+        )
     if tdata.get("warnings"):
         data["warnings"] = tdata["warnings"]
     return {"data": data, "next_cursor": page["next_cursor"], "page": _page_meta(page)}
@@ -825,9 +873,12 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         # Call-level outcome over the per-item batch: complete when every query
-        # succeeded, partial when any query failed (failures isolate per item),
-        # failed only for a call-level fault (which also sets isError).
-        "outcome": {"type": "string", "enum": ["complete", "partial", "failed"]},
+        # succeeded, partial when any query failed. The shared envelope's other
+        # values are absent because inspect cannot reach them: per-item
+        # isolation turns every query fault into that item's error, and a
+        # call-level fault raises — the SDK then answers with isError and no
+        # structuredContent, so it is never carried by this envelope.
+        "outcome": {"type": "string", "enum": ["complete", "partial"]},
         "results": {
             "type": "array",
             "items": {
