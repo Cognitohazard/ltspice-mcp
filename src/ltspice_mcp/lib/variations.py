@@ -77,7 +77,15 @@ class AssignVariation(VariationModel):
     """A deterministic grid or lock-step assignment family."""
 
     kind: Literal["assign"]
-    id: str | None = None
+    id: str | None = Field(
+        default=None,
+        description=(
+            "Label for this entry in error messages only. Unlike a random "
+            "variation's id it does NOT reach case assignments (several assign "
+            "entries can combine into one case, so there is no single id to "
+            "record); group cases by the assigned target names instead."
+        ),
+    )
     combine: Literal["grid", "zip"] = "grid"
     applies_to: list[str] | None = None
     assign: dict[str, list[ScalarValue]]
@@ -158,7 +166,13 @@ class RandomVariation(VariationModel):
     """One reproducible Monte Carlo family."""
 
     kind: Literal["random"]
-    id: str | None = None
+    id: str | None = Field(
+        default=None,
+        description=(
+            "Label for this entry; also recorded on every case it produces as "
+            "the '_random_id' assignment, so it is groupable."
+        ),
+    )
     runs: int = Field(ge=1)
     seed: int | None = None
     applies_to: list[str] | None = None

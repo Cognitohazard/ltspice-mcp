@@ -271,6 +271,29 @@ class TestRandomExpansion:
         with pytest.raises(VariationError, match="configured maximum"):
             expand_variations([first, second], [variation], max_cases=5)
 
+    def test_variation_id_reach_is_asymmetric_and_documented(self, tmp_path: Path):
+        """A random id is recorded on every case it produces; an assign id
+        reaches no case at all (several assign entries combine into one case),
+        so each field description has to say which one it is."""
+        circuit = _deck(tmp_path / "dut.cir")
+        assign = AssignVariation(kind="assign", id="corner_sweep", assign={"R1": [1, 2]})
+        random_variation = _random(runs=1).model_copy(update={"id": "mc"})
+
+        expanded = expand_variations([circuit], [assign, random_variation])
+        cases = materialize_variants(circuit, expanded, tmp_path / "out")
+
+        assert {case.assignments["_random_id"] for case in cases} == {"mc"}
+        assert not any(
+            "corner_sweep" in (key, value)
+            for case in cases
+            for key, value in case.assignments.items()
+        )
+
+        assign_doc = AssignVariation.model_fields["id"].description or ""
+        random_doc = RandomVariation.model_fields["id"].description or ""
+        assert "_random_id" in random_doc
+        assert "NOT" in assign_doc and "assignments" in assign_doc
+
     def test_mismatch_model_fields_match_shipped_tool_model(self):
         assert set(MismatchRule.model_fields) - {"rule"} == set(
             MonteCarloMismatchRule.model_fields

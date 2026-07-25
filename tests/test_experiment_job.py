@@ -14,9 +14,10 @@ import pytest
 from pydantic import BaseModel
 
 from ltspice_mcp.errors import BatchJobError, ResultError, SimulationError
-from ltspice_mcp.lib import experiment_store, job_store, now, recent, services
+from ltspice_mcp.lib import experiment_store, job_registry, job_store, now, recent, services
 from ltspice_mcp.lib.experiment_runner import (
     CANONICALIZER_VERSION,
+    ExperimentCancellationError,
     ExperimentRunner,
     ExperimentRunRequest,
     IdempotencyConflictError,
@@ -154,6 +155,16 @@ class TestExperimentTypesAndStore:
         completeness.cancelled = 1
         with pytest.raises(ValueError, match="does not reconcile"):
             completeness.validate_terminal()
+
+    def test_completeness_fell_short_counts_uncounted_runs(self):
+        assert not Completeness(expanded=3, produced=3).fell_short
+        assert Completeness(expanded=3, produced=1, failed=2).fell_short
+        # A run that reached no terminal counter at all: summing the shortfall
+        # counters would call this complete, which is the loss going unreported.
+        assert Completeness(expanded=3, produced=2).fell_short
+        # The same loss masked by a double-counted failure — terminal
+        # reconciles to expanded, but a run that was promised never landed.
+        assert Completeness(expanded=3, produced=2, failed=1, cancelled=1).fell_short
 
     def test_completeness_recount_derives_all_case_counters(self, work_dir: Path):
         circuit = work_dir / "deck.cir"
@@ -353,6 +364,100 @@ class TestExperimentLifecycle:
         assert job.analysis.status == "cancelled"
         assert job.runs_done_event.is_set()
         assert job.done_event.is_set()
+
+    def _shutdown_pair(
+        self, work_dir: Path, runner: Any, *, live_count: int = 1
+    ) -> tuple[JobRegistry, Any, Any]:
+        """A registry holding ``live_count`` jobs served by ``runner``, then one
+        with no runner of its own."""
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        live = [
+            _job(work_dir, circuit, job_id=f"exp_live_{index:04d}", status="running")
+            for index in range(live_count)
+        ]
+        following = _job(work_dir, circuit, job_id="exp_next_0001", status="running")
+        registry = JobRegistry(persist_enabled=False, working_dir=work_dir)
+        for job in live:
+            registry.add_experiment_job(job)
+        registry.add_experiment_job(following)
+        live_ids = {job.job_id for job in live}
+        runners = SimpleNamespace(
+            get_experiment_runner_for=lambda job: runner if job.job_id in live_ids else None
+        )
+        return registry, runners, following
+
+    @pytest.mark.asyncio
+    async def test_shutdown_bounds_a_runner_cancel_that_never_returns(
+        self,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        entered: list[str] = []
+
+        class HungRunner:
+            async def cancel(self, job: Any) -> list[dict[str, Any]]:
+                # A wedged simulator: the coordinator's done_event never fires.
+                entered.append(job.job_id)
+                await asyncio.Event().wait()
+                return []
+
+        registry, runners, following = self._shutdown_pair(work_dir, HungRunner(), live_count=3)
+        monkeypatch.setattr(job_registry, "_SHUTDOWN_CANCEL_TIMEOUT_S", 0.05)
+
+        await asyncio.wait_for(registry.cancel_running(runners, None), timeout=5)
+
+        assert len(entered) == 3
+        assert following.status == "cancelled"
+        assert following.done_event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_shutdown_cancels_live_experiments_concurrently(self, work_dir: Path):
+        """The cancel timeout bounds the stage, not each job in it.
+
+        Shutdown flushes job persistence only after this returns, so a bound
+        that multiplied by the number of live experiments would let a client's
+        shutdown grace kill the process before the sidecars it protects land.
+        """
+        released = asyncio.Event()
+        entered: list[str] = []
+
+        class BlockingRunner:
+            async def cancel(self, job: Any) -> list[dict[str, Any]]:
+                entered.append(job.job_id)
+                # Only the last job to start releases the first, so this
+                # returns at all only if the cancels overlap.
+                if len(entered) == 3:
+                    released.set()
+                await released.wait()
+                return []
+
+        registry, runners, following = self._shutdown_pair(
+            work_dir, BlockingRunner(), live_count=3
+        )
+
+        # No monkeypatched timeout: under a per-job bound the first cancel waits
+        # out the real one and this outer wait expires first.
+        await asyncio.wait_for(registry.cancel_running(runners, None), timeout=3)
+
+        assert len(entered) == 3
+        assert released.is_set()
+        assert following.status == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_shutdown_survives_a_runner_cancel_that_raises(self, work_dir: Path):
+        class RefusingRunner:
+            async def cancel(self, job: Any) -> list[dict[str, Any]]:
+                raise ExperimentCancellationError(
+                    f"Experiment job {job.job_id} is not owned by a live coordinator"
+                )
+
+        registry, runners, following = self._shutdown_pair(work_dir, RefusingRunner())
+
+        await registry.cancel_running(runners, None)
+
+        assert following.status == "cancelled"
+        assert following.done_event.is_set()
 
 
 class TestExperimentDiscovery:

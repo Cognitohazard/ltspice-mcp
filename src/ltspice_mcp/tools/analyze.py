@@ -22,6 +22,7 @@ from ltspice_mcp.errors import LTSpiceMCPError, ResultError
 from ltspice_mcp.lib import _fsync_dir, _fsync_fd, result_store, services
 from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.format import format_spice_value
+from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.job_store import JOBS_SUBDIR, SIDECAR_DIRNAME
 from ltspice_mcp.lib.log_parser import parse_step_iterations
 from ltspice_mcp.lib.raw_parser import get_step_count, safe_magnitude_db
@@ -65,7 +66,11 @@ from ltspice_mcp.tools._base import (
 
 _ARTIFACT_SAFETY_FACTOR = 4.0
 _MIN_ITEM_DEADLINE_S = 0.05
-_PAGE_CAP = 100
+# Public: the largest per_run page this tool will return. Any surface that lets
+# a caller ask for a page size — including run_experiments' attached-analysis
+# request — bounds itself on THIS name, so a limit accepted at submission is a
+# limit the analysis can actually serve.
+MAX_PAGE_SIZE = 100
 _FAIL_CASE_PAGE_CAP = 100
 _FAILURE_CAP = 100
 
@@ -105,7 +110,7 @@ class AnalyzeSourceInput(StrictModel):
 
 
 class PerRunInclude(StrictModel):
-    limit: int = Field(default=50, ge=1, le=_PAGE_CAP)
+    limit: int = Field(default=50, ge=1, le=MAX_PAGE_SIZE)
     cursor: str | None = None
 
 
@@ -132,8 +137,20 @@ class AnalyzeResultsInput(ToolInput):
     @model_validator(mode="after")
     def _new_or_continue(self) -> AnalyzeResultsInput:
         if self.continuation is not None:
-            if self.sources is not None or self.recipes is not None:
-                raise ValueError("'continue' is mutually exclusive with sources/recipes")
+            # A continuation replays the request stored in the result set, so
+            # every request-shaping field is read from there, not from these
+            # args. Reject them rather than accept and drop them: raising
+            # include.per_run.limit on resume is the obvious thing to try, and
+            # silently ignoring it hands back a page the caller did not ask for.
+            supplied = {"sources", "recipes", "include", "group_by"} & self.model_fields_set
+            if supplied:
+                raise ValueError(
+                    "'continue' is mutually exclusive with "
+                    + "/".join(sorted(supplied))
+                    + "; a continuation replays the stored request unchanged. "
+                    "To change sources, recipes, grouping or include options, "
+                    "start a new analysis."
+                )
             return self
         if not self.sources or not self.recipes:
             raise ValueError("a new analysis requires non-empty sources and recipes")
@@ -168,7 +185,17 @@ class _PendingArtifact:
     manifest_id: str
 
 
-def _page(items: list[Any], offset: int = 0, limit: int = _PAGE_CAP) -> dict[str, Any]:
+def _page(
+    items: list[Any], offset: int = 0, limit: int = MAX_PAGE_SIZE
+) -> tuple[dict[str, Any], int]:
+    """One page of ``items``, with the offset the page after it starts at.
+
+    ``next_cursor`` starts null and is filled in by the caller for the views
+    that are resumable (per_run, coverage.missing_cases); a view that cannot be
+    resumed says so in a warning instead. The resumable callers encode the
+    returned offset rather than re-deriving it, so where the next page begins
+    is decided here only.
+    """
     shown = items[offset : offset + limit]
     next_offset = offset + len(shown)
     return {
@@ -177,7 +204,7 @@ def _page(items: list[Any], offset: int = 0, limit: int = _PAGE_CAP) -> dict[str
         "returned": len(shown),
         "truncated": next_offset < len(items),
         "next_cursor": None,
-    }
+    }, next_offset
 
 
 # The canonical per-record identity keys. Reduced/spec attribution rows omit the
@@ -350,14 +377,18 @@ async def _resolve_sources(
         source_jobs[job.job_id] = str(record) if record.is_file() else None
 
         if isinstance(job, ExperimentJob):
-            if job.status not in services.TERMINAL_STATUSES:
+            # Per-case readiness is gated below, not here.
+            if not runs_terminal(job.status):
                 missing.append(
                     {
                         "label": source_input.label,
                         "case_id": None,
                         "run_index": None,
                         "code": "job_not_terminal",
-                        "detail": f"Experiment job {job.job_id!r} is not terminal",
+                        "detail": (
+                            f"Experiment job {job.job_id!r} has no readable runs yet "
+                            f"(status={job.status!r})"
+                        ),
                     }
                 )
                 continue
@@ -1440,7 +1471,8 @@ def _spec(
         "max": limits.max,
         "pass_count": pass_count,
         "fail_count": len(failed),
-        "fail_cases": _page(failed, limit=_FAIL_CASE_PAGE_CAP),
+        # fail_cases is not resumable, so its next offset has no consumer.
+        "fail_cases": _page(failed, limit=_FAIL_CASE_PAGE_CAP)[0],
         "verdict": verdict,
         "allow_incomplete": limits.allow_incomplete,
     }
@@ -1651,7 +1683,9 @@ def _result_entry(
     per_run_offset: int,
     per_run_limit: int | None,
     include_outliers: bool,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], int]:
+    """The one result entry for ``recipe``, plus the offset its ``per_run``
+    page ends at — the caller turns that into the resume cursor."""
     incomplete = bool(failures or missing)
     entry: dict[str, Any] = {
         "metric": recipe.metric,
@@ -1675,16 +1709,27 @@ def _result_entry(
     )
     if spec is not None:
         entry["spec"] = spec
-    if per_run_limit is not None:
-        entry["per_run"] = _page(records, per_run_offset, per_run_limit)
-    elif not getattr(recipe, "reduce", []):
-        entry["values"] = records[:_PAGE_CAP]
-        if len(records) > _PAGE_CAP:
+        if spec["fail_cases"]["truncated"]:
+            # fail_cases is a projection of records computed in THIS call and
+            # never persisted, so it has no cursor of its own. Name the route
+            # that does page every attributed value instead of leaving the
+            # caller with a truncation flag and nowhere to go.
             entry["warnings"].append(
-                f"{len(records) - _PAGE_CAP} value(s) omitted; request include.per_run "
+                f"{spec['fail_count'] - spec['fail_cases']['returned']} failing case(s) "
+                "omitted from spec.fail_cases, which is not pageable; request "
+                "include.per_run for callable pagination over every attributed value."
+            )
+    per_run_next = per_run_offset
+    if per_run_limit is not None:
+        entry["per_run"], per_run_next = _page(records, per_run_offset, per_run_limit)
+    elif not getattr(recipe, "reduce", []):
+        entry["values"] = records[:MAX_PAGE_SIZE]
+        if len(records) > MAX_PAGE_SIZE:
+            entry["warnings"].append(
+                f"{len(records) - MAX_PAGE_SIZE} value(s) omitted; request include.per_run "
                 "for callable pagination."
             )
-    return entry
+    return entry, per_run_next
 
 
 def _source_hashes(item: result_store.ResultSet) -> list[dict[str, Any]]:
@@ -1977,13 +2022,16 @@ async def handle_analyze_results(
         item = await _create_result_set(args, state, call_deadline, digest_cache)
         position = 0
         intra_item = 0
+        missing_offset = 0
     elif args.continuation is not None:
         item = await asyncio.to_thread(
             result_store.load,
             args.continuation.result_set_id,
             state.working_dir,
         )
-        position, intra_item = result_store.decode_cursor(args.continuation.cursor, item)
+        position, intra_item, missing_offset = result_store.decode_cursor(
+            args.continuation.cursor, item
+        )
     else:
         assert page_cursor is not None
         item = await asyncio.to_thread(
@@ -1996,7 +2044,7 @@ async def handle_analyze_results(
                 "The per_run cursor does not match these sources, recipes, grouping, "
                 "and include options."
             )
-        position, intra_item = result_store.decode_cursor(page_cursor, item)
+        position, intra_item, missing_offset = result_store.decode_cursor(page_cursor, item)
 
     runs = _deserialize_runs(item, state)
     manifests = {str(manifest["manifest_id"]): manifest for manifest in item.source_manifests}
@@ -2081,8 +2129,14 @@ async def handle_analyze_results(
                     "stage": "preflight",
                     "where": key,
                     "message": (
-                        "Artifact estimate exceeds the per-call safety bound; reduce "
-                        "max_points, narrow the window, or request fewer signals."
+                        "Artifact estimate exceeds the per-call safety bound. The "
+                        "bound is computed from raw file size and signal count "
+                        "before any data is read, so request fewer signals or "
+                        "select fewer/smaller runs; narrowing the window or "
+                        "lowering max_points does not move it. A single large "
+                        "raw read for a single signal has no request-side lever "
+                        "— raise [analysis] analysis_budget_s "
+                        "(LTSPICE_MCP_ANALYSIS_BUDGET_S) instead."
                     ),
                 }
             )
@@ -2105,6 +2159,25 @@ async def handle_analyze_results(
             if manifest_id in selected_ids
         ]
         eligible_runs = [run for run in selected_runs if run.manifest_id not in precheck]
+        # max_points bounds the INLINE series only; a csv artifact is written at
+        # full fidelity over the requested window. Say so when the caller set it
+        # on a csv recipe, so a silently inert argument becomes a stated fact.
+        if (
+            isinstance(recipe, WaveformRecipe)
+            and recipe.format == "csv"
+            and "max_points" in recipe.model_fields_set
+        ):
+            observations.append(
+                {
+                    "code": "max_points_not_applied",
+                    "kind": "provenance",
+                    "detail": (
+                        f"Recipe {key!r} sets max_points, which bounds format='inline' "
+                        "series only; the csv artifact holds every sample in the "
+                        "requested window. Narrow the recipe window to write fewer rows."
+                    ),
+                }
+            )
 
         records, item_failures, pending = await _evaluate_item(
             recipe,
@@ -2217,6 +2290,13 @@ async def handle_analyze_results(
                 if isinstance(artifact, dict) and artifact["path"] in by_path:
                     artifact.update(by_path[artifact["path"]])
 
+    # One resume point serves every cursor this call emits. The work list and
+    # the coverage list are paged independently, so each cursor has to carry
+    # BOTH offsets: one that dropped the work position would strand un-analyzed
+    # work, and one that dropped the coverage offset would replay missing cases
+    # already shown. Paged here, ahead of the cursors that have to quote it.
+    missing_page, missing_next = _page(missing, missing_offset)
+
     for unit in processed:
         key = unit["key"]
         recipe = unit["recipe"]
@@ -2231,7 +2311,7 @@ async def handle_analyze_results(
             for case in missing
             if recipe.sources is None or case.get("label") in set(recipe.sources)
         ]
-        entry = _result_entry(
+        entry, per_run_next = _result_entry(
             recipe,
             records,
             item_failures,
@@ -2251,16 +2331,23 @@ async def handle_analyze_results(
             and include.per_run is not None
             and entry["per_run"]["truncated"]
         ):
-            next_offset = unit["per_run_offset"] + entry["per_run"]["returned"]
             entry["per_run"]["next_cursor"] = result_store.encode_cursor(
-                item, unit["position"], intra_item=next_offset
+                item,
+                unit["position"],
+                intra_item=per_run_next,
+                missing_offset=missing_next,
             )
 
     next_value: dict[str, str] | None = None
     if position < len(item.work):
         next_value = {
             "result_set_id": item.result_set_id,
-            "cursor": result_store.encode_cursor(item, position, intra_item=intra_item),
+            "cursor": result_store.encode_cursor(
+                item,
+                position,
+                intra_item=intra_item,
+                missing_offset=missing_next,
+            ),
         }
     failure_total = len(failures)
     if failure_total > _FAILURE_CAP:
@@ -2283,10 +2370,20 @@ async def handle_analyze_results(
         if failures or missing or next_value is not None
         else "complete"
     )
+    if missing_page["truncated"]:
+        # Carries the live work position, not the end of the work list: this
+        # cursor advances the coverage view, and pointing it past the work would
+        # discard whatever work the caller had left to resume.
+        missing_page["next_cursor"] = result_store.encode_cursor(
+            item,
+            position,
+            intra_item=intra_item,
+            missing_offset=missing_next,
+        )
     coverage = {
         "runs_requested": runs_requested,
         "runs_analyzed": len(analyzed_identities),
-        "missing_cases": _page(missing),
+        "missing_cases": missing_page,
     }
     data: dict[str, Any] = {
         "outcome": outcome,
@@ -2308,12 +2405,21 @@ async def handle_analyze_results(
             except LTSpiceMCPError:
                 available[run.manifest_id] = []
         data["signals_available"] = available
+    hints: list[str] = []
     if next_value is not None:
         reason = "an artifact item was deferred intact" if deferred else "the call budget ended"
-        data["hint"] = (
+        hints.append(
             f"Analysis is partial because {reason}; call analyze_results with "
             f"continue={{result_set_id, cursor}} from 'next'."
         )
+    if missing_page["next_cursor"] is not None:
+        hints.append(
+            "coverage.missing_cases is truncated; call analyze_results with "
+            "continue={result_set_id, cursor: coverage.missing_cases.next_cursor} "
+            "for the next page of missing cases (no work is replayed)."
+        )
+    if hints:
+        data["hint"] = " ".join(hints)
     text = (
         f"analyze_results: {outcome}; {len(results)} recipe result(s), "
         f"{failure_total} failure(s), "
