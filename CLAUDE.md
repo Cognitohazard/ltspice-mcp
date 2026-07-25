@@ -8,41 +8,27 @@ MCP server that exposes LTSpice circuit simulation to LLMs via the Model Context
 
 ## Commands
 
+Standard `uv` invocations (`uv sync`, `uv run pyright`, `uv run ruff check --fix src/ tests/`,
+`uv run pytest tests/ -v`) work as expected; the dev tools are declared in `pyproject.toml`.
+The non-obvious ones:
+
 ```bash
-# Install dependencies (uses uv package manager)
-uv sync
-
-# Run the server (stdio transport)
-uv run ltspice-mcp
-
-# Type checking
-uv run pyright
-
-# Lint
-uv run ruff check src/ tests/
-
-# Lint with auto-fix
-uv run ruff check --fix src/ tests/
-
-# Format
-uv run ruff format src/ tests/
-
-# Run tests
-uv run pytest tests/ -v
-
-# Run a single test file
-uv run pytest tests/test_pathutil.py -v
-
 # Debug a single failure (disable parallelism for readable output)
 uv run pytest -n0 tests/test_pathutil.py::TestName::test_case -v
 
-# Run directly
+# Run the server without the console script
 python -m ltspice_mcp
 ```
 
 No Makefile. CI: `.github/workflows/publish.yml` (test + publish to PyPI on version tags).
 
 `pytest-xdist` is available, but the suite runs serially by default. Pass `-n auto` to parallelize locally when you do not need deterministic output order or debugger attachment.
+
+**Working practice** (these cost real time when ignored):
+- **Don't use `uv run python -c` to explore an API.** Read the source with `Read`/`Grep` instead — a throwaway interpreter session answers one question and teaches nothing that survives.
+- **A regression test must fail before the fix and pass after.** If it never failed, it does not pin the behavior; run it against the unfixed code to prove it bites.
+- **Test through real code paths, never a bypass**, and assert on real values — a test that stubs the mechanism it claims to cover passes for the wrong reason.
+- **A green suite is green.** Do not re-run it to feel sure; re-run it only after the tree changes.
 
 `docs/TESTING.md` is the testing-practice doc: the absence-class blind spot path-walking stress tests cannot see (a missing or unusable-for-a-class capability), and the mechanisms that catch it — inverse-op closure (`test_dispatch.py::TestOpInverseClosure`), the archetype build battery (`test_circuit_asc.py::TestArchetypeBuildCoverage`), task-down coverage, and blind-artifact judging. Read it before adding a tool or an op.
 
@@ -53,6 +39,41 @@ These are read by people outside this repo's internal process — keep internal 
 ## spicelib bugs
 
 spicelib is a pinned third-party dependency we cannot fix in place, so we work around its bugs and remove the workaround once upstream is fixed. **Whenever you hit a spicelib bug or limitation** — a wrong parse, a hang/infinite loop, a silently dropped field, an unapplied header value — **record it in `.claude/plans/spicelib_bugs.md`** as a self-contained, upstream-PR-ready section: summary, affected code + version, reproduction, impact, proposed fix, a suggested upstream test, and a cross-reference to our workaround and the test that pins it. Do this even when you also ship a workaround — the doc is the record of what to delete once upstream lands, and the reproduction is what lets someone (us or upstream) confirm the fix. Follow the format of the existing entries.
+
+## Project tour (the maintainer's read surface)
+
+The maintainer reads this project through a guided tour of its *decisions* — source at
+`.claude/artifacts/project_tour.html`, published as a private page whose address is in
+`.claude/artifacts/project_tour.url` (this file is public; that link is not). Republish with
+the Artifact tool passing that address as `url` so the page keeps it; a publish without it
+mints a new URL and orphans the one the maintainer has open.
+
+Its current layout is expected to change — it is a live document, not a template. What must
+not change:
+
+- **Decisions, not code.** Each entry is a question a returning reader would not know to ask
+  ("why is the dependency's kill-all function deliberately never called?"), answered in a
+  paragraph, with a path to open. They can read the code; they cannot read the reasons.
+- **One sitting.** Reading it end to end is what surfaces the questions, so it has to stay
+  readable end to end. That is the size limit — there is no correct number of sections. When
+  it stops fitting, cut what has stopped being surprising: a doctrine now taken for granted
+  has earned its way out, and the archive for it is the plan docs.
+- **Sequence carries meaning.** Ordered, with a next link. A reader who knew where to click
+  would not need the page.
+- **A view, never a source.** When it disagrees with the code, the code is right.
+- **Monospace is machine-checkable fact; serif is judgement the maintainer may overrule.**
+- **`#calls` is their authority surface.** Every judgement call you make that they would
+  plausibly overrule gets a block there: the call, and the position currently in force, so
+  their silence is a real answer rather than a default nobody chose. Delete a block when they
+  rule on it — resolved decisions belong in a commit message or a plan doc. Reference that
+  section by its `#calls` anchor, never by ordinal.
+
+**Maintain it at commit-batch time, not per commit** — after `/simplify` and the gate, before
+reporting done. Refresh when the batch changed a doctrine, a contract, a headline number, or
+the known-broken list; a batch of leaf fixes needs no edit. To find out whether you have
+drifted: `git rev-list --count --since="@$(stat -c %Y .claude/artifacts/project_tour.html)" HEAD`
+prints the commits since the last refresh — a number to judge against what those commits did,
+not a threshold to clear.
 
 ## Architecture
 
@@ -72,11 +93,14 @@ Key `lib/` modules:
 - `services.py` — application-level service layer shared by tools and resources. Owns job resolution, cached result loading, and reusable extraction logic. Sits between MCP adapters and pure parsers. **Unified result read-model:** `runs_of(job)` projects either a `SimulationJob` or a `BatchJob` into a uniform `list[RunRef]` (a single run = batch-of-one); `resolve_run(job_id, run_index)` + `resolve_raw_file`/`resolve_log_file` address any run through it (gated on `completed`). This is the one place that knows the two physical result layouts (one multi-step raw vs N single-point raws), so extraction stays job-agnostic. `query_value`/`bode_metrics` accept `job_id`+`run_index` to analyze a sweep/MC run like a standalone raw (job-run raws bypass `safe_path` — trusted server artifacts, like `batch_results`).
 - **SPICE lexer/validator** — `spice_lex.py` (foundation netlist lexer → `list[SpiceCard]` tokens), `spice_lex_ops.py` (cross-card transform passes), `spice_lex_views.py` (typed views over cards), `spice_validator.py` (pre-flight directive + arity validation). The `.cir`/`.net` read / list / value-edit paths and `validate_netlist` arity checks run on this pipeline, not spicelib's `SpiceEditor` (which is still used for some other `.cir`/`.net` editor ops).
 - **Job subsystem** — `job_types.py` (domain dataclasses `SimulationJob`/`BatchJob`/`RunRef`/configs, re-exported from `state` to break import cycles), `job_registry.py` (in-memory registry + disk persistence + interrupted-job recovery + `preload_recent`), `job_store.py` (per-circuit JSON sidecar at `{circuit_dir}/.ltspice-mcp/jobs/{job_id}.json`), `job_lifecycle.py` (declarative status state machine, `transition()`).
+- **Experiment subsystem** (backs the `consolidated` profile) — `experiment_types.py` (pure leaf dataclasses `ExperimentJob`/`ExperimentCase`/`Completeness`), `experiment_store.py` (working-dir records + request index; the durable-idempotency lookup), `experiment_runner.py` (the standalone coordinator: per-case futures, cancel gates, retained permits on unconfirmed kills), `variations.py` (variation expansion, target ladder param→ref→@model), `deck_staging.py` (manifest staging + WSL Windows-native routing), `lint_rules.py`, `store_common.py` (atomic JSON + schema envelopes shared with the job store). Cases are never `SimulationJob`s — they run on the job-agnostic `submit_netlist` primitive in `runner_base`.
+- **Analysis result plumbing** — `recipes.py` (the typed recipe union behind `analyze_results`), `result_store.py` (immutable result sets, composite raw+log digest manifests), `cursor_codec.py` (the shared checksummed pagination cursor; also used by `pin_legend.py` and `inspect`).
+- **Schematic rendering** — `schematic_scene.py` (`.asc` → absolute-coordinate `Scene`), `schematic_renderer.py` (SVG), `raster.py` (PNG via the optional `raster` extra), `netlist_graph.py` (structural comparison behind `verify_circuit`), `pin_legend.py` (per-component pin/net table).
 - `sim_runner.py`, `sweep_runner.py`, `montecarlo_runner.py`, `runner_base.py` — spicelib runner wrappers (`runner_base` = shared scaffolding); `montecarlo.py` is the pure perturbation engine behind `montecarlo_runner`
 - `runner_manager.py` — centralized runner lifecycle (see Key Patterns)
 - `simulator.py` — simulator detection, WSL/Wine selection
 - `ltspice_wsl.py`, `wsl.py` — WSL path conversion and interop
-- `ac_analysis.py`, `signal_analysis.py` — pure-function analysis primitives for frequency-domain (.AC) and transient (.tran) `.raw` data; back the structured analysis tools (`bode_metrics`, `signal_stats`, etc.)
+- `ac_analysis.py`, `signal_analysis.py`, `ac_structure.py` — pure-function analysis primitives for frequency-domain (.AC) and transient (.tran) `.raw` data; back the structured analysis tools (`bode_metrics`, `signal_stats`, etc.)
 - `raw_parser.py`, `log_parser.py` — simulation `.raw` / `.log` result parsing
 - `library_manager.py`, `library_parser.py`, `encoding.py` — component library handling + library/netlist encoding detection
 - `batch_results.py` — sweep/MC batch result extraction
@@ -84,9 +108,11 @@ Key `lib/` modules:
 - `cache.py` — `FileCache` for editor and result instances
 - `pathutil.py` — path security (`safe_path()`, `resolve_safe_path()`); `filelock.py` — cross-process advisory file locks
 - `recent.py` — global recently-touched-circuit index (`recent.json`); backs the `recent` tool + job preload
-- `format.py`, `sweep_utils.py` — formatting + sweep helpers
 - `symbol_geometry.py`, `geometry.py` — .asy symbol parsing (pin positions, rotation transforms, bounding boxes) + shared 2D / bbox helpers
 - `mcp_logging.py`, `observability.py` — MCP protocol log notifications + structured job-lifecycle events
+
+Self-describing helpers not listed above (`format.py`, `sweep_utils.py`, `desktop.py`,
+`plot_html.py`) do what their names say — read them when you need them.
 
 ### Tool Module Convention
 
@@ -202,7 +228,23 @@ TOML sections: `[simulator]`, `[security]`, `[simulation]`, `[analysis]`, `[logg
 |-|-|-|
 | `full` (default) | All 49 | Any MCP client, automation, non-agent LLMs |
 | `agentic` | 41 | LLM agents with native file access (Read/Edit/Write) |
+| `consolidated` | 6 | Experimental — see below |
 
 The "agentic" profile removes 8 tools: the netlist-editing wrappers (`create_netlist`, `read_circuit`, `set_component_value`, `parameter`, `edit_directive`) and library session management (`load_library`, `unload_library`, `list_libraries`) — things capable agents do natively. It deliberately **keeps** `configure_sweep`/`configure_montecarlo`: the only producers of the `config_id` that `run_sweep`/`run_montecarlo` consume, and Monte Carlo perturbation + N-run aggregation (and the batch-sweep route) are not something an agent reproduces with native file edits the way it can a plain LTspice `.step`. It keeps simulation lifecycle, binary `.raw` parsing, batch run/results, `find_model` search, and the schematic-construction + wiring + inspection set (`create_schematic`, `apply_schematic_ops`, `wire_pins`, `export_netlist`, `reset_schematic`, `symbol_info`, `component_info`, `trace_net`) — geometry-aware .asc editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match. Component placement and the ack-only mutations (`move_component`, `remove_component`, `set_component_attribute`, `add_net_label`, `remove_net_label`, `remove_wire`) are reached through `apply_schematic_ops` (see the standalone-vs-op rule above).
 
+The **"consolidated" profile is experimental**: six tools over three planes — EXECUTE
+(`run_experiments`, `jobs`), UNDERSTAND (`analyze_results`, `inspect`), AUTHOR
+(`edit_schematic`, `verify_circuit`) — all sharing one response envelope. It shares no tools
+with the other two profiles, so it is additive: `full` and `agentic` are unaffected, and its
+handlers live in their own `tools/` modules (`experiments.py`, `analyze.py`,
+`schematic_edit.py`, `verify.py`, `inspect_tools.py`). The envelope contract, the per-tool
+argument shapes, and the rationale are in `.claude/plans/mcp_v1_design.md` — read it before
+changing any of the six; it is the ratified spec and this file deliberately does not
+duplicate it.
+
 Profile-filtered tool defs and dispatch live on `SessionState` (`state.tool_defs`, `state.tool_dispatch`). Each tool's `profiles` frozenset (set at registration via `@registry.tool(profiles=...)`) determines visibility. Error hints in `server.py` are profile-aware (tuples of `(full_hint, agentic_hint)`) so they don't reference tools the client can't see.
+
+**Every registered tool's `output_schema` must be an object schema at the top level.** A bare
+`oneOf`/`anyOf` makes strict MCP clients (Claude Code included) reject the entire `tools/list`
+response, disabling every tool on the server — pinned by
+`test_dispatch.py::TestSchemaPostProcessing::test_output_schema_top_level_is_object`.
