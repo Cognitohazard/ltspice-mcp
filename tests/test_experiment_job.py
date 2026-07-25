@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from ltspice_mcp.errors import BatchJobError, ResultError, SimulationError
 from ltspice_mcp.lib import experiment_store, job_registry, job_store, now, recent, services
+from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import (
     CANONICALIZER_VERSION,
     ExperimentCancellationError,
@@ -43,16 +44,22 @@ from ltspice_mcp.tools.simulation import (
 
 
 def _source(circuit: Path, staged: Path | None = None) -> SourceRecord:
+    """Provenance for an already-written circuit.
+
+    The digest is the file's real one: a manifest whose sha256 does not
+    describe the file it names is a record no replay could accept.
+    """
     staged = staged or circuit
+    digest = sha256_file(circuit)
     return SourceRecord(
         circuit=circuit.stem,
         path=circuit,
-        sha256="source-sha",
+        sha256=digest,
         staged_deck=staged,
         manifest=[
             ManifestEntry(
                 path=circuit,
-                sha256="source-sha",
+                sha256=digest,
                 staged=True,
                 live=False,
                 staged_path=staged,
