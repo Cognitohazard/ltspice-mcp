@@ -107,16 +107,70 @@ class _CircuitPreparation:
 
 
 class ExperimentCircuit(StrictModel):
-    path: str
-    id: str | None = None
+    path: str = Field(
+        description=(
+            "Deck to run: .cir/.net/.sp, or an .asc exported through LTspice first. "
+            "It is staged content-addressed at submission, so later edits to the "
+            "file cannot change what this job ran."
+        ),
+    )
+    id: str | None = Field(
+        default=None,
+        description=(
+            "Short name for this circuit, used to scope a variation's 'applies_to' "
+            "and to label its rows. Defaults to the file stem."
+        ),
+    )
 
 
 class ExperimentExecution(StrictModel):
-    wait_s: float = Field(default=60.0, ge=0.0, le=120.0)
-    run_timeout_s: float | None = Field(default=None, gt=0.0)
-    job_deadline_s: float | None = Field(default=None, gt=0.0)
-    max_parallel: int | None = Field(default=None, ge=1)
-    simulator: Literal["ltspice", "ngspice"] | None = None
+    """How long this call waits, how hard the job runs, and on which simulator."""
+
+    # Docstring, not a Field description on ``execution``: the schema builder
+    # inlines a $ref over its siblings, so only a model-level description of a
+    # submodel-typed field reaches the published schema.
+    wait_s: float = Field(
+        default=60.0,
+        ge=0.0,
+        le=120.0,
+        description=(
+            "How long this call waits for the job before returning a receipt, "
+            "0-120s. It bounds the RESPONSE only: the job is durable and keeps "
+            "running past it, and 0 returns the receipt immediately."
+        ),
+    )
+    run_timeout_s: float | None = Field(
+        default=None,
+        gt=0.0,
+        description=(
+            "Kill any single case whose simulator exceeds this and mark it failed; "
+            "the other cases continue."
+        ),
+    )
+    job_deadline_s: float | None = Field(
+        default=None,
+        gt=0.0,
+        description=(
+            "Wall-clock budget for the whole job, measured from submission. On "
+            "expiry unfinished cases are cancelled and already-produced results are "
+            "kept."
+        ),
+    )
+    max_parallel: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Cases in flight at once. Defaults to the server's concurrency cap; "
+            "lower it only to leave room for other work."
+        ),
+    )
+    simulator: Literal["ltspice", "ngspice"] | None = Field(
+        default=None,
+        description=(
+            "Engine for every case; it also decides the dialect the results are "
+            "parsed with. Defaults to the server's default simulator."
+        ),
+    )
 
 
 class AnalysisPerRun(StrictModel):
@@ -124,30 +178,126 @@ class AnalysisPerRun(StrictModel):
     # attached block is handed straight to that engine, so a limit this schema
     # advertised but the engine rejected would be a lever that cannot work.
     limit: int = Field(default=50, ge=1, le=MAX_PAGE_SIZE)
-    cursor: str | None = None
+    cursor: str | None = Field(
+        default=None,
+        description=(
+            "Nothing has been paged at submission time; leave it unset and page the "
+            "finished analysis with analyze_results."
+        ),
+    )
 
 
 class AnalysisInclude(StrictModel):
-    per_run: AnalysisPerRun | None = None
-    outliers: bool = False
-    signals_available: bool = False
+    per_run: AnalysisPerRun | None = Field(
+        default=None,
+        description=(
+            "Return the individual attributed rows, paginated. Omitted, a recipe "
+            "with 'reduce' returns only its reductions."
+        ),
+    )
+    outliers: bool = Field(
+        default=False,
+        description="Add the spec-failing records to each recipe's spec block.",
+    )
+    signals_available: bool = Field(
+        default=False,
+        description=(
+            "List the trace names each run's .raw carries. Costs one raw load per "
+            "run — a discovery aid, not something to leave on."
+        ),
+    )
 
 
 class AttachedAnalysis(StrictModel):
-    recipes: list[dict[str, Any]]
-    group_by: list[str] = Field(default_factory=list)
-    include: AnalysisInclude | None = None
+    recipes: list[dict[str, Any]] = Field(
+        description=(
+            "analyze_results recipes, in that tool's exact shape, run over this "
+            "job's own runs once they finish. Saves a round trip when the "
+            "measurements are known up front."
+        ),
+    )
+    group_by: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Split reductions along these dimensions: a variation assignment "
+            "parameter name, 'circuit', or a .step axis name."
+        ),
+    )
+    include: AnalysisInclude | None = Field(
+        default=None,
+        description=(
+            "Optional analysis blocks. Field projection (analyze_results "
+            "include.fields) is not available on the attached stage — for that, "
+            "analyze the finished job with analyze_results."
+        ),
+    )
 
 
 class RunExperimentsInput(ToolInput):
-    request_id: str = Field(min_length=1)
-    circuits: list[ExperimentCircuit] = Field(min_length=1)
-    variations: list[Variation] = Field(default_factory=list)
+    request_id: str = Field(
+        min_length=1,
+        description=(
+            "Caller-chosen idempotency key. The same id with the same arguments AND "
+            "unchanged source decks replays the existing receipt instead of running "
+            "anything again; the same id after either changed is a conflict, not a "
+            "replay."
+        ),
+    )
+    circuits: list[ExperimentCircuit] = Field(
+        min_length=1,
+        description=(
+            "Decks to run. Several circuits in one call share the variation grid "
+            "and one job, which is how designs are compared under identical "
+            "conditions; scope a variation to one of them with its 'applies_to'."
+        ),
+    )
+    variations: list[Variation] = Field(
+        default_factory=list,
+        description=(
+            "The sweep. 'assign' entries build the case grid (cartesian across "
+            "entries, or lock-step within one entry via combine:'zip'); at most one "
+            "'random' entry adds Monte Carlo runs. Cases run in PARALLEL up to the "
+            "concurrency cap, so a whole grid costs little more wall-clock than a "
+            "single case — express the sweep here rather than as repeated one-case "
+            "calls. Empty runs each circuit once as authored."
+        ),
+    )
     execution: ExperimentExecution = Field(default_factory=ExperimentExecution)
-    analyze: AttachedAnalysis | None = None
-    lint: Literal["block", "warn", "off"] = "block"
-    suppress: list[str] = Field(default_factory=list)
-    allow_live_includes: bool = False
+    analyze: AttachedAnalysis | None = Field(
+        default=None,
+        description=(
+            "Measure the runs as a stage of this job, so terminal responses carry "
+            "the numbers already. Its failure does not fail the runs; it sets its "
+            "own analysis status and the runs stay analyzable with analyze_results."
+        ),
+    )
+    lint: Literal["block", "warn", "off"] = Field(
+        default="block",
+        description=(
+            "What to do with SPICE lint findings on the staged deck. 'block' refuses "
+            "to submit a circuit with a blocking finding (its cases are reported "
+            "'skipped'); 'warn' runs anyway and reports them; 'off' skips linting. "
+            "Prefer 'suppress' over lowering this — the rules catch decks that "
+            "simulate to silently wrong answers."
+        ),
+    )
+    suppress: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Lint rule_ids to drop, taken from the rule_id of a finding already "
+            "reported. Narrower than lint:'warn': everything else still blocks."
+        ),
+    )
+    allow_live_includes: bool = Field(
+        default=False,
+        description=(
+            "Let a .include/.lib that cannot be staged (outside the allowed roots, "
+            "or past the recursion depth) be read live at run time instead of "
+            "failing that circuit's submission. The job then cannot prove what "
+            "those files held when it ran: the manifest marks the reference "
+            "live:true and an observation says so."
+        ),
+    )
 
 
 _FINDING_SCHEMA: dict[str, Any] = {
@@ -389,9 +539,13 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
 @registry.tool(
     name="run_experiments",
     description=(
-        "Run one or more staged SPICE decks across strict assignment and random "
-        "variations. The required request_id makes submission durable and "
-        "idempotent; quick jobs return inline and longer jobs return a receipt."
+        "Run one or more staged SPICE decks across an assignment grid and random "
+        "(Monte Carlo) variations, as one durable job. Cases run in parallel up to "
+        "the concurrency cap, so submit the whole sweep as one 'variations' grid "
+        "rather than a call per point — a large grid costs about what one case "
+        "costs. The required request_id makes submission idempotent; quick jobs "
+        "return results inline, longer ones return a receipt to follow with 'jobs'. "
+        "Attach an 'analyze' block to get the measurements back with the results."
     ),
     input_model=RunExperimentsInput,
     annotations=types.ToolAnnotations(
@@ -1219,15 +1373,78 @@ Job = SimulationJob | BatchJob | ExperimentJob
 class JobsInput(ToolInput):
     """Action-specific inputs for the consolidated jobs control plane."""
 
-    action: Literal["status", "wait", "cancel", "list", "runs"]
-    job_id: str | None = Field(default=None, min_length=1)
-    request_id: str | None = Field(default=None, min_length=1)
-    timeout_s: float = Field(default=60.0, ge=0.0, le=300.0)
-    wait_for: Literal["all", "runs"] = "all"
-    control_token: str | None = Field(default=None, min_length=1)
-    circuit: str | None = None
-    limit: int = Field(default=_JOBS_PAGE_LIMIT, ge=1, le=_JOBS_PAGE_LIMIT)
-    cursor: str | None = None
+    action: Literal["status", "wait", "cancel", "list", "runs"] = Field(
+        description=(
+            "'status' snapshots a job now; 'wait' blocks until it finishes or "
+            "timeout_s elapses; 'cancel' stops it; 'list' pages recent circuits and "
+            "their job counts; 'runs' pages one job's per-run records. Each action "
+            "accepts only its own fields and rejects the rest, so send exactly what "
+            "the action takes."
+        ),
+    )
+    job_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Address the job directly. Required by status/wait/cancel/runs unless "
+            "request_id is given instead; never both, and never with 'list'."
+        ),
+    )
+    request_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Address the job by the idempotency key it was submitted under — the "
+            "way back to a job whose id was lost. Alternative to job_id."
+        ),
+    )
+    timeout_s: float = Field(
+        default=60.0,
+        ge=0.0,
+        le=300.0,
+        description=(
+            "'wait' only: how long to block, 0-300s. Timing out is not a failure — "
+            "the response comes back with timed_out set and the job keeps running, "
+            "so wait again. Polling with 'status' in a loop costs calls this avoids."
+        ),
+    )
+    wait_for: Literal["all", "runs"] = Field(
+        default="all",
+        description=(
+            "'wait' only: 'all' waits for the runs AND any attached analysis stage; "
+            "'runs' returns as soon as the last run is terminal, before the "
+            "analysis it would then have to wait for separately."
+        ),
+    )
+    control_token: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "'cancel' only: the token from the original run_experiments receipt. "
+            "Needed only when this process did not submit the job — the owning "
+            "process may always cancel its own. Status and list never disclose it."
+        ),
+    )
+    circuit: str | None = Field(
+        default=None,
+        description=(
+            "'list' only: restrict to jobs of this circuit file. Omitted, 'list' is "
+            "the recently-touched-circuits view — the way to find work from an "
+            "earlier session."
+        ),
+    )
+    limit: int = Field(
+        default=_JOBS_PAGE_LIMIT,
+        ge=1,
+        le=_JOBS_PAGE_LIMIT,
+        description="'list' only: circuit groups per page.",
+    )
+    cursor: str | None = Field(
+        default=None,
+        description=(
+            "'list'/'runs': next_cursor from the previous page. Absent means the first page."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_action_fields(self) -> Self:
@@ -2123,9 +2340,12 @@ def _jobs_error_details(exc: Exception) -> tuple[str, str, bool]:
 @registry.tool(
     name="jobs",
     description=(
-        "Control durable jobs by job_id or experiment request_id: read status, "
-        "wait for runs or attached analysis, cancel with owner/token authority, "
-        "list recent circuit groups, or page run records."
+        "Follow and control durable jobs, addressed by job_id or by the "
+        "request_id they were submitted under. 'wait' blocks server-side until the "
+        "job finishes — prefer it to polling 'status' in a loop; 'status' snapshots "
+        "it now; 'cancel' stops it (owner process, or the receipt's control_token); "
+        "'runs' pages per-run records; 'list' with no circuit is the "
+        "recently-touched-circuits view for picking up work from an earlier session."
     ),
     input_model=JobsInput,
     annotations=types.ToolAnnotations(

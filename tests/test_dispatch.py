@@ -107,6 +107,29 @@ class TestToolSchemas:
                 assert req in props, f"{tool_def.name}: required '{req}' not in properties"
 
 
+class TestConsolidatedInputDocumentation:
+    """The published input schema is the ONLY documentation a model gets about
+    how to call a tool — it has no README and no source. A top-level argument
+    with no ``description`` is therefore an argument the caller has to guess,
+    and the guess is silent: it validates or it does not, with no way to learn
+    what the field meant. The six consolidated tools carry the whole surface,
+    so every one of their top-level fields must say what it is for."""
+
+    def test_every_consolidated_top_level_field_is_documented(self):
+        defs, _ = get_tools_for_profile("consolidated")
+        assert defs, "consolidated profile exposes no tools"
+        undocumented: list[str] = []
+        for tool_def in defs:
+            for field, prop in (tool_def.inputSchema.get("properties") or {}).items():
+                if not (prop.get("description") or "").strip():
+                    undocumented.append(f"{tool_def.name}.{field}")
+        assert not undocumented, (
+            "Consolidated tools with undocumented top-level input fields "
+            f"({len(undocumented)}): {sorted(undocumented)}. Give each a "
+            "Field(description=...) saying what the caller should put there."
+        )
+
+
 class TestToolProfiles:
     def test_full_profile_returns_all_dispatch_entries(self):
         """Every tool definition has a dispatch entry; the dispatch map may
