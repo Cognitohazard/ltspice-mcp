@@ -179,12 +179,11 @@ class EditSchematicInput(ToolInput):
             "content to <target>.draft-<build_id>.asc for inspection."
         ),
     )
-    return_views: list[Literal["occupancy", "pin_legend", "render"]] = Field(
+    return_views: list[Literal["pin_legend", "render"]] = Field(
         default_factory=lambda: ["pin_legend"],
         description=(
             "Which geometry views to return. 'pin_legend' (default) is the per-"
-            "component pin/net table; 'render' is an SVG/PNG of the sheet; "
-            "'occupancy' is experimental and currently returns an unsupported note."
+            "component pin/net table; 'render' is an SVG/PNG of the sheet."
         ),
     )
     view_cursors: _ViewCursors | None = Field(
@@ -302,7 +301,6 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
             "type": "object",
             "properties": {
                 "pin_legend": _PAGE_SCHEMA,
-                "occupancy": {"type": "object"},
                 "render": {"type": "object"},
             },
         },
@@ -469,15 +467,6 @@ async def _paginate_views(
             views["pin_legend"] = paginate_view(
                 legend, "pin_legend", cursor=cursors.pin_legend, limit=args.view_limit
             )
-        elif view == "occupancy":
-            views["occupancy"] = {
-                "status": "unsupported_variant",
-                "supported": ["pin_legend", "render"],
-                "note": (
-                    "The occupancy-map view is experimental and pending an A/B "
-                    "evaluation; use pin_legend or render."
-                ),
-            }
         elif view == "render":
             # A render needs a committed file on disk. In dry_run nothing is
             # committed, so report metadata-only rather than writing an artifact
