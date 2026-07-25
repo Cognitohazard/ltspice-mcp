@@ -109,28 +109,74 @@ _JOBS_WAIT_MAX_S = 300.0
 # ---------------------------------------------------------------------------
 
 
+_CURSOR_DESCRIPTION = (
+    "Opaque page token taken verbatim from a previous page's 'next_cursor' — echo "
+    "it back unmodified. It is bound to this exact query, so it will not resume a "
+    "different one, and an edited or stale token is rejected."
+)
+
+
 class CapabilitiesQuery(StrictModel):
+    """What this server can do: the detected simulators and the raw dialect each
+    parses, whether the .asc netlist exporter is available, job persistence, the
+    allowed path roots, the active tool profile, the configured limits and dwell
+    caps, and the linter version. Takes no arguments and probes nothing."""
+
     kind: Literal["capabilities"]
 
 
 class SymbolsQuery(StrictModel):
+    """The .asy symbol names that resolve, and the directory precedence they
+    resolve through. Ask this before placing a component — a name absent here
+    will not place."""
+
     kind: Literal["symbols"]
-    path: str | None = None
-    filter: str | None = None
-    cursor: str | None = None
+    path: str | None = Field(
+        default=None,
+        description=(
+            "Optional schematic whose OWN directory is put at the front of the "
+            "reported precedence — pass it to see what that sheet would resolve."
+        ),
+    )
+    filter: str | None = Field(
+        default=None,
+        description="Case-insensitive substring; only symbol names containing it are returned.",
+    )
+    cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION)
 
 
 class SymbolQuery(StrictModel):
+    """One symbol's geometry: pin positions at every rotation, bounding box, and
+    origin. This is the non-destructive pre-placement view — the pins reported
+    for a rotation are where they land when the part is placed at it."""
+
     kind: Literal["symbol"]
-    name: str = Field(min_length=1)
-    path: str | None = None
+    name: str = Field(
+        min_length=1,
+        description="Symbol name without the .asy extension, e.g. 'res', 'nmos4'.",
+    )
+    path: str | None = Field(
+        default=None,
+        description="Optional schematic whose directory is searched first, for a sheet-local symbol.",
+    )
 
 
 class NetQuery(StrictModel):
+    """Everything on one net. On a .asc this is a geometric trace — pins, wire
+    vertices, net labels, and whether two labels short the net. On a netlist it
+    is card membership — which element cards reference the node — with no
+    geometry at all."""
+
     kind: Literal["net"]
-    path: str
-    at: str | list[int]
-    cursor: str | None = None
+    path: str = Field(description="The .asc schematic, or .cir/.net/.sp netlist, to read.")
+    at: str | list[int] = Field(
+        description=(
+            "Where the net is: 'REF.PIN' (e.g. 'M1.D'), 'net:NAME', or [x, y]. A "
+            "netlist carries no geometry, so there it takes 'net:NAME', a bare node "
+            "name, or 'REF.<terminal-number>', and rejects a coordinate."
+        )
+    )
+    cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION)
 
     @model_validator(mode="after")
     def _valid_at(self) -> NetQuery:
@@ -143,19 +189,52 @@ class NetQuery(StrictModel):
 
 
 class ComponentsQuery(StrictModel):
+    """The components of a .asc schematic or a .cir/.net/.sp netlist."""
+
     kind: Literal["components"]
-    path: str
-    prefix: str | None = None
-    detail: Literal["list", "full"] = "list"
-    cursor: str | None = None
+    path: str = Field(description="The .asc schematic, or .cir/.net/.sp netlist, to read.")
+    prefix: str | None = Field(
+        default=None,
+        description=(
+            "Keep only components whose reference starts with this element letter "
+            "('R', 'C', 'M', …). A single letter; anything longer is rejected."
+        ),
+    )
+    detail: Literal["list", "full"] = Field(
+        default="list",
+        description=(
+            "'list' returns reference and value only. 'full' adds nodes, model and "
+            "params on a netlist, and symbol, position, rotation, pins and bounding "
+            "box on a schematic."
+        ),
+    )
+    cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION)
 
 
 class ModelQuery(StrictModel):
+    """Find a .model or .subckt definition — by fuzzy name match, or by listing
+    everything the given libraries define."""
+
     kind: Literal["model"]
-    mode: Literal["search", "enumerate"]
-    query: str | None = None
-    libs: list[str] | None = None
-    cursor: str | None = None
+    mode: Literal["search", "enumerate"] = Field(
+        description=(
+            "'search' fuzzy-matches 'query' and requires it. 'enumerate' lists every "
+            "model in 'libs' and REJECTS a 'query' rather than echoing back a filter "
+            "it never applied."
+        )
+    )
+    query: str | None = Field(
+        default=None,
+        description="Part name or fragment to match. Required by 'search', refused by 'enumerate'.",
+    )
+    libs: list[str] | None = Field(
+        default=None,
+        description=(
+            "Library files to read. Required by 'enumerate'; optional for 'search', "
+            "which searches the session's loaded libraries when it is omitted."
+        ),
+    )
+    cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION)
 
     @model_validator(mode="after")
     def _mode_requirements(self) -> ModelQuery:
@@ -209,7 +288,16 @@ def _validate_query(data: Any) -> Query:
 
 
 class InspectInput(ToolInput):
-    queries: list[SkipValidation[Query]] = Field(min_length=1, max_length=64)
+    queries: list[SkipValidation[Query]] = Field(
+        min_length=1,
+        max_length=64,
+        description=(
+            "Independent read-only lookups, 1-64 per call, each tagged by its 'kind'. "
+            "Batch freely: they share one round trip and are isolated from each other, "
+            "so a denied path, a stale cursor, an unknown kind, or a malformed query "
+            "fails only its own item and every other query still returns its data."
+        ),
+    )
 
     # SkipValidation keeps the strict discriminated union in the published JSON
     # Schema while letting the handler validate each query independently, so a
