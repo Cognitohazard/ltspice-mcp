@@ -5102,34 +5102,70 @@ async def handle_step_get(args: StepGetInput, state: SessionState) -> types.Call
 
 _RotationLiteral = Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"]
 
+# Shared op-field descriptions. The op models are published in three profiles
+# (full, agentic and the consolidated edit_schematic), so each string is paid
+# for three times over — keep them to the fact the caller cannot infer. The
+# coordinate convention is stated once on the ``ops`` field instead of on the
+# dozen x/y pairs below.
+_ROTATION_DESCRIPTION = (
+    "'R<deg>' rotates clockwise by that many degrees; 'M<deg>' mirrors "
+    "horizontally and then rotates. Pins move with the body."
+)
+_REFERENCE_DESCRIPTION = "Reference designator of an existing component, e.g. 'R1', 'M3'."
+_COORDINATE_DESCRIPTION = (
+    "All x/y are LTspice grid units, with x increasing to the right and y increasing DOWNWARD."
+)
+
 
 class _OpAddComponent(StrictModel):
+    """Place a new component from its symbol at a coordinate."""
+
     op: Literal["add_component"]
-    reference: str
-    symbol: str
+    reference: str = Field(
+        description="Reference designator to give the new part, e.g. 'R1', 'M3'."
+    )
+    symbol: str = Field(
+        description=(
+            "Symbol name without the .asy extension, e.g. 'res', 'nmos4'. It must be "
+            "one the active symbol libraries resolve."
+        )
+    )
     x: int
     y: int
-    rotation: _RotationLiteral = "R0"
-    value: str | None = None
-    attributes: dict[str, str] | None = None
+    rotation: _RotationLiteral = Field(default="R0", description=_ROTATION_DESCRIPTION)
+    value: str | None = Field(
+        default=None, description="Value or model name, e.g. '10k', '1u', 'BSS123'."
+    )
+    attributes: dict[str, str] | None = Field(
+        default=None,
+        description="Further symbol attributes by name, e.g. SpiceLine, SpiceModel.",
+    )
 
 
 class _OpSetComponentValue(StrictModel):
+    """Set an existing component's primary value."""
+
     op: Literal["set_component_value"]
-    reference: str
-    value: str
+    reference: str = Field(description=_REFERENCE_DESCRIPTION)
+    value: str = Field(description="New value or model name, e.g. '10k', '1u', 'BSS123'.")
 
 
 class _OpSetComponentAttribute(StrictModel):
+    """Set one named symbol attribute on an existing component."""
+
     op: Literal["set_component_attribute"]
-    reference: str
-    attribute: str
-    value: str
+    reference: str = Field(description=_REFERENCE_DESCRIPTION)
+    attribute: str = Field(
+        description="Attribute name, e.g. Value, Value2, SpiceLine, SpiceModel."
+    )
+    value: str = Field(description="New value for that attribute.")
 
 
 class _OpRemoveComponent(StrictModel):
+    """Delete a component, optionally taking its dangling wires with it."""
+
     op: Literal["remove_component"]
-    reference: str
+    reference: str = Field(description=_REFERENCE_DESCRIPTION)
     cleanup_wires: bool = Field(
         default=False,
         description=(
@@ -5141,65 +5177,113 @@ class _OpRemoveComponent(StrictModel):
 
 
 class _OpMoveComponent(StrictModel):
+    """Move an existing component, optionally re-rotating it."""
+
     op: Literal["move_component"]
-    reference: str
+    reference: str = Field(description=_REFERENCE_DESCRIPTION)
     x: int
     y: int
-    rotation: _RotationLiteral | None = None
+    rotation: _RotationLiteral | None = Field(
+        default=None, description=f"Omit to keep the current rotation. {_ROTATION_DESCRIPTION}"
+    )
 
 
 class _OpAddNetLabel(StrictModel):
+    """Name a net by placing a label, either at a pin or at a coordinate."""
+
     op: Literal["add_net_label"]
-    net: str
-    pin: str | None = None
+    net: str = Field(description="Net name the label declares, e.g. 'VDD', 'out'.")
+    pin: str | None = Field(
+        default=None,
+        description="Place at this pin, e.g. 'M1.D'. Give this or x/y, not both.",
+    )
     x: int | None = None
     y: int | None = None
 
 
 class _OpWirePins(StrictModel):
+    """Draw an orthogonal wire between two pins, refusing a diagonal run, a pin
+    collision, or an overlapping wire junction rather than drawing them."""
+
     # "connect" is the deprecated former name, still accepted.
     op: Literal["wire_pins", "connect"]
-    from_pin: str
-    to_pin: str
-    waypoints: list[WaypointInput] = Field(default_factory=list)
+    from_pin: str = Field(
+        description="Source pin as 'Reference.Pin', e.g. 'M1.D', or 'net:NAME' for a label."
+    )
+    to_pin: str = Field(
+        description="Target pin as 'Reference.Pin', e.g. 'M4a.D', or 'net:NAME' for a label."
+    )
+    waypoints: list[WaypointInput] = Field(
+        default_factory=list,
+        description=(
+            "Corner points the route must pass through, in order. Omit to let the "
+            "router pick the elbow; supply them to steer around other parts."
+        ),
+    )
 
 
 class _OpRemoveNetLabel(StrictModel):
+    """Delete a net label, addressed by its pin or its coordinate."""
+
     op: Literal["remove_net_label"]
-    pin: str | None = None
+    pin: str | None = Field(
+        default=None, description="The pin the label sits on. Give this or x/y, not both."
+    )
     x: int | None = None
     y: int | None = None
 
 
 class _OpRemoveWire(StrictModel):
+    """Delete wires, addressed either as one exact segment or as every segment
+    incident on a point. Prefer the segment form to undo one wire_pins call."""
+
     op: Literal["remove_wire"]
-    # Exact-segment form: all four endpoints (either direction). This is the
-    # precise inverse of a single wire_pins segment — it removes only that
-    # segment. If the schematic holds several byte-identical copies of the
-    # segment (double-drawn wires), ALL of them are removed in one op; the
-    # result's `removed` count says how many.
-    x1: int | None = None
+    x1: int | None = Field(
+        default=None,
+        description=(
+            "Segment form: with y1/x2/y2, removes only this segment (either "
+            "direction). Byte-identical duplicates all go at once; 'removed' counts them."
+        ),
+    )
     y1: int | None = None
     x2: int | None = None
     y2: int | None = None
-    # Incident-point form: every segment touching this coordinate. Broader than
-    # the segment form — at a shared node it also drops wires from other
-    # connections, so prefer the segment form to undo one specific wire_pins call.
-    pin: str | None = None
-    x: int | None = None
+    pin: str | None = Field(
+        default=None,
+        description=(
+            "Incident-point form: removes EVERY segment touching this pin, including "
+            "wires belonging to other connections at a shared node."
+        ),
+    )
+    x: int | None = Field(default=None, description="Incident-point form, as a coordinate.")
     y: int | None = None
 
 
 class _OpAddDirective(StrictModel):
+    """Add a SPICE directive or a comment to the sheet."""
+
     op: Literal["add_directive"]
-    instruction: str
-    kind: Literal["directive", "comment"] = "directive"
-    x: int | None = None
+    instruction: str = Field(
+        description="Directive or comment text, e.g. '.tran 1m' or '.model NMOS ...'."
+    )
+    kind: Literal["directive", "comment"] = Field(
+        default="directive",
+        description="'directive' is simulated; 'comment' is annotation LTspice ignores.",
+    )
+    x: int | None = Field(
+        default=None,
+        description=(
+            "Omit x/y to use the default anchor, stepped down past any text already "
+            "there so directives do not stack on top of each other."
+        ),
+    )
     y: int | None = None
-    size: int = 2
+    size: int = Field(default=2, description="LTspice text size index.")
 
 
 class _OpRemoveDirective(StrictModel):
+    """Delete a directive or comment by its text."""
+
     op: Literal["remove_directive"]
     instruction: str = Field(
         description=(
@@ -5232,7 +5316,7 @@ class ApplySchematicOpsInput(ToolInput):
             "List of edit operations applied in order against a single in-memory "
             "AscEditor. The file is saved once at the end iff every op succeeded "
             "(or stop_on_error=false). Each op is tagged by its ``op`` field; see "
-            "the schema for per-op fields."
+            "the schema for per-op fields. " + _COORDINATE_DESCRIPTION
         )
     )
     stop_on_error: bool = Field(

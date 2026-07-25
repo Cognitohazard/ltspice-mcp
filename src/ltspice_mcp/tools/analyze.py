@@ -80,7 +80,13 @@ _DigestCache = dict[tuple[str, int, int], str]
 
 
 class CaseSelection(StrictModel):
-    case_ids: list[str] = Field(min_length=1)
+    case_ids: list[str] = Field(
+        min_length=1,
+        description=(
+            "Analyze only these cases, addressed by the stable case_id a "
+            "run_experiments receipt reports. Experiment jobs only."
+        ),
+    )
 
     @model_validator(mode="after")
     def _unique_cases(self) -> CaseSelection:
@@ -90,10 +96,39 @@ class CaseSelection(StrictModel):
 
 
 class AnalyzeSourceInput(StrictModel):
-    job_id: str | None = None
-    raw_path: str | None = None
-    runs: Literal["all"] | list[int] | CaseSelection = "all"
-    label: str = Field(min_length=1)
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "Analyze the results of a job this server ran — an experiment, "
+            "simulation, sweep or Monte Carlo id. Exactly one of job_id or "
+            "raw_path. Its runs must have finished; a job still running is "
+            "reported under coverage.missing_cases instead of failing the call."
+        ),
+    )
+    raw_path: str | None = Field(
+        default=None,
+        description=(
+            "Analyze a .raw file directly, for results this server did not run. "
+            "It has no job provenance, so its rows carry deck_sha256: null and an "
+            "observation says so. Exactly one of job_id or raw_path."
+        ),
+    )
+    runs: Literal["all"] | list[int] | CaseSelection = Field(
+        default="all",
+        description=(
+            "Which runs of this source to read: 'all', a list of run indices, or "
+            "{case_ids: [...]} for an experiment job. Narrowing here is the cheapest "
+            "way to keep a large fan-out inside the call budget."
+        ),
+    )
+    label: str = Field(
+        min_length=1,
+        description=(
+            "Short unique name for this source; it tags every returned row and is "
+            "what a recipe's own 'sources' list refers to. Name the condition "
+            "('nominal', 'hot'), not the file."
+        ),
+    )
 
     @model_validator(mode="after")
     def _one_source(self) -> AnalyzeSourceInput:
@@ -130,21 +165,57 @@ _ROW_KEYS: tuple[str, ...] = ("source", *_IDENTITY_KEYS, "value")
 
 class PerRunInclude(StrictModel):
     limit: int = Field(default=50, ge=1, le=MAX_PAGE_SIZE)
-    cursor: str | None = None
+    cursor: str | None = Field(
+        default=None,
+        description=(
+            "Resume paging from a previous response's per_run.next_cursor. The "
+            "cursor is bound to those sources, recipes and grouping and is refused "
+            "against any other request."
+        ),
+    )
 
 
 class AnalyzeInclude(StrictModel):
-    per_run: PerRunInclude | None = None
-    outliers: bool = False
-    signals_available: bool = False
+    """Optional response blocks. The default response carries reductions, groups
+    and spec verdicts; per-run rows, outlier records and signal listings are
+    opt-in because each one grows the payload."""
+
+    # Docstring, not a Field description on ``include``: the schema builder
+    # inlines a $ref over its siblings, so only a model-level description of a
+    # submodel-typed field reaches the published schema.
+    per_run: PerRunInclude | None = Field(
+        default=None,
+        description=(
+            "Return the individual attributed rows, paginated. Omitted, a recipe "
+            "with 'reduce' returns only its reductions and a recipe without one "
+            "inlines up to 100 unpaged rows. Pair with 'fields' on a wide sweep."
+        ),
+    )
+    outliers: bool = Field(
+        default=False,
+        description=(
+            "Add the spec-failing records to each recipe's spec block. No effect on "
+            "a recipe that declares no 'spec'."
+        ),
+    )
+    signals_available: bool = Field(
+        default=False,
+        description=(
+            "List the trace names each source's .raw carries, keyed by source "
+            "manifest id. Costs one raw load per run — a discovery aid for naming "
+            "signals, not something to leave on."
+        ),
+    )
     fields: list[str] | None = Field(
         default=None,
         min_length=1,
         max_length=32,
         description=(
             "Keep only these dotted row paths (e.g. 'value.phase_margin_deg', "
-            "'step_values') on per_run/values rows, so a wide sweep returns the "
-            "few numbers wanted instead of every full row."
+            "'step_values') on per_run/values rows. Paths root at one of "
+            f"{', '.join(_ROW_KEYS)}; an unknown root is rejected rather than "
+            "silently returning empty rows. This is the payload lever for a wide "
+            "sweep — on a 45-step case it cut the rows from ~39k to ~5k characters."
         ),
     )
 
@@ -170,18 +241,58 @@ class AnalyzeInclude(StrictModel):
 
 
 class ContinueInput(StrictModel):
-    result_set_id: str
-    cursor: str
+    result_set_id: str = Field(
+        description="From the 'next' block of the partial response being resumed.",
+    )
+    cursor: str = Field(
+        description=(
+            "From that same 'next' block, or coverage.missing_cases.next_cursor to "
+            "page missing cases. Resuming replays no completed work."
+        ),
+    )
 
 
 class AnalyzeResultsInput(ToolInput):
-    sources: list[AnalyzeSourceInput] | None = Field(default=None, max_length=64)
+    sources: list[AnalyzeSourceInput] | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "What to read — up to 64 jobs and/or .raw files, each under a unique "
+            "label. Every recipe runs against every source unless the recipe names "
+            "a subset itself. Each source's .raw is parsed once and shared by all "
+            "recipes in the call. Required unless 'continue' is given."
+        ),
+    )
     # SkipValidation preserves the strict A.2 union in JSON Schema while
     # allowing the handler to validate each item independently.
-    recipes: list[SkipValidation[Recipe]] | None = Field(default=None, max_length=256)
-    group_by: list[str] = Field(default_factory=list)
+    recipes: list[SkipValidation[Recipe]] | None = Field(
+        default=None,
+        max_length=256,
+        description=(
+            "The measurements to take, up to 256, each a typed recipe returned "
+            "under its own unique 'key'. Ask for every metric you want in one call "
+            "rather than one call per metric; a recipe that fails fails alone into "
+            "'failures'."
+        ),
+    )
+    group_by: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Split each recipe's reductions into groups along these dimensions: a "
+            "variation assignment parameter name, 'circuit', or a .step axis name. "
+            "Empty gives one reduction over every row."
+        ),
+    )
     include: AnalyzeInclude = Field(default_factory=AnalyzeInclude)
-    continuation: ContinueInput | None = Field(default=None, alias="continue")
+    continuation: ContinueInput | None = Field(
+        default=None,
+        alias="continue",
+        description=(
+            "Resume a response truncated by the call budget. The stored request is "
+            "replayed verbatim, so sources, recipes, group_by and include are "
+            "rejected alongside it — to change any of those, start a new analysis."
+        ),
+    )
 
     @model_validator(mode="after")
     def _new_or_continue(self) -> AnalyzeResultsInput:
@@ -2145,10 +2256,13 @@ OUTPUT_SCHEMA: dict[str, Any] = {
 @registry.tool(
     name="analyze_results",
     description=(
-        "Apply strict typed recipes to one or more completed simulation or "
-        "terminal experiment sources. Returns case/run/step-attributed values, "
-        "reductions and spec counts. Work is bounded; resume a partial response "
-        "with its result_set_id and cursor."
+        "Measure finished simulation results: apply typed recipes to completed "
+        "jobs and/or .raw files and get values, reductions, group splits and spec "
+        "verdicts attributed to case, run and .step. One call spans many sources "
+        "and many metrics, so batch them instead of calling per metric. Work is "
+        "bounded by a compute budget; a partial response returns a result_set_id "
+        "and cursor to resume with 'continue'. On a wide sweep set include.fields "
+        "to return only the numbers you need."
     ),
     input_model=AnalyzeResultsInput,
     annotations=types.ToolAnnotations(

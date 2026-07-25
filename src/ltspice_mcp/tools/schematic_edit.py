@@ -65,6 +65,7 @@ from ltspice_mcp.tools._base import (
     symbol_resolver_for,
 )
 from ltspice_mcp.tools.circuit import (
+    _COORDINATE_DESCRIPTION,
     _build_on_wire_predicate,
     _collect_component_geometry,
     _edit_guard,
@@ -96,13 +97,15 @@ _DEFAULT_VIEW_LIMIT = 100
 
 
 class _OpWirePinsStrict(_OpWirePins):
-    """The wire op, ``wire_pins`` only (ID-15).
+    """Draw an orthogonal wire between two pins, refusing a diagonal run, a pin
+    collision, or an overlapping wire junction rather than drawing them.
 
     The shipped ``_OpWirePins`` still accepts the deprecated ``connect`` alias;
     this consolidated surface drops it. Because the parent's applier dispatches
     on ``isinstance(op, _OpWirePins)`` and reads ``op.op``, narrowing the literal
     is all that is needed — a ``connect`` payload no longer validates and never
-    reaches the applier.
+    reaches the applier. The payload fields (and their descriptions) are the
+    parent's; only the discriminator is narrowed.
     """
 
     op: Literal["wire_pins"] = "wire_pins"  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -127,8 +130,12 @@ ConsolidatedOp = (
 class _ViewCursors(StrictModel):
     """Resumption cursors for the paginated views, each a page's ``next_cursor``."""
 
-    label_only_pins: str | None = None
-    pin_legend: str | None = None
+    label_only_pins: str | None = Field(
+        default=None, description="next_cursor from a previous wiring.label_only_pins page."
+    )
+    pin_legend: str | None = Field(
+        default=None, description="next_cursor from a previous views.pin_legend page."
+    )
 
 
 class EditSchematicInput(ToolInput):
@@ -151,9 +158,12 @@ class EditSchematicInput(ToolInput):
     )
     ops: list[ConsolidatedOp] = Field(
         description=(
-            "Typed edit ops applied in order against one in-memory editor. The whole "
-            "batch commits atomically or not at all: the first op that fails aborts "
-            "the transaction and nothing is written."
+            "Typed edit ops applied in order against one in-memory editor, each tagged "
+            "by its 'op' field: add_component, move_component, remove_component, "
+            "set_component_value, set_component_attribute, add_net_label, "
+            "remove_net_label, wire_pins, remove_wire, add_directive, remove_directive. "
+            "The whole batch commits atomically or not at all: the first op that fails "
+            "aborts the transaction and nothing is written. " + _COORDINATE_DESCRIPTION
         )
     )
     reference: str | None = Field(
@@ -161,7 +171,9 @@ class EditSchematicInput(ToolInput):
         description=(
             "Optional netlist (.cir/.net) to verify the committed sheet against: the "
             "sheet is exported on a copy and compared for connectivity equivalence. "
-            "Runs AFTER commit — a mismatch is reported but does not un-commit."
+            "Runs AFTER commit — a mismatch is reported but does not un-commit. The "
+            "path itself is checked up front, so one outside the allowed roots is "
+            "refused before the sheet is written, not after."
         ),
     )
     dry_run: bool = Field(
@@ -183,16 +195,24 @@ class EditSchematicInput(ToolInput):
         default_factory=lambda: ["pin_legend"],
         description=(
             "Which geometry views to return. 'pin_legend' (default) is the per-"
-            "component pin/net table; 'render' is an SVG/PNG of the sheet."
+            "component pin/net table; 'render' is an SVG/PNG of the sheet. A render "
+            "needs a committed file, so under dry_run it reports metadata only and "
+            "writes no artifact."
         ),
     )
     view_cursors: _ViewCursors | None = Field(
         default=None,
-        description="Resume a paginated view by passing back its page's next_cursor.",
+        description=(
+            "Resume a paginated view by echoing back that page's next_cursor "
+            "unmodified. Each cursor is bound to its own view and is checked before "
+            "any work runs, so a bad one cannot surface after the sheet is committed."
+        ),
     )
     view_limit: int = Field(
         default=_DEFAULT_VIEW_LIMIT,
-        description="Page size for the paginated views (pin_legend, label_only_pins).",
+        description=(
+            "Page size for both paginated views — views.pin_legend and wiring.label_only_pins."
+        ),
     )
     render_format: Literal["png", "svg"] = Field(
         default="png",
