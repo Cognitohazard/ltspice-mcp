@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
 
 from ltspice_mcp.lib import lint_rules
-from ltspice_mcp.lib.lint_rules import RULES, RULES_BY_ID, lint_deck, linter_version
+from ltspice_mcp.lib.lint_rules import RULES, RULES_BY_ID, LintRule, lint_deck, linter_version
 
 
 def _ids(
@@ -186,12 +187,27 @@ def test_control_block_contents_produce_no_findings(tmp_path: Path):
     )
 
 
-def test_registry_dispositions_and_phases_are_explicit():
+def test_registry_dispositions_are_explicit():
     assert RULES_BY_ID["save-meas-coverage"].disposition == "blocking"
     assert RULES_BY_ID["include-relative"].disposition == "warning"
-    assert RULES_BY_ID["model-missing"].phase == "staging"
-    assert all(rule.provenance for rule in RULES)
+    assert all(rule.disposition for rule in RULES)
     assert "op-degenerate" not in RULES_BY_ID
+
+
+def test_rule_metadata_is_limited_to_fields_something_reads():
+    """A rule carries only metadata a consumer acts on.
+
+    ``disposition`` picks the finding's severity and drives the blocking gate;
+    ``check`` is the rule body. Anything else every rule sets and nothing reads
+    is worse than absent when it names an execution stage: ``lint_deck`` runs
+    every rule unconditionally, so a rule declaring a later stage would run at
+    preflight anyway. Add such a field together with the code that honours it.
+    """
+    assert {field.name for field in dataclasses.fields(LintRule)} == {
+        "rule_id",
+        "disposition",
+        "check",
+    }
 
 
 def test_linter_version_is_stable_nonempty_string():

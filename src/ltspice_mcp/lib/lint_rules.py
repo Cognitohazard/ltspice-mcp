@@ -19,7 +19,6 @@ from ltspice_mcp.lib.spice_lex_views import InstanceLine
 from ltspice_mcp.lib.spice_validator import PROBE_REF_RE, validate_netlist_arity
 
 Disposition = Literal["blocking", "warning", "observation"]
-Phase = Literal["preflight", "staging", "postrun"]
 LintFinding = dict[str, Any]
 
 linter_version = "1"
@@ -39,8 +38,6 @@ class LintRule:
 
     rule_id: str
     disposition: Disposition
-    phase: Phase
-    provenance: str
     check: RuleCheck
 
 
@@ -352,62 +349,14 @@ def _normalize_signal(value: str) -> str:
 
 
 RULES: tuple[LintRule, ...] = (
-    LintRule(
-        "save-meas-coverage",
-        "blocking",
-        "preflight",
-        "SPICE save-list and measurement dependency semantics",
-        _save_meas_coverage,
-    ),
-    LintRule(
-        "meas-ngspice-batch",
-        "blocking",
-        "preflight",
-        "ngspice batch-mode diagnostic",
-        _meas_ngspice_batch,
-    ),
-    LintRule(
-        "lib-section-ngspice",
-        "blocking",
-        "preflight",
-        "ngspice compatibility-mode behavior",
-        _lib_section_ngspice,
-    ),
-    LintRule(
-        "model-missing",
-        "blocking",
-        "staging",
-        "local model/subcircuit declarations",
-        _model_missing,
-    ),
-    LintRule(
-        "directive-arity",
-        "blocking",
-        "preflight",
-        "shared SPICE arity validator",
-        _directive_arity,
-    ),
-    LintRule(
-        "include-relative",
-        "warning",
-        "preflight",
-        "SPICE include resolution semantics",
-        _include_relative,
-    ),
-    LintRule(
-        "suffix-mega-milli",
-        "warning",
-        "preflight",
-        "SPICE engineering-suffix semantics",
-        _suffix_mega_milli,
-    ),
-    LintRule(
-        "temp-as-param",
-        "warning",
-        "preflight",
-        "SPICE temperature-axis semantics",
-        _temp_as_param,
-    ),
+    LintRule("save-meas-coverage", "blocking", _save_meas_coverage),
+    LintRule("meas-ngspice-batch", "blocking", _meas_ngspice_batch),
+    LintRule("lib-section-ngspice", "blocking", _lib_section_ngspice),
+    LintRule("model-missing", "blocking", _model_missing),
+    LintRule("directive-arity", "blocking", _directive_arity),
+    LintRule("include-relative", "warning", _include_relative),
+    LintRule("suffix-mega-milli", "warning", _suffix_mega_milli),
+    LintRule("temp-as-param", "warning", _temp_as_param),
 )
 
 RULES_BY_ID: dict[str, LintRule] = {rule.rule_id: rule for rule in RULES}

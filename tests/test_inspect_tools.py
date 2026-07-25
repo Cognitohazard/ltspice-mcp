@@ -218,6 +218,62 @@ async def test_net_netlist_has_no_geometry_keys(netlist: Path, state_no_sim: Ses
         assert set(member) == {"reference", "terminal"}
 
 
+@pytest.fixture
+def wide_net_asc(work_dir: Path, asc_state: SessionState) -> Path:
+    """A schematic whose one net carries more wire vertices than a single page.
+
+    600 collinear segments share 601 endpoints, all on the flagged net — enough
+    to make the coordinate page boundary observable without depending on the
+    page size's value.
+    """
+    lines = ["Version 4.1", "SHEET 1 880 680"]
+    lines += [f"WIRE {x} 0 {x + 16} 0" for x in range(0, 600 * 16, 16)]
+    lines.append("FLAG 0 0 bignet")
+    p = work_dir / "wide.asc"
+    p.write_text("\n".join(lines) + "\n")
+    return p
+
+
+async def test_net_asc_coordinates_advance_across_pages(
+    wide_net_asc: Path, asc_state: SessionState
+):
+    """Wire-vertex coordinates page forward instead of re-serving the first page.
+
+    The item's cursor advances pins AND coordinates, so every vertex is
+    reachable exactly once. Announcing more coordinates while handing back the
+    same ones on every page is worse than plain truncation: it advertises data
+    the caller has no lever to reach.
+    """
+    query: dict = {"kind": "net", "path": str(wide_net_asc), "at": "net:bignet"}
+    (first,) = await _run(asc_state, [query])
+    assert first["ok"] is True
+    assert first["data"]["coordinates_truncated"] is True
+    cursor = first["next_cursor"]
+    assert cursor is not None, "coordinates reported truncated with no cursor to reach the rest"
+    total = first["data"]["total_coordinates"]
+    page1 = first["data"]["coordinates"]
+    assert total > len(page1), "fixture net must exceed one coordinate page"
+
+    (second,) = await _run(asc_state, [{**query, "cursor": cursor}])
+    assert second["ok"] is True
+    page2 = second["data"]["coordinates"]
+    assert page2, "page 2 returned no coordinates"
+    assert not [c for c in page2 if c in page1], "page 2 repeated page 1's coordinates"
+
+    # Walk to exhaustion: every vertex appears exactly once across the pages.
+    seen = list(page1) + list(page2)
+    cursor = second["next_cursor"]
+    pages = 2
+    while cursor is not None:
+        (nxt,) = await _run(asc_state, [{**query, "cursor": cursor}])
+        seen.extend(nxt["data"]["coordinates"])
+        cursor = nxt["next_cursor"]
+        pages += 1
+        assert pages < 20, "cursor failed to terminate"
+    assert len(seen) == total
+    assert len({(c["x"], c["y"]) for c in seen}) == total
+
+
 async def test_net_netlist_coordinates_rejected(netlist: Path, state_no_sim: SessionState):
     (res,) = await _run(state_no_sim, [{"kind": "net", "path": str(netlist), "at": [10, 20]}])
     assert res["ok"] is False
@@ -378,6 +434,31 @@ async def test_mixed_batch_partial_failure(netlist: Path, cap_state: SessionStat
     assert results[3]["ok"] is True
     # Every result keeps its input position.
     assert [r["index"] for r in results] == [0, 1, 2, 3]
+
+
+async def test_outcome_enum_advertises_only_reachable_values(state_no_sim: SessionState):
+    """The envelope must not document an outcome no code path can produce.
+
+    Per-item isolation is inspect's contract: every query fault — including an
+    unexpected one — is caught and returned as that item's error, so a batch
+    where every query fails is still 'partial' with isError false. A genuine
+    call-level fault raises out of the handler, and the SDK answers with isError
+    and no structuredContent at all, so this envelope is never the carrier of
+    'failed'. ('in_progress' is likewise absent: inspect has no async work.)
+    """
+    assert insp._OUTPUT_SCHEMA["properties"]["outcome"]["enum"] == ["complete", "partial"]
+
+    # The behavioural half: nothing an individual query can do reaches a
+    # call-level outcome. _run pins outcome == "partial" and isError is False.
+    results = await _run(
+        state_no_sim,
+        [
+            {"kind": "no_such_kind"},
+            {"kind": "symbol", "name": "definitely_not_a_symbol"},
+            {"kind": "net", "path": "/etc/passwd", "at": "net:x"},
+        ],
+    )
+    assert [r["ok"] for r in results] == [False, False, False]
 
 
 # ---------------------------------------------------------------------------
