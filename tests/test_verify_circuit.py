@@ -9,12 +9,20 @@ PNG-present, and PNG forced-absent), the sidecar export (in-place .net + diff
 against the prior), .sp dispatch, findings at+subject completeness, and the
 quality checks firing on label-island and text-overlap fixtures while staying
 silent on a clean sheet.
+
+Every response in this module is validated against verify_circuit's own declared
+output_schema *closed* — additionalProperties:false injected into every object
+that declares properties — so a key the handler emits but the schema never
+declared fails here. The plain schema cannot catch that: JSON Schema admits
+undeclared keys by default, which is how ``comparison`` came to spread sixteen
+undeclared keys past both the suite and the session-wide conformance hook.
 """
 
 from __future__ import annotations
 
 import typing
 from pathlib import Path
+from typing import Any
 
 import jsonschema
 import pytest
@@ -23,6 +31,7 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import raster
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify as vc
+from ltspice_mcp.tools.circuit import STRUCTURAL_DELTA_PROPS
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 
 
@@ -32,10 +41,29 @@ class FakeSim:
     spice_exe: typing.ClassVar[list[str]] = ["/fake/LTspice.exe"]
 
 
+def _closed(node: Any) -> Any:
+    """The schema with additionalProperties:false wherever it declares properties.
+
+    An object with no ``properties`` (a finding's free-form ``evidence``) is left
+    open, because it genuinely carries caller-defined keys.
+    """
+    if isinstance(node, dict):
+        closed = {key: _closed(value) for key, value in node.items()}
+        if isinstance(node.get("properties"), dict):
+            closed["additionalProperties"] = False
+        return closed
+    if isinstance(node, list):
+        return [_closed(item) for item in node]
+    return node
+
+
+_CLOSED_OUTPUT_SCHEMA = _closed(vc._OUTPUT_SCHEMA)
+
+
 def _assert_schema(result) -> dict:
     data = result.structuredContent
     assert data is not None
-    jsonschema.Draft202012Validator(vc._OUTPUT_SCHEMA).validate(data)
+    jsonschema.Draft202012Validator(_CLOSED_OUTPUT_SCHEMA).validate(data)
     return data
 
 
@@ -234,6 +262,165 @@ async def test_structural_topology_change_is_node_blind(state_no_sim, work_dir):
         state_no_sim, path=str(deck), reference=str(ref), compare_mode="structural_diff"
     )
     assert data["comparison"]["equivalent"] is True
+
+
+# ---------------------------------------------------------------------------
+# Schema conformance: every emitted key is a declared key
+# ---------------------------------------------------------------------------
+
+# Differs from _BASE in all four ways at once so both comparison modes populate
+# every list they can: R1's value changed, R2 rewired (isomorphism break), C1
+# absent, L1 extra.
+_MULTI_DIFF = "* divider\nV1 in 0 5\nR1 in out 4k7\nR2 in 0 2k\nL1 out 0 1u\n.end\n"
+_MULTI_BASE = "* divider\nV1 in 0 5\nR1 in out 1k\nR2 out 0 2k\nC1 out 0 1n\n.end\n"
+
+
+def _declared_comparison_keys() -> set[str]:
+    return set(vc._COMPARISON_SCHEMA["properties"])
+
+
+async def test_equivalence_comparison_declares_every_key_it_emits(state_no_sim, work_dir):
+    """The equivalence payload is ``{"mode": ...} | GraphComparison.as_dict()``;
+    every one of those keys must be declared, not just the verdict booleans."""
+    deck = _write(work_dir, "cand.cir", _MULTI_BASE)
+    ref = _write(work_dir, "ref.cir", _MULTI_DIFF)
+    data = await _run(state_no_sim, path=str(deck), reference=str(ref))
+    comparison = data["comparison"]
+    undeclared = set(comparison) - _declared_comparison_keys()
+    assert not undeclared, f"equivalence emits undeclared comparison keys: {sorted(undeclared)}"
+    # The difference detail a caller acts on actually arrived, so this is a real
+    # payload and not a degenerate all-empty one that would pass vacuously.
+    assert {c["ref"] for c in comparison["added"]} == {"C1"}
+    assert {c["ref"] for c in comparison["removed"]} == {"L1"}
+    assert {v["ref"] for v in comparison["value_mismatches"]} == {"R1"}
+    assert comparison["node_partition_mismatches"]
+
+
+async def test_structural_comparison_declares_every_key_it_emits(state_no_sim, work_dir):
+    """Same for the structural_diff payload, whose keys are disjoint from the
+    equivalence ones — one flat schema has to cover both."""
+    deck = _write(work_dir, "cand.cir", _MULTI_BASE)
+    ref = _write(work_dir, "ref.cir", _MULTI_DIFF)
+    data = await _run(
+        state_no_sim, path=str(deck), reference=str(ref), compare_mode="structural_diff"
+    )
+    comparison = data["comparison"]
+    undeclared = set(comparison) - _declared_comparison_keys()
+    assert not undeclared, (
+        f"structural_diff emits undeclared comparison keys: {sorted(undeclared)}"
+    )
+    assert comparison["components_added"] == ["C1"]
+    assert comparison["components_removed"] == ["L1"]
+    assert {c["reference"] for c in comparison["components_changed"]} == {"R1"}
+
+
+# ---------------------------------------------------------------------------
+# Parse warnings have exactly one home: the top-level warnings channel
+# ---------------------------------------------------------------------------
+
+
+async def test_unparseable_reference_warns_at_top_level(state_no_sim, work_dir):
+    """A deck that could not be parsed is diffed as empty, so everything on the
+    other side reads as added/removed. That caveat must reach the declared
+    top-level channel — inside ``comparison`` it was invisible to the schema, and
+    a structured-only client would have read the bogus delta as fact."""
+    deck = _write(work_dir, "cand.cir", _BASE)
+    missing = work_dir / "never_written.cir"
+    data = await _run(
+        state_no_sim, path=str(deck), reference=str(missing), compare_mode="structural_diff"
+    )
+    assert "warnings" not in data["comparison"], "parse warnings must not ride inside comparison"
+    assert any("could not be parsed" in w for w in data["warnings"])
+    assert any("never_written.cir" in w for w in data["warnings"])
+    # The delta is the bogus one the warning is about — the unparseable reference
+    # read as empty, so this circuit's whole component set looks newly added.
+    assert set(data["comparison"]["components_added"]) == {"V1", "R1", "R2"}
+    # Presentation mirrors it: without this the hint reads "No problems found".
+    assert "could not be parsed" in data["hint"]
+
+
+async def test_unparseable_deck_reaches_no_verdict(state_no_sim, work_dir):
+    """A delta measured against a deck nothing could read is not evidence of a
+    difference any more than of a match — the side it was measured against was
+    fabricated. So the verdict is null, and the outcome stays off 'complete'."""
+    deck = _write(work_dir, "cand.cir", _BASE)
+    data = await _run(
+        state_no_sim,
+        path=str(deck),
+        reference=str(work_dir / "never_written.cir"),
+        compare_mode="structural_diff",
+    )
+    assert data["comparison"]["equivalent"] is None
+    assert data["outcome"] == "partial"
+    assert "no verdict" in data["hint"]
+
+
+def test_two_unparseable_decks_are_not_equivalent(work_dir):
+    """The defect this closes: two unread decks both diff as EMPTY circuits, so
+    the delta is empty — and an empty delta otherwise means 'these match'. That
+    combination reported equivalent/complete for a comparison that compared
+    nothing.
+
+    Driven at ``_compare_structural`` because the handler cannot currently reach
+    the pairing: it gates on ``path.is_file()``, and ``extract_netlist_info``
+    raises only on a missing file (malformed content surfaces as lexer warnings
+    and ``<unparseable>`` values, never an exception), so the candidate side of a
+    netlist comparison always parses. The rule is pinned here anyway — it should
+    hold by construction, not by whichever inputs happen to be reachable today.
+    """
+    comparison, _findings, failure, warnings = vc._compare_structural(
+        work_dir / "no_such_reference.cir", work_dir / "no_such_candidate.cir"
+    )
+    assert failure is None
+    assert comparison is not None
+    assert not any(comparison[key] for key in STRUCTURAL_DELTA_PROPS), (
+        "precondition: the delta really is empty, the shape that read as a match"
+    )
+    assert comparison["equivalent"] is None
+    assert len(warnings) == 3, "the caveat plus one message per unread deck"
+    # The null verdict has to survive into the outcome, or the fix stops at the
+    # payload and the call still reports success.
+    assert vc._outcome([], [], comparison) == "partial"
+
+
+async def test_unreadable_reference_contract_differs_by_mode_as_documented(state_no_sim, work_dir):
+    """The two modes answer an unreadable reference differently, on purpose, and
+    ``compare_mode``'s description promises exactly this. Equivalence cannot build
+    a comparison at all — isomorphism is undefined without both graphs — so it
+    reports a compare failure and no comparison. structural_diff diffs the missing
+    side as empty, so the delta survives with a null verdict and a warning. Pinned
+    because a documented asymmetry that drifts is worse than an undocumented one.
+    """
+    deck = _write(work_dir, "cand.cir", _BASE)
+    missing = str(work_dir / "never_written.cir")
+
+    equiv = await _run(state_no_sim, path=str(deck), reference=missing)
+    assert equiv["comparison"] is None
+    assert [f["stage"] for f in equiv["failures"]] == ["compare"]
+    assert "compare" not in equiv["checks_run"]
+
+    structural = await _run(
+        state_no_sim, path=str(deck), reference=missing, compare_mode="structural_diff"
+    )
+    assert structural["comparison"]["equivalent"] is None
+    assert structural["failures"] == []
+    assert structural["warnings"]
+    assert "compare" in structural["checks_run"]
+
+    # What the caller CAN rely on across both modes: not a clean result, and the
+    # reason is somewhere in the response rather than inferred from silence.
+    assert equiv["outcome"] == structural["outcome"] == "partial"
+
+
+async def test_clean_comparison_emits_no_warnings(state_no_sim, work_dir):
+    """The channel stays empty when nothing was assumed — so a populated
+    ``warnings`` always means something, and is never decorative."""
+    deck = _write(work_dir, "cand.cir", _BASE)
+    ref = _write(work_dir, "ref.cir", _BASE)
+    data = await _run(
+        state_no_sim, path=str(deck), reference=str(ref), compare_mode="structural_diff"
+    )
+    assert data["warnings"] == []
 
 
 # ---------------------------------------------------------------------------
