@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.lib import experiment_store
+from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import (
     ExperimentCancellationError,
     ExperimentRunner,
@@ -42,15 +43,18 @@ async def _wait_for(condition, *, timeout_s: float = 5.0) -> None:
 def _cases(work_dir: Path, count: int) -> tuple[list[ExperimentCase], list[SourceRecord]]:
     circuit = work_dir / "deck.cir"
     circuit.write_text(".op\n.end\n")
+    # The recorded digest is the file's real one: a replay checks the manifest
+    # against the source on disk, so a fictional digest reads as an edited deck.
+    digest = sha256_file(circuit)
     source = SourceRecord(
         circuit="deck",
         path=circuit,
-        sha256="source-sha",
+        sha256=digest,
         staged_deck=circuit,
         manifest=[
             ManifestEntry(
                 path=circuit,
-                sha256="source-sha",
+                sha256=digest,
                 staged=True,
                 live=False,
                 staged_path=circuit,

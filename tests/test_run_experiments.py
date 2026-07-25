@@ -13,6 +13,7 @@ import jsonschema
 import pytest
 from pydantic import ValidationError
 
+from ltspice_mcp.lib import experiment_store
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.state import SessionState
@@ -366,6 +367,133 @@ class TestIdempotency:
         assert result.isError
         assert data["error"]["code"] == "idempotency_conflict"
         assert "control_token" not in data
+        assert len(submissions) == 1
+
+
+@pytest.mark.asyncio
+class TestReplayRejectsChangedSources:
+    """A reused request_id over an edited circuit must not return the old numbers.
+
+    The canonical fingerprint covers the request arguments only, so nothing in
+    it moves when a deck is edited: an identical payload over a changed circuit
+    used to replay the earlier receipt as a confirmed success. That is the one
+    failure that returns wrong data rather than a wrong field, so it fails
+    closed on the digests the coordinator already recorded.
+    """
+
+    async def test_edited_deck_conflicts_instead_of_replaying(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        _instant_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "edited.cir")
+        args = _args(deck, "edited-deck")
+        await handle_run_experiments(args, state_with_sim)
+        _deck(deck, "V1 in 0 1\nR1 in 0 2k\n.op\n.end\n")
+
+        result = await handle_run_experiments(args, state_with_sim)
+        data = _assert_schema(result)
+
+        assert result.isError
+        assert data["error"]["code"] == "idempotency_conflict"
+        assert str(deck) in data["error"]["message"]
+        assert "control_token" not in data
+        assert len(submissions) == 1
+
+    async def test_edited_include_conflicts_with_the_root_deck_untouched(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        deck = _factored_deck(work_dir)
+        args = _args(deck, "edited-include", lint="off")
+        await handle_run_experiments(args, state_with_sim)
+        root_bytes = deck.read_bytes()
+        core = work_dir / "core.inc"
+        core.write_text(".subckt core in out\nR1 in mid 2k\nC1 mid out 1n\n.ends\n")
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert deck.read_bytes() == root_bytes
+        assert data["error"]["code"] == "idempotency_conflict"
+        assert str(core) in data["error"]["message"]
+        assert len(submitted) == 1
+
+    async def test_unchanged_deck_and_include_still_replay(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        deck = _factored_deck(work_dir)
+        args = _args(deck, "unchanged-include", lint="off")
+
+        first = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert replay["job_id"] == first["job_id"]
+        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        assert len(submitted) == 1
+
+    async def test_deleted_source_conflicts_rather_than_replaying(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        _instant_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "removed.cir")
+        args = _args(deck, "removed-deck")
+        await handle_run_experiments(args, state_with_sim)
+        deck.unlink()
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert data["error"]["code"] == "idempotency_conflict"
+        assert "no longer readable" in data["error"]["message"]
+        assert str(deck) in data["error"]["message"]
+        assert len(submissions) == 1
+
+    async def test_record_without_source_digests_conflicts(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A record predating recorded digests must not replay as a match.
+
+        Treating an absent digest as agreement would leave the fix inert for
+        exactly the jobs already sitting on disk.
+        """
+        submissions: list[str] = []
+        _instant_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "digestless.cir")
+        args = _args(deck, "digestless-record")
+        first = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        await state_with_sim.job_registry.drain_pending()
+
+        record = experiment_store.record_path(first["job_id"], work_dir)
+        stored = json.loads(record.read_text())
+        for source in stored["sources"]:
+            source["sha256"] = ""
+            for entry in source["manifest"]:
+                entry["sha256"] = ""
+        record.write_text(json.dumps(stored))
+        del state_with_sim.experiment_jobs[first["job_id"]]
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert data["error"]["code"] == "idempotency_conflict"
+        assert "digest" in data["error"]["message"]
         assert len(submissions) == 1
 
 

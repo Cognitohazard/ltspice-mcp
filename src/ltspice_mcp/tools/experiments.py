@@ -33,6 +33,7 @@ from ltspice_mcp.lib.experiment_runner import (
     ExperimentRunRequest,
     IdempotencyConflictError,
     canonical_fingerprint,
+    verify_replay_sources,
 )
 from ltspice_mcp.lib.experiment_types import (
     TERMINAL_CASE_STATUSES,
@@ -812,6 +813,7 @@ async def _load_matching_replay(
         raise IdempotencyConflictError(
             f"request_id {args.request_id!r} points to an inconsistent coordinator record"
         )
+    await asyncio.to_thread(verify_replay_sources, job, args.request_id)
     if not any(item.get("code") == "idempotent_replay" for item in job.observations):
         job.observations.append(
             {

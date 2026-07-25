@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from ltspice_mcp.errors import SimulationError
 from ltspice_mcp.lib import experiment_store, now
+from ltspice_mcp.lib.deck_staging import verify_staged_manifest
 from ltspice_mcp.lib.experiment_types import (
     TERMINAL_CASE_STATUSES,
     AnalysisStage,
@@ -38,6 +39,13 @@ DEFAULT_KILL_GRACE_S = 10.0
 
 AnalysisCallback = Callable[[ExperimentJob], Awaitable[dict[str, Any]]]
 
+# How each staging-time drift observation reads when it blocks a replay
+# instead of annotating a fresh stage.
+_DRIFT_REASONS = {
+    "source_modified_after_staging": "content changed",
+    "source_unavailable_after_staging": "no longer readable",
+}
+
 
 class IdempotencyConflictError(SimulationError):
     """A request id was reused for a different canonical payload."""
@@ -60,6 +68,43 @@ def canonical_fingerprint(request_model: Any) -> str:
         ensure_ascii=False,
     ).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
+
+
+def verify_replay_sources(job: ExperimentJob, request_id: str) -> None:
+    """Refuse to replay a receipt whose source decks have changed since it ran.
+
+    The canonical fingerprint hashes the request arguments only, so nothing in
+    it moves when a circuit is edited underneath a reused request_id — the
+    replay would hand back the earlier run's numbers as a confirmed success for
+    a circuit that no longer exists.
+
+    Staging already reports exactly this drift through
+    ``verify_staged_manifest``; replay is simply the path that never stages, so
+    the check is lifted onto it rather than restated. Comparing against the
+    manifest the coordinator persisted is what keeps the replay cheap: it needs
+    the stored record, not a second staging pass.
+
+    A changed deck raises the conflict a changed payload already raises: both
+    are one request_id reused for a different experiment.
+    """
+    for source in job.sources:
+        if not any(entry.staged and not entry.live for entry in source.manifest):
+            raise IdempotencyConflictError(
+                f"request_id {request_id!r} points to experiment {job.job_id}, whose "
+                f"record carries no source digest for circuit {source.circuit!r}; its "
+                "results cannot be shown to describe the current deck. Submit under a "
+                "new request_id to run it again."
+            )
+        drift = [
+            f"{item['evidence']['path']} ({_DRIFT_REASONS[item['code']]})"
+            for item in verify_staged_manifest(source.manifest)
+        ]
+        if drift:
+            raise IdempotencyConflictError(
+                f"request_id {request_id!r} already ran circuit {source.circuit!r}, "
+                f"whose sources have changed since: {', '.join(drift)}. Submit under a "
+                "new request_id to run the updated circuit."
+            )
 
 
 @dataclass
@@ -313,6 +358,10 @@ class ExperimentRunner(RunnerBase):
                             f"request_id {request.request_id!r} points to an "
                             "inconsistent coordinator record"
                         )
+                    # The cheap pre-staging replay check cannot see a record
+                    # written after it looked, so the same drift is re-checked
+                    # here, where this submission has already staged its decks.
+                    verify_replay_sources(existing, request.request_id)
                     if any(
                         item.get("code") == "server_restarted" for item in existing.observations
                     ):
