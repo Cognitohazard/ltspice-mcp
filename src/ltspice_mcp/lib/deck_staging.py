@@ -14,7 +14,12 @@ from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.experiment_types import ManifestEntry
 from ltspice_mcp.lib.spice_lex import SpiceCard, Token, emit, lex, tokenize_body
 
-DEFAULT_INCLUDE_DEPTH = 3
+# Sized for real foundry PDKs, which fan out further than a hand-written deck:
+# sky130 reaches a device model five levels down (deck -> sky130.lib.spice ->
+# corners/<corner>.spice -> <device>__<corner>.corner.spice -> <device>.pm3.spice),
+# and gf180 nests comparably. Cycles are caught separately by the in-progress
+# set, so this bound is a resource guard, not the loop guard.
+DEFAULT_INCLUDE_DEPTH = 8
 
 INCLUDE_HEADS = frozenset({".include", ".inc", ".lib", ".libfile"})
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
@@ -179,7 +184,7 @@ def stage_deck(
             text = decode_spice_bytes(data)
             parsed = lex(text)
             changed = False
-            for reference in scan_include_references(parsed.cards, resolved):
+            for reference in scan_include_references(parsed.cards, resolved, depth=depth):
                 target = _resolve_reference(resolved.parent, reference.raw_path)
                 target_resolved = _resolve_existing(target)
                 target_root = (
@@ -260,10 +265,18 @@ def stage_deck(
                     is_absolute_reference(reference.raw_path)
                     or expected != actual_destination.resolve()
                 ):
-                    staged_relative = Path(
-                        os.path.relpath(actual_destination, destination.parent)
-                    ).as_posix()
-                    _replace_reference(reference, staged_relative)
+                    # The root deck is what gets handed to the simulator, which
+                    # runs it from its own output folder — a reference relative
+                    # to the staging directory does not survive that move. Files
+                    # deeper in the bundle never move relative to each other, so
+                    # they stay relative and the bundle stays relocatable.
+                    if depth == 0:
+                        replacement = actual_destination.as_posix()
+                    else:
+                        replacement = Path(
+                            os.path.relpath(actual_destination, destination.parent)
+                        ).as_posix()
+                    _replace_reference(reference, replacement)
                     changed = True
 
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -367,8 +380,15 @@ def _destination_for(
 def scan_include_references(
     cards: list[SpiceCard],
     source: Path,
+    *,
+    depth: int = 0,
 ) -> list[IncludeReference]:
-    """Return quote-aware include/library references from parsed cards."""
+    """Return quote-aware include/library references from parsed cards.
+
+    ``depth`` is 0 for the deck itself and >0 for a file reached by following
+    a reference out of it — inside such a file a bare ``.lib <name>`` is a
+    section declaration, not an include.
+    """
     references: list[IncludeReference] = []
     for card in cards:
         if card.kind != "directive":
@@ -382,7 +402,7 @@ def scan_include_references(
             continue
         is_lib = tokens[0].text.casefold() == ".lib"
         section = _unquote(tokens[2].text) if is_lib and len(tokens) > 2 else None
-        if is_lib and section is None and _looks_like_section_declaration(raw_path, source):
+        if is_lib and section is None and _looks_like_section_declaration(raw_path, source, depth):
             continue
         references.append(
             IncludeReference(
@@ -395,8 +415,18 @@ def scan_include_references(
     return references
 
 
-def _looks_like_section_declaration(raw_path: str, source: Path) -> bool:
-    if source.suffix.casefold() not in {".lib", ".sub"}:
+def _looks_like_section_declaration(raw_path: str, source: Path, depth: int = 0) -> bool:
+    """True when a single-token ``.lib X`` declares a section rather than
+    naming a file to include.
+
+    Library-context test, in order of authority: any file reached by following
+    a reference is one (that is how a sectioned library is entered), and at the
+    top level the name has to look like a library. Matching ``.lib`` anywhere
+    in the suffixes — not just the last one — is what admits the near-universal
+    PDK naming ``<pdk>.lib.spice`` (sky130, gf180); keying on the final suffix
+    alone read every corner declaration inside them as a missing file.
+    """
+    if depth == 0 and not any(suffix.casefold() in {".lib", ".sub"} for suffix in source.suffixes):
         return False
     if any(char in raw_path for char in ("/", "\\", ".")):
         return False

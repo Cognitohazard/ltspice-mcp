@@ -212,3 +212,77 @@ class TestPlatformRouting:
         assert paths.staging_root == (
             tmp_path / ".ltspice-mcp" / "jobs" / "exp1" / "staged" / "dut"
         )
+
+
+class TestFoundryPdkShapes:
+    """Staging shapes that only real foundry PDKs exercise.
+
+    Modelled on sky130/gf180: a sectioned corner library named ``*.lib.spice``,
+    a device model five include levels below the deck, and the library living
+    under a different allowed root than the deck.
+    """
+
+    @staticmethod
+    def _pdk(tmp_path: Path) -> tuple[Path, Path]:
+        pdk = tmp_path / "pdk"
+        # Corner sections declared with a bare ``.lib <name>`` inside a file
+        # whose final suffix is ``.spice`` — the near-universal PDK naming.
+        _write(
+            pdk / "models.lib.spice",
+            '.lib tt\n.include "corners/tt.spice"\n.endl\n'
+            '.lib ss\n.include "corners/ss.spice"\n.endl\n',
+        )
+        _write(pdk / "corners" / "tt.spice", '.include "../devices/nfet__tt.corner.spice"\n')
+        _write(pdk / "corners" / "ss.spice", '.include "../devices/nfet__ss.corner.spice"\n')
+        _write(pdk / "devices" / "nfet__tt.corner.spice", '.include "nfet.pm3.spice"\n')
+        _write(pdk / "devices" / "nfet__ss.corner.spice", '.include "nfet.pm3.spice"\n')
+        _write(pdk / "devices" / "nfet.pm3.spice", ".model nfet nmos level=8\n")
+        return pdk, pdk / "models.lib.spice"
+
+    def test_sectioned_library_declarations_are_not_files(self, tmp_path: Path):
+        """``.lib tt`` inside a ``*.lib.spice`` declares a section. Reading it
+        as a filename fails every real PDK corner selection."""
+        root = tmp_path / "root"
+        pdk, lib = self._pdk(tmp_path)
+        deck = _write(root / "deck.cir", f'.lib "{lib}" tt\nM1 d g s b nfet\n.op\n.end\n')
+
+        staged = stage_deck(deck, tmp_path / "stage", [root, pdk])
+
+        names = {entry.path.name for entry in staged.manifest}
+        assert "models.lib.spice" in names
+        assert "nfet.pm3.spice" in names, "did not reach the device model five levels down"
+        assert not any(entry.path.name in {"tt", "ss"} for entry in staged.manifest)
+
+    def test_root_deck_reference_survives_relocation(self, tmp_path: Path):
+        """The staged deck is handed to the simulator, which runs it from its
+        own output folder — so the root deck's rewritten reference has to
+        resolve from anywhere, not just from the staging directory."""
+        root = tmp_path / "root"
+        pdk, lib = self._pdk(tmp_path)
+        deck = _write(root / "deck.cir", f'.lib "{lib}" tt\n.op\n.end\n')
+
+        staged = stage_deck(deck, tmp_path / "stage", [root, pdk])
+
+        text = staged.staged_deck.read_text()
+        reference = text.splitlines()[0].split()[1].strip('"')
+        assert Path(reference).is_absolute(), (
+            f"root deck kept a relocatable-only path: {reference}"
+        )
+        assert Path(reference).exists()
+
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        moved = elsewhere / "run.cir"
+        moved.write_text(text)
+        assert (moved.parent / reference).exists(), "reference broke when the deck moved"
+
+    def test_default_depth_reaches_pdk_device_models(self, tmp_path: Path):
+        """sky130 puts a device model five levels below the deck; a shallower
+        default silently caps every PDK at a partial manifest."""
+        root = tmp_path / "root"
+        pdk, lib = self._pdk(tmp_path)
+        deck = _write(root / "deck.cir", f'.lib "{lib}" tt\n.op\n.end\n')
+
+        staged = stage_deck(deck, tmp_path / "stage", [root, pdk])
+
+        assert len(staged.manifest) >= 5
