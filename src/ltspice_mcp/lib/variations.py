@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
@@ -22,6 +23,10 @@ from pydantic import (
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import atomic_write_text, component_value
+from ltspice_mcp.lib.deck_staging import (
+    rewrite_staged_references,
+    staged_reference_targets,
+)
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.montecarlo import (
     MCSampler,
@@ -193,12 +198,24 @@ Variation: TypeAlias = Annotated[
 
 
 @dataclass(frozen=True)
+class DeckFile:
+    """One staged file a deck pulls in through ``.include``/``.lib``."""
+
+    path: Path
+    text: str
+
+
+@dataclass(frozen=True)
 class CircuitDeck:
     """One uniquely named circuit deck supplied to the expansion engine."""
 
     circuit_id: str
     path: Path
     text: str
+    # The staged include closure, root deck excluded. A variation resolves
+    # against every file in it, so factoring a circuit into a reusable core
+    # does not put that core's components out of a sweep's reach.
+    includes: tuple[DeckFile, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -209,6 +226,8 @@ class ResolvedAssignment:
     kind: Literal["param", "component", "model"]
     value: ScalarValue
     refs: tuple[str, ...] = ()
+    # Index into the deck closure: 0 is the root deck, 1.. its includes.
+    file_index: int = 0
 
 
 @dataclass
@@ -245,6 +264,28 @@ class _DeckTargets:
     params: dict[str, str]
     components: dict[str, str]
     models_by_ref: dict[str, str]
+    model_names: dict[str, str]
+
+
+@dataclass(frozen=True)
+class _ClosureFile:
+    """One file of a deck's include closure, with its targets resolved."""
+
+    index: int
+    path: Path
+    text: str
+    targets: _DeckTargets
+
+
+@dataclass(frozen=True)
+class _DeckClosure:
+    """A deck and its staged includes, addressed as one target namespace."""
+
+    circuit_id: str
+    files: tuple[_ClosureFile, ...]
+
+    def texts(self) -> dict[int, str]:
+        return {file.index: file.text for file in self.files}
 
 
 def normalize_circuit_decks(circuits: list[CircuitDeck]) -> list[CircuitDeck]:
@@ -350,7 +391,7 @@ def expand_variations(
 
     expanded: list[ExpandedCase] = []
     for circuit in circuits:
-        targets, cards = _deck_targets(circuit.text)
+        closure = _build_closure(circuit)
         families: list[list[tuple[dict[str, Any], tuple[ResolvedAssignment, ...]]]] = []
         random_variation: RandomVariation | None = None
         for variation in variations:
@@ -358,9 +399,10 @@ def expand_variations(
                 continue
             if isinstance(variation, RandomVariation):
                 random_variation = variation
-                _validate_random_targets(circuit, targets, cards, variation)
+                for rule in variation.rules:
+                    _resolve_random_rule_file(closure, rule)
                 continue
-            families.append(_resolve_assign_family(circuit, targets, variation))
+            families.append(_resolve_assign_family(closure, variation))
 
         combinations: list[tuple[dict[str, Any], tuple[ResolvedAssignment, ...]]] = [({}, ())]
         for family in families:
@@ -415,21 +457,24 @@ def materialize_variants(
     suffix = (
         circuit.path.suffix if circuit.path.suffix.lower() in {".cir", ".net", ".sp"} else ".cir"
     )
+    closure = _build_closure(circuit)
+    referrers = _include_referrers(closure)
     materialized: list[MaterializedCase] = []
     for case in cases:
         if case.circuit_id != circuit.circuit_id:
             continue
-        text = _apply_assignments(circuit.text, case.edits)
+        texts = closure.texts()
+        _apply_assignments(texts, case.edits)
         assignments = dict(case.assignments)
         if case.random is not None and case.random_index is not None:
             sampler = MCSampler(case.random.seed).derive(
                 f"{case.circuit_id}:case{case.case_index}:run{case.random_index + 1}"
             )
-            text, draws = _apply_random_rules(text, case.random.rules, sampler)
-            assignments.update(draws)
+            assignments.update(_apply_random_rules(closure, texts, case.random.rules, sampler))
             assignments["_random_run"] = case.random_index
             if case.random.id is not None:
                 assignments["_random_id"] = case.random.id
+        text = _write_case_includes(closure, referrers, texts, case.case_index)
         path = output_dir / f"case-{case.case_index:04d}{suffix}"
         atomic_write_text(path, text, durable=True)
         materialized.append(
@@ -452,16 +497,18 @@ def _applies(variation: AssignVariation | RandomVariation, circuit_id: str) -> b
     }
 
 
-def _deck_targets(text: str) -> tuple[_DeckTargets, list[SpiceCard]]:
-    cards = lex(text).cards
+def _deck_targets(text: str) -> _DeckTargets:
     params: dict[str, str] = {}
     components: dict[str, str] = {}
     models_by_ref: dict[str, str] = {}
-    for card in cards:
+    model_names: dict[str, str] = {}
+    for card in lex(text).cards:
         if card.kind == "param":
             for token in tokenize_body(card.body)[1:]:
                 if token.kind == TokenKind.KEY_VALUE and token.key:
                     params.setdefault(token.key.casefold(), token.key)
+        elif card.kind == "model" and card.name:
+            model_names.setdefault(card.name.casefold(), card.name)
         elif card.kind == "instance" and card.name:
             try:
                 view = InstanceLine.from_card(card)
@@ -470,19 +517,61 @@ def _deck_targets(text: str) -> tuple[_DeckTargets, list[SpiceCard]]:
             components.setdefault(view.ref.casefold(), view.ref)
             if view.model is not None:
                 models_by_ref.setdefault(view.ref.casefold(), view.ref)
-    return (
-        _DeckTargets(
-            params=params,
-            components=components,
-            models_by_ref=models_by_ref,
-        ),
-        cards,
+    return _DeckTargets(
+        params=params,
+        components=components,
+        models_by_ref=models_by_ref,
+        model_names=model_names,
+    )
+
+
+def _build_closure(circuit: CircuitDeck) -> _DeckClosure:
+    """Project a deck and its staged includes into one addressable namespace."""
+    files = [
+        _ClosureFile(
+            index=index,
+            path=path,
+            text=text,
+            targets=_deck_targets(text),
+        )
+        for index, (path, text) in enumerate(
+            [(circuit.path, circuit.text)]
+            + [(include.path, include.text) for include in circuit.includes]
+        )
+    ]
+    return _DeckClosure(circuit_id=circuit.circuit_id, files=tuple(files))
+
+
+def _select_target_file(
+    closure: _DeckClosure,
+    matches: list[int],
+    *,
+    what: str,
+    target: str,
+) -> int:
+    """Resolve a target that several closure files declare.
+
+    The root deck wins outright: that is where a target resolved before the
+    closure was searched at all, so extending the search can only add reach,
+    never move an existing target somewhere else. Between two includes there is
+    no such tiebreak, so the caller is told which files collided rather than
+    handed a silent pick.
+    """
+    if 0 in matches:
+        return 0
+    if len(matches) == 1:
+        return matches[0]
+    names = ", ".join(sorted(closure.files[index].path.name for index in matches))
+    raise VariationError(
+        "ambiguous_target",
+        f"Circuit {closure.circuit_id!r}: {what} {target!r} is declared in more "
+        f"than one included file ({names}) and not in the deck itself; declare "
+        "it in the deck to say which one the variation means",
     )
 
 
 def _resolve_assign_family(
-    circuit: CircuitDeck,
-    targets: _DeckTargets,
+    closure: _DeckClosure,
     variation: AssignVariation,
 ) -> list[tuple[dict[str, Any], tuple[ResolvedAssignment, ...]]]:
     target_values = list(variation.assign.items())
@@ -490,7 +579,7 @@ def _resolve_assign_family(
     if len(set(folded_targets)) != len(folded_targets):
         raise VariationError(
             "duplicate_assignment_target",
-            f"Circuit {circuit.circuit_id!r} assigns the same target more than "
+            f"Circuit {closure.circuit_id!r} assigns the same target more than "
             "once with different casing",
         )
     if variation.combine == "zip":
@@ -503,58 +592,88 @@ def _resolve_assign_family(
         edits: list[ResolvedAssignment] = []
         for (target, _), value in zip(target_values, row, strict=True):
             assignments[target] = value
-            edits.append(_resolve_assignment(circuit, targets, target, value))
+            edits.append(_resolve_assignment(closure, target, value))
         family.append((assignments, tuple(edits)))
     return family
 
 
 def _resolve_assignment(
-    circuit: CircuitDeck,
-    targets: _DeckTargets,
+    closure: _DeckClosure,
     target: str,
     value: ScalarValue,
 ) -> ResolvedAssignment:
     if target.casefold().endswith("@model"):
-        pattern = target[:-6]
-        refs = tuple(
-            ref
-            for folded, ref in targets.models_by_ref.items()
-            if fnmatch.fnmatchcase(folded, pattern.casefold())
-        )
-        if not refs:
+        pattern = target[:-6].casefold()
+        matches = [
+            file.index
+            for file in closure.files
+            if any(fnmatch.fnmatchcase(folded, pattern) for folded in file.targets.models_by_ref)
+        ]
+        if not matches:
             raise VariationError(
                 "ambiguous_target",
-                f"Circuit {circuit.circuit_id!r}: model-swap target {target!r} "
-                "matches no model-bearing component",
+                f"Circuit {closure.circuit_id!r}: model-swap target {target!r} "
+                f"matches no model-bearing component{_closure_scope(closure)}",
             )
-        return ResolvedAssignment(target=target, kind="model", value=value, refs=refs)
+        index = _select_target_file(closure, matches, what="model-swap target", target=target)
+        return ResolvedAssignment(
+            target=target,
+            kind="model",
+            value=value,
+            refs=tuple(
+                ref
+                for folded, ref in closure.files[index].targets.models_by_ref.items()
+                if fnmatch.fnmatchcase(folded, pattern)
+            ),
+            file_index=index,
+        )
 
     folded = target.casefold()
+    # File precedence is the outer test and kind precedence the inner one: a
+    # .param still beats a same-named component, but only within the one file
+    # that owns the target, so an include can never shadow the root deck.
+    matches = [
+        file.index
+        for file in closure.files
+        if folded in file.targets.params or folded in file.targets.components
+    ]
+    if not matches:
+        raise VariationError(
+            "ambiguous_target",
+            f"Circuit {closure.circuit_id!r}: target {target!r} is neither a declared "
+            f".param, a component reference, nor a REF@model/model-glob target"
+            f"{_closure_scope(closure)}",
+        )
+    index = _select_target_file(closure, matches, what="target", target=target)
+    targets = closure.files[index].targets
     if folded in targets.params:
-        _require_numeric_assignment(circuit, target, value)
+        _require_numeric_assignment(closure.circuit_id, target, value)
         return ResolvedAssignment(
             target=target,
             kind="param",
             value=value,
             refs=(targets.params[folded],),
+            file_index=index,
         )
-    if folded in targets.components:
-        reference = targets.components[folded]
-        return ResolvedAssignment(
-            target=target,
-            kind="component",
-            value=value,
-            refs=(reference,),
-        )
-    raise VariationError(
-        "ambiguous_target",
-        f"Circuit {circuit.circuit_id!r}: target {target!r} is neither a declared "
-        ".param, a component reference, nor a REF@model/model-glob target",
+    return ResolvedAssignment(
+        target=target,
+        kind="component",
+        value=value,
+        refs=(targets.components[folded],),
+        file_index=index,
     )
 
 
+def _closure_scope(closure: _DeckClosure) -> str:
+    """Name what was searched, so a miss reads as a miss and not a blind spot."""
+    includes = len(closure.files) - 1
+    if not includes:
+        return " in the deck, which includes no other file"
+    return f" in the deck or its {includes} included file(s)"
+
+
 def _require_numeric_assignment(
-    circuit: CircuitDeck,
+    circuit_id: str,
     target: str,
     value: ScalarValue,
 ) -> None:
@@ -565,57 +684,72 @@ def _require_numeric_assignment(
     except ValueError as exc:
         raise VariationError(
             "invalid_assignment_value",
-            f"Circuit {circuit.circuit_id!r}: target {target!r} requires a plain "
+            f"Circuit {circuit_id!r}: target {target!r} requires a plain "
             f"number or SI-suffix SPICE value, got {value!r}",
         ) from exc
 
 
-def _validate_random_targets(
-    circuit: CircuitDeck,
-    targets: _DeckTargets,
-    cards: list[SpiceCard],
-    variation: RandomVariation,
-) -> None:
-    model_names = {card.name.casefold() for card in cards if card.kind == "model" and card.name}
-    for rule in variation.rules:
-        if isinstance(rule, ComponentRule):
-            if not any(
-                fnmatch.fnmatchcase(folded, rule.target.casefold())
-                for folded in targets.components
-            ):
-                raise VariationError(
-                    "ambiguous_target",
-                    f"Circuit {circuit.circuit_id!r}: random component target "
-                    f"{rule.target!r} matches no component",
-                )
-        elif isinstance(rule, ParamRule):
-            if rule.target.casefold() not in targets.params:
-                raise VariationError(
-                    "ambiguous_target",
-                    f"Circuit {circuit.circuit_id!r}: random param target "
-                    f"{rule.target!r} is not a declared .param",
-                )
-        elif isinstance(rule, ModelRule) and rule.target.casefold() not in model_names:
-            raise VariationError(
-                "ambiguous_target",
-                f"Circuit {circuit.circuit_id!r}: random model target "
-                f"{rule.target!r} has no local .model card",
+def _resolve_random_rule_file(closure: _DeckClosure, rule: RandomRule) -> int:
+    """Bind one random rule to the closure file it perturbs.
+
+    Expansion and materialization both route through here, so a rule can never
+    validate against one file and then be applied to another.
+    """
+    if isinstance(rule, ComponentRule):
+        pattern = rule.target.casefold()
+        matches = [
+            file.index
+            for file in closure.files
+            if any(fnmatch.fnmatchcase(folded, pattern) for folded in file.targets.components)
+        ]
+        what, target, miss = "random component target", rule.target, "matches no component"
+    elif isinstance(rule, ParamRule):
+        matches = [
+            file.index for file in closure.files if rule.target.casefold() in file.targets.params
+        ]
+        what, target, miss = "random param target", rule.target, "is not a declared .param"
+    elif isinstance(rule, ModelRule):
+        matches = [
+            file.index
+            for file in closure.files
+            if rule.target.casefold() in file.targets.model_names
+        ]
+        what, target, miss = "random model target", rule.target, "has no .model card"
+    else:
+        matches = [
+            file.index
+            for file in closure.files
+            if any(
+                instance.ref.upper().startswith(rule.prefix.upper())
+                for instance in extract_mosfet_instances(file.text)
             )
+        ]
+        what = "mismatch prefix"
+        target = rule.prefix
+        miss = "matches no top-level device with numeric W/L"
+    if not matches:
+        raise VariationError(
+            "ambiguous_target",
+            f"Circuit {closure.circuit_id!r}: {what} {target!r} {miss}{_closure_scope(closure)}",
+        )
+    return _select_target_file(closure, matches, what=what, target=target)
 
 
-def _apply_assignments(text: str, edits: tuple[ResolvedAssignment, ...]) -> str:
-    if not edits:
-        return text
-    cards = lex(text).cards
+def _apply_assignments(texts: dict[int, str], edits: tuple[ResolvedAssignment, ...]) -> None:
+    by_file: dict[int, list[ResolvedAssignment]] = {}
     for edit in edits:
-        if edit.kind == "param":
-            _set_param_value_on_cards(cards, edit.refs[0], edit.value)
-        elif edit.kind == "component":
-            _set_component_value(cards, edit.refs[0], edit.value)
-        else:
-            for ref in edit.refs:
-                _set_instance_model(cards, ref, str(edit.value))
-    return emit(cards)
+        by_file.setdefault(edit.file_index, []).append(edit)
+    for index, file_edits in by_file.items():
+        cards = lex(texts[index]).cards
+        for edit in file_edits:
+            if edit.kind == "param":
+                _set_param_value_on_cards(cards, edit.refs[0], edit.value)
+            elif edit.kind == "component":
+                _set_component_value(cards, edit.refs[0], edit.value)
+            else:
+                for ref in edit.refs:
+                    _set_instance_model(cards, ref, str(edit.value))
+        texts[index] = emit(cards)
 
 
 def _set_param_value(text: str, name: str, value: ScalarValue) -> str:
@@ -681,12 +815,15 @@ def _set_instance_model(
 
 
 def _apply_random_rules(
-    text: str,
+    closure: _DeckClosure,
+    texts: dict[int, str],
     rules: list[RandomRule],
     sampler: MCSampler,
-) -> tuple[str, dict[str, float]]:
+) -> dict[str, float]:
     draws: dict[str, float] = {}
     for rule in rules:
+        index = _resolve_random_rule_file(closure, rule)
+        text = texts[index]
         if isinstance(rule, ComponentRule):
             text, sampled = _apply_component_rule(text, rule, sampler)
         elif isinstance(rule, ParamRule):
@@ -694,9 +831,94 @@ def _apply_random_rules(
         elif isinstance(rule, ModelRule):
             text, sampled = _apply_model_rule(text, rule, sampler)
         else:
-            text, sampled = _apply_mismatch_rule(text, rule, sampler)
+            text, sampled = _apply_mismatch_rule(
+                text,
+                rule,
+                sampler,
+                model_card=lambda name: _closure_model_card(closure, texts, name),
+            )
+        texts[index] = text
         draws.update(sampled)
-    return text, draws
+    return draws
+
+
+def _closure_model_card(closure: _DeckClosure, texts: dict[int, str], name: str) -> str | None:
+    """Find a .model card anywhere in the closure.
+
+    A mismatch rule perturbs an instance, and the model that instance names is
+    very often the thing the include was factored out for.
+    """
+    for file in closure.files:
+        card = extract_model_card(texts[file.index], name)
+        if card is not None:
+            return card
+    return None
+
+
+def _include_referrers(closure: _DeckClosure) -> dict[int, set[int]]:
+    """Map each closure file to the files whose references point at it."""
+    by_path = {file.path.resolve(): file.index for file in closure.files}
+    referrers: dict[int, set[int]] = {file.index: set() for file in closure.files}
+    for file in closure.files:
+        for target in staged_reference_targets(
+            file.text,
+            file.path,
+            depth=0 if file.index == 0 else 1,
+        ):
+            index = by_path.get(target)
+            if index is not None and index != file.index:
+                referrers[index].add(file.index)
+    return referrers
+
+
+def _case_copy_name(case_index: int, name: str) -> str:
+    return f"case-{case_index:04d}__{name}"
+
+
+def _write_case_includes(
+    closure: _DeckClosure,
+    referrers: dict[int, set[int]],
+    texts: dict[int, str],
+    case_index: int,
+) -> str:
+    """Write this case's private copies of the includes it edited.
+
+    Isolation is by construction: a case only ever creates new ``case-NNNN__``
+    files beside the shared staged originals and never writes to a path any
+    other case reads, so the staged closure a sibling case consumes cannot move
+    under it. Every file on the include chain above an edited one is copied too
+    — otherwise the copy would be written and nothing would point at it.
+    """
+    edited = {index for index, text in texts.items() if text != closure.files[index].text}
+    copies = {0}
+    pending = list(edited)
+    while pending:
+        index = pending.pop()
+        if index in copies:
+            continue
+        copies.add(index)
+        pending.extend(referrers.get(index, ()))
+    renames = {
+        closure.files[index].path.resolve(): _case_copy_name(
+            case_index, closure.files[index].path.name
+        )
+        for index in copies
+        if index != 0
+    }
+    for index in sorted(copies):
+        file = closure.files[index]
+        texts[index] = rewrite_staged_references(
+            texts[index],
+            file.path,
+            renames,
+            depth=0 if index == 0 else 1,
+        )
+        if index == 0:
+            continue
+        destination = file.path.with_name(renames[file.path.resolve()])
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(destination, texts[index], durable=True)
+    return texts[0]
 
 
 def _spec(rule: RandomRuleBase) -> ToleranceSpec:
@@ -828,6 +1050,8 @@ def _apply_mismatch_rule(
     text: str,
     rule: MismatchRule,
     sampler: MCSampler,
+    *,
+    model_card: Callable[[str], str | None],
 ) -> tuple[str, dict[str, float]]:
     engine_rule = EngineMismatchRule(
         prefix=rule.prefix,
@@ -850,7 +1074,7 @@ def _apply_mismatch_rule(
         )
     draws: dict[str, float] = {}
     for instance in instances:
-        base_card = extract_model_card(text, instance.model_name)
+        base_card = model_card(instance.model_name)
         if base_card is None:
             raise VariationError(
                 "model_missing",

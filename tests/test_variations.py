@@ -11,6 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 from ltspice_mcp.lib.variations import (
     AssignVariation,
     CircuitDeck,
+    DeckFile,
     MismatchRule,
     RandomVariation,
     Variation,
@@ -301,3 +302,113 @@ class TestRandomExpansion:
         assert MismatchRule(rule="mismatch").model_dump(exclude={"rule"}) == (
             MonteCarloMismatchRule().model_dump()
         )
+
+
+_CORE = ".subckt core in out\nR1 in out 1k\n.ends\n"
+
+
+def _factored(
+    tmp_path: Path,
+    *,
+    includes: dict[str, str],
+    root_body: str = "",
+) -> CircuitDeck:
+    """A deck whose components live in staged include files beside it."""
+    staged = tmp_path / "staged"
+    staged.mkdir(exist_ok=True)
+    files = []
+    references = ""
+    for name, text in includes.items():
+        path = staged / name
+        path.write_text(text)
+        files.append(DeckFile(path, text))
+        references += f'.include "{path}"\n'
+    root_text = f"{references}V1 in 0 1\nX1 in out core\n{root_body}.op\n.end\n"
+    root = staged / "dut.cir"
+    root.write_text(root_text)
+    return CircuitDeck("dut", root, root_text, tuple(files))
+
+
+class TestIncludeClosureTargets:
+    def test_included_component_edits_a_per_case_copy(self, tmp_path: Path):
+        circuit = _factored(tmp_path, includes={"core.inc": _CORE})
+        variation = AssignVariation(kind="assign", assign={"R1": ["2k", "3k"]})
+
+        variants = materialize_variants(
+            circuit,
+            expand_variations([circuit], [variation]),
+            tmp_path / "out",
+        )
+
+        copies = [tmp_path / "staged" / f"case-{index:04d}__core.inc" for index in (0, 1)]
+        assert "R1 in out 2k" in copies[0].read_text()
+        assert "R1 in out 3k" in copies[1].read_text()
+        assert str(copies[0]) in variants[0].text
+        assert str(copies[1]) in variants[1].text
+        assert (tmp_path / "staged" / "core.inc").read_text() == _CORE
+
+    def test_root_declaration_wins_over_an_include(self, tmp_path: Path):
+        circuit = _factored(
+            tmp_path,
+            includes={"core.inc": _CORE},
+            root_body="R1 a b 5k\n",
+        )
+        variation = AssignVariation(kind="assign", assign={"R1": ["9k"]})
+
+        variants = materialize_variants(
+            circuit,
+            expand_variations([circuit], [variation]),
+            tmp_path / "out",
+        )
+
+        assert "R1 a b 9k" in variants[0].text
+        assert not (tmp_path / "staged" / "case-0000__core.inc").exists()
+
+    def test_two_includes_declaring_one_target_name_both_files(self, tmp_path: Path):
+        circuit = _factored(
+            tmp_path,
+            includes={
+                "left.inc": ".subckt left in out\nR1 in out 1k\n.ends\n",
+                "right.inc": ".subckt right in out\nR1 in out 2k\n.ends\n",
+            },
+        )
+        variation = AssignVariation(kind="assign", assign={"R1": ["3k"]})
+
+        with pytest.raises(VariationError, match=r"left\.inc, right\.inc") as excinfo:
+            expand_variations([circuit], [variation])
+
+        assert excinfo.value.code == "ambiguous_target"
+
+    def test_missing_target_reports_what_was_searched(self, tmp_path: Path):
+        circuit = _factored(tmp_path, includes={"core.inc": _CORE})
+        variation = AssignVariation(kind="assign", assign={"nowhere": [1]})
+
+        with pytest.raises(VariationError, match="its 1 included file"):
+            expand_variations([circuit], [variation])
+
+    def test_random_component_rule_perturbs_the_include(self, tmp_path: Path):
+        circuit = _factored(tmp_path, includes={"core.inc": _CORE})
+        variation = RandomVariation.model_validate(
+            {
+                "kind": "random",
+                "runs": 2,
+                "seed": 5,
+                "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+            }
+        )
+
+        materialize_variants(
+            circuit,
+            expand_variations([circuit], [variation]),
+            tmp_path / "out",
+        )
+
+        values = [
+            (tmp_path / "staged" / f"case-{index:04d}__core.inc")
+            .read_text()
+            .split("R1 in out ")[1]
+            .split()[0]
+            for index in (0, 1)
+        ]
+        assert len(set(values)) == 2
+        assert all(float(value) != 1000.0 for value in values)
