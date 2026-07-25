@@ -551,11 +551,11 @@ async def test_render_png_falls_back_to_svg_without_raster(asc_state, monkeypatc
     assert "raster" in (render["note"] or "")
 
 
-async def test_occupancy_view_declares_unsupported(asc_state):
-    data = await _build_blank(asc_state, "occ", _DIVIDER_OPS, return_views=["occupancy"])
-    occ = data["views"]["occupancy"]
-    assert occ["status"] == "unsupported_variant"
-    assert "pin_legend" in occ["supported"]
+async def test_occupancy_view_variant_is_rejected(asc_state):
+    """'occupancy' is not a return view; strict validation rejects the
+    variant at the schema so no dead stub path can exist behind it."""
+    with pytest.raises(ValidationError):
+        await _build_blank(asc_state, "occ", _DIVIDER_OPS, return_views=["occupancy"])
 
 
 # ---------------------------------------------------------------------------
