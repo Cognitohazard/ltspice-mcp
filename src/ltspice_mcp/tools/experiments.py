@@ -583,6 +583,7 @@ async def _prepare_circuit(
             paths.staging_root,
             state.config.allowed_paths,
             allow_live_includes=args.allow_live_includes,
+            windows_paths=paths.windows_native,
         )
         dialect = simulator_dialect(simulator)
         findings = (
