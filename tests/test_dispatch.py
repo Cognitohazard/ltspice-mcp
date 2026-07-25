@@ -461,6 +461,32 @@ class TestSchemaPostProcessing:
                 f"{schema.get('type')!r}; MCP requires 'object'"
             )
 
+    def test_every_output_schema_admits_warnings(self):
+        """sanitize_payload can add ``warnings`` to any payload, so every schema
+        must accept it.
+
+        A tool that closes itself with additionalProperties:false and omits the
+        key rejects its own response exactly when a run diverged — and a strict
+        client rejects the whole tools/list over it. Registration injects the
+        key so no individual tool has to remember; this pins that it reached
+        every one of them, in every profile."""
+        for tool_def in _all_profile_defs():
+            schema = tool_def.outputSchema
+            if schema is None:
+                continue
+            declared = (schema.get("properties") or {}).get("warnings")
+            assert declared is not None, (
+                f"{tool_def.name}: outputSchema does not declare 'warnings'"
+            )
+            # A tool that owns its own warnings channel may describe it, but the
+            # shape has to be the list of strings sanitize_payload writes.
+            assert declared.get("type") == "array", (
+                f"{tool_def.name}: 'warnings' is declared as {declared.get('type')!r}, not an array"
+            )
+            assert declared.get("items") == {"type": "string"}, (
+                f"{tool_def.name}: 'warnings' items are {declared.get('items')!r}, not strings"
+            )
+
     def test_nested_model_inlining(self):
         """Tools with nested models should have schemas fully inlined."""
         defs, _ = get_tools_for_profile("full")

@@ -263,12 +263,21 @@ def invalidate_for_job(working_dir: Path, job_id: str) -> int:
     return removed
 
 
-def encode_cursor(item: ResultSet, position: int, *, intra_item: int = 0) -> str:
+def encode_cursor(
+    item: ResultSet, position: int, *, intra_item: int = 0, missing_offset: int = 0
+) -> str:
+    """Encode a resume point: work position, per-run offset, coverage offset.
+
+    ``missing_offset`` pages the coverage view (``missing_cases``), which lives
+    in the immutable inputs rather than the work list — a cursor that carries it
+    with ``position == len(work)`` pages that view without redoing any work.
+    """
     return _encode_body_cursor(
         {
             "result_set_id": item.result_set_id,
             "position": position,
             "intra_item": intra_item,
+            "missing_offset": missing_offset,
             "work_hash": item.work_hash,
         }
     )
@@ -289,19 +298,23 @@ def cursor_result_set_id(cursor: str) -> str:
     return result_set_id
 
 
-def decode_cursor(cursor: str, item: ResultSet) -> tuple[int, int]:
-    """Decode and bind a cursor to one immutable result set and work list."""
+def decode_cursor(cursor: str, item: ResultSet) -> tuple[int, int, int]:
+    """Decode and bind a cursor to one immutable result set and work list.
+
+    Returns ``(position, intra_item, missing_offset)``.
+    """
     try:
         body = _decode_cursor_body(cursor)
         if body["result_set_id"] != item.result_set_id or body["work_hash"] != item.work_hash:
             raise ValueError("cursor belongs to a different result set")
         position = int(body["position"])
         intra_item = int(body.get("intra_item", 0))
+        missing_offset = int(body.get("missing_offset", 0))
     except (KeyError, TypeError, ValueError) as exc:
         raise ResultError(f"Invalid analyze_results cursor: {exc}") from None
-    if position < 0 or position > len(item.work) or intra_item < 0:
+    if position < 0 or position > len(item.work) or intra_item < 0 or missing_offset < 0:
         raise ResultError("Invalid analyze_results cursor position")
-    return position, intra_item
+    return position, intra_item, missing_offset
 
 
 def artifact_paths(

@@ -441,9 +441,7 @@ class ExperimentRunner(RunnerBase):
             elif (
                 execution.stop_reason == "job_deadline"
                 or analysis_failed
-                or job.completeness.failed
-                or job.completeness.cancelled
-                or job.completeness.skipped
+                or job.completeness.fell_short
             ):
                 transition(job, "completed_with_failures", state=request.state)
             else:

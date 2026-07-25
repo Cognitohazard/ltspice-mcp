@@ -624,6 +624,37 @@ async def test_completed_with_failures_experiment_analyzes_produced_cases(
 
 
 @pytest.mark.asyncio
+async def test_analyzing_experiment_reads_its_own_produced_cases(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """An experiment's attached analysis necessarily runs while the job sits in
+    'analyzing' — a state entered only after every run reached a terminal status
+    — so that state must resolve produced cases with full case identity."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    job = _completed_with_failures_experiment(work_dir, raw)
+    job.status = "analyzing"
+    experiment_store.save_job(job)
+    state_no_sim.add_experiment_job(job, already_persisted=True)
+    args = AnalyzeResultsInput.model_validate(
+        {
+            "sources": [{"job_id": job.job_id, "label": "experiment"}],
+            "recipes": [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}],
+            "group_by": ["R"],
+        }
+    )
+    result = await handle_analyze_results(args, state_no_sim)
+    data = result.structuredContent
+    assert data is not None
+    assert "v" in data["results"]
+    assert data["results"]["v"]["groups"][0]["by"] == {"R": "1k"}
+    # The per-case gate still does the real work: the failed case is missing,
+    # the produced one is analyzed.
+    assert data["coverage"]["missing_cases"]["items"][0]["case_id"] == "case_bad"
+    assert data["coverage"]["runs_analyzed"] == 1
+
+
+@pytest.mark.asyncio
 async def test_raw_path_has_null_deck_hash_and_provenance_observation(
     state_no_sim: SessionState,
     work_dir: Path,
@@ -737,3 +768,246 @@ async def test_summary_and_measurement_slow_parsers_are_bounded_at_tool_level(
         failure["code"] == "analysis_deadline" and failure["stage"] == "analyze"
         for failure in measurements["failures"]
     )
+
+
+# ---------------------------------------------------------------------------
+# Envelope contract: what the response promises must be reachable and legal
+# ---------------------------------------------------------------------------
+
+
+def _raw_with_non_finite(work_dir: Path) -> Path:
+    """A .raw whose trace holds a NaN, as a diverged solve produces."""
+    import numpy as np
+    from spicelib.raw.raw_write import RawWrite, Trace
+
+    n = 64
+    values = np.linspace(0.0, 5.0, n)
+    values[7] = np.nan
+    writer = RawWrite(plot_name="Transient Analysis")
+    writer.add_trace(Trace("time", np.linspace(0.0, 1e-3, n), whattype="time"))
+    writer.add_trace(Trace("V(out)", values, whattype="voltage"))
+    path = work_dir / "diverged.raw"
+    writer.save(path)
+    return path
+
+
+@pytest.mark.asyncio
+async def test_non_finite_sample_keeps_the_response_schema_conformant(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A NaN sample makes sanitize_payload inject a top-level 'warnings' key.
+
+    Undeclared under the schema's additionalProperties:false, that injection
+    made a strict client reject the whole response exactly when a run diverged.
+    """
+    import jsonschema
+
+    raw = _raw_with_non_finite(work_dir)
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "wave", "metric": "waveform", "signals": ["V(out)"]}],
+    )
+    series = data["results"]["wave"]["values"][0]["value"]["series"][0]
+    assert None in series["y"], "the NaN sample must be surfaced as an explicit null"
+    assert any("Non-finite" in warning for warning in data["warnings"])
+    jsonschema.Draft202012Validator(analyze_mod.OUTPUT_SCHEMA).validate(data)
+
+
+@pytest.mark.asyncio
+async def test_csv_waveform_states_that_max_points_is_inline_only(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """max_points bounds the inline series only; a csv artifact ignores it."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [
+            {
+                "key": "csv",
+                "metric": "waveform",
+                "signals": ["V(out)"],
+                "format": "csv",
+                "max_points": 10,
+            }
+        ],
+    )
+    assert data["results"]["csv"]["values"][0]["value"]["row_count"] > 10
+    assert any(
+        observation["code"] == "max_points_not_applied" for observation in data["observations"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_artifact_too_large_names_only_levers_that_move_the_bound(
+    state_no_sim: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The estimate reads raw size and signal count, nothing else — so telling
+    the caller to lower max_points or narrow the window sends them in a loop."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    state_no_sim.config.analysis_budget_s = 0.1
+    monkeypatch.setattr(analyze_mod, "_artifact_estimate", lambda recipe, runs: 1.0)
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "csv", "metric": "waveform", "signals": ["V(out)"], "format": "csv"}],
+    )
+    message = next(
+        failure["message"]
+        for failure in data["failures"]
+        if failure["code"] == "artifact_too_large"
+    )
+    assert "fewer signals" in message
+    assert "narrowing the window or lowering max_points does not move it" in message
+    # The one case with no request-side lever at all names the config exit.
+    assert "analysis_budget_s" in message
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"include": {"per_run": {"limit": 100}}},
+        {"include": {"outliers": True}},
+        {"group_by": ["temp"]},
+    ],
+)
+def test_continuation_rejects_request_shaping_arguments(extra: dict[str, Any]):
+    """A continuation replays the stored request, so include/group_by passed
+    alongside it were validated and then silently dropped."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="mutually exclusive"):
+        AnalyzeResultsInput.model_validate(
+            {"continue": {"result_set_id": "set-1", "cursor": "abc"}, **extra}
+        )
+
+
+@pytest.mark.asyncio
+async def test_truncated_missing_cases_page_is_followable(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """coverage.missing_cases advertises truncation, so it must hand back a
+    cursor that actually reaches the rest."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    args = AnalyzeResultsInput.model_validate(
+        {
+            "sources": [{"raw_path": str(raw), "label": "dut", "runs": list(range(121))}],
+            "recipes": [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}],
+        }
+    )
+    first = await handle_analyze_results(args, state_no_sim)
+    assert first.structuredContent is not None
+    page = first.structuredContent["coverage"]["missing_cases"]
+    assert (page["total"], page["returned"], page["truncated"]) == (120, 100, True)
+    assert page["next_cursor"] is not None
+
+    resumed = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {
+                "continue": {
+                    "result_set_id": first.structuredContent["result_set_id"],
+                    "cursor": page["next_cursor"],
+                }
+            }
+        ),
+        state_no_sim,
+    )
+    assert resumed.structuredContent is not None
+    rest = resumed.structuredContent["coverage"]["missing_cases"]
+    assert rest["returned"] == 20
+    assert rest["items"][0]["run_index"] == 101
+    assert rest["truncated"] is False
+    assert rest["next_cursor"] is None
+
+
+@pytest.mark.asyncio
+async def test_work_and_coverage_cursors_advance_independently(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """One call pages two lists; either cursor must advance its own view without
+    resetting or discarding the other.
+
+    They share one encoded resume point, so a cursor that drops the work
+    position strands un-analyzed work, and one that drops the coverage offset
+    re-serves missing cases the caller has already read.
+    """
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    request = {
+        "sources": [{"raw_path": str(raw), "label": "dut", "runs": list(range(121))}],
+        "recipes": [
+            {
+                "key": "values",
+                "metric": "value",
+                "expr": "V(out)",
+                "at": "900u",
+                "all_steps": True,
+            }
+        ],
+        "include": {"per_run": {"limit": 1}},
+    }
+    first = await handle_analyze_results(AnalyzeResultsInput.model_validate(request), state_no_sim)
+    assert first.structuredContent is not None
+    coverage_cursor = first.structuredContent["coverage"]["missing_cases"]["next_cursor"]
+    assert coverage_cursor is not None
+    assert first.structuredContent["next"] is not None
+    result_set_id = first.structuredContent["result_set_id"]
+
+    # Following the coverage cursor advances the missing list AND keeps the
+    # work resume point, so there is still a `next` to follow.
+    by_coverage = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {"continue": {"result_set_id": result_set_id, "cursor": coverage_cursor}}
+        ),
+        state_no_sim,
+    )
+    assert by_coverage.structuredContent is not None
+    rest = by_coverage.structuredContent["coverage"]["missing_cases"]
+    assert rest["items"][0]["run_index"] == 101
+    assert by_coverage.structuredContent["next"] is not None
+
+    # Following the work cursor advances the work AND carries the coverage
+    # offset, so the missing cases already served are not replayed.
+    by_work = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate({"continue": first.structuredContent["next"]}),
+        state_no_sim,
+    )
+    assert by_work.structuredContent is not None
+    carried = by_work.structuredContent["coverage"]["missing_cases"]
+    assert carried["items"][0]["run_index"] == 101
+    assert carried["truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_truncated_fail_cases_names_the_route_to_the_rest(
+    state_no_sim: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """spec.fail_cases is a per-call projection with no cursor of its own, so a
+    truncated page must name the view that does page every value."""
+    monkeypatch.setattr(analyze_mod, "_FAIL_CASE_PAGE_CAP", 1)
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [
+            {
+                "key": "vout",
+                "metric": "value",
+                "expr": "V(out)",
+                "at": "900u",
+                "all_steps": True,
+                "spec": {"max": -1.0},
+            }
+        ],
+    )
+    entry = data["results"]["vout"]
+    assert entry["spec"]["fail_cases"]["truncated"] is True
+    assert any("include.per_run" in warning for warning in entry["warnings"])

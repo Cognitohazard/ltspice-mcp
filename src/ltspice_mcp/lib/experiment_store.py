@@ -24,7 +24,7 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.filelock import file_lock
-from ltspice_mcp.lib.job_lifecycle import reconcile_experiment_restart
+from ltspice_mcp.lib.job_lifecycle import reconcile_experiment_restart, runs_terminal
 from ltspice_mcp.lib.store_common import (
     accept_schema,
     atomic_write_json,
@@ -452,13 +452,11 @@ def _reconcile_restart(job: ExperimentJob, *, owner_alive: bool) -> None:
             for case in abandoned
         )
     job.completeness.recount(job.cases)
-    if job.status == "analyzing" or runs_were_terminal:
-        has_failure = (
-            job.completeness.failed > 0
-            or job.completeness.cancelled > 0
-            or job.completeness.skipped > 0
-            or job.analysis.status in {"failed", "cancelled"}
-        )
+    if runs_terminal(job.status) or runs_were_terminal:
+        has_failure = job.completeness.fell_short or job.analysis.status in {
+            "failed",
+            "cancelled",
+        }
         reconcile_experiment_restart(
             job,
             "completed_with_failures" if has_failure else "completed",

@@ -53,6 +53,20 @@ def text_response(text: str) -> types.CallToolResult:
     )
 
 
+def result_text(result: types.CallToolResult, *, joined: bool = False) -> str:
+    """The text channel of a ``CallToolResult``, for relaying a sub-handler's
+    message out of a dispatcher.
+
+    Returns the first text block verbatim. ``joined`` merges every text block
+    onto one stripped line instead, for callers that fold the text into a
+    message of their own rather than re-rendering it.
+    """
+    blocks = [block.text for block in result.content if isinstance(block, types.TextContent)]
+    if joined:
+        return " ".join(blocks).strip()
+    return blocks[0] if blocks else ""
+
+
 # Most named key paths one scrub warning lists — a fully-NaN trace array
 # should produce one warning naming a few paths plus a count, not thousands.
 _SCRUB_NAMED_PATHS = 10
@@ -646,6 +660,31 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._registered: list[RegisteredTool] = []
 
+    @staticmethod
+    def _declare_warnings_key(schema: dict[str, Any]) -> dict[str, Any]:
+        """Declare the ``warnings`` key any payload can grow.
+
+        ``sanitize_payload`` injects a top-level ``warnings`` list into ANY
+        tool's payload the moment a float in it is non-finite — reachable
+        through raw waveform samples on a diverged run. A schema that closes
+        itself with ``additionalProperties: false`` and does not declare the key
+        therefore rejects its own response exactly when a run went wrong, and a
+        strict client rejects the whole ``tools/list`` over one such schema,
+        disabling every tool on the server.
+
+        Declared here because this is the schema choke point, mirroring the
+        response choke point that adds the key: per-tool declarations put the
+        two in different places and let each new tool omit it silently.
+
+        Edits the schema in place and returns it, so a module's exported
+        ``*_OUTPUT_SCHEMA`` constant IS the schema clients are served — a copy
+        would leave the two able to disagree, which is the drift this exists to
+        remove. A schema that already declares ``warnings`` is left alone.
+        """
+        properties = schema.setdefault("properties", {})
+        properties.setdefault("warnings", WARNINGS_SCHEMA)
+        return schema
+
     def tool(
         self,
         *,
@@ -695,9 +734,11 @@ class ToolRegistry:
                 "annotations": annotations,
             }
             if output_model is not None:
-                definition_kwargs["outputSchema"] = schema_from_typeddict(output_model)
+                definition_kwargs["outputSchema"] = self._declare_warnings_key(
+                    schema_from_typeddict(output_model)
+                )
             elif output_schema is not None:
-                definition_kwargs["outputSchema"] = output_schema
+                definition_kwargs["outputSchema"] = self._declare_warnings_key(output_schema)
 
             definition = types.Tool(**definition_kwargs)
             if meta is not None:

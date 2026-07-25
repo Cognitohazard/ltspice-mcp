@@ -44,6 +44,13 @@ J = TypeVar("J", bound=Job)
 # Maximum finished jobs to retain per job type (single-sim, batch, experiment).
 _MAX_FINISHED_JOBS = 200
 
+# How long shutdown waits on the experiment runners' cancels. The experiment
+# coordinator's cancel waits for the job's done event, which in turn waits on
+# live simulator processes — an unbounded await there would hold shutdown open
+# indefinitely, and with it the job-persistence flush that follows. The cancels
+# are issued together, so this bounds that whole stage rather than each job.
+_SHUTDOWN_CANCEL_TIMEOUT_S = 10.0
+
 # LTspice .raw header magic. Classic files start with ASCII ``Title:``;
 # newer LTspice writes a UTF-16 LE BOM followed by the same ``Title:``.
 _RAW_HEADER_ASCII = b"Title:"
@@ -634,12 +641,33 @@ class JobRegistry:
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await batch_job.task
 
-        for experiment in list(self.experiment_jobs.values()):
-            runner = runners.get_experiment_runner_for(experiment)
-            if experiment.owner_pid == own_pid and runner is not None:
-                await runner.cancel(experiment)
-            elif (
-                experiment.status in NON_TERMINAL_LIVE_STATUSES and experiment.owner_pid == own_pid
+        experiments = list(self.experiment_jobs.values())
+        delegated = [
+            (runner, experiment)
+            for experiment in experiments
+            if experiment.owner_pid == own_pid
+            and (runner := runners.get_experiment_runner_for(experiment)) is not None
+        ]
+        # A cancel that hangs on a wedged simulator, or refuses (the coordinator
+        # raises when it no longer owns the job), must not take the rest of
+        # shutdown with it. Issued together so the timeout bounds the stage: a
+        # per-job wait would multiply a client's shutdown grace by the number of
+        # live experiments, spending on cancels the time the flush below needs.
+        if delegated:
+            await asyncio.gather(
+                *(
+                    asyncio.wait_for(runner.cancel(experiment), _SHUTDOWN_CANCEL_TIMEOUT_S)
+                    for runner, experiment in delegated
+                ),
+                return_exceptions=True,
+            )
+
+        delegated_ids = {experiment.job_id for _, experiment in delegated}
+        for experiment in experiments:
+            if (
+                experiment.job_id not in delegated_ids
+                and experiment.status in NON_TERMINAL_LIVE_STATUSES
+                and experiment.owner_pid == own_pid
             ):
                 cancelled_at = now()
                 newly_cancelled = [

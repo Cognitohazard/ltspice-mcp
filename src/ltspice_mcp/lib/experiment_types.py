@@ -93,6 +93,25 @@ class Completeness:
     def terminal(self) -> int:
         return self.produced + self.failed + self.cancelled + self.skipped
 
+    @property
+    def fell_short(self) -> bool:
+        """Did the runs deliver anything less than the expansion promised?
+
+        Checked against ``expanded`` from both sides rather than by summing the
+        shortfall counters. Under the terminal invariant all three agree; when
+        they disagree the disagreement is the finding. ``terminal != expanded``
+        catches a case that reached no counter at all, and ``produced !=
+        expanded`` catches the same loss masked by a double-counted failure —
+        either way an unreconciled run reads as a shortfall instead of being
+        rounded down to success.
+
+        Run-scoped on purpose. An attached analysis that failed or was
+        cancelled is a separate fact with its own home in ``analysis.status``;
+        folding it in here would send a caller hunting for dropped runs that do
+        not exist.
+        """
+        return self.terminal != self.expanded or self.produced != self.expanded
+
     def recount(self, cases: list[ExperimentCase]) -> None:
         """Recompute all case-derived counters from the current case records."""
         submitted = produced = failed = cancelled = skipped = 0
