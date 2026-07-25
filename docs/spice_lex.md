@@ -95,7 +95,8 @@ keeps:
 ```python
 class SpiceCard:
     kind: Literal["model", "param", "instance", "subckt", "ends",
-                  "meas", "directive", "end", "comment", "blank"]
+                  "meas", "directive", "end", "comment", "blank",
+                  "control"]
     raw_lines: list[str]      # original source lines (preserved for emit)
     body: str                 # merged & comment-stripped (for parser)
     line_start: int           # 1-based line in the source
@@ -312,6 +313,18 @@ contract holds even when input is broken:
 - Cards after a top-level `.END`: keep their position and scope but
   carry `trailing=True`. LTspice ignores them; we preserve them rather
   than dropping.
+- `.control` without a matching `.endc`: the region runs to EOF, plus a
+  warning. Every remaining line stays an opaque `kind="control"` card.
+
+Opaque regions: `.control` ... `.endc` (ngspice) is simulator script,
+not netlist. Each of its lines becomes one `kind="control"` card with an
+empty `body` — one card per source line, no `+`-continuation merging —
+so device, arity, and model rules find nothing to inspect. Without this
+every control command would lex as the element sharing its first letter
+(`let` → L, `dc` → D, `meas` → M, `foreach` → F, `alter` → A, `set` → S)
+and a valid ngspice deck would draw a dozen bogus arity errors. Both
+delimiters are part of the region; a stray `.endc` with no opener stays
+an ordinary directive.
 
 Mutation safety: typed views are short-lived. Holding two views over the
 same card and mutating both is undefined — re-derive after each
