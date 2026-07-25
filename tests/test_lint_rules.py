@@ -149,6 +149,43 @@ def test_suppression_removes_named_rule(tmp_path: Path):
     )
 
 
+_NGSPICE_CONTROL_DECK = (
+    "* ngspice control-block deck\n"
+    "V1 in 0 DC 1\n"
+    "R1 in out 1k\n"
+    "C1 out 0 1u\n"
+    ".tran 1u 1m\n"
+    ".control\n"
+    "set filetype=ascii\n"
+    "let vo = v(out)\n"
+    "dc VDD 1.0 1.8 0.005\n"
+    "meas dc vhalf find vo when v(in)=0.5\n"
+    "foreach il 0 10m\n"
+    "alter ILOAD = $il\n"
+    "run\n"
+    "end\n"
+    "write out.raw\n"
+    ".endc\n"
+    ".end\n"
+)
+
+
+def test_control_block_contents_produce_no_findings(tmp_path: Path):
+    # ngspice control commands share their first letter with SPICE element
+    # prefixes (let->L, dc->D, meas->M, ...). The block is simulator script,
+    # not netlist, so no rule may read inside it — otherwise the documented
+    # ngspice .meas workaround gets its own deck refused.
+    assert (
+        _ids(
+            _NGSPICE_CONTROL_DECK,
+            tmp_path,
+            dialect="ngspice",
+            simulator="NGspiceSimulator",
+        )
+        == set()
+    )
+
+
 def test_registry_dispositions_and_phases_are_explicit():
     assert RULES_BY_ID["save-meas-coverage"].disposition == "blocking"
     assert RULES_BY_ID["include-relative"].disposition == "warning"
