@@ -109,6 +109,25 @@ class AnalyzeSourceInput(StrictModel):
         return self
 
 
+# The canonical per-record identity keys. Reduced/spec attribution rows omit the
+# trailing provenance pair (their output schema forbids the extra keys), so they
+# pick the first five — a slice of the one list, never a parallel one.
+_IDENTITY_KEYS: tuple[str, ...] = (
+    "case_id",
+    "run_index",
+    "step_index",
+    "step_values",
+    "assignments",
+    "circuit",
+    "deck_sha256",
+)
+_ATTRIBUTION_KEYS: tuple[str, ...] = _IDENTITY_KEYS[:5]
+# Every key a per_run/values row carries, in emission order. ``include.fields``
+# paths are rooted here, so this one list is both the projector's alphabet and
+# the answer a caller gets when a path names something that does not exist.
+_ROW_KEYS: tuple[str, ...] = ("source", *_IDENTITY_KEYS, "value")
+
+
 class PerRunInclude(StrictModel):
     limit: int = Field(default=50, ge=1, le=MAX_PAGE_SIZE)
     cursor: str | None = None
@@ -118,6 +137,36 @@ class AnalyzeInclude(StrictModel):
     per_run: PerRunInclude | None = None
     outliers: bool = False
     signals_available: bool = False
+    fields: list[str] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=32,
+        description=(
+            "Keep only these dotted row paths (e.g. 'value.phase_margin_deg', "
+            "'step_values') on per_run/values rows, so a wide sweep returns the "
+            "few numbers wanted instead of every full row."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _fields_name_real_row_keys(self) -> AnalyzeInclude:
+        # A projection that silently keeps nothing is worse than no projection
+        # at all, so a path that cannot be rooted in a row is rejected here
+        # rather than returning empty rows the caller has to explain.
+        if self.fields is None:
+            return self
+        if len(set(self.fields)) != len(self.fields):
+            raise ValueError("include.fields paths must be unique")
+        for path in self.fields:
+            if any(not segment for segment in path.split(".")):
+                raise ValueError(f"include.fields path {path!r} has an empty segment")
+            root = path.split(".", 1)[0]
+            if root not in _ROW_KEYS:
+                raise ValueError(
+                    f"include.fields path {path!r} starts at unknown row key {root!r}; "
+                    f"choose one of: {', '.join(_ROW_KEYS)}"
+                )
+        return self
 
 
 class ContinueInput(StrictModel):
@@ -207,24 +256,103 @@ def _page(
     }, next_offset
 
 
-# The canonical per-record identity keys. Reduced/spec attribution rows omit the
-# trailing provenance pair (their output schema forbids the extra keys), so they
-# pick the first five — a slice of the one list, never a parallel one.
-_IDENTITY_KEYS: tuple[str, ...] = (
-    "case_id",
-    "run_index",
-    "step_index",
-    "step_values",
-    "assignments",
-    "circuit",
-    "deck_sha256",
-)
-_ATTRIBUTION_KEYS: tuple[str, ...] = _IDENTITY_KEYS[:5]
-
-
 def _pick(source: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
     """Project ``keys`` out of ``source`` (identity/attribution subsets)."""
     return {key: source[key] for key in keys}
+
+
+_ABSENT = object()
+
+# A keep-plan mirrors the row's own nesting: ``None`` keeps a whole subtree, a
+# nested plan keeps only the named keys inside it. Projection therefore returns
+# the SAME shape with fewer keys, never a flattened one — caller code that reads
+# ``row["value"]["phase_margin_deg"]`` reads it identically either way.
+_KeepPlan = dict[str, "_KeepPlan | None"]
+
+
+def _keep_plan(paths: list[str]) -> _KeepPlan:
+    """Group dotted ``paths`` into a nested keep-plan, in first-named order."""
+    order: list[str] = []
+    nested: dict[str, list[str]] = {}
+    whole: set[str] = set()
+    for path in paths:
+        root, _, rest = path.partition(".")
+        if root not in order:
+            order.append(root)
+        if rest:
+            nested.setdefault(root, []).append(rest)
+        else:
+            # A bare key wins over any dotted sibling: asking for the subtree and
+            # a leaf inside it means the subtree.
+            whole.add(root)
+    return {root: None if root in whole else _keep_plan(nested[root]) for root in order}
+
+
+def _project(row: dict[str, Any], plan: _KeepPlan) -> dict[str, Any]:
+    """A NEW row carrying only the planned keys.
+
+    Never mutates ``row``: the full record is still read after this call — spec
+    attribution, reductions and the analyzed-identity accounting all index keys
+    a projection drops — so this is a view built for emission, not an edit.
+    """
+    kept: dict[str, Any] = {}
+    for key, sub in plan.items():
+        value = row.get(key, _ABSENT)
+        if value is _ABSENT:
+            continue
+        if sub is None:
+            kept[key] = value
+        elif isinstance(value, dict):
+            nested = _project(value, sub)
+            if nested:
+                kept[key] = nested
+    return kept
+
+
+def _at_path(row: dict[str, Any], path: str) -> Any:
+    """The value at dotted ``path``, or ``_ABSENT`` when a segment is missing."""
+    node: Any = row
+    for segment in path.split("."):
+        if not isinstance(node, dict) or segment not in node:
+            return _ABSENT
+        node = node[segment]
+    return node
+
+
+def _projection_warnings(records: list[dict[str, Any]], fields: list[str]) -> list[str]:
+    """One warning per requested path that no row of this recipe carries.
+
+    Root keys are validated at input, so only a path reaching INTO a value dict
+    can miss — and it can miss legitimately, because ``include.fields`` is
+    call-global while each metric has its own value shape. Naming the keys that
+    are actually there turns a row missing the requested key from a silence into
+    the next call's argument.
+    """
+    warnings: list[str] = []
+    for path in fields:
+        parent, _, _leaf = path.rpartition(".")
+        if not parent:
+            continue
+        if any(_at_path(record, path) is not _ABSENT for record in records):
+            continue
+        present = sorted(
+            {
+                key
+                for record in records
+                for node in (_at_path(record, parent),)
+                if isinstance(node, dict)
+                for key in node
+            }
+        )
+        warnings.append(
+            f"include.fields path {path!r} is absent from every row of this recipe; "
+            + (
+                f"keys present at {parent!r}: {', '.join(present)}"
+                if present
+                else f"{parent!r} holds no object on these rows"
+            )
+        )
+    return warnings
 
 
 def _identity(
@@ -1674,6 +1802,30 @@ def _selected_manifest_ids(recipe: Recipe, runs: list[_ResolvedRun]) -> set[str]
     return {run.manifest_id for run in runs if run.label in labels}
 
 
+def _record_warnings(records: list[dict[str, Any]]) -> list[str]:
+    """Every distinct record warning once, in first-appearance order, carrying
+    how many records raised it.
+
+    A warning repeated per record adds nothing after the first copy, but its
+    REACH is itself a fact — one raised on 45 of 45 runs means something
+    different from one raised on 3 — so identical texts collapse onto a single
+    line that states the count and texts that differ stay separate. The count is
+    left off a single-record result, where "1 of 1" says nothing. Counting is by
+    record, not by occurrence, so the number always answers "how many runs".
+    """
+    counts: dict[str, int] = {}
+    for record in records:
+        seen: set[str] = set()
+        for warning in record["value"].get("warnings", []):
+            if not isinstance(warning, str) or warning in seen:
+                continue
+            seen.add(warning)
+            counts[warning] = counts.get(warning, 0) + 1
+    if len(records) <= 1:
+        return list(counts)
+    return [f"{text} ({count} of {len(records)} records)" for text, count in counts.items()]
+
+
 def _result_entry(
     recipe: Recipe,
     records: list[dict[str, Any]],
@@ -1683,6 +1835,7 @@ def _result_entry(
     per_run_offset: int,
     per_run_limit: int | None,
     include_outliers: bool,
+    fields: list[str] | None = None,
 ) -> tuple[dict[str, Any], int]:
     """The one result entry for ``recipe``, plus the offset its ``per_run``
     page ends at — the caller turns that into the resume cursor."""
@@ -1691,12 +1844,7 @@ def _result_entry(
         "metric": recipe.metric,
         "units": None,
         "reduced": _reduce(recipe, records),
-        "warnings": [
-            warning
-            for record in records
-            for warning in record["value"].get("warnings", [])
-            if isinstance(warning, str)
-        ],
+        "warnings": _record_warnings(records),
     }
     groups = _group_values(recipe, records, group_by)
     if groups:
@@ -1719,16 +1867,29 @@ def _result_entry(
                 "omitted from spec.fail_cases, which is not pageable; request "
                 "include.per_run for callable pagination over every attributed value."
             )
+    # One plan, applied at both row surfaces — a projection that reached only
+    # per_run or only values would be a lever whose effect depends on an
+    # unrelated argument.
+    plan = _keep_plan(fields) if fields else None
     per_run_next = per_run_offset
     if per_run_limit is not None:
-        entry["per_run"], per_run_next = _page(records, per_run_offset, per_run_limit)
+        page, per_run_next = _page(records, per_run_offset, per_run_limit)
+        if plan is not None:
+            page["items"] = [_project(row, plan) for row in page["items"]]
+        entry["per_run"] = page
     elif not getattr(recipe, "reduce", []):
-        entry["values"] = records[:MAX_PAGE_SIZE]
+        shown = records[:MAX_PAGE_SIZE]
+        entry["values"] = [_project(row, plan) for row in shown] if plan is not None else shown
         if len(records) > MAX_PAGE_SIZE:
             entry["warnings"].append(
                 f"{len(records) - MAX_PAGE_SIZE} value(s) omitted; request include.per_run "
                 "for callable pagination."
             )
+    # Only report unresolved paths where rows were actually emitted: a
+    # reduce-only recipe has no row surface by construction, so its fields did
+    # not fail to resolve — they had nothing to apply to.
+    if fields and records and ("per_run" in entry or "values" in entry):
+        entry["warnings"].extend(_projection_warnings(records, fields))
     return entry, per_run_next
 
 
@@ -1765,8 +1926,16 @@ _PAGE_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+# One per_run/values row. No ``required`` list: include.fields projects a row
+# down to the requested paths, so any subset of these keys is a valid row. The
+# full set is what an unprojected call returns; ``additionalProperties: false``
+# still holds because projection keeps the row's shape and only drops keys.
 _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
     "type": "object",
+    "description": (
+        "A case/run/step-attributed row. Carries every key below unless "
+        "include.fields projected it down to the requested paths."
+    ),
     "properties": {
         "source": {"type": "string"},
         "case_id": {"type": ["string", "null"]},
@@ -1778,17 +1947,6 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
         "deck_sha256": {"type": ["string", "null"]},
         "value": {"type": "object"},
     },
-    "required": [
-        "source",
-        "case_id",
-        "run_index",
-        "step_index",
-        "step_values",
-        "assignments",
-        "circuit",
-        "deck_sha256",
-        "value",
-    ],
     "additionalProperties": False,
 }
 
@@ -2320,6 +2478,7 @@ async def handle_analyze_results(
             unit["per_run_offset"],
             per_run_limit,
             include.outliers,
+            include.fields,
         )
         if records or not item_failures:
             results[key] = entry

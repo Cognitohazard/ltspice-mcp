@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import atomic_write, experiment_store, now, result_store
@@ -1011,3 +1012,229 @@ async def test_truncated_fail_cases_names_the_route_to_the_rest(
     entry = data["results"]["vout"]
     assert entry["spec"]["fail_cases"]["truncated"] is True
     assert any("include.per_run" in warning for warning in entry["warnings"])
+
+
+# ---------------------------------------------------------------------------
+# include.fields: per-row projection
+# ---------------------------------------------------------------------------
+
+# 15 source labels over a 3-step .AC sweep — 45 rows, the width at which an
+# agent stops reading the tool's rows and writes its own parser instead.
+_WIDE_SOURCES = 15
+
+_LOOP_RECIPE: dict[str, Any] = {
+    "key": "loop",
+    "metric": "bode_filter",
+    "signal": "V(out)",
+    "all_steps": True,
+}
+
+_FULL_ROW_KEYS = {
+    "source",
+    "case_id",
+    "run_index",
+    "step_index",
+    "step_values",
+    "assignments",
+    "circuit",
+    "deck_sha256",
+    "value",
+}
+
+
+def _wide_args(raw: Path, **include: Any) -> AnalyzeResultsInput:
+    return AnalyzeResultsInput.model_validate(
+        {
+            "sources": [_source(raw, f"corner{index:02d}") for index in range(_WIDE_SOURCES)],
+            "recipes": [_LOOP_RECIPE],
+            "include": include,
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["values", "per_run"])
+async def test_include_fields_projects_both_row_surfaces(
+    surface: str,
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """Projection reaches the paged and un-paged row lists alike — a lever that
+    worked on one and not the other would depend on an unrelated argument."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
+    include: dict[str, Any] = {"fields": ["step_index", "value.passband_gain_db"]}
+    if surface == "per_run":
+        include["per_run"] = {"limit": 10}
+    data = await _analyze(state_no_sim, raw, [_LOOP_RECIPE], include=include)
+    entry = data["results"]["loop"]
+    rows = entry["per_run"]["items"] if surface == "per_run" else entry["values"]
+    assert rows
+    for row in rows:
+        # Projection keeps the row's shape and drops keys: the nested read
+        # row["value"]["passband_gain_db"] is identical projected or not.
+        assert set(row) == {"step_index", "value"}
+        assert set(row["value"]) == {"passband_gain_db"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["values", "per_run"])
+async def test_rows_are_whole_when_include_fields_is_absent(
+    surface: str,
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """The default response is unprojected: include.fields is purely additive."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
+    include: dict[str, Any] = {"per_run": {"limit": 10}} if surface == "per_run" else {}
+    data = await _analyze(state_no_sim, raw, [_LOOP_RECIPE], include=include)
+    entry = data["results"]["loop"]
+    rows = entry["per_run"]["items"] if surface == "per_run" else entry["values"]
+    assert rows
+    for row in rows:
+        assert set(row) == _FULL_ROW_KEYS
+        assert len(row["value"]) > 1
+
+
+def test_unknown_projection_path_names_the_valid_row_keys(work_dir: Path):
+    """A path that cannot be rooted in a row is refused at the door, naming the
+    keys that exist — an advertised lever that silently keeps nothing is worse
+    than no lever."""
+    with pytest.raises(ValidationError) as excinfo:
+        _args(
+            work_dir / "unread.raw",
+            [_LOOP_RECIPE],
+            include={"fields": ["passband_gain_db"]},
+        )
+    message = str(excinfo.value)
+    assert "passband_gain_db" in message
+    for key in _FULL_ROW_KEYS:
+        assert key in message
+
+
+@pytest.mark.asyncio
+async def test_absent_nested_path_names_the_keys_the_rows_do_carry(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """include.fields is call-global while each metric owns its value shape, so a
+    path into 'value' can legitimately miss. It is reported per recipe, naming
+    the keys that are there, instead of handing back rows with nothing in them."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [_LOOP_RECIPE],
+        include={"fields": ["value.phase_margin_deg"]},
+    )
+    entry = data["results"]["loop"]
+    assert entry["values"] and all(row == {} for row in entry["values"])
+    warning = next(text for text in entry["warnings"] if "phase_margin_deg" in text)
+    assert "keys present at 'value'" in warning
+    assert "passband_gain_db" in warning
+
+
+@pytest.mark.asyncio
+async def test_projection_leaves_spec_attribution_rows_whole(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """spec.fail_cases rows are an already-reduced attribution shape whose
+    'value' is the failing number, not the metric's value dict, so include.fields
+    paths do not address them and they are returned intact."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [
+            {
+                "key": "vout",
+                "metric": "value",
+                "expr": "V(out)",
+                "at": "900u",
+                "spec": {"max": 0.1},
+            }
+        ],
+        include={"fields": ["step_index"], "outliers": True},
+    )
+    entry = data["results"]["vout"]
+    assert entry["values"] == [{"step_index": 0}]
+    case = entry["spec"]["fail_cases"]["items"][0]
+    assert set(case) == {
+        "value",
+        "case_id",
+        "run_index",
+        "step_index",
+        "step_values",
+        "assignments",
+    }
+    assert entry["spec"]["outliers"][0]["run_index"] == 0
+
+
+@pytest.mark.asyncio
+async def test_projection_shrinks_a_wide_sweep_payload(
+    state_no_sim: SessionState,
+    work_dir: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    """The whole justification, measured: a 45-row table an agent wants three
+    numbers from must not cost the full nested value dict of every row."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
+    full = await handle_analyze_results(_wide_args(raw), state_no_sim)
+    projected = await handle_analyze_results(
+        _wide_args(raw, fields=["source", "step_values", "value.passband_gain_db"]),
+        state_no_sim,
+    )
+    assert full.structuredContent is not None and projected.structuredContent is not None
+    full_rows = full.structuredContent["results"]["loop"]["values"]
+    projected_rows = projected.structuredContent["results"]["loop"]["values"]
+    assert len(full_rows) == len(projected_rows) == 45
+    full_chars = len(json.dumps(full_rows))
+    projected_chars = len(json.dumps(projected_rows))
+    with capsys.disabled():
+        print(
+            f"\n45-row table: {full_chars} chars whole, {projected_chars} projected; "
+            f"whole response {len(json.dumps(full.structuredContent))} -> "
+            f"{len(json.dumps(projected.structuredContent))}"
+        )
+    # The row table is what projection governs; the rest of the envelope
+    # (source hashes, aggregated warnings) is fixed overhead it does not claim.
+    assert projected_chars * 5 < full_chars
+
+
+@pytest.mark.asyncio
+async def test_identical_record_warnings_collapse_but_keep_their_reach(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """One warning raised by every record shipped 45 identical copies — 9,225
+    characters of a 59,268-character response saying one thing. It collapses to
+    a single line, and the line still says how many records raised it, because
+    45-of-45 and 3-of-45 are different facts."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
+    result = await handle_analyze_results(_wide_args(raw), state_no_sim)
+    assert result.structuredContent is not None
+    entry = result.structuredContent["results"]["loop"]
+    assert len(entry["values"]) == 45
+    assert len(entry["warnings"]) == 1
+    assert entry["warnings"][0].endswith(" (45 of 45 records)")
+
+
+def test_differing_record_warnings_all_survive_in_first_seen_order():
+    """Collapsing is by exact text: two different warnings are two facts, and
+    the count is per record even when one record repeats itself."""
+    records = [
+        {"value": {"warnings": ["clamped window", "clamped window", "ambiguous edge"]}},
+        {"value": {"warnings": ["clamped window"]}},
+        {"value": {"warnings": []}},
+    ]
+    assert analyze_mod._record_warnings(records) == [
+        "clamped window (2 of 3 records)",
+        "ambiguous edge (1 of 3 records)",
+    ]
+
+
+def test_single_record_warnings_carry_no_count():
+    """ "1 of 1" states nothing, so a single-run result reads exactly as before."""
+    assert analyze_mod._record_warnings([{"value": {"warnings": ["clamped window"]}}]) == [
+        "clamped window"
+    ]
