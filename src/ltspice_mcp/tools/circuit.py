@@ -14,11 +14,11 @@ import io
 import itertools
 import re
 from collections import Counter, defaultdict
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from collections.abc import Set as AbstractSet
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal, NamedTuple, cast
+from typing import Any, Literal, NamedTuple, cast
 
 import numpy as np
 from mcp import types
@@ -4605,6 +4605,73 @@ def _components_and_directives(path: Path) -> tuple[dict[str, str], set[str], st
     return components, directives, None
 
 
+# The added/removed/changed delta both structural comparisons in this codebase
+# produce from ``_components_and_directives``: diff_circuit's own payload and
+# verify_circuit's structural_diff / sidecar-export diff. One payload, one schema
+# — declared here, beside the function whose output it describes.
+#
+# "baseline" is the first deck given (diff_circuit's ``path_a``, verify's
+# reference); "compared" is the second (``path_b``, the circuit under test).
+STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
+    "components_added": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "References present in the compared deck but absent from the baseline.",
+    },
+    "components_removed": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "References present in the baseline but absent from the compared deck.",
+    },
+    "components_changed": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "reference": {"type": "string", "description": "Component reference, e.g. 'R1'."},
+                "before": {"type": "string", "description": "Its signature in the baseline."},
+                "after": {"type": "string", "description": "Its signature in the compared deck."},
+            },
+            "required": ["reference", "before", "after"],
+        },
+        "description": "References in both decks whose type/value signature differs.",
+    },
+    "directives_added": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "SPICE directives in the compared deck and not the baseline.",
+    },
+    "directives_removed": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "SPICE directives in the baseline and not the compared deck.",
+    },
+}
+
+
+def parse_failure_warnings(pairs: Sequence[tuple[str, str | None]]) -> list[str]:
+    """Structured warnings for the decks a structural diff could not parse.
+
+    ``pairs`` is ``(display name, parse error or None)`` per side. An unparsed
+    deck is diffed as an EMPTY circuit, so the other side's whole content reads
+    as added or removed. That interpretation has to ride in the structured
+    channel, not only the text one: structured-aware clients never see the text
+    caveat, and the bogus added/removed lists look trustworthy without it.
+
+    Returns the interpretation first, then one message per unparsed deck.
+    """
+    errors = [err for _name, err in pairs if err]
+    if not errors:
+        return []
+    unparsed = " and ".join(name for name, err in pairs if err)
+    return [
+        f"{unparsed} could not be parsed; the diff treats it as empty, so its "
+        "components/directives appear as added/removed. Fix the file before "
+        "trusting this comparison.",
+        *errors,
+    ]
+
+
 @registry.tool(
     name="diff_circuit",
     description=(
@@ -4623,22 +4690,7 @@ def _components_and_directives(path: Path) -> tuple[dict[str, str], set[str], st
         "properties": {
             "path_a": {"type": "string"},
             "path_b": {"type": "string"},
-            "components_added": {"type": "array", "items": {"type": "string"}},
-            "components_removed": {"type": "array", "items": {"type": "string"}},
-            "components_changed": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "reference": {"type": "string"},
-                        "before": {"type": "string"},
-                        "after": {"type": "string"},
-                    },
-                    "required": ["reference", "before", "after"],
-                },
-            },
-            "directives_added": {"type": "array", "items": {"type": "string"}},
-            "directives_removed": {"type": "array", "items": {"type": "string"}},
+            **STRUCTURAL_DELTA_PROPS,
             # A parse failure on either file rides here — the added/removed
             # lists are untrustworthy until it's resolved.
             "warnings": WARNINGS_SCHEMA,
@@ -4662,21 +4714,10 @@ async def handle_diff_circuit(args: DiffCircuitInput, state: SessionState) -> ty
 
     a, da, err_a = _components_and_directives(path_a)
     b, db, err_b = _components_and_directives(path_b)
+    warnings = parse_failure_warnings([(path_a.name, err_a), (path_b.name, err_b)])
+    # The text channel writes its own caveat around the bare messages, so it
+    # needs them without the structured channel's leading interpretation line.
     parse_errors = [m for m in (err_a, err_b) if m]
-    # The interpretation of a parse failure must ride in the structured
-    # warnings too — structured-aware clients never see the text channel's
-    # caveat, and without it the bogus added/removed lists look trustworthy.
-    warnings = list(parse_errors)
-    if parse_errors:
-        unparsed = " and ".join(
-            name for name, err in ((path_a.name, err_a), (path_b.name, err_b)) if err
-        )
-        warnings.insert(
-            0,
-            f"{unparsed} could not be parsed; the diff treats it as empty, so its "
-            "components/directives appear as added/removed. Fix the file before "
-            "trusting this comparison.",
-        )
 
     added = sorted(set(b) - set(a))
     removed = sorted(set(a) - set(b))

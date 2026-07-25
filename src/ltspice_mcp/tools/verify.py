@@ -22,6 +22,26 @@ connectivity engine (every include/lib open gated by ``safe_path`` so an in-deck
 include that escapes the allowed roots is denied and never read); ``structural_diff``
 reuses the shipped ``diff_circuit`` internals for an added/removed/changed delta.
 
+The three channels stay separate. ``observations`` are facts about what the checks
+could see — an unresolved symbol drawn as a placeholder, a finding list truncated
+at the cap, the layout scan's stated blind spot — each weighed by the caller, none
+with a single required action. ``warnings`` are the assumptions a check had to make
+for its result to exist: today, a deck in a comparison that could not be parsed and
+was therefore diffed as an empty circuit, which makes the other side's whole content
+read as added or removed. Those warnings have one home, the top-level channel:
+nested inside ``comparison`` they were invisible to the schema, so a structured-only
+client read the bogus delta as fact.
+
+An unparsed deck sits in ``warnings`` rather than ``observations`` deliberately. The
+doctrine in ``lib/result_observations.py`` routes a *run-level solve failure* to
+``observations`` where a tool has that channel, but that rule is about a fact the
+simulator produced about a solve; verify_circuit never solves. What it reports here
+is its own substitution — it could not read a deck, so it stood an empty circuit in
+its place and carried on — which is the ``warnings`` question verbatim ("did this
+have to make assumptions?"), free-text with one thing to fix. It also keeps the
+channel consistent with ``diff_circuit``, which has surfaced these same messages,
+from this same helper, in ``warnings`` all along.
+
 ``export_to`` is ``managed`` by default — a non-destructive export into a staged
 scratch directory that leaves the caller's files untouched. ``sidecar`` overwrites
 the deck's conventional ``<name>.net`` next to the schematic under the export lock,
@@ -67,6 +87,7 @@ from ltspice_mcp.lib.spice_validator import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    WARNINGS_SCHEMA,
     StrictModel,
     ToolInput,
     asc_export_lock,
@@ -79,9 +100,11 @@ from ltspice_mcp.tools._base import (
     symbol_resolver_for,
 )
 from ltspice_mcp.tools.circuit import (
+    STRUCTURAL_DELTA_PROPS,
     _components_and_directives,
     _norm_micro,
     _same_instance_dropped_segments,
+    parse_failure_warnings,
 )
 
 # The apply_schematic_ops geometry helpers and diff internals are reused verbatim
@@ -180,7 +203,16 @@ _EXPORT_SCHEMA: dict[str, Any] = {
         "components": {"type": ["integer", "null"]},
         "nets": {"type": ["integer", "null"]},
         "destination": {"type": "string"},
-        "diff_vs_prior": {"type": ["object", "null"]},
+        "diff_vs_prior": {
+            "type": ["object", "null"],
+            "properties": dict(STRUCTURAL_DELTA_PROPS),
+            "required": list(STRUCTURAL_DELTA_PROPS),
+            "description": (
+                "sidecar mode only: the structural delta between the .net that was "
+                "already on disk and the one just exported. Null when there was no "
+                "prior file or the export was managed."
+            ),
+        },
     },
     "required": ["ok", "destination"],
 }
@@ -215,13 +247,254 @@ _SCENE_SCHEMA: dict[str, Any] = {
     },
 }
 
+# Equivalence-mode difference records — the JSON projection of the matching
+# lib.netlist_graph dataclasses (see GraphComparison.as_dict).
+_REF: dict[str, Any] = {
+    "type": "string",
+    "description": "Component reference, hierarchical for a subcircuit leaf ('X1.M2').",
+}
+
+_COMPONENT_DELTA_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "ref": _REF,
+        "type_letter": {"type": "string", "description": "SPICE element letter (R, C, M, X, …)."},
+        "detail": {"type": "string", "description": "What the component is, in words."},
+    },
+    "required": ["ref", "type_letter", "detail"],
+}
+
+_RETYPE_DIFF_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "ref": _REF,
+        "reference_type": {
+            "type": "string",
+            "description": "Element type / model name on the reference side.",
+        },
+        "candidate_type": {
+            "type": "string",
+            "description": "Element type / model name on this circuit's side.",
+        },
+    },
+    "required": ["ref", "reference_type", "candidate_type"],
+}
+
+_VALUE_DIFF_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "ref": _REF,
+        "reference_value": {
+            "type": ["string", "null"],
+            "description": "Primary value on the reference side.",
+        },
+        "candidate_value": {
+            "type": ["string", "null"],
+            "description": "Primary value on this circuit's side.",
+        },
+    },
+    "required": ["ref", "reference_value", "candidate_value"],
+}
+
+_PARAM_DIFF_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "ref": _REF,
+        "key": {"type": "string", "description": "The key=value parameter name that differs."},
+        "reference_value": {
+            "type": ["string", "null"],
+            "description": "Its value on the reference side.",
+        },
+        "candidate_value": {
+            "type": ["string", "null"],
+            "description": "Its value on this circuit's side.",
+        },
+    },
+    "required": ["ref", "key", "reference_value", "candidate_value"],
+}
+
+_NODE_PARTITION_DIFF_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "One connectivity collision: one reference net forced onto several candidate "
+        "nets (a fan-out) or several reference nets merged onto one (a short). Both "
+        "sides are named, so the other end never has to be reconstructed."
+    ),
+    "properties": {
+        "reference_nets": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "The reference-side nets in the collision.",
+        },
+        "candidate_nets": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "The candidate-side nets they could not be reconciled with.",
+        },
+        "involved": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Device pins ('R1.2') that witness the constraint.",
+        },
+    },
+    "required": ["reference_nets", "candidate_nets", "involved"],
+}
+
+_ANCHOR_VIOLATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "anchor": {"type": "string", "description": "The anchor net name that is misplaced."},
+        "detail": {"type": "string", "description": "How its structural position differs."},
+    },
+    "required": ["anchor", "detail"],
+}
+
+_ARITY_ERROR_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "ref": _REF,
+        "reference_arity": {
+            "type": "integer",
+            "description": "Terminal count on the reference side.",
+        },
+        "candidate_arity": {
+            "type": "integer",
+            "description": "Terminal count on this circuit's side.",
+        },
+    },
+    "required": ["ref", "reference_arity", "candidate_arity"],
+}
+
+_UNRESOLVED_SUBCKT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "An X instance whose .subckt definition was found nowhere, left as a black "
+        "box. A fact, not a difference — it does not flip 'equivalent'."
+    ),
+    "properties": {
+        "name": {"type": "string", "description": "The subcircuit name that was asked for."},
+        "side": {
+            "type": "string",
+            "description": "Which deck asked for it: 'reference' or 'candidate'.",
+        },
+        "missing_includes": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "That side's unusable include targets — empty means the library was "
+                "never referenced, non-empty means the definition file is missing."
+            ),
+        },
+    },
+    "required": ["name", "side", "missing_includes"],
+}
+
+_DUPLICATE_SUBCKT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "A subcircuit defined more than once; SPICE keeps the first in textual "
+        "order. A fact, not a difference — it does not flip 'equivalent'."
+    ),
+    "properties": {
+        "name": {"type": "string", "description": "The duplicated subcircuit name."},
+        "used": {"type": "string", "description": "The source whose definition won."},
+        "ignored": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "The sources whose definitions were discarded.",
+        },
+    },
+    "required": ["name", "used", "ignored"],
+}
+
+# One flat object over both compare modes rather than a nested oneOf: strict MCP
+# clients handle a plain properties map everywhere, and 'mode' says which subset
+# is populated. Only 'mode' and 'equivalent' are emitted by both modes.
 _COMPARISON_SCHEMA: dict[str, Any] = {
     "type": ["object", "null"],
+    "description": (
+        "The reference comparison, null when no reference was supplied or compare "
+        "did not run. 'mode' selects which keys are present."
+    ),
     "properties": {
-        "mode": {"type": "string"},
-        "equivalent": {"type": ["boolean", "null"]},
-        "structurally_equivalent": {"type": ["boolean", "null"]},
+        "mode": {
+            "type": "string",
+            "enum": ["equivalence", "structural_diff"],
+            "description": (
+                "'equivalence' populates the graph-comparison keys "
+                "(structurally_equivalent, added/removed/retyped, the mismatch lists, "
+                "the subckt facts); 'structural_diff' populates the components_*/"
+                "directives_* delta."
+            ),
+        },
+        "equivalent": {
+            "type": ["boolean", "null"],
+            "description": (
+                "The single-glance verdict. In equivalence mode: structurally "
+                "isomorphic AND no component, value, parameter, anchor or arity "
+                "difference. In structural_diff mode: the delta is empty."
+            ),
+        },
+        "structurally_equivalent": {
+            "type": ["boolean", "null"],
+            "description": (
+                "equivalence mode only: the wiring-only verdict, ignoring values and "
+                "anchor placement. Can be true while 'equivalent' is false."
+            ),
+        },
+        "added": {
+            "type": "array",
+            "items": _COMPONENT_DELTA_SCHEMA,
+            "description": "equivalence: components present only in this circuit.",
+        },
+        "removed": {
+            "type": "array",
+            "items": _COMPONENT_DELTA_SCHEMA,
+            "description": "equivalence: components present only in the reference.",
+        },
+        "retyped": {
+            "type": "array",
+            "items": _RETYPE_DIFF_SCHEMA,
+            "description": "equivalence: matched components whose type or model changed.",
+        },
+        "value_mismatches": {
+            "type": "array",
+            "items": _VALUE_DIFF_SCHEMA,
+            "description": "equivalence: matched components whose value differs beyond rtol.",
+        },
+        "param_mismatches": {
+            "type": "array",
+            "items": _PARAM_DIFF_SCHEMA,
+            "description": "equivalence: matched components whose key=value parameter differs.",
+        },
+        "node_partition_mismatches": {
+            "type": "array",
+            "items": _NODE_PARTITION_DIFF_SCHEMA,
+            "description": "equivalence: the wiring collisions — where a miswire shows up.",
+        },
+        "anchor_violations": {
+            "type": "array",
+            "items": _ANCHOR_VIOLATION_SCHEMA,
+            "description": "equivalence: anchor nets not in corresponding positions.",
+        },
+        "arity_errors": {
+            "type": "array",
+            "items": _ARITY_ERROR_SCHEMA,
+            "description": "equivalence: matched components whose terminal count differs.",
+        },
+        "unresolved_subckts": {
+            "type": "array",
+            "items": _UNRESOLVED_SUBCKT_SCHEMA,
+            "description": "equivalence: subcircuits left as black boxes on either side.",
+        },
+        "duplicate_subckts": {
+            "type": "array",
+            "items": _DUPLICATE_SUBCKT_SCHEMA,
+            "description": "equivalence: subcircuits defined more than once.",
+        },
+        **STRUCTURAL_DELTA_PROPS,
     },
+    "required": ["mode", "equivalent"],
 }
 
 _OUTPUT_SCHEMA: dict[str, Any] = {
@@ -237,8 +510,24 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "export": _EXPORT_SCHEMA,
         "render": _RENDER_SCHEMA,
         "scene": _SCENE_SCHEMA,
-        "observations": {"type": "array", "items": {"type": "string"}},
-        "warnings": {"type": "array", "items": {"type": "string"}},
+        "observations": {
+            **WARNINGS_SCHEMA,
+            "description": (
+                "What the checks could and could not see: a symbol that resolved "
+                "only to a placeholder, a finding list truncated at the cap, the "
+                "layout scan's stated blind spot, a render that was skipped. Facts "
+                "to weigh — none carries a single required action."
+            ),
+        },
+        "warnings": {
+            **WARNINGS_SCHEMA,
+            "description": (
+                "Assumptions a check had to make for its result to exist at all — "
+                "today, a deck in a comparison that could not be parsed and was "
+                "diffed as an empty circuit. Each names one thing to fix, so read "
+                "these before trusting 'comparison' or 'export.diff_vs_prior'."
+            ),
+        },
         "failures": {"type": "array", "items": _FAILURE_SCHEMA},
         "hint": {"type": "string"},
     },
@@ -364,8 +653,13 @@ class VerifyCircuitInput(ToolInput):
         description=(
             "'equivalence' graph-compares connectivity (component set, values, "
             "normalized parameters, node partitions by canonical labeling, arity, "
-            "and 'anchors'). 'structural_diff' reports the added/removed/changed "
-            "component and directive delta between the two decks."
+            "and 'anchors'); a deck it cannot read yields a compare failure and no "
+            "'comparison' at all, because isomorphism is undefined without both "
+            "graphs. 'structural_diff' reports the added/removed/changed component "
+            "and directive delta between the two decks; a deck it cannot read is "
+            "diffed as empty, so the delta still comes back but 'equivalent' is null "
+            "and a warning names the deck that failed. Either way the outcome is "
+            "'partial' and the reason is in the response."
         ),
     )
     anchors: list[str] | None = Field(default=None, description=_ANCHORS_DESCRIPTION)
@@ -748,15 +1042,16 @@ def _file_digest(path: Path, length: int | None = None) -> str | None:
 
 async def _run_export(
     asc_path: Path, state: SessionState, export_to: str, simulator_cls: Any
-) -> tuple[dict[str, Any], dict[str, Any] | None, list[str]]:
+) -> tuple[dict[str, Any], dict[str, Any] | None, list[str], list[str]]:
     """Export a schematic to a netlist, managed (scratch copy) or sidecar (in place).
 
-    Returns ``(export_payload, failure_or_none, observations)``. The ``sidecar``
-    mode runs under the export lock (it overwrites ``<name>.net``) and records a
-    structural ``diff_vs_prior``; ``managed`` stages the schematic with its
+    Returns ``(export_payload, failure_or_none, observations, warnings)``. The
+    ``sidecar`` mode runs under the export lock (it overwrites ``<name>.net``) and
+    records a structural ``diff_vs_prior``; ``managed`` stages the schematic with its
     project-local assets and exports there, touching none of the caller's files.
     """
     observations: list[str] = []
+    warnings: list[str] = []
     timeout = state.config.default_timeout
     payload: dict[str, Any] = {
         "ok": False,
@@ -777,9 +1072,10 @@ async def _run_export(
                     _create_netlist, simulator_cls, asc_path, timeout
                 )
                 if prior is not None and new_path.exists():
-                    payload["diff_vs_prior"] = await asyncio.to_thread(
+                    payload["diff_vs_prior"], diff_warnings = await asyncio.to_thread(
                         _diff_vs_prior, prior, new_path, state
                     )
+                    warnings.extend(diff_warnings)
                 net_path = new_path
         else:
             scratch = (
@@ -808,6 +1104,7 @@ async def _run_export(
                 remedy="drop 'export' from checks to run the offline checks only",
             ),
             observations,
+            warnings,
         )
 
     if not net_path.exists():
@@ -819,6 +1116,7 @@ async def _run_export(
                 where=str(net_path),
             ),
             observations,
+            warnings,
         )
 
     components, nets = await asyncio.to_thread(_netlist_counts, net_path)
@@ -831,16 +1129,24 @@ async def _run_export(
             "nets": nets,
         }
     )
-    return payload, None, observations
+    return payload, None, observations, warnings
 
 
-def _diff_vs_prior(prior_bytes: bytes, new_path: Path, state: SessionState) -> dict[str, Any]:
-    """Structural delta between the sidecar .net's prior content and the fresh one."""
+def _diff_vs_prior(
+    prior_bytes: bytes, new_path: Path, state: SessionState
+) -> tuple[dict[str, Any], list[str]]:
+    """Structural delta between the sidecar .net's prior content and the fresh one.
+
+    The staged copy of the prior content is named for what it is, not for its
+    digest alone, so a parse warning naming that file still identifies it.
+    """
     scratch = _scratch_dir(state, "prior")
-    prior_path = scratch / f"{hashlib.sha256(prior_bytes).hexdigest()[:12]}.net"
+    stamp = hashlib.sha256(prior_bytes).hexdigest()[:12]
+    prior_path = scratch / f"prior-{new_path.stem}.{stamp}.net"
     prior_path.write_bytes(prior_bytes)
     try:
-        return _structural_diff(prior_path, new_path)
+        delta, warnings, _both_parsed = _structural_diff(prior_path, new_path)
+        return delta, warnings
     finally:
         with contextlib.suppress(OSError):
             prior_path.unlink()
@@ -898,6 +1204,16 @@ def _parse_graph_or_fail(
     return graph, None
 
 
+# Both compare modes return this, in this order, so the call site destructures
+# one shape regardless of mode: (comparison, findings, failure, warnings). Each
+# mode leaves the channel it does not use empty — equivalence fails hard on a
+# parse error rather than warning, structural_diff routes everything through
+# warnings rather than findings.
+CompareResult = tuple[
+    dict[str, Any] | None, list[dict[str, Any]], dict[str, Any] | None, list[str]
+]
+
+
 def _compare_equivalence(
     reference: str | Path,
     candidate: str | Path,
@@ -906,7 +1222,7 @@ def _compare_equivalence(
     anchors: list[str] | None,
     rtol: float,
     resolver: IncludeResolver,
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]], dict[str, Any] | None]:
+) -> CompareResult:
     """Graph-compare candidate against reference through the safe_path resolver.
 
     ``candidate`` may be the already-read netlist text (parsed with ``cand_source``
@@ -916,18 +1232,18 @@ def _compare_equivalence(
     findings: list[dict[str, Any]] = []
     ref_graph, failure = _parse_graph_or_fail(reference, "reference netlist", ref_source, resolver)
     if failure is not None:
-        return None, findings, failure
+        return None, findings, failure, []
     cand_graph, failure = _parse_graph_or_fail(
         candidate, "netlist under test", cand_source, resolver, base_dir=cand_source.parent
     )
     if failure is not None:
-        return None, findings, failure
+        return None, findings, failure, []
     assert ref_graph is not None and cand_graph is not None  # failure is None ⇒ both parsed
     findings.extend(_denied_include_findings(ref_graph, ref_source))
     findings.extend(_denied_include_findings(cand_graph, cand_source))
     comparison = compare_graphs(ref_graph, cand_graph, anchors=anchors, rtol=rtol)
     payload: dict[str, Any] = {"mode": "equivalence", **comparison.as_dict()}
-    return payload, findings, None
+    return payload, findings, None, []
 
 
 def _by_directive_key(directives: set[str]) -> dict[str, list[str]]:
@@ -940,11 +1256,21 @@ def _by_directive_key(directives: set[str]) -> dict[str, list[str]]:
     return by_key
 
 
-def _structural_diff(ref_path: Path, cand_path: Path) -> dict[str, Any]:
-    """Added/removed/changed component and directive delta (diff_circuit internals)."""
+def _structural_diff(ref_path: Path, cand_path: Path) -> tuple[dict[str, Any], list[str], bool]:
+    """Added/removed/changed component and directive delta (diff_circuit internals).
+
+    Returns ``(delta, warnings, both_parsed)``. A deck that could not be parsed is
+    diffed as an empty circuit, which makes every component of the other side look
+    added or removed — so the caveat rides out as a warning rather than inside the
+    delta, where the caller browsing the difference lists would never look for it.
+
+    ``both_parsed`` is reported separately rather than inferred from an empty
+    ``warnings`` list, so a future warning of some other kind cannot silently be
+    read as a parse failure.
+    """
     a, da, err_a = _components_and_directives(ref_path)
     b, db, err_b = _components_and_directives(cand_path)
-    warnings = [m for m in (err_a, err_b) if m]
+    warnings = parse_failure_warnings([(ref_path.name, err_a), (cand_path.name, err_b)])
 
     added = sorted(set(b) - set(a))
     removed = sorted(set(a) - set(b))
@@ -959,32 +1285,37 @@ def _structural_diff(ref_path: Path, cand_path: Path) -> dict[str, Any]:
     directives_added = sorted(d for k in db_by.keys() - da_by.keys() for d in db_by[k])
     directives_removed = sorted(d for k in da_by.keys() - db_by.keys() for d in da_by[k])
 
-    return {
+    delta = {
         "components_added": added,
         "components_removed": removed,
         "components_changed": changed,
         "directives_added": directives_added,
         "directives_removed": directives_removed,
-        "warnings": warnings,
     }
+    return delta, warnings, err_a is None and err_b is None
 
 
-def _compare_structural(
-    ref_path: Path, candidate: Path
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+def _compare_structural(ref_path: Path, candidate: Path) -> CompareResult:
     """structural_diff mode: reuse the shipped diff internals."""
     try:
-        diff = _structural_diff(ref_path, candidate)
+        diff, warnings, both_parsed = _structural_diff(ref_path, candidate)
     except (OSError, ValueError) as exc:
-        return None, _failure("compare", f"structural diff failed: {exc}", where=str(candidate))
-    equivalent = not (
-        diff["components_added"]
-        or diff["components_removed"]
-        or diff["components_changed"]
-        or diff["directives_added"]
-        or diff["directives_removed"]
-    )
-    return {"mode": "structural_diff", "equivalent": equivalent, **diff}, None
+        return (
+            None,
+            [],
+            _failure("compare", f"structural diff failed: {exc}", where=str(candidate)),
+            [],
+        )
+    # An unparsed deck is diffed as an empty circuit, so the delta describes a
+    # circuit nothing read. Two decks that both failed then produce an EMPTY
+    # delta, and an empty delta otherwise means "these match" — success reported
+    # for a comparison that compared nothing. The verdict is not derivable from a
+    # fabricated side in either direction, so it is null and the warning says why.
+    #
+    # Keyed on the delta's own difference lists rather than ``any(diff.values())``:
+    # a metadata key added to the delta later must not read as a difference.
+    equivalent = not any(diff[key] for key in STRUCTURAL_DELTA_PROPS) if both_parsed else None
+    return {"mode": "structural_diff", "equivalent": equivalent, **diff}, [], None, warnings
 
 
 # ---------------------------------------------------------------------------
@@ -1096,12 +1427,20 @@ def _image_content(image: RenderedImage) -> types.ImageContent:
 # ---------------------------------------------------------------------------
 
 
+def _comparison_unverified(comparison: dict[str, Any] | None) -> bool:
+    """The comparison ran but could not reach a verdict (a side was unparseable)."""
+    return comparison is not None and comparison.get("equivalent") is None
+
+
 def _comparison_mismatch(comparison: dict[str, Any] | None) -> bool:
+    """Anything short of a positive match — a real difference OR no verdict at all.
+
+    Deliberately not ``not equivalent``: only ``True`` is a clean result, so a null
+    verdict keeps the outcome off ``complete`` instead of falling through it.
+    """
     if comparison is None:
         return False
-    if comparison.get("mode") == "structural_diff":
-        return not comparison.get("equivalent", True)
-    return not comparison.get("equivalent", True)
+    return comparison.get("equivalent") is not True
 
 
 def _outcome(
@@ -1126,18 +1465,31 @@ def _hint(data: dict[str, Any]) -> str:
         remedy = first.get("remedy")
         return f"{first['stage']} failed: {first['error']}" + (f" — {remedy}" if remedy else "")
     parts: list[str] = []
+    # A warning says a result exists only because something was assumed, so it
+    # leads: without it "no problems found" reads as a clean bill of health over a
+    # comparison that was built on a deck nothing could parse.
+    warnings_channel = data.get("warnings") or []
+    if warnings_channel:
+        parts.append(warnings_channel[0].rstrip("."))
     errors = [f for f in data["findings"] if f["severity"] == "error"]
-    warnings = [f for f in data["findings"] if f["severity"] == "warning"]
+    # Findings of warning severity — a different thing from the top-level
+    # warnings channel read above, which is why neither is just "warnings".
+    warning_findings = [f for f in data["findings"] if f["severity"] == "warning"]
     if errors:
         parts.append(
             f"{len(errors)} error finding(s): " + ", ".join(sorted({f["rule_id"] for f in errors}))
         )
-    if warnings:
+    if warning_findings:
         parts.append(
-            f"{len(warnings)} warning(s): " + ", ".join(sorted({f["rule_id"] for f in warnings}))
+            f"{len(warning_findings)} warning(s): "
+            + ", ".join(sorted({f["rule_id"] for f in warning_findings}))
         )
     comparison = data.get("comparison")
-    if _comparison_mismatch(comparison):
+    if _comparison_unverified(comparison):
+        # Not the same news as a mismatch: nothing was compared, so telling the
+        # caller the decks "did not match" would invent a difference.
+        parts.append("reference comparison reached no verdict — see warnings")
+    elif _comparison_mismatch(comparison):
         parts.append("reference comparison did not match — see comparison")
     observations = [f for f in data["findings"] if f["severity"] == "observation"]
     if observations and not parts:
@@ -1244,6 +1596,7 @@ async def handle_verify_circuit(
     findings: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     observations: list[str] = []
+    warnings: list[str] = []
     checks_run: list[str] = []
     skipped: list[dict[str, str]] = []
 
@@ -1338,10 +1691,11 @@ async def handle_verify_circuit(
         if simulator_cls is None:
             skip("export", "LTspice not detected")
         else:
-            export_payload, export_failure, export_obs = await _run_export(
+            export_payload, export_failure, export_obs, export_warnings = await _run_export(
                 path, state, args.export_to, simulator_cls
             )
             observations.extend(export_obs)
+            warnings.extend(export_warnings)
             if scene is not None:
                 findings.extend(_dropped_wire_findings(scene, path))
             data["export"] = export_payload
@@ -1357,13 +1711,14 @@ async def handle_verify_circuit(
             skip("compare", "the exported netlist is required and the export did not run")
         else:
             ref_source = reference if isinstance(reference, Path) else path
+            compared: CompareResult
             if args.compare_mode == "equivalence":
                 # Reuse the netlist text already read for syntax, so the candidate
                 # is not read+lexed a second time; the export path has no such text.
                 cand_input: str | Path = (
                     text if kind == "netlist" and text is not None else candidate
                 )
-                comparison, cmp_findings, cmp_failure = await asyncio.to_thread(
+                compared = await asyncio.to_thread(
                     _compare_equivalence,
                     reference,
                     cand_input,
@@ -1373,12 +1728,12 @@ async def handle_verify_circuit(
                     args.rtol,
                     make_include_resolver(state),
                 )
-                findings.extend(cmp_findings)
             else:
                 ref_path = _reference_to_path(reference, state)
-                comparison, cmp_failure = await asyncio.to_thread(
-                    _compare_structural, ref_path, candidate
-                )
+                compared = await asyncio.to_thread(_compare_structural, ref_path, candidate)
+            comparison, cmp_findings, cmp_failure, cmp_warnings = compared
+            findings.extend(cmp_findings)
+            warnings.extend(cmp_warnings)
             if cmp_failure is not None:
                 failures.append(cmp_failure)
             else:
@@ -1402,6 +1757,7 @@ async def handle_verify_circuit(
             "checks_skipped": skipped,
             "findings": findings,
             "observations": observations,
+            "warnings": warnings,
             "failures": failures,
         }
     )
