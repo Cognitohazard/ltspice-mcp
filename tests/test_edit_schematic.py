@@ -17,7 +17,7 @@ import jsonschema
 import pytest
 from pydantic import ValidationError
 
-from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.lib import raster
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import schematic_edit as se
@@ -592,6 +592,96 @@ async def test_reference_mismatch_stays_committed(asc_state, work_dir, monkeypat
     assert data["verification"]["equivalent"] is False
     # A difference is data, not a failure: the sheet stays committed.
     assert (work_dir / "refbad.asc").is_file()
+
+
+async def test_rejected_reference_path_refuses_before_committing(asc_state, work_dir):
+    """A reference outside allowed_paths is an argument fault, caught pre-commit.
+
+    Resolving it in the post-commit stage instead wrote the sheet and then
+    aborted with a bare raise, so the caller was told only "error" and never
+    learned the new sha of the file it had just committed.
+    """
+    with pytest.raises(PathSecurityError):
+        await _build_blank(
+            asc_state, "denied_ref", _DIVIDER_OPS, reference="/etc/ltspice-mcp-not-allowed.cir"
+        )
+    # Nothing was written: the rejection lands before the commit protocol runs.
+    assert not (work_dir / "denied_ref.asc").exists()
+    assert not list(work_dir.glob("denied_ref.asc.staging-*"))
+
+
+# ---------------------------------------------------------------------------
+# Post-commit escapes still return a committed envelope
+# ---------------------------------------------------------------------------
+
+
+async def test_post_commit_reference_error_returns_committed_envelope(
+    asc_state, work_dir, monkeypatch
+):
+    """An exception in the reference stage reports the commit, not a bare raise."""
+    (work_dir / "ref.cir").write_text(_REF_DECK)
+
+    def boom(*_a, **_kw):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(se, "_write_export_copy", boom)
+
+    data = await _build_blank(asc_state, "refboom", _DIVIDER_OPS, reference="ref.cir")
+    committed = work_dir / "refboom.asc"
+    assert committed.is_file()
+    # The caller learns the commit happened AND the sha it must edit against next.
+    assert data["outcome"] == "partial"
+    assert data["commit_state"] == "committed"
+    assert data["sha256"] == _sha(committed)
+    assert data["error"]["code"] == "post_commit_failed"
+    assert data["error"]["stage"] == "reference"
+    assert data["error"]["commit_state"] == "committed"
+    assert "no space left on device" in data["error"]["message"]
+    assert data["stages"][-1] == {
+        "stage": "reference",
+        "ok": False,
+        "error": "no space left on device",
+    }
+    # And that sha is usable: the follow-up edit does not hit revision_conflict.
+    nxt = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                target="refboom.asc",
+                expected_sha256=data["sha256"],
+                ops=[
+                    {
+                        "op": "add_component",
+                        "reference": "R3",
+                        "symbol": "res",
+                        "x": 1000,
+                        "y": 300,
+                    }
+                ],
+            ),
+            asc_state,
+        )
+    )
+    assert nxt["outcome"] == "complete"
+
+
+async def test_post_commit_view_error_returns_committed_envelope(asc_state, work_dir, monkeypatch):
+    """A view-assembly exception is post-commit too, and reports the same way."""
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("legend blew up")
+
+    monkeypatch.setattr(se, "paginate_view", boom)
+
+    result = await handle_edit_schematic(
+        _edit_input(target="viewboom.asc", base="blank", ops=_DIVIDER_OPS), asc_state
+    )
+    data = _assert_schema(result)
+    committed = work_dir / "viewboom.asc"
+    assert committed.is_file()
+    assert data["commit_state"] == "committed"
+    assert data["sha256"] == _sha(committed)
+    assert data["error"]["stage"] == "views"
+    assert "legend blew up" in data["error"]["message"]
 
 
 # ---------------------------------------------------------------------------
