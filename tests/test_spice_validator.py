@@ -300,6 +300,48 @@ class TestElementArity:
         ), issues
 
 
+class TestControlBlockIsOpaque:
+    """ngspice ``.control`` commands collide with SPICE element prefixes
+    (let->L, dc->D, meas->M, foreach->F, alter->A, set->S, run->R, end->E,
+    write->W). None of them is a circuit element, so no instance-level rule
+    may inspect a line inside ``.control`` ... ``.endc``."""
+
+    DECK = (
+        "* ngspice control-block deck\n"
+        "V1 in 0 DC 1\n"
+        "R1 in out 1k\n"
+        "C1 out 0 1u\n"
+        ".tran 1u 1m\n"
+        ".control\n"
+        "set filetype=ascii\n"
+        "let vo = v(out)\n"
+        "dc VDD 1.0 1.8 0.005\n"
+        "meas dc vhalf find vo when v(in)=0.5\n"
+        "foreach il 0 10m\n"
+        "alter ILOAD = $il\n"
+        "run\n"
+        "end\n"
+        "write out.raw\n"
+        ".endc\n"
+        ".end\n"
+    )
+
+    def test_no_arity_issues_from_control_commands(self):
+        assert validate_netlist_arity(lex(self.DECK).cards) == []
+
+    def test_no_dangling_or_reference_issues_from_control_commands(self):
+        cards = lex(self.DECK).cards
+        assert validate_netlist_dangling_nodes(cards) == []
+        assert validate_netlist_directive_refs(cards) == []
+
+    def test_real_cards_outside_the_block_are_still_checked(self):
+        text = self.DECK.replace("R1 in out 1k\n", "R1 in 1k\n")
+        issues = validate_netlist_arity(lex(text).cards)
+        assert [str(i["message"]) for i in issues] == [
+            "R1: expected at least 2 positional node(s) for a R-element, got 1"
+        ]
+
+
 class TestDanglingNodes:
     """Single-connection nodes are statically detectable: a node touched by
     exactly one element terminal in its scope gets a warning-level issue.

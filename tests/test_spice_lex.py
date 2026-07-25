@@ -690,6 +690,114 @@ class TestLexAndEmit:
 
 
 # ---------------------------------------------------------------------------
+# ngspice ``.control`` blocks
+# ---------------------------------------------------------------------------
+
+# Every command in this block collides with the SPICE element prefix that
+# shares its first letter: let->L, dc->D, meas->M, foreach->F, alter->A,
+# set->S, run->R, end->E, write->W.
+CONTROL_DECK = (
+    "* ngspice control-block deck\n"
+    "V1 in 0 DC 1\n"
+    "R1 in out 1k\n"
+    ".tran 1u 1m\n"
+    ".control\n"
+    "set filetype=ascii\n"
+    "let vo = v(out)\n"
+    "dc VDD 1.0 1.8 0.005\n"
+    "meas dc vhalf find vo when v(in)=0.5\n"
+    "foreach il 0 10m\n"
+    "alter ILOAD = $il\n"
+    "run\n"
+    "end\n"
+    "write out.raw\n"
+    "+ v(out) v(in)\n"
+    ".endc\n"
+    "R2 out 0 2k\n"
+    ".end\n"
+)
+
+
+class TestControlBlock:
+    """``.control``/``.endc`` is an opaque region.
+
+    ngspice control commands are simulator script, not netlist cards, and
+    every one of them collides with the element prefix sharing its first
+    letter. Nothing between the delimiters may reach a device/arity/model
+    rule.
+    """
+
+    def test_control_region_is_opaque(self) -> None:
+        result = lex(CONTROL_DECK)
+        region = [c for c in result.cards if 5 <= c.line_start <= 16]
+        assert [c.raw_lines[0].rstrip("\n") for c in region] == [
+            ".control",
+            "set filetype=ascii",
+            "let vo = v(out)",
+            "dc VDD 1.0 1.8 0.005",
+            "meas dc vhalf find vo when v(in)=0.5",
+            "foreach il 0 10m",
+            "alter ILOAD = $il",
+            "run",
+            "end",
+            "write out.raw",
+            "+ v(out) v(in)",
+            ".endc",
+        ]
+        assert {c.kind for c in region} == {"control"}
+        # Opaque means no body for a rule to inspect, not merely a kind
+        # every rule remembers to filter out.
+        assert all(c.body == "" for c in region)
+        assert all(c.name is None for c in region)
+        assert result.warnings == []
+
+    def test_cards_outside_the_block_still_lex(self) -> None:
+        result = lex(CONTROL_DECK)
+        instances = [c for c in result.cards if c.kind == "instance"]
+        assert [c.name for c in instances] == ["V1", "R1", "R2"]
+        assert [c.kind for c in result.cards if c.kind in ("directive", "end")] == [
+            "directive",
+            "end",
+        ]
+
+    def test_round_trip_byte_identical(self) -> None:
+        assert emit(lex(CONTROL_DECK).cards) == CONTROL_DECK
+
+    def test_second_block_reopens_the_region(self) -> None:
+        text = ".control\nrun\n.endc\nR1 a b 1k\n.control\nwrite out.raw\n.endc\n"
+        result = lex(text)
+        assert [c.kind for c in result.cards] == [
+            "control",
+            "control",
+            "control",
+            "instance",
+            "control",
+            "control",
+            "control",
+        ]
+        assert emit(result.cards) == text
+
+    def test_unterminated_control_runs_to_eof_and_warns(self) -> None:
+        text = "R1 a b 1k\n.control\nlet vo = v(out)\nrun\n.end\n"
+        result = lex(text)
+        assert [c.kind for c in result.cards] == [
+            "instance",
+            "control",
+            "control",
+            "control",
+            "control",
+        ]
+        assert any("no matching .endc" in w for w in result.warnings)
+        assert emit(result.cards) == text
+
+    def test_stray_endc_without_opener_is_a_plain_directive(self) -> None:
+        text = ".endc\nR1 a b 1k\n"
+        result = lex(text)
+        assert [c.kind for c in result.cards] == ["directive", "instance"]
+        assert emit(result.cards) == text
+
+
+# ---------------------------------------------------------------------------
 # Layer 2 typed views
 # ---------------------------------------------------------------------------
 
