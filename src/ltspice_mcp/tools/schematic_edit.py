@@ -519,18 +519,20 @@ def _compare_reference(ref_path: Path, netlist_text: str, resolver: IncludeResol
 async def _run_reference_stage(
     committed_text: str,
     encoding: str,
-    reference: str,
+    ref_path: Path,
     build_id: str,
     state: SessionState,
 ) -> dict:
-    """Export a copy of the committed sheet and compare it to ``reference``.
+    """Export a copy of the committed sheet and compare it to ``ref_path``.
 
     Runs entirely on a COPY under a managed temp dir, so the exporter's own
     asc_export_lock keys on the copy's path (no reentrancy with the guard-held
-    target lock). Any failure is captured into the returned dict — the sheet is
-    already committed and stays so.
+    target lock). The reference path is already resolved — the handler validates
+    it in pre-flight, so no path rejection can land here, after the commit. An
+    export failure is captured into the returned dict; anything else escapes to
+    the handler, which reports it on a committed envelope. Either way the sheet
+    is already committed and stays so.
     """
-    ref_path = safe_path(reference, state)
     verification: dict[str, Any] = {"reference": str(ref_path)}
     export_root = state.working_dir / ".ltspice-mcp" / "edit-exports" / build_id
     copy_asc = export_root / "committed.asc"
@@ -684,6 +686,11 @@ async def handle_edit_schematic(
     if not args.ops:
         raise NetlistError("ops list is empty — pass at least one op.")
     _validate_view_cursors(args.view_cursors)
+    # Resolve the optional reference here, with the rest of the argument checks:
+    # a path outside allowed_paths is an argument fault the caller fixes by
+    # resending, not a property of the sheet. Resolving it in the post-commit
+    # stage instead would reject the call after the target was already written.
+    reference_path = safe_path(args.reference, state) if args.reference is not None else None
 
     build_id = generate_id("build")
     stages: list[dict] = []
@@ -736,6 +743,11 @@ async def handle_edit_schematic(
 
         use_template = args.base == "blank" or not exists
         editor = _build_editor(target, use_template, state)
+        # Set once the atomic rename lands. From that point every escape must be
+        # reported on a committed envelope instead of re-raised (see the except
+        # clauses below); post_commit_stage names the stage that was in flight.
+        committed_sha: str | None = None
+        post_commit_stage = "views"
         try:
             results, failures, abort_reason = _apply_ops(editor, args.ops, target, args.dry_run)
 
@@ -833,9 +845,10 @@ async def handle_edit_schematic(
 
             verification = None
             netlist = None
-            if args.reference is not None:
+            if reference_path is not None:
+                post_commit_stage = "reference"
                 verification = await _run_reference_stage(
-                    committed_text, encoding, args.reference, build_id, state
+                    committed_text, encoding, reference_path, build_id, state
                 )
                 netlist = verification.pop("_netlist", None)
                 ok = verification.get("export_error") is None and verification.get("equivalent")
@@ -863,9 +876,19 @@ async def handle_edit_schematic(
                 ),
                 args.format,
             )
-        except BaseException:
+        except Exception as exc:
             # Any escape leaves the cached editor dirty — evict so the next read
             # re-parses from disk (the on-disk file is intact or already renamed).
+            state.editors.invalidate(target)
+            if committed_sha is None:
+                raise
+            _stage(post_commit_stage, False, str(exc))
+            return _post_commit_failure_response(
+                args, target, build_id, stages, committed_sha, post_commit_stage, str(exc)
+            )
+        except BaseException:
+            # Cancellation (and any other non-Exception escape) still propagates
+            # unchanged — it is not ours to convert into a response.
             state.editors.invalidate(target)
             raise
 
@@ -949,6 +972,51 @@ def _commit_failure_response(
             },
             artifacts=artifacts,
             hint="The sheet was not modified; retry with the same expected_sha256.",
+        ),
+        args.format,
+    )
+
+
+def _post_commit_failure_response(
+    args: EditSchematicInput,
+    target: Path,
+    build_id: str,
+    stages: list[dict],
+    committed_sha: str,
+    stage: str,
+    error: str,
+) -> types.CallToolResult:
+    """Envelope for a failure AFTER the atomic rename — the sheet stays committed.
+
+    The rename is the irreversible step: once it lands the caller MUST learn the
+    new sha256, or its next edit sends the stale expected_sha256 and gets a
+    revision_conflict on a file it just wrote successfully. So a post-commit
+    escape is reported as a partial outcome carrying commit_state and the real
+    sha, never re-raised — a raise returns no structuredContent at all, which is
+    exactly the state the caller cannot recover from.
+    """
+    return format_response(
+        f"edit_schematic committed {target.name} (build {build_id}), then the post-commit "
+        f"{stage} stage failed: {error}. The sheet IS written.",
+        _envelope(
+            outcome="partial",
+            commit_state="committed",
+            target=target,
+            build_id=build_id,
+            base=args.base,
+            stages=stages,
+            sha256=committed_sha,
+            error={
+                "code": "post_commit_failed",
+                "message": error,
+                "stage": stage,
+                "retryable": False,
+            },
+            hint=(
+                f"The edit committed: {target.name} is now sha256 {committed_sha} — use that "
+                f"as expected_sha256 for your next edit. Only the post-commit {stage} stage "
+                "failed; re-run it separately if you need it."
+            ),
         ),
         args.format,
     )
