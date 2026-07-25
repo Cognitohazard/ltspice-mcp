@@ -54,6 +54,7 @@ from ltspice_mcp.lib.simulator import simulator_dialect
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.variations import (
     CircuitDeck,
+    DeckFile,
     ExpandedCase,
     RandomVariation,
     Variation,
@@ -636,6 +637,10 @@ async def _prepare_circuit(
             circuit_id=circuit_id,
             path=staged.staged_deck,
             text=staged.text,
+            includes=tuple(
+                DeckFile(path=included.staged_path, text=included.text)
+                for included in staged.includes
+            ),
         )
         expanded = await asyncio.to_thread(
             expand_variations,

@@ -46,6 +46,15 @@ class ExperimentPaths:
     windows_native: bool = False
 
 
+@dataclass(frozen=True)
+class StagedFile:
+    """One staged file in a deck's include closure."""
+
+    source: Path
+    staged_path: Path
+    text: str
+
+
 @dataclass
 class StagedDeck:
     """One staged primary deck plus its dependency manifest."""
@@ -56,6 +65,11 @@ class StagedDeck:
     sha256: str
     manifest: list[ManifestEntry]
     observations: list[dict[str, Any]] = field(default_factory=list)
+    # Every staged file EXCEPT the primary deck, in discovery order. The
+    # manifest records where each dependency came from; this records what the
+    # staged copy says, which is what a variation has to read to find a
+    # component that the root deck only reaches through an include.
+    includes: list[StagedFile] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -329,7 +343,53 @@ def stage_deck(
         sha256=primary_sha,
         manifest=manifest,
         observations=observations,
+        includes=[
+            StagedFile(source=path, staged_path=source_destinations[path], text=text)
+            for path, text in staged_texts.items()
+            if path != source
+        ],
     )
+
+
+def staged_reference_targets(text: str, source: Path, *, depth: int) -> list[Path]:
+    """Return the resolved paths one staged file's include references name."""
+    return [
+        _resolve_reference(source.parent, reference.raw_path).resolve()
+        for reference in scan_include_references(lex(text).cards, source, depth=depth)
+    ]
+
+
+def rewrite_staged_references(
+    text: str,
+    source: Path,
+    renames: dict[Path, str],
+    *,
+    depth: int,
+) -> str:
+    """Repoint include references at renamed copies sitting beside the originals.
+
+    Only the reference's final path segment is rewritten, so whatever spelling
+    staging chose for the rest of it — a POSIX relative hop between two deep
+    files, a Windows absolute path handed to LTspice across the WSL boundary —
+    survives untouched. That is why ``renames`` is keyed by resolved path and
+    valued by bare filename: a copy that is not a sibling of its original
+    cannot be addressed this way.
+    """
+    cards = lex(text).cards
+    changed = False
+    for reference in scan_include_references(cards, source, depth=depth):
+        target = _resolve_reference(source.parent, reference.raw_path).resolve()
+        name = renames.get(target)
+        if name is None:
+            continue
+        _replace_reference(reference, _replace_last_segment(reference.raw_path, name))
+        changed = True
+    return emit(cards) if changed else text
+
+
+def _replace_last_segment(raw_path: str, name: str) -> str:
+    cut = max(raw_path.rfind("/"), raw_path.rfind("\\"))
+    return name if cut < 0 else raw_path[: cut + 1] + name
 
 
 def verify_staged_manifest(manifest: list[ManifestEntry]) -> list[dict[str, Any]]:

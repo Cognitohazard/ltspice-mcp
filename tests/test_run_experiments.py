@@ -722,3 +722,268 @@ class TestAttachedAnalysis:
         assert finished["timed_out"] is False
         assert finished["status"] == "completed"
         assert finished["analysis_status"] == "completed"
+
+
+_CORE_INC = ".subckt core in out\nR1 in mid 1k\nC1 mid out 1n\n.ends\n"
+_FACTORED_ROOT = '.include "core.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n'
+
+
+def _recording_simulator(monkeypatch: pytest.MonkeyPatch, submitted: list[Path]) -> None:
+    """Instant simulator that records the case deck it was handed."""
+
+    def submit(self, netlist: Path, run_filename: str, callback):
+        submitted.append(Path(netlist))
+        raw = self.output_folder / f"{Path(run_filename).stem}.raw"
+        log = self.output_folder / f"{Path(run_filename).stem}.log"
+        raw.write_bytes(b"Title: mock")
+        log.write_text("ok")
+        outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
+        self.loop.call_soon_threadsafe(callback, outcome)
+        return object()
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+
+
+def _include_targets(netlist: Path) -> list[Path]:
+    """Resolve a deck's include references without the production resolver."""
+    targets: list[Path] = []
+    for line in netlist.read_text().splitlines():
+        parts = line.split()
+        if parts and parts[0].casefold() in {".include", ".inc"}:
+            raw = Path(parts[1].strip('"'))
+            targets.append(raw if raw.is_absolute() else netlist.parent / raw)
+    return targets
+
+
+def _factored_deck(work_dir: Path, *, core: str = _CORE_INC, root: str = _FACTORED_ROOT) -> Path:
+    (work_dir / "core.inc").write_text(core)
+    return _deck(work_dir / "factored.cir", root)
+
+
+@pytest.mark.asyncio
+class TestVariationsReachIntoIncludes:
+    """A component only reachable through .include is still a sweep target.
+
+    Factoring a circuit into a reusable core used to cost the ability to vary
+    anything in it, which pushed authors into promoting every value they might
+    later sweep to a top-level .param before they knew which ones those were.
+    """
+
+    async def test_included_component_is_targetable(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        deck = _factored_deck(work_dir)
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "include-assign",
+                    lint="off",
+                    variations=[{"kind": "assign", "assign": {"R1": ["2k"]}}],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert data["outcome"] == "complete"
+        assert data["completeness"]["produced"] == 1
+        staged_core = _include_targets(submitted[0])[0]
+        assert "R1 in mid 2k" in staged_core.read_text()
+
+    async def test_each_case_edits_its_own_copy_of_the_include(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        deck = _factored_deck(work_dir)
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "include-isolation",
+                    lint="off",
+                    variations=[{"kind": "assign", "assign": {"R1": ["2k", "3k"]}}],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert data["completeness"]["produced"] == 2
+        cores = [_include_targets(path)[0] for path in sorted(submitted, key=lambda p: p.name)]
+        assert cores[0] != cores[1]
+        assert "R1 in mid 2k" in cores[0].read_text()
+        assert "R1 in mid 3k" in cores[1].read_text()
+
+    async def test_authored_include_is_never_written(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        deck = _factored_deck(work_dir)
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "include-readonly",
+                    lint="off",
+                    variations=[{"kind": "assign", "assign": {"R1": ["2k", "3k"]}}],
+                ),
+                state_with_sim,
+            )
+        )
+
+        # Both cases really did edit the include, so an untouched original is
+        # evidence of staging and not of a run that never got that far.
+        assert data["completeness"]["produced"] == 2
+        assert all("core.inc" in str(_include_targets(path)[0]) for path in submitted)
+        assert (work_dir / "core.inc").read_text() == _CORE_INC
+        assert not (work_dir / "case-0000__core.inc").is_file()
+        assert not (work_dir / "case-0001__core.inc").is_file()
+
+    async def test_root_deck_declaration_wins_over_an_include(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        deck = _factored_deck(
+            work_dir,
+            root='.include "core.inc"\nV1 in 0 1\nR1 in out 1k\nX1 out 0 core\n.op\n.end\n',
+        )
+
+        _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "include-root-wins",
+                    lint="off",
+                    variations=[{"kind": "assign", "assign": {"R1": ["2k"]}}],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert "R1 in out 2k" in submitted[0].read_text()
+        staged_core = _include_targets(submitted[0])[0]
+        assert "R1 in mid 1k" in staged_core.read_text()
+
+    async def test_two_includes_declaring_the_target_name_both_files(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        _instant_simulator(monkeypatch, submissions)
+        (work_dir / "left.inc").write_text(".subckt left in out\nR1 in out 1k\n.ends\n")
+        (work_dir / "right.inc").write_text(".subckt right in out\nR1 in out 2k\n.ends\n")
+        deck = _deck(
+            work_dir / "two-cores.cir",
+            '.include "left.inc"\n.include "right.inc"\nV1 in 0 1\n'
+            "X1 in mid left\nX2 mid 0 right\n.op\n.end\n",
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "include-ambiguous",
+                    lint="off",
+                    variations=[{"kind": "assign", "assign": {"R1": ["2k"]}}],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert submissions == []
+        failure = data["failures"][0]
+        assert failure["code"] == "ambiguous_target"
+        assert "left.inc" in failure["message"]
+        assert "right.inc" in failure["message"]
+
+    async def test_random_rule_reaches_an_included_component(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        deck = _factored_deck(work_dir)
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "include-random",
+                    lint="off",
+                    variations=[
+                        {
+                            "kind": "random",
+                            "runs": 2,
+                            "seed": 11,
+                            "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+                        }
+                    ],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert data["completeness"]["produced"] == 2
+        values = [
+            _include_targets(path)[0].read_text().split("R1 in mid ")[1].split()[0]
+            for path in sorted(submitted, key=lambda p: p.name)
+        ]
+        assert len(set(values)) == 2
+        assert all(float(value) != 1000.0 for value in values)
+
+    async def test_two_level_include_chain_resolves_and_is_rewired(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        (work_dir / "core.inc").write_text(_CORE_INC)
+        (work_dir / "mid.inc").write_text('.include "core.inc"\n')
+        deck = _deck(
+            work_dir / "nested.cir",
+            '.include "mid.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n',
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "include-nested",
+                    lint="off",
+                    variations=[{"kind": "assign", "assign": {"R1": ["7k"]}}],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert data["outcome"] == "complete"
+        staged_mid = _include_targets(submitted[0])[0]
+        assert staged_mid.name == "case-0000__mid.inc"
+        staged_core = _include_targets(staged_mid)[0]
+        assert staged_core.name == "case-0000__core.inc"
+        assert "R1 in mid 7k" in staged_core.read_text()
