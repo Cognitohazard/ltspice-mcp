@@ -158,8 +158,14 @@ class ModelQuery(StrictModel):
     def _mode_requirements(self) -> ModelQuery:
         if self.mode == "search" and not self.query:
             raise ValueError("model search requires 'query'")
-        if self.mode == "enumerate" and not self.libs:
-            raise ValueError("model enumerate requires 'libs'")
+        if self.mode == "enumerate":
+            if not self.libs:
+                raise ValueError("model enumerate requires 'libs'")
+            # Enumerate lists every model in 'libs' unfiltered. Accepting a
+            # 'query' here would echo the caller's filter back on a response
+            # that never applied it — reject instead of silently ignoring.
+            if self.query is not None:
+                raise ValueError("model enumerate does not filter; use mode 'search' with 'query'")
         return self
 
 

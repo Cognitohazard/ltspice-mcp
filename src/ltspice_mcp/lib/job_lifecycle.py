@@ -90,6 +90,24 @@ VALID_EXPERIMENT_TRANSITIONS: dict[str, frozenset[str]] = {
     "interrupted": frozenset(),
 }
 
+
+def runs_terminal(status: str) -> bool:
+    """Have an experiment's runs all reached terminality at this status?
+
+    True for every terminal status, and also for ``analyzing``: the coordinator
+    validates completeness and sets ``runs_done_event`` BEFORE transitioning
+    there, and the table above lets nothing but a terminal status follow it — so
+    ``analyzing`` means every run is done and only the attached analysis is
+    still in flight. That is what lets an experiment's own attached analysis
+    read its own produced cases.
+
+    Lives beside the transition table because the table is what makes it true.
+    Every caller asking "are the runs done?" from a status reads this, so the
+    equivalence is stated once rather than re-derived per module.
+    """
+    return status in TERMINAL_STATUSES or status == "analyzing"
+
+
 # Which event name fires when a job enters a given status.
 # 'timeout' maps to 'failed' — it's a failure variant, not its own
 # event type in the external log schema.

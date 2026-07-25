@@ -131,6 +131,7 @@ from ltspice_mcp.tools._base import (
     format_observations,
     format_response,
     registry,
+    result_text,
     safe_path,
     schema_from_typeddict,
 )
@@ -4945,7 +4946,7 @@ async def handle_bode_metrics(args: BodeMetricsInput, state: SessionState):
             for w in sc.pop("warnings", None) or []:
                 warning_steps.setdefault(w, []).append(i)
             entry.update(sc)
-            step_texts.append(f"── {label} ──\n{_strip_warning_block(_result_text(res))}")
+            step_texts.append(f"── {label} ──\n{_strip_warning_block(result_text(res))}")
         except ResultError as e:
             if first_error is None:
                 first_error = e
@@ -5076,11 +5077,6 @@ async def _bode_dispatch(
 def _structured(result: types.CallToolResult) -> dict:
     """structuredContent of an adapter result as a dict (``{}`` if absent)."""
     return dict(result.structuredContent) if result.structuredContent else {}
-
-
-def _result_text(result: types.CallToolResult) -> str:
-    block = result.content[0] if result.content else None
-    return block.text if isinstance(block, types.TextContent) else ""
 
 
 def _strip_warning_block(text: str) -> str:

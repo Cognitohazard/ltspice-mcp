@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Literal, Self
 
 from mcp import types
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationError, model_validator
 
 from ltspice_mcp.errors import (
     JobNotFoundError,
@@ -27,6 +27,7 @@ from ltspice_mcp.lib.deck_staging import (
 )
 from ltspice_mcp.lib.experiment_runner import (
     CANONICALIZER_VERSION,
+    AnalysisCallback,
     ExperimentCancellationError,
     ExperimentReceipt,
     ExperimentRunRequest,
@@ -41,6 +42,7 @@ from ltspice_mcp.lib.experiment_types import (
     ManifestEntry,
     SourceRecord,
 )
+from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.job_types import (
     NON_TERMINAL_LIVE_STATUSES,
     TERMINAL_STATUSES,
@@ -65,6 +67,7 @@ from ltspice_mcp.lib.variations import (
     validate_variation_circuit_ids,
 )
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools import analyze
 from ltspice_mcp.tools._base import (
     StrictModel,
     ToolInput,
@@ -74,10 +77,14 @@ from ltspice_mcp.tools._base import (
     registry,
     resolve_run_simulator,
     resolve_runnable_netlist,
+    result_text,
     safe_path,
 )
+from ltspice_mcp.tools.analyze import MAX_PAGE_SIZE
 
 _RUN_PAGE_LIMIT = 50
+# The source label an attached analysis analyzes its own experiment under.
+_ATTACHED_ANALYSIS_LABEL = "experiment"
 _TERMINAL_EXPERIMENT_STATUSES = frozenset(
     {
         "completed",
@@ -111,7 +118,10 @@ class ExperimentExecution(StrictModel):
 
 
 class AnalysisPerRun(StrictModel):
-    limit: int = Field(default=50, ge=1)
+    # Bound taken from analyze_results itself, never a copy of its number: the
+    # attached block is handed straight to that engine, so a limit this schema
+    # advertised but the engine rejected would be a lever that cannot work.
+    limit: int = Field(default=50, ge=1, le=MAX_PAGE_SIZE)
     cursor: str | None = None
 
 
@@ -489,15 +499,24 @@ async def handle_run_experiments(
             run_timeout_s=args.execution.run_timeout_s,
             job_deadline_s=args.execution.job_deadline_s,
             analysis_request=analysis_request,
-            analysis_callback=_analysis_not_available if analysis_request is not None else None,
+            analysis_callback=(
+                _attached_analysis_callback(state) if analysis_request is not None else None
+            ),
         )
         receipt = await asyncio.shield(runner.submit(request))
-        return await _dwell_and_respond(
-            receipt,
-            args.execution.wait_s,
-            state,
-            lint_by_circuit=lint_by_circuit,
-        )
+        # Holding the receipt means the cases are live and durable: submission
+        # is irreversible from here, so no escape below may reach the
+        # not_started handlers underneath. The nested guard is what makes that
+        # structural rather than a rule about which exception types to list.
+        try:
+            return await _dwell_and_respond(
+                receipt,
+                args.execution.wait_s,
+                state,
+                lint_by_circuit=lint_by_circuit,
+            )
+        except Exception as exc:
+            return _post_submit_error_response(receipt, exc, lint_by_circuit)
     except IdempotencyConflictError as exc:
         return _error_response(
             args.request_id,
@@ -693,8 +712,48 @@ async def _prepare_circuit(
     )
 
 
-async def _analysis_not_available(_job: ExperimentJob) -> dict[str, Any]:
-    raise SimulationError("Attached analysis is not yet available in this build")
+def _attached_analysis_callback(state: SessionState) -> AnalysisCallback:
+    """Bind the session onto the coordinator's job-only analysis hook.
+
+    The coordinator hands the callback nothing but the job, so the session it
+    must analyze against is closed over here.
+    """
+
+    async def run_attached_analysis(job: ExperimentJob) -> dict[str, Any]:
+        request = job.analysis.request or {}
+        payload: dict[str, Any] = {
+            "sources": [
+                {
+                    "job_id": job.job_id,
+                    "runs": "all",
+                    "label": _ATTACHED_ANALYSIS_LABEL,
+                }
+            ],
+            "recipes": request.get("recipes") or [],
+            "group_by": request.get("group_by") or [],
+        }
+        include = request.get("include")
+        if include is not None:
+            payload["include"] = include
+        try:
+            args = analyze.AnalyzeResultsInput.model_validate(payload)
+        except ValidationError as exc:
+            raise SimulationError(
+                f"The attached analyze block is not a valid analyze_results request: {exc}"
+            ) from exc
+        # Resolved on the module, not bound at import: the analysis stage is
+        # patched through ``tools.analyze`` in tests, and the attribute lookup
+        # is what keeps that seam where the engine actually lives.
+        result = await analyze.handle_analyze_results(args, state)
+        data = result.structuredContent
+        if result.isError or data is None:
+            raise SimulationError(
+                result_text(result, joined=True)
+                or "Attached analysis returned no structured result"
+            )
+        return data
+
+    return run_attached_analysis
 
 
 def _circuit_decks_for_validation(circuits: list[ExperimentCircuit]) -> list[CircuitDeck]:
@@ -905,14 +964,13 @@ def _terminal_outcome(job: ExperimentJob) -> str:
         return "in_progress"
     if job.status == "failed":
         return "failed"
-    if (
-        job.completeness.failed
-        or job.completeness.cancelled
-        or job.completeness.skipped
-        or job.analysis.status in {"failed", "cancelled"}
-    ):
+    if job.status == "cancelled":
+        # A cancelled experiment never delivered what it promised, whatever the
+        # counters say: a cancel landing after every run but before the
+        # analysis leaves them fully reconciled, and one landing before
+        # expansion leaves them all at zero.
         return "partial"
-    return "complete"
+    return "partial" if job.completeness.fell_short else "complete"
 
 
 def _terminal_hint(job: ExperimentJob, truncated: bool) -> str:
@@ -923,6 +981,12 @@ def _terminal_hint(job: ExperimentJob, truncated: bool) -> str:
         )
     if job.failures:
         return "Inspect failures and lint findings before retrying omitted cases."
+    if job.analysis.status in {"failed", "cancelled"}:
+        return (
+            f"All declared experiment cases reached terminality, but the attached "
+            f"analysis {job.analysis.status}; read analysis.error and re-run it with "
+            f"analyze_results over job_id {job.job_id}."
+        )
     return "All declared experiment cases reached terminality."
 
 
@@ -1065,6 +1129,52 @@ def _error_response(
         }
     )
     result = format_response(message, data)
+    result.isError = True
+    return result
+
+
+def _post_submit_error_response(
+    receipt: ExperimentReceipt,
+    exc: Exception,
+    lint_by_circuit: dict[str, list[dict[str, Any]]] | None,
+) -> types.CallToolResult:
+    """Envelope for a failure that escaped AFTER the cases were submitted.
+
+    Submission is the irreversible step: once the receipt exists the simulator
+    fleet is running, and the job_id plus its control_token are the only handles
+    that reach it. Reporting ``not_started`` here — or letting the exception out,
+    which returns no structuredContent at all — strands running cases with no way
+    to poll or cancel them. That orphaned fleet is precisely what commit_state
+    exists to prevent, so a post-submit escape is always reported as committed.
+    """
+    job = receipt.job
+    try:
+        data = _job_payload(job, receipt.control_token, lint_by_circuit=lint_by_circuit)
+    except Exception:
+        # Even the receipt builder failed. Fall back to the minimum that keeps
+        # the running job reachable rather than losing the handles with it.
+        data = _empty_payload(job.request_id)
+        data["job_id"] = job.job_id
+        data["status"] = job.status
+        data["outcome"] = "in_progress"
+        data["control_token"] = receipt.control_token
+    data["hint"] = (
+        f"The experiment was submitted and is running. Use jobs(status) with job_id "
+        f"{job.job_id} to follow it, or jobs(cancel) with that job_id and its "
+        f"control_token to stop it."
+    )
+    data["error"] = {
+        "code": getattr(exc, "code", "receipt_failed"),
+        "message": str(exc),
+        "stage": "receipt",
+        "retryable": True,
+        "commit_state": "committed",
+    }
+    result = format_response(
+        f"Experiment {job.job_id} was submitted, but building its receipt failed: {exc}. "
+        f"The cases ARE running.",
+        data,
+    )
     result.isError = True
     return result
 
@@ -1446,7 +1556,17 @@ def _jobs_outcome(job: Job) -> Literal["complete", "partial", "failed", "in_prog
         return "in_progress"
     if job.status in {"failed", "timeout", "interrupted"}:
         return "failed"
-    if job.status in {"completed_with_failures", "cancelled"}:
+    if job.status == "completed_with_failures":
+        # The coordinator marks an experiment completed_with_failures when its
+        # attached analysis fails even though every run landed, so read an
+        # experiment's outcome off its own run counters rather than its status.
+        # Only this status: a cancelled experiment is partial no matter how the
+        # counters read, including the cancel that lands before expansion and
+        # leaves them all at zero.
+        if isinstance(job, ExperimentJob):
+            return "partial" if job.completeness.fell_short else "complete"
+        return "partial"
+    if job.status == "cancelled":
         return "partial"
     return "complete"
 
@@ -1611,8 +1731,13 @@ def _receipt_snapshot(
 
 def _runs_finished(job: Job, wait_for: Literal["all", "runs"]) -> bool:
     if isinstance(job, ExperimentJob) and wait_for == "runs":
-        return job.runs_done_event.is_set() or all(
-            case.status in TERMINAL_CASE_STATUSES for case in job.cases
+        # Three ways to know, in cost order: the event this session set, the
+        # status the lifecycle guarantees it for, then the cases themselves —
+        # a job loaded from a peer's sidecar has no event of ours to read.
+        return (
+            job.runs_done_event.is_set()
+            or runs_terminal(job.status)
+            or all(case.status in TERMINAL_CASE_STATUSES for case in job.cases)
         )
     return job.done_event.is_set() or job.status in TERMINAL_STATUSES
 

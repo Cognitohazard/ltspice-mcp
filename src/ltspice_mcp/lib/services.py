@@ -30,6 +30,7 @@ from ltspice_mcp.lib.batch_results import (
 )
 from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.format import cap_list
+from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.library_manager import LibraryManager
 from ltspice_mcp.lib.log_parser import (
     extract_missing_refs,
@@ -494,12 +495,15 @@ def resolve_experiment_run(
     run_index: int | None = None,
     case_id: str | None = None,
 ) -> RunContext:
-    """Resolve a produced experiment case from any terminal experiment job."""
+    """Resolve a produced case from any experiment job whose runs are terminal."""
     job = resolve_job(job_id, state)
     if not isinstance(job, ExperimentJob):
         raise ResultError(f"Job {job_id!r} is not an experiment job")
-    if job.status not in TERMINAL_STATUSES:
-        raise ResultError(f"Experiment job {job_id!r} is not terminal (status={job.status!r})")
+    # Per-case readiness is still gated case by case below.
+    if not runs_terminal(job.status):
+        raise ResultError(
+            f"Experiment job {job_id!r} has no readable runs yet (status={job.status!r})"
+        )
     if case_id is None and run_index is None:
         run_index = 0
     matches = [

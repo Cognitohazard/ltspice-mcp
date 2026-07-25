@@ -4,21 +4,56 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from pathlib import Path
+from typing import Any, Literal
 from unittest.mock import AsyncMock
 
 import jsonschema
 import pytest
+from pydantic import ValidationError
 
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools import analyze as analyze_mod
+from ltspice_mcp.tools import experiments as experiments_mod
 from ltspice_mcp.tools._base import _build_input_schema
 from ltspice_mcp.tools.experiments import (
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
+    AnalysisPerRun,
+    JobsInput,
     RunExperimentsInput,
+    handle_jobs,
     handle_run_experiments,
 )
+from tests.conftest import FIXTURES_DIR
+
+
+def test_attached_per_run_limit_shares_the_analyze_page_cap():
+    """One cap, both surfaces.
+
+    The attached block is handed straight to analyze_results, so a per_run
+    limit run_experiments advertises but that engine rejects would be a lever
+    that cannot work. Both bounds must come from the same constant, and the
+    over-cap request must be refused at submission, not at the analysis stage.
+    """
+    advertised = AnalysisPerRun.model_json_schema()["properties"]["limit"]["maximum"]
+    engine = analyze_mod.PerRunInclude.model_json_schema()["properties"]["limit"]["maximum"]
+
+    assert advertised == engine == analyze_mod.MAX_PAGE_SIZE
+
+    with pytest.raises(ValidationError):
+        RunExperimentsInput.model_validate(
+            {
+                "request_id": "over-cap",
+                "circuits": [{"path": "dut.cir"}],
+                "analyze": {
+                    "recipes": [{"key": "vout", "metric": "summary"}],
+                    "include": {"per_run": {"limit": analyze_mod.MAX_PAGE_SIZE + 1}},
+                },
+            }
+        )
 
 
 def test_variation_input_schema_is_inlined_and_discriminated():
@@ -93,6 +128,65 @@ def _instant_simulator(
     monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
 
 
+def _fixture_simulator(
+    monkeypatch: pytest.MonkeyPatch,
+    fixture_name: str = "ltspice_tran_rc",
+) -> None:
+    """Instant simulator that hands back a recorded raw the analyzers can read."""
+
+    def submit(self, _netlist: Path, run_filename: str, callback):
+        stem = Path(run_filename).stem
+        raw = self.output_folder / f"{stem}.raw"
+        log = self.output_folder / f"{stem}.log"
+        shutil.copy(FIXTURES_DIR / f"{fixture_name}.raw", raw)
+        shutil.copy(FIXTURES_DIR / f"{fixture_name}.log", log)
+        outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
+        self.loop.call_soon_threadsafe(callback, outcome)
+        return object()
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+
+
+# One assign variation plus one real recipe grouped by the assigned target, so
+# a group_by that never matched would collapse to a single group and be seen.
+_VARIED_ANALYSIS: dict[str, Any] = {
+    "variations": [{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}],
+    "analyze": {
+        "recipes": [
+            {
+                "key": "vout",
+                "metric": "value",
+                "expr": "V(out)",
+                "at": "900u",
+                "reduce": ["mean"],
+            }
+        ],
+        "group_by": ["R1"],
+    },
+}
+
+
+async def _jobs_wait(
+    state: SessionState,
+    job_id: str,
+    wait_for: Literal["all", "runs"],
+    timeout_s: float,
+) -> dict[str, Any]:
+    result = await handle_jobs(
+        JobsInput.model_validate(
+            {
+                "action": "wait",
+                "job_id": job_id,
+                "wait_for": wait_for,
+                "timeout_s": timeout_s,
+            }
+        ),
+        state,
+    )
+    assert result.structuredContent is not None
+    return result.structuredContent
+
+
 @pytest.mark.asyncio
 class TestReceiptThenDwell:
     async def test_quick_completion_returns_inline(
@@ -150,6 +244,82 @@ class TestReceiptThenDwell:
             callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
         job = state_with_sim.experiment_jobs[data["job_id"]]
         await asyncio.wait_for(job.done_event.wait(), 1)
+
+    async def test_failure_after_submit_reports_committed_with_handles(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Submission is irreversible, so a later failure cannot say nothing started.
+
+        The fleet is running by then and the job_id plus control_token are the
+        only handles that reach it; reporting not_started with a null job_id
+        leaves the caller no way to poll or cancel real simulator work.
+        """
+        callbacks = {}
+
+        def submit(self, _netlist: Path, run_filename: str, callback):
+            callbacks[run_filename] = callback
+            return object()
+
+        async def failing_wait(self, job, timeout_s, *, wait_for="all"):
+            raise OSError("dwell exploded")
+
+        monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+        monkeypatch.setattr(ExperimentRunner, "wait", failing_wait)
+        deck = _deck(work_dir / "post-submit.cir")
+
+        result = await handle_run_experiments(
+            _args(deck, "post-submit-failure", wait_s=1.0),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert data["error"]["commit_state"] == "committed"
+        assert data["error"]["message"] == "dwell exploded"
+        assert data["job_id"] in state_with_sim.experiment_jobs
+        assert data["control_token"]
+        assert data["outcome"] == "in_progress"
+        assert data["job_id"] in data["hint"]
+
+        # Let the still-live job finish so teardown is not racing it.
+        await _wait_for(lambda: bool(callbacks))
+        for run_filename, callback in callbacks.items():
+            raw = work_dir / f"{Path(run_filename).stem}.raw"
+            log = work_dir / f"{Path(run_filename).stem}.log"
+            raw.write_bytes(b"Title: mock")
+            log.write_text("ok")
+            callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
+        job = state_with_sim.experiment_jobs[data["job_id"]]
+        await asyncio.wait_for(job.done_event.wait(), 1)
+
+    async def test_receipt_builder_failure_still_returns_handles(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The last-resort path: even the payload builder failing keeps the handles."""
+        submissions: list[str] = []
+        _instant_simulator(monkeypatch, submissions)
+
+        def exploding_payload(*_args, **_kwargs):
+            raise ValueError("payload exploded")
+
+        monkeypatch.setattr(experiments_mod, "_job_payload", exploding_payload)
+        deck = _deck(work_dir / "payload-fail.cir")
+
+        result = await handle_run_experiments(
+            _args(deck, "payload-failure"),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert data["error"]["commit_state"] == "committed"
+        assert data["error"]["message"] == "payload exploded"
+        assert data["job_id"] in state_with_sim.experiment_jobs
+        assert data["control_token"]
 
 
 @pytest.mark.asyncio
@@ -423,23 +593,132 @@ class TestPerCircuitFailuresAndAccounting:
 
         note.assert_awaited_once_with(deck.resolve())
 
-    async def test_attached_analysis_request_is_persisted_and_stubbed(
+
+@pytest.mark.asyncio
+class TestAttachedAnalysis:
+    """The analyze block runs on the real recipe engine, not a stub."""
+
+    async def test_recipes_and_group_by_run_end_to_end(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
-        deck = _deck(work_dir / "analysis.cir")
-        args = _args(
-            deck,
-            "analysis-stub",
-            analyze={"recipes": [{"kind": "summary", "key": "summary"}]},
+        _fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "attached-analysis", **_VARIED_ANALYSIS),
+                state_with_sim,
+            )
         )
 
-        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        analysis = data["analysis"]
+        assert analysis["status"] == "completed", analysis["error"]
+        result = analysis["result"]
+        assert result is not None, analysis
+        assert result["coverage"]["missing_cases"]["items"] == []
+        # Real recipe output, addressed by the recipe key the caller chose.
+        groups = result["results"]["vout"]["groups"]
+        assert sorted(group["by"]["R1"] for group in groups) == ["1k", "2k"]
+        assert all(group["count"] == 1 for group in groups)
+        assert all(
+            entry["stat"] == "mean" and entry["value"] is not None
+            for group in groups
+            for entry in group["reduced"]
+        )
+        assert result["coverage"]["runs_analyzed"] == 2
 
-        assert data["analysis"]["request"]["recipes"][0]["kind"] == "summary"
+    async def test_successful_analysis_does_not_report_partial(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached-complete.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "attached-complete", **_VARIED_ANALYSIS),
+                state_with_sim,
+            )
+        )
+
+        assert data["completeness"]["produced"] == data["completeness"]["expanded"] == 2
+        assert data["outcome"] == "complete"
+        assert data["status"] == "completed"
+
+    async def test_failed_analysis_keeps_a_run_complete_outcome(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached-bad.cir")
+        # run_experiments takes the analyze block as free-form JSON, so a
+        # request analyze_results rejects (here: a repeated group_by dimension)
+        # only fails once the stage runs. The run accounting must not move.
+        analyze = {
+            "recipes": [{"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}],
+            "group_by": ["R1", "R1"],
+        }
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "attached-bad-request", analyze=analyze),
+                state_with_sim,
+            )
+        )
+
+        # The runs are what `outcome` describes; the analysis failure has its
+        # own field, its own observation, and a hint that points at both.
+        assert data["outcome"] == "complete"
+        assert data["completeness"]["produced"] == 1
+        assert data["completeness"]["failed"] == 0
         assert data["analysis"]["status"] == "failed"
-        assert "not yet available" in data["analysis"]["error"]
+        assert "not a valid analyze_results request" in data["analysis"]["error"]
+        assert [item["code"] for item in data["analysis"]["observations"]] == ["analysis_failed"]
+        assert "attached analysis failed" in data["hint"]
+        # The coordinator still records the stage failure on the job status.
+        assert data["status"] == "completed_with_failures"
+
+    async def test_wait_for_runs_returns_before_analysis_finishes(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached-wait.cir")
+        released = asyncio.Event()
+        engine = analyze_mod.handle_analyze_results
+
+        async def gated(args, state):
+            await released.wait()
+            return await engine(args, state)
+
+        monkeypatch.setattr(analyze_mod, "handle_analyze_results", gated)
+
+        receipt = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "attached-wait", wait_s=0.0, **_VARIED_ANALYSIS),
+                state_with_sim,
+            )
+        )
+        job_id = receipt["job_id"]
+
+        runs_done = await _jobs_wait(state_with_sim, job_id, "runs", 2.0)
+        assert runs_done["timed_out"] is False
+        assert runs_done["status"] == "analyzing"
+
+        still_analyzing = await _jobs_wait(state_with_sim, job_id, "all", 0.05)
+        assert still_analyzing["timed_out"] is True
+
+        released.set()
+        finished = await _jobs_wait(state_with_sim, job_id, "all", 2.0)
+        assert finished["timed_out"] is False
+        assert finished["status"] == "completed"
+        assert finished["analysis_status"] == "completed"

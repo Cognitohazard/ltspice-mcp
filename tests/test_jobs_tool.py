@@ -285,6 +285,59 @@ class TestActionShapesAndTokenSecrecy:
 
         assert data["outcome"] == "partial"
 
+    async def test_cancelled_status_reports_partial_even_when_runs_reconcile(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+    ):
+        """A cancel landing after the last run still leaves the counters fully
+        reconciled, so only the status can tell a cancelled experiment from a
+        finished one. Reading the counters here reports a cancelled experiment
+        as a success."""
+        circuit = _circuit(work_dir)
+        job = _experiment(
+            work_dir,
+            circuit,
+            status="cancelled",
+            case_status="produced",
+        )
+        assert job.completeness.produced == job.completeness.expanded
+        state_no_sim.all_jobs[job.job_id] = job
+
+        data = _assert_jobs_schema(
+            await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
+        )
+
+        assert data["outcome"] == "partial"
+
+    async def test_uncounted_run_reports_partial_outcome(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+    ):
+        """A run that vanishes without landing in any shortfall counter is the
+        silent-data-loss case: the shortfall is read off ``produced`` against
+        ``expanded``, so an unaccounted run reads as one."""
+        circuit = _circuit(work_dir)
+        job = _experiment(
+            work_dir,
+            circuit,
+            status="completed_with_failures",
+            case_status="produced",
+        )
+        # Two runs promised, one produced, and nothing recorded the other's fate.
+        job.completeness.expanded = 2
+        assert job.completeness.failed == 0
+        assert job.completeness.cancelled == 0
+        assert job.completeness.skipped == 0
+        state_no_sim.all_jobs[job.job_id] = job
+
+        data = _assert_jobs_schema(
+            await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
+        )
+
+        assert data["outcome"] == "partial"
+
 
 @pytest.mark.asyncio
 class TestWait:

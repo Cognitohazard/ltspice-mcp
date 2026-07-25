@@ -317,6 +317,20 @@ async def test_model_enumerate_requires_libs(state_no_sim: SessionState):
     assert "libs" in res["error"]["message"]
 
 
+async def test_model_enumerate_rejects_a_query_it_would_ignore(
+    libfile: Path, state_no_sim: SessionState
+):
+    """Enumerate never filters, so accepting 'query' would echo back a filter
+    that was not applied."""
+    (res,) = await _run(
+        state_no_sim,
+        [{"kind": "model", "mode": "enumerate", "libs": [str(libfile)], "query": "MyNPN"}],
+    )
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_query"
+    assert "query" in res["error"]["message"]
+
+
 async def test_requirement_matrix_isolates(libfile: Path, state_no_sim: SessionState):
     """A search-missing-query and an enumerate-missing-libs each fail, while a
     valid enumerate in the same batch returns."""
