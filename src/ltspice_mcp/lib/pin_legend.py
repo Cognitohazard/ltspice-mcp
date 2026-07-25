@@ -130,6 +130,54 @@ def decode_page_cursor(cursor: str, kind: str) -> int:
     return offset
 
 
+def encode_pair_cursor(kind: str, offsets: tuple[int, int]) -> str:
+    """Opaque cursor for a view paging TWO collections under one token.
+
+    The body key differs from the single-offset cursor's (``offsets`` vs
+    ``offset``), so handing either decoder the other's cursor raises rather than
+    silently dropping an offset — a dropped second offset would re-serve the
+    same rows forever.
+    """
+    return encode_cursor({"kind": kind, "offsets": [offsets[0], offsets[1]]})
+
+
+def decode_pair_cursor(cursor: str, kind: str) -> tuple[int, int]:
+    """Recover both resume offsets from ``cursor``; validate it belongs to ``kind``."""
+    try:
+        body = decode_cursor(cursor)
+        c_kind = body["kind"]
+        first, second = (int(value) for value in body["offsets"])
+    except (CursorError, KeyError, TypeError, ValueError) as exc:
+        raise PageCursorError(f"malformed page cursor: {cursor!r}") from exc
+    if c_kind != kind:
+        raise PageCursorError(
+            f"cursor is for view {c_kind!r}, not {kind!r}; use the page's own next_cursor"
+        )
+    if first < 0 or second < 0:
+        raise PageCursorError(f"invalid page cursor: {cursor!r}")
+    return first, second
+
+
+def _window(items: Sequence[Any], offset: int, limit: int) -> dict[str, Any]:
+    """One page of ``items`` from ``offset``, plus ``end`` — where the next starts.
+
+    The single slicing rule behind every paginated view, so a page's contents
+    and the cursor that resumes it can never disagree.
+    """
+    total = len(items)
+    offset = min(max(0, offset), total)
+    limit = max(1, int(limit))
+    window = list(items[offset : offset + limit])
+    end = offset + len(window)
+    return {
+        "items": window,
+        "total": total,
+        "returned": len(window),
+        "end": end,
+        "truncated": end < total,
+    }
+
+
 def paginate_view(
     items: Sequence[Any],
     kind: str,
@@ -140,17 +188,49 @@ def paginate_view(
     """Slice ``items`` into a ``{items, total, returned, truncated, next_cursor}``
     page. ``cursor`` resumes a prior page (its offset must belong to ``kind``).
     """
-    total = len(items)
     offset = decode_page_cursor(cursor, kind) if cursor else 0
-    offset = min(max(0, offset), total)
-    limit = max(1, int(limit))
-    window = list(items[offset : offset + limit])
-    end = offset + len(window)
-    truncated = end < total
+    window = _window(items, offset, limit)
     return {
-        "items": window,
-        "total": total,
-        "returned": len(window),
+        "items": window["items"],
+        "total": window["total"],
+        "returned": window["returned"],
+        "truncated": window["truncated"],
+        "next_cursor": encode_page_cursor(kind, window["end"]) if window["truncated"] else None,
+    }
+
+
+def paginate_pair(
+    primary: Sequence[Any],
+    secondary: Sequence[Any],
+    kind: str,
+    *,
+    cursor: str | None = None,
+    limit: int = DEFAULT_PAGE_SIZE,
+    secondary_limit: int = DEFAULT_PAGE_SIZE,
+) -> dict[str, Any]:
+    """Page two collections of ONE item under a single resumption token.
+
+    Each collection advances by its own offset — both ride in the cursor — so
+    successive pages repeat neither, and neither is capped at its first page.
+    ``truncated`` and ``next_cursor`` cover the pair: a cursor is minted while
+    *either* collection has more, which keeps "page until next_cursor is null"
+    the correct stop rule. Per-collection exhaustion is reported separately
+    (``secondary_truncated``) so the caller can tell which one continues.
+    """
+    first_offset, second_offset = decode_pair_cursor(cursor, kind) if cursor else (0, 0)
+    first = _window(primary, first_offset, limit)
+    second = _window(secondary, second_offset, secondary_limit)
+    truncated = first["truncated"] or second["truncated"]
+    return {
+        "items": first["items"],
+        "total": first["total"],
+        "returned": first["returned"],
+        "secondary_items": second["items"],
+        "secondary_total": second["total"],
+        "secondary_returned": second["returned"],
+        "secondary_truncated": second["truncated"],
         "truncated": truncated,
-        "next_cursor": encode_page_cursor(kind, end) if truncated else None,
+        "next_cursor": (
+            encode_pair_cursor(kind, (first["end"], second["end"])) if truncated else None
+        ),
     }
