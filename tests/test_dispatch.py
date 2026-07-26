@@ -1,6 +1,5 @@
 """Tests for tool dispatch, schema validation, and profile filtering."""
 
-import json
 import typing
 
 from mcp import types
@@ -9,6 +8,7 @@ from pydantic import ValidationError
 from ltspice_mcp.config import VALID_PROFILES
 from ltspice_mcp.tools import get_tools_for_profile
 from ltspice_mcp.tools.circuit import SchematicOp
+from tests.conftest import resolve_local_ref
 
 
 def _all_profile_defs() -> list[types.Tool]:
@@ -22,6 +22,21 @@ def _all_profile_defs() -> list[types.Tool]:
         defs, _ = get_tools_for_profile(profile)
         for tool_def in defs:
             seen[tool_def.name] = tool_def
+    return list(seen.values())
+
+
+def _all_profile_declared_defs() -> list[types.Tool]:
+    """Union of DISPATCH-side definitions across every profile, deduped.
+
+    The wire tool list drops outputSchema (followups item 30); the declared
+    output contract lives on the dispatch definitions, which is what the
+    conformance hook validates emissions against. Contract pins on output
+    shapes must read this side, not the advertised list."""
+    seen: dict[str, types.Tool] = {}
+    for profile in VALID_PROFILES:
+        _, dispatch = get_tools_for_profile(profile)
+        for registered in dispatch.values():
+            seen[registered.definition.name] = registered.definition
     return list(seen.values())
 
 
@@ -448,13 +463,36 @@ def _assert_no_key_at_depth(node, key: str, tool_name: str, path: str) -> None:
 class TestSchemaPostProcessing:
     """Verify that Pydantic-generated schemas are cleaned for MCP compatibility."""
 
-    def test_no_defs_in_any_schema(self):
-        """No tool schema should contain $defs after inlining."""
-        defs, _ = get_tools_for_profile("full")
-        for tool_def in defs:
-            assert "$defs" not in tool_def.inputSchema, (
-                f"{tool_def.name}: schema still contains $defs"
-            )
+    def test_every_ref_resolves_within_its_own_schema(self):
+        """Input schemas keep $defs (followups item 30) — every $ref must be
+        internal and resolve against that same schema's $defs, in every
+        profile. A dangling or external ref is a schema a strict client
+        cannot resolve, and at least one schema must actually use $defs so a
+        silent return to inlining fails here instead of quietly re-bloating."""
+        any_defs = False
+        for tool_def in _all_profile_defs():
+            schema = tool_def.inputSchema
+            defs = schema.get("$defs", {})
+            any_defs = any_defs or bool(defs)
+
+            def walk(node, path, tool=tool_def.name, defs=defs):
+                if isinstance(node, dict):
+                    ref = node.get("$ref")
+                    if ref is not None:
+                        assert isinstance(ref, str) and ref.startswith("#/$defs/"), (
+                            f"{tool}: non-local $ref {ref!r} at {path}"
+                        )
+                        assert ref.split("/")[-1] in defs, (
+                            f"{tool}: dangling $ref {ref!r} at {path}"
+                        )
+                    for key, value in node.items():
+                        walk(value, f"{path}.{key}")
+                elif isinstance(node, list):
+                    for i, item in enumerate(node):
+                        walk(item, f"{path}[{i}]")
+
+            walk(schema, "root")
+        assert any_defs, "no schema uses $defs — inlining silently returned"
 
     def test_no_title_at_any_depth(self):
         """No 'title' key should exist at any depth in any tool schema."""
@@ -462,20 +500,30 @@ class TestSchemaPostProcessing:
         for tool_def in defs:
             _assert_no_key_at_depth(tool_def.inputSchema, "title", tool_def.name, "root")
 
-    def test_no_ref_at_any_depth(self):
-        """No '$ref' key should exist after inlining."""
-        defs, _ = get_tools_for_profile("full")
-        for tool_def in defs:
-            schema_str = json.dumps(tool_def.inputSchema)
-            assert "$ref" not in schema_str, f"{tool_def.name}: schema contains un-inlined $ref"
+    def test_wire_tool_list_omits_output_schema(self):
+        """The advertised list carries no outputSchema (followups item 30 —
+        it was 84% of `jobs`); the dispatch definition keeps the declared
+        shape so the conformance hook still enforces it. Both directions
+        pinned, so neither side can silently regress."""
+        declared = {t.name: t for t in _all_profile_declared_defs()}
+        stripped = 0
+        for tool_def in _all_profile_defs():
+            assert tool_def.outputSchema is None, (
+                f"{tool_def.name}: wire definition still advertises outputSchema"
+            )
+            if declared[tool_def.name].outputSchema is not None:
+                stripped += 1
+        assert stripped > 0, "no tool declares an output schema — hook is vacuous"
 
     def test_output_schema_top_level_is_object(self):
         """MCP requires outputSchema to be an object schema at the top level.
 
         Claude Code's client validates this literally and rejects the ENTIRE
         tools/list response when any one tool violates it, disabling every
-        tool on the server for that session."""
-        for tool_def in _all_profile_defs():
+        tool on the server for that session. The wire no longer carries
+        outputSchema, but the pin stays on the declared side against the day
+        it is re-exposed."""
+        for tool_def in _all_profile_declared_defs():
             schema = tool_def.outputSchema
             if schema is None:
                 continue
@@ -493,7 +541,7 @@ class TestSchemaPostProcessing:
         client rejects the whole tools/list over it. Registration injects the
         key so no individual tool has to remember; this pins that it reached
         every one of them, in every profile."""
-        for tool_def in _all_profile_defs():
+        for tool_def in _all_profile_declared_defs():
             schema = tool_def.outputSchema
             if schema is None:
                 continue
@@ -510,13 +558,15 @@ class TestSchemaPostProcessing:
                 f"{tool_def.name}: 'warnings' items are {declared.get('items')!r}, not strings"
             )
 
-    def test_nested_model_inlining(self):
-        """Tools with nested models should have schemas fully inlined."""
+    def test_nested_models_resolve_through_defs(self):
+        """Nested submodels are $refs into the schema's own $defs (followups
+        item 30) — the composition contract is that they resolve to full
+        object schemas a local-ref-following client can read."""
         defs, _ = get_tools_for_profile("full")
         sweep_tools = [d for d in defs if d.name == "configure_sweep"]
         assert sweep_tools, "configure_sweep not found"
         schema = sweep_tools[0].inputSchema
-        # parameters property should have inlined items schema
         params_prop = schema["properties"]["parameters"]
         assert "items" in params_prop, "parameters should have items schema"
-        assert "properties" in params_prop["items"], "nested items should have inlined properties"
+        resolved = resolve_local_ref(schema, params_prop["items"])
+        assert "properties" in resolved, "nested items must resolve to an object schema"

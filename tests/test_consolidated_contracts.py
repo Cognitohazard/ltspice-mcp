@@ -55,7 +55,17 @@ def _registered() -> dict[str, Any]:
 
 
 def _output_schemas() -> dict[str, dict[str, Any]]:
-    return {name: tool_def.outputSchema for name, tool_def in _registered().items()}
+    # The wire defs drop outputSchema; the declared shapes live on the
+    # dispatch-side definitions (keyed here by wire names so deprecated
+    # aliases can't double-count). Non-None is asserted so every consumer
+    # gets a plain dict; the named per-tool pin is TestOutputSchemaCoverage.
+    _, dispatch = get_tools_for_profile("consolidated")
+    schemas: dict[str, dict[str, Any]] = {}
+    for name in _registered():
+        schema = dispatch[name].definition.outputSchema
+        assert schema is not None, f"{name}: consolidated tool must declare an outputSchema"
+        schemas[name] = schema
+    return schemas
 
 
 def _input_schemas() -> dict[str, dict[str, Any]]:
@@ -251,7 +261,7 @@ class TestOutputSchemaCoverage:
 
     @pytest.mark.parametrize("name", CONSOLIDATED_TOOLS)
     def test_declares_an_output_schema(self, name: str):
-        assert _registered()[name].outputSchema is not None
+        assert _output_schemas()[name] is not None
 
 
 class TestStableErrorCodesAndIsError:

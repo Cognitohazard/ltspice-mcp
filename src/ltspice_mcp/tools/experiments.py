@@ -128,9 +128,6 @@ class ExperimentCircuit(StrictModel):
 class ExperimentExecution(StrictModel):
     """How long this call waits, how hard the job runs, and on which simulator."""
 
-    # Docstring, not a Field description on ``execution``: the schema builder
-    # inlines a $ref over its siblings, so only a model-level description of a
-    # submodel-typed field reaches the published schema.
     wait_s: float = Field(
         default=60.0,
         ge=0.0,
@@ -269,7 +266,15 @@ class RunExperimentsInput(ToolInput):
             "calls. Empty runs each circuit once as authored."
         ),
     )
-    execution: ExperimentExecution = Field(default_factory=ExperimentExecution)
+    execution: ExperimentExecution = Field(
+        default_factory=ExperimentExecution,
+        description=(
+            "How the job runs and how long this call dwells: wait_s bounds only "
+            "this response (the job is durable either way), plus per-case "
+            "timeout_s, simulator choice, and the parallelism cap. Defaults suit "
+            "a quick check."
+        ),
+    )
     analyze: AttachedAnalysis | None = Field(
         default=None,
         description=(

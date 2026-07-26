@@ -29,7 +29,7 @@ from ltspice_mcp.tools.experiments import (
     handle_jobs,
     handle_run_experiments,
 )
-from tests.conftest import FIXTURES_DIR, make_sim_job
+from tests.conftest import FIXTURES_DIR, make_sim_job, resolve_local_ref
 
 
 def test_attached_per_run_limit_shares_the_analyze_page_cap():
@@ -58,20 +58,27 @@ def test_attached_per_run_limit_shares_the_analyze_page_cap():
         )
 
 
-def test_variation_input_schema_is_inlined_and_discriminated():
+def test_variation_schema_keeps_discriminated_union_through_defs():
+    """Schemas keep $defs (followups item 30): the assign/random discriminated
+    union must stay fully resolvable through local refs, so a client sees the
+    same composition contract inlining used to spell out."""
     schema = _build_input_schema(RunExperimentsInput)
-    variations = schema["properties"]["variations"]["items"]
+    variations = resolve_local_ref(schema, schema["properties"]["variations"]["items"])
 
-    assert "$defs" not in schema
-    assert '"$ref"' not in json.dumps(schema)
     assert variations["discriminator"]["propertyName"] == "kind"
     assert len(variations["oneOf"]) == 2
-    branches = {branch["properties"]["kind"]["const"]: branch for branch in variations["oneOf"]}
+    branches = {}
+    for ref in variations["oneOf"]:
+        branch = resolve_local_ref(schema, ref)
+        branches[branch["properties"]["kind"]["const"]] = branch
     assert branches["assign"]["additionalProperties"] is False
     assert branches["assign"]["properties"]["combine"]["default"] == "grid"
-    random_rules = branches["random"]["properties"]["rules"]["items"]
+    random_rules = resolve_local_ref(schema, branches["random"]["properties"]["rules"]["items"])
     assert random_rules["discriminator"]["propertyName"] == "rule"
-    assert all(branch["additionalProperties"] is False for branch in random_rules["oneOf"])
+    assert all(
+        resolve_local_ref(schema, ref)["additionalProperties"] is False
+        for ref in random_rules["oneOf"]
+    )
 
 
 def _deck(path: Path, body: str | None = None) -> Path:

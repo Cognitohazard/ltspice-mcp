@@ -328,11 +328,13 @@ class TestRegisteredOutputSchemas:
                 for i, value in enumerate(node):
                     check(value, f"{path}[{i}]")
 
-        # get_tools_for_profile imports the tool modules (triggering registration)
-        # and returns the published Tool defs — the same surface MCP clients see.
-        defs, _ = get_tools_for_profile("full")
+        # get_tools_for_profile imports the tool modules (triggering
+        # registration). The wire defs no longer carry outputSchema, so the
+        # declared shapes are read from the dispatch-side definitions.
+        _, dispatch = get_tools_for_profile("full")
         checked = 0
-        for tool in defs:
+        for registered in dispatch.values():
+            tool = registered.definition
             if tool.outputSchema is not None:
                 checked += 1
                 check(tool.outputSchema, tool.name)
