@@ -1378,3 +1378,126 @@ class TestSourceHashProvenance:
         assert full_entry["raw_path"]
         assert full_entry["composite_sha256"] or full_entry["raw_sha256"]
         assert len(json.dumps(full)) > len(json.dumps(lean))
+
+
+class TestHeadlineLeafPromotion:
+    """A sweep's table is read from per_run rows, and dotted projection cannot
+    reach into lists — so a headline that lives only inside points[]/
+    crossings[] is unprojectable below the whole value block (measured at
+    13-22x the shell-equivalent size for the same 36 numbers). Each such
+    metric promotes its headline to a flat value leaf, through the reducer's
+    own extractor, so leaf and reduction cannot disagree."""
+
+    @pytest.mark.asyncio
+    async def test_crossing_and_point_rows_carry_flat_headlines(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+        data = await _analyze(
+            state_no_sim,
+            raw,
+            [
+                {"key": "gbw", "metric": "bode_crossing", "signal": "V(out)", "level_db": -3.0},
+                {"key": "dc", "metric": "bode_point", "signal": "V(out)", "at_hz": "1"},
+            ],
+            include={"per_run": {"limit": 5}},
+        )
+        crossing_row = data["results"]["gbw"]["per_run"]["items"][0]["value"]
+        assert crossing_row["first_crossing_hz"] == crossing_row["crossings"][0]["frequency_hz"]
+        assert "crossings_found" not in crossing_row, (
+            "the adapter caps its crossings list without a truncation signal, "
+            "so a count leaf would silently saturate — it must not exist"
+        )
+        point_row = data["results"]["dc"]["per_run"]["items"][0]["value"]
+        assert point_row["magnitude_db"] == point_row["points"][0]["magnitude_db"]
+
+    @pytest.mark.asyncio
+    async def test_headline_is_projectable_to_a_lean_row(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The point of the promotion: a caller can now name the one number."""
+        raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+        data = await _analyze(
+            state_no_sim,
+            raw,
+            [{"key": "gbw", "metric": "bode_crossing", "signal": "V(out)", "level_db": -3.0}],
+            include={
+                "per_run": {"limit": 5},
+                "fields": ["step_values", "value.first_crossing_hz"],
+            },
+        )
+        rows = data["results"]["gbw"]["per_run"]["items"]
+        assert rows, "expected per_run rows"
+        for row in rows:
+            assert set(row) <= {"step_values", "value"}
+            assert set(row["value"]) == {"first_crossing_hz"}
+            assert isinstance(row["value"]["first_crossing_hz"], float)
+
+    def test_promotion_never_overwrites_an_existing_key(self):
+        """setdefault contract: if an adapter ever grows its own flat leaf with
+        the same name, the adapter's value wins and promotion becomes a no-op —
+        not a silent overwrite of fresher data."""
+        from ltspice_mcp.tools.analyze import _promote_headlines
+
+        value = {"crossings": [{"frequency_hz": 42.0}], "first_crossing_hz": 7.0}
+        out = _promote_headlines("bode_crossing", value)
+        assert out["first_crossing_hz"] == 7.0
+
+    def test_first_crossing_means_first_in_sweep_order(self):
+        """The recorded RC fixture has exactly one crossing, so the end-to-end
+        tests cannot tell crossings[0] from crossings[-1] — a mutation swapping
+        them survived. The rule is pure, so pin it on a two-crossing value."""
+        from ltspice_mcp.tools.analyze import _promote_headlines
+
+        value = {"crossings": [{"frequency_hz": 42.0}, {"frequency_hz": 99.0}]}
+        out = _promote_headlines("bode_crossing", value)
+        assert out["first_crossing_hz"] == 42.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("metric", "fixture_name", "fields"), EXECUTION_CASES)
+async def test_every_metric_exposes_a_flat_numeric_headline(
+    metric: str,
+    fixture_name: str,
+    fields: dict[str, Any],
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """The class pin behind headline promotion: a metric whose numbers live
+    ONLY inside nested structure is invisible to ``include.fields`` projection
+    (dotted paths cannot reach into lists), which is the defect the fleet
+    measured at 13-22x shell cost. Every metric must expose at least one flat
+    numeric leaf on its row value — or sit on this explicit exemption list,
+    which fails CLOSED: removing a metric's flatness without adding it here
+    breaks this test, and an exemption for a metric that IS flat is dead
+    weight that also fails."""
+    # Whole-row payloads whose value is a keyed BUNDLE the caller projects by
+    # name (measurements: per-.meas stats), not a single measurement with a
+    # headline. operating_point is NOT here: its row value carries flat leaves.
+    exempt = {"measurements"}
+    raw = stage_recorded_fixture(work_dir, fixture_name)
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": metric, "metric": metric, **fields}],
+        include={"per_run": {"limit": 3}},
+    )
+    if metric not in data["results"]:
+        pytest.skip("metric legitimately found no feature in this fixture")
+    rows = data["results"][metric]["per_run"]["items"]
+    if not rows:
+        pytest.skip("no per-run rows for this fixture")
+    value = rows[0]["value"]
+    flat_numeric = any(
+        isinstance(v, int | float) and not isinstance(v, bool) for v in value.values()
+    )
+    if metric in exempt:
+        assert not flat_numeric, (
+            f"{metric} now exposes a flat numeric leaf; remove it from the "
+            "exemption list so coverage does not silently shrink"
+        )
+    else:
+        assert flat_numeric, (
+            f"{metric} rows carry no flat numeric leaf — its headline is "
+            "unprojectable; add a _HEADLINE_LEAVES entry (see bode_crossing)"
+        )
