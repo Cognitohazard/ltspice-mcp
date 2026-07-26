@@ -86,6 +86,14 @@ def verify_replay_sources(job: ExperimentJob, request_id: str) -> None:
 
     A changed deck raises the conflict a changed payload already raises: both
     are one request_id reused for a different experiment.
+
+    A live include is refused for the same reason a record with no digests is:
+    its content was never hashed, so nothing here can show it still holds what
+    it held. ``allow_live_includes`` already says in as many words that the job
+    cannot prove what those files contained; a replay is that claim made a
+    second time, on evidence that has aged. The cost is a re-run of a job that
+    opted out of provenance, which is the direction every other case here
+    fails.
     """
     for source in job.sources:
         if not any(entry.staged and not entry.live for entry in source.manifest):
@@ -94,6 +102,18 @@ def verify_replay_sources(job: ExperimentJob, request_id: str) -> None:
                 f"record carries no source digest for circuit {source.circuit!r}; its "
                 "results cannot be shown to describe the current deck. Submit under a "
                 "new request_id to run it again."
+            )
+        # Ahead of the drift check below: this one reads the record in memory,
+        # while that one re-hashes every staged byte. A replay this rejects is
+        # rejected either way, so paying for the closure hash first would be
+        # work spent on an answer already known.
+        live = [str(entry.path) for entry in source.manifest if entry.live]
+        if live:
+            raise IdempotencyConflictError(
+                f"request_id {request_id!r} already ran circuit {source.circuit!r} "
+                f"against live include(s) {', '.join(live)}, whose content was never "
+                "digested; this receipt cannot be shown to describe them now. Submit "
+                "under a new request_id to run it again."
             )
         drift = [
             f"{item['evidence']['path']} ({_DRIFT_REASONS[item['code']]})"

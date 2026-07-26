@@ -295,7 +295,9 @@ class RunExperimentsInput(ToolInput):
             "or past the recursion depth) be read live at run time instead of "
             "failing that circuit's submission. The job then cannot prove what "
             "those files held when it ran: the manifest marks the reference "
-            "live:true and an observation says so."
+            "live:true, an observation says so, and reusing its request_id runs "
+            "the experiment again rather than replaying a receipt whose inputs "
+            "cannot be checked."
         ),
     )
 
@@ -757,6 +759,11 @@ async def _prepare_circuit(
             runnable,
             paths.staging_root,
             state.config.allowed_paths,
+            # A schematic is simulated through an exported netlist, so without
+            # this the manifest describes only that export — and re-exporting is
+            # exactly what a replay skips, leaving an edited .asc invisible to
+            # every check made over this record.
+            origin=source_path,
             allow_live_includes=args.allow_live_includes,
             windows_paths=paths.windows_native,
         )
@@ -776,7 +783,10 @@ async def _prepare_circuit(
         source = SourceRecord(
             circuit=circuit_id,
             path=source_path,
-            sha256=staged.sha256,
+            # The digest of the path this record names. For a schematic that is
+            # the .asc, not the netlist exported from it — the staged export's
+            # own digest stays reachable through its manifest entry.
+            sha256=staged.origin_sha256,
             staged_deck=staged.staged_deck,
             manifest=staged.manifest,
             linter_version=linter_version,
@@ -1652,6 +1662,12 @@ JOBS_OUTPUT_SCHEMA: dict[str, Any] = {
     # MCP requires outputSchema to be an object schema at the top level;
     # Claude Code rejects the whole tools/list response when it is not.
     "type": "object",
+    # Every branch below declares these and requires most of them, so hoisting
+    # them constrains nothing new. What it buys is the introspecting client that
+    # reads `properties` and never looks at `oneOf`: it sees the shape all five
+    # actions share instead of the lone `warnings` key the registry injects into
+    # a schema that declares no properties of its own.
+    "properties": {"action": {"type": "string"}, **_JOBS_COMMON_PROPERTIES},
     "discriminator": {"propertyName": "action"},
     "oneOf": [
         _jobs_receipt_schema("status"),

@@ -12,6 +12,7 @@ keys at all, and capabilities key presence (pinned loosely, not by value).
 
 from __future__ import annotations
 
+import asyncio
 import typing
 from pathlib import Path
 
@@ -274,6 +275,39 @@ async def test_net_asc_coordinates_advance_across_pages(
     assert len({(c["x"], c["y"]) for c in seen}) == total
 
 
+async def test_page_counters_cover_every_collection_the_item_pages(
+    wide_net_asc: Path, asc_state: SessionState
+):
+    """``page.returned == page.total`` must never read "done" while rows remain.
+
+    A .asc net pages pins and wire vertices under one cursor. Counters that
+    described the pins alone reported "3 of 3 returned" on a net with hundreds of
+    unfetched coordinates, so a caller stopping on ``returned == total`` dropped
+    them silently while ``truncated`` said otherwise.
+    """
+    query: dict = {"kind": "net", "path": str(wide_net_asc), "at": "net:bignet"}
+    (first,) = await _run(asc_state, [query])
+    page = first["page"]
+    assert page["truncated"] is True
+    assert page["returned"] < page["total"], "counters read complete while the item is truncated"
+    assert set(page["collections"]) == {"pins", "coordinates"}
+    coordinates = page["collections"]["coordinates"]
+    assert coordinates["total"] == first["data"]["total_coordinates"]
+    assert coordinates["returned"] == len(first["data"]["coordinates"])
+    assert coordinates["truncated"] is True
+
+    # Walking to exhaustion accounts for exactly the rows the first page promised.
+    seen = page["returned"]
+    cursor = first["next_cursor"]
+    while cursor is not None:
+        (nxt,) = await _run(asc_state, [{**query, "cursor": cursor}])
+        assert nxt["page"]["total"] == page["total"]
+        assert not nxt["page"]["truncated"] or nxt["page"]["returned"] < nxt["page"]["total"]
+        seen += nxt["page"]["returned"]
+        cursor = nxt["next_cursor"]
+    assert seen == page["total"]
+
+
 async def test_net_netlist_coordinates_rejected(netlist: Path, state_no_sim: SessionState):
     (res,) = await _run(state_no_sim, [{"kind": "net", "path": str(netlist), "at": [10, 20]}])
     assert res["ok"] is False
@@ -489,6 +523,72 @@ async def test_cursor_paging_and_resumption(
     assert pages == 3  # 5 components at 2 per page
     assert set(seen) == {"C1", "R1", "R2", "V1", "X1"}
     assert len(seen) == 5  # no overlap across pages
+    # A single-collection kind still names the collection its counters describe.
+    assert set(res["page"]["collections"]) == {"components"}
+    assert res["page"]["collections"]["components"]["total"] == res["page"]["total"] == 5
+
+
+async def test_cursor_minted_before_an_edit_is_rejected(
+    netlist: Path, state_no_sim: SessionState, monkeypatch: pytest.MonkeyPatch
+):
+    """A cursor that outlived the file it paged must not resume at a stale offset.
+
+    The token carries a row offset into a list the server re-derives on every
+    page, so replaying it after an edit silently skips or repeats components.
+    Binding the file's size and mtime makes that a clean rejection instead.
+    """
+    monkeypatch.setattr(insp, "_PAGE_SIZE", 2)
+    path = str(netlist)
+    (first,) = await _run(state_no_sim, [{"kind": "components", "path": path}])
+    cursor = first["next_cursor"]
+    assert cursor is not None
+
+    await asyncio.to_thread(
+        netlist.write_text, "* amp\nR1 in mid 1k\nR9 mid out 9k\nV1 in 0 AC 1\n.end\n"
+    )
+
+    (res,) = await _run(state_no_sim, [{"kind": "components", "path": path, "cursor": cursor}])
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_cursor"
+
+
+@pytest.mark.parametrize(
+    ("mode", "extra"),
+    [("enumerate", {}), ("search", {"query": "AMP1"})],
+    ids=["enumerate", "search"],
+)
+async def test_model_cursor_minted_before_a_library_edit_is_rejected(
+    work_dir: Path,
+    state_no_sim: SessionState,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    extra: dict,
+):
+    """A model page is rows read out of library FILES, so its cursor binds them.
+
+    Same defect the components and net cursors close: the token carries a row
+    offset into a list the server re-derives on every page, so a library edited
+    between pages silently shifts the rows that offset lands on. Both modes read
+    the files named in 'libs', so both must reject the stale token.
+    """
+    monkeypatch.setattr(insp, "_PAGE_SIZE", 1)
+    lib = work_dir / "parts2.lib"
+    lib.write_text(".model AMP1 NPN(BF=100)\n.model AMP2 NPN(BF=100)\n")
+    query: dict = {"kind": "model", "mode": mode, "libs": [str(lib)], **extra}
+
+    (first,) = await _run(state_no_sim, [query])
+    assert first["ok"] is True
+    cursor = first["next_cursor"]
+    assert cursor is not None
+
+    await asyncio.to_thread(
+        lib.write_text,
+        ".model AMP0 NPN(BF=90)\n.model AMP1 NPN(BF=100)\n.model AMP2 NPN(BF=100)\n",
+    )
+
+    (res,) = await _run(state_no_sim, [{**query, "cursor": cursor}])
+    assert res["ok"] is False
+    assert res["error"]["code"] == "invalid_cursor"
 
 
 async def test_tampered_cursor_isolated(

@@ -31,6 +31,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.symbol_geometry import (
@@ -683,12 +684,6 @@ def parse_symbol(asy_path: Path, name: str) -> SymbolProto:
 # ---------------------------------------------------------------------------
 
 
-def _content_stamp(path: Path) -> tuple[int, int]:
-    """Cheap change token: ``(mtime_ns, size)``. Any rewrite bumps it."""
-    st = path.stat()
-    return (st.st_mtime_ns, st.st_size)
-
-
 class SymbolResolver:
     """Resolve a symbol name to a ``.asy`` file and parse it, with caching.
 
@@ -777,7 +772,7 @@ class SymbolResolver:
         if path is None:
             return None
         try:
-            stamp = _content_stamp(path)
+            stamp = file_stamp(path)
         except OSError:
             return None
         key = (str(path), stamp, self._active_set)

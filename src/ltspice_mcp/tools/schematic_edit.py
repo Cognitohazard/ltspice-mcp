@@ -239,6 +239,13 @@ _PAGE_SCHEMA: dict[str, Any] = {
         "total": {"type": "integer"},
         "returned": {"type": "integer"},
         "truncated": {"type": "boolean"},
+        "primary_truncated": {
+            "type": "boolean",
+            "description": (
+                "Whether THIS collection has more rows. Equal to 'truncated' here; the "
+                "two differ only on a page that carries a second collection."
+            ),
+        },
         "next_cursor": {"type": ["string", "null"]},
     },
     "required": ["items", "total", "returned", "truncated", "next_cursor"],
@@ -716,11 +723,19 @@ async def handle_edit_schematic(
     stages: list[dict] = []
 
     def _stage(name: str, ok: bool = True, error: str | None = None) -> None:
-        """Append one commit-protocol stage entry (the ok path omits ``error``)."""
+        """Append one commit-protocol stage entry (the ok path omits ``error``).
+
+        Recording an outcome also ends that stage: ``post_commit_stage`` drops
+        back to "response", so a later failure cannot be appended as a second,
+        contradictory entry for a stage that already reported ok. A stage names
+        itself right before it runs; nothing has to remember to un-name it.
+        """
+        nonlocal post_commit_stage
         entry: dict[str, Any] = {"stage": name, "ok": ok}
         if error is not None:
             entry["error"] = error
         stages.append(entry)
+        post_commit_stage = "response"
 
     async with _edit_guard(target):
         # --- revision guard (inside the guard so a peer's committed write is seen)
@@ -765,9 +780,10 @@ async def handle_edit_schematic(
         editor = _build_editor(target, use_template, state)
         # Set once the atomic rename lands. From that point every escape must be
         # reported on a committed envelope instead of re-raised (see the except
-        # clauses below); post_commit_stage names the stage that was in flight.
+        # clauses below); post_commit_stage names the stage that was in flight,
+        # and "response" means none is — the failure is in assembling the reply.
         committed_sha: str | None = None
-        post_commit_stage = "views"
+        post_commit_stage = "response"
         try:
             results, failures, abort_reason = _apply_ops(editor, args.ops, target, args.dry_run)
 
@@ -857,9 +873,13 @@ async def handle_edit_schematic(
             committed_sha = hashlib.sha256(committed_text.encode(encoding)).hexdigest()
 
             # --- post-commit: everything below keeps commit_state='committed'
+            # Views report no stage entry of their own, so they open and close
+            # their name by hand; a stage that calls _stage() only opens it.
+            post_commit_stage = "views"
             label_only_page, views, view_failures = await _paginate_views(
                 args, legend, label_only, target, build_id, state
             )
+            post_commit_stage = "response"
             wiring = _wiring_dict(profile, label_only_page)
             artifacts = _artifacts_from_views(views)
 
@@ -902,9 +922,12 @@ async def handle_edit_schematic(
             state.editors.invalidate(target)
             if committed_sha is None:
                 raise
-            _stage(post_commit_stage, False, str(exc))
+            # Read the name before recording it: _stage ends the stage it
+            # records, so post_commit_stage is "response" by the time it returns.
+            failed_stage = post_commit_stage
+            _stage(failed_stage, False, str(exc))
             return _post_commit_failure_response(
-                args, target, build_id, stages, committed_sha, post_commit_stage, str(exc)
+                args, target, build_id, stages, committed_sha, failed_stage, str(exc)
             )
         except BaseException:
             # Cancellation (and any other non-Exception escape) still propagates

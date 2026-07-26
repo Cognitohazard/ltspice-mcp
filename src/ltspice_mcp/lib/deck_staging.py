@@ -64,6 +64,11 @@ class StagedDeck:
     text: str
     sha256: str
     manifest: list[ManifestEntry]
+    # Digest of the file the author edits: the ``origin`` when the primary deck
+    # was generated from one (a schematic exported to a netlist), else the
+    # primary deck itself. This is the digest that describes the path a caller
+    # named, which is a different file whenever an export sits in between.
+    origin_sha256: str = ""
     observations: list[dict[str, Any]] = field(default_factory=list)
     # Every staged file EXCEPT the primary deck, in discovery order. The
     # manifest records where each dependency came from; this records what the
@@ -130,6 +135,7 @@ def stage_deck(
     staging_root: Path,
     allowed_roots: list[Path],
     *,
+    origin: Path,
     allow_live_includes: bool = False,
     max_depth: int = DEFAULT_INCLUDE_DEPTH,
     windows_paths: bool = False,
@@ -140,6 +146,15 @@ def stage_deck(
     absolute or cross-root reference is rewritten only in the staged copy so
     the simulator still consumes the snapshot. The authoring files are never
     modified.
+
+    ``origin`` is the file the primary deck was generated FROM — an ``.asc``
+    schematic exported to the ``.net`` handed here, or the deck itself when it
+    was hand-written. It is snapshotted and digested like any other source even
+    though no simulator reads it, because it is the file the author edits:
+    without it the manifest records only the export, and a caller who changes
+    the schematic changes nothing this deck's provenance can see. Required
+    rather than defaulted, so a new caller has to answer the question instead
+    of inheriting an answer that silently records the wrong file.
 
     ``windows_paths`` renders the root deck's rewritten references in Windows
     form, for a Windows simulator reached across the WSL boundary: it cannot
@@ -184,7 +199,14 @@ def stage_deck(
         manifest_keys.add(key)
         manifest.append(entry)
 
-    def snapshot_file(path: Path, destination: Path, depth: int) -> Path:
+    def snapshot_file(path: Path, destination: Path, depth: int, *, walk: bool = True) -> Path:
+        """Copy one source into the staging tree and record it in the manifest.
+
+        ``walk=False`` stages a file whose references are not ours to follow —
+        the authoring origin, which is not SPICE. It still goes through here so
+        it lands in the same bookkeeping: a path staged twice is copied once,
+        and the copy the walk wrote is never overwritten by a plain one.
+        """
         resolved = path.resolve(strict=True)
         prior = source_destinations.get(resolved)
         if prior is None:
@@ -205,6 +227,11 @@ def stage_deck(
         else:
             destination = prior
             data = source_bytes[resolved]
+        if not walk:
+            if prior is None:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_bytes(destination, data, durable=True)
+            return destination
         if resolved in processing:
             return destination
         prior_depth = processed_depths.get(resolved)
@@ -332,15 +359,44 @@ def stage_deck(
         processed_depths[resolved] = depth
         return destination
 
+    def _snapshot_origin(authoring_source: Path) -> str:
+        """Snapshot the file the primary deck was generated from; return its digest.
+
+        It carries no include references — it is not SPICE — so it is staged
+        without walking. It joins the manifest as a staged entry so every later
+        check over that manifest sees it: drift verification is the one that
+        matters, since an edit to the schematic leaves the previously exported
+        netlist on disk byte-identical.
+        """
+        resolved = authoring_source.resolve(strict=True)
+        if resolved == source:
+            return primary_sha
+        origin_root = _containing_root(resolved, roots)
+        if origin_root is None:
+            raise DeckStagingError(
+                "include_unstaged",
+                f"Source {resolved} is outside the configured allowed roots",
+                reference=str(resolved),
+            )
+        snapshot_file(
+            resolved,
+            _destination_for(resolved, staging_root, roots, origin_root),
+            0,
+            walk=False,
+        )
+        return source_digests[resolved]
+
     staged_primary = snapshot_file(source, primary_destination, 0)
     primary_sha = next(
         entry.sha256 for entry in manifest if entry.path == source and entry.section is None
     )
+    origin_sha = _snapshot_origin(origin)
     return StagedDeck(
         source_path=source,
         staged_deck=staged_primary,
         text=staged_texts[source],
         sha256=primary_sha,
+        origin_sha256=origin_sha,
         manifest=manifest,
         observations=observations,
         includes=[
@@ -483,12 +539,12 @@ def scan_include_references(
         if len(tokens) < 2 or tokens[0].text.casefold() not in INCLUDE_HEADS:
             continue
         path_token = tokens[1]
-        raw_path = _unquote(path_token.text)
+        raw_path = unquote(path_token.text)
         if not raw_path:
             continue
         is_lib = tokens[0].text.casefold() == ".lib"
-        section = _unquote(tokens[2].text) if is_lib and len(tokens) > 2 else None
-        if is_lib and section is None and _looks_like_section_declaration(raw_path, source, depth):
+        section = unquote(tokens[2].text) if is_lib and len(tokens) > 2 else None
+        if is_lib and section is None and looks_like_section_declaration(raw_path, source, depth):
             continue
         references.append(
             IncludeReference(
@@ -501,7 +557,7 @@ def scan_include_references(
     return references
 
 
-def _looks_like_section_declaration(raw_path: str, source: Path, depth: int = 0) -> bool:
+def looks_like_section_declaration(raw_path: str, source: Path, depth: int = 0) -> bool:
     """True when a single-token ``.lib X`` declares a section rather than
     naming a file to include.
 
@@ -511,6 +567,10 @@ def _looks_like_section_declaration(raw_path: str, source: Path, depth: int = 0)
     in the suffixes — not just the last one — is what admits the near-universal
     PDK naming ``<pdk>.lib.spice`` (sky130, gf180); keying on the final suffix
     alone read every corner declaration inside them as a missing file.
+
+    Public because it is the *only* answer to this question: a second one
+    written elsewhere can disagree, and then one caller reads a file the other
+    reads as a section.
     """
     if depth == 0 and not any(suffix.casefold() in {".lib", ".sub"} for suffix in source.suffixes):
         return False
@@ -519,7 +579,7 @@ def _looks_like_section_declaration(raw_path: str, source: Path, depth: int = 0)
     return not (source.parent / raw_path).exists()
 
 
-def _unquote(value: str) -> str:
+def unquote(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
         return value[1:-1]
     return value

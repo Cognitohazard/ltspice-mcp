@@ -214,8 +214,11 @@ class AnalyzeInclude(StrictModel):
             "Keep only these dotted row paths (e.g. 'value.phase_margin_deg', "
             "'step_values') on per_run/values rows. Paths root at one of "
             f"{', '.join(_ROW_KEYS)}; an unknown root is rejected rather than "
-            "silently returning empty rows. This is the payload lever for a wide "
-            "sweep — on a 45-step case it cut the rows from ~39k to ~5k characters."
+            "silently returning empty rows. A dot inside a key's own name is "
+            r"escaped as '\.' — a subcircuit node or device parameter is spelled "
+            r"'value.voltages.v(x1\.out)', 'value.device_op_points.@m\.x1\.m1[gm]'. "
+            "This is the payload lever for a wide sweep — on a 45-step case it cut "
+            "the rows from ~39k to ~5k characters."
         ),
     )
 
@@ -229,9 +232,10 @@ class AnalyzeInclude(StrictModel):
         if len(set(self.fields)) != len(self.fields):
             raise ValueError("include.fields paths must be unique")
         for path in self.fields:
-            if any(not segment for segment in path.split(".")):
+            segments = _split_path(path)
+            if any(not segment for segment in segments):
                 raise ValueError(f"include.fields path {path!r} has an empty segment")
-            root = path.split(".", 1)[0]
+            root = segments[0]
             if root not in _ROW_KEYS:
                 raise ValueError(
                     f"include.fields path {path!r} starts at unknown row key {root!r}; "
@@ -381,13 +385,58 @@ _ABSENT = object()
 _KeepPlan = dict[str, "_KeepPlan | None"]
 
 
+def _split_path(path: str) -> list[str]:
+    r"""Segments of a dotted path, where ``\.`` is a dot INSIDE a key.
+
+    A row key is whatever the simulator called the thing, and plenty of them
+    carry dots of their own — ngspice spells a subcircuit node ``v(x1.out)``
+    and a subcircuit device parameter ``@m.x1.m1[gm]``. Splitting those on
+    every dot addresses a nesting that does not exist, so the escape is what
+    makes the most ordinary op-point key projectable at all.
+    """
+    segments: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for char in path:
+        if escaped:
+            # Only the dot is escapable; anything else keeps its backslash, so
+            # a path that never meant to escape reads back unchanged.
+            current.append(char if char == "." else "\\" + char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == ".":
+            segments.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+    if escaped:
+        current.append("\\")
+    segments.append("".join(current))
+    return segments
+
+
+def _escape_segment(segment: str) -> str:
+    r"""Spell one row key as the path segment that addresses it.
+
+    Only the dot is escaped, mirroring the split: a backslash means nothing on
+    its own there, so doubling one here would put a character in the path that
+    reading it back would not remove.
+    """
+    return segment.replace(".", "\\.")
+
+
 def _keep_plan(paths: list[str]) -> _KeepPlan:
     """Group dotted ``paths`` into a nested keep-plan, in first-named order."""
+    return _plan_for([_split_path(path) for path in paths])
+
+
+def _plan_for(paths: list[list[str]]) -> _KeepPlan:
     order: list[str] = []
-    nested: dict[str, list[str]] = {}
+    nested: dict[str, list[list[str]]] = {}
     whole: set[str] = set()
-    for path in paths:
-        root, _, rest = path.partition(".")
+    for segments in paths:
+        root, rest = segments[0], segments[1:]
         if root not in order:
             order.append(root)
         if rest:
@@ -396,7 +445,7 @@ def _keep_plan(paths: list[str]) -> _KeepPlan:
             # A bare key wins over any dotted sibling: asking for the subtree and
             # a leaf inside it means the subtree.
             whole.add(root)
-    return {root: None if root in whole else _keep_plan(nested[root]) for root in order}
+    return {root: None if root in whole else _plan_for(nested[root]) for root in order}
 
 
 def _project(row: dict[str, Any], plan: _KeepPlan) -> dict[str, Any]:
@@ -420,10 +469,10 @@ def _project(row: dict[str, Any], plan: _KeepPlan) -> dict[str, Any]:
     return kept
 
 
-def _at_path(row: dict[str, Any], path: str) -> Any:
-    """The value at dotted ``path``, or ``_ABSENT`` when a segment is missing."""
+def _at_segments(row: dict[str, Any], segments: list[str]) -> Any:
+    """The value at ``segments``, or ``_ABSENT`` when one of them is missing."""
     node: Any = row
-    for segment in path.split("."):
+    for segment in segments:
         if not isinstance(node, dict) or segment not in node:
             return _ABSENT
         node = node[segment]
@@ -441,26 +490,33 @@ def _projection_warnings(records: list[dict[str, Any]], fields: list[str]) -> li
     """
     warnings: list[str] = []
     for path in fields:
-        parent, _, _leaf = path.rpartition(".")
-        if not parent:
+        segments = _split_path(path)
+        if len(segments) == 1:
             continue
-        if any(_at_path(record, path) is not _ABSENT for record in records):
+        if any(_at_segments(record, segments) is not _ABSENT for record in records):
             continue
+        parent_segments = segments[:-1]
+        parent = ".".join(_escape_segment(segment) for segment in parent_segments)
         present = sorted(
             {
                 key
                 for record in records
-                for node in (_at_path(record, parent),)
+                for node in (_at_segments(record, parent_segments),)
                 if isinstance(node, dict)
                 for key in node
             }
         )
+        # Naming a dotted key as it must be SPELLED, not just as it reads, is
+        # the difference between a warning and a fix: the caller is one escape
+        # away from the value, and no amount of staring at the key says so.
+        addressable = ", ".join(_escape_segment(key) for key in present)
         warnings.append(
             f"include.fields path {path!r} is absent from every row of this recipe; "
             + (
-                f"keys present at {parent!r}: {', '.join(present)}"
+                f"keys present at {parent!r}: {addressable}"
                 if present
-                else f"{parent!r} holds no object on these rows"
+                else f"no row reaches {parent!r} — a key whose own name contains a "
+                r"'.' is one segment, so address it with '\.' (e.g. 'value.v(x1\.out)')"
             )
         )
     return warnings
