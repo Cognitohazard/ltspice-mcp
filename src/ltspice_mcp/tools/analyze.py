@@ -405,6 +405,35 @@ def _at_segments(row: dict[str, Any], segments: list[str]) -> Any:
     return node
 
 
+def _lean_row(row: dict[str, Any], *, keep_value_whole: bool = False) -> dict[str, Any]:
+    """Default row rendering — the answer channel.
+
+    Drops attribution keys that carry nothing (null step_index, empty
+    step_values — the row schema declares no required keys, so absent and
+    empty mean the same thing), drops the per-row deck digest (provenance,
+    reachable via include.fields), and flattens ``value`` to its scalar
+    leaves — the promoted headlines and the simple facts. The nested
+    curve/list detail stays reachable by name: include.fields=["value"]
+    returns the full block. If flattening would empty the value (an
+    all-nested metric such as measurements), the full dict stays — lean
+    never trades data for absence.
+    """
+    out: dict[str, Any] = {}
+    for key, item in row.items():
+        if key == "value" or key == "deck_sha256":
+            continue
+        if item is None or item == {} or item == []:
+            continue
+        out[key] = item
+    value = row.get("value")
+    if isinstance(value, dict) and not keep_value_whole:
+        flat = {k: v for k, v in value.items() if not isinstance(v, (dict, list))}
+        out["value"] = flat if flat else value
+    else:
+        out["value"] = value
+    return out
+
+
 def _projection_warnings(records: list[dict[str, Any]], fields: list[str]) -> list[str]:
     """One warning per requested path that no row of this recipe carries.
 
@@ -2001,17 +2030,28 @@ def _result_entry(
             )
     # One plan, applied at both row surfaces — a projection that reached only
     # per_run or only values would be a lever whose effect depends on an
-    # unrelated argument.
+    # unrelated argument. Without a plan, rows render through the lean
+    # default (_lean_row); include.fields is the named opt-in that restores
+    # any dropped detail, up to the whole block via fields=["value"].
     plan = keep_plan(fields) if fields else None
+    # A waveform's value IS the curve — the caller asked for series data, so
+    # flattening it away would defeat the recipe. Everything else defaults
+    # to the scalar leaves.
+    whole = recipe.metric == "waveform"
+
+    def render(row: dict[str, Any]) -> dict[str, Any]:
+        if plan is not None:
+            return project_row(row, plan)
+        return _lean_row(row, keep_value_whole=whole)
+
     per_run_next = per_run_offset
     if per_run_limit is not None:
         page, per_run_next = _page(records, per_run_offset, per_run_limit)
-        if plan is not None:
-            page["items"] = [project_row(row, plan) for row in page["items"]]
+        page["items"] = [render(row) for row in page["items"]]
         entry["per_run"] = page
     elif not getattr(recipe, "reduce", []):
         shown = records[:MAX_PAGE_SIZE]
-        entry["values"] = [project_row(row, plan) for row in shown] if plan is not None else shown
+        entry["values"] = [render(row) for row in shown]
         if len(records) > MAX_PAGE_SIZE:
             entry["warnings"].append(
                 f"{len(records) - MAX_PAGE_SIZE} value(s) omitted; request include.per_run "
@@ -2028,8 +2068,10 @@ def _result_entry(
 # What a caller addresses a run by, versus the audit trail proving what it ran
 # against. The trail was 1,174 chars of a 7,835-char receipt on a real fleet
 # run — a sixth of it, naming files the analysis tools already resolve by id.
-_RUN_IDENTITY_KEYS = ("manifest_id", "label", "log_present", "job_id")
+_RUN_IDENTITY_KEYS = ("manifest_id", "label")
 _RUN_PROVENANCE_KEYS = (
+    "log_present",
+    "job_id",
     "raw_path",
     "raw_sha256",
     "log_path",

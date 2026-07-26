@@ -524,9 +524,10 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                     "items": _OBSERVATION_SCHEMA,
                 },
             },
+            # "request" is the caller's own input replayed back — emitted
+            # under provenance only, so it cannot be required.
             "required": [
                 "status",
-                "request",
                 "result",
                 "error",
                 "observations",
@@ -1109,8 +1110,12 @@ def _job_payload(
         "outcome": outcome,
         "source": [_source_payload(source, provenance=provenance) for source in job.sources],
         "completeness": asdict(job.completeness),
+        # Findings always emit; a circuit absent from the list is clean —
+        # the empty-findings entry was per-circuit ceremony.
         "lint": [
-            {"circuit": circuit, "findings": findings} for circuit, findings in lint_map.items()
+            {"circuit": circuit, "findings": findings}
+            for circuit, findings in lint_map.items()
+            if findings
         ],
         "runs": runs,
         "failures": list(job.failures),
@@ -1124,11 +1129,14 @@ def _job_payload(
     if job.analysis.status != "not_requested":
         data["analysis"] = {
             "status": job.analysis.status,
-            "request": job.analysis.request,
             "result": job.analysis.result,
             "error": job.analysis.error,
             "observations": job.analysis.observations,
         }
+        if provenance:
+            # The caller's own attached-analysis input, replayed back —
+            # proof of what ran, not something to re-read every turn.
+            data["analysis"]["request"] = job.analysis.request
     return data
 
 
@@ -1191,6 +1199,15 @@ def _runs_page(cases: list[ExperimentCase], run_fields: list[str] | None = None)
     if run_fields:
         plan = keep_plan(run_fields)
         rows = [project_row(row, plan) for row in rows]
+    else:
+        # Lean default: a produced row's artifact paths are provenance the
+        # analysis tools resolve by id (fetch them via jobs(runs) or
+        # run_fields). Every other status keeps them — failures entries
+        # carry only {case_id, code, message}, so the failed row's log path
+        # is its diagnostic.
+        for row in rows:
+            if row["status"] == "produced":
+                del row["raw"], row["log"]
     # Same "o:<offset>" grammar jobs(action="runs") decodes; the shared
     # receipt assembly reads this key to build the continuation hint.
     # Nullable-key-always-present is the ruled cursor convention: readers may
