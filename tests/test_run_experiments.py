@@ -498,6 +498,70 @@ class TestLeanReceipt:
         assert loud["analysis"]["request"] is not None
 
 
+@pytest.mark.asyncio
+class TestAttachedBlockPreflight:
+    """A malformed attached analyze block is refused BEFORE anything runs.
+
+    Validated only at the analysis stage, a typo'd recipe burns the whole
+    simulation cycle — and the corrected block changes the fingerprint, so
+    the retry re-runs every case."""
+
+    async def test_malformed_attached_block_refused_before_any_simulation(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        _instant_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "attached_bad.cir")
+        bad = {"recipes": [{"key": "x", "metric": "no_such_metric"}]}
+
+        result = await handle_run_experiments(
+            _args(deck, "attached-bad", analyze=bad), state_with_sim
+        )
+
+        assert result.isError
+        assert "attached analyze block" in json.dumps(result.structuredContent)
+        assert submissions == []
+
+        # The refusal left no durable record: the same id retries the same
+        # way instead of replaying a failure or conflicting.
+        again = await handle_run_experiments(
+            _args(deck, "attached-bad", analyze=bad), state_with_sim
+        )
+        assert again.isError
+        assert submissions == []
+
+    async def test_model_level_analyze_fault_also_refused_at_the_door(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        submissions: list[str] = []
+        _instant_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "attached_dup.cir")
+
+        result = await handle_run_experiments(
+            _args(
+                deck,
+                "attached-dup-group",
+                analyze={
+                    "recipes": [
+                        {"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}
+                    ],
+                    "group_by": ["R1", "R1"],
+                },
+            ),
+            state_with_sim,
+        )
+
+        assert result.isError
+        assert "attached analyze block" in json.dumps(result.structuredContent)
+        assert submissions == []
+
+
 class TestOptionalRequestId:
     """request_id may be omitted: a fresh id is generated per call, so a
     one-off run pays no idempotency ceremony, while an explicit id keeps the
@@ -1116,14 +1180,17 @@ class TestAttachedAnalysis:
     ):
         _fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "attached-bad.cir")
-        # run_experiments takes the analyze block as free-form JSON, so a
-        # request analyze_results rejects (here: a repeated group_by dimension)
-        # only fails once the stage runs. The run accounting must not move.
+        # A malformed block is refused before submission now, so a STAGE-time
+        # failure needs the engine itself to fail — patched through
+        # tools.analyze, the seam the callback deliberately resolves late.
         analyze = {
             "recipes": [{"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}],
-            "group_by": ["R1", "R1"],
         }
 
+        async def exploding_engine(args, state):
+            raise ValueError("analysis engine failure injected by test")
+
+        monkeypatch.setattr(analyze_mod, "handle_analyze_results", exploding_engine)
         data = _assert_schema(
             await handle_run_experiments(
                 _args(deck, "attached-bad-request", analyze=analyze),
@@ -1137,7 +1204,7 @@ class TestAttachedAnalysis:
         assert data["completeness"]["produced"] == 1
         assert data["completeness"]["failed"] == 0
         assert data["analysis"]["status"] == "failed"
-        assert "not a valid analyze_results request" in data["analysis"]["error"]
+        assert "analysis engine failure injected by test" in data["analysis"]["error"]
         assert [item["code"] for item in data["analysis"]["observations"]] == ["analysis_failed"]
         assert "attached analysis failed" in data["hint"]
         # The coordinator still records the stage failure on the job status.
