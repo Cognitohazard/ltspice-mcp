@@ -185,9 +185,6 @@ class AnalyzeInclude(StrictModel):
     and spec verdicts; per-run rows, outlier records and signal listings are
     opt-in because each one grows the payload."""
 
-    # Docstring, not a Field description on ``include``: the schema builder
-    # inlines a $ref over its siblings, so only a model-level description of a
-    # submodel-typed field reaches the published schema.
     per_run: PerRunInclude | None = Field(
         default=None,
         description=(
@@ -301,7 +298,15 @@ class AnalyzeResultsInput(ToolInput):
             "Empty gives one reduction over every row."
         ),
     )
-    include: AnalyzeInclude = Field(default_factory=AnalyzeInclude)
+    include: AnalyzeInclude = Field(
+        default_factory=AnalyzeInclude,
+        description=(
+            "Named opt-in response blocks — per_run rows, outliers, "
+            "signals_available, provenance, and the 'fields' row projection. "
+            "The default response carries reductions, groups and spec verdicts; "
+            "each opt-in grows the payload, so ask only for what you will read."
+        ),
+    )
     continuation: ContinueInput | None = Field(
         default=None,
         alias="continue",

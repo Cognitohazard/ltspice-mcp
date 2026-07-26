@@ -360,10 +360,12 @@ class TestCheckJobOutputSchemaContract:
 
         cached = getattr(cls, "_cached_validator", None)
         if cached is None:
-            tool_defs, _ = get_tools_for_profile("full")
-            tool = next(t for t in tool_defs if t.name == "check_job")
-            assert tool.outputSchema is not None
-            cached = jsonschema.Draft202012Validator(tool.outputSchema)
+            # The wire list drops outputSchema; the declared shape lives on
+            # the dispatch-side definition.
+            _, dispatch = get_tools_for_profile("full")
+            schema = dispatch["check_job"].definition.outputSchema
+            assert schema is not None
+            cached = jsonschema.Draft202012Validator(schema)
             cls._cached_validator = cached
         return cached
 
