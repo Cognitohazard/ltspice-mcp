@@ -51,6 +51,7 @@ from ltspice_mcp.lib.job_types import (
     SimulationJob,
 )
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
+from ltspice_mcp.lib.recipes import validate_recipe
 from ltspice_mcp.lib.simulator import simulator_dialect
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.variations import (
@@ -626,6 +627,8 @@ async def handle_run_experiments(
             projected_case_count(circuit.circuit_id, args.variations) for circuit in circuit_inputs
         )
         check_case_cap(projected, state.config.max_experiment_cases)
+        if args.analyze is not None:
+            _validate_attached_analysis(args.analyze)
 
         job_id = generate_id("exp")
         try:
@@ -927,6 +930,54 @@ async def _prepare_circuit(
     )
 
 
+def _attached_analysis_payload(job_id: str, request: dict[str, Any]) -> dict[str, Any]:
+    """The analyze_results request an attached block expands to.
+
+    One builder for the submission pre-flight AND the post-run analysis
+    stage, so what the pre-flight validates is byte-for-byte what will run.
+    """
+    payload: dict[str, Any] = {
+        "sources": [
+            {
+                "job_id": job_id,
+                "runs": "all",
+                "label": _ATTACHED_ANALYSIS_LABEL,
+            }
+        ],
+        "recipes": request.get("recipes") or [],
+        "group_by": request.get("group_by") or [],
+    }
+    include = request.get("include")
+    if include is not None:
+        payload["include"] = include
+    return payload
+
+
+def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> None:
+    """Refuse a malformed attached analyze block BEFORE anything is staged.
+
+    Validated only at the analysis stage, a typo'd recipe burns the whole
+    simulation cycle — and the corrected block then changes the canonical
+    fingerprint, so the retry re-runs every case. The probe job id never
+    resolves because shape validation does not touch the registry.
+    """
+    request = analyze_block.model_dump(mode="json", exclude_unset=False)
+    try:
+        analyze.AnalyzeResultsInput.model_validate(
+            _attached_analysis_payload("preflight", request)
+        )
+        # The input model deliberately skips per-recipe validation
+        # (SkipValidation[Recipe] — items are validated lazily at execution so
+        # one bad recipe fails one item). At SUBMISSION that laziness is the
+        # bug: every recipe must parse before a simulator is asked to run.
+        for raw_recipe in request.get("recipes") or []:
+            validate_recipe(raw_recipe)
+    except (ValidationError, ValueError) as exc:
+        raise SimulationError(
+            f"The attached analyze block is not a valid analyze_results request: {exc}"
+        ) from exc
+
+
 def _attached_analysis_callback(state: SessionState) -> AnalysisCallback:
     """Bind the session onto the coordinator's job-only analysis hook.
 
@@ -935,21 +986,7 @@ def _attached_analysis_callback(state: SessionState) -> AnalysisCallback:
     """
 
     async def run_attached_analysis(job: ExperimentJob) -> dict[str, Any]:
-        request = job.analysis.request or {}
-        payload: dict[str, Any] = {
-            "sources": [
-                {
-                    "job_id": job.job_id,
-                    "runs": "all",
-                    "label": _ATTACHED_ANALYSIS_LABEL,
-                }
-            ],
-            "recipes": request.get("recipes") or [],
-            "group_by": request.get("group_by") or [],
-        }
-        include = request.get("include")
-        if include is not None:
-            payload["include"] = include
+        payload = _attached_analysis_payload(job.job_id, job.analysis.request or {})
         try:
             args = analyze.AnalyzeResultsInput.model_validate(payload)
         except ValidationError as exc:
