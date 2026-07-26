@@ -47,6 +47,22 @@ def stage_recorded_fixture(work_dir: Path, name: str) -> Path:
     return raw
 
 
+def resolve_local_ref(schema: dict, node: dict) -> dict:
+    """Follow a local ``$ref`` (possibly allOf-wrapped) into ``schema['$defs']``.
+
+    Input schemas keep ``$defs`` instead of inlining (followups item 30);
+    contract tests that assert on a nested submodel's shape resolve it the
+    way a conformant client would.
+    """
+    while True:
+        if "$ref" in node:
+            node = schema["$defs"][node["$ref"].split("/")[-1]]
+        elif "allOf" in node and len(node["allOf"]) == 1 and "$ref" in node["allOf"][0]:
+            node = schema["$defs"][node["allOf"][0]["$ref"].split("/")[-1]]
+        else:
+            return node
+
+
 def make_sim_job(job_id: str = "j1", *, status: str = "completed", **overrides) -> SimulationJob:
     """SimulationJob with test defaults; any dataclass field is overridable.
 

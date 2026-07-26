@@ -3,7 +3,6 @@
 import asyncio
 import base64
 import contextlib
-import copy
 import hashlib
 import json
 import logging
@@ -493,26 +492,15 @@ def _strip_titles(node: Any) -> Any:
     return node
 
 
-def _inline_json_schema(node: Any, defs: dict[str, Any]) -> Any:
-    """Inline ``$defs`` references in a Pydantic-generated schema."""
-    if isinstance(node, dict):
-        ref = node.get("$ref")
-        if isinstance(ref, str) and ref.startswith("#/$defs/"):
-            name = ref.split("/")[-1]
-            resolved = copy.deepcopy(defs[name])
-            return _inline_json_schema(resolved, defs)
-        return {key: _inline_json_schema(value, defs) for key, value in node.items()}
-    if isinstance(node, list):
-        return [_inline_json_schema(item, defs) for item in node]
-    return node
-
-
 def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
-    """Generate a cleaned MCP-ready JSON schema from a Pydantic model."""
-    schema = input_model.model_json_schema()
-    defs = schema.pop("$defs", {})
-    schema = _inline_json_schema(schema, defs)
-    return _strip_titles(schema)
+    """Generate a cleaned MCP-ready JSON schema from a Pydantic model.
+
+    ``$defs`` are kept as Pydantic emits them, not inlined: a shared submodel
+    appears once and every use site is a ``$ref``, which measured 21% smaller
+    on the consolidated surface (followups item 30). Every ref is internal to
+    the one schema document, so any conformant client resolves it locally.
+    """
+    return _strip_titles(input_model.model_json_schema())
 
 
 # ---------------------------------------------------------------------------
@@ -775,7 +763,17 @@ class ToolRegistry:
         tool_dispatch: dict[str, RegisteredTool] = {}
         for registered in self._registered:
             if effective_profile in registered.profiles:
-                tool_defs.append(registered.definition)
+                definition = registered.definition
+                if definition.outputSchema is not None:
+                    # The advertised tool list drops outputSchema — it was the
+                    # single largest schema block (84% of `jobs`, -35% across
+                    # the consolidated surface; followups item 30). Return
+                    # shapes are learned from responses instead. The
+                    # dispatch-side definition keeps the schema: the test
+                    # suite's conformance hook validates every emission
+                    # against it, so the declared shape is still enforced.
+                    definition = definition.model_copy(update={"outputSchema": None})
+                tool_defs.append(definition)
                 tool_dispatch[registered.definition.name] = registered
         # Second pass: deprecated aliases dispatch to their tool but are not
         # listed in tool_defs. Done AFTER all definition names so a real tool
