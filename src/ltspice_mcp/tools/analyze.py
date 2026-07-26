@@ -57,11 +57,16 @@ from ltspice_mcp.lib.recipes import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    ABSENT,
     StrictModel,
     ToolInput,
+    escape_field_segment,
     format_response,
+    keep_plan,
+    project_row,
     registry,
     safe_path,
+    split_field_path,
 )
 
 _ARTIFACT_SAFETY_FACTOR = 4.0
@@ -206,6 +211,15 @@ class AnalyzeInclude(StrictModel):
             "signals, not something to leave on."
         ),
     )
+    provenance: bool = Field(
+        default=False,
+        description=(
+            "Add the artifact paths and content digests to each entry of "
+            "'source_hashes'. Off by default because runs are addressed by "
+            "manifest_id and job_id, which are always present — the paths and "
+            "hashes prove what was analyzed, they are not how you reach it."
+        ),
+    )
     fields: list[str] | None = Field(
         default=None,
         min_length=1,
@@ -232,7 +246,7 @@ class AnalyzeInclude(StrictModel):
         if len(set(self.fields)) != len(self.fields):
             raise ValueError("include.fields paths must be unique")
         for path in self.fields:
-            segments = _split_path(path)
+            segments = split_field_path(path)
             if any(not segment for segment in segments):
                 raise ValueError(f"include.fields path {path!r} has an empty segment")
             root = segments[0]
@@ -376,105 +390,12 @@ def _pick(source: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
     return {key: source[key] for key in keys}
 
 
-_ABSENT = object()
-
-# A keep-plan mirrors the row's own nesting: ``None`` keeps a whole subtree, a
-# nested plan keeps only the named keys inside it. Projection therefore returns
-# the SAME shape with fewer keys, never a flattened one — caller code that reads
-# ``row["value"]["phase_margin_deg"]`` reads it identically either way.
-_KeepPlan = dict[str, "_KeepPlan | None"]
-
-
-def _split_path(path: str) -> list[str]:
-    r"""Segments of a dotted path, where ``\.`` is a dot INSIDE a key.
-
-    A row key is whatever the simulator called the thing, and plenty of them
-    carry dots of their own — ngspice spells a subcircuit node ``v(x1.out)``
-    and a subcircuit device parameter ``@m.x1.m1[gm]``. Splitting those on
-    every dot addresses a nesting that does not exist, so the escape is what
-    makes the most ordinary op-point key projectable at all.
-    """
-    segments: list[str] = []
-    current: list[str] = []
-    escaped = False
-    for char in path:
-        if escaped:
-            # Only the dot is escapable; anything else keeps its backslash, so
-            # a path that never meant to escape reads back unchanged.
-            current.append(char if char == "." else "\\" + char)
-            escaped = False
-        elif char == "\\":
-            escaped = True
-        elif char == ".":
-            segments.append("".join(current))
-            current = []
-        else:
-            current.append(char)
-    if escaped:
-        current.append("\\")
-    segments.append("".join(current))
-    return segments
-
-
-def _escape_segment(segment: str) -> str:
-    r"""Spell one row key as the path segment that addresses it.
-
-    Only the dot is escaped, mirroring the split: a backslash means nothing on
-    its own there, so doubling one here would put a character in the path that
-    reading it back would not remove.
-    """
-    return segment.replace(".", "\\.")
-
-
-def _keep_plan(paths: list[str]) -> _KeepPlan:
-    """Group dotted ``paths`` into a nested keep-plan, in first-named order."""
-    return _plan_for([_split_path(path) for path in paths])
-
-
-def _plan_for(paths: list[list[str]]) -> _KeepPlan:
-    order: list[str] = []
-    nested: dict[str, list[list[str]]] = {}
-    whole: set[str] = set()
-    for segments in paths:
-        root, rest = segments[0], segments[1:]
-        if root not in order:
-            order.append(root)
-        if rest:
-            nested.setdefault(root, []).append(rest)
-        else:
-            # A bare key wins over any dotted sibling: asking for the subtree and
-            # a leaf inside it means the subtree.
-            whole.add(root)
-    return {root: None if root in whole else _plan_for(nested[root]) for root in order}
-
-
-def _project(row: dict[str, Any], plan: _KeepPlan) -> dict[str, Any]:
-    """A NEW row carrying only the planned keys.
-
-    Never mutates ``row``: the full record is still read after this call — spec
-    attribution, reductions and the analyzed-identity accounting all index keys
-    a projection drops — so this is a view built for emission, not an edit.
-    """
-    kept: dict[str, Any] = {}
-    for key, sub in plan.items():
-        value = row.get(key, _ABSENT)
-        if value is _ABSENT:
-            continue
-        if sub is None:
-            kept[key] = value
-        elif isinstance(value, dict):
-            nested = _project(value, sub)
-            if nested:
-                kept[key] = nested
-    return kept
-
-
 def _at_segments(row: dict[str, Any], segments: list[str]) -> Any:
-    """The value at ``segments``, or ``_ABSENT`` when one of them is missing."""
+    """The value at ``segments``, or ``ABSENT`` when one of them is missing."""
     node: Any = row
     for segment in segments:
         if not isinstance(node, dict) or segment not in node:
-            return _ABSENT
+            return ABSENT
         node = node[segment]
     return node
 
@@ -490,13 +411,13 @@ def _projection_warnings(records: list[dict[str, Any]], fields: list[str]) -> li
     """
     warnings: list[str] = []
     for path in fields:
-        segments = _split_path(path)
+        segments = split_field_path(path)
         if len(segments) == 1:
             continue
-        if any(_at_segments(record, segments) is not _ABSENT for record in records):
+        if any(_at_segments(record, segments) is not ABSENT for record in records):
             continue
         parent_segments = segments[:-1]
-        parent = ".".join(_escape_segment(segment) for segment in parent_segments)
+        parent = ".".join(escape_field_segment(segment) for segment in parent_segments)
         present = sorted(
             {
                 key
@@ -509,7 +430,7 @@ def _projection_warnings(records: list[dict[str, Any]], fields: list[str]) -> li
         # Naming a dotted key as it must be SPELLED, not just as it reads, is
         # the difference between a warning and a fix: the caller is one escape
         # away from the value, and no amount of staring at the key says so.
-        addressable = ", ".join(_escape_segment(key) for key in present)
+        addressable = ", ".join(escape_field_segment(key) for key in present)
         warnings.append(
             f"include.fields path {path!r} is absent from every row of this recipe; "
             + (
@@ -2037,16 +1958,16 @@ def _result_entry(
     # One plan, applied at both row surfaces — a projection that reached only
     # per_run or only values would be a lever whose effect depends on an
     # unrelated argument.
-    plan = _keep_plan(fields) if fields else None
+    plan = keep_plan(fields) if fields else None
     per_run_next = per_run_offset
     if per_run_limit is not None:
         page, per_run_next = _page(records, per_run_offset, per_run_limit)
         if plan is not None:
-            page["items"] = [_project(row, plan) for row in page["items"]]
+            page["items"] = [project_row(row, plan) for row in page["items"]]
         entry["per_run"] = page
     elif not getattr(recipe, "reduce", []):
         shown = records[:MAX_PAGE_SIZE]
-        entry["values"] = [_project(row, plan) for row in shown] if plan is not None else shown
+        entry["values"] = [project_row(row, plan) for row in shown] if plan is not None else shown
         if len(records) > MAX_PAGE_SIZE:
             entry["warnings"].append(
                 f"{len(records) - MAX_PAGE_SIZE} value(s) omitted; request include.per_run "
@@ -2060,24 +1981,24 @@ def _result_entry(
     return entry, per_run_next
 
 
-def _source_hashes(item: result_store.ResultSet) -> list[dict[str, Any]]:
-    return [
-        {
-            key: manifest.get(key)
-            for key in (
-                "manifest_id",
-                "label",
-                "raw_path",
-                "raw_sha256",
-                "log_path",
-                "log_present",
-                "log_sha256",
-                "composite_sha256",
-                "job_id",
-            )
-        }
-        for manifest in item.source_manifests
-    ]
+# What a caller addresses a run by, versus the audit trail proving what it ran
+# against. The trail was 1,174 chars of a 7,835-char receipt on a real fleet
+# run — a sixth of it, naming files the analysis tools already resolve by id.
+_RUN_IDENTITY_KEYS = ("manifest_id", "label", "log_present", "job_id")
+_RUN_PROVENANCE_KEYS = (
+    "raw_path",
+    "raw_sha256",
+    "log_path",
+    "log_sha256",
+    "composite_sha256",
+)
+
+
+def _source_hashes(
+    item: result_store.ResultSet, *, provenance: bool = False
+) -> list[dict[str, Any]]:
+    keys = _RUN_IDENTITY_KEYS + (_RUN_PROVENANCE_KEYS if provenance else ())
+    return [{key: manifest.get(key) for key in keys} for manifest in item.source_manifests]
 
 
 _PAGE_SCHEMA: dict[str, Any] = {
@@ -2267,17 +2188,11 @@ OUTPUT_SCHEMA: dict[str, Any] = {
                     "composite_sha256": {"type": ["string", "null"]},
                     "job_id": {"type": ["string", "null"]},
                 },
-                "required": [
-                    "manifest_id",
-                    "label",
-                    "raw_path",
-                    "raw_sha256",
-                    "log_path",
-                    "log_present",
-                    "log_sha256",
-                    "composite_sha256",
-                    "job_id",
-                ],
+                # Only the identity a caller addresses a run by is always
+                # present; the paths and digests are the audit trail, emitted
+                # under include.provenance. Requiring them would make the lean
+                # payload violate this tool's own schema.
+                "required": ["manifest_id", "label"],
                 "additionalProperties": False,
             },
         },
@@ -2720,7 +2635,7 @@ async def handle_analyze_results(
         "results": results,
         "observations": observations,
         "failures": failures,
-        "source_hashes": _source_hashes(item),
+        "source_hashes": _source_hashes(item, provenance=include.provenance),
         "result_set_id": item.result_set_id,
         "cursor": next_value["cursor"] if next_value is not None else None,
         "next": next_value,

@@ -1355,3 +1355,26 @@ def test_single_record_warnings_carry_no_count():
     assert analyze_mod._record_warnings([{"value": {"warnings": ["clamped window"]}}]) == [
         "clamped window"
     ]
+
+
+class TestSourceHashProvenance:
+    """Artifact paths and digests prove what was analyzed; they are not how a
+    caller reaches it. On a real fleet run they were 1,174 chars of a 7,835-char
+    receipt, naming files the analysis tools resolve by manifest_id anyway."""
+
+    @pytest.mark.asyncio
+    async def test_paths_and_digests_are_opt_in(self, state_no_sim: SessionState, work_dir: Path):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        recipes = [{"key": "s", "metric": "summary"}]
+        lean = await _analyze(state_no_sim, raw, recipes)
+        entry = lean["source_hashes"][0]
+        assert entry["manifest_id"]
+        assert "label" in entry
+        for key in ("raw_path", "raw_sha256", "log_path", "log_sha256", "composite_sha256"):
+            assert key not in entry, f"{key} is provenance and must be opt-in"
+
+        full = await _analyze(state_no_sim, raw, recipes, include={"provenance": True})
+        full_entry = full["source_hashes"][0]
+        assert full_entry["raw_path"]
+        assert full_entry["composite_sha256"] or full_entry["raw_sha256"]
+        assert len(json.dumps(full)) > len(json.dumps(lean))

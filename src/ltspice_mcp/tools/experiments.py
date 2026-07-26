@@ -7,7 +7,7 @@ import contextlib
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Literal, Self
+from typing import Any, ClassVar, Literal, Self
 
 from mcp import types
 from pydantic import Field, ValidationError, model_validator
@@ -74,8 +74,10 @@ from ltspice_mcp.tools._base import (
     StrictModel,
     ToolInput,
     format_response,
+    keep_plan,
     paginate,
     pagination_metadata,
+    project_row,
     registry,
     resolve_run_simulator,
     resolve_runnable_netlist,
@@ -234,6 +236,11 @@ class AttachedAnalysis(StrictModel):
 
 
 class RunExperimentsInput(ToolInput):
+    # Fields that choose how the receipt is rendered rather than what runs.
+    # canonical_fingerprint excludes them, so re-asking for the same experiment
+    # at a different verbosity replays instead of conflicting.
+    PRESENTATION_FIELDS: ClassVar[frozenset[str]] = frozenset({"provenance", "run_fields"})
+
     request_id: str = Field(
         min_length=1,
         description=(
@@ -298,6 +305,27 @@ class RunExperimentsInput(ToolInput):
             "live:true, an observation says so, and reusing its request_id runs "
             "the experiment again rather than replaying a receipt whose inputs "
             "cannot be checked."
+        ),
+    )
+    provenance: bool = Field(
+        default=False,
+        description=(
+            "Emit the full audit trail on each source: content digests, the staged "
+            "deck path, every staged file, and the linter version. Off by default "
+            "because it is a third of a receipt's bytes and names files you do not "
+            "open — the analysis tools address runs by job_id. Entries that say "
+            "something actionable (a live, unprovable include) are reported either "
+            "way."
+        ),
+    )
+    run_fields: list[str] | None = Field(
+        default=None,
+        description=(
+            "Keep only these keys on each row of 'runs.items', dotted for nesting "
+            "(e.g. 'case_id', 'assignments.RDEG'). Nesting is preserved, so a row "
+            "reads the same way with fewer keys. Use it on a wide sweep: the run "
+            "list is per-case and grows with the grid. Escape a dot inside a key "
+            "name as '\\.'."
         ),
     )
 
@@ -400,14 +428,16 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                     "linter_version": {"type": "string"},
                     "simulator": {"type": "string"},
                     "dialect": {"type": ["string", "null"]},
+                    "staged_files": {"type": "integer"},
                 },
+                # Only the fields every receipt carries are required. The
+                # digests, staging paths and full manifest are provenance: they
+                # are emitted when 'provenance' is set, and otherwise omitted,
+                # because they are a third of a receipt's bytes and name files
+                # the caller does not open.
                 "required": [
                     "circuit",
                     "path",
-                    "sha256",
-                    "staged_deck",
-                    "manifest",
-                    "linter_version",
                     "simulator",
                     "dialect",
                 ],
@@ -461,15 +491,11 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                             "raw": {"type": ["string", "null"]},
                             "log": {"type": ["string", "null"]},
                         },
-                        "required": [
-                            "case_id",
-                            "run_index",
-                            "circuit",
-                            "assignments",
-                            "status",
-                            "raw",
-                            "log",
-                        ],
+                        # Nothing is required: 'run_fields' lets the caller keep
+                        # only the keys it wants, so any key here is one a
+                        # projection may legitimately have dropped. Declaring
+                        # them required would make a projected receipt violate
+                        # this tool's own schema.
                     },
                 },
                 "total": {"type": "integer"},
@@ -568,7 +594,13 @@ async def handle_run_experiments(
     try:
         replay = await _load_matching_replay(args, state, fingerprint)
         if replay is not None:
-            return await _dwell_and_respond(replay, args.execution.wait_s, state)
+            return await _dwell_and_respond(
+                replay,
+                args.execution.wait_s,
+                state,
+                provenance=args.provenance,
+                run_fields=args.run_fields,
+            )
 
         simulator = resolve_run_simulator(args.execution.simulator, state)
         circuit_inputs = _circuit_decks_for_validation(args.circuits)
@@ -672,6 +704,8 @@ async def handle_run_experiments(
                 args.execution.wait_s,
                 state,
                 lint_by_circuit=lint_by_circuit,
+                provenance=args.provenance,
+                run_fields=args.run_fields,
             )
         except Exception as exc:
             return _post_submit_error_response(receipt, exc, lint_by_circuit)
@@ -1000,6 +1034,8 @@ async def _dwell_and_respond(
     state: SessionState,
     *,
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
+    provenance: bool = False,
+    run_fields: list[str] | None = None,
 ) -> types.CallToolResult:
     job = receipt.job
     if job.status not in _TERMINAL_EXPERIMENT_STATUSES and wait_s > 0:
@@ -1009,7 +1045,13 @@ async def _dwell_and_respond(
         else:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(job.done_event.wait(), wait_s)
-    data = _job_payload(job, receipt.control_token, lint_by_circuit=lint_by_circuit)
+    data = _job_payload(
+        job,
+        receipt.control_token,
+        lint_by_circuit=lint_by_circuit,
+        provenance=provenance,
+        run_fields=run_fields,
+    )
     if job.status not in _TERMINAL_EXPERIMENT_STATUSES:
         data["hint"] = (
             f"Experiment {job.job_id} is still running; use jobs(wait) with this "
@@ -1027,6 +1069,8 @@ def _job_payload(
     control_token: str | None,
     *,
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
+    provenance: bool = False,
+    run_fields: list[str] | None = None,
 ) -> dict[str, Any]:
     if lint_by_circuit is None:
         lint_map = {}
@@ -1045,14 +1089,14 @@ def _job_payload(
                 observations.append(observation)
                 seen_observations.add(key)
     outcome = _terminal_outcome(job)
-    runs = _runs_page(job.cases)
+    runs = _runs_page(job.cases, run_fields)
     hint = _terminal_hint(job, runs["truncated"])
     data: dict[str, Any] = {
         "job_id": job.job_id,
         "request_id": job.request_id,
         "status": job.status,
         "outcome": outcome,
-        "source": [_source_payload(source) for source in job.sources],
+        "source": [_source_payload(source, provenance=provenance) for source in job.sources],
         "completeness": asdict(job.completeness),
         "lint": [
             {"circuit": circuit, "findings": findings} for circuit, findings in lint_map.items()
@@ -1077,17 +1121,32 @@ def _job_payload(
     return data
 
 
-def _source_payload(source: SourceRecord) -> dict[str, Any]:
-    return {
+def _source_payload(source: SourceRecord, *, provenance: bool) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "circuit": source.circuit,
         "path": str(source.path),
-        "sha256": source.sha256,
-        "staged_deck": str(source.staged_deck),
-        "manifest": [_manifest_payload(entry) for entry in source.manifest],
-        "linter_version": source.linter_version,
         "simulator": source.simulator,
         "dialect": source.dialect,
     }
+    if provenance:
+        payload["sha256"] = source.sha256
+        payload["staged_deck"] = str(source.staged_deck)
+        payload["manifest"] = [_manifest_payload(entry) for entry in source.manifest]
+        payload["linter_version"] = source.linter_version
+        return payload
+    # Keep the entries that say something the caller must act on; dropping those
+    # with the bulk would turn a disclosure into a silent omission. The predicate
+    # is "not an ordinary staged reference" rather than a list of known-bad
+    # states, so it fails CLOSED — the store rebuilds `staged` with a False
+    # default, and an entry that is neither staged, live, nor explained is
+    # exactly the anomaly that must not be hidden.
+    notable = [
+        entry for entry in source.manifest if entry.live or entry.reason or not entry.staged
+    ]
+    if notable:
+        payload["manifest"] = [_manifest_payload(entry) for entry in notable]
+    payload["staged_files"] = len(source.manifest)
+    return payload
 
 
 def _manifest_payload(entry: ManifestEntry) -> dict[str, Any]:
@@ -1114,11 +1173,15 @@ def _run_item(case: ExperimentCase) -> dict[str, Any]:
     }
 
 
-def _runs_page(cases: list[ExperimentCase]) -> dict[str, Any]:
+def _runs_page(cases: list[ExperimentCase], run_fields: list[str] | None = None) -> dict[str, Any]:
     page, total, offset, limit = paginate(cases, None, cap=_RUN_PAGE_LIMIT)
     pagination = pagination_metadata(total, offset, limit)
+    rows = [_run_item(case) for case in page]
+    if run_fields:
+        plan = keep_plan(run_fields)
+        rows = [project_row(row, plan) for row in rows]
     data: dict[str, Any] = {
-        "items": [_run_item(case) for case in page],
+        "items": rows,
         "total": pagination["total"],
         "returned": len(page),
         "truncated": pagination["has_more"],
@@ -1906,13 +1969,13 @@ def _legacy_source(
     *,
     dialect: str | None,
 ) -> dict[str, Any]:
+    # A legacy job never staged anything, so it has no digest, no staged deck
+    # and no manifest — it used to say so with empty strings and an empty list.
+    # Omitting them says the same thing without spending the bytes, and matches
+    # the experiment receipt, where those keys mean "provenance was requested".
     return {
         "circuit": job.netlist.stem,
         "path": str(job.netlist),
-        "sha256": "",
-        "staged_deck": str(job.netlist),
-        "manifest": [],
-        "linter_version": "",
         "simulator": job.simulator,
         "dialect": dialect,
     }
