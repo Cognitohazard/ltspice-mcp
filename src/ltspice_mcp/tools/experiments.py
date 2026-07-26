@@ -508,9 +508,9 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                 "total": {"type": "integer"},
                 "returned": {"type": "integer"},
                 "truncated": {"type": "boolean"},
-                "next_cursor": {"type": "string"},
+                "next_cursor": {"type": ["string", "null"]},
             },
-            "required": ["items", "total", "returned", "truncated"],
+            "required": ["items", "total", "returned", "truncated", "next_cursor"],
         },
         "analysis": {
             "type": "object",
@@ -1191,16 +1191,18 @@ def _runs_page(cases: list[ExperimentCase], run_fields: list[str] | None = None)
     if run_fields:
         plan = keep_plan(run_fields)
         rows = [project_row(row, plan) for row in rows]
+    # Same "o:<offset>" grammar jobs(action="runs") decodes; the shared
+    # receipt assembly reads this key to build the continuation hint.
+    # Nullable-key-always-present is the ruled cursor convention: readers may
+    # do an unconditional ``page["next_cursor"]`` — the omit form is what
+    # produced the KeyError fixed in 2fa1bc6.
     data: dict[str, Any] = {
         "items": rows,
         "total": pagination["total"],
         "returned": len(page),
         "truncated": pagination["has_more"],
+        "next_cursor": f"o:{offset + len(page)}" if pagination["has_more"] else None,
     }
-    if pagination["has_more"]:
-        # Same "o:<offset>" grammar jobs(action="runs") decodes; the shared
-        # receipt assembly reads this key to build the continuation hint.
-        data["next_cursor"] = f"o:{offset + len(page)}"
     return data
 
 
@@ -1609,7 +1611,7 @@ _JOBS_PAGE_PROPERTIES: dict[str, Any] = {
     "total": {"type": "integer"},
     "returned": {"type": "integer"},
     "truncated": {"type": "boolean"},
-    "next_cursor": {"type": "string"},
+    "next_cursor": {"type": ["string", "null"]},
 }
 
 _JOBS_RECEIPT_PROPERTIES: dict[str, Any] = {
@@ -1711,7 +1713,7 @@ def _jobs_page_schema(
         **_JOBS_PAGE_PROPERTIES,
     }
     properties["items"] = {"type": "array", "items": item_schema}
-    required = [*_JOBS_COMMON_REQUIRED, "items", "total", "returned", "truncated"]
+    required = [*_JOBS_COMMON_REQUIRED, "items", "total", "returned", "truncated", "next_cursor"]
     if addressed:
         properties.update(
             {
@@ -1798,14 +1800,16 @@ def _jobs_page(
     offset = min(_decode_jobs_cursor(cursor), len(items))
     page = items[offset : offset + limit]
     truncated = offset + len(page) < len(items)
+    # Nullable-key-always-present, the ruled cursor convention: readers may do
+    # an unconditional ``page["next_cursor"]`` — the omit form is what produced
+    # the KeyError fixed in 2fa1bc6.
     data: dict[str, Any] = {
         "items": page,
         "total": len(items),
         "returned": len(page),
         "truncated": truncated,
+        "next_cursor": f"o:{offset + len(page)}" if truncated else None,
     }
-    if truncated:
-        data["next_cursor"] = f"o:{offset + len(page)}"
     return data
 
 
@@ -1815,6 +1819,7 @@ def _jobs_unpaged(items: list[dict[str, Any]]) -> dict[str, Any]:
         "total": len(items),
         "returned": len(items),
         "truncated": False,
+        "next_cursor": None,
     }
 
 
