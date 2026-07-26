@@ -239,12 +239,14 @@ class RunExperimentsInput(ToolInput):
     PRESENTATION_FIELDS: ClassVar[frozenset[str]] = frozenset({"provenance", "run_fields"})
 
     request_id: str = Field(
+        default_factory=lambda: generate_id("req"),
         min_length=1,
         description=(
-            "Caller-chosen idempotency key. The same id with the same arguments AND "
-            "unchanged source decks replays the existing receipt instead of running "
-            "anything again; the same id after either changed is a conflict, not a "
-            "replay."
+            "Idempotency key, optional. Omit it for a one-off run — a fresh id is "
+            "generated and echoed on the receipt. Pass your own to make submission "
+            "durable: the same id with the same arguments AND unchanged source "
+            "decks replays the existing receipt instead of running anything again; "
+            "the same id after either changed is a conflict, not a replay."
         ),
     )
     circuits: list[ExperimentCircuit] = Field(
@@ -576,7 +578,8 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         "(Monte Carlo) variations, as one durable job. Cases run in parallel up to "
         "the concurrency cap, so submit the whole sweep as one 'variations' grid "
         "rather than a call per point — a large grid costs about what one case "
-        "costs. The required request_id makes submission idempotent; quick jobs "
+        "costs. Omit request_id for a one-off run, or pass one to make submission "
+        "durable and idempotent across retries; quick jobs "
         "return results inline, longer ones return a receipt to follow with 'jobs'. "
         "Attach an 'analyze' block to get the measurements back with the results. "
         "Cheap enough for spot checks: when unsure about a behavior, assumption, "
