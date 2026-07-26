@@ -18,10 +18,10 @@ import asyncio
 import contextlib
 import logging
 import os
-from collections.abc import Iterator, MutableMapping
+from collections.abc import Awaitable, Iterator, MutableMapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.experiment_types import TERMINAL_CASE_STATUSES, ExperimentJob
@@ -44,11 +44,11 @@ J = TypeVar("J", bound=Job)
 # Maximum finished jobs to retain per job type (single-sim, batch, experiment).
 _MAX_FINISHED_JOBS = 200
 
-# How long shutdown waits on the experiment runners' cancels. The experiment
-# coordinator's cancel waits for the job's done event, which in turn waits on
-# live simulator processes — an unbounded await there would hold shutdown open
-# indefinitely, and with it the job-persistence flush that follows. The cancels
-# are issued together, so this bounds that whole stage rather than each job.
+# How long shutdown waits on one stage of cancels (see ``_issue_cancels``).
+# Every such wait is on live work that may never end — a simulator process
+# wedged past its kill, a task that swallows its cancellation — so an unbounded
+# await would hold shutdown open indefinitely, and with it the job-persistence
+# flush that follows.
 _SHUTDOWN_CANCEL_TIMEOUT_S = 10.0
 
 # LTspice .raw header magic. Classic files start with ASCII ``Title:``;
@@ -71,6 +71,63 @@ def _has_valid_raw(path: Path | None) -> bool:
     except OSError:
         return False
     return header.startswith(_RAW_HEADER_ASCII) or header.startswith(_RAW_HEADER_UTF16)
+
+
+def _discard_outcome(task: asyncio.Future[Any]) -> None:
+    """Retrieve a finished cancel's result so asyncio does not log it unhandled."""
+    with contextlib.suppress(BaseException):
+        task.exception()
+
+
+async def _issue_cancels(cancels: list[Awaitable[Any]]) -> None:
+    """Run one shutdown stage's cancels: together, bounded, and isolated.
+
+    Every cancel here waits on live work — a runner's kill of a simulator
+    process, or a job's own task winding down — so any of them can hang or
+    raise outright (a runner refuses when it no longer owns the job).
+    Awaited one by one, the first such failure ends the whole shutdown: the
+    stages after it are never reconciled, and neither is the persistence flush
+    that would have recorded them. So every outcome is discarded rather than
+    raised; what a failed cancel leaves behind is a job still in a live status,
+    which the caller's own bookkeeping then finishes.
+
+    Issued together so the timeout bounds the stage rather than each job: a
+    per-job wait would multiply a client's shutdown grace by the number of live
+    jobs, spending on cancels the time the flush needs.
+
+    ``asyncio.wait`` and not ``wait_for``, because ``wait_for`` bounds only the
+    cooperative case: on timeout it cancels its awaitable and then *awaits that
+    cancellation*, so anything that declines to stop — the very case this bound
+    exists for — hangs it as surely as a bare await. ``wait`` returns on the
+    deadline regardless; the stragglers are asked to stop and left to it,
+    because this process is exiting anyway and the flush is waiting.
+    """
+    if not cancels:
+        return
+    tasks = [asyncio.ensure_future(cancel) for cancel in cancels]
+    for task in tasks:
+        task.add_done_callback(_discard_outcome)
+    _, pending = await asyncio.wait(tasks, timeout=_SHUTDOWN_CANCEL_TIMEOUT_S)
+    for task in pending:
+        task.cancel()
+
+
+def _cancel_tasks(jobs: list[BatchJob] | list[ExperimentJob]) -> list[Awaitable[Any]]:
+    """Cancel each job's still-live task; return the awaits for the bound above.
+
+    Requesting cancellation is not the same as being stopped: a task that
+    swallows ``CancelledError``, or is blocked inside a shielded section, keeps
+    its await open for as long as it likes. Unbounded, that stalls shutdown
+    exactly as a wedged runner cancel does — and the persistence flush is still
+    behind it.
+    """
+    pending: list[Awaitable[Any]] = []
+    for job in jobs:
+        task = job.task
+        if task is not None and not task.done():
+            task.cancel()
+            pending.append(task)
+    return pending
 
 
 class _TypedJobView(MutableMapping[str, J]):
@@ -613,6 +670,7 @@ class JobRegistry:
         # live job also sits in the registry as running (loaded from its
         # sidecar with the owner still alive) and must not be killed or
         # relabeled by our shutdown.
+        sim_cancels: list[Awaitable[Any]] = []
         for job in list(self.sim_jobs.values()):
             if job.status in NON_TERMINAL_LIVE_STATUSES and job.owner_pid == own_pid:
                 # Match the runner to the job's own simulator: runners are
@@ -620,11 +678,13 @@ class JobRegistry:
                 # class's executable names.
                 sim_runner = runners.get_existing_sim_runner(job.simulator)
                 if sim_runner is not None:
-                    await sim_runner.cancel(job, session_state)
+                    sim_cancels.append(sim_runner.cancel(job, session_state))
                 else:
                     transition(job, "cancelled")
                     self.persist_job(job)
+        await _issue_cancels(sim_cancels)
 
+        batch_cancels: list[Awaitable[Any]] = []
         for batch_job in list(self.batch_jobs.values()):
             if batch_job.status == "running" and batch_job.owner_pid == own_pid:
                 # Route to the runner instance that launched the batch — with
@@ -632,43 +692,33 @@ class JobRegistry:
                 # necessarily the owner of this job's cancel event.
                 batch_runner = runners.get_batch_runner_for(batch_job)
                 if batch_runner is not None:
-                    await batch_runner.cancel(batch_job, session_state)
+                    batch_cancels.append(batch_runner.cancel(batch_job, session_state))
                 else:
                     transition(batch_job, "cancelled")
                     self.persist_job(batch_job)
-            if batch_job.task is not None and not batch_job.task.done():
-                batch_job.task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await batch_job.task
+        await _issue_cancels(batch_cancels)
+
+        await _issue_cancels(_cancel_tasks(list(self.batch_jobs.values())))
 
         experiments = list(self.experiment_jobs.values())
-        delegated = [
-            (runner, experiment)
-            for experiment in experiments
-            if experiment.owner_pid == own_pid
-            and (runner := runners.get_experiment_runner_for(experiment)) is not None
-        ]
-        # A cancel that hangs on a wedged simulator, or refuses (the coordinator
-        # raises when it no longer owns the job), must not take the rest of
-        # shutdown with it. Issued together so the timeout bounds the stage: a
-        # per-job wait would multiply a client's shutdown grace by the number of
-        # live experiments, spending on cancels the time the flush below needs.
-        if delegated:
-            await asyncio.gather(
-                *(
-                    asyncio.wait_for(runner.cancel(experiment), _SHUTDOWN_CANCEL_TIMEOUT_S)
-                    for runner, experiment in delegated
-                ),
-                return_exceptions=True,
-            )
-
-        delegated_ids = {experiment.job_id for _, experiment in delegated}
+        await _issue_cancels(
+            [
+                runner.cancel(experiment)
+                for experiment in experiments
+                if experiment.owner_pid == own_pid
+                and (runner := runners.get_experiment_runner_for(experiment)) is not None
+            ]
+        )
+        # No record is kept of which cancels succeeded, because a cancel that
+        # RETURNED already left its job terminal — every return path of the
+        # coordinator's cancel is behind the job's done event, and only a
+        # terminal transition sets that. So the status guard below is the whole
+        # test: a job still non-terminal here is one whose cancel timed out,
+        # raised, or never existed, and this pass is the last thing that can
+        # write it a terminal status before the process exits. Skipping it would
+        # persist a sidecar reading "running" under a pid that no longer exists.
         for experiment in experiments:
-            if (
-                experiment.job_id not in delegated_ids
-                and experiment.status in NON_TERMINAL_LIVE_STATUSES
-                and experiment.owner_pid == own_pid
-            ):
+            if experiment.status in NON_TERMINAL_LIVE_STATUSES and experiment.owner_pid == own_pid:
                 cancelled_at = now()
                 newly_cancelled = [
                     case for case in experiment.cases if case.status not in TERMINAL_CASE_STATUSES
@@ -709,7 +759,5 @@ class JobRegistry:
                 experiment.runs_done_event.set()
                 transition(experiment, "cancelled")
                 self.persist_job(experiment)
-            if experiment.task is not None and not experiment.task.done():
-                experiment.task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await experiment.task
+
+        await _issue_cancels(_cancel_tasks(experiments))

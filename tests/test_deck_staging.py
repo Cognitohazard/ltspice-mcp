@@ -31,7 +31,7 @@ class TestManifestWalk:
         _write(root / "b.inc", '.include "c.inc"\n')
         _write(root / "c.inc", ".param x=1\n")
 
-        staged = stage_deck(deck, tmp_path / "stage", [root])
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
 
         assert {entry.path.name for entry in staged.manifest} == {
             "deck.cir",
@@ -40,13 +40,51 @@ class TestManifestWalk:
             "c.inc",
         }
 
+    def test_origin_is_snapshotted_and_digested_beside_the_deck(self, tmp_path: Path):
+        """The file the deck was generated from is a source like any other.
+
+        A netlist exported from a schematic describes the schematic only until
+        the schematic is edited, and the export on disk does not change when it
+        is. Recording the origin is what lets a later reader tell the two apart.
+        """
+        root = tmp_path / "root"
+        schematic = _write(root / "amp.asc", "Version 4\nSYMATTR Value 1k\n")
+        deck = _write(root / "amp.net", "V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
+
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=schematic)
+
+        entry = next(item for item in staged.manifest if item.path == schematic.resolve())
+        assert entry.staged and not entry.live
+        assert entry.sha256 == deck_staging.sha256_file(schematic)
+        assert entry.staged_path is not None
+        assert entry.staged_path.read_bytes() == schematic.read_bytes()
+        assert staged.origin_sha256 == entry.sha256
+        # The origin is not part of the deck the simulator reads, so it must not
+        # arrive as an include a variation would try to edit.
+        assert schematic not in {included.source for included in staged.includes}
+
+        schematic.write_text("Version 4\nSYMATTR Value 2k\n")
+        assert [item["code"] for item in verify_staged_manifest(staged.manifest)] == [
+            "source_modified_after_staging"
+        ]
+
+    def test_origin_equal_to_the_deck_records_one_entry(self, tmp_path: Path):
+        """A hand-written deck is its own origin; it must not be listed twice."""
+        root = tmp_path / "root"
+        deck = _write(root / "deck.cir", ".op\n.end\n")
+
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+
+        assert [entry.path for entry in staged.manifest] == [deck.resolve()]
+        assert staged.origin_sha256 == staged.sha256
+
     def test_outside_allowed_root_fails_closed(self, tmp_path: Path):
         root = tmp_path / "root"
         outside = _write(tmp_path / "outside.inc", ".param x=1\n")
         deck = _write(root / "deck.cir", f'.include "{outside}"\n.op\n.end\n')
 
         with pytest.raises(DeckStagingError, match="outside allowed roots"):
-            stage_deck(deck, tmp_path / "stage", [root])
+            stage_deck(deck, tmp_path / "stage", [root], origin=deck)
 
     def test_allow_live_include_marks_manifest_and_observation(self, tmp_path: Path):
         root = tmp_path / "root"
@@ -57,6 +95,7 @@ class TestManifestWalk:
             deck,
             tmp_path / "stage",
             [root],
+            origin=deck,
             allow_live_includes=True,
         )
 
@@ -78,7 +117,7 @@ class TestManifestWalk:
         _write(root / "models" / "device.lib", '.include "params.inc"\n.model DFAST D\n')
         _write(root / "models" / "params.inc", ".param x=1\n")
 
-        staged = stage_deck(deck, tmp_path / "stage", [root])
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
 
         staged_lib = staged.staged_deck.parent / "models" / "device.lib"
         assert staged_lib.is_file()
@@ -96,7 +135,7 @@ class TestManifestWalk:
         deck = _write(root / "deck.cir", '.lib "models.lib" TT\n.op\n.end\n')
         _write(root / "models.lib", ".lib TT\n.model DFAST D\n.endl TT\n")
 
-        staged = stage_deck(deck, tmp_path / "stage", [root])
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
 
         assert any(
             entry.path.name == "models.lib" and entry.section == "TT" for entry in staged.manifest
@@ -107,7 +146,7 @@ class TestManifestWalk:
         deck = _write(root / "deck.cir", '.include "a.inc"\n.op\n.end\n')
         _write(root / "a.inc", '.include "deck.cir"\n')
 
-        staged = stage_deck(deck, tmp_path / "stage", [root])
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
 
         assert [entry.path.name for entry in staged.manifest].count("deck.cir") == 1
         assert [entry.path.name for entry in staged.manifest].count("a.inc") == 1
@@ -120,7 +159,7 @@ class TestManifestWalk:
         deck = _write(root / "deck.cir", '.include "escape.inc"\n.op\n.end\n')
 
         with pytest.raises(DeckStagingError, match="outside allowed roots"):
-            stage_deck(deck, tmp_path / "stage", [root])
+            stage_deck(deck, tmp_path / "stage", [root], origin=deck)
 
     def test_duplicate_includes_copy_once(self, tmp_path: Path):
         root = tmp_path / "root"
@@ -130,7 +169,7 @@ class TestManifestWalk:
         )
         shared = _write(root / "shared.inc", ".param x=1\n")
 
-        staged = stage_deck(deck, tmp_path / "stage", [root])
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
 
         assert sum(entry.path == shared.resolve() for entry in staged.manifest) == 1
 
@@ -157,7 +196,7 @@ class TestManifestWalk:
 
         monkeypatch.setattr(deck_staging, "_resolve_reference", resolve)
 
-        staged = stage_deck(deck, tmp_path / "stage", [root])
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
 
         assert {quoted.resolve(), windows.resolve()} <= {entry.path for entry in staged.manifest}
 
@@ -165,7 +204,7 @@ class TestManifestWalk:
         root = tmp_path / "root"
         deck = _write(root / "deck.cir", '.include "value.inc"\n.op\n.end\n')
         included = _write(root / "value.inc", ".param x=1\n")
-        staged = stage_deck(deck, tmp_path / "stage", [root])
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
         staged_include = next(
             entry.staged_path for entry in staged.manifest if entry.path == included.resolve()
         )
@@ -261,7 +300,7 @@ class TestFoundryPdkShapes:
         pdk, lib = self._pdk(tmp_path)
         deck = _write(root / "deck.cir", f'.lib "{lib}" tt\nM1 d g s b nfet\n.op\n.end\n')
 
-        staged = stage_deck(deck, tmp_path / "stage", [root, pdk])
+        staged = stage_deck(deck, tmp_path / "stage", [root, pdk], origin=deck)
 
         names = {entry.path.name for entry in staged.manifest}
         assert "models.lib.spice" in names
@@ -276,7 +315,7 @@ class TestFoundryPdkShapes:
         pdk, lib = self._pdk(tmp_path)
         deck = _write(root / "deck.cir", f'.lib "{lib}" tt\n.op\n.end\n')
 
-        staged = stage_deck(deck, tmp_path / "stage", [root, pdk])
+        staged = stage_deck(deck, tmp_path / "stage", [root, pdk], origin=deck)
 
         text = staged.staged_deck.read_text()
         reference = text.splitlines()[0].split()[1].strip('"')
@@ -292,15 +331,20 @@ class TestFoundryPdkShapes:
         assert (moved.parent / reference).exists(), "reference broke when the deck moved"
 
     def test_default_depth_reaches_pdk_device_models(self, tmp_path: Path):
-        """sky130 puts a device model five levels below the deck; a shallower
-        default silently caps every PDK at a partial manifest."""
+        """sky130 puts a device model five levels below the deck, and a bound
+        too small for it does not truncate the manifest — it refuses the deck.
+        So the default has to clear that chain, and the way to see that it does
+        is that the same deck under a smaller bound fails."""
         root = tmp_path / "root"
         pdk, lib = self._pdk(tmp_path)
         deck = _write(root / "deck.cir", f'.lib "{lib}" tt\n.op\n.end\n')
 
-        staged = stage_deck(deck, tmp_path / "stage", [root, pdk])
+        staged = stage_deck(deck, tmp_path / "stage", [root, pdk], origin=deck)
 
-        assert len(staged.manifest) >= 5
+        assert "nfet.pm3.spice" in {entry.path.name for entry in staged.manifest}
+
+        with pytest.raises(DeckStagingError, match="exceeds depth 3"):
+            stage_deck(deck, tmp_path / "shallow", [root, pdk], max_depth=3, origin=deck)
 
 
 class TestRootDeckSurvivesTheRun:
@@ -314,7 +358,7 @@ class TestRootDeckSurvivesTheRun:
         _write(root / "core.inc", "R1 in out 1k\n")
         deck = _write(root / "tb.cir", "V1 in 0 1\n.include core.inc\n.op\n.end\n")
 
-        staged = stage_deck(deck, tmp_path / "stage", [root])
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
 
         reference = staged.staged_deck.read_text().splitlines()[1].split()[1].strip('"')
         assert Path(reference).is_absolute(), (
@@ -329,16 +373,41 @@ class TestRootDeckSurvivesTheRun:
         moved.write_text(staged.staged_deck.read_text())
         assert (moved.parent / reference).exists(), "include broke when the deck moved"
 
-    def test_windows_paths_render_for_a_windows_simulator(self, tmp_path: Path):
+    def test_windows_paths_render_for_a_windows_simulator(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
         """A Windows simulator reached across the WSL boundary cannot open the
-        /mnt/c spelling of the file it is handed."""
+        /mnt/c spelling of the file it is handed.
+
+        The conversion itself belongs to the WSL interop layer and depends on
+        the host, so it is replaced with a known one here: what this pins is
+        that the staged deck names the staged file THROUGH that conversion, and
+        names the whole path — a reference that survives the deck being run from
+        another directory.
+        """
+        monkeypatch.setattr(wsl, "to_windows_path", lambda path: f"Z:{path}".replace("/", "\\"))
         root = tmp_path / "root"
         _write(root / "core.inc", "R1 in out 1k\n")
         deck = _write(root / "tb.cir", "V1 in 0 1\n.include core.inc\n.op\n.end\n")
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], windows_paths=True)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, windows_paths=True)
 
         reference = staged.staged_deck.read_text().splitlines()[1].split()[1].strip('"')
-        assert "/" not in reference or reference[1:3] == ":\\", (
-            f"expected a Windows-form path, got {reference}"
-        )
+        included = next(item for item in staged.includes if item.source.name == "core.inc")
+        assert reference == wsl.to_windows_path(included.staged_path)
+        assert Path(reference.replace("\\", "/").removeprefix("Z:")).is_file()
+
+    def test_posix_paths_render_without_the_windows_routing(self, tmp_path: Path):
+        """The default is the path the local simulator can open: the Windows
+        rendering is a WSL-boundary special case, not the general spelling."""
+        root = tmp_path / "root"
+        _write(root / "core.inc", "R1 in out 1k\n")
+        deck = _write(root / "tb.cir", "V1 in 0 1\n.include core.inc\n.op\n.end\n")
+
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+
+        reference = staged.staged_deck.read_text().splitlines()[1].split()[1].strip('"')
+        included = next(item for item in staged.includes if item.source.name == "core.inc")
+        assert reference == included.staged_path.as_posix()

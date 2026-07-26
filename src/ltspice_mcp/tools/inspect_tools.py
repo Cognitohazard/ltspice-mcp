@@ -39,6 +39,7 @@ in the handler coroutine.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAlias, get_args
 
@@ -47,6 +48,7 @@ from pydantic import Field, SkipValidation, TypeAdapter, ValidationError, model_
 
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
 from ltspice_mcp.lib import services
+from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.library_manager import _part_aware_score, parse_library_file_cached
@@ -112,7 +114,18 @@ _JOBS_WAIT_MAX_S = 300.0
 _CURSOR_DESCRIPTION = (
     "Opaque page token taken verbatim from a previous page's 'next_cursor' — echo "
     "it back unmodified. It is bound to this exact query, so it will not resume a "
-    "different one, and an edited or stale token is rejected."
+    "different one, and a tampered token is rejected. It carries a row offset, not "
+    "a snapshot: if the underlying libraries or directories change between pages, "
+    "it still resumes at that offset."
+)
+
+# The file-backed kinds bind the file itself, so the stronger claim holds there.
+_CURSOR_DESCRIPTION_FILE = (
+    "Opaque page token taken verbatim from a previous page's 'next_cursor' — echo "
+    "it back unmodified. It is bound to this exact query AND to the file's size and "
+    "modification time, so it will not resume a different one, and a tampered token "
+    "— or one minted before an edit to the file — is rejected instead of resuming at "
+    "a stale offset."
 )
 
 
@@ -176,7 +189,7 @@ class NetQuery(StrictModel):
             "name, or 'REF.<terminal-number>', and rejects a coordinate."
         )
     )
-    cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION)
+    cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION_FILE)
 
     @model_validator(mode="after")
     def _valid_at(self) -> NetQuery:
@@ -208,7 +221,7 @@ class ComponentsQuery(StrictModel):
             "box on a schematic."
         ),
     )
-    cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION)
+    cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION_FILE)
 
 
 class ModelQuery(StrictModel):
@@ -234,7 +247,14 @@ class ModelQuery(StrictModel):
             "which searches the session's loaded libraries when it is omitted."
         ),
     )
-    cursor: str | None = Field(default=None, description=_CURSOR_DESCRIPTION)
+    cursor: str | None = Field(
+        default=None,
+        description=(
+            _CURSOR_DESCRIPTION_FILE + " Those files are the ones named in 'libs'; with "
+            "'libs' omitted the rows come from the session's loaded libraries instead, "
+            "and the token binds the query alone."
+        ),
+    )
 
     @model_validator(mode="after")
     def _mode_requirements(self) -> ModelQuery:
@@ -309,14 +329,37 @@ class InspectInput(ToolInput):
 # ---------------------------------------------------------------------------
 
 
-def _binding(kind: str, identity: dict[str, Any]) -> str:
-    """The cursor's view binding: the paginated ``kind`` plus this query's identity.
+def _binding(kind: str, identity: dict[str, Any], sources: Sequence[Path]) -> str:
+    """The cursor's view binding: the paginated ``kind``, this query's identity,
+    and the revision of every file the rows were derived from.
 
     Folding a hash of ``identity`` into the binding means a cursor minted for one
     query cannot resume a different one — a changed path/filter/prefix yields a
-    different binding, and the shared codec rejects the mismatch.
+    different binding, and the shared codec rejects the mismatch. ``sources``
+    extends that to the files themselves: a cursor carries a row offset into a
+    list the server re-derives on every page, so without their stamps a token
+    minted before an edit still validates and seeks into the NEW list, silently
+    skipping or repeating rows. With them the binding changes and the stale token
+    is rejected — a clean error instead of a wrong page.
+
+    ``sources`` is required rather than opt-in so a new file-backed kind cannot
+    forget it; a kind that pages something the server does not read off named
+    files passes ``()`` on purpose. Stat granularity bounds the guarantee: a
+    rewrite of identical size within one filesystem clock tick still reads as
+    unchanged.
     """
-    return f"{kind}:{canonical_hash(identity)}"
+    bound = dict(identity)
+    if sources:
+        bound["sources"] = [[str(path), _file_stamp(path)] for path in sources]
+    return f"{kind}:{canonical_hash(bound)}"
+
+
+def _file_stamp(path: Path) -> list[int] | None:
+    """This file's revision marker, or ``None`` when it cannot be stat'd."""
+    try:
+        return list(file_stamp(path))
+    except OSError:
+        return None
 
 
 def _invalid_cursor(exc: PageCursorError) -> _QueryError:
@@ -325,11 +368,18 @@ def _invalid_cursor(exc: PageCursorError) -> _QueryError:
 
 
 def _paginate(
-    items: list[Any], kind: str, identity: dict[str, Any], cursor: str | None
+    items: list[Any],
+    kind: str,
+    identity: dict[str, Any],
+    cursor: str | None,
+    sources: Sequence[Path],
 ) -> dict[str, Any]:
-    """Page ``items`` through the shared paginator, bound to this query's identity."""
+    """Page ``items`` through the shared paginator, bound to this query's identity
+    and to the revision of the ``sources`` the rows came from."""
     try:
-        return paginate_view(items, _binding(kind, identity), cursor=cursor, limit=_PAGE_SIZE)
+        return paginate_view(
+            items, _binding(kind, identity, sources), cursor=cursor, limit=_PAGE_SIZE
+        )
     except PageCursorError as exc:
         raise _invalid_cursor(exc) from exc
 
@@ -340,13 +390,14 @@ def _paginate_pair(
     kind: str,
     identity: dict[str, Any],
     cursor: str | None,
+    sources: Sequence[Path],
 ) -> dict[str, Any]:
     """Page an item's two collections under its single cursor (both offsets ride in it)."""
     try:
         return paginate_pair(
             primary,
             secondary,
-            _binding(kind, identity),
+            _binding(kind, identity, sources),
             cursor=cursor,
             limit=_PAGE_SIZE,
             secondary_limit=_COORD_PAGE_SIZE,
@@ -355,17 +406,35 @@ def _paginate_pair(
         raise _invalid_cursor(exc) from exc
 
 
-def _page_meta(page: dict[str, Any]) -> dict[str, int | bool]:
+def _page_meta(page: dict[str, Any], primary: str, secondary: str | None = None) -> dict[str, Any]:
     """The paged-collection facts surfaced in each item's ``page`` field.
 
-    ``total``/``returned`` describe the item's primary collection; ``truncated``
-    means "this item has more" and always equals ``next_cursor`` being present,
-    so paging until the cursor is null never stops short of a second collection.
+    ``primary`` and ``secondary`` are the data keys this page carries, named
+    rather than positional so the two cannot be swapped into each other's
+    counters. The top-level counters describe BOTH: a ``.asc`` net pages pins and
+    wire-vertex coordinates under one cursor, and pins-only counters read
+    ``returned == total`` while hundreds of coordinates are still unfetched.
+    Summed instead, ``truncated`` implies ``returned < total`` on every page, and
+    ``collections`` says which collection is the one that continues.
     """
+    collections: dict[str, dict[str, Any]] = {
+        primary: {
+            "total": page["total"],
+            "returned": page["returned"],
+            "truncated": page["primary_truncated"],
+        }
+    }
+    if secondary is not None:
+        collections[secondary] = {
+            "total": page["secondary_total"],
+            "returned": page["secondary_returned"],
+            "truncated": page["secondary_truncated"],
+        }
     return {
-        "total": page["total"],
-        "returned": page["returned"],
+        "total": sum(c["total"] for c in collections.values()),
+        "returned": sum(c["returned"] for c in collections.values()),
         "truncated": page["truncated"],
+        "collections": collections,
     }
 
 
@@ -499,8 +568,14 @@ async def _do_symbols(q: SymbolsQuery, state: SessionState) -> dict[str, Any]:
     precedence = _symbol_precedence(asc_dir, state)
     prec_report, names = await asyncio.to_thread(_symbols_payload, precedence, q.filter)
 
+    # No sources: the rows are directory listings, not the content of named
+    # files, so there is nothing here a stamp could bind (see _CURSOR_DESCRIPTION).
     page = _paginate(
-        names, "symbols", {"path": str(asc_dir) if asc_dir else None, "filter": q.filter}, q.cursor
+        names,
+        "symbols",
+        {"path": str(asc_dir) if asc_dir else None, "filter": q.filter},
+        q.cursor,
+        (),
     )
     return {
         "data": {
@@ -511,7 +586,7 @@ async def _do_symbols(q: SymbolsQuery, state: SessionState) -> dict[str, Any]:
             "filter": q.filter,
         },
         "next_cursor": page["next_cursor"],
-        "page": _page_meta(page),
+        "page": _page_meta(page, "symbols"),
     }
 
 
@@ -645,6 +720,7 @@ def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
 
 async def _do_net(q: NetQuery, state: SessionState) -> dict[str, Any]:
     path = _resolve_path(q, q.path, state)
+    identity = {"path": str(path), "at": q.at}
 
     if _route_circuit_kind(path, "net") == "netlist":
         try:
@@ -656,7 +732,7 @@ async def _do_net(q: NetQuery, state: SessionState) -> dict[str, Any]:
         except SpiceLexError as exc:
             raise _QueryError("parse_error", str(exc)) from exc
         members = payload.pop("members")
-        page = _paginate(members, "net", {"path": str(path), "at": q.at}, q.cursor)
+        page = _paginate(members, "net", identity, q.cursor, [path])
         return {
             "data": {
                 "source": "netlist",
@@ -667,7 +743,7 @@ async def _do_net(q: NetQuery, state: SessionState) -> dict[str, Any]:
                 "unparseable_cards": payload["unparseable_cards"],
             },
             "next_cursor": page["next_cursor"],
-            "page": _page_meta(page),
+            "page": _page_meta(page, "members"),
         }
 
     # .asc: geometric trace via trace_net internals. The cached AscEditor is
@@ -682,7 +758,7 @@ async def _do_net(q: NetQuery, state: SessionState) -> dict[str, Any]:
     # and the item carries one cursor — so both offsets ride in it and both
     # advance. A coordinate window that restarted every page would re-serve the
     # same vertices forever while claiming more existed.
-    page = _paginate_pair(pins, coords, "net.asc", {"path": str(path), "at": q.at}, q.cursor)
+    page = _paginate_pair(pins, coords, "net.asc", identity, q.cursor, [path])
     data: dict[str, Any] = {
         "source": "schematic",
         "start": tdata.get("start"),
@@ -704,7 +780,11 @@ async def _do_net(q: NetQuery, state: SessionState) -> dict[str, Any]:
         )
     if tdata.get("warnings"):
         data["warnings"] = tdata["warnings"]
-    return {"data": data, "next_cursor": page["next_cursor"], "page": _page_meta(page)}
+    return {
+        "data": data,
+        "next_cursor": page["next_cursor"],
+        "page": _page_meta(page, "pins", "coordinates"),
+    }
 
 
 def _trace_input_for(path: str, at: str | list[int]) -> TraceNetInput:
@@ -804,7 +884,7 @@ async def _do_components(q: ComponentsQuery, state: SessionState) -> dict[str, A
             refs = sorted(editor.get_components(q.prefix) if q.prefix else editor.get_components())
         except Exception as exc:
             raise _QueryError("parse_error", f"failed to list components: {exc}") from exc
-        page = _paginate(refs, "components", identity, q.cursor)
+        page = _paginate(refs, "components", identity, q.cursor, [path])
         rows = _components_asc_page(editor, page["items"], q.detail)
     else:
         try:
@@ -817,7 +897,7 @@ async def _do_components(q: ComponentsQuery, state: SessionState) -> dict[str, A
             )
         except SpiceLexError as exc:
             raise _QueryError("parse_error", str(exc)) from exc
-        page = _paginate(all_rows, "components", identity, q.cursor)
+        page = _paginate(all_rows, "components", identity, q.cursor, [path])
         rows = page["items"]
 
     return {
@@ -829,7 +909,7 @@ async def _do_components(q: ComponentsQuery, state: SessionState) -> dict[str, A
             "returned": page["returned"],
         },
         "next_cursor": page["next_cursor"],
-        "page": _page_meta(page),
+        "page": _page_meta(page, "components"),
     }
 
 
@@ -879,24 +959,30 @@ def _search_libs(lib_paths: list[Path], query: str, cutoff: float = 0.6) -> list
 
 
 async def _do_model(q: ModelQuery, state: SessionState) -> dict[str, Any]:
+    # The library files these rows were read from, so the cursor binds their
+    # revision: an edited library must reject a stale token, not page into the
+    # re-parsed list at the old offset.
+    sources: list[Path] = []
     if q.mode == "enumerate":
-        lib_paths = [_resolve_path(q, lib, state) for lib in (q.libs or [])]
+        sources = [_resolve_path(q, lib, state) for lib in (q.libs or [])]
         try:
-            rows = await asyncio.to_thread(_enumerate_libs, lib_paths)
+            rows = await asyncio.to_thread(_enumerate_libs, sources)
         except OSError as exc:
             raise _QueryError("read_error", str(exc)) from exc
-        identity: dict[str, Any] = {"mode": "enumerate", "libs": [str(p) for p in lib_paths]}
+        identity: dict[str, Any] = {"mode": "enumerate", "libs": [str(p) for p in sources]}
     else:
         assert q.query is not None  # guaranteed by the model validator
         if q.libs:
-            lib_paths = [_resolve_path(q, lib, state) for lib in q.libs]
+            sources = [_resolve_path(q, lib, state) for lib in q.libs]
             try:
-                rows = await asyncio.to_thread(_search_libs, lib_paths, q.query)
+                rows = await asyncio.to_thread(_search_libs, sources, q.query)
             except OSError as exc:
                 raise _QueryError("read_error", str(exc)) from exc
         else:
             # No libs given: fall back to the session's loaded libraries (loop-owned
-            # mutable state — read inline, never offloaded).
+            # mutable state — read inline, never offloaded). Those rows come from
+            # the session's own load/unload state and the stock library tree, not
+            # from files this query names, so there is nothing to stamp.
             try:
                 rows = state.libraries.find_similar_models(
                     q.query, exact=False, limit=10_000, cutoff=0.6
@@ -905,7 +991,7 @@ async def _do_model(q: ModelQuery, state: SessionState) -> dict[str, Any]:
                 raise _QueryError("search_error", str(exc)) from exc
         identity = {"mode": "search", "query": q.query, "libs": q.libs}
 
-    page = _paginate(rows, "model", identity, q.cursor)
+    page = _paginate(rows, "model", identity, q.cursor, sources)
     return {
         "data": {
             "mode": q.mode,
@@ -915,7 +1001,7 @@ async def _do_model(q: ModelQuery, state: SessionState) -> dict[str, Any]:
             "returned": page["returned"],
         },
         "next_cursor": page["next_cursor"],
-        "page": _page_meta(page),
+        "page": _page_meta(page, "results"),
     }
 
 
@@ -982,10 +1068,44 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                     "next_cursor": {"type": ["string", "null"]},
                     "page": {
                         "type": "object",
+                        "description": (
+                            "Paging counters for this item, summed over every collection "
+                            "it pages (a .asc net pages pins AND coordinates under one "
+                            "cursor)."
+                        ),
                         "properties": {
-                            "total": {"type": "integer"},
-                            "returned": {"type": "integer"},
-                            "truncated": {"type": "boolean"},
+                            "total": {
+                                "type": "integer",
+                                "description": "Rows this item has in all, across all pages.",
+                            },
+                            "returned": {
+                                "type": "integer",
+                                "description": "Rows in THIS page.",
+                            },
+                            "truncated": {
+                                "type": "boolean",
+                                "description": (
+                                    "More rows remain somewhere in this item; always equals "
+                                    "next_cursor being non-null. Stop on next_cursor, not on "
+                                    "returned == total."
+                                ),
+                            },
+                            "collections": {
+                                "type": "object",
+                                "description": (
+                                    "Per-collection counters, keyed by the data key they page "
+                                    "('pins', 'coordinates', 'components', …) — this is what "
+                                    "says which collection still has rows."
+                                ),
+                                "additionalProperties": {
+                                    "type": "object",
+                                    "properties": {
+                                        "total": {"type": "integer"},
+                                        "returned": {"type": "integer"},
+                                        "truncated": {"type": "boolean"},
+                                    },
+                                },
+                            },
                         },
                     },
                 },

@@ -187,6 +187,11 @@ def paginate_view(
 ) -> dict[str, Any]:
     """Slice ``items`` into a ``{items, total, returned, truncated, next_cursor}``
     page. ``cursor`` resumes a prior page (its offset must belong to ``kind``).
+
+    ``primary_truncated`` repeats ``truncated`` so both paginators report each
+    collection's own exhaustion beside it under one name: a reader of either
+    page can ask "does THIS collection continue?" without first knowing which
+    paginator produced it.
     """
     offset = decode_page_cursor(cursor, kind) if cursor else 0
     window = _window(items, offset, limit)
@@ -195,6 +200,7 @@ def paginate_view(
         "total": window["total"],
         "returned": window["returned"],
         "truncated": window["truncated"],
+        "primary_truncated": window["truncated"],
         "next_cursor": encode_page_cursor(kind, window["end"]) if window["truncated"] else None,
     }
 
@@ -214,8 +220,9 @@ def paginate_pair(
     successive pages repeat neither, and neither is capped at its first page.
     ``truncated`` and ``next_cursor`` cover the pair: a cursor is minted while
     *either* collection has more, which keeps "page until next_cursor is null"
-    the correct stop rule. Per-collection exhaustion is reported separately
-    (``secondary_truncated``) so the caller can tell which one continues.
+    the correct stop rule. Each collection's own exhaustion is reported beside it
+    (``primary_truncated`` / ``secondary_truncated``) so the caller can tell which
+    one continues — the pair-level ``truncated`` cannot say.
     """
     first_offset, second_offset = decode_pair_cursor(cursor, kind) if cursor else (0, 0)
     first = _window(primary, first_offset, limit)
@@ -225,6 +232,7 @@ def paginate_pair(
         "items": first["items"],
         "total": first["total"],
         "returned": first["returned"],
+        "primary_truncated": first["truncated"],
         "secondary_items": second["items"],
         "secondary_total": second["total"],
         "secondary_returned": second["returned"],

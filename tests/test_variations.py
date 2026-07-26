@@ -307,13 +307,14 @@ class TestRandomExpansion:
 _CORE = ".subckt core in out\nR1 in out 1k\n.ends\n"
 
 
-def _factored(
+def _closure(
     tmp_path: Path,
     *,
     includes: dict[str, str],
-    root_body: str = "",
+    root_body: str,
+    reference: str = ".include",
 ) -> CircuitDeck:
-    """A deck whose components live in staged include files beside it."""
+    """A deck whose root body is given verbatim, over staged include files."""
     staged = tmp_path / "staged"
     staged.mkdir(exist_ok=True)
     files = []
@@ -322,11 +323,35 @@ def _factored(
         path = staged / name
         path.write_text(text)
         files.append(DeckFile(path, text))
-        references += f'.include "{path}"\n'
-    root_text = f"{references}V1 in 0 1\nX1 in out core\n{root_body}.op\n.end\n"
+        references += f'{reference} "{path}"\n'
+    root_text = f"{references}{root_body}.op\n.end\n"
     root = staged / "dut.cir"
     root.write_text(root_text)
     return CircuitDeck("dut", root, root_text, tuple(files))
+
+
+def _factored(
+    tmp_path: Path,
+    *,
+    includes: dict[str, str],
+    root_body: str = "",
+) -> CircuitDeck:
+    """A deck whose components live in staged include files beside it."""
+    return _closure(
+        tmp_path,
+        includes=includes,
+        root_body=f"V1 in 0 1\nX1 in out core\n{root_body}",
+    )
+
+
+def _random_rule(rule: dict[str, object], *, runs: int = 1, seed: int = 3) -> RandomVariation:
+    return RandomVariation.model_validate(
+        {"kind": "random", "runs": runs, "seed": seed, "rules": [rule]}
+    )
+
+
+def _case_copy(tmp_path: Path, name: str, index: int = 0) -> str:
+    return (tmp_path / "staged" / f"case-{index:04d}__{name}").read_text()
 
 
 class TestIncludeClosureTargets:
@@ -412,3 +437,403 @@ class TestIncludeClosureTargets:
         ]
         assert len(set(values)) == 2
         assert all(float(value) != 1000.0 for value in values)
+
+
+class TestPatternTargetsSpanTheClosure:
+    """A glob or a prefix means every match, wherever the closure holds it.
+
+    Stopping at the root deck is how a Monte Carlo comes to perturb half the
+    devices it was asked to and still report a clean sweep.
+    """
+
+    def test_component_glob_perturbs_matches_in_every_file(self, tmp_path: Path):
+        circuit = _closure(
+            tmp_path,
+            includes={"core.inc": "R3 a b 3k\nR4 b 0 4k\n"},
+            root_body="R1 in out 1k\nR2 out 0 2k\n",
+        )
+        variation = _random_rule({"rule": "component", "target": "R*", "tolerance": 0.1})
+
+        cases = materialize_variants(
+            circuit,
+            expand_variations([circuit], [variation]),
+            tmp_path / "out",
+        )
+
+        assert {key for key in cases[0].assignments if key.startswith("random:component:")} == {
+            "random:component:R1",
+            "random:component:R2",
+            "random:component:R3",
+            "random:component:R4",
+        }
+        include = _case_copy(tmp_path, "core.inc")
+        assert "R3 a b 3k" not in include and "R4 b 0 4k" not in include
+
+    def test_mismatch_prefix_reaches_devices_in_an_include(self, tmp_path: Path):
+        circuit = _closure(
+            tmp_path,
+            includes={"core.inc": "M3 d g 0 0 NM W=4u L=1u\n"},
+            root_body=".model NM NMOS(VTO=0.7 KP=100u)\nM1 d g 0 0 NM W=10u L=1u\n",
+        )
+        variation = _random_rule(
+            {"rule": "mismatch", "prefix": "M", "AVT": 3e-3, "AK": 0.02},
+        )
+
+        cases = materialize_variants(
+            circuit,
+            expand_variations([circuit], [variation]),
+            tmp_path / "out",
+        )
+
+        assert {key for key in cases[0].assignments if key.startswith("random:mismatch:")} == {
+            "random:mismatch:M1.VTO",
+            "random:mismatch:M1.KP",
+            "random:mismatch:M3.VTO",
+            "random:mismatch:M3.KP",
+        }
+        assert "NM__M3" in _case_copy(tmp_path, "core.inc")
+
+    def test_model_swap_glob_rewrites_every_matching_file(self, tmp_path: Path):
+        circuit = _closure(
+            tmp_path,
+            includes={"core.inc": "M2 d g 0 0 NM W=4u L=1u\n"},
+            root_body="M1 d g 0 0 NM W=10u L=1u\n",
+        )
+        variation = AssignVariation(kind="assign", assign={"M*@model": ["FAST"]})
+
+        cases = materialize_variants(
+            circuit,
+            expand_variations([circuit], [variation]),
+            tmp_path / "out",
+        )
+
+        assert "M1 d g 0 0 FAST" in cases[0].text
+        assert "M2 d g 0 0 FAST" in _case_copy(tmp_path, "core.inc")
+
+    def test_exact_name_in_two_includes_is_still_refused(self, tmp_path: Path):
+        circuit = _closure(
+            tmp_path,
+            includes={"a.inc": ".param VDD=1\nR1 a b 1k\n", "b.inc": ".param VDD=2\nR2 b 0 2k\n"},
+            root_body="V1 in 0 1\n",
+        )
+        variation = AssignVariation(kind="assign", assign={"VDD": [3]})
+
+        with pytest.raises(VariationError, match="names one declaration") as excinfo:
+            expand_variations([circuit], [variation])
+
+        assert excinfo.value.code == "ambiguous_target"
+        assert "declare it in the deck" in str(excinfo.value)
+
+    def test_a_glob_over_the_same_two_includes_perturbs_both(self, tmp_path: Path):
+        circuit = _closure(
+            tmp_path,
+            includes={"a.inc": ".param VDD=1\nR1 a b 1k\n", "b.inc": ".param VDD=2\nR2 b 0 2k\n"},
+            root_body="V1 in 0 1\n",
+        )
+        variation = _random_rule({"rule": "component", "target": "R*", "tolerance": 0.1})
+
+        cases = materialize_variants(
+            circuit,
+            expand_variations([circuit], [variation]),
+            tmp_path / "out",
+        )
+
+        assert {key for key in cases[0].assignments if key.startswith("random:component:")} == {
+            "random:component:R1",
+            "random:component:R2",
+        }
+
+
+class TestOneFileDeclaringOneNameTwice:
+    """Ambiguity inside a file is the same data loss as ambiguity across two.
+
+    Includes are exactly where several ``.subckt`` bodies and several library
+    corner sections live, so the flattened first-match that used to resolve
+    these silently edited one declaration and reported the whole set applied.
+    """
+
+    def test_two_subckts_declaring_one_component_are_ambiguous(self, tmp_path: Path):
+        circuit = _closure(
+            tmp_path,
+            includes={
+                "core.inc": (
+                    ".subckt left in out\nR1 in out 1k\n.ends\n"
+                    ".subckt right in out\nR1 in out 2k\n.ends\n"
+                )
+            },
+            root_body="V1 in 0 1\n",
+        )
+        variation = AssignVariation(kind="assign", assign={"R1": ["3k"]})
+
+        with pytest.raises(VariationError, match=r"\.subckt left, \.subckt right") as excinfo:
+            expand_variations([circuit], [variation])
+
+        assert excinfo.value.code == "ambiguous_target"
+
+    def test_duplicates_sharing_a_site_are_not_told_to_move_there(self, tmp_path: Path):
+        """Two declarations in one place cannot be resolved by moving one there."""
+        circuit = _closure(
+            tmp_path,
+            includes={},
+            root_body=".param gain=2\n.param gain=3\nR1 a b 1k\n",
+        )
+        variation = AssignVariation(kind="assign", assign={"gain": [5]})
+
+        with pytest.raises(VariationError, match="all at top level") as excinfo:
+            expand_variations([circuit], [variation])
+
+        assert "move the one you mean" not in str(excinfo.value)
+        assert excinfo.value.code == "ambiguous_target"
+
+    def test_two_library_sections_declaring_one_model_are_ambiguous(self, tmp_path: Path):
+        circuit = _closure(
+            tmp_path,
+            includes={
+                "mos.lib": (
+                    ".lib tt\n.model nch NMOS(VTO=0.4 KP=100u)\n.endl\n"
+                    ".lib ff\n.model nch NMOS(VTO=0.3 KP=120u)\n.endl\n"
+                )
+            },
+            root_body="M1 d g 0 0 nch W=10u L=1u\n",
+            reference=".lib",
+        )
+        variation = _random_rule(
+            {"rule": "model", "target": "nch", "param": "VTO", "tolerance": 0.2},
+            runs=2,
+        )
+
+        with pytest.raises(VariationError, match="section 'ff'") as excinfo:
+            expand_variations([circuit], [variation])
+
+        assert excinfo.value.code == "ambiguous_target"
+        assert "section 'tt'" in str(excinfo.value)
+
+    def test_two_files_declaring_one_mismatch_model_are_ambiguous(self, tmp_path: Path):
+        circuit = _closure(
+            tmp_path,
+            includes={"core.inc": ".model NM NMOS(VTO=0.5 KP=80u)\n"},
+            root_body=".model NM NMOS(VTO=0.7 KP=100u)\nM1 d g 0 0 NM W=10u L=1u\n",
+        )
+        variation = _random_rule({"rule": "mismatch", "prefix": "M", "AVT": 3e-3})
+
+        with pytest.raises(VariationError, match="mismatch model 'NM' has 2 declarations"):
+            materialize_variants(
+                circuit,
+                expand_variations([circuit], [variation]),
+                tmp_path / "out",
+            )
+
+    def test_a_top_level_declaration_wins_over_a_subckt_copy(self, tmp_path: Path):
+        circuit = _closure(
+            tmp_path,
+            includes={},
+            root_body=".subckt buf in out\nR1 in out 9k\n.ends\nR1 a b 1k\n",
+        )
+        variation = AssignVariation(kind="assign", assign={"R1": ["3k"]})
+
+        cases = materialize_variants(
+            circuit,
+            expand_variations([circuit], [variation]),
+            tmp_path / "out",
+        )
+
+        assert "R1 a b 3k" in cases[0].text
+        assert "R1 in out 9k" in cases[0].text
+
+    def test_a_top_level_lib_include_opens_no_section(self, tmp_path: Path):
+        """In a deck, a bare ``.lib`` names a file; only a library has sections.
+
+        Reading it as a section opener pushes a section nothing closes, and
+        every declaration below it then reads as buried — so a target that
+        resolves against the deck's own top level is refused as ambiguous.
+        """
+        staged = tmp_path / "staged"
+        staged.mkdir()
+        models = staged / "models"
+        model_text = ".model NM NMOS(VTO=0.7)\n"
+        models.write_text(model_text)
+        root_text = ".lib models\n.subckt buf in out\nR1 in out 9k\n.ends\nR1 a b 1k\n.op\n.end\n"
+        root = staged / "dut.cir"
+        root.write_text(root_text)
+        circuit = CircuitDeck("dut", root, root_text, (DeckFile(models, model_text),))
+        variation = AssignVariation(kind="assign", assign={"R1": ["3k"]})
+
+        cases = materialize_variants(
+            circuit,
+            expand_variations([circuit], [variation]),
+            tmp_path / "out",
+        )
+
+        assert "R1 a b 3k" in cases[0].text
+        assert "R1 in out 9k" in cases[0].text
+
+    def test_a_glob_matching_one_reference_twice_is_refused(self, tmp_path: Path):
+        """One reference, two declarations, two draws — and one of them reported.
+
+        Each match draws from a stream keyed by the reference, so the second
+        declaration is perturbed with a different number than the first and the
+        receipt keeps whichever was written last.
+        """
+        circuit = _closure(
+            tmp_path,
+            includes={
+                "core.inc": (
+                    ".subckt left in out\nR1 in out 1k\n.ends\n"
+                    ".subckt right in out\nR1 in out 2k\n.ends\n"
+                )
+            },
+            root_body="V1 in 0 1\n",
+        )
+        variation = _random_rule({"rule": "component", "target": "R*", "tolerance": 0.1})
+
+        with pytest.raises(VariationError, match=r"matches 'R1' at 2 declarations") as excinfo:
+            materialize_variants(
+                circuit,
+                expand_variations([circuit], [variation]),
+                tmp_path / "out",
+            )
+
+        assert excinfo.value.code == "ambiguous_target"
+        assert ".subckt left" in str(excinfo.value)
+
+    def test_a_glob_matching_one_reference_in_two_files_is_refused(self, tmp_path: Path):
+        """The fan-out across files widened the same defect; it refuses there too."""
+        circuit = _closure(
+            tmp_path,
+            includes={
+                "a.inc": ".subckt left in out\nR1 in out 1k\n.ends\n",
+                "b.inc": ".subckt right in out\nR1 in out 2k\n.ends\n",
+            },
+            root_body="V1 in 0 1\n",
+        )
+        variation = _random_rule({"rule": "component", "target": "R*", "tolerance": 0.1})
+
+        with pytest.raises(VariationError, match=r"matches 'R1' at 2 declarations") as excinfo:
+            materialize_variants(
+                circuit,
+                expand_variations([circuit], [variation]),
+                tmp_path / "out",
+            )
+
+        assert excinfo.value.code == "ambiguous_target"
+        assert "a.inc" in str(excinfo.value) and "b.inc" in str(excinfo.value)
+
+
+class TestRulesReadWhatEarlierRulesWrote:
+    """Each rule runs against the deck the rule before it produced."""
+
+    def test_overlapping_mismatch_prefixes_see_the_injected_variant(self, tmp_path: Path):
+        """A mismatch rule repoints its instances at variant models it injects.
+
+        A second rule matching the same devices then reads those variant names,
+        so a model lookup that consults only the pre-expansion index cannot see
+        them and the instance reads as referencing a model that does not exist.
+        """
+        circuit = _closure(
+            tmp_path,
+            includes={},
+            root_body=".model NM NMOS(VTO=0.7 KP=100u)\nM1 d g 0 0 NM W=10u L=1u\n",
+        )
+        variation = RandomVariation.model_validate(
+            {
+                "kind": "random",
+                "runs": 1,
+                "seed": 3,
+                "rules": [
+                    {"rule": "mismatch", "prefix": "M", "AVT": 3e-3},
+                    {"rule": "mismatch", "prefix": "M1", "AVT": 2e-3},
+                ],
+            }
+        )
+
+        cases = materialize_variants(
+            circuit,
+            expand_variations([circuit], [variation]),
+            tmp_path / "out",
+        )
+
+        # The second rule perturbed the card the first one injected, so both
+        # variants are on the deck and the instance names the newer of them.
+        assert ".MODEL NM__M1 " in cases[0].text
+        assert ".MODEL NM__M1__M1 " in cases[0].text
+        assert "M1 d g 0 0 NM__M1__M1" in cases[0].text
+
+    def test_an_unparsable_twin_declaration_reports_the_reference(self, tmp_path: Path):
+        """A declaration the lexer cannot read is still a declaration.
+
+        It is skipped when the target index is built, so the repeated-reference
+        guard never sees it; the writer then meets it anyway and must name the
+        reference rather than surface a raw tokenizer fault.
+        """
+        circuit = _closure(
+            tmp_path,
+            includes={
+                "core.inc": (
+                    ".subckt left in out\nR1 in out 1k\n.ends\n"
+                    '.subckt right in out\nR1 in out "1k\n.ends\n'
+                )
+            },
+            root_body="V1 in 0 1\n",
+        )
+        variation = _random_rule({"rule": "component", "target": "R*", "tolerance": 0.1})
+
+        with pytest.raises(VariationError, match="R1") as excinfo:
+            materialize_variants(
+                circuit,
+                expand_variations([circuit], [variation]),
+                tmp_path / "out",
+            )
+
+        assert excinfo.value.code == "ambiguous_target"
+        assert "could not be read" in str(excinfo.value)
+
+
+class TestSeedStability:
+    def test_single_file_draws_are_bit_identical(self, tmp_path: Path):
+        """Widening a pattern's reach must not move one recorded number.
+
+        Every draw is keyed by the name of what it perturbs, never by a
+        position in a match list, so reaching further can only add draws. These
+        literals were recorded before that change; a diff here means a shipped
+        Monte Carlo silently reports different values for the same seed.
+        """
+        circuit = _deck(tmp_path / "dut.cir")
+        variation = RandomVariation.model_validate(
+            {
+                "kind": "random",
+                "runs": 2,
+                "seed": 1234,
+                "rules": [
+                    {"rule": "component", "target": "R1", "tolerance": 0.1},
+                    {"rule": "param", "target": "gain", "tolerance": 0.2},
+                    {"rule": "model", "target": "NM", "param": "VTO", "tolerance": 0.15},
+                    {"rule": "mismatch", "prefix": "M", "AVT": 3e-3, "AK": 0.02},
+                ],
+            }
+        )
+
+        cases = materialize_variants(
+            circuit,
+            expand_variations([circuit], [variation]),
+            tmp_path / "out",
+        )
+
+        assert [
+            {key: value for key, value in case.assignments.items() if key.startswith("random:")}
+            for case in cases
+        ] == [
+            {
+                "random:component:R1": 958.0617667513966,
+                "random:mismatch:M1.KP": 0.00010148208338562579,
+                "random:mismatch:M1.VTO": 0.757990883147177,
+                "random:model:NM.VTO": 0.7579506983921265,
+                "random:param:gain": 1.9558313266252403,
+            },
+            {
+                "random:component:R1": 976.05993006425,
+                "random:mismatch:M1.KP": 0.00010097882808618597,
+                "random:mismatch:M1.VTO": 0.6759447769918987,
+                "random:model:NM.VTO": 0.6753772591338416,
+                "random:param:gain": 1.9275251793846904,
+            },
+        ]

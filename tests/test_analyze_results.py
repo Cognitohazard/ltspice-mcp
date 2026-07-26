@@ -1201,6 +1201,123 @@ async def test_projection_shrinks_a_wide_sweep_payload(
     assert projected_chars * 5 < full_chars
 
 
+def _hierarchical_op_raw(work_dir: Path) -> Path:
+    """An .op raw whose trace names carry dots of their own.
+
+    ngspice spells a subcircuit node ``v(x1.out)`` and a subcircuit device
+    parameter ``@m.x1.m1[gm]``, so the values an analysis of a hierarchical
+    design is after are named with the projector's own separator.
+    """
+    raw = work_dir / "hierarchical_op.raw"
+    raw.write_text(
+        "Title: * hierarchy\n"
+        "Date: Thu Jul 10 12:00:00 2026\n"
+        "Plotname: Operating Point\n"
+        "Flags: real\n"
+        "No. Variables: 3\n"
+        "No. Points: 1\n"
+        "Offset: 0.0000000000000000e+00\n"
+        # The dialect line a real .raw carries; without it the reader refuses
+        # the file rather than guessing at its number format.
+        "Command: Linear Technology Corporation LTspice\n"
+        "Variables:\n"
+        "\t0\tV(x1.out)\tvoltage\n"
+        "\t1\tV(out)\tvoltage\n"
+        "\t2\t@m.x1.m1[gm]\tadmittance\n"
+        "Values:\n"
+        "0\t1.2500000000000000e+00\n"
+        "\t9.0000000000000000e-01\n"
+        "\t3.1000000000000000e-03\n"
+    )
+    return raw
+
+
+_OP_RECIPE: dict[str, Any] = {"key": "bias", "metric": "operating_point"}
+
+
+@pytest.mark.asyncio
+async def test_projection_reaches_a_key_whose_own_name_contains_a_dot(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    r"""The one projection target these tools exist to serve must be addressable.
+
+    Splitting on every dot addresses a nesting a subcircuit device parameter
+    does not have, which left the most ordinary op-point key unreachable by the
+    payload lever advertised for exactly this kind of wide result. ``\.`` says
+    the dot belongs to the key.
+    """
+    raw = _hierarchical_op_raw(work_dir)
+
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [_OP_RECIPE],
+        include={
+            "fields": [
+                r"value.device_op_points.@m\.x1\.m1[gm]",
+                r"value.voltages.V(x1\.out)",
+            ]
+        },
+    )
+
+    entry = data["results"]["bias"]
+    assert entry["values"] == [
+        {
+            "value": {
+                "device_op_points": {"@m.x1.m1[gm]": pytest.approx(3.1e-3)},
+                "voltages": {"V(x1.out)": pytest.approx(1.25)},
+            }
+        }
+    ]
+    assert not entry["warnings"]
+
+
+@pytest.mark.asyncio
+async def test_unreachable_parent_says_the_key_is_one_segment(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """The warning has to describe the reason it missed, not invent one.
+
+    Reading 'value.voltages.V(x1' as a parent that 'holds no object' names a
+    path the caller never wrote and sends them looking for a missing dict, when
+    the dict is there and the key simply owns the dot.
+    """
+    raw = _hierarchical_op_raw(work_dir)
+
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [_OP_RECIPE],
+        include={"fields": ["value.voltages.V(x1.out)"]},
+    )
+
+    warning = next(text for text in data["results"]["bias"]["warnings"] if "V(x1.out)" in text)
+    assert "holds no object" not in warning
+    assert r"'\.'" in warning
+
+
+@pytest.mark.asyncio
+async def test_present_keys_are_reported_as_they_must_be_spelled(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A key listed as present must be listed as addressable: echoing the raw
+    name of a dotted key hands back a path that misses again."""
+    raw = _hierarchical_op_raw(work_dir)
+
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [_OP_RECIPE],
+        include={"fields": ["value.device_op_points.absent"]},
+    )
+
+    warning = next(text for text in data["results"]["bias"]["warnings"] if "absent" in text)
+    assert r"@m\.x1\.m1[gm]" in warning
+
+
 @pytest.mark.asyncio
 async def test_identical_record_warnings_collapse_but_keep_their_reach(
     state_no_sim: SessionState,

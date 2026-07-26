@@ -156,6 +156,23 @@ def test_jobs_output_schema_is_discriminated_by_action():
     assert actions == {"status", "wait", "cancel", "list", "runs"}
 
 
+def test_top_level_properties_describe_what_every_action_shares():
+    """A client that reads `properties` and stops there must not be told this
+    tool returns one key. Registration injects `warnings` into any schema that
+    declares no properties, so a bare oneOf advertises exactly that — while the
+    shape all five actions share is sitting one level down."""
+    shared = JOBS_OUTPUT_SCHEMA["properties"]
+
+    assert set(shared) > {"warnings"}
+    for branch in JOBS_OUTPUT_SCHEMA["oneOf"]:
+        # Hoisting may not constrain anything: every branch declares these keys
+        # itself, and closes with additionalProperties false.
+        for name, schema in shared.items():
+            if name == "action":
+                continue
+            assert branch["properties"][name] == schema
+
+
 async def _wait_for(condition, *, timeout_s: float = 1.0) -> None:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_s

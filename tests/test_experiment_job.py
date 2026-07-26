@@ -41,6 +41,7 @@ from ltspice_mcp.tools.simulation import (
     handle_cancel_job,
     handle_check_job,
 )
+from tests.conftest import make_batch_job
 
 
 def _source(circuit: Path, staged: Path | None = None) -> SourceRecord:
@@ -172,6 +173,11 @@ class TestExperimentTypesAndStore:
         # The same loss masked by a double-counted failure — terminal
         # reconciles to expanded, but a run that was promised never landed.
         assert Completeness(expanded=3, produced=2, failed=1, cancelled=1).fell_short
+        # Over-counted the other way: every promised run produced, yet a counter
+        # also logged a failure. Only the terminal-side half of the predicate
+        # sees this — produced alone reads "3 of 3, complete" while the job's
+        # own accounting says four runs reached a terminal state out of three.
+        assert Completeness(expanded=3, produced=3, failed=1).fell_short
 
     def test_completeness_recount_derives_all_case_counters(self, work_dir: Path):
         circuit = work_dir / "deck.cir"
@@ -374,9 +380,15 @@ class TestExperimentLifecycle:
 
     def _shutdown_pair(
         self, work_dir: Path, runner: Any, *, live_count: int = 1
-    ) -> tuple[JobRegistry, Any, Any]:
+    ) -> tuple[JobRegistry, Any, list[ExperimentJob], ExperimentJob]:
         """A registry holding ``live_count`` jobs served by ``runner``, then one
-        with no runner of its own."""
+        with no runner of its own.
+
+        Both halves are returned: the DELEGATED jobs (whose cancel is the part
+        that can hang or refuse) are the ones shutdown is least certain to
+        reconcile, so a test that only checked the undelegated one would pass
+        while the risky half stayed running.
+        """
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
         live = [
@@ -392,7 +404,7 @@ class TestExperimentLifecycle:
         runners = SimpleNamespace(
             get_experiment_runner_for=lambda job: runner if job.job_id in live_ids else None
         )
-        return registry, runners, following
+        return registry, runners, live, following
 
     @pytest.mark.asyncio
     async def test_shutdown_bounds_a_runner_cancel_that_never_returns(
@@ -409,7 +421,9 @@ class TestExperimentLifecycle:
                 await asyncio.Event().wait()
                 return []
 
-        registry, runners, following = self._shutdown_pair(work_dir, HungRunner(), live_count=3)
+        registry, runners, live, following = self._shutdown_pair(
+            work_dir, HungRunner(), live_count=3
+        )
         monkeypatch.setattr(job_registry, "_SHUTDOWN_CANCEL_TIMEOUT_S", 0.05)
 
         await asyncio.wait_for(registry.cancel_running(runners, None), timeout=5)
@@ -417,6 +431,50 @@ class TestExperimentLifecycle:
         assert len(entered) == 3
         assert following.status == "cancelled"
         assert following.done_event.is_set()
+        # The DELEGATED jobs — the wedged ones. A cancel that never returned
+        # reconciled nothing, so shutdown's own bookkeeping owes them a terminal
+        # status; without it they persist as "running" under a dying pid.
+        for job in live:
+            assert job.status == "cancelled", f"{job.job_id} left non-terminal by a hung cancel"
+            assert job.runs_done_event.is_set()
+            assert job.done_event.is_set()
+            assert [case.failure_code for case in job.cases] == ["server_shutdown"]
+
+    @pytest.mark.asyncio
+    async def test_shutdown_persists_a_terminal_status_for_a_wedged_cancel(
+        self,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The sidecar a wedged cancel leaves behind must not read ``running``.
+
+        This process is exiting; a record still claiming ``running`` under a pid
+        that is about to disappear reloads as an interrupted job, mislabelling a
+        deliberate shutdown as a crash.
+        """
+
+        class HungRunner:
+            async def cancel(self, job: Any) -> list[dict[str, Any]]:
+                await asyncio.Event().wait()
+                return []
+
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        job = _job(work_dir, circuit, job_id="exp_wedged_0001", status="running")
+        registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
+        registry.add_experiment_job(job)
+        # Delegated: a runner owns this job, and its cancel is the one that hangs.
+        runners = SimpleNamespace(get_experiment_runner_for=lambda _job: HungRunner())
+        monkeypatch.setattr(job_registry, "_SHUTDOWN_CANCEL_TIMEOUT_S", 0.05)
+
+        # The real shutdown sequence: cancel the live work, then flush.
+        await asyncio.wait_for(registry.cancel_running(runners, None), timeout=5)
+        await registry.drain_pending()
+
+        reloaded = experiment_store.load_job(job.job_id, work_dir)
+        assert reloaded is not None
+        assert reloaded.status == "cancelled"
+        assert reloaded.failures and reloaded.failures[0]["code"] == "server_shutdown"
 
     @pytest.mark.asyncio
     async def test_shutdown_cancels_live_experiments_concurrently(self, work_dir: Path):
@@ -439,7 +497,7 @@ class TestExperimentLifecycle:
                 await released.wait()
                 return []
 
-        registry, runners, following = self._shutdown_pair(
+        registry, runners, _live, following = self._shutdown_pair(
             work_dir, BlockingRunner(), live_count=3
         )
 
@@ -452,6 +510,97 @@ class TestExperimentLifecycle:
         assert following.status == "cancelled"
 
     @pytest.mark.asyncio
+    async def test_shutdown_bounds_a_task_that_swallows_its_cancellation(
+        self,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Cancelling a job's task is a request, not a guarantee.
+
+        A task that catches ``CancelledError`` — or sits inside a shielded
+        section — keeps its await open for as long as it likes, and shutdown
+        awaited it unbounded. Both task passes (batch, then experiment) sit
+        ahead of the persistence flush, so either one stalling loses every
+        sidecar the flush had left to write.
+        """
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        release = asyncio.Event()
+        swallowed: list[str] = []
+
+        async def _refuses_to_stop(name: str) -> None:
+            while True:
+                try:
+                    await release.wait()
+                    return
+                except asyncio.CancelledError:
+                    swallowed.append(name)
+
+        batch = make_batch_job("batch_stubborn", status="running", netlist=circuit)
+        experiment = _job(work_dir, circuit, job_id="exp_stubborn", status="running")
+        batch.task = asyncio.create_task(_refuses_to_stop("batch"))
+        experiment.task = asyncio.create_task(_refuses_to_stop("experiment"))
+        await asyncio.sleep(0)  # let both reach their first await
+
+        registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
+        registry.add_batch_job(batch)
+        registry.add_experiment_job(experiment)
+        runners = SimpleNamespace(
+            get_batch_runner_for=lambda _job: None,
+            get_experiment_runner_for=lambda _job: None,
+        )
+        monkeypatch.setattr(job_registry, "_SHUTDOWN_CANCEL_TIMEOUT_S", 0.05)
+
+        # The real shutdown sequence: cancel the live work, then flush.
+        await asyncio.wait_for(registry.cancel_running(runners, None), timeout=5)
+        await registry.drain_pending()
+
+        # Both tasks really did refuse — otherwise this passes for the wrong reason.
+        assert set(swallowed) == {"batch", "experiment"}
+        reloaded = experiment_store.load_job(experiment.job_id, work_dir)
+        assert reloaded is not None and reloaded.status == "cancelled", "the flush never ran"
+        _, batches = job_store.load_jobs_for_circuit(circuit)
+        assert [(bj.job_id, bj.status) for bj in batches] == [("batch_stubborn", "cancelled")]
+
+        release.set()
+        await asyncio.gather(batch.task, experiment.task)
+
+    @pytest.mark.asyncio
+    async def test_shutdown_survives_a_batch_cancel_that_raises(self, work_dir: Path):
+        """Experiments are reconciled LAST, so every earlier collection's cancel
+        stands between them and a terminal status.
+
+        A raise from a batch runner used to propagate straight out of
+        ``cancel_running``, leaving the experiment loop below it unrun and the
+        persistence flush after it unreached — the experiment records lost to a
+        failure in an unrelated job type.
+        """
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        batch = make_batch_job("batch_refused", status="running", netlist=circuit)
+        experiment = _job(work_dir, circuit, job_id="exp_after_batch", status="running")
+        registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
+        registry.add_batch_job(batch)
+        registry.add_experiment_job(experiment)
+
+        class RefusingBatchRunner:
+            async def cancel(self, job: Any, state: Any = None) -> None:
+                raise BatchJobError(f"batch {job.job_id} could not be stopped")
+
+        runners = SimpleNamespace(
+            get_batch_runner_for=lambda _job: RefusingBatchRunner(),
+            get_experiment_runner_for=lambda _job: None,
+        )
+
+        # The real shutdown sequence: cancel the live work, then flush.
+        await registry.cancel_running(runners, None)
+        await registry.drain_pending()
+
+        assert experiment.status == "cancelled", "the experiment loop never ran"
+        reloaded = experiment_store.load_job(experiment.job_id, work_dir)
+        assert reloaded is not None and reloaded.status == "cancelled", "the flush never ran"
+
+    @pytest.mark.asyncio
     async def test_shutdown_survives_a_runner_cancel_that_raises(self, work_dir: Path):
         class RefusingRunner:
             async def cancel(self, job: Any) -> list[dict[str, Any]]:
@@ -459,12 +608,18 @@ class TestExperimentLifecycle:
                     f"Experiment job {job.job_id} is not owned by a live coordinator"
                 )
 
-        registry, runners, following = self._shutdown_pair(work_dir, RefusingRunner())
+        registry, runners, live, following = self._shutdown_pair(work_dir, RefusingRunner())
 
         await registry.cancel_running(runners, None)
 
         assert following.status == "cancelled"
         assert following.done_event.is_set()
+        # A refused cancel is a cancel that did not happen: the DELEGATED job it
+        # refused still needs shutdown's bookkeeping, not an exemption for having
+        # been asked.
+        for job in live:
+            assert job.status == "cancelled", f"{job.job_id} left non-terminal by a refused cancel"
+            assert job.done_event.is_set()
 
 
 class TestExperimentDiscovery:
