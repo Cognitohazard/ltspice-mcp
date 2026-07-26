@@ -141,8 +141,12 @@ async def test_values_and_extrema_carry_outer_and_inner_identity(
     # success outcome (formerly "success").
     assert data["outcome"] == "complete"
     record = data["results"]["vout"]["per_run"]["items"][0]
-    for field in ("case_id", "run_index", "step_index", "step_values", "assignments"):
-        assert field in record
+    # Lean default: attribution keys that carry information survive; a
+    # null/empty one (no case, no steps on a standalone raw) is dropped —
+    # absent and empty mean the same thing on a row with no required keys.
+    assert record["run_index"] == 0
+    for field in ("case_id", "step_index", "step_values", "assignments"):
+        assert record.get(field) in (None, {}, []) or field in record
     reduced = data["results"]["vout"]["reduced"]
     assert {entry["stat"] for entry in reduced} == {"min", "mean"}
     assert next(entry for entry in reduced if entry["stat"] == "min")["run_index"] == 0
@@ -667,7 +671,10 @@ async def test_raw_path_has_null_deck_hash_and_provenance_observation(
         [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}],
     )
     value = data["results"]["v"]["values"][0]
-    assert value["deck_sha256"] is None
+    # Lean rows no longer carry the per-row deck digest at all; the
+    # observation remains the channel that says this source has no deck
+    # provenance to offer.
+    assert "deck_sha256" not in value
     assert any(
         observation["code"] == "raw_path_without_deck_provenance"
         for observation in data["observations"]
@@ -1078,12 +1085,15 @@ async def test_include_fields_projects_both_row_surfaces(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("surface", ["values", "per_run"])
-async def test_rows_are_whole_when_include_fields_is_absent(
+async def test_default_rows_are_lean_and_fields_restores_the_whole_value(
     surface: str,
     state_no_sim: SessionState,
     work_dir: Path,
 ):
-    """The default response is unprojected: include.fields is purely additive."""
+    """Lean-by-default: rows carry the scalar leaves of value and drop
+    null/empty attribution plus the per-row deck digest; include.fields is
+    the named opt-in that restores any dropped detail, up to the whole
+    block via fields=["value"]. Both row surfaces render identically."""
     raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
     include: dict[str, Any] = {"per_run": {"limit": 10}} if surface == "per_run" else {}
     data = await _analyze(state_no_sim, raw, [_LOOP_RECIPE], include=include)
@@ -1091,8 +1101,20 @@ async def test_rows_are_whole_when_include_fields_is_absent(
     rows = entry["per_run"]["items"] if surface == "per_run" else entry["values"]
     assert rows
     for row in rows:
-        assert set(row) == _FULL_ROW_KEYS
-        assert len(row["value"]) > 1
+        assert set(row) <= _FULL_ROW_KEYS
+        assert "deck_sha256" not in row
+        assert not any(isinstance(item, (dict, list)) for item in row["value"].values()), (
+            "default value must be scalar leaves only"
+        )
+
+    full_include = dict(include)
+    full_include["fields"] = ["value"]
+    full = await _analyze(state_no_sim, raw, [_LOOP_RECIPE], include=full_include)
+    full_entry = full["results"]["loop"]
+    full_rows = full_entry["per_run"]["items"] if surface == "per_run" else full_entry["values"]
+    assert any(
+        isinstance(item, (dict, list)) for row in full_rows for item in row["value"].values()
+    ), 'include.fields=["value"] must restore the nested detail'
 
 
 def test_unknown_projection_path_names_the_valid_row_keys(work_dir: Path):
@@ -1369,14 +1391,15 @@ class TestSourceHashProvenance:
         lean = await _analyze(state_no_sim, raw, recipes)
         entry = lean["source_hashes"][0]
         assert entry["manifest_id"]
-        assert "label" in entry
-        for key in ("raw_path", "raw_sha256", "log_path", "log_sha256", "composite_sha256"):
-            assert key not in entry, f"{key} is provenance and must be opt-in"
+        # The default is exactly the attribution legend rows join against —
+        # anything past {manifest_id, label} is provenance and opt-in.
+        assert set(entry) == {"manifest_id", "label"}
 
         full = await _analyze(state_no_sim, raw, recipes, include={"provenance": True})
         full_entry = full["source_hashes"][0]
         assert full_entry["raw_path"]
         assert full_entry["composite_sha256"] or full_entry["raw_sha256"]
+        assert "log_present" in full_entry and "job_id" in full_entry
         assert len(json.dumps(full)) > len(json.dumps(lean))
 
 
@@ -1400,7 +1423,9 @@ class TestHeadlineLeafPromotion:
                 {"key": "gbw", "metric": "bode_crossing", "signal": "V(out)", "level_db": -3.0},
                 {"key": "dc", "metric": "bode_point", "signal": "V(out)", "at_hz": "1"},
             ],
-            include={"per_run": {"limit": 5}},
+            # fields=["value"] fetches the WHOLE value block — this test checks
+            # the promoted flat leaf agrees with the nested detail it came from.
+            include={"per_run": {"limit": 5}, "fields": ["value"]},
         )
         crossing_row = data["results"]["gbw"]["per_run"]["items"][0]["value"]
         assert crossing_row["first_crossing_hz"] == crossing_row["crossings"][0]["frequency_hz"]

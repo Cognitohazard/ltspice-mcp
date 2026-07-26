@@ -410,6 +410,94 @@ class TestIdempotency:
         assert len(submissions) == 1
 
 
+@pytest.mark.asyncio
+class TestLeanReceipt:
+    """The default receipt is the answer channel: completed rows drop their
+    artifact paths (reachable via jobs(runs) or run_fields), non-completed
+    rows keep them (the failed row's log is its diagnostic), and the caller's
+    own attached-analysis request is echoed only under provenance."""
+
+    async def test_completed_rows_drop_artifact_paths(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _instant_simulator(monkeypatch, [])
+        deck = _deck(work_dir / "lean_rows.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "lean-rows"), state_with_sim)
+        )
+
+        (row,) = data["runs"]["items"]
+        assert row["status"] == "produced"
+        assert "raw" not in row and "log" not in row
+        assert row["assignments"] == {}
+
+    async def test_run_fields_still_fetch_artifact_paths(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _instant_simulator(monkeypatch, [])
+        deck = _deck(work_dir / "lean_fetch.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "lean-fetch", run_fields=["case_id", "raw", "log"]),
+                state_with_sim,
+            )
+        )
+
+        (row,) = data["runs"]["items"]
+        assert row["raw"] and row["log"]
+
+    async def test_non_completed_rows_keep_artifact_path_keys(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _instant_simulator(monkeypatch, [])
+        deck = _deck(work_dir / "lean_blocked.cir", body="V1 in 0 1\nR1 out 1k\n.op\n.end\n")
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "lean-blocked"), state_with_sim)
+        )
+
+        (row,) = data["runs"]["items"]
+        assert row["status"] != "produced"
+        assert "raw" in row and "log" in row
+
+    async def test_analysis_request_echo_is_provenance(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "lean_echo.cir")
+
+        lean = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "lean-echo", **_VARIED_ANALYSIS),
+                state_with_sim,
+            )
+        )
+        assert lean["analysis"]["status"] == "completed"
+        assert "request" not in lean["analysis"]
+
+        loud = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "lean-echo", provenance=True, **_VARIED_ANALYSIS),
+                state_with_sim,
+            )
+        )
+        assert loud["analysis"]["request"] is not None
+
+
 class TestOptionalRequestId:
     """request_id may be omitted: a fresh id is generated per call, so a
     one-off run pays no idempotency ceremony, while an explicit id keeps the
@@ -780,7 +868,9 @@ class TestLintModes:
         data = _assert_schema(result)
 
         assert len(submissions) == 1
-        assert data["lint"] == [{"circuit": "dut", "findings": []}]
+        # No findings (linting was off) -> no lint entry at all; an empty
+        # per-circuit row is ceremony the lean receipt no longer carries.
+        assert data["lint"] == []
 
 
 @pytest.mark.asyncio
