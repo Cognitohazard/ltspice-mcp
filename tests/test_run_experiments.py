@@ -29,7 +29,7 @@ from ltspice_mcp.tools.experiments import (
     handle_jobs,
     handle_run_experiments,
 )
-from tests.conftest import FIXTURES_DIR
+from tests.conftest import FIXTURES_DIR, make_sim_job
 
 
 def test_attached_per_run_limit_shares_the_analyze_page_cap():
@@ -513,7 +513,7 @@ class TestReplayRejectsChangedSources:
         _instant_simulator(monkeypatch, submissions)
         schematic = _schematic(work_dir / "amp.asc", "1k")
         _asc_exporter(state_with_sim)
-        args = _args(schematic, "edited-schematic")
+        args = _args(schematic, "edited-schematic", provenance=True)
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
         exported = work_dir / "amp.net"
         exported_bytes = exported.read_bytes()
@@ -540,7 +540,9 @@ class TestReplayRejectsChangedSources:
         _asc_exporter(state_with_sim)
 
         data = _assert_schema(
-            await handle_run_experiments(_args(schematic, "paired-digest"), state_with_sim)
+            await handle_run_experiments(
+                _args(schematic, "paired-digest", provenance=True), state_with_sim
+            )
         )
 
         source = data["source"][0]
@@ -1295,3 +1297,236 @@ class TestVariationsReachIntoIncludes:
         staged_core = _include_targets(staged_mid)[0]
         assert staged_core.name == "case-0000__core.inc"
         assert "R1 in mid 7k" in staged_core.read_text()
+
+
+class TestReceiptWeight:
+    """A receipt carries what the caller acts on; provenance is opt-in.
+
+    Provenance was measured at 29% of an experiment receipt's bytes on a real
+    fleet run — absolute paths repeated four ways and a digest per staged file,
+    none of which a caller opens, because the analysis tools address runs by
+    job_id.
+    """
+
+    async def test_provenance_is_absent_by_default_and_returned_on_request(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _instant_simulator(monkeypatch, [])
+        deck = _deck(work_dir / "weight.cir")
+
+        lean = _assert_schema(await handle_run_experiments(_args(deck, "lean-1"), state_with_sim))
+        source = lean["source"][0]
+        assert "sha256" not in source
+        assert "staged_deck" not in source
+        assert "manifest" not in source
+        assert "linter_version" not in source
+        # The count survives, so "how many files were staged" is still answerable
+        # without naming every one of them.
+        assert source["staged_files"] >= 1
+        # What the caller acts on is untouched.
+        assert source["circuit"] == "dut"
+        assert source["simulator"]
+
+        full = _assert_schema(
+            await handle_run_experiments(_args(deck, "full-1", provenance=True), state_with_sim)
+        )
+        full_source = full["source"][0]
+        assert full_source["sha256"]
+        assert full_source["staged_deck"]
+        assert full_source["manifest"]
+        assert full_source["linter_version"]
+
+    async def test_dropping_provenance_actually_shrinks_the_payload(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _instant_simulator(monkeypatch, [])
+        deck = _deck(work_dir / "shrink.cir")
+
+        lean = _assert_schema(
+            await handle_run_experiments(_args(deck, "shrink-lean"), state_with_sim)
+        )
+        full = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "shrink-full", provenance=True), state_with_sim
+            )
+        )
+        assert len(json.dumps(lean)) < len(json.dumps(full))
+
+    async def test_run_fields_projects_rows_and_preserves_nesting(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _instant_simulator(monkeypatch, [])
+        deck = _deck(work_dir / "proj.cir")
+
+        args = _args(
+            deck,
+            "proj-1",
+            variations=[{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}],
+            run_fields=["case_id", "assignments"],
+        )
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        rows = data["runs"]["items"]
+        assert rows, "expected the sweep to produce runs"
+        for row in rows:
+            assert set(row) == {"case_id", "assignments"}
+            # Nesting is preserved, not flattened.
+            assert isinstance(row["assignments"], dict)
+
+    async def test_asking_for_provenance_replays_rather_than_conflicting(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Verbosity chooses how a receipt reads, not what runs.
+
+        If it reached the idempotency fingerprint, re-reading an existing
+        receipt with the audit trail turned on would be rejected as a changed
+        request — refusing the caller exactly when they want to see more.
+        """
+        submissions: list[str] = []
+        _instant_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "verbosity.cir")
+
+        lean = _assert_schema(
+            await handle_run_experiments(_args(deck, "verbosity-1"), state_with_sim)
+        )
+        again = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "verbosity-1", provenance=True, run_fields=["case_id"]),
+                state_with_sim,
+            )
+        )
+
+        assert again.get("error") is None, "a verbosity change is not a conflict"
+        assert again["job_id"] == lean["job_id"], "expected a replay of the same job"
+        assert len(submissions) == 1, "the replay must not re-run anything"
+        assert again["source"][0]["sha256"], "the replay honours the new verbosity"
+
+    async def test_a_live_include_is_reported_even_without_provenance(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """An unprovable input is a disclosure, not provenance trivia.
+
+        Stripping the manifest wholesale would turn "this job cannot prove what
+        it ran against" into silence, which is the one thing the lean receipt
+        must not do.
+        """
+        _instant_simulator(monkeypatch, [])
+        outside = work_dir.parent / "outside_core.inc"
+        outside.write_text("R9 in 0 1k\n")
+        # A stageable include alongside the live one: without both, "keep only
+        # the notable entries" is indistinguishable from "keep every entry".
+        inside = work_dir / "inside_core.inc"
+        inside.write_text("R8 in 0 2k\n")
+        deck = _deck(
+            work_dir / "live.cir",
+            f".include {inside}\n.include {outside}\nV1 in 0 1\n.op\n.end\n",
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "live-1", allow_live_includes=True), state_with_sim
+            )
+        )
+        entries = [e for src in data["source"] for e in src.get("manifest", [])]
+        assert entries, "the live include must still be disclosed"
+        assert all(e["live"] or e["reason"] for e in entries), (
+            "a lean receipt keeps only manifest entries that say something"
+        )
+        assert not any(str(inside) == e["path"] for e in entries), (
+            "the ordinary staged include is bulk, not a disclosure"
+        )
+
+    def test_the_fingerprint_covers_exactly_the_execution_arguments(self):
+        """A new presentation field must not silently invalidate stored receipts.
+
+        CANONICALIZER_VERSION gates replay and did not change here, so if a
+        newly added field entered the fingerprint, every previously stored
+        receipt would hash differently and come back as "different request
+        payload" — an idempotency conflict reported as the caller's fault.
+        Pinning the covered key set makes the next such field fail here instead.
+        """
+        from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
+
+        model = RunExperimentsInput.model_validate(
+            {"request_id": "r", "circuits": [{"path": "/tmp/a.cir", "id": "d"}]}
+        )
+        covered = set(
+            model.model_dump(
+                mode="json",
+                exclude_unset=False,
+                exclude=set(RunExperimentsInput.PRESENTATION_FIELDS),
+            )
+        )
+        assert covered == {
+            "request_id",
+            "circuits",
+            "variations",
+            "execution",
+            "analyze",
+            "lint",
+            "suppress",
+            "allow_live_includes",
+        }
+        loud = RunExperimentsInput.model_validate(
+            {
+                "request_id": "r",
+                "circuits": [{"path": "/tmp/a.cir", "id": "d"}],
+                "provenance": True,
+                "run_fields": ["case_id"],
+            }
+        )
+        assert canonical_fingerprint(model) == canonical_fingerprint(loud)
+
+    def test_a_legacy_job_source_omits_provenance_it_never_had(self):
+        """Empty-string digests and an empty manifest say nothing, at a cost.
+
+        A non-experiment job stages nothing, so it has no digest and no
+        manifest. Absence states that; placeholders spend bytes to state it
+        while looking like real provenance.
+        """
+        job = make_sim_job(netlist=Path("/tmp/legacy.cir"), simulator="ngspice")
+        payload = experiments_mod._legacy_source(job, dialect="ngspice")
+
+        assert set(payload) == {"circuit", "path", "simulator", "dialect"}
+
+    def test_the_lean_manifest_filter_fails_closed(self):
+        """An entry that is neither staged, live, nor explained is an anomaly.
+
+        The store rebuilds `staged` with a False default, so this state is
+        reachable from a record written by an older or partial writer. A filter
+        listing known-bad states would hide it; one that keeps everything except
+        an ordinary staged reference cannot.
+        """
+        from ltspice_mcp.lib.experiment_types import ManifestEntry, SourceRecord
+
+        ordinary = ManifestEntry(path=Path("a.inc"), sha256="x", staged=True, live=False)
+        anomalous = ManifestEntry(path=Path("b.inc"), sha256="", staged=False, live=False)
+        record = SourceRecord(
+            circuit="dut",
+            path=Path("dut.cir"),
+            sha256="x",
+            staged_deck=Path("staged/dut.cir"),
+            manifest=[ordinary, anomalous],
+        )
+
+        lean = experiments_mod._source_payload(record, provenance=False)
+
+        kept = [entry["path"] for entry in lean.get("manifest", [])]
+        assert str(anomalous.path) in kept, "an unexplained un-staged entry must survive"
+        assert str(ordinary.path) not in kept, "an ordinary staged entry is bulk"
+        assert lean["staged_files"] == 2, "the count still covers every entry"
