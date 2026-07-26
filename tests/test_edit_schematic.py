@@ -664,6 +664,41 @@ async def test_post_commit_reference_error_returns_committed_envelope(
     assert nxt["outcome"] == "complete"
 
 
+async def test_failure_after_a_completed_stage_is_not_reported_against_it(
+    asc_state, work_dir, monkeypatch
+):
+    """One stage, one verdict: a later failure must not overwrite an earlier ok.
+
+    The reference stage records its own outcome. An exception raised after it —
+    in hint or envelope assembly — used to append a SECOND 'reference' entry with
+    ok=false, leaving two entries for one stage with opposite verdicts and no way
+    to tell the caller which of the two actually happened.
+    """
+    (work_dir / "ref.cir").write_text(_REF_DECK)
+
+    async def fake_export(_copy, _state):
+        return _REF_DECK
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("hint assembly blew up")
+
+    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
+    monkeypatch.setattr(se, "_commit_hint", boom)
+
+    data = await _build_blank(asc_state, "hintboom", _DIVIDER_OPS, reference="ref.cir")
+    assert data["commit_state"] == "committed"
+    assert data["outcome"] == "partial"
+    assert [s for s in data["stages"] if s["stage"] == "reference"] == [
+        {"stage": "reference", "ok": True}
+    ]
+    assert data["stages"][-1] == {
+        "stage": "response",
+        "ok": False,
+        "error": "hint assembly blew up",
+    }
+    assert data["error"]["stage"] == "response"
+
+
 async def test_post_commit_view_error_returns_committed_envelope(asc_state, work_dir, monkeypatch):
     """A view-assembly exception is post-commit too, and reports the same way."""
 

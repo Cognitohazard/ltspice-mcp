@@ -3,11 +3,12 @@
 import asyncio
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.lib import now
+from ltspice_mcp.lib import job_store, now
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_registry import JobRegistry
@@ -312,6 +313,58 @@ class TestCancelRunningSnapshotsViews:
             assert registry.jobs[f"run{i}"].status == "cancelled"
             # Jobs registered mid-cancel land in the store untouched.
             assert registry.jobs[f"late-run{i}"].status == "completed"
+
+
+class TestShutdownCancelIsolation:
+    """One job's cancel failing must cost only that job.
+
+    ``cancel_running`` is the last thing that can write a terminal status
+    before the process exits, and the caller flushes job persistence
+    immediately after it returns. A cancel that raised straight out of the
+    loop therefore skipped every job it had not reached yet AND the flush
+    that would have persisted them — one wedged simulator losing the record
+    of all the others.
+    """
+
+    async def test_a_raising_sim_cancel_leaves_later_jobs_and_the_flush_intact(
+        self, work_dir: Path
+    ):
+        netlist = work_dir / "deck.cir"
+        netlist.write_text(".op\n.end\n")
+        registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
+        refused = make_sim_job("sim_refused", status="running", netlist=netlist)
+        following = make_sim_job("sim_following", status="running", netlist=netlist)
+        batch = make_batch_job("batch_following", status="running", netlist=netlist)
+        registry.add_sim_job(refused)
+        registry.add_sim_job(following)
+        registry.add_batch_job(batch)
+
+        class _PartlyRefusingRunner(_RecordingRunner):
+            async def cancel(
+                self, job: SimulationJob | BatchJob, state: SessionState | None = None
+            ) -> None:
+                if job.job_id == "sim_refused":
+                    raise RuntimeError("simulator kill failed")
+                await super().cancel(job, state)
+
+        sim_runner = _PartlyRefusingRunner()
+        runners = SimpleNamespace(
+            get_existing_sim_runner=lambda _simulator: sim_runner,
+            # No batch runner: shutdown's own bookkeeping cancels and persists it,
+            # which is the half a raise upstream used to skip entirely.
+            get_batch_runner_for=lambda _job: None,
+        )
+
+        # The real shutdown sequence: cancel the live work, then flush.
+        await registry.cancel_running(runners, None)
+        await registry.drain_pending()
+
+        assert following.status == "cancelled", "a sibling sim job was skipped by the raise"
+        assert batch.status == "cancelled", "the batch collection was skipped by the raise"
+        _, reloaded_batches = job_store.load_jobs_for_circuit(netlist)
+        assert [(bj.job_id, bj.status) for bj in reloaded_batches] == [
+            ("batch_following", "cancelled")
+        ], "the persistence flush never ran"
 
 
 class TestPerTypeEvictionCap:

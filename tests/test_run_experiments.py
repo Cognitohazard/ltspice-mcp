@@ -14,6 +14,7 @@ import pytest
 from pydantic import ValidationError
 
 from ltspice_mcp.lib import experiment_store
+from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.state import SessionState
@@ -76,6 +77,38 @@ def test_variation_input_schema_is_inlined_and_discriminated():
 def _deck(path: Path, body: str | None = None) -> Path:
     path.write_text(body or "V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
     return path
+
+
+def _schematic(path: Path, resistance: str) -> Path:
+    """A schematic carrying one editable value, in .asc's own syntax."""
+    path.write_text(
+        f"Version 4\nSYMBOL res 0 0 R0\nSYMATTR InstName R1\nSYMATTR Value {resistance}\n"
+    )
+    return path
+
+
+def _asc_exporter(state: SessionState) -> None:
+    """Stand in for the LTspice binary that turns an .asc into a netlist.
+
+    The real exporter is a Windows process; what the replay path depends on is
+    only that a schematic reaches the simulator as a netlist written from it,
+    leaving the .asc itself read by nothing downstream.
+    """
+
+    class _Exporter:
+        @staticmethod
+        def create_netlist(path: str, timeout: float | None = None) -> str:
+            schematic = Path(path)
+            value = next(
+                line.split()[-1]
+                for line in schematic.read_text().splitlines()
+                if line.startswith("SYMATTR Value")
+            )
+            netlist = schematic.with_suffix(".net")
+            netlist.write_text(f"V1 in 0 1\nR1 in 0 {value}\n.op\n.end\n")
+            return str(netlist)
+
+    state.available_simulators["ltspice"] = _Exporter
 
 
 def _args(
@@ -463,6 +496,108 @@ class TestReplayRejectsChangedSources:
         assert str(deck) in data["error"]["message"]
         assert len(submissions) == 1
 
+    async def test_edited_schematic_conflicts_though_its_export_is_untouched(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The .asc is the file the author edits, and nothing else moves with it.
+
+        A schematic runs through an exported netlist, and a replay skips the
+        export — so the netlist the manifest recorded is still on disk, still
+        byte-identical, and still describes the circuit as it was. Checking only
+        that export is checking the one file an edit cannot reach.
+        """
+        submissions: list[str] = []
+        _instant_simulator(monkeypatch, submissions)
+        schematic = _schematic(work_dir / "amp.asc", "1k")
+        _asc_exporter(state_with_sim)
+        args = _args(schematic, "edited-schematic")
+        first = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        exported = work_dir / "amp.net"
+        exported_bytes = exported.read_bytes()
+        _schematic(schematic, "2k")
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert exported.read_bytes() == exported_bytes
+        assert first["source"][0]["sha256"] != sha256_file(exported)
+        assert data["error"]["code"] == "idempotency_conflict"
+        assert str(schematic) in data["error"]["message"]
+        assert len(submissions) == 1
+
+    async def test_schematic_source_digest_describes_the_schematic(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A record that pairs the .asc's path with the .net's digest describes
+        neither file, and no later reader can tell which one it meant."""
+        _instant_simulator(monkeypatch, [])
+        schematic = _schematic(work_dir / "paired.asc", "3k")
+        _asc_exporter(state_with_sim)
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(schematic, "paired-digest"), state_with_sim)
+        )
+
+        source = data["source"][0]
+        assert source["path"] == str(schematic)
+        assert source["sha256"] == sha256_file(schematic)
+
+    async def test_unchanged_schematic_still_replays(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Adding the schematic to the manifest must not make every .asc replay a
+        conflict — the export is regenerated per submission and never matches."""
+        submissions: list[str] = []
+        _instant_simulator(monkeypatch, submissions)
+        schematic = _schematic(work_dir / "stable.asc", "4k7")
+        _asc_exporter(state_with_sim)
+        args = _args(schematic, "stable-schematic")
+
+        first = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert replay["job_id"] == first["job_id"]
+        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        assert len(submissions) == 1
+
+    async def test_live_include_conflicts_rather_than_replaying(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A file that was never digested cannot be shown to be unchanged.
+
+        allow_live_includes already says the job cannot prove what those files
+        held; a replay would make that claim a second time, later. It fails the
+        way every other unprovable case here does — a re-run, not stale numbers.
+        """
+        submissions: list[str] = []
+        _instant_simulator(monkeypatch, submissions)
+        outside = work_dir.parent / f"{work_dir.name}-shared.inc"
+        outside.write_text(".param supply=5\n")
+        deck = _deck(
+            work_dir / "live.cir",
+            f'.include "{outside}"\nV1 in 0 {{supply}}\nR1 in 0 1k\n.op\n.end\n',
+        )
+        args = _args(deck, "live-include", lint="off", allow_live_includes=True)
+        first = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert first["outcome"] == "complete"
+        assert data["error"]["code"] == "idempotency_conflict"
+        assert str(outside) in data["error"]["message"]
+        assert len(submissions) == 1
+
     async def test_record_without_source_digests_conflicts(
         self,
         state_with_sim: SessionState,
@@ -471,13 +606,16 @@ class TestReplayRejectsChangedSources:
     ):
         """A record predating recorded digests must not replay as a match.
 
-        Treating an absent digest as agreement would leave the fix inert for
-        exactly the jobs already sitting on disk.
+        Such a record carries no manifest to compare against at all, so there is
+        no drift to find — the guard has to refuse it on the absence itself, or
+        the fix is inert for exactly the jobs already sitting on disk. The deck
+        is named so that no assertion here can pass on the filename instead of
+        the message.
         """
         submissions: list[str] = []
         _instant_simulator(monkeypatch, submissions)
-        deck = _deck(work_dir / "digestless.cir")
-        args = _args(deck, "digestless-record")
+        deck = _deck(work_dir / "older.cir")
+        args = _args(deck, "older-record")
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
         await state_with_sim.job_registry.drain_pending()
 
@@ -485,15 +623,18 @@ class TestReplayRejectsChangedSources:
         stored = json.loads(record.read_text())
         for source in stored["sources"]:
             source["sha256"] = ""
-            for entry in source["manifest"]:
-                entry["sha256"] = ""
+            source["manifest"] = []
         record.write_text(json.dumps(stored))
         del state_with_sim.experiment_jobs[first["job_id"]]
 
         data = _assert_schema(await handle_run_experiments(args, state_with_sim))
 
+        message = data["error"]["message"]
         assert data["error"]["code"] == "idempotency_conflict"
-        assert "digest" in data["error"]["message"]
+        assert "carries no source digest" in message
+        # Not the drift path: nothing on disk changed, and a record with no
+        # manifest cannot report that it did.
+        assert "changed since" not in message
         assert len(submissions) == 1
 
 
@@ -757,6 +898,45 @@ class TestAttachedAnalysis:
             for entry in group["reduced"]
         )
         assert result["coverage"]["runs_analyzed"] == 2
+
+    async def test_include_block_reaches_the_analysis_engine(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The include block is the caller's only lever over what comes back.
+
+        A recipe with 'reduce' returns reductions alone unless per_run is asked
+        for, so the rows are proof the block was forwarded rather than accepted
+        and dropped — a silent drop leaves the response looking exactly like a
+        caller who never asked.
+        """
+        _fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached-include.cir")
+        analysis = {
+            **_VARIED_ANALYSIS["analyze"],
+            "include": {"per_run": {"limit": 5}, "signals_available": True},
+        }
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-include",
+                    variations=_VARIED_ANALYSIS["variations"],
+                    analyze=analysis,
+                ),
+                state_with_sim,
+            )
+        )
+
+        result = data["analysis"]["result"]
+        assert result is not None, data["analysis"]
+        entry = result["results"]["vout"]
+        assert entry["per_run"]["returned"] == 2
+        assert {row["run_index"] for row in entry["per_run"]["items"]} == {0, 1}
+        assert result["signals_available"]
 
     async def test_successful_analysis_does_not_report_partial(
         self,
