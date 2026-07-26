@@ -468,6 +468,8 @@ Build or edit .asc with the schematic tools, never by hand (hand-writing forfeit
 CONSOLIDATED_INSTRUCTIONS = """\
 EXPERIMENTAL consolidated profile: six tools for an agent with native file access (author .cir/.net/.sp decks with your own file tools; these tools run, analyze, gate, and edit .asc schematics geometry-aware).
 
+Simulate, don't deliberate: runs are cheap — spot-check ideas, assumptions, and sizings with quick experiments instead of reasoning them out.
+
 EXECUTE — run_experiments: run staged decks across declared variations (strict assignments plus one random/Monte-Carlo); required request_id = durable, idempotent submission; quick jobs return inline, longer ones a receipt/job_id. jobs: status, wait (long-poll), cancel (owner/control_token), list, run-record pages; by job_id or request_id.
 
 UNDERSTAND — analyze_results: typed recipes over completed runs/experiments; case/step-attributed values, reductions, spec verdicts; continuable via result_set_id + cursor. inspect: read-only — capabilities, symbols, net trace, components, models.
@@ -478,8 +480,6 @@ Loops:
   netlist: write deck -> run_experiments -> analyze_results -> edit -> ...
   schematic new: inspect(symbols) -> edit_schematic{base:"blank", ops, render} -> revise
   schematic edit: read .asc -> edit_schematic{ops, expected_sha256} -> verify_circuit
-  debug: verify_circuit(lint) -> fix -> run_experiments -> analyze_results
-  long runs: run_experiments (receipt) -> jobs(wait) -> analyze_results
 
 A terminal run can still be degenerate (coerced value, skipped .meas): read observations/warnings and per-item failures — completed is not correct. Match recipe to run type (AC metrics need .AC, transient need .tran) or analyze_results errors.
 """

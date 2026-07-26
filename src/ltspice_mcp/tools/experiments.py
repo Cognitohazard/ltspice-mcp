@@ -573,7 +573,10 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         "rather than a call per point — a large grid costs about what one case "
         "costs. The required request_id makes submission idempotent; quick jobs "
         "return results inline, longer ones return a receipt to follow with 'jobs'. "
-        "Attach an 'analyze' block to get the measurements back with the results."
+        "Attach an 'analyze' block to get the measurements back with the results. "
+        "Cheap enough for spot checks: when unsure about a behavior, assumption, "
+        "or sizing, run a small experiment and read the numbers rather than "
+        "reasoning it out."
     ),
     input_model=RunExperimentsInput,
     annotations=types.ToolAnnotations(
