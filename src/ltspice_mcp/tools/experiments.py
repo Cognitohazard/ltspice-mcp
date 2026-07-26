@@ -575,17 +575,16 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
 @registry.tool(
     name="run_experiments",
     description=(
-        "Run one or more staged SPICE decks across an assignment grid and random "
-        "(Monte Carlo) variations, as one durable job. Cases run in parallel up to "
-        "the concurrency cap, so submit the whole sweep as one 'variations' grid "
-        "rather than a call per point — a large grid costs about what one case "
-        "costs. Omit request_id for a one-off run, or pass one to make submission "
-        "durable and idempotent across retries; quick jobs "
-        "return results inline, longer ones return a receipt to follow with 'jobs'. "
-        "Attach an 'analyze' block to get the measurements back with the results. "
-        "Cheap enough for spot checks: when unsure about a behavior, assumption, "
-        "or sizing, run a small experiment and read the numbers rather than "
-        "reasoning it out."
+        "Run SPICE and get the numbers back in one call: point it at your deck(s), "
+        "attach an 'analyze' block, and the measured values return with the "
+        "results — from a one-off spot check to a full sweep or Monte Carlo grid. "
+        "Cases run in parallel, so express the whole sweep as one 'variations' "
+        "grid rather than a call per point; a large grid costs about what one "
+        "case costs. When unsure about a behavior, assumption, or sizing, run a "
+        "small experiment and read the numbers rather than reasoning it out. "
+        "Quick runs return results inline; longer ones return a receipt to follow "
+        "with 'jobs', and passing a request_id makes the submission durable and "
+        "idempotent across retries."
     ),
     input_model=RunExperimentsInput,
     annotations=types.ToolAnnotations(
@@ -2452,12 +2451,13 @@ def _jobs_error_details(exc: Exception) -> tuple[str, str, bool]:
 @registry.tool(
     name="jobs",
     description=(
-        "Follow and control durable jobs, addressed by job_id or by the "
-        "request_id they were submitted under. 'wait' blocks server-side until the "
+        "Check on, wait for, or stop a run you started, by job_id or the "
+        "request_id it was submitted under. 'wait' blocks server-side until the "
         "job finishes — prefer it to polling 'status' in a loop; 'status' snapshots "
         "it now; 'cancel' stops it (owner process, or the receipt's control_token); "
-        "'runs' pages per-run records; 'list' with no circuit is the "
-        "recently-touched-circuits view for picking up work from an earlier session."
+        "'runs' pages the full per-run records, artifact paths included; 'list' "
+        "with no circuit is the recently-touched-circuits view for picking up "
+        "work from an earlier session."
     ),
     input_model=JobsInput,
     annotations=types.ToolAnnotations(
