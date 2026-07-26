@@ -1529,12 +1529,48 @@ def _bode_point_sample(value: dict[str, Any]) -> tuple[str, Any]:
     return "magnitude_db", (points[0].get("magnitude_db") if points else None)
 
 
+def _crossing_sample(value: dict[str, Any]) -> tuple[str, Any]:
+    """The first crossing's frequency, in sweep order — the name carries the
+    rule. None when the level was never crossed, over a made-up number."""
+    crossings = value.get("crossings") or []
+    return "first_crossing_hz", (crossings[0].get("frequency_hz") if crossings else None)
+
+
 # Scalar metrics whose sample lives in a nested structure rather than a flat
 # top-level field. Keyed alongside _SCALAR_FIELDS so no discriminant is special
 # cased inside the loop.
 _SCALAR_NESTED: dict[str, Callable[[dict[str, Any]], tuple[str, Any]]] = {
     "bode_point": _bode_point_sample,
 }
+
+
+# Metrics whose headline number lives only inside a list (points[]/crossings[])
+# where dotted ``include.fields`` projection cannot reach — measured at 13-22x
+# the shell-equivalent size for a 12-case sweep table because the caller could
+# not name the one leaf it wanted. Promote that number to a flat ``value`` leaf
+# at row-build time. bode_point's extractor is the reducer's own, so the
+# projected leaf and a reduce over that recipe can never disagree;
+# bode_crossing is a variable-length recipe whose category rejects ``reduce``
+# at validation, so its rule lives only here. stability already ships its
+# worst-case scalars flat; this is that rule applied uniformly.
+_HEADLINE_LEAVES: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    "bode_point": lambda value: dict([_bode_point_sample(value)]),
+    # No crossing COUNT here: the adapter caps its list (max_results, default
+    # 10) and reports no truncation, so a count would silently saturate — a
+    # wrong number dressed as a fact. Null first_crossing_hz carries "never
+    # crossed"; ambiguity is visible in the list itself.
+    "bode_crossing": lambda value: dict([_crossing_sample(value)]),
+}
+
+
+def _promote_headlines(metric: str, value: dict[str, Any]) -> dict[str, Any]:
+    """``value`` with the metric's headline leaves added; existing keys win."""
+    promote = _HEADLINE_LEAVES.get(metric)
+    if promote is None or not isinstance(value, dict):
+        return value
+    for name, leaf in promote(value).items():
+        value.setdefault(name, leaf)
+    return value
 
 
 def _measurements_flat(value: dict[str, Any]) -> dict[str, Any]:
@@ -1809,7 +1845,10 @@ async def _evaluate_item(
                             item_deadline,
                         )
                     else:
-                        value = await _adapter_value(recipe, run.source, step, state)
+                        value = _promote_headlines(
+                            recipe.metric,
+                            await _adapter_value(recipe, run.source, step, state),
+                        )
                         artifacts = []
                     identity = _identity(run.source, step, step_values)
                     records.append(
