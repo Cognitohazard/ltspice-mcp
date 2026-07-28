@@ -73,6 +73,7 @@ DOC_PATHS = (
     "docs/DESIGN.md",
     "skills/ltspice/SKILL.md",
     "skills/ngspice/SKILL.md",
+    "skills/spice-experiments/SKILL.md",
 )
 
 # Tool names that existed before the consolidations and no longer do.
@@ -80,6 +81,10 @@ DOC_PATHS = (
 # step addressing, simulation_summary, find_model, edit_directive); a doc that
 # still names them as tools sends users chasing ghosts.
 REMOVED_TOOL_NAMES = (
+    # "measurements" is also a live recipe metric on the consolidated
+    # surface: skills/spice-experiments/SKILL.md refers to it in prose
+    # (unbackticked) on purpose, since only backticked forms count as tool
+    # references here.
     "measurements",
     "model_info",
     "add_text",
@@ -139,6 +144,19 @@ class TestStaleToolNamesInDocs:
             "query_value step_axis/step_value, transient_response modes, simulation_summary, "
             "find_model, edit_directive)."
         )
+
+
+class TestConsolidatedSkillDocCoverage:
+    def test_experiment_skill_doc_names_every_consolidated_tool(self) -> None:
+        # Derived from the registry, not hand-copied: adding a tool to the
+        # consolidated profile fails here until the skill doc teaches it (or
+        # this pin is deliberately revisited).
+        tool_defs, _ = registry.get_for_profile("consolidated")
+        names = sorted(t.name for t in tool_defs)
+        assert names, "consolidated profile registered no tools"
+        text = (ROOT / "skills/spice-experiments/SKILL.md").read_text()
+        missing = [name for name in names if name not in text]
+        assert not missing, f"skills/spice-experiments/SKILL.md never mentions {missing}"
 
 
 def _ltspice_refs_in_strings(py_path: Path) -> set[str]:
