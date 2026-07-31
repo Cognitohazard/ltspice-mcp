@@ -239,6 +239,41 @@ _PROFILE_BLOCK_RE = re.compile(
     re.DOTALL,
 )
 
+#: Either fence line, opening or closing. Used to audit the markers before any
+#: block is dropped, and again on the result to prove none survived.
+_PROFILE_MARKER_RE = re.compile(r"<!--\s*(?P<close>/)?profile\b[^>]*-->")
+
+
+def _fence_error(text: str, match: re.Match[str], problem: str) -> ValueError:
+    """A parse failure that names the offending fence and where it is."""
+    line = text.count("\n", 0, match.start()) + 1
+    return ValueError(f"spice_guide.md line {line}: {problem}: {match.group(0)!r}")
+
+
+def _check_fences(text: str) -> None:
+    """Reject a fence structure that would silently mis-select a block.
+
+    Fences do not nest and every opening has a closing. Both failures are
+    invisible at read time and produce a WRONG document rather than an obviously
+    broken one — an unterminated opening leaves its block unmatched, so the text
+    it was meant to scope leaks into every profile's guide, and a nested pair
+    ends the outer block at the inner closing, so the tail of the outer block
+    escapes its own fence. Neither is something a reader can spot in the served
+    text, which is why this raises instead of coping.
+    """
+    open_match: re.Match[str] | None = None
+    for match in _PROFILE_MARKER_RE.finditer(text):
+        if match["close"]:
+            if open_match is None:
+                raise _fence_error(text, match, "profile fence closed but never opened")
+            open_match = None
+        else:
+            if open_match is not None:
+                raise _fence_error(text, match, "profile fence opened inside another fence")
+            open_match = match
+    if open_match is not None:
+        raise _fence_error(text, open_match, "profile fence opened but never closed")
+
 
 def _select_profile_blocks(text: str, profile: str) -> str:
     """Keep the guide blocks fenced for ``profile``, drop the rest.
@@ -246,7 +281,11 @@ def _select_profile_blocks(text: str, profile: str) -> str:
     A fence naming a profile that does not exist is rejected rather than
     honoured: it matches nobody, so it would delete its block for every profile
     — a typo whose only symptom is missing guidance no reader knows to expect.
+    An unbalanced or nested fence is rejected the same way, and for the same
+    reason: it changes what a profile is told without changing anything a reader
+    would notice.
     """
+    _check_fences(text)
 
     def keep(match: re.Match[str]) -> str:
         names = match["profiles"].split()
@@ -258,7 +297,18 @@ def _select_profile_blocks(text: str, profile: str) -> str:
             )
         return match["body"] if profile in names else ""
 
-    return _PROFILE_BLOCK_RE.sub(keep, text)
+    selected = _PROFILE_BLOCK_RE.sub(keep, text)
+    # The audit above is structural; this is the outcome. A marker that survives
+    # selection is one _PROFILE_BLOCK_RE could not consume — a fence written in a
+    # spelling only the audit regex accepts — and shipping it would put internal
+    # markup in front of the client.
+    leftover = _PROFILE_MARKER_RE.search(selected)
+    if leftover is not None:
+        raise ValueError(
+            "spice_guide.md: a profile fence survived selection and would reach "
+            f"the client: {leftover.group(0)!r}"
+        )
+    return selected
 
 
 @lru_cache(maxsize=4)

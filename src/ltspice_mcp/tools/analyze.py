@@ -1737,6 +1737,7 @@ def _spec(
     *,
     incomplete: bool,
     include_outliers: bool,
+    fail_case_limit: int,
 ) -> dict[str, Any] | None:
     limits = getattr(recipe, "spec", None)
     if limits is None:
@@ -1767,12 +1768,12 @@ def _spec(
         "pass_count": pass_count,
         "fail_count": len(failed),
         # fail_cases is not resumable, so its next offset has no consumer.
-        "fail_cases": _page(failed, limit=_FAIL_CASE_PAGE_CAP)[0],
+        "fail_cases": _page(failed, limit=fail_case_limit)[0],
         "verdict": verdict,
         "allow_incomplete": limits.allow_incomplete,
     }
     if include_outliers:
-        result["outliers"] = failed[:_FAIL_CASE_PAGE_CAP]
+        result["outliers"] = failed[:fail_case_limit]
     return result
 
 
@@ -2007,7 +2008,9 @@ def _result_entry(
     include_outliers: bool,
     fields: list[str] | None = None,
     *,
-    values_limit: int = MAX_PAGE_SIZE,
+    values_limit: int,
+    fail_case_limit: int,
+    groups_limit: int | None,
 ) -> tuple[dict[str, Any], int]:
     """The one result entry for ``recipe``, plus the offset its ``per_run``
     page ends at — the caller turns that into the resume cursor."""
@@ -2020,12 +2023,23 @@ def _result_entry(
     }
     groups = _group_values(recipe, records, group_by)
     if groups:
+        if groups_limit is not None and len(groups) > groups_limit:
+            # Only a caller-set budget's shrink rung passes a limit here. A group
+            # is an aggregate answer rather than a page of a longer list, so the
+            # omission is stated rather than flagged — there is no cursor that
+            # walks the rest.
+            entry["warnings"].append(
+                f"{len(groups) - groups_limit} of {len(groups)} group(s) omitted to fit "
+                "the response budget; re-ask without 'budget' for every group."
+            )
+            groups = groups[:groups_limit]
         entry["groups"] = groups
     spec = _spec(
         recipe,
         records,
         incomplete=incomplete,
         include_outliers=include_outliers,
+        fail_case_limit=fail_case_limit,
     )
     if spec is not None:
         entry["spec"] = spec
@@ -2325,23 +2339,46 @@ class _Limits:
     """
 
     per_run: int | None
-    #: The cap on both unpaged row surfaces — the values list and the
-    #: missing-cases page. One field because they are one number: both start at
-    #: MAX_PAGE_SIZE and both shrink against the same row measurement.
+    #: The cap on the unpaged row surfaces that start at one number — the values
+    #: list and the missing-cases page. One field because they are one number:
+    #: both start at MAX_PAGE_SIZE and both shrink against the same measurement.
     rows: int
+    #: The cap on ``spec.fail_cases``. Its own field only because it starts at
+    #: its own constant; it shrinks with everything else.
+    fail_cases: int
+    #: The cap on a recipe's ``groups`` list. ``None`` is uncapped, which is what
+    #: every unbudgeted call gets: a group_by answer is not a page, so nothing
+    #: but a caller-set budget's shrink rung ever trims it.
+    groups: int | None = None
 
     @classmethod
     def of(cls, include: AnalyzeInclude) -> _Limits:
+        # Read here, not bound as field defaults: this is the one place the
+        # module's caps enter a render, so a test that moves a cap moves it for
+        # the whole path rather than for whichever call site happened to reread it.
         return cls(
             per_run=include.per_run.limit if include.per_run else None,
             rows=MAX_PAGE_SIZE,
+            fail_cases=_FAIL_CASE_PAGE_CAP,
         )
 
     def scaled(self, measure: response_budget.RowMeasure, rung: response_budget.Rung) -> _Limits:
-        """These limits, shrunk to what the previous rung's measurement affords."""
+        """These limits, shrunk to what the previous rung's measurement affords.
+
+        Every surface named here is also in :func:`_analysis_rows`. That pairing
+        is the cost model: a surface this shrinks but the measurement omits is
+        charged to the fixed envelope, and one the measurement counts but this
+        cannot shrink makes the fixed envelope look smaller than it is.
+        """
         return _Limits(
             per_run=(None if self.per_run is None else measure.fit_limit(self.per_run, rung)),
             rows=measure.fit_limit(self.rows, rung),
+            fail_cases=measure.fit_limit(self.fail_cases, rung),
+            groups=(
+                measure.fit_limit(self.groups, rung)
+                if self.groups is not None
+                else measure.affordable(rung)
+            ),
         )
 
 
@@ -2442,6 +2479,8 @@ def _assemble(
             outliers,
             a.include.fields,
             values_limit=limits.rows,
+            fail_case_limit=limits.fail_cases,
+            groups_limit=limits.groups,
         )
         if records or not item_failures:
             results[key] = entry
@@ -2544,14 +2583,24 @@ def _assemble(
 
 
 def _analysis_rows(data: dict[str, Any]) -> list[Any]:
-    """Every row this response is currently showing, across all row surfaces."""
+    """Every row this response is currently showing, across all row surfaces.
+
+    Every surface :meth:`_Limits.scaled` shrinks appears here, and nothing else
+    does. A spec-heavy or group_by-heavy call is otherwise the size driver the
+    shrink rung neither measures nor touches, which degrades to budget_not_met
+    on a response the ladder could in fact have fitted.
+    """
     rows: list[Any] = []
     for entry in data["results"].values():
         rows.extend(entry.get("reduced", []))
         rows.extend(entry.get("values", []))
+        rows.extend(entry.get("groups", []))
         per_run = entry.get("per_run")
         if isinstance(per_run, dict):
             rows.extend(per_run["items"])
+        spec = entry.get("spec")
+        if isinstance(spec, dict):
+            rows.extend(spec["fail_cases"]["items"])
     rows.extend(data["coverage"]["missing_cases"]["items"])
     return rows
 
@@ -2597,6 +2646,18 @@ def _degrade_analysis(data: dict[str, Any], rung: response_budget.Rung) -> None:
         response_budget.columnarize(data["coverage"]["missing_cases"], "items")
 
 
+#: This tool's budget epilogue. No hint mirror: an analyze ``hint`` is the resume
+#: route for a partial call, and the ladder's own note reaches the caller on
+#: ``observations`` without displacing it.
+_BUDGET_NOTES = response_budget.Notes(
+    cut=(
+        "presentation was reduced; every recipe that produced a result "
+        "still has one, and its reductions and spec verdict are intact."
+    ),
+    route="Re-ask without 'budget', or continue with continue={result_set_id, cursor}.",
+)
+
+
 async def _negotiate_analysis(budget: int, a: _Assembly) -> types.CallToolResult:
     """Assemble this analysis at the mildest ladder rung that fits ``budget``."""
     base = _Limits.of(a.include)
@@ -2621,15 +2682,8 @@ async def _negotiate_analysis(budget: int, a: _Assembly) -> types.CallToolResult
         _degrade_analysis(rendered, rung)
         return rendered
 
-    result = await response_budget.negotiate(budget, render)
-    response_budget.attach_notes(
-        result,
-        cut=(
-            "presentation was reduced; every recipe that produced a result "
-            "still has one, and its reductions and spec verdict are intact."
-        ),
-        route="Re-ask without 'budget', or continue with continue={result_set_id, cursor}.",
-    )
+    result = await response_budget.negotiate(budget, render, _BUDGET_NOTES)
+    response_budget.attach_notes(result, _BUDGET_NOTES)
     return format_response(text, result.data)
 
 

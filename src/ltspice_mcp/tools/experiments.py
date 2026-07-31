@@ -1948,6 +1948,15 @@ def _degrade_jobs(data: dict[str, Any], rung: response_budget.Rung) -> None:
             response_budget.columnarize(page, "items")
 
 
+#: This tool's budget epilogue. No hint mirror: a jobs envelope's ``hint`` is the
+#: control-plane's next step, and the ladder's own note reaches the caller on
+#: ``observations`` without displacing it.
+_BUDGET_NOTES = response_budget.Notes(
+    cut="presentation was reduced, no run or receipt was dropped.",
+    route="Re-ask without 'budget', or page on with next_cursor.",
+)
+
+
 async def _negotiate_jobs(
     budget: int,
     build: _JobsBuild,
@@ -1975,12 +1984,8 @@ async def _negotiate_jobs(
         _degrade_jobs(rendered, rung)
         return rendered
 
-    result = await response_budget.negotiate(budget, render)
-    response_budget.attach_notes(
-        result,
-        cut="presentation was reduced, no run or receipt was dropped.",
-        route="Re-ask without 'budget', or page on with next_cursor.",
-    )
+    result = await response_budget.negotiate(budget, render, _BUDGET_NOTES)
+    response_budget.attach_notes(result, _BUDGET_NOTES)
     return result.data, text
 
 

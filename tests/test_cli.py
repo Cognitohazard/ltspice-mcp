@@ -23,8 +23,9 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 import pytest
 from mcp import types
@@ -41,6 +42,7 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.filelock import file_lock
+from ltspice_mcp.lib.runner_base import RunnerBase
 from ltspice_mcp.tools import get_tools_for_profile
 from ltspice_mcp.tools._base import circuit_lock_target
 from tests.conftest import FakeSim, fake_simulator
@@ -437,9 +439,10 @@ class TestExitCodes:
             cli.EXIT_FAILED,
             cli.EXIT_PARTIAL,
             cli.EXIT_UNFINISHED,
+            cli.EXIT_UNCONFIRMED,
             cli.EXIT_INTERRUPTED,
         }
-        assert len(codes) == 7
+        assert len(codes) == 8
         help_text = cli.build_parser().format_help()
         for code in sorted(codes):
             assert f"  {code} " in help_text or f"  {code}   " in help_text
@@ -624,6 +627,246 @@ class TestBlockToTerminality:
         """The refusal is a statement of fact about this installation, so the
         fact has to be checked somewhere rather than assumed at the call site."""
         assert cli.daemon_owner_present() is False
+
+
+# ---------------------------------------------------------------------------
+# Exit-path honesty: the envelope, the code and stderr all say what happened
+# ---------------------------------------------------------------------------
+
+
+class TestExitPathHonesty:
+    async def test_an_interrupt_does_not_wait_out_the_poll_it_landed_in(
+        self, cli_home: Path, capsys, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Ctrl-C is checked against the leg, not between legs. A dwell this
+        process is already inside must not hold a stop request for its full
+        length — the help text promises the cancel happens on the interrupt."""
+        if not hasattr(signal, "SIGINT"):  # pragma: no cover - POSIX-only path
+            pytest.skip("no SIGINT on this platform")
+        # Far longer than the interrupt: without the race, this is what the run
+        # would sit through before noticing.
+        monkeypatch.setattr(cli, "_WAIT_LEG_S", 20.0)
+        # The scoped kill reaches the Windows process table over WSL interop,
+        # which is a fixed cost of the cancel that follows rather than of
+        # noticing the interrupt.
+        monkeypatch.setattr(RunnerBase, "_kill_by_token", lambda self, token, label="": None)
+        fake_simulator(monkeypatch, delay_s=None)
+        deck = _deck(cli_home)
+
+        async def interrupt_soon() -> None:
+            await asyncio.sleep(0.4)
+            os.kill(os.getpid(), signal.SIGINT)
+
+        interrupter = asyncio.create_task(interrupt_soon())
+        began = time.monotonic()
+        try:
+            code = await cli.run(
+                [
+                    "run-experiments",
+                    json.dumps(
+                        {
+                            "request_id": "cli-mid-leg",
+                            "circuits": [{"path": str(deck)}],
+                            "execution": {"wait_s": 0},
+                        }
+                    ),
+                    "--json",
+                ]
+            )
+        finally:
+            await interrupter
+        elapsed = time.monotonic() - began
+
+        assert code == cli.EXIT_INTERRUPTED
+        assert _stdout_json(capsys)["status"] == "cancelled"
+        # The floor here is the cancel's own kill-grace (a killed case is given
+        # time to confirm it died), not the leg. Waiting the leg out lands well
+        # past this; noticing the interrupt lands well under it.
+        assert elapsed < 15.0, f"the interrupt waited out the leg ({elapsed:.1f}s)"
+
+    async def test_a_leg_that_ignores_its_cancellation_does_not_hold_the_interrupt(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The bound has to survive an uncooperative victim. asyncio.wait_for
+        cancels and then AWAITS the cancellation, so a dwell that swallows it
+        would defeat the interrupt exactly when the interrupt matters most: the
+        loser is cancelled and abandoned, never awaited."""
+        started = asyncio.Event()
+
+        async def stubborn(tool: str, arguments: dict[str, Any], state: Any) -> Any:
+            started.set()
+            with suppress(asyncio.CancelledError):
+                await asyncio.sleep(3.0)
+            return None
+
+        monkeypatch.setattr(cli, "invoke", stubborn)
+        interrupt = cli._Interrupt()
+
+        async def fire() -> None:
+            await started.wait()
+            interrupt.requested.set()
+
+        firing = asyncio.create_task(fire())
+        began = time.monotonic()
+        leg = await cli._wait_leg("exp_x", cast("Any", None), 3.0, interrupt)
+        elapsed = time.monotonic() - began
+        await firing
+
+        assert leg is None, "an abandoned leg reports no snapshot"
+        assert elapsed < 1.0, f"the interrupt awaited the cancellation ({elapsed:.1f}s)"
+
+    async def test_a_committed_fault_reports_where_the_job_actually_got_to(
+        self, cli_home: Path, capsys, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The first receipt's error block is the report of the code that hit
+        the fault and must survive. Its lifecycle fields are a different thing:
+        printing 'in_progress' about a job this process then watched finish is
+        the envelope contradicting the exit path that produced it."""
+        original = ExperimentRunner.wait
+        calls = {"n": 0}
+
+        async def flaky_wait(
+            self, job, timeout_s=None, *, wait_for: Literal["all", "runs"] = "all"
+        ):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("dwell exploded")
+            return await original(self, job, timeout_s, wait_for=wait_for)
+
+        monkeypatch.setattr(ExperimentRunner, "wait", flaky_wait)
+        fake_simulator(monkeypatch, delay_s=0.4)
+        deck = _deck(cli_home)
+
+        code = await cli.run(
+            [
+                "run-experiments",
+                json.dumps(
+                    {
+                        "request_id": "cli-committed",
+                        "circuits": [{"path": str(deck)}],
+                        "execution": {"wait_s": 0.1},
+                    }
+                ),
+                "--json",
+            ]
+        )
+        payload = _stdout_json(capsys)
+
+        assert payload["error"]["commit_state"] == "committed"
+        assert payload["error"]["message"] == "dwell exploded"
+        assert payload["status"] == "completed"
+        assert payload["outcome"] != cli.IN_PROGRESS
+        assert payload["completeness"]["produced"] == 1
+        assert code == cli.EXIT_FAILED
+
+    async def test_an_interrupt_after_the_job_finished_reports_the_result(
+        self, cli_home: Path, capsys, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Once the job is terminal an interrupt cannot change the outcome, so
+        exiting 130 with 'cancelling the run this process owns' on stderr would
+        be a cancel that never happened, reported against a completed run."""
+        if not hasattr(signal, "SIGINT"):  # pragma: no cover - POSIX-only path
+            pytest.skip("no SIGINT on this platform")
+        fake_simulator(monkeypatch, delay_s=0.2)
+        deck = _deck(cli_home)
+        real_invoke = cli.invoke
+        replays = {"n": 0}
+
+        async def interrupt_on_final_replay(tool: str, arguments: dict[str, Any], state: Any):
+            if tool == "run_experiments":
+                replays["n"] += 1
+                if replays["n"] == 2:
+                    # The job is terminal by now; this is the render of its
+                    # finished receipt.
+                    os.kill(os.getpid(), signal.SIGINT)
+                    await asyncio.sleep(0.05)
+            return await real_invoke(tool, arguments, state)
+
+        monkeypatch.setattr(cli, "invoke", interrupt_on_final_replay)
+
+        code = await cli.run(
+            [
+                "run-experiments",
+                json.dumps(
+                    {
+                        "request_id": "cli-late-interrupt",
+                        "circuits": [{"path": str(deck)}],
+                        "execution": {"wait_s": 0},
+                    }
+                ),
+                "--json",
+            ]
+        )
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+
+        assert payload["status"] == "completed"
+        assert payload["outcome"] == "complete"
+        assert code == cli.EXIT_OK
+        assert "interrupted" in captured.err
+        assert "too late to change the outcome" in captured.err
+        assert "cancelling the run" not in captured.err
+
+    async def test_an_unconfirmed_cancel_says_so_instead_of_still_running(
+        self, cli_home: Path, capsys, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A kill this process issued and could not confirm is not the same
+        state as a job running normally, and EXIT_UNFINISHED means the latter —
+        its own docstring says only a status query can end there."""
+
+        async def unacknowledged_cancel(self, job, *, control_token=None):
+            return []  # accepted, stops nothing: the job stays running
+
+        monkeypatch.setattr(ExperimentRunner, "cancel", unacknowledged_cancel)
+        monkeypatch.setattr(cli, "_CANCEL_JOIN_S", 0.3)
+        fake_simulator(monkeypatch, delay_s=None)
+        deck = _deck(cli_home)
+
+        code = await cli.run(
+            [
+                "run-experiments",
+                json.dumps(
+                    {
+                        "request_id": "cli-unconfirmed",
+                        "circuits": [{"path": str(deck)}],
+                        "execution": {"wait_s": 0},
+                    }
+                ),
+                "--timeout",
+                "0.3",
+                "--json",
+            ]
+        )
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+
+        # The envelope on its own reads as a job running normally, which is
+        # exactly the reading that must not reach the caller: EXIT_UNFINISHED is
+        # what that outcome maps to, and its own docstring says only a status
+        # query can end there.
+        assert payload["outcome"] == cli.IN_PROGRESS
+        assert cli._EXIT_BY_OUTCOME[cli.IN_PROGRESS] == cli.EXIT_UNFINISHED
+        assert code == cli.EXIT_UNCONFIRMED
+        assert payload[cli.CANCEL_CONFIRMED_KEY] is False
+        assert "NOT confirmed" in captured.err
+        assert "jobs --action status" in captured.err
+
+    async def test_a_config_from_one_run_does_not_leak_into_the_next(self, cli_home: Path, capsys):
+        """run() is a reusable entry point, so its environment mutation has to be
+        undone: a --config left standing hands the NEXT invocation a sandbox and
+        a set of limits its caller never asked for, with nothing saying why."""
+        toml = cli_home / "custom.toml"
+        toml.write_text("[analysis]\nanalysis_budget_s = 12.5\n")
+        query = json.dumps({"queries": [{"kind": "capabilities"}]})
+
+        assert await cli.run(["inspect", query, "--config", str(toml), "--json"]) == cli.EXIT_OK
+        configured = _stdout_json(capsys)["results"][0]["data"]["limits"]
+        assert configured["analysis_budget_s"] == 12.5
+
+        assert await cli.run(["inspect", query, "--json"]) == cli.EXIT_OK
+        inherited = _stdout_json(capsys)["results"][0]["data"]["limits"]
+        assert inherited["analysis_budget_s"] != 12.5
+        assert "LTSPICE_MCP_CONFIG" not in os.environ
 
 
 # ---------------------------------------------------------------------------

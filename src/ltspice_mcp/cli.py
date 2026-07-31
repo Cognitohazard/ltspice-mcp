@@ -6,7 +6,7 @@ no second implementation of staging, linting, job ownership, locking or result
 parsing to keep in step. ``--json`` prints that handler's ``structuredContent``
 unchanged; the human channel is the handler's own text summary.
 
-Two rules shape everything here:
+Three rules shape everything here:
 
 * **Block to terminality.** The coordinator, the parallelism cap and the cancel
   authority live in the process that submitted the job. A one-shot process that
@@ -16,6 +16,11 @@ Two rules shape everything here:
   Anything that launches simulations therefore waits for a terminal status, and
   every early exit — deadline, Ctrl-C — cancels what this process owns first.
   ``--no-wait`` is refused while no daemon owner exists to hand the job to.
+* **Say what happened, and only that.** The printed envelope, the exit code and
+  stderr describe one story. An interrupt that lands after the job is terminal
+  cancels nothing and reports the result the run produced; a cancel this process
+  issued and could not confirm is reported as unconfirmed rather than as a job
+  politely still running.
 * **A CLI invocation is a parallel session.** It takes the same cross-process
   circuit-file locks, records the same owner pid, and kills only its own
   simulator processes. Two invocations sharing a working directory coordinate
@@ -32,12 +37,12 @@ import json
 import os
 import signal
 import sys
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, contextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:  # pragma: no cover - import-time weight is the point
-    from collections.abc import AsyncIterator, Callable, Sequence
+    from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 
     from mcp import types
 
@@ -68,8 +73,16 @@ EXIT_UNFINISHED = 5
 """The subject is still running. Only a status query can end here — a run
 started by this process always blocks to a terminal state."""
 
+EXIT_UNCONFIRMED = 6
+"""This process issued a cancel and could not confirm it: the job never reached
+a terminal status inside the join window, so whether its simulator processes are
+still alive is unknown. Deliberately not EXIT_UNFINISHED — that code says the
+subject is running normally, and this one says nobody knows."""
+
 EXIT_INTERRUPTED = 130
-"""Ctrl-C. Anything this process owned was cancelled before exiting."""
+"""Ctrl-C, and it changed the outcome: a job this process owned was still
+running and was cancelled. An interrupt that lands after the work is terminal
+cannot cancel anything, so it reports the result it actually got instead."""
 
 IN_PROGRESS = "in_progress"
 """The envelope ``outcome`` of a subject that has not reached a terminal status."""
@@ -109,6 +122,18 @@ _WAIT_LEG_S = 30.0
 # After cancelling, how long to keep waiting for the job to actually reach a
 # terminal status. Cancellation is an acknowledgement, not a join.
 _CANCEL_JOIN_S = 30.0
+
+# How much longer than the dwell it asked for one wait leg may take before this
+# process stops waiting on it. The handler's own timeout is the real bound; this
+# is the backstop for a leg that does not honour it, because a wait that never
+# returns would defeat both Ctrl-C and --timeout — the two bounds this loop
+# exists to provide.
+_LEG_GRACE_S = 5.0
+
+# Wait legs this process cancelled and walked away from. Referenced only so a
+# still-pending leg is not garbage-collected mid-cancellation; nothing ever
+# awaits them, which is the point (see _wait_leg).
+_abandoned_legs: set[asyncio.Future[Any]] = set()
 
 # Recent-index writes are fire-and-forget background tasks in the dispatch path.
 # A long-lived server lets them finish on its own time; a one-shot process must
@@ -151,13 +176,17 @@ exit codes:
   3   execution failed after work started
   4   terminal but incomplete — some runs, checks or recipes produced no result
   5   still running (only a status query can end here)
-  130 interrupted; anything this process owned was cancelled first
+  6   a cancel this process issued was never confirmed; whether the job's
+      simulator processes are still alive is unknown
+  130 interrupted, and the interrupt cancelled a job that was still running
 
 waiting:
   run-experiments blocks until the job is terminal. The coordinator that owns a
   running job is this process, so exiting early would abandon it rather than
   detach it. --timeout bounds the wait and cancels the job when it expires;
-  Ctrl-C does the same immediately.
+  Ctrl-C does the same, without waiting out the poll it landed in. An interrupt
+  that arrives after the job is already terminal cancels nothing and reports the
+  result the run produced.
 
 parallel invocations:
   Invocations share a working directory safely — the same cross-process file
@@ -412,23 +441,51 @@ def build_payload(namespace: argparse.Namespace) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def prepare_environment(namespace: argparse.Namespace) -> None:
-    """Apply CLI options that are expressed as configuration.
+def prepare_environment(namespace: argparse.Namespace) -> dict[str, str]:
+    """The environment variables this invocation's options amount to.
 
     Routing them through the environment rather than a second config path is
     what keeps the CLI's session identical to a server session: one loader, one
-    set of precedence rules, one sandbox.
+    set of precedence rules, one sandbox. Returned rather than applied, so the
+    same mapping that says what to set says what to put back — see
+    :func:`prepared_environment`.
     """
+    env: dict[str, str] = {}
     if namespace.config:
-        os.environ["LTSPICE_MCP_CONFIG"] = namespace.config
+        env["LTSPICE_MCP_CONFIG"] = namespace.config
     # The six subcommands are the consolidated tool set; that profile is what
     # registers their handlers, so it is not a user choice here.
-    os.environ["LTSPICE_MCP_TOOL_PROFILE"] = "consolidated"
-    if not namespace.verbose:
+    env["LTSPICE_MCP_TOOL_PROFILE"] = "consolidated"
+    if not namespace.verbose and "LTSPICE_MCP_LOG_LEVEL" not in os.environ:
         # The server's startup banner is diagnostics for a long-lived process;
         # for a one-shot it is noise ahead of the answer. An explicitly exported
         # level still wins.
-        os.environ.setdefault("LTSPICE_MCP_LOG_LEVEL", "WARNING")
+        env["LTSPICE_MCP_LOG_LEVEL"] = "WARNING"
+    return env
+
+
+@contextmanager
+def prepared_environment(namespace: argparse.Namespace) -> Iterator[None]:
+    """Apply this invocation's configuration options, then put the process back.
+
+    ``run()`` is a documented reusable entry point, so the mutation cannot be
+    left standing: a ``--config`` from one call would silently hand a later call
+    a sandbox, a simulator and a set of limits its caller never asked for, and
+    nothing about the second invocation would say where they came from. The
+    restore set is the same mapping :func:`prepare_environment` returns, so a new
+    variable cannot be applied without also being restored.
+    """
+    env = prepare_environment(namespace)
+    saved = {key: os.environ.get(key) for key in env}
+    os.environ.update(env)
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 @asynccontextmanager
@@ -443,7 +500,22 @@ async def session() -> AsyncIterator[SessionState]:
         yield context["state"]
 
 
-def _install_interrupt_handler() -> asyncio.Event:
+class _Interrupt:
+    """A Ctrl-C request, and what this process actually did about it.
+
+    Two facts, not one, because the exit code and the stderr line have to report
+    the second: at the moment the signal lands nothing knows whether there is
+    still anything to cancel, and a job that has already finished cannot be
+    stopped. Only the code that owns the job sets ``cancelled``, and only then
+    may this invocation claim a cancel.
+    """
+
+    def __init__(self) -> None:
+        self.requested = asyncio.Event()
+        self.cancelled = False
+
+
+def _install_interrupt_handler() -> _Interrupt:
     """Turn the first Ctrl-C into a cancel-then-exit request.
 
     The handler removes itself, so a second Ctrl-C reaches Python's default and
@@ -451,21 +523,20 @@ def _install_interrupt_handler() -> asyncio.Event:
     without loop signal handlers (Windows) fall back to KeyboardInterrupt, which
     ``main`` maps to the same exit code.
     """
-    interrupted = asyncio.Event()
+    interrupt = _Interrupt()
     loop = asyncio.get_running_loop()
 
     def _on_sigint() -> None:
         with suppress(NotImplementedError, RuntimeError, ValueError):
             loop.remove_signal_handler(signal.SIGINT)
-        interrupted.set()
-        print(
-            "spice-mcp: interrupted — cancelling the run this process owns.",
-            file=sys.stderr,
-        )
+        interrupt.requested.set()
+        # Only that it was received. Whether anything gets cancelled is decided
+        # by the wait loop, which says so itself.
+        print("spice-mcp: interrupted.", file=sys.stderr)
 
     with suppress(NotImplementedError, RuntimeError, AttributeError, ValueError):
         loop.add_signal_handler(signal.SIGINT, _on_sigint)
-    return interrupted
+    return interrupt
 
 
 def _remove_interrupt_handler() -> None:
@@ -563,20 +634,50 @@ async def run_command(
     namespace: argparse.Namespace,
     payload: dict[str, Any],
     state: SessionState,
-    interrupted: asyncio.Event,
+    interrupt: _Interrupt,
 ) -> types.CallToolResult:
     """Dispatch one subcommand, blocking to terminality where one is launched."""
     tool = COMMAND_TOOLS[namespace.command]
     if tool != "run_experiments":
         return await invoke(tool, payload, state)
-    return await _run_experiments_blocking(namespace, payload, state, interrupted)
+    return await _run_experiments_blocking(namespace, payload, state, interrupt)
+
+
+CANCEL_CONFIRMED_KEY = "cancel_confirmed"
+"""Payload marker: present and false when this process issued a cancel and could
+not confirm it. Absent means no cancel of this kind happened — the key exists to
+be checked for ``False``, not for presence. It is the one thing the CLI adds to a
+handler's payload, because it is a fact about this process rather than about the
+job, and no handler is in a position to report it."""
+
+_UNCONFIRMED_CANCEL_MESSAGE = (
+    "cancel was issued but NOT confirmed — the job did not reach a terminal "
+    "status within {join:.0f}s of the kill, so whether its simulator processes "
+    "are still running is unknown. This is not the same as 'still running': "
+    "something tried to stop it. Check with 'spice-mcp jobs --action status "
+    "--job-id {job_id}' before launching another run in this directory."
+)
+
+_LIFECYCLE_FIELDS: tuple[str, ...] = (
+    "status",
+    "outcome",
+    "completeness",
+    "runs",
+    "failures",
+    "observations",
+    "artifacts",
+)
+"""What a terminal status read may overwrite on a receipt that already reported a
+fault against itself. Everything else on that receipt — above all its ``error``
+block — is the report of the code that WAS there when the fault happened, and a
+later read cannot improve on it."""
 
 
 async def _run_experiments_blocking(
     namespace: argparse.Namespace,
     payload: dict[str, Any],
     state: SessionState,
-    interrupted: asyncio.Event,
+    interrupt: _Interrupt,
 ) -> types.CallToolResult:
     """Submit an experiment and stay until it is terminal.
 
@@ -603,39 +704,75 @@ async def _run_experiments_blocking(
 
     loop = asyncio.get_running_loop()
     deadline = None if namespace.timeout is None else loop.time() + namespace.timeout
-    reached_terminal = await _wait_until_terminal(job_id, state, deadline, interrupted)
+    reached_terminal = await _wait_until_terminal(job_id, state, deadline, interrupt)
+    confirmed = True
     if not reached_terminal:
         # Deadline, Ctrl-C, or a job that can no longer be followed. Cancel
-        # before leaving: nothing else can.
+        # before leaving: nothing else can. Claimed here rather than by the
+        # signal handler, because this is the point at which it is true.
+        print("spice-mcp: cancelling the run this process owns.", file=sys.stderr)
+        interrupt.cancelled = interrupt.requested.is_set()
         await invoke("jobs", {"action": "cancel", "job_id": job_id}, state)
-        await _wait_until_terminal(job_id, state, loop.time() + _CANCEL_JOIN_S, None)
+        confirmed = await _wait_until_terminal(job_id, state, loop.time() + _CANCEL_JOIN_S, None)
 
     if isinstance(data.get("error"), dict):
         # The submission already reported a fault against itself. Re-asking would
         # render from the replay path, which classifies its own faults as
         # not_started and would downgrade a committed one — losing the fact that
-        # cases were running. Keep the report that knows what happened.
-        return result
-    return await invoke("run_experiments", payload, state)
+        # cases were running. Keep that report, and bring only its lifecycle
+        # fields up to date so it does not still say 'in_progress' about a job
+        # this process watched finish.
+        await _refresh_lifecycle(result, job_id, state)
+    else:
+        result = await invoke("run_experiments", payload, state)
+    if not confirmed and result.structuredContent is not None:
+        result.structuredContent[CANCEL_CONFIRMED_KEY] = False
+    return result
+
+
+async def _refresh_lifecycle(
+    result: types.CallToolResult, job_id: str, state: SessionState
+) -> None:
+    """Update a standing receipt's lifecycle fields from one status read, in place.
+
+    One cheap read, not a replay: the receipt's own ``error`` block and its
+    handles stay exactly as the code that hit the fault wrote them, and only the
+    fields that describe where the job GOT TO are refreshed.
+    """
+    data = result.structuredContent
+    if data is None:
+        return
+    try:
+        status = await invoke("jobs", {"action": "status", "job_id": job_id}, state)
+    except (_Refused, _Failed):
+        # A receipt that cannot be refreshed is still a receipt, and it still
+        # carries the handles that reach the job. Losing it would be worse.
+        return
+    fresh = status.structuredContent or {}
+    for name in _LIFECYCLE_FIELDS:
+        if name in fresh:
+            data[name] = fresh[name]
 
 
 async def _wait_until_terminal(
     job_id: str,
     state: SessionState,
     deadline: float | None,
-    interrupted: asyncio.Event | None,
+    interrupt: _Interrupt | None,
 ) -> bool:
     """Block in bounded legs until the job is terminal, the deadline passes, or
     an interrupt arrives. Returns whether terminality was reached."""
     loop = asyncio.get_running_loop()
-    while interrupted is None or not interrupted.is_set():
+    while interrupt is None or not interrupt.requested.is_set():
         remaining = None if deadline is None else deadline - loop.time()
         if remaining is not None and remaining <= 0:
             return False
         leg = _WAIT_LEG_S if remaining is None else min(_WAIT_LEG_S, remaining)
-        waited = await invoke(
-            "jobs", {"action": "wait", "job_id": job_id, "timeout_s": leg}, state
-        )
+        waited = await _wait_leg(job_id, state, leg, interrupt)
+        if waited is None:
+            # The leg was abandoned — interrupted, or overrunning the dwell it
+            # was given. Either way this loop cannot report terminality.
+            return False
         snapshot = waited.structuredContent or {}
         if isinstance(snapshot.get("error"), dict):
             # The wait itself failed, so looping cannot make progress. Report
@@ -644,6 +781,40 @@ async def _wait_until_terminal(
         if snapshot.get("outcome") != IN_PROGRESS:
             return True
     return False
+
+
+async def _wait_leg(
+    job_id: str,
+    state: SessionState,
+    leg: float,
+    interrupt: _Interrupt | None,
+) -> types.CallToolResult | None:
+    """One dwell, raced against the interrupt. ``None`` means it did not finish.
+
+    Racing is the whole point: checking the interrupt only between legs makes
+    Ctrl-C wait out the leg it landed in, which is up to ``_WAIT_LEG_S`` of a
+    process that has been told to stop.
+
+    ``asyncio.wait`` rather than ``wait_for``, and the loser is cancelled but
+    never awaited: ``wait_for`` cancels and then AWAITS the cancellation, so a
+    dwell that does not cooperate defeats the bound it was given.
+    """
+    call: asyncio.Future[Any] = asyncio.ensure_future(
+        invoke("jobs", {"action": "wait", "job_id": job_id, "timeout_s": leg}, state)
+    )
+    racers: set[asyncio.Future[Any]] = {call}
+    if interrupt is not None:
+        racers.add(asyncio.ensure_future(interrupt.requested.wait()))
+    done, pending = await asyncio.wait(
+        racers, timeout=leg + _LEG_GRACE_S, return_when=asyncio.FIRST_COMPLETED
+    )
+    for task in pending:
+        task.cancel()
+        _abandoned_legs.add(task)
+        task.add_done_callback(_abandoned_legs.discard)
+    if call not in done:
+        return None
+    return call.result()
 
 
 # ---------------------------------------------------------------------------
@@ -659,6 +830,12 @@ def exit_code_for(result: types.CallToolResult) -> int:
     much of what was asked for came back.
     """
     data = result.structuredContent or {}
+    if data.get(CANCEL_CONFIRMED_KEY) is False:
+        # Ahead of everything else: whatever the envelope says about the job, it
+        # was written by a read that could not see the job reach a terminal
+        # state, and reporting that reading as if it settled the matter is the
+        # one thing this code must not do.
+        return EXIT_UNCONFIRMED
     error = data.get("error")
     if isinstance(error, dict):
         return (
@@ -676,6 +853,16 @@ def emit(namespace: argparse.Namespace, result: types.CallToolResult, code: int)
     from ltspice_mcp.tools._base import result_text
 
     data = result.structuredContent
+    if (data or {}).get(CANCEL_CONFIRMED_KEY) is False:
+        # On stderr in both modes: the payload marker is for a script, this line
+        # is for whoever is watching, and neither may be the only one to say it.
+        print(
+            "spice-mcp: "
+            + _UNCONFIRMED_CANCEL_MESSAGE.format(
+                join=_CANCEL_JOIN_S, job_id=(data or {}).get("job_id")
+            ),
+            file=sys.stderr,
+        )
     if namespace.as_json:
         sys.stdout.write(json.dumps(data if data is not None else {}, ensure_ascii=False) + "\n")
         return
@@ -712,22 +899,36 @@ async def execute(namespace: argparse.Namespace) -> int:
         # Refused before the session exists, so nothing is staged or submitted.
         return emit_error(namespace, "no_wait_unavailable", _NO_WAIT_REFUSAL, EXIT_REFUSED)
 
-    prepare_environment(namespace)
     try:
-        async with session() as state:
-            interrupted = _install_interrupt_handler()
-            try:
-                result = await run_command(namespace, payload, state, interrupted)
-            except _Refused as exc:
-                return emit_error(namespace, "refused", str(exc), EXIT_REFUSED)
-            except _Failed as exc:
-                return emit_error(namespace, "failed", str(exc), EXIT_FAILED)
-            finally:
-                _remove_interrupt_handler()
-                await _drain_background_writes()
-            code = exit_code_for(result)
-            emit(namespace, result, code)
-            return EXIT_INTERRUPTED if interrupted.is_set() else code
+        with prepared_environment(namespace):
+            async with session() as state:
+                interrupt = _install_interrupt_handler()
+                try:
+                    result = await run_command(namespace, payload, state, interrupt)
+                except _Refused as exc:
+                    return emit_error(namespace, "refused", str(exc), EXIT_REFUSED)
+                except _Failed as exc:
+                    return emit_error(namespace, "failed", str(exc), EXIT_FAILED)
+                finally:
+                    _remove_interrupt_handler()
+                    await _drain_background_writes()
+                code = exit_code_for(result)
+                emit(namespace, result, code)
+                if code == EXIT_UNCONFIRMED:
+                    # An unconfirmed kill outranks the interrupt that asked for
+                    # it: 130 promises the job was cancelled, which is exactly
+                    # the claim this process cannot make.
+                    return code
+                if not interrupt.cancelled:
+                    if interrupt.requested.is_set():
+                        print(
+                            "spice-mcp: the interrupt arrived too late to change the "
+                            "outcome; nothing was cancelled and the result above is "
+                            "what the work produced.",
+                            file=sys.stderr,
+                        )
+                    return code
+                return EXIT_INTERRUPTED
     except Exception as exc:  # the message is the diagnostic, not a swallow
         return emit_error(namespace, "internal", f"{type(exc).__name__}: {exc}", EXIT_INTERNAL)
 
