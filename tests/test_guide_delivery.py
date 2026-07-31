@@ -14,7 +14,7 @@ import pytest
 from mcp import types
 
 from ltspice_mcp.config import VALID_PROFILES, ServerConfig, ToolProfile
-from ltspice_mcp.resources import handle_read_resource
+from ltspice_mcp.resources import _select_profile_blocks, handle_read_resource
 from ltspice_mcp.server import SERVER_INSTRUCTIONS
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.circuit import (
@@ -127,3 +127,15 @@ class TestGuideIsProfileScoped:
             assert tool in guide, f"consolidated guide never names {tool}"
         assert "use the server's schematic tools (`create_schematic`" not in guide
         assert '`edit_schematic(target=..., base="blank")` starts a new sheet' in guide
+
+    def test_a_fence_naming_an_unknown_profile_is_rejected(self):
+        """A misspelled fence matches nobody, so it would delete its block for
+        every profile — a typo whose only symptom is guidance silently gone."""
+        text = "before\n<!-- profile: full agentc -->\nbody\n<!-- /profile -->\nafter\n"
+        with pytest.raises(ValueError, match="agentc"):
+            _select_profile_blocks(text, "full")
+
+    @pytest.mark.parametrize("profile", sorted(VALID_PROFILES))
+    def test_the_shipped_guide_fences_only_real_profiles(self, profile: str, work_dir: Path):
+        # The same check over the asset itself: reading it must not raise.
+        assert _guide_for(profile, work_dir)

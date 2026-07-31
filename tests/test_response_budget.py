@@ -17,6 +17,8 @@ import pytest
 from ltspice_mcp.lib import response_budget
 from ltspice_mcp.lib.response_budget import Rung
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools import analyze as analyze_mod
+from ltspice_mcp.tools import experiments as exp_mod
 from ltspice_mcp.tools import inspect_tools as insp
 from ltspice_mcp.tools.analyze import (
     OUTPUT_SCHEMA,
@@ -31,6 +33,57 @@ from ltspice_mcp.tools.experiments import (
 )
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from tests.conftest import make_batch_job, stage_recorded_fixture
+
+# Every rung-0 allowlist the three budget-aware tools declare, paired with the
+# schema node whose keys it names. Listed rather than derived: the coverage test
+# below fails on any `_TRIM_*` constant that is not here, so a new allowlist
+# cannot slip in unpinned.
+_TRIM_ALLOWLISTS: list[tuple[Any, str, dict[str, Any]]] = [
+    (analyze_mod, "_TRIM_REMOVE_RESULT", analyze_mod._RESULT_ENTRY_SCHEMA),
+    (analyze_mod, "_TRIM_REMOVE_ENVELOPE", OUTPUT_SCHEMA),
+    (analyze_mod, "_TRIM_EMPTY_ENVELOPE", OUTPUT_SCHEMA),
+    (exp_mod, "_TRIM_REMOVE_RECEIPT", exp_mod._jobs_receipt_schema("status")),
+    (exp_mod, "_TRIM_EMPTY_RECEIPT", exp_mod._jobs_receipt_schema("status")),
+    (insp, "_TRIM_REMOVE_EXHAUSTED", insp._OUTPUT_SCHEMA["properties"]["results"]["items"]),
+]
+
+
+class TestRungZeroAllowlists:
+    """Rung 0 against the schemas it edits.
+
+    It is the one rung that exempts content, so its keys are declared as data
+    and checked here rather than reasoned about at the call site. A ``REMOVE``
+    key must be optional — deleting a required key would make the emission fail
+    the tool's own schema — and an ``EMPTY`` key must be required, because an
+    optional key that is only ever emptied should have been removed instead.
+    """
+
+    @pytest.mark.parametrize(
+        ("module", "name", "schema"),
+        _TRIM_ALLOWLISTS,
+        ids=[
+            f"{module.__name__.rsplit('.', 1)[-1]}.{name}" for module, name, _ in _TRIM_ALLOWLISTS
+        ],
+    )
+    def test_key_classification_matches_the_schema(self, module, name, schema):
+        keys = getattr(module, name)
+        assert keys, f"{name} is empty; delete it rather than declaring a no-op allowlist"
+        required = set(schema.get("required", ()))
+        for key in keys:
+            assert key in schema["properties"], f"{name} names {key!r}, absent from the schema"
+            if "_REMOVE_" in name:
+                assert key not in required, f"{name} would delete required key {key!r}"
+            else:
+                assert key in required, f"{name} empties optional key {key!r}; remove it instead"
+
+    def test_every_declared_allowlist_is_pinned(self):
+        """The fail-closed half: a rung-0 list added to a tool and not listed
+        above is an exemption nothing checks."""
+        for module in (analyze_mod, exp_mod, insp):
+            declared = {name for name in vars(module) if name.startswith("_TRIM_")}
+            pinned = {name for mod, name, _ in _TRIM_ALLOWLISTS if mod is module}
+            assert declared == pinned, f"{module.__name__}: unpinned rung-0 allowlists"
+
 
 # A .step AC sweep: 45 attributed rows off one raw, which is the shape a budget
 # has anything to say about.
@@ -125,20 +178,32 @@ class TestLadderPrimitives:
         assert response_budget.columnarize(block, "items") is False
 
     def test_fit_limit_never_grows_and_never_reaches_zero(self):
-        rows = [{"a": "x" * 40} for _ in range(20)]
+        measure = response_budget.RowMeasure.of([{"a": "x" * 40} for _ in range(20)])
         generous = Rung(level=response_budget.RUNG_SHRINK, budget=1_000_000, measured=500)
-        assert response_budget.fit_limit(20, rows, generous) == 20
+        assert measure.fit_limit(20, generous) == 20
         starved = Rung(level=response_budget.RUNG_SHRINK, budget=500, measured=100_000)
-        assert response_budget.fit_limit(20, rows, starved) == 1
+        assert measure.fit_limit(20, starved) == 1
 
     def test_rung_zero_removes_optional_and_only_empties_required(self):
         container = {"optional": [], "kept": [1], "required": [1, 2]}
-        response_budget.remove_when_empty(container, "optional")
-        response_budget.remove_when_empty(container, "kept")
-        response_budget.empty_required(container, "required")
+        response_budget.apply_trim(container, remove=("optional", "kept"), empty=("required",))
         assert "optional" not in container
         assert container["kept"] == [1]
         assert container["required"] == []
+
+    def test_notes_extend_observations_rather_than_replacing_them(self):
+        """A budget cuts presentation, so it may never overwrite a fact channel
+        a tool already filled — the epilogue appends, on every tool."""
+        rung = Rung(level=response_budget.RUNG_SHRINK, budget=600, measured=99_999)
+        result = response_budget.Negotiated(
+            data={"observations": [{"code": "prior"}], "hint": "keep me"},
+            rung=rung,
+            estimate=99_999,
+        )
+        response_budget.attach_notes(result, cut="cut", route="route", hint_key="hint")
+        codes = [o["code"] for o in result.data["observations"]]
+        assert codes == ["prior", "budget_truncated", "budget_not_met"]
+        assert result.data["hint"].startswith("keep me ")
 
     async def test_ladder_terminates_and_reports_a_budget_it_cannot_meet(self):
         """A budget under the floor gets the floor, not an endless descent."""

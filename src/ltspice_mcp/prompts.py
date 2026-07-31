@@ -25,10 +25,19 @@ PromptBuilder = Callable[[Mapping[str, str]], types.GetPromptResult]
 CLASSIC = "classic"
 CONSOLIDATED = "consolidated"
 
+# Total over the valid profiles, not a default with one exception: a profile
+# added to the config without a line here fails loudly instead of silently
+# inheriting an edition that names tools it cannot see. Pinned by test_prompts.
+EDITIONS: dict[str, str] = {
+    "full": CLASSIC,
+    "agentic": CLASSIC,
+    "consolidated": CONSOLIDATED,
+}
+
 
 def edition_for(profile: str) -> str:
     """Which prompt edition a tool profile reads."""
-    return CONSOLIDATED if profile == "consolidated" else CLASSIC
+    return EDITIONS[profile]
 
 
 def _text_result(description: str, text: str) -> types.GetPromptResult:

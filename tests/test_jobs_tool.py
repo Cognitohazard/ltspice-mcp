@@ -11,7 +11,7 @@ import jsonschema
 import pytest
 
 from ltspice_mcp.lib import experiment_store, now, recent
-from ltspice_mcp.lib.experiment_runner import ExperimentRunner, ExperimentRunRequest
+from ltspice_mcp.lib.experiment_runner import ExperimentRunRequest
 from ltspice_mcp.lib.experiment_types import (
     AnalysisStage,
     Completeness,
@@ -29,7 +29,7 @@ from ltspice_mcp.tools.experiments import (
     handle_jobs,
     handle_run_experiments,
 )
-from tests.conftest import make_batch_job, make_sim_job
+from tests.conftest import fake_simulator, make_batch_job, make_sim_job
 
 
 class MockSimulator:
@@ -655,18 +655,7 @@ class TestListAndRunsPagination:
         monkeypatch.setenv("LTSPICE_MCP_HOME", str(work_dir / "recent-state"))
         circuit = _circuit(work_dir, "submitted.cir")
 
-        def submit(self, _netlist: Path, run_filename: str, callback):
-            raw = self.output_folder / f"{Path(run_filename).stem}.raw"
-            log = self.output_folder / f"{Path(run_filename).stem}.log"
-            raw.write_bytes(b"Title: mock")
-            log.write_text("ok")
-            self.loop.call_soon_threadsafe(
-                callback,
-                RunOutcome(str(raw), str(log), raw.stat().st_size, None),
-            )
-            return object()
-
-        monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+        fake_simulator(monkeypatch)
         await handle_run_experiments(
             RunExperimentsInput.model_validate(
                 {

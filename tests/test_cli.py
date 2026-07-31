@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from mcp import types
 
 from ltspice_mcp import cli
 from ltspice_mcp.lib import experiment_store, now
@@ -40,9 +41,9 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.filelock import file_lock
-from ltspice_mcp.lib.runner_base import RunOutcome
+from ltspice_mcp.tools import get_tools_for_profile
 from ltspice_mcp.tools._base import circuit_lock_target
-from tests.conftest import FakeSim
+from tests.conftest import FakeSim, fake_simulator
 
 _GOOD_DECK = "V1 in 0 1\nR1 in 0 1k\n.op\n.end\n"
 
@@ -123,56 +124,6 @@ async def _handler_payload(tool: str, arguments: dict[str, Any]) -> dict[str, An
     return result.structuredContent
 
 
-def _instant_simulator(monkeypatch: pytest.MonkeyPatch, submissions: list[str]) -> None:
-    """Every submitted case finishes immediately with a readable artifact pair."""
-
-    def submit(self, _netlist: Path, run_filename: str, callback):
-        submissions.append(run_filename)
-        raw = self.output_folder / f"{Path(run_filename).stem}.raw"
-        log = self.output_folder / f"{Path(run_filename).stem}.log"
-        raw.write_bytes(b"Title: mock")
-        log.write_text("ok")
-        outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
-        self.loop.call_soon_threadsafe(callback, outcome)
-        return object()
-
-    monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
-
-
-def _delayed_simulator(monkeypatch: pytest.MonkeyPatch, delay_s: float) -> list[str]:
-    """A case that finishes only after ``delay_s`` — long enough that a caller
-    which did not block would print a receipt for a job still in flight."""
-    submissions: list[str] = []
-
-    def submit(self, _netlist: Path, run_filename: str, callback):
-        submissions.append(run_filename)
-        raw = self.output_folder / f"{Path(run_filename).stem}.raw"
-        log = self.output_folder / f"{Path(run_filename).stem}.log"
-
-        def finish() -> None:
-            raw.write_bytes(b"Title: mock")
-            log.write_text("ok")
-            callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
-
-        self.loop.call_later(delay_s, finish)
-        return object()
-
-    monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
-    return submissions
-
-
-def _never_finishing_simulator(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Cases that are accepted and never call back."""
-    submissions: list[str] = []
-
-    def submit(self, _netlist: Path, run_filename: str, callback):
-        submissions.append(run_filename)
-        return object()
-
-    monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
-    return submissions
-
-
 # ---------------------------------------------------------------------------
 # Startup cost
 # ---------------------------------------------------------------------------
@@ -182,6 +133,8 @@ class TestStartupCost:
     def test_help_does_not_build_a_session(self):
         """``--help`` is documentation, not a server start: it must not pay for
         config load, simulator detection or the spicelib import chain."""
+        # importlib.metadata is in the list because it walks the installed
+        # distributions to answer --version, and nothing but --version asks.
         probe = (
             "import sys\n"
             "from ltspice_mcp.cli import main\n"
@@ -189,7 +142,8 @@ class TestStartupCost:
             "    main(['--help'])\n"
             "except SystemExit:\n"
             "    pass\n"
-            "loaded = [m for m in ('ltspice_mcp.state', 'ltspice_mcp.server', 'spicelib')\n"
+            "loaded = [m for m in ('ltspice_mcp.state', 'ltspice_mcp.server', 'spicelib',\n"
+            "                      'importlib.metadata')\n"
             "          if m in sys.modules]\n"
             "sys.stderr.write('LOADED=' + ','.join(loaded))\n"
         )
@@ -199,6 +153,15 @@ class TestStartupCost:
         assert "LOADED=" in proc.stderr
         assert proc.stderr.rsplit("LOADED=", 1)[1] == ""
         assert "exit codes" in proc.stdout
+
+    def test_version_still_reports_the_installed_version(self, capsys):
+        """Deferred, not dropped: the flag that needs the lookup still pays it."""
+        from ltspice_mcp import __version__
+
+        with pytest.raises(SystemExit) as exc:
+            cli.parse_args(["--version"])
+        assert exc.value.code == 0
+        assert capsys.readouterr().out == f"spice-mcp {__version__}\n"
 
     def test_help_never_advertises_cost_savings(self):
         """The CLI is a second binding over one engine; it sells coordination and
@@ -282,7 +245,7 @@ class TestJsonParity:
         every id, path and counter must match, because both readings render one
         coordinator record through one receipt builder. Only the observation the
         replay itself records may differ."""
-        _instant_simulator(monkeypatch, [])
+        fake_simulator(monkeypatch)
         deck = _deck(cli_home)
         args = {
             "request_id": "cli-parity",
@@ -342,6 +305,48 @@ class TestJsonParity:
 # ---------------------------------------------------------------------------
 
 
+class TestOutcomeMapping:
+    """The outcome table is closed, and it covers what the tools can say."""
+
+    def test_every_declared_outcome_has_an_exit_code(self):
+        """The union of the six tools' declared ``outcome`` enums, taken from
+        their own schemas: an outcome a tool can emit and this table does not
+        name would exit internal-error on a perfectly good result."""
+        declared: set[str] = set()
+
+        def walk(node: Any, key: str | None = None) -> None:
+            if isinstance(node, dict):
+                if key == "outcome" and isinstance(node.get("enum"), list):
+                    declared.update(node["enum"])
+                for name, child in node.items():
+                    walk(child, name)
+            elif isinstance(node, list):
+                for child in node:
+                    walk(child, key)
+
+        # The dispatch map, not the advertised list: the list drops
+        # outputSchema, and the declared enums are what this has to read.
+        _, dispatch = get_tools_for_profile("consolidated")
+        schemas = {r.definition.name: r.definition.outputSchema for r in dispatch.values()}
+        assert len(schemas) == 6
+        for schema in schemas.values():
+            walk(schema)
+        assert declared
+        assert declared <= set(cli._EXIT_BY_OUTCOME), (
+            f"outcomes with no exit code: {sorted(declared - set(cli._EXIT_BY_OUTCOME))}"
+        )
+
+    def test_an_unknown_outcome_never_reads_as_success(self):
+        result = types.CallToolResult(
+            content=[], structuredContent={"outcome": "quantum_superposition"}
+        )
+        assert cli.exit_code_for(result) == cli.EXIT_INTERNAL
+
+    def test_a_missing_outcome_never_reads_as_success(self):
+        result = types.CallToolResult(content=[], structuredContent={})
+        assert cli.exit_code_for(result) == cli.EXIT_INTERNAL
+
+
 class TestExitCodes:
     async def test_clean_check_exits_ok(self, cli_home: Path, capsys):
         deck = _deck(cli_home)
@@ -387,7 +392,7 @@ class TestExitCodes:
     ):
         """A fault after submission is an execution failure, not a refusal: the
         fleet is running and the receipt carries the handles that reach it."""
-        _never_finishing_simulator(monkeypatch)
+        fake_simulator(monkeypatch, delay_s=None)
 
         async def failing_wait(self, job, timeout_s, *, wait_for="all"):
             raise OSError("dwell exploded")
@@ -504,7 +509,7 @@ class TestBlockToTerminality:
     ):
         """The dwell the tool itself offers is shorter than the run; the CLI has
         to keep waiting rather than print an in-flight receipt and exit."""
-        _delayed_simulator(monkeypatch, delay_s=0.6)
+        fake_simulator(monkeypatch, delay_s=0.6)
         deck = _deck(cli_home)
 
         code = await cli.run(
@@ -532,7 +537,7 @@ class TestBlockToTerminality:
     ):
         """--timeout bounds the wait, and the bound is honoured by cancelling:
         leaving would abandon a job nothing else can reach."""
-        _never_finishing_simulator(monkeypatch)
+        fake_simulator(monkeypatch, delay_s=None)
         deck = _deck(cli_home)
 
         code = await cli.run(
@@ -563,7 +568,7 @@ class TestBlockToTerminality:
         and reports the interrupt in the exit code."""
         if not hasattr(signal, "SIGINT"):  # pragma: no cover - POSIX-only path
             pytest.skip("no SIGINT on this platform")
-        _never_finishing_simulator(monkeypatch)
+        fake_simulator(monkeypatch, delay_s=None)
         deck = _deck(cli_home)
 
         async def interrupt_soon() -> None:
@@ -595,7 +600,7 @@ class TestBlockToTerminality:
     async def test_no_wait_is_refused_before_anything_is_staged(
         self, cli_home: Path, capsys, monkeypatch: pytest.MonkeyPatch
     ):
-        submissions = _never_finishing_simulator(monkeypatch)
+        submissions = fake_simulator(monkeypatch, delay_s=None)
         deck = _deck(cli_home)
 
         code = await cli.run(

@@ -11,6 +11,8 @@ from spicelib import AscEditor
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import now
+from ltspice_mcp.lib.experiment_runner import ExperimentRunner
+from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -45,6 +47,53 @@ def stage_recorded_fixture(work_dir: Path, name: str) -> Path:
     if log.exists():
         shutil.copy(log, work_dir / f"{name}.log")
     return raw
+
+
+def fake_simulator(
+    monkeypatch: pytest.MonkeyPatch,
+    submissions: list[str] | None = None,
+    *,
+    delay_s: float | None = 0.0,
+) -> list[str]:
+    """Stand in for the simulator behind ``ExperimentRunner.submit_netlist``.
+
+    A case is always accepted and recorded; ``delay_s`` decides when — and
+    whether — it comes back:
+
+    * ``0`` finishes it with a readable artifact pair before submit returns;
+    * a positive delay finishes it that many seconds later on the loop, which
+      is what makes a caller that failed to block print a receipt for a job
+      still in flight;
+    * ``None`` never calls back at all.
+
+    Returns the list run filenames are appended to, so a caller that passed
+    none can still read what was submitted.
+    """
+    recorded = [] if submissions is None else submissions
+
+    def submit(self, _netlist: Path, run_filename: str, callback):
+        recorded.append(run_filename)
+        if delay_s is None:
+            return object()
+        raw = self.output_folder / f"{Path(run_filename).stem}.raw"
+        log = self.output_folder / f"{Path(run_filename).stem}.log"
+
+        def finish() -> None:
+            raw.write_bytes(b"Title: mock")
+            log.write_text("ok")
+            callback(RunOutcome(str(raw), str(log), raw.stat().st_size, None))
+
+        if delay_s > 0:
+            self.loop.call_later(delay_s, finish)
+        else:
+            raw.write_bytes(b"Title: mock")
+            log.write_text("ok")
+            outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
+            self.loop.call_soon_threadsafe(callback, outcome)
+        return object()
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+    return recorded
 
 
 def resolve_local_ref(schema: dict, node: dict) -> dict:

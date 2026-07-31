@@ -104,8 +104,10 @@ class _View:
     tree per rung would pay for the budget twice.
     """
 
-    # Read at construction, not at class definition, so the module constants
-    # stay the one place the default page size lives.
+    # Read at construction, not at class definition, so the module constant
+    # stays the live source of the default page size rather than a value copied
+    # into this class once at import. test_response_budget's shrink-ladder test
+    # rests on that: it raises _PAGE_SIZE to page a wider set in one go.
     limit: int = field(default_factory=lambda: _PAGE_SIZE)
     coord_limit: int = field(default_factory=lambda: _COORD_PAGE_SIZE)
     #: Revoke the caller's detail opt-in (``detail='full'``) — the answer rung.
@@ -1269,6 +1271,15 @@ def _inspect_envelope(results: list[dict[str, Any]]) -> dict[str, Any]:
     return data
 
 
+# Rung 0's allowlist, declared as data rather than spelled inside the ``if``
+# that applies it: a rung that exempts content is the one place a checker can
+# silently lose coverage, so it has to be a list a test can read. Both keys are
+# optional on an item schema — pinned by tests/test_response_budget.py. They go
+# only from an item with nothing left to fetch, for which the paging block
+# restates counts the rows carry and a null cursor that leads nowhere.
+_TRIM_REMOVE_EXHAUSTED: tuple[str, ...] = ("page", "next_cursor")
+
+
 def _degrade_inspect(data: dict[str, Any], rung: response_budget.Rung) -> None:
     """Apply the budget ladder's presentation rungs to an inspect envelope.
 
@@ -1276,18 +1287,18 @@ def _degrade_inspect(data: dict[str, Any], rung: response_budget.Rung) -> None:
     reads, so they are inputs to the query pass (``_View``) rather than edits to
     its answer — a page shrunk after the fact would leave its cursor pointing
     past rows the caller never saw. Nothing below touches an item's ``error``.
+
+    Idempotent, so the ladder may re-apply it to an envelope it already degraded
+    on the way down.
     """
     if rung.trim:
         for item in data["results"]:
-            # Optional keys, removed only from an item with nothing left to
-            # fetch: for those the paging block restates counts the rows carry
-            # and a null cursor that leads nowhere.
             page = item.get("page")
             if item.get("next_cursor") is None and (
                 not isinstance(page, dict) or not page.get("truncated")
             ):
-                item.pop("page", None)
-                item.pop("next_cursor", None)
+                for key in _TRIM_REMOVE_EXHAUSTED:
+                    item.pop(key, None)
     if rung.columnar:
         for item in data["results"]:
             payload = item.get("data")
@@ -1317,42 +1328,41 @@ async def _negotiate_inspect(args: InspectInput, state: SessionState) -> types.C
     # re-render an answered batch, only the answer and shrink rungs re-ask it.
     passes: dict[_View, list[dict[str, Any]]] = {}
     rendered: dict[str, Any] = {"results": []}
+    # The view the standing envelope was built from. A rung that does not change
+    # the view is the previous rung degraded a step further, so it edits that
+    # envelope rather than copying the pass and rebuilding over it.
+    built_from: _View | None = None
 
     async def render(rung: response_budget.Rung) -> dict[str, Any]:
-        nonlocal rendered
+        nonlocal rendered, built_from
         view = _View(lean=rung.answer_channel)
         if rung.shrink:
-            rows = _paged_rows(rendered)
+            measure = response_budget.RowMeasure.of(_paged_rows(rendered))
             view = _View(
-                limit=response_budget.fit_limit(_PAGE_SIZE, rows, rung),
-                coord_limit=response_budget.fit_limit(_COORD_PAGE_SIZE, rows, rung),
+                limit=measure.fit_limit(_PAGE_SIZE, rung),
+                coord_limit=measure.fit_limit(_COORD_PAGE_SIZE, rung),
                 lean=rung.answer_channel,
             )
-        if view not in passes:
-            passes[view] = await _run_queries(args, state, view)
-        data = _inspect_envelope(copy.deepcopy(passes[view]))
-        _degrade_inspect(data, rung)
-        rendered = data
-        return data
+        if built_from != view:
+            if view not in passes:
+                passes[view] = await _run_queries(args, state, view)
+            # A copy per envelope, because a pass is cached and reused across
+            # rungs while the envelope built from it is degraded in place.
+            rendered = _inspect_envelope(copy.deepcopy(passes[view]))
+            built_from = view
+        _degrade_inspect(rendered, rung)
+        return rendered
 
     result = await response_budget.negotiate(args.budget, render)
+    # Mirrored into the guidance channel too: structured-aware clients render
+    # only structuredContent, and 'hint' is where this tool puts guidance.
+    response_budget.attach_notes(
+        result,
+        cut="presentation was reduced; no query was dropped and no error was hidden.",
+        route="Re-ask without 'budget', or page on with each item's next_cursor.",
+        hint_key="hint",
+    )
     data = result.data
-    if result.degraded:
-        observations = [
-            response_budget.truncated_observation(
-                result.rung,
-                result.estimate,
-                cut="presentation was reduced; no query was dropped and no error was hidden.",
-                route="Re-ask without 'budget', or page on with each item's next_cursor.",
-            )
-        ]
-        if not result.met:
-            observations.append(response_budget.not_met_observation(result.rung, result.estimate))
-        data["observations"] = observations
-        # Mirrored into the guidance channel: structured-aware clients render
-        # only structuredContent, and 'hint' is where this tool puts guidance.
-        budget_hint = observations[-1]["detail"]
-        data["hint"] = f"{data['hint']} {budget_hint}" if data.get("hint") else budget_hint
     return format_response(_summary_text(data["results"]), data)
 
 

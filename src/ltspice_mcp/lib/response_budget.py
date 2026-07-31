@@ -144,10 +144,6 @@ def estimate_tokens(payload: Any) -> int:
     return len(text) // CHARS_PER_TOKEN
 
 
-def fits(payload: Any, budget: int) -> bool:
-    return estimate_tokens(payload) <= budget
-
-
 # --------------------------------------------------------------------------
 # Rung 0 primitives — remove optional, empty required
 # --------------------------------------------------------------------------
@@ -163,16 +159,6 @@ def remove_when_empty(container: dict[str, Any], key: str) -> None:
         del container[key]
 
 
-def empty_page(page: dict[str, Any]) -> None:
-    """Empty a page object's rows in place, keeping every required counter.
-
-    ``total`` still states how many rows exist and ``next_cursor`` still points
-    at them, so an emptied page is a handle, not a loss.
-    """
-    page["items"] = []
-    page["returned"] = 0
-
-
 def empty_required(container: dict[str, Any], key: str) -> None:
     """Empty a REQUIRED presentation key in place — never delete it.
 
@@ -184,6 +170,28 @@ def empty_required(container: dict[str, Any], key: str) -> None:
         container[key] = []
     elif isinstance(value, dict):
         container[key] = {}
+
+
+def apply_trim(
+    container: dict[str, Any],
+    *,
+    remove: Sequence[str] = (),
+    empty: Sequence[str] = (),
+) -> None:
+    """Rung 0 over one container, from a tool's declared key lists.
+
+    ``remove`` names optional keys, dropped only when they carry nothing;
+    ``empty`` names required keys, emptied in place. The lists are declared as
+    module-level data by each tool rather than spelled inline here: a rung that
+    exempts content is the one place a checker can silently lose coverage, so
+    the allowlist has to be something a test can read.
+
+    Idempotent, so the ladder may re-apply it to an already-trimmed envelope.
+    """
+    for key in remove:
+        remove_when_empty(container, key)
+    for key in empty:
+        empty_required(container, key)
 
 
 # --------------------------------------------------------------------------
@@ -233,27 +241,70 @@ COLUMNAR_ROWS_SCHEMA: dict[str, Any] = {
 }
 
 
+def row_items_schema(item_schema: dict[str, Any]) -> dict[str, Any]:
+    """A row surface's two forms, as one schema.
+
+    Rows are objects at every rung but the columnar one, where a caller-set
+    budget renders them as arrays of values with a sibling ``*_columns`` list
+    naming the positions. Both are declared so no rung can emit something the
+    tool's own schema rejects.
+    """
+    return {"type": "array", "items": {"anyOf": [item_schema, {"type": "array"}]}}
+
+
+def row_page_schema(
+    page_schema: dict[str, Any], *, item_schema: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """A copy of ``page_schema`` that also admits the columnar row form.
+
+    A copy, not a mutation: a page schema is often shared with a tool that takes
+    no budget and must keep exactly the shape it declares today. ``item_schema``
+    narrows the row type at the same time, for a page reused with a more
+    specific row than the one it was declared with.
+    """
+    properties = dict(page_schema["properties"])
+    rows = item_schema if item_schema is not None else properties["items"]["items"]
+    properties["items"] = row_items_schema(rows)
+    properties["items_columns"] = COLUMNAR_ROWS_SCHEMA
+    return {**page_schema, "properties": properties}
+
+
 # --------------------------------------------------------------------------
 # Rung 3 primitive — size a page against a measurement
 # --------------------------------------------------------------------------
 
 
-def fit_limit(current: int, rows: Sequence[Any], rung: Rung) -> int:
-    """The row limit whose page is expected to fit, from the measured envelope.
+@dataclass(frozen=True)
+class RowMeasure:
+    """One measurement of the rows a rung rendered, shared by every limit.
 
-    Splits the previous rung's measurement into the fixed envelope and the rows
-    it carried, then divides what the budget leaves by the per-row cost. Never
-    grows the caller's limit and never goes below one row: a page of one row
-    still carries a cursor, which is the route back to the rest.
+    A response with several row surfaces sizes them all against the same
+    envelope, so the rows are measured once and each limit divides into that
+    measurement rather than re-serializing the same rows per limit.
     """
-    shown = len(rows)
-    if shown <= 0 or current <= 1:
-        return current
-    row_tokens = estimate_tokens(list(rows))
-    fixed = max(0, rung.measured - row_tokens)
-    per_row = max(1, row_tokens // shown)
-    affordable = (rung.body_budget - fixed) // per_row
-    return max(1, min(current, int(affordable)))
+
+    shown: int
+    tokens: int
+
+    @classmethod
+    def of(cls, rows: Sequence[Any]) -> RowMeasure:
+        return cls(shown=len(rows), tokens=estimate_tokens(list(rows)))
+
+    def fit_limit(self, current: int, rung: Rung) -> int:
+        """The row limit whose page is expected to fit, from the measured envelope.
+
+        Splits the previous rung's measurement into the fixed envelope and the
+        rows it carried, then divides what the budget leaves by the per-row
+        cost. Never grows the caller's limit and never goes below one row: a
+        page of one row still carries a cursor, which is the route back to the
+        rest.
+        """
+        if self.shown <= 0 or current <= 1:
+            return current
+        fixed = max(0, rung.measured - self.tokens)
+        per_row = max(1, self.tokens // self.shown)
+        affordable = (rung.body_budget - fixed) // per_row
+        return max(1, min(current, int(affordable)))
 
 
 # --------------------------------------------------------------------------
@@ -330,7 +381,7 @@ class Negotiated:
 
     @property
     def met(self) -> bool:
-        return self.estimate <= self.rung.budget - NOTE_RESERVE_TOKENS
+        return self.estimate <= self.rung.body_budget
 
 
 async def negotiate(
@@ -347,7 +398,6 @@ async def negotiate(
     Fit is judged against the budget less :data:`NOTE_RESERVE_TOKENS`, the room
     the caller's own budget notes will take once appended.
     """
-    body_budget = budget - NOTE_RESERVE_TOKENS
     measured = 0
     data: dict[str, Any] = {}
     rung = Rung(level=RUNG_NONE, budget=budget, measured=0)
@@ -355,6 +405,40 @@ async def negotiate(
         rung = Rung(level=level, budget=budget, measured=measured)
         data = await render(rung)
         measured = estimate_tokens(data)
-        if measured <= body_budget:
+        if measured <= rung.body_budget:
             break
     return Negotiated(data=data, rung=rung, estimate=measured)
+
+
+def attach_notes(
+    result: Negotiated,
+    *,
+    cut: str,
+    route: str,
+    hint_key: str | None = None,
+) -> None:
+    """Append the budget's own notes to a negotiated response, in place.
+
+    One epilogue for every tool that negotiates. A degraded response says so and
+    how to get the rest back; a response the ladder could not shrink into the
+    budget says that too. Both go on ``observations`` by extension, never by
+    assignment: a tool that already put facts there keeps them, which is the
+    whole point of a channel a budget cannot cut.
+
+    ``hint_key`` mirrors the last note into the tool's guidance key, for tools
+    whose structured-aware clients read guidance only from there.
+    """
+    notes: list[dict[str, Any]] = []
+    if result.degraded:
+        notes.append(truncated_observation(result.rung, result.estimate, cut=cut, route=route))
+    if not result.met:
+        notes.append(not_met_observation(result.rung, result.estimate))
+    if not notes:
+        return
+    data = result.data
+    observations = data.setdefault("observations", [])
+    observations.extend(notes)
+    if hint_key is not None:
+        detail = notes[-1]["detail"]
+        existing = data.get(hint_key)
+        data[hint_key] = f"{existing} {detail}" if existing else detail

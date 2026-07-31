@@ -174,7 +174,12 @@ def _configure_asc_editor(config: ServerConfig, available: dict) -> None:
 class _ErrorHint(NamedTuple):
     """Profile-aware error hint. ``full`` references the full MCP tool set;
     ``agentic`` gives direct file-edit guidance; ``consolidated`` references
-    only the six consolidated tools (never a tool that profile can't see)."""
+    only the six consolidated tools (never a tool that profile can't see).
+
+    The fields ARE the valid profiles, which is what makes the mapping total: a
+    new profile cannot silently inherit another's hint, because no ``_ErrorHint``
+    below would construct without a line for it. Pinned by tests/test_server.py.
+    """
 
     full: str
     agentic: str
@@ -305,11 +310,9 @@ def _get_error_hint(err_type: type[LTSpiceMCPError], profile: str) -> str | None
     hint = _ERROR_HINTS.get(err_type)
     if hint is None:
         return None
-    if profile == "agentic":
-        return hint.agentic
-    if profile == "consolidated":
-        return hint.consolidated
-    return hint.full
+    # The hint's fields are the profile names, so selection is total over them;
+    # only a profile string from outside the config's own set falls back.
+    return getattr(hint, profile if profile in _ErrorHint._fields else "full")
 
 
 def _path_reject_guidance(state: SessionState) -> str:
@@ -493,6 +496,25 @@ _INSTRUCTIONS_BUDGET = 2048
 _SIM_DISPLAY = {"ltspice": "LTspice", "ngspice": "ngspice", "qspice": "QSPICE", "xyce": "Xyce"}
 
 
+class _ProfileGuidance(NamedTuple):
+    """What a tool profile's handshake says: its instruction edition, and
+    whether the no-simulator line is the short form its tool budget affords."""
+
+    instructions: str
+    short_no_simulator: bool
+
+
+# Total over the valid profiles, not a default with one exception: a profile
+# added to the config without a line here fails loudly instead of silently
+# inheriting instructions that name tools it does not expose. Pinned by
+# tests/test_server.py.
+_PROFILE_GUIDANCE: dict[str, _ProfileGuidance] = {
+    "full": _ProfileGuidance(SERVER_INSTRUCTIONS, short_no_simulator=False),
+    "agentic": _ProfileGuidance(SERVER_INSTRUCTIONS, short_no_simulator=False),
+    "consolidated": _ProfileGuidance(CONSOLIDATED_INSTRUCTIONS, short_no_simulator=True),
+}
+
+
 def build_instructions(
     available: dict[str, type], default: type | None, profile: str = "full"
 ) -> str:
@@ -503,8 +525,9 @@ def build_instructions(
     degradation. Stating the active engine up front removes that ambiguity. The
     consolidated profile carries its own six-tool guide.
     """
+    guidance = _PROFILE_GUIDANCE[profile]
     if not available:
-        active = no_simulator_message(short=(profile == "consolidated"))
+        active = no_simulator_message(short=guidance.short_no_simulator)
     else:
 
         def disp(name: str) -> str:
@@ -522,8 +545,7 @@ def build_instructions(
                 "symbol files and may be unavailable — simulation and analysis "
                 "run on the active engine and are unaffected.)"
             )
-    body = CONSOLIDATED_INSTRUCTIONS if profile == "consolidated" else SERVER_INSTRUCTIONS
-    return f"{active}\n\n{body}"
+    return f"{active}\n\n{guidance.instructions}"
 
 
 # The name is overridable so the thin alias packages (circuit-mcp, ngspice-mcp)
