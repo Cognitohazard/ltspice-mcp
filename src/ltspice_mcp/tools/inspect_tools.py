@@ -1308,16 +1308,37 @@ def _degrade_inspect(data: dict[str, Any], rung: response_budget.Rung) -> None:
                 response_budget.columnarize(payload, key)
 
 
+#: This tool's budget epilogue. The hint mirror is why it is a value: the note's
+#: detail is written twice under a hint key, and the reserve has to know that.
+#: Structured-aware clients render only structuredContent, and 'hint' is where
+#: this tool puts guidance, so the mirror is not optional.
+_BUDGET_NOTES = response_budget.Notes(
+    cut="presentation was reduced; no query was dropped and no error was hidden.",
+    route="Re-ask without 'budget', or page on with each item's next_cursor.",
+    hint_key="hint",
+)
+
+
 def _paged_rows(data: dict[str, Any]) -> list[Any]:
-    """Every row the answered batch is currently showing, across all items."""
+    """Every row the answered batch is currently showing, across all items.
+
+    The columnar rung's ``*_columns`` siblings are skipped. They are not rows —
+    they are one list of column names per row surface, they shrink only when the
+    rows they describe do, and counting them would inflate both the row count and
+    the per-row cost the shrink rung sizes its page against.
+    """
     rows: list[Any] = []
     for item in data["results"]:
         payload = item.get("data")
         if not isinstance(payload, dict):
             continue
-        for value in payload.values():
-            if isinstance(value, list):
-                rows.extend(value)
+        for key, value in payload.items():
+            if not isinstance(value, list):
+                continue
+            described = key.removesuffix(response_budget.COLUMNS_SUFFIX)
+            if described != key and isinstance(payload.get(described), list):
+                continue
+            rows.extend(value)
     return rows
 
 
@@ -1353,15 +1374,8 @@ async def _negotiate_inspect(args: InspectInput, state: SessionState) -> types.C
         _degrade_inspect(rendered, rung)
         return rendered
 
-    result = await response_budget.negotiate(args.budget, render)
-    # Mirrored into the guidance channel too: structured-aware clients render
-    # only structuredContent, and 'hint' is where this tool puts guidance.
-    response_budget.attach_notes(
-        result,
-        cut="presentation was reduced; no query was dropped and no error was hidden.",
-        route="Re-ask without 'budget', or page on with each item's next_cursor.",
-        hint_key="hint",
-    )
+    result = await response_budget.negotiate(args.budget, render, _BUDGET_NOTES)
+    response_budget.attach_notes(result, _BUDGET_NOTES)
     data = result.data
     return format_response(_summary_text(data["results"]), data)
 

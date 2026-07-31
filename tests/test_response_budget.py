@@ -116,6 +116,37 @@ async def _analysis(state: SessionState, raw: Path, **extra: Any) -> dict[str, A
     return result.structuredContent
 
 
+# The same fan-out with a spec every sample fails, so spec.fail_cases — not the
+# per-run page — is what the response is mostly made of.
+_SPEC_RECIPE: dict[str, Any] = {
+    "key": "vout",
+    "metric": "value",
+    "expr": "V(out)",
+    "at": "900u",
+    "all_steps": True,
+    "spec": {"max": -1.0},
+}
+
+
+async def _spec_analysis(state: SessionState, raw: Path, **extra: Any) -> dict[str, Any]:
+    result = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {
+                "sources": [
+                    {"raw_path": str(raw), "label": f"corner{index:02d}"}
+                    for index in range(_WIDE_SOURCES)
+                ],
+                "recipes": [_SPEC_RECIPE],
+                **extra,
+            }
+        ),
+        state,
+    )
+    assert result.structuredContent is not None
+    jsonschema.Draft202012Validator(OUTPUT_SCHEMA).validate(result.structuredContent)
+    return result.structuredContent
+
+
 def _observation(data: dict[str, Any], code: str) -> dict[str, Any] | None:
     for item in data.get("observations", []):
         if item.get("code") == code:
@@ -200,7 +231,8 @@ class TestLadderPrimitives:
             rung=rung,
             estimate=99_999,
         )
-        response_budget.attach_notes(result, cut="cut", route="route", hint_key="hint")
+        notes = response_budget.Notes(cut="cut", route="route", hint_key="hint")
+        response_budget.attach_notes(result, notes)
         codes = [o["code"] for o in result.data["observations"]]
         assert codes == ["prior", "budget_truncated", "budget_not_met"]
         assert result.data["hint"].startswith("keep me ")
@@ -213,7 +245,9 @@ class TestLadderPrimitives:
             rungs.append(rung.level)
             return {"failures": ["x" * 4000]}
 
-        result = await response_budget.negotiate(1, render)
+        result = await response_budget.negotiate(
+            1, render, response_budget.Notes(cut="cut", route="route")
+        )
         assert rungs == list(response_budget.LADDER)
         assert result.met is False
         assert result.rung.level == response_budget.RUNG_SHRINK
@@ -450,6 +484,68 @@ class TestAnalysisBudget:
         assert len(rows) > 1
         assert rows == expected[: len(rows)]
 
+    async def test_a_spec_heavy_call_shrinks_its_fail_cases(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """spec.fail_cases used to sit at a fixed cap the ladder never touched,
+        so a call whose size driver was its failing cases had nothing to give and
+        degraded to budget_not_met. The page shrinks; the fail COUNT does not."""
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+        plain = await _spec_analysis(state_no_sim, raw)
+        wide = plain["results"]["vout"]["spec"]
+        assert wide["fail_count"] > 4, "fixture stopped producing failing cases"
+        assert wide["fail_cases"]["truncated"] is False
+
+        data = await _spec_analysis(state_no_sim, raw, budget=response_budget.BUDGET_MIN_TOKENS)
+        spec = data["results"]["vout"]["spec"]
+        page = _uncolumnar(spec["fail_cases"], "items")
+        assert len(page) < wide["fail_cases"]["returned"]
+        assert spec["fail_count"] == wide["fail_count"], "a count is a fact, not a page"
+        assert spec["verdict"] == wide["verdict"]
+
+    async def test_a_grouped_call_shrinks_its_groups_and_says_so(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """A group list is an aggregate, not a page, so no cursor walks it — but
+        the shrink rung must still be able to reach it, and must state what it
+        dropped rather than hand back a silently shorter answer."""
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
+        plain = await _analysis(state_no_sim, raw, group_by=["r"])
+        every_group = plain["results"]["loop"]["groups"]
+        assert len(every_group) > 1
+
+        data = await _analysis(
+            state_no_sim, raw, group_by=["r"], budget=response_budget.BUDGET_MIN_TOKENS
+        )
+        entry = data["results"]["loop"]
+        assert len(entry["groups"]) < len(every_group)
+        assert any("group(s) omitted" in warning for warning in entry["warnings"])
+
+    async def test_the_row_measurement_covers_every_surface_the_ladder_shrinks(self):
+        """The cost model's two halves have to name the same surfaces. One the
+        ladder shrinks but the measurement omits is billed to the fixed envelope,
+        so the shrink rung sizes its page against a cost that is not real."""
+        data = {
+            "results": {
+                "k": {
+                    "reduced": ["reduced-row"],
+                    "values": ["value-row"],
+                    "groups": ["group-row"],
+                    "per_run": {"items": ["per-run-row"]},
+                    "spec": {"fail_cases": {"items": ["fail-row"]}},
+                }
+            },
+            "coverage": {"missing_cases": {"items": ["missing-row"]}},
+        }
+        assert sorted(analyze_mod._analysis_rows(data)) == [
+            "fail-row",
+            "group-row",
+            "missing-row",
+            "per-run-row",
+            "reduced-row",
+            "value-row",
+        ]
+
     async def test_a_budget_below_the_floor_is_refused_at_the_edge(self):
         """Not a silent clamp: a number the ladder could never negotiate is a
         request error, so the caller learns the floor instead of guessing."""
@@ -643,6 +739,40 @@ class TestInspectBudget:
         assert failed["error"]["message"]
         assert _observation(data, "budget_truncated") is not None
         assert "budget" in data["hint"]
+
+    async def test_no_budget_in_a_sweep_lands_over_cap_without_saying_so(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """Swept rather than spot-checked, because the failure was a band: the
+        note this tool mirrors into 'hint' is written twice, and reserving room
+        for one copy let responses across a whole stretch of budgets exceed the
+        cap while flagged only as truncated. Over the cap is allowed — the fact
+        floor is never cut to fit — but only when the response SAYS it is."""
+        path = _many_component_netlist(work_dir, 90)
+        query = {"kind": "components", "path": str(path), "detail": "full"}
+        over_and_silent: list[tuple[int, int]] = []
+        for budget in range(response_budget.BUDGET_MIN_TOKENS, 1400, 20):
+            data = await _inspect(state_no_sim, [query], budget=budget)
+            estimate = response_budget.estimate_tokens(data)
+            if estimate > budget and _observation(data, "budget_not_met") is None:
+                over_and_silent.append((budget, estimate))
+        assert not over_and_silent, f"over cap, flagged only truncated: {over_and_silent}"
+
+    async def test_the_row_sweep_skips_the_columnar_sibling_lists(self):
+        """The columnar rung mints a '*_columns' list beside each row surface.
+        It is one list of names, not rows, and it shrinks only when its rows do —
+        counting it skews both the row count and the per-row cost."""
+        data = {
+            "results": [
+                {
+                    "data": {
+                        "components": [["R1", "1k"], ["R2", "2k"]],
+                        "components_columns": ["reference", "value"],
+                    }
+                }
+            ]
+        }
+        assert insp._paged_rows(data) == [["R1", "1k"], ["R2", "2k"]]
 
     async def test_the_answer_rung_falls_back_to_the_component_list(
         self, state_no_sim: SessionState, work_dir: Path
