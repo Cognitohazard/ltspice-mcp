@@ -19,6 +19,18 @@ def _text(result: types.GetPromptResult) -> str:
     return content.text
 
 
+class TestEditionSelection:
+    def test_every_valid_profile_chooses_an_edition(self):
+        """Total, not a default with one exception: a profile added to the
+        config without a line here must fail loudly rather than inherit an
+        edition that names tools it cannot see."""
+        assert set(prompts.EDITIONS) == VALID_PROFILES
+
+    def test_an_unknown_profile_is_not_silently_given_an_edition(self):
+        with pytest.raises(KeyError):
+            prompts.edition_for("toolbox")
+
+
 class TestListPrompts:
     @pytest.mark.parametrize("profile", sorted(VALID_PROFILES))
     def test_every_profile_lists_the_three_starters(self, profile: str):

@@ -2098,18 +2098,10 @@ def _source_hashes(
     return [{key: manifest.get(key) for key in keys} for manifest in item.source_manifests]
 
 
-# A row surface's two forms. Rows are objects at every rung but the columnar
-# one, where a caller-set budget renders them as arrays of values with a
-# sibling ``*_columns`` list naming the positions. Both are declared so no rung
-# can emit something this tool's own schema rejects.
-def _row_items(item_schema: dict[str, Any]) -> dict[str, Any]:
-    return {"type": "array", "items": {"anyOf": [item_schema, {"type": "array"}]}}
-
-
 _PAGE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "items": _row_items({"type": "object"}),
+        "items": response_budget.row_items_schema({"type": "object"}),
         "items_columns": response_budget.COLUMNAR_ROWS_SCHEMA,
         "total": {"type": "integer"},
         "returned": {"type": "integer"},
@@ -2203,19 +2195,15 @@ _RESULT_ENTRY_SCHEMA: dict[str, Any] = {
     "properties": {
         "metric": {"type": "string"},
         "units": {"type": ["string", "object", "null"]},
-        "reduced": _row_items(_REDUCED_SCHEMA),
+        "reduced": response_budget.row_items_schema(_REDUCED_SCHEMA),
         "reduced_columns": response_budget.COLUMNAR_ROWS_SCHEMA,
         "groups": {"type": "array", "items": {"type": "object"}},
         "steps": {"type": "array", "items": {"type": "object"}},
         "spec": _SPEC_SCHEMA,
-        "per_run": {
-            **_PAGE_SCHEMA,
-            "properties": {
-                **_PAGE_SCHEMA["properties"],
-                "items": _row_items(_ATTRIBUTED_VALUE_SCHEMA),
-            },
-        },
-        "values": _row_items(_ATTRIBUTED_VALUE_SCHEMA),
+        "per_run": response_budget.row_page_schema(
+            _PAGE_SCHEMA, item_schema=_ATTRIBUTED_VALUE_SCHEMA
+        ),
+        "values": response_budget.row_items_schema(_ATTRIBUTED_VALUE_SCHEMA),
         "values_columns": response_budget.COLUMNAR_ROWS_SCHEMA,
         "warnings": {"type": "array", "items": {"type": "string"}},
     },
@@ -2337,27 +2325,23 @@ class _Limits:
     """
 
     per_run: int | None
-    values: int
-    missing: int
+    #: The cap on both unpaged row surfaces — the values list and the
+    #: missing-cases page. One field because they are one number: both start at
+    #: MAX_PAGE_SIZE and both shrink against the same row measurement.
+    rows: int
 
     @classmethod
     def of(cls, include: AnalyzeInclude) -> _Limits:
         return cls(
             per_run=include.per_run.limit if include.per_run else None,
-            values=MAX_PAGE_SIZE,
-            missing=MAX_PAGE_SIZE,
+            rows=MAX_PAGE_SIZE,
         )
 
-    def scaled(self, rows: list[Any], rung: response_budget.Rung) -> _Limits:
+    def scaled(self, measure: response_budget.RowMeasure, rung: response_budget.Rung) -> _Limits:
         """These limits, shrunk to what the previous rung's measurement affords."""
         return _Limits(
-            per_run=(
-                None
-                if self.per_run is None
-                else response_budget.fit_limit(self.per_run, rows, rung)
-            ),
-            values=response_budget.fit_limit(self.values, rows, rung),
-            missing=response_budget.fit_limit(self.missing, rows, rung),
+            per_run=(None if self.per_run is None else measure.fit_limit(self.per_run, rung)),
+            rows=measure.fit_limit(self.rows, rung),
         )
 
 
@@ -2425,7 +2409,7 @@ def _assemble(
     # BOTH offsets: one that dropped the work position would strand un-analyzed
     # work, and one that dropped the coverage offset would replay missing cases
     # already shown. Paged here, ahead of the cursors that have to quote it.
-    missing_page, missing_next = _page(a.missing, a.missing_offset, limits.missing)
+    missing_page, missing_next = _page(a.missing, a.missing_offset, limits.rows)
 
     # A rejection for work this response no longer reaches belongs to the call
     # that resumes it, not to this one.
@@ -2457,7 +2441,7 @@ def _assemble(
             limits.per_run,
             outliers,
             a.include.fields,
-            values_limit=limits.values,
+            values_limit=limits.rows,
         )
         if records or not item_failures:
             results[key] = entry
@@ -2536,8 +2520,6 @@ def _assemble(
     }
     if signals is not None:
         data["signals_available"] = signals
-    if rung is not None:
-        _degrade_analysis(data, rung)
     hints: list[str] = []
     if next_value is not None:
         reason = "an artifact item was deferred intact" if a.deferred else "the call budget ended"
@@ -2574,26 +2556,34 @@ def _analysis_rows(data: dict[str, Any]) -> list[Any]:
     return rows
 
 
+# Rung 0's allowlist, declared as data rather than spelled inside the ``if``
+# that applies it: a rung that exempts content is the one place a checker can
+# silently lose coverage, so it has to be a list a test can read. ``_REMOVE_``
+# names optional keys (dropped only when empty), ``_EMPTY_`` required ones
+# (emptied in place, never deleted) — pinned against this tool's own schema by
+# tests/test_response_budget.py.
+_TRIM_REMOVE_RESULT: tuple[str, ...] = ("groups", "values")
+_TRIM_REMOVE_ENVELOPE: tuple[str, ...] = ("signals_available",)
+# The identity echo is the audit trail, not the way back — rows carry their own
+# source label and case_id, and a run is addressed by manifest_id and job_id.
+_TRIM_EMPTY_ENVELOPE: tuple[str, ...] = ("source_hashes",)
+
+
 def _degrade_analysis(data: dict[str, Any], rung: response_budget.Rung) -> None:
     """Apply the budget ladder's in-place presentation rungs to this envelope.
 
     The answer rung and the shrink rung are not here: revoking an opt-in changes
     what gets computed, and shrinking a page has to happen before its cursor is
-    minted, so both are inputs to :func:`_assemble` instead. The rung-0 keys are
-    enumerated here and nowhere else — a rung that exempts content is the one
-    place a checker can silently lose coverage. Nothing below touches failures,
-    observations, warnings, completeness or spec verdicts.
+    minted, so both are inputs to :func:`_assemble` instead. Nothing below
+    touches failures, observations, warnings, completeness or spec verdicts.
+
+    Idempotent, so the ladder may re-apply it to an envelope it already degraded
+    on the way down.
     """
     if rung.trim:
         for entry in data["results"].values():
-            # Optional keys, removed only when they carry nothing.
-            response_budget.remove_when_empty(entry, "groups")
-            response_budget.remove_when_empty(entry, "values")
-        response_budget.remove_when_empty(data, "signals_available")
-        # Required per response, so emptied in place: the identity echo is the
-        # audit trail, not the way back — rows carry their own source label and
-        # case_id, and a run is addressed by manifest_id and job_id.
-        response_budget.empty_required(data, "source_hashes")
+            response_budget.apply_trim(entry, remove=_TRIM_REMOVE_RESULT)
+        response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=_TRIM_EMPTY_ENVELOPE)
     if rung.columnar:
         for entry in data["results"].values():
             response_budget.columnarize(entry, "reduced")
@@ -2612,33 +2602,34 @@ async def _negotiate_analysis(budget: int, a: _Assembly) -> types.CallToolResult
     base = _Limits.of(a.include)
     text = ""
     rendered: dict[str, Any] = {}
+    # What the standing assembly was built for. Only two things change what
+    # :func:`_assemble` produces — the answer channel and the limits — so a rung
+    # that changes neither is the previous rung degraded one step further, not a
+    # second pass over the same finished work.
+    built_for: tuple[bool, _Limits] | None = None
 
     async def render(rung: response_budget.Rung) -> dict[str, Any]:
-        nonlocal text, rendered
-        limits = base.scaled(_analysis_rows(rendered), rung) if rung.shrink else base
-        data, text = _assemble(a, rung, limits)
-        rendered = data
-        return data
+        nonlocal text, rendered, built_for
+        limits = (
+            base.scaled(response_budget.RowMeasure.of(_analysis_rows(rendered)), rung)
+            if rung.shrink
+            else base
+        )
+        if built_for != (rung.answer_channel, limits):
+            rendered, text = _assemble(a, rung, limits)
+            built_for = (rung.answer_channel, limits)
+        _degrade_analysis(rendered, rung)
+        return rendered
 
     result = await response_budget.negotiate(budget, render)
-    if result.degraded:
-        result.data["observations"].append(
-            response_budget.truncated_observation(
-                result.rung,
-                result.estimate,
-                cut=(
-                    "presentation was reduced; every recipe that produced a result "
-                    "still has one, and its reductions and spec verdict are intact."
-                ),
-                route=(
-                    "Re-ask without 'budget', or continue with continue={result_set_id, cursor}."
-                ),
-            )
-        )
-    if not result.met:
-        result.data["observations"].append(
-            response_budget.not_met_observation(result.rung, result.estimate)
-        )
+    response_budget.attach_notes(
+        result,
+        cut=(
+            "presentation was reduced; every recipe that produced a result "
+            "still has one, and its reductions and spec verdict are intact."
+        ),
+        route="Re-ask without 'budget', or continue with continue={result_set_id, cursor}.",
+    )
     return format_response(text, result.data)
 
 
