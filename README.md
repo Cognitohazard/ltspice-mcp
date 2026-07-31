@@ -74,6 +74,28 @@ Everything operates on ordinary LTspice and SPICE files, so the work passes back
 - Or the reverse: the assistant designs and verifies the circuit and writes the `.asc`; you open it in LTspice, inspect it, and tweak by hand. Your manual edits are simply the file's new state — the assistant picks up from there on the next request.
 - Changes can flow either direction mid-design: adjust a value in the GUI and ask for re-verification, or have the assistant sweep a change you're considering before you commit to it.
 
+## The command line, same engine
+
+`spice-mcp` drives the identical engine from a shell — for agents and scripts
+that live in a terminal rather than behind an MCP client. Six subcommands map
+one-to-one onto the experiment tools (`run-experiments`, `jobs`,
+`analyze-results`, `inspect`, `edit-schematic`, `verify-circuit`); `--json`
+output is exactly the structured payload the MCP tool would return, so a
+pipeline can switch between the two front ends without re-parsing anything.
+
+```bash
+spice-mcp run-experiments @experiment.json     # submits, then waits
+spice-mcp jobs --action list --json
+spice-mcp analyze-results @recipes.json --json | jq '.results[0]'
+```
+
+Anything that launches simulations blocks until the job finishes: a one-shot
+process can't supervise a job after it exits, so the CLI stays, owns the job,
+and cancels it cleanly on Ctrl-C or `--timeout` instead of orphaning
+simulator processes. Exit codes distinguish "refused before anything ran",
+"ran and failed", and "finished but incomplete" — details in
+`spice-mcp --help`.
+
 ## What it does
 
 **Simulation and measurement.** Runs LTspice or ngspice and parses the binary output directly. Measurements are computed server-side and returned as numbers: time-domain (rise/fall, overshoot, settling, delay, period/duty/jitter, RMS, THD), frequency-domain (filter cutoffs and roll-off, gain and phase at any frequency, stability margins, resonance peaks with Q, integrated noise), DC operating points, and `.MEAS` directive results including the ones that failed. Per-device small-signal operating-point parameters (`gm`, `gds`, `vth`, …) come back by name on **both** simulators — LTspice via an auto-added `.options logopinfo` block in the log, ngspice via `.save @dev[param]` traces. Read the set across a `.dc` sweep as a gm/ID table with `export_waveform`, or a single bias point with `operating_point` (address them as `m1.gm` / `@m1[gm]`, no rawfile parsing).

@@ -34,12 +34,10 @@ import signal
 import sys
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-from ltspice_mcp import __version__
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:  # pragma: no cover - import-time weight is the point
-    from collections.abc import AsyncIterator, Sequence
+    from collections.abc import AsyncIterator, Callable, Sequence
 
     from mcp import types
 
@@ -72,6 +70,21 @@ started by this process always blocks to a terminal state."""
 
 EXIT_INTERRUPTED = 130
 """Ctrl-C. Anything this process owned was cancelled before exiting."""
+
+IN_PROGRESS = "in_progress"
+"""The envelope ``outcome`` of a subject that has not reached a terminal status."""
+
+# Every ``outcome`` the six consolidated tools declare, mapped to the code that
+# reports it. Closed on purpose: an outcome nobody mapped is a build that grew a
+# state this front end does not understand, and reporting that as success would
+# make a script treat an unknown result as a good one. Pinned against the tools'
+# own schemas by tests/test_cli.py.
+_EXIT_BY_OUTCOME: dict[str, int] = {
+    "complete": EXIT_OK,
+    "partial": EXIT_PARTIAL,
+    "failed": EXIT_FAILED,
+    IN_PROGRESS: EXIT_UNFINISHED,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +172,35 @@ examples:
 """
 
 
+class _VersionAction(argparse.Action):
+    """``--version``, resolved when it is asked for.
+
+    argparse's own version action wants the string at parser-construction time,
+    which would make every ``--help`` pay for the distribution lookup.
+    """
+
+    def __init__(
+        self,
+        option_strings: Sequence[str],
+        dest: str = argparse.SUPPRESS,
+        default: str = argparse.SUPPRESS,
+        help: str = "Show the version and exit.",
+    ) -> None:
+        super().__init__(option_strings, dest, nargs=0, default=default, help=help)
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: Any,
+        option_string: str | None = None,
+    ) -> None:
+        from ltspice_mcp import __version__
+
+        print(f"spice-mcp {__version__}")
+        parser.exit()
+
+
 def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     """Options every subcommand accepts."""
     parser.add_argument(
@@ -207,38 +249,11 @@ def _add_field(
     )
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Build the argument parser.
-
-    Deliberately free of any ltspice_mcp import beyond the version string:
-    ``--help`` must not pay for simulator detection, symbol-path resolution or
-    the spicelib import chain.
-    """
-    parser = argparse.ArgumentParser(
-        prog="spice-mcp",
-        description=_DESCRIPTION,
-        epilog=_EPILOG,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument("--version", action="version", version=f"spice-mcp {__version__}")
-    sub = parser.add_subparsers(dest="command", metavar="COMMAND")
-
-    run = sub.add_parser(
-        "run-experiments",
-        aliases=["run_experiments"],
-        help="Run one or more decks, optionally as a sweep, and return the measured values.",
-        description=(
-            "Stage the decks, lint them, expand the variation grid, run the cases in "
-            "parallel, and return the receipt with any attached measurements. Blocks "
-            "until the job is terminal."
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    _add_shared_arguments(run)
+def _add_run_options(parser: argparse.ArgumentParser) -> None:
     _add_field(
-        run, "--request-id", "request_id", "Idempotency key; reusing one replays its receipt."
+        parser, "--request-id", "request_id", "Idempotency key; reusing one replays its receipt."
     )
-    run.add_argument(
+    parser.add_argument(
         "--timeout",
         type=float,
         metavar="SECONDS",
@@ -247,7 +262,7 @@ def build_parser() -> argparse.ArgumentParser:
             "wait is unbounded, because exiting early would abandon the run."
         ),
     )
-    run.add_argument(
+    parser.add_argument(
         "--no-wait",
         action="store_true",
         help=(
@@ -256,54 +271,94 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    jobs = sub.add_parser(
-        "jobs",
-        help="Check on, wait for, or stop a run; list recent circuits and their jobs.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    _add_shared_arguments(jobs)
-    _add_field(jobs, "--action", "action", "status, wait, cancel, list, or runs.")
-    _add_field(jobs, "--job-id", "job_id", "The job to address.")
+
+def _add_jobs_options(parser: argparse.ArgumentParser) -> None:
+    _add_field(parser, "--action", "action", "status, wait, cancel, list, or runs.")
+    _add_field(parser, "--job-id", "job_id", "The job to address.")
     _add_field(
-        jobs, "--request-id", "request_id", "Address the job by its idempotency key instead."
+        parser, "--request-id", "request_id", "Address the job by its idempotency key instead."
     )
-    _add_field(jobs, "--timeout-s", "timeout_s", "wait: seconds to block, 0-300.", type_=float)
-    _add_field(jobs, "--wait-for", "wait_for", "wait: 'all' (runs and analysis) or 'runs'.")
-    _add_field(jobs, "--control-token", "control_token", "cancel: the receipt's token.")
-    _add_field(jobs, "--circuit", "circuit", "list: restrict to one circuit file.")
-    _add_field(jobs, "--cursor", "cursor", "list/runs: next_cursor from the previous page.")
+    _add_field(parser, "--timeout-s", "timeout_s", "wait: seconds to block, 0-300.", type_=float)
+    _add_field(parser, "--wait-for", "wait_for", "wait: 'all' (runs and analysis) or 'runs'.")
+    _add_field(parser, "--control-token", "control_token", "cancel: the receipt's token.")
+    _add_field(parser, "--circuit", "circuit", "list: restrict to one circuit file.")
+    _add_field(parser, "--cursor", "cursor", "list/runs: next_cursor from the previous page.")
 
-    analyze = sub.add_parser(
-        "analyze-results",
-        aliases=["analyze_results"],
+
+def _add_verify_options(parser: argparse.ArgumentParser) -> None:
+    _add_field(parser, "--path", "path", "Circuit to check: .asc, .cir, .net or .sp.")
+
+
+class _Subcommand(NamedTuple):
+    """One subparser: its one-line help, its longer description, and the
+    shorthand flags it adds beyond the shared ones."""
+
+    help: str
+    description: str | None = None
+    options: Callable[[argparse.ArgumentParser], None] | None = None
+
+
+# Every subcommand, in the order --help lists them. The name is the hyphenated
+# spelling; the underscore form of a two-word name is registered as an alias, so
+# a caller who knows the MCP tool can type it.
+_SUBCOMMANDS: dict[str, _Subcommand] = {
+    "run-experiments": _Subcommand(
+        help="Run one or more decks, optionally as a sweep, and return the measured values.",
+        description=(
+            "Stage the decks, lint them, expand the variation grid, run the cases in "
+            "parallel, and return the receipt with any attached measurements. Blocks "
+            "until the job is terminal."
+        ),
+        options=_add_run_options,
+    ),
+    "jobs": _Subcommand(
+        help="Check on, wait for, or stop a run; list recent circuits and their jobs.",
+        options=_add_jobs_options,
+    ),
+    "analyze-results": _Subcommand(
         help="Measure finished runs: metrics, comparisons and waveform extracts.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    _add_shared_arguments(analyze)
-
-    inspect = sub.add_parser(
-        "inspect",
+    ),
+    "inspect": _Subcommand(
         help="Read-only lookups over decks, schematics, symbols, models and libraries.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    _add_shared_arguments(inspect)
-
-    edit = sub.add_parser(
-        "edit-schematic",
-        aliases=["edit_schematic"],
+    ),
+    "edit-schematic": _Subcommand(
         help="Apply a typed op batch to an .asc schematic in one transactional call.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    _add_shared_arguments(edit)
-
-    verify = sub.add_parser(
-        "verify-circuit",
-        aliases=["verify_circuit"],
+    ),
+    "verify-circuit": _Subcommand(
         help="Check a circuit file, optionally rendering it or comparing it to a reference.",
+        options=_add_verify_options,
+    ),
+}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser.
+
+    Deliberately free of any ltspice_mcp import: ``--help`` must not pay for the
+    version lookup, simulator detection, symbol-path resolution or the spicelib
+    import chain.
+    """
+    parser = argparse.ArgumentParser(
+        prog="spice-mcp",
+        description=_DESCRIPTION,
+        epilog=_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    _add_shared_arguments(verify)
-    _add_field(verify, "--path", "path", "Circuit to check: .asc, .cir, .net or .sp.")
+    parser.add_argument("--version", action=_VersionAction)
+    sub = parser.add_subparsers(dest="command", metavar="COMMAND")
+
+    for name, spec in _SUBCOMMANDS.items():
+        alias = name.replace("-", "_")
+        command = sub.add_parser(
+            name,
+            aliases=[alias] if alias != name else [],
+            help=spec.help,
+            description=spec.description,
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        _add_shared_arguments(command)
+        if spec.options is not None:
+            spec.options(command)
 
     return parser
 
@@ -539,7 +594,7 @@ async def _run_experiments_blocking(
     result = await invoke("run_experiments", payload, state)
     data = result.structuredContent or {}
     job_id = data.get("job_id")
-    if data.get("outcome") != "in_progress" or not job_id:
+    if data.get("outcome") != IN_PROGRESS or not job_id:
         return result
     if getattr(namespace, "no_wait", False):
         # Reachable only once a daemon owner exists to hold the job — ``execute``
@@ -586,7 +641,7 @@ async def _wait_until_terminal(
             # The wait itself failed, so looping cannot make progress. Report
             # not-terminal: the caller cancels rather than spinning or leaving.
             return False
-        if snapshot.get("outcome") != "in_progress":
+        if snapshot.get("outcome") != IN_PROGRESS:
             return True
     return False
 
@@ -611,14 +666,7 @@ def exit_code_for(result: types.CallToolResult) -> int:
         )
     if result.isError:
         return EXIT_REFUSED
-    outcome = data.get("outcome")
-    if outcome == "partial":
-        return EXIT_PARTIAL
-    if outcome == "in_progress":
-        return EXIT_UNFINISHED
-    if outcome == "failed":
-        return EXIT_FAILED
-    return EXIT_OK
+    return _EXIT_BY_OUTCOME.get(data.get("outcome", ""), EXIT_INTERNAL)
 
 
 def emit(namespace: argparse.Namespace, result: types.CallToolResult, code: int) -> None:

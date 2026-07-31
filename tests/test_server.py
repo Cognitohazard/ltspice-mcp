@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.config import VALID_PROFILES, ServerConfig
 from ltspice_mcp.errors import (
     LibraryError,
     LTSpiceMCPError,
@@ -122,6 +122,32 @@ class TestBuildInstructions:
                 f"consolidated instructions {len(text)} chars > "
                 f"{_INSTRUCTIONS_BUDGET} client truncation budget"
             )
+
+
+class TestProfileGuidanceIsTotal:
+    """Every profile-keyed choice covers every valid profile.
+
+    A profile added to the config and forgotten here would otherwise inherit
+    whichever branch the code falls through to — instructions or an error hint
+    naming tools it does not expose, with nothing failing to say so.
+    """
+
+    def test_instruction_editions_cover_every_profile(self):
+        from ltspice_mcp.server import _PROFILE_GUIDANCE
+
+        assert set(_PROFILE_GUIDANCE) == VALID_PROFILES
+
+    def test_error_hint_fields_are_the_profiles(self):
+        from ltspice_mcp.server import _ErrorHint
+
+        assert set(_ErrorHint._fields) == VALID_PROFILES
+
+    @pytest.mark.parametrize("profile", sorted(VALID_PROFILES))
+    def test_every_profile_gets_its_own_hint(self, profile: str):
+        from ltspice_mcp.server import _ERROR_HINTS, _get_error_hint
+
+        for err_type, hint in _ERROR_HINTS.items():
+            assert _get_error_hint(err_type, profile) == getattr(hint, profile)
 
 
 class TestConfigureAscEditor:

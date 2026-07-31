@@ -18,6 +18,7 @@ from urllib.parse import quote, unquote
 from mcp import types
 from pydantic import AnyUrl
 
+from ltspice_mcp.config import VALID_PROFILES
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, services
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.experiment_types import ExperimentJob
@@ -240,10 +241,22 @@ _PROFILE_BLOCK_RE = re.compile(
 
 
 def _select_profile_blocks(text: str, profile: str) -> str:
-    """Keep the guide blocks fenced for ``profile``, drop the rest."""
+    """Keep the guide blocks fenced for ``profile``, drop the rest.
+
+    A fence naming a profile that does not exist is rejected rather than
+    honoured: it matches nobody, so it would delete its block for every profile
+    — a typo whose only symptom is missing guidance no reader knows to expect.
+    """
 
     def keep(match: re.Match[str]) -> str:
-        return match["body"] if profile in match["profiles"].split() else ""
+        names = match["profiles"].split()
+        unknown = sorted(set(names) - VALID_PROFILES)
+        if unknown:
+            raise ValueError(
+                f"spice_guide.md fences an unknown tool profile: {', '.join(unknown)} "
+                f"(valid: {', '.join(sorted(VALID_PROFILES))})"
+            )
+        return match["body"] if profile in names else ""
 
     return _PROFILE_BLOCK_RE.sub(keep, text)
 

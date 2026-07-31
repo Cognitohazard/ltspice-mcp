@@ -29,7 +29,7 @@ from ltspice_mcp.tools.experiments import (
     handle_jobs,
     handle_run_experiments,
 )
-from tests.conftest import FIXTURES_DIR, make_sim_job, resolve_local_ref
+from tests.conftest import FIXTURES_DIR, fake_simulator, make_sim_job, resolve_local_ref
 
 
 def test_attached_per_run_limit_shares_the_analyze_page_cap():
@@ -152,23 +152,6 @@ async def _wait_for(condition, timeout_s: float = 1.0) -> None:
         await asyncio.sleep(0.005)
 
 
-def _instant_simulator(
-    monkeypatch: pytest.MonkeyPatch,
-    submissions: list[str],
-) -> None:
-    def submit(self, _netlist: Path, run_filename: str, callback):
-        submissions.append(run_filename)
-        raw = self.output_folder / f"{Path(run_filename).stem}.raw"
-        log = self.output_folder / f"{Path(run_filename).stem}.log"
-        raw.write_bytes(b"Title: mock")
-        log.write_text("ok")
-        outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
-        self.loop.call_soon_threadsafe(callback, outcome)
-        return object()
-
-    monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
-
-
 def _fixture_simulator(
     monkeypatch: pytest.MonkeyPatch,
     fixture_name: str = "ltspice_tran_rc",
@@ -237,7 +220,7 @@ class TestReceiptThenDwell:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         deck = _deck(work_dir / "quick.cir")
 
         result = await handle_run_experiments(
@@ -343,7 +326,7 @@ class TestReceiptThenDwell:
     ):
         """The last-resort path: even the payload builder failing keeps the handles."""
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
 
         def exploding_payload(*_args, **_kwargs):
             raise ValueError("payload exploded")
@@ -372,7 +355,7 @@ class TestIdempotency:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         deck = _deck(work_dir / "replay.cir")
         args = _args(deck, "same-payload")
 
@@ -391,7 +374,7 @@ class TestIdempotency:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         deck = _deck(work_dir / "conflict.cir")
         await handle_run_experiments(
             _args(deck, "conflicting-payload"),
@@ -423,7 +406,7 @@ class TestLeanReceipt:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        _instant_simulator(monkeypatch, [])
+        fake_simulator(monkeypatch)
         deck = _deck(work_dir / "lean_rows.cir")
 
         data = _assert_schema(
@@ -441,7 +424,7 @@ class TestLeanReceipt:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        _instant_simulator(monkeypatch, [])
+        fake_simulator(monkeypatch)
         deck = _deck(work_dir / "lean_fetch.cir")
 
         data = _assert_schema(
@@ -460,7 +443,7 @@ class TestLeanReceipt:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        _instant_simulator(monkeypatch, [])
+        fake_simulator(monkeypatch)
         deck = _deck(work_dir / "lean_blocked.cir", body="V1 in 0 1\nR1 out 1k\n.op\n.end\n")
 
         data = _assert_schema(
@@ -513,7 +496,7 @@ class TestAttachedBlockPreflight:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         deck = _deck(work_dir / "attached_bad.cir")
         bad = {"recipes": [{"key": "x", "metric": "no_such_metric"}]}
 
@@ -540,7 +523,7 @@ class TestAttachedBlockPreflight:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         deck = _deck(work_dir / "attached_dup.cir")
 
         result = await handle_run_experiments(
@@ -593,7 +576,7 @@ class TestOptionalRequestId:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         deck = _deck(work_dir / "auto_id.cir")
         args = RunExperimentsInput.model_validate(
             {
@@ -631,7 +614,7 @@ class TestReplayRejectsChangedSources:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         deck = _deck(work_dir / "edited.cir")
         args = _args(deck, "edited-deck")
         await handle_run_experiments(args, state_with_sim)
@@ -693,7 +676,7 @@ class TestReplayRejectsChangedSources:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         deck = _deck(work_dir / "removed.cir")
         args = _args(deck, "removed-deck")
         await handle_run_experiments(args, state_with_sim)
@@ -720,7 +703,7 @@ class TestReplayRejectsChangedSources:
         that export is checking the one file an edit cannot reach.
         """
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         schematic = _schematic(work_dir / "amp.asc", "1k")
         _asc_exporter(state_with_sim)
         args = _args(schematic, "edited-schematic", provenance=True)
@@ -745,7 +728,7 @@ class TestReplayRejectsChangedSources:
     ):
         """A record that pairs the .asc's path with the .net's digest describes
         neither file, and no later reader can tell which one it meant."""
-        _instant_simulator(monkeypatch, [])
+        fake_simulator(monkeypatch)
         schematic = _schematic(work_dir / "paired.asc", "3k")
         _asc_exporter(state_with_sim)
 
@@ -768,7 +751,7 @@ class TestReplayRejectsChangedSources:
         """Adding the schematic to the manifest must not make every .asc replay a
         conflict — the export is regenerated per submission and never matches."""
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         schematic = _schematic(work_dir / "stable.asc", "4k7")
         _asc_exporter(state_with_sim)
         args = _args(schematic, "stable-schematic")
@@ -793,7 +776,7 @@ class TestReplayRejectsChangedSources:
         way every other unprovable case here does — a re-run, not stale numbers.
         """
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         outside = work_dir.parent / f"{work_dir.name}-shared.inc"
         outside.write_text(".param supply=5\n")
         deck = _deck(
@@ -825,7 +808,7 @@ class TestReplayRejectsChangedSources:
         the message.
         """
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         deck = _deck(work_dir / "older.cir")
         args = _args(deck, "older-record")
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
@@ -859,7 +842,7 @@ class TestLintModes:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         deck = _deck(
             work_dir / "blocked.cir",
             "V1 in 0 1\nR1 out 1k\n.op\n.end\n",
@@ -895,7 +878,7 @@ class TestLintModes:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         deck = _deck(
             work_dir / "warn.cir",
             "V1 in 0 1\nR1 in 0 1M\n.op\n.end\n",
@@ -919,7 +902,7 @@ class TestLintModes:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         deck = _deck(
             work_dir / "off.cir",
             "V1 in 0 1\nR1 in 0 1M\n.op\n.end\n",
@@ -946,7 +929,7 @@ class TestPerCircuitFailuresAndAccounting:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         valid = _deck(work_dir / "valid.cir")
         missing = work_dir / "missing.cir"
         args = RunExperimentsInput.model_validate(
@@ -1014,7 +997,7 @@ class TestPerCircuitFailuresAndAccounting:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         schematic = _deck(work_dir / "missing-exporter.asc", "Version 4\n")
 
         result = await handle_run_experiments(
@@ -1034,7 +1017,7 @@ class TestPerCircuitFailuresAndAccounting:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         deck = _deck(work_dir / "grid.cir")
         args = _args(
             deck,
@@ -1063,7 +1046,7 @@ class TestPerCircuitFailuresAndAccounting:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         deck = _deck(work_dir / "recent.cir")
         note = AsyncMock()
         monkeypatch.setattr(state_with_sim, "note_recent_circuit", note)
@@ -1415,7 +1398,7 @@ class TestVariationsReachIntoIncludes:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         (work_dir / "left.inc").write_text(".subckt left in out\nR1 in out 1k\n.ends\n")
         (work_dir / "right.inc").write_text(".subckt right in out\nR1 in out 2k\n.ends\n")
         deck = _deck(
@@ -1529,7 +1512,7 @@ class TestReceiptWeight:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        _instant_simulator(monkeypatch, [])
+        fake_simulator(monkeypatch)
         deck = _deck(work_dir / "weight.cir")
 
         lean = _assert_schema(await handle_run_experiments(_args(deck, "lean-1"), state_with_sim))
@@ -1560,7 +1543,7 @@ class TestReceiptWeight:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        _instant_simulator(monkeypatch, [])
+        fake_simulator(monkeypatch)
         deck = _deck(work_dir / "shrink.cir")
 
         lean = _assert_schema(
@@ -1579,7 +1562,7 @@ class TestReceiptWeight:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        _instant_simulator(monkeypatch, [])
+        fake_simulator(monkeypatch)
         deck = _deck(work_dir / "proj.cir")
 
         args = _args(
@@ -1610,7 +1593,7 @@ class TestReceiptWeight:
         request — refusing the caller exactly when they want to see more.
         """
         submissions: list[str] = []
-        _instant_simulator(monkeypatch, submissions)
+        fake_simulator(monkeypatch, submissions)
         deck = _deck(work_dir / "verbosity.cir")
 
         lean = _assert_schema(
@@ -1640,7 +1623,7 @@ class TestReceiptWeight:
         it ran against" into silence, which is the one thing the lean receipt
         must not do.
         """
-        _instant_simulator(monkeypatch, [])
+        fake_simulator(monkeypatch)
         outside = work_dir.parent / "outside_core.inc"
         outside.write_text("R9 in 0 1k\n")
         # A stageable include alongside the live one: without both, "keep only
