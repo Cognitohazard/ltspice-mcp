@@ -5,24 +5,54 @@ and unique identifiers for sweep/Monte Carlo batch jobs and configs.
 """
 
 import math
+import re
 import time
+import unicodedata
 import uuid
 
 import numpy as np
 
+# An id becomes a filename ({id}.net, {id}_case_3.net) and the token the
+# scoped process kill matches on, so a name folded into one is reduced to
+# lowercase [a-z0-9-] and capped. Underscores are excluded deliberately: an
+# id then carries exactly as many underscores as its format has, in fixed
+# positions, so no generated id can be a proper prefix of another one that
+# ends at the filename boundary proc_kill._token_in_arg accepts.
+_STEM_MAX_LEN = 24
+_STEM_DISALLOWED = re.compile(r"[^a-z0-9]+")
 
-def generate_id(prefix: str) -> str:
+
+def sanitize_stem(stem: str) -> str:
+    """Fold a deck name into the id-safe alphabet.
+
+    Non-ASCII is transliterated away, every remaining run of disallowed
+    characters (including ``_`` and ``.``) becomes a single ``-``, and the
+    result is lowercased and length-capped. Returns "" when nothing usable
+    survives — callers then emit the stemless id form.
+    """
+    ascii_only = unicodedata.normalize("NFKD", stem).encode("ascii", "ignore").decode("ascii")
+    cleaned = _STEM_DISALLOWED.sub("-", ascii_only.lower()).strip("-")
+    return cleaned[:_STEM_MAX_LEN].strip("-")
+
+
+def generate_id(prefix: str, stem: str | None = None) -> str:
     """Generate a unique ID with the given prefix.
 
-    Format: {prefix}_{timestamp}_{uuid_short}
+    Format: {prefix}_{stem}_{timestamp}_{uuid_short}, or
+    {prefix}_{timestamp}_{uuid_short} when no stem is given (or none of it
+    survives sanitization). The stem carries the deck's name into the handle
+    so a job id read back in a listing says what it ran.
 
     Args:
         prefix: ID prefix (e.g. "sim", "sweep", "montecarlo", "mc")
+        stem: Optional deck name to embed; sanitized by :func:`sanitize_stem`
 
     Returns:
-        ID string (e.g., "sweep_1707916800_a3f7b2c4")
+        ID string (e.g., "exp_rc-filter_1707916800_a3f7b2c4")
     """
-    return f"{prefix}_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    cleaned = sanitize_stem(stem) if stem else ""
+    middle = f"{cleaned}_" if cleaned else ""
+    return f"{prefix}_{middle}{int(time.time())}_{uuid.uuid4().hex[:8]}"
 
 
 def generate_batch_job_id(job_type: str) -> str:

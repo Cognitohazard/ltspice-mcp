@@ -223,19 +223,49 @@ def _read_plot_widget(
     return _make_result(uri_str, build_widget_html(), mime=WIDGET_MIME_TYPE)
 
 
-@lru_cache(maxsize=1)
-def _guide_text() -> str:
-    """Read the packaged guide once; it is immutable for the process lifetime."""
-    return (files("ltspice_mcp") / "assets" / "spice_guide.md").read_text("utf-8")
+# Guide passages that name this server's tools are fenced per tool profile:
+#
+#     <!-- profile: full agentic -->
+#     ...text naming tools those profiles expose...
+#     <!-- /profile -->
+#
+# Unfenced text — everything about SPICE itself — is shared by every profile,
+# so simulator behavior stays single-sourced and only the tool-surface
+# passages differ. The fence lines and the block they wrap are consumed
+# together, so dropping a block leaves the surrounding spacing intact.
+_PROFILE_BLOCK_RE = re.compile(
+    r"<!-- profile: (?P<profiles>[a-z ]+) -->\n(?P<body>.*?)<!-- /profile -->\n",
+    re.DOTALL,
+)
+
+
+def _select_profile_blocks(text: str, profile: str) -> str:
+    """Keep the guide blocks fenced for ``profile``, drop the rest."""
+
+    def keep(match: re.Match[str]) -> str:
+        return match["body"] if profile in match["profiles"].split() else ""
+
+    return _PROFILE_BLOCK_RE.sub(keep, text)
+
+
+@lru_cache(maxsize=4)
+def _guide_text(profile: str) -> str:
+    """Read the packaged guide once per profile; it is immutable for the process."""
+    raw = (files("ltspice_mcp") / "assets" / "spice_guide.md").read_text("utf-8")
+    return _select_profile_blocks(raw, profile)
 
 
 @_router.route("spice://guide")
 def _read_guide(
     uri_str: str, params: dict[str, str], state: SessionState
 ) -> types.ReadResourceResult:
-    """Serve the packaged LTspice authoring + schematic-layout guide."""
-    del params, state
-    return _make_result(uri_str, _guide_text(), mime="text/markdown")
+    """Serve the packaged LTspice authoring + schematic-layout guide.
+
+    Served per tool profile: the SPICE content is identical, the passages
+    naming this server's tools are the active profile's.
+    """
+    del params
+    return _make_result(uri_str, _guide_text(state.config.tool_profile), mime="text/markdown")
 
 
 @_router.route("spice://config")

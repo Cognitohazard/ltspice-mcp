@@ -630,7 +630,9 @@ async def handle_run_experiments(
         if args.analyze is not None:
             _validate_attached_analysis(args.analyze)
 
-        job_id = generate_id("exp")
+        # The first circuit's id (the deck's file stem unless the caller named
+        # it) rides in the job id so the handle says what it ran.
+        job_id = generate_id("exp", circuit_inputs[0].circuit_id)
         try:
             route = await asyncio.to_thread(
                 resolve_experiment_paths,

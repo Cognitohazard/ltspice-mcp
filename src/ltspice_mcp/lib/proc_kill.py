@@ -56,9 +56,11 @@ def _token_in_arg(token: str, arg: str) -> bool:
     Staged run files are ``{job_id}.{ext}`` (single runs) or
     ``{job_id}_{n}.{ext}`` (batch sub-runs), so the id is always followed by
     ``.`` or ``_`` — or ends the argument. Requiring that boundary keeps a
-    job id from matching a longer id it happens to prefix. (Generated ids
-    are fixed-length per class, so a proper prefix can't occur today; the
-    anchor makes the match safe rather than reliant on that invariant.)
+    job id from matching a longer id it happens to prefix (``{id}_case_1``
+    against ``{id}_case_10``). Ids also can't prefix each other by
+    construction: the deck name an id may carry is stripped of underscores
+    (``sweep_utils.sanitize_stem``), so every id of a class has the same
+    underscore count in the same positions.
     """
     return re.search(re.escape(token) + r"(?:[._]|$)", arg) is not None
 
