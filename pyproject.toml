@@ -58,6 +58,7 @@ Issues = "https://github.com/cognitohazard/ltspice-mcp/issues"
 
 [project.scripts]
 ltspice-mcp = "ltspice_mcp.main:main"
+spice-mcp = "ltspice_mcp.cli:main"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
