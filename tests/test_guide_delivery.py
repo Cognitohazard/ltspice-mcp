@@ -7,7 +7,14 @@ single-sourced ``spice://guide`` resource.
 """
 
 from importlib.resources import files
+from pathlib import Path
+from typing import cast
 
+import pytest
+from mcp import types
+
+from ltspice_mcp.config import VALID_PROFILES, ServerConfig, ToolProfile
+from ltspice_mcp.resources import handle_read_resource
 from ltspice_mcp.server import SERVER_INSTRUCTIONS
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.circuit import (
@@ -64,3 +71,59 @@ class TestGuideIsEngineGeneral:
         ngspice_anchors = ("### .control / .endc Blocks", "### XSPICE", "### .save Directive")
         for anchor in ltspice_anchors + ngspice_anchors:
             assert anchor in guide, f"guide is missing section: {anchor}"
+
+
+def _guide_for(profile: str, work_dir: Path) -> str:
+    """The guide as a client on ``profile`` receives it, through the resource route."""
+    config = ServerConfig(
+        working_dir=work_dir,
+        allowed_paths=[work_dir],
+        tool_profile=cast("ToolProfile", profile),
+    )
+    state = SessionState.create(config, available={})
+    contents = handle_read_resource("spice://guide", state).contents[0]
+    assert isinstance(contents, types.TextResourceContents)
+    return contents.text
+
+
+class TestGuideIsProfileScoped:
+    """One document, one set of simulator facts, and per-profile tool passages:
+    no profile may be told to call a tool it cannot see."""
+
+    @pytest.mark.parametrize("profile", sorted(VALID_PROFILES))
+    def test_simulator_facts_are_shared_by_every_profile(self, profile: str, work_dir: Path):
+        guide = _guide_for(profile, work_dir)
+        for anchor in (
+            "### Value Notation — CRITICAL",
+            "ngspice skips `.meas` under the server's",
+            "### .control / .endc Blocks",
+            "### .asc Schematics",
+            "LTspice vs ngspice",
+        ):
+            assert anchor in guide, f"{profile} guide is missing shared content: {anchor}"
+
+    @pytest.mark.parametrize("profile", sorted(VALID_PROFILES))
+    def test_no_fence_markers_reach_the_client(self, profile: str, work_dir: Path):
+        assert "<!-- profile" not in _guide_for(profile, work_dir)
+
+    def test_full_and_agentic_keep_the_shipped_tool_text(self, work_dir: Path):
+        full = _guide_for("full", work_dir)
+        assert full == _guide_for("agentic", work_dir)
+        assert "use the server's schematic tools (`create_schematic`" in full
+        assert "`apply_schematic_ops` ops, so batch them in one transaction" in full
+        assert "## Tool surface on this profile" not in full
+
+    def test_consolidated_maps_the_six_tools_and_replaces_the_asc_entry(self, work_dir: Path):
+        guide = _guide_for("consolidated", work_dir)
+        assert "## Tool surface on this profile" in guide
+        for tool in (
+            "run_experiments",
+            "jobs",
+            "analyze_results",
+            "inspect",
+            "edit_schematic",
+            "verify_circuit",
+        ):
+            assert tool in guide, f"consolidated guide never names {tool}"
+        assert "use the server's schematic tools (`create_schematic`" not in guide
+        assert '`edit_schematic(target=..., base="blank")` starts a new sheet' in guide

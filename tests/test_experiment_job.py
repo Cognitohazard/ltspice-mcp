@@ -219,6 +219,28 @@ class TestExperimentTypesAndStore:
         assert loaded.analysis.status == "pending"
         assert loaded.store_path == job.store_path.resolve()
 
+    @pytest.mark.asyncio
+    async def test_pre_stem_job_id_still_loads_and_resolves(
+        self, work_dir: Path, state_no_sim: SessionState
+    ):
+        # Ids gained a deck-name segment; the records already on disk kept the
+        # old prefix_timestamp_random form. Nothing on the read path parses an
+        # id, so such a record must still load and address exactly as before.
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        legacy_id = "exp_1707916800_a3f7b2c4"
+        job = _job(work_dir, circuit, job_id=legacy_id, status="completed")
+        experiment_store.save_job(job)
+
+        loaded = experiment_store.load_job(legacy_id, work_dir, own_is_alive=True)
+        assert loaded is not None
+        assert loaded.job_id == legacy_id
+        assert loaded.cases[0].assignments == {"R1": "1k"}
+
+        resolved = await services.resolve_job_async(legacy_id, state_no_sim)
+        assert isinstance(resolved, ExperimentJob)
+        assert resolved.job_id == legacy_id
+
     def test_job_store_delegates_experiment_kind_without_misparsing(self, work_dir: Path):
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
