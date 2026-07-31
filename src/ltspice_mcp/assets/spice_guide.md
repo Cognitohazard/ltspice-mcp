@@ -7,6 +7,43 @@ Covers both engines. **SPICE Fundamentals** applies to both; then read
 character, behavioral-source conditionals, MOSFET bulk handling, parameter
 sweeps, and Monte Carlo — see the differences table at the end.
 
+<!-- profile: consolidated -->
+## Tool surface on this profile
+
+Six tools: `run_experiments`, `jobs`, `analyze_results`, `inspect`,
+`edit_schematic`, `verify_circuit`. The loop is: write the deck to a file, run it
+with `run_experiments` (attach `analyze.recipes` and the numbers come back in the
+same response), follow a receipt with `jobs`, measure a finished job with
+`analyze_results`.
+
+| To … | Call |
+|-|-|
+| run a deck — once, swept, or perturbed | `run_experiments(circuits=[{"path": …}], variations=[…])` |
+| get the measurements without a second round trip | `run_experiments(analyze={"recipes": […]})` |
+| follow, cancel, or page a job's runs | `jobs(action="status"\|"wait"\|"cancel"\|"list"\|"runs")` |
+| measure a finished job | `analyze_results(sources=[{"job_id": …}], recipes=[…])` |
+| read `.meas` results | recipe `{"metric": "measurements"}` |
+| a scalar, a trace, a chart | recipes `value`, `waveform`, `plot` |
+| device operating points (gm/gds/vth) | recipe `{"metric": "operating_point", "device": "M1"}` |
+| AC corner, gain, slope, crossing, stability | recipes `bode_filter`, `bode_point`, `bode_slope`, `bode_crossing`, `stability`, `ac_structure` |
+| transient stats, edges, timing, THD | recipes `signal_stats`, `edges`, `timing`, `periodic`, `transient_response`, `thd` |
+| symbol geometry, a net, a component list, a model | `inspect(kind="symbol"\|"net"\|"components"\|"model")` |
+| create or mutate an `.asc` | `edit_schematic(target=…, ops=[…])` |
+| check a sheet against its netlist, or render it | `verify_circuit(path=…)` |
+
+Later sections show their examples with the tool names of this server's other
+profiles, which are not exposed here. Read them through this map: for
+`run_simulation` use `run_experiments`; for `measurement_stats`, `bode_metrics`,
+`signal_stats`, `edge_metrics`, `transient_response`, `thd`, `operating_point`,
+`query_value`, `get_waveform`, `export_waveform`, `plot_waveform` and the other
+analysis tools use the `analyze_results` recipe of the same name; for
+`create_schematic` / `apply_schematic_ops` / `wire_pins` use `edit_schematic`;
+for `symbol_info` / `component_info` use `inspect(kind="symbol")`, for
+`trace_net` `inspect(kind="net")`, for `read_circuit` / `list_components`
+`inspect(kind="components")`, for `find_model` `inspect(kind="model")`, and for
+`export_netlist`'s equivalence check `verify_circuit`. The SPICE is identical.
+
+<!-- /profile -->
 ## SPICE Fundamentals
 
 ### Netlist Structure
@@ -433,8 +470,14 @@ C1 out 0 {C}
 
 ### .asc Schematics
 
+<!-- profile: full agentic -->
 `.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use the server's schematic tools (`create_schematic`, `apply_schematic_ops`, `wire_pins`, ...) or LTspice's GUI. These are available in both the full and agentic profiles — geometry-aware editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match. Place components with the `apply_schematic_ops` `add_component` op, which returns placed pins, bounding box, and overlap warnings. Other mutations (move/remove a component, set an attribute, add or remove a net label, remove a wire) are also `apply_schematic_ops` ops, so batch them in one transaction.
 
+<!-- /profile -->
+<!-- profile: consolidated -->
+`.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use `edit_schematic` or LTspice's GUI. It gives geometry-aware editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match. `edit_schematic(target=..., base="blank")` starts a new sheet; every mutation below is an entry in its `ops` list, applied as one guarded transaction, so batch a whole build into one call. Place components with the `add_component` op, which returns placed pins, bounding box, and overlap warnings — `inspect(kind="symbol")` previews the same geometry before you place anything.
+
+<!-- /profile -->
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2.
 - Export to netlist for direct text editing when needed.
 - Bus notation: `Data[0:7]` creates 8 nets (cosmetic — netlister flattens to individual nets).
