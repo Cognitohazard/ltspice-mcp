@@ -55,12 +55,19 @@ def _token_in_arg(token: str, arg: str) -> bool:
 
     Staged run files are ``{job_id}.{ext}`` (single runs) or
     ``{job_id}_{n}.{ext}`` (batch sub-runs), so the id is always followed by
-    ``.`` or ``_`` — or ends the argument. Requiring that boundary keeps a
-    job id from matching a longer id it happens to prefix (``{id}_case_1``
-    against ``{id}_case_10``). Ids also can't prefix each other by
-    construction: the deck name an id may carry is stripped of underscores
-    (``sweep_utils.sanitize_stem``), so every id of a class has the same
-    underscore count in the same positions.
+    ``.`` or ``_`` — or ends the argument.
+
+    That trailing anchor is what makes the match safe, and nothing else here
+    substitutes for it: without it a token would also match every longer id it
+    happens to prefix (``{id}_case_1`` against ``{id}_case_10``), killing a
+    sibling job's simulator. Do not drop it. In particular, ids are NOT all the
+    same shape — ``sweep_utils.generate_id`` emits ``{prefix}_{stem}_{ts}_{hex}``
+    and, when no stem survives sanitization, ``{prefix}_{ts}_{hex}`` — so no
+    safety argument is available from "every id has its separators in the same
+    places". What the id format does contribute is a supporting invariant:
+    ``sanitize_stem`` strips ``_`` out of the stem, so an id can never grow an
+    extra ``_``-delimited field, which is what would let one whole id extend
+    another at exactly this boundary.
     """
     return re.search(re.escape(token) + r"(?:[._]|$)", arg) is not None
 

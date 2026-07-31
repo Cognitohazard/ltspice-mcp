@@ -14,7 +14,11 @@ import pytest
 from mcp import types
 
 from ltspice_mcp.config import VALID_PROFILES, ServerConfig, ToolProfile
-from ltspice_mcp.resources import _select_profile_blocks, handle_read_resource
+from ltspice_mcp.resources import (
+    _PROFILE_MARKER_RE,
+    _select_profile_blocks,
+    handle_read_resource,
+)
 from ltspice_mcp.server import SERVER_INSTRUCTIONS
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.circuit import (
@@ -104,7 +108,13 @@ class TestGuideIsProfileScoped:
 
     @pytest.mark.parametrize("profile", sorted(VALID_PROFILES))
     def test_no_fence_markers_reach_the_client(self, profile: str, work_dir: Path):
-        assert "<!-- profile" not in _guide_for(profile, work_dir)
+        # Matched on the marker pattern, not on the opening spelling: a stray
+        # CLOSING marker is internal markup in front of the client too, and a
+        # substring check for "<!-- profile" would walk straight past it.
+        served = _guide_for(profile, work_dir)
+        assert _PROFILE_MARKER_RE.search(served) is None
+        assert "<!-- profile" not in served
+        assert "<!-- /profile" not in served
 
     def test_full_and_agentic_keep_the_shipped_tool_text(self, work_dir: Path):
         full = _guide_for("full", work_dir)
@@ -139,3 +149,36 @@ class TestGuideIsProfileScoped:
     def test_the_shipped_guide_fences_only_real_profiles(self, profile: str, work_dir: Path):
         # The same check over the asset itself: reading it must not raise.
         assert _guide_for(profile, work_dir)
+
+    def test_the_shipped_guide_balances_every_fence(self):
+        """Every opening has its closing, and none nests — measured on the asset
+        rather than assumed, because the failure is silent by nature."""
+        markers = _PROFILE_MARKER_RE.findall(_GUIDE_ASSET.read_text("utf-8"))
+        opens = [close for close in markers if not close]
+        closes = [close for close in markers if close]
+        assert opens and len(opens) == len(closes)
+
+    @pytest.mark.parametrize(
+        ("text", "problem"),
+        [
+            (
+                "before\n<!-- profile: full -->\nbody\nafter\n",
+                "opened but never closed",
+            ),
+            (
+                "<!-- profile: full -->\na\n<!-- profile: agentic -->\nb\n<!-- /profile -->\n",
+                "opened inside another fence",
+            ),
+            (
+                "before\n<!-- /profile -->\nafter\n",
+                "closed but never opened",
+            ),
+        ],
+        ids=["unterminated", "nested", "stray-close"],
+    )
+    def test_a_broken_fence_structure_is_rejected(self, text: str, problem: str):
+        """A fence that does not pair is not recoverable — it silently mis-scopes
+        its block for every profile — so it fails at parse, loudly, like a fence
+        naming a profile nobody has."""
+        with pytest.raises(ValueError, match=problem):
+            _select_profile_blocks(text, "full")

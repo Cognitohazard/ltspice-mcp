@@ -100,6 +100,10 @@ class Rung:
     level: int
     budget: int
     measured: int
+    #: Room held back for the budget's own epilogue. ``None`` means one copy of
+    #: the truncation note; :class:`Notes` sets it for the tool that is
+    #: negotiating, because a tool mirroring the note into a hint writes it twice.
+    reserve: int | None = None
 
     @property
     def trim(self) -> bool:
@@ -124,7 +128,7 @@ class Rung:
     @property
     def body_budget(self) -> int:
         """The budget less the room the budget notes themselves will take."""
-        return self.budget - NOTE_RESERVE_TOKENS
+        return self.budget - (NOTE_RESERVE_TOKENS if self.reserve is None else self.reserve)
 
 
 def estimate_tokens(payload: Any) -> int:
@@ -290,21 +294,31 @@ class RowMeasure:
     def of(cls, rows: Sequence[Any]) -> RowMeasure:
         return cls(shown=len(rows), tokens=estimate_tokens(list(rows)))
 
-    def fit_limit(self, current: int, rung: Rung) -> int:
-        """The row limit whose page is expected to fit, from the measured envelope.
+    def affordable(self, rung: Rung) -> int:
+        """How many rows of the measured cost this budget leaves room for.
 
         Splits the previous rung's measurement into the fixed envelope and the
         rows it carried, then divides what the budget leaves by the per-row
-        cost. Never grows the caller's limit and never goes below one row: a
-        page of one row still carries a cursor, which is the route back to the
-        rest.
+        cost. Never below one row: a page of one row still carries a cursor,
+        which is the route back to the rest.
+
+        Every row surface a rung shrinks has to be in the measurement this was
+        built from. A surface left out is charged to ``fixed`` — correct only
+        while it genuinely cannot shrink, and an under-count of the fixed cost
+        the moment it can.
+        """
+        fixed = max(0, rung.measured - self.tokens)
+        per_row = max(1, self.tokens // self.shown) if self.shown > 0 else 1
+        return max(1, (rung.body_budget - fixed) // per_row)
+
+    def fit_limit(self, current: int, rung: Rung) -> int:
+        """``current``, lowered to what :meth:`affordable` leaves room for.
+
+        Never grows the caller's limit.
         """
         if self.shown <= 0 or current <= 1:
             return current
-        fixed = max(0, rung.measured - self.tokens)
-        per_row = max(1, self.tokens // self.shown)
-        affordable = (rung.body_budget - fixed) // per_row
-        return max(1, min(current, int(affordable)))
+        return min(current, self.affordable(rung))
 
 
 # --------------------------------------------------------------------------
@@ -370,6 +384,38 @@ NOTE_RESERVE_TOKENS = estimate_tokens(
 
 
 @dataclass(frozen=True)
+class Notes:
+    """A tool's budget epilogue: what it says, and what saying it costs.
+
+    One value drives both ends of the ladder — :func:`negotiate` holds back the
+    room the notes will need, :func:`attach_notes` writes them — so the two
+    cannot disagree about how much room that is. That is the whole reason this
+    is an object rather than two argument lists: the reserve is derived from the
+    same ``hint_key`` that decides how many copies get written.
+    """
+
+    #: What this tool gave up, in its own terms.
+    cut: str
+    #: How the caller gets the rest back.
+    route: str
+    #: The guidance key to mirror the last note into, for tools whose
+    #: structured-aware clients read guidance only from there.
+    hint_key: str | None = None
+
+    @property
+    def reserve(self) -> int:
+        """Room to hold back for the epilogue itself.
+
+        Two copies when a hint key is set, because that is literally how many
+        get written: the detail lands on ``observations`` AND again in the hint.
+        Reserving one would let a response that reports its own truncation land
+        over the cap the caller asked for — flagged as truncated, and silently
+        wrong about having met the budget.
+        """
+        return NOTE_RESERVE_TOKENS * (2 if self.hint_key is not None else 1)
+
+
+@dataclass(frozen=True)
 class Negotiated:
     data: dict[str, Any]
     rung: Rung
@@ -387,22 +433,23 @@ class Negotiated:
 async def negotiate(
     budget: int,
     render: Callable[[Rung], Awaitable[dict[str, Any]]],
+    notes: Notes,
 ) -> Negotiated:
     """Render at the mildest rung of the ladder that fits inside ``budget``.
 
     ``render`` builds the whole envelope for a rung; it is called at most once
     per rung, in order, and the first result that fits is returned. If none
     fits, the last rung's response stands — the caller is expected to attach
-    :func:`not_met_observation` to it.
+    :func:`not_met_observation` to it, which :func:`attach_notes` does.
 
-    Fit is judged against the budget less :data:`NOTE_RESERVE_TOKENS`, the room
-    the caller's own budget notes will take once appended.
+    Fit is judged against the budget less ``notes.reserve``, the room this
+    tool's own budget notes will take once appended.
     """
     measured = 0
     data: dict[str, Any] = {}
-    rung = Rung(level=RUNG_NONE, budget=budget, measured=0)
+    rung = Rung(level=RUNG_NONE, budget=budget, measured=0, reserve=notes.reserve)
     for level in LADDER:
-        rung = Rung(level=level, budget=budget, measured=measured)
+        rung = Rung(level=level, budget=budget, measured=measured, reserve=notes.reserve)
         data = await render(rung)
         measured = estimate_tokens(data)
         if measured <= rung.body_budget:
@@ -410,13 +457,7 @@ async def negotiate(
     return Negotiated(data=data, rung=rung, estimate=measured)
 
 
-def attach_notes(
-    result: Negotiated,
-    *,
-    cut: str,
-    route: str,
-    hint_key: str | None = None,
-) -> None:
+def attach_notes(result: Negotiated, notes: Notes) -> None:
     """Append the budget's own notes to a negotiated response, in place.
 
     One epilogue for every tool that negotiates. A degraded response says so and
@@ -425,20 +466,22 @@ def attach_notes(
     assignment: a tool that already put facts there keeps them, which is the
     whole point of a channel a budget cannot cut.
 
-    ``hint_key`` mirrors the last note into the tool's guidance key, for tools
-    whose structured-aware clients read guidance only from there.
+    ``notes.hint_key`` mirrors the last note into the tool's guidance key — the
+    second copy ``Notes.reserve`` already made room for.
     """
-    notes: list[dict[str, Any]] = []
+    written: list[dict[str, Any]] = []
     if result.degraded:
-        notes.append(truncated_observation(result.rung, result.estimate, cut=cut, route=route))
+        written.append(
+            truncated_observation(result.rung, result.estimate, cut=notes.cut, route=notes.route)
+        )
     if not result.met:
-        notes.append(not_met_observation(result.rung, result.estimate))
-    if not notes:
+        written.append(not_met_observation(result.rung, result.estimate))
+    if not written:
         return
     data = result.data
     observations = data.setdefault("observations", [])
-    observations.extend(notes)
-    if hint_key is not None:
-        detail = notes[-1]["detail"]
-        existing = data.get(hint_key)
-        data[hint_key] = f"{existing} {detail}" if existing else detail
+    observations.extend(written)
+    if notes.hint_key is not None:
+        detail = written[-1]["detail"]
+        existing = data.get(notes.hint_key)
+        data[notes.hint_key] = f"{existing} {detail}" if existing else detail
