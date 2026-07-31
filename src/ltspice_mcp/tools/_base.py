@@ -492,6 +492,219 @@ def _strip_titles(node: Any) -> Any:
     return node
 
 
+# Keywords that make a schema branch more than a plain type constraint, so it
+# cannot be merged into a multi-type ``type`` array without changing meaning
+# (``const``/``enum`` would also constrain the ``null`` member; the composition
+# and reference keywords have no per-type semantics to inherit).
+_UNFOLDABLE_KEYWORDS = frozenset({"$ref", "allOf", "anyOf", "const", "enum", "not", "oneOf"})
+
+# Cheap pre-filter: a fragment shorter than the ``$ref`` that would replace it
+# can never pay, so it is not worth hashing. The gain test below is the real
+# gate.
+_HOIST_MIN_CHARS = 28
+
+# A shared definition has to earn its indirection: a reader now has to look the
+# name up. Roughly twenty-five tokens of net saving is the line.
+_HOIST_MIN_GAIN = 100
+
+
+_JSON_TYPE_OF: dict[type, str] = {
+    bool: "boolean",
+    str: "string",
+    int: "integer",
+    float: "number",
+}
+
+
+def _compact_type_keywords(node: Any) -> Any:
+    """Collapse type keywords that say something the schema already said.
+
+    Pydantic spells every ``X | None`` as a two-branch ``anyOf``. Where the
+    branches are plain type constraints, the equivalent ``{"type": [...]}``
+    array says the same thing in far fewer characters: type-specific keywords
+    (``items``, ``minLength``, ``minimum``) are no-ops for the other members,
+    so ``{"items": ..., "type": ["array", "null"]}`` accepts exactly what the
+    two-branch form did. Branches carrying ``const``/``enum``/``$ref`` are left
+    alone — those constrain the *value*, not just its type.
+
+    A ``type`` sitting beside a ``const`` of that same type is dropped for the
+    same reason: the literal already pins the value, so the keyword narrows
+    nothing. The union discriminators (``metric``, ``op``, ``kind``) are all
+    of that shape, one per member of each tagged union.
+    """
+    if isinstance(node, list):
+        return [_compact_type_keywords(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+
+    folded = {key: _compact_type_keywords(value) for key, value in node.items()}
+    if "const" in folded and _JSON_TYPE_OF.get(type(folded["const"])) == folded.get("type"):
+        folded.pop("type")
+    branches = folded.get("anyOf")
+    if not isinstance(branches, list) or len(branches) < 2:
+        return folded
+    if not all(
+        isinstance(b, dict)
+        and isinstance(b.get("type"), str)
+        and not (_UNFOLDABLE_KEYWORDS & b.keys())
+        for b in branches
+    ):
+        return folded
+
+    # Only one branch may carry type-specific keywords; merging two constrained
+    # branches would apply each one's keywords to the other's type.
+    constrained = [b for b in branches if b.keys() != {"type"}]
+    if len(constrained) > 1:
+        return folded
+
+    types = list(dict.fromkeys(b["type"] for b in branches))
+    if len(types) != len(branches):
+        return folded
+
+    siblings = {k: v for k, v in folded.items() if k != "anyOf"}
+    inner = dict(constrained[0]) if constrained else {}
+    if inner.keys() & (siblings.keys() - {"type"}):
+        return folded
+    return {**inner, **siblings, "type": types}
+
+
+def _shape_name(node: dict[str, Any]) -> str | None:
+    """Name a fragment after the shape it describes, e.g. ``StringListOrNull``.
+
+    Used when one fragment is shared by properties with different names, where
+    naming it after any one of them would misdescribe the others. Only a plain
+    type constraint gets one: a shape name that hid a real default (a
+    ``Boolean`` that is secretly false unless set) would cost a reader more
+    than the characters it saved.
+    """
+    if node.keys() - {"type", "items", "default"} or node.get("default") is not None:
+        return None
+    raw = node.get("type")
+    types = [raw] if isinstance(raw, str) else list(raw or [])
+    core = [t for t in types if t != "null"]
+    if len(core) != 1:
+        return None
+    if core[0] == "array":
+        items = node.get("items")
+        if not isinstance(items, dict) or not isinstance(items.get("type"), str):
+            return None
+        base = f"{items['type'].capitalize()}List"
+    else:
+        base = core[0].capitalize()
+    return base + ("OrNull" if "null" in types else "")
+
+
+def _defs_name(hint: str, taken: set[str]) -> str:
+    """Turn a naming hint into a ``$defs`` key that is free to use."""
+    base = "".join(part[:1].upper() + part[1:] for part in hint.split("_") if part)
+    base = re.sub(r"[^0-9A-Za-z]", "", base) or "Shared"
+    name = base
+    suffix = 0
+    while name in taken:
+        suffix += 1
+        name = f"{base}Arg" if suffix == 1 else f"{base}Arg{suffix}"
+    return name
+
+
+def _hoist_shared_fragments(schema: dict[str, Any]) -> dict[str, Any]:
+    """Move sub-schemas repeated across the document into shared ``$defs``.
+
+    Pydantic re-emits a field's schema at every model that declares it, so a
+    mixin field (``sources``, ``step``, ``spec`` on the analysis recipes) is
+    serialized once per recipe. A single ``$defs`` entry with ``$ref`` use
+    sites says the same thing once.
+
+    Only nested property values are hoisted, and only when every use site sits
+    under the same property name — the name it lends the ``$defs`` entry has to
+    describe every reference, or the indirection costs a reader more than the
+    characters it saves. The tools' own top-level properties are never hoisted:
+    their inline ``description`` is the only documentation a caller gets.
+    """
+    counts: dict[str, int] = {}
+    hints: dict[str, set[str]] = {}
+
+    def survey(node: Any, key_hint: str | None, depth: int) -> None:
+        if isinstance(node, list):
+            for item in node:
+                survey(item, key_hint, depth)
+            return
+        if not isinstance(node, dict):
+            return
+        if key_hint is not None:
+            blob = json.dumps(node, separators=(",", ":"), sort_keys=True)
+            if len(blob) >= _HOIST_MIN_CHARS:
+                counts[blob] = counts.get(blob, 0) + 1
+                hints.setdefault(blob, set()).add(key_hint)
+        for name, value in node.items():
+            if name == "properties" and isinstance(value, dict):
+                # Depth 0 is the tool's own argument list — leave it inline.
+                for prop, sub in value.items():
+                    survey(sub, prop if depth else None, depth + 1)
+            elif name == "$defs" and isinstance(value, dict):
+                for sub in value.values():
+                    survey(sub, None, max(depth, 1))
+            else:
+                survey(value, None, depth)
+
+    survey(schema, None, 0)
+
+    defs: dict[str, Any] = dict(schema.get("$defs") or {})
+    taken = set(defs)
+    replacements: dict[str, str] = {}
+    for blob, count in sorted(counts.items()):
+        if count < 2:
+            continue
+        fragment = json.loads(blob)
+        names = hints[blob]
+        hint = next(iter(names)) if len(names) == 1 else _shape_name(fragment)
+        if hint is None:
+            continue
+        name = _defs_name(hint, taken)
+        ref_cost = len(f'{{"$ref":"#/$defs/{name}"}}')
+        # Net saving: every use site shrinks, minus the one def entry we add.
+        gain = count * (len(blob) - ref_cost) - (len(name) + 3 + len(blob))
+        if gain < _HOIST_MIN_GAIN:
+            continue
+        taken.add(name)
+        defs[name] = fragment
+        replacements[blob] = name
+
+    if not replacements:
+        return schema
+
+    def rewrite(node: Any, key_hint: str | None, depth: int) -> Any:
+        if isinstance(node, list):
+            return [rewrite(item, key_hint, depth) for item in node]
+        if not isinstance(node, dict):
+            return node
+        if key_hint is not None:
+            blob = json.dumps(node, separators=(",", ":"), sort_keys=True)
+            target = replacements.get(blob)
+            if target is not None:
+                return {"$ref": f"#/$defs/{target}"}
+        out: dict[str, Any] = {}
+        for name, value in node.items():
+            if name == "properties" and isinstance(value, dict):
+                out[name] = {
+                    prop: rewrite(sub, prop if depth else None, depth + 1)
+                    for prop, sub in value.items()
+                }
+            elif name == "$defs" and isinstance(value, dict):
+                out[name] = {
+                    def_name: rewrite(sub, None, max(depth, 1)) for def_name, sub in value.items()
+                }
+            else:
+                out[name] = rewrite(value, None, depth)
+        return out
+
+    rewritten = rewrite({k: v for k, v in schema.items() if k != "$defs"}, None, 0)
+    # Def bodies are rewritten with no key hint at their own root, so a hoisted
+    # fragment can never be rewritten into a reference to itself; a fragment
+    # nested inside another one is strictly shorter, so the refs cannot cycle.
+    rewritten["$defs"] = {name: rewrite(body, None, 1) for name, body in defs.items()}
+    return rewritten
+
+
 def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
     """Generate a cleaned MCP-ready JSON schema from a Pydantic model.
 
@@ -499,8 +712,20 @@ def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
     appears once and every use site is a ``$ref``, which measured 21% smaller
     on the consolidated surface (followups item 30). Every ref is internal to
     the one schema document, so any conformant client resolves it locally.
+
+    Two further passes shrink the *advertised* shape only — the Pydantic model
+    stays the validator and accepts exactly what it did before.
+    ``_compact_type_keywords`` drops the type keywords a schema already implies
+    (a nullable branch becomes a multi-type ``type`` array; the ``type`` beside
+    a ``const`` goes), and ``_hoist_shared_fragments`` gives a sub-schema
+    repeated across models one ``$defs`` entry instead of a copy per use site.
+    Together they measured a tenth off the consolidated surface, most of it on
+    ``analyze_results``, whose twenty-odd recipe models each restated the same
+    seven shared fields. ``tests/test_consolidated_contracts.py`` pins the
+    resulting size per tool.
     """
-    return _strip_titles(input_model.model_json_schema())
+    schema = _strip_titles(input_model.model_json_schema())
+    return _hoist_shared_fragments(_compact_type_keywords(schema))
 
 
 # ---------------------------------------------------------------------------

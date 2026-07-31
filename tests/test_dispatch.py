@@ -1,5 +1,6 @@
 """Tests for tool dispatch, schema validation, and profile filtering."""
 
+import json
 import typing
 
 from mcp import types
@@ -493,6 +494,58 @@ class TestSchemaPostProcessing:
 
             walk(schema, "root")
         assert any_defs, "no schema uses $defs — inlining silently returned"
+
+    def test_no_defs_entry_is_unreferenced(self):
+        """A $defs entry nobody points at is pure weight on the wire. The
+        schema slimmer mints definitions of its own, so a rule that stopped
+        earning its keep would otherwise leave an orphan behind silently."""
+        for tool_def in _all_profile_defs():
+            schema = tool_def.inputSchema
+            text = json.dumps(schema)
+            orphans = [name for name in schema.get("$defs", {}) if f'"#/$defs/{name}"' not in text]
+            assert not orphans, f"{tool_def.name}: unreferenced $defs entries {orphans}"
+
+    def test_nullable_unions_are_folded_to_type_arrays(self):
+        """``X | None`` is advertised as ``{"type": [X, "null"]}``, not as a
+        two-branch ``anyOf`` of bare types. Same acceptance, far fewer
+        characters; an anyOf whose branches differ only by type means the fold
+        stopped running."""
+        for tool_def in _all_profile_defs():
+
+            def walk(node, path, tool=tool_def.name):
+                if isinstance(node, dict):
+                    branches = node.get("anyOf")
+                    if isinstance(branches, list) and len(branches) > 1:
+                        assert not all(
+                            isinstance(b, dict) and b.keys() == {"type"} for b in branches
+                        ), f"{tool}: unfolded type-only anyOf at {path}"
+                    for key, value in node.items():
+                        walk(value, f"{path}.{key}")
+                elif isinstance(node, list):
+                    for i, item in enumerate(node):
+                        walk(item, f"{path}[{i}]")
+
+            walk(tool_def.inputSchema, "root")
+
+    def test_const_carries_no_redundant_type(self):
+        """A literal already pins its own type, so the ``type`` beside a
+        ``const`` narrows nothing — and the tagged unions carry one per
+        member."""
+        for tool_def in _all_profile_defs():
+
+            def walk(node, path, tool=tool_def.name):
+                if isinstance(node, dict):
+                    if "const" in node:
+                        assert "type" not in node, (
+                            f"{tool}: redundant 'type' beside 'const' at {path}"
+                        )
+                    for key, value in node.items():
+                        walk(value, f"{path}.{key}")
+                elif isinstance(node, list):
+                    for i, item in enumerate(node):
+                        walk(item, f"{path}[{i}]")
+
+            walk(tool_def.inputSchema, "root")
 
     def test_no_title_at_any_depth(self):
         """No 'title' key should exist at any depth in any tool schema."""
