@@ -19,7 +19,7 @@ from mcp import types
 from pydantic import Field, SkipValidation, model_validator
 
 from ltspice_mcp.errors import LTSpiceMCPError, ResultError
-from ltspice_mcp.lib import _fsync_dir, _fsync_fd, result_store, services
+from ltspice_mcp.lib import _fsync_dir, _fsync_fd, response_budget, result_store, services
 from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.format import format_spice_value
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
@@ -305,6 +305,15 @@ class AnalyzeResultsInput(ToolInput):
             "signals_available, provenance, and the 'fields' row projection. "
             "The default response carries reductions, groups and spec verdicts; "
             "each opt-in grows the payload, so ask only for what you will read."
+        ),
+    )
+    budget: int | None = Field(
+        default=None,
+        ge=response_budget.BUDGET_MIN_TOKENS,
+        description=response_budget.budget_description(
+            "the source identity echo and empty blocks, then include.provenance / "
+            "outliers / signals_available, then columnar rows, then smaller pages "
+            "of per_run rows and values"
         ),
     )
     continuation: ContinueInput | None = Field(
@@ -1997,6 +2006,8 @@ def _result_entry(
     per_run_limit: int | None,
     include_outliers: bool,
     fields: list[str] | None = None,
+    *,
+    values_limit: int = MAX_PAGE_SIZE,
 ) -> tuple[dict[str, Any], int]:
     """The one result entry for ``recipe``, plus the offset its ``per_run``
     page ends at — the caller turns that into the resume cursor."""
@@ -2050,11 +2061,11 @@ def _result_entry(
         page["items"] = [render(row) for row in page["items"]]
         entry["per_run"] = page
     elif not getattr(recipe, "reduce", []):
-        shown = records[:MAX_PAGE_SIZE]
+        shown = records[:values_limit]
         entry["values"] = [render(row) for row in shown]
-        if len(records) > MAX_PAGE_SIZE:
+        if len(records) > values_limit:
             entry["warnings"].append(
-                f"{len(records) - MAX_PAGE_SIZE} value(s) omitted; request include.per_run "
+                f"{len(records) - values_limit} value(s) omitted; request include.per_run "
                 "for callable pagination."
             )
     # Only report unresolved paths where rows were actually emitted: a
@@ -2087,10 +2098,19 @@ def _source_hashes(
     return [{key: manifest.get(key) for key in keys} for manifest in item.source_manifests]
 
 
+# A row surface's two forms. Rows are objects at every rung but the columnar
+# one, where a caller-set budget renders them as arrays of values with a
+# sibling ``*_columns`` list naming the positions. Both are declared so no rung
+# can emit something this tool's own schema rejects.
+def _row_items(item_schema: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "array", "items": {"anyOf": [item_schema, {"type": "array"}]}}
+
+
 _PAGE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "items": {"type": "array", "items": {"type": "object"}},
+        "items": _row_items({"type": "object"}),
+        "items_columns": response_budget.COLUMNAR_ROWS_SCHEMA,
         "total": {"type": "integer"},
         "returned": {"type": "integer"},
         "truncated": {"type": "boolean"},
@@ -2183,7 +2203,8 @@ _RESULT_ENTRY_SCHEMA: dict[str, Any] = {
     "properties": {
         "metric": {"type": "string"},
         "units": {"type": ["string", "object", "null"]},
-        "reduced": {"type": "array", "items": _REDUCED_SCHEMA},
+        "reduced": _row_items(_REDUCED_SCHEMA),
+        "reduced_columns": response_budget.COLUMNAR_ROWS_SCHEMA,
         "groups": {"type": "array", "items": {"type": "object"}},
         "steps": {"type": "array", "items": {"type": "object"}},
         "spec": _SPEC_SCHEMA,
@@ -2191,16 +2212,11 @@ _RESULT_ENTRY_SCHEMA: dict[str, Any] = {
             **_PAGE_SCHEMA,
             "properties": {
                 **_PAGE_SCHEMA["properties"],
-                "items": {
-                    "type": "array",
-                    "items": _ATTRIBUTED_VALUE_SCHEMA,
-                },
+                "items": _row_items(_ATTRIBUTED_VALUE_SCHEMA),
             },
         },
-        "values": {
-            "type": "array",
-            "items": _ATTRIBUTED_VALUE_SCHEMA,
-        },
+        "values": _row_items(_ATTRIBUTED_VALUE_SCHEMA),
+        "values_columns": response_budget.COLUMNAR_ROWS_SCHEMA,
         "warnings": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["metric", "units", "reduced", "warnings"],
@@ -2310,6 +2326,322 @@ OUTPUT_SCHEMA: dict[str, Any] = {
 }
 
 
+@dataclass(frozen=True)
+class _Limits:
+    """The effective list limits one assembly renders at.
+
+    Held apart from the request because the budget ladder shrinks them, and a
+    shrunk page has to be decided BEFORE the entry and its cursor are built: a
+    cursor minted against the caller's limit and then handed back with fewer
+    rows would skip the difference on resume.
+    """
+
+    per_run: int | None
+    values: int
+    missing: int
+
+    @classmethod
+    def of(cls, include: AnalyzeInclude) -> _Limits:
+        return cls(
+            per_run=include.per_run.limit if include.per_run else None,
+            values=MAX_PAGE_SIZE,
+            missing=MAX_PAGE_SIZE,
+        )
+
+    def scaled(self, rows: list[Any], rung: response_budget.Rung) -> _Limits:
+        """These limits, shrunk to what the previous rung's measurement affords."""
+        return _Limits(
+            per_run=(
+                None
+                if self.per_run is None
+                else response_budget.fit_limit(self.per_run, rows, rung)
+            ),
+            values=response_budget.fit_limit(self.values, rows, rung),
+            missing=response_budget.fit_limit(self.missing, rows, rung),
+        )
+
+
+@dataclass(frozen=True)
+class _Assembly:
+    """Everything a response is built from, once the work behind it is done.
+
+    Assembly is a separate step from evaluation because the budget ladder
+    re-renders: reaching a smaller page by re-running the recipes would pay for
+    the budget in raw reads, and trimming an assembled page instead would
+    desync the cursor it already minted.
+    """
+
+    item: result_store.ResultSet
+    processed: list[dict[str, Any]]
+    runs: list[_ResolvedRun]
+    missing: list[dict[str, Any]]
+    missing_offset: int
+    skipped: list[tuple[int, dict[str, Any]]]
+    base_observations: list[dict[str, Any]]
+    include: AnalyzeInclude
+    group_by: list[str]
+    natural_position: int
+    natural_intra: int
+    deferred: bool
+    signals: dict[str, list[str]] | None
+
+
+def _assemble(
+    a: _Assembly,
+    rung: response_budget.Rung | None,
+    limits: _Limits,
+) -> tuple[dict[str, Any], str]:
+    """Build the response from finished work, at ``limits`` and ``rung``.
+
+    ``rung`` is None when the caller set no budget, which is the only path that
+    existed before budgets and is byte-for-byte what it always produced.
+    """
+    answer_channel = rung is not None and rung.answer_channel
+    provenance = a.include.provenance and not answer_channel
+    outliers = a.include.outliers and not answer_channel
+    signals = None if answer_channel else a.signals
+    item = a.item
+
+    # Re-decide where this response stops, against the limit it is assembling
+    # at. A smaller page stops at the same recipe or an earlier one, so every
+    # unit it keeps was already evaluated; a unit it drops is re-evaluated on
+    # resume and rewrites its artifacts under the same deterministic names.
+    units = a.processed
+    paginating = -1
+    position, intra_item = a.natural_position, a.natural_intra
+    if limits.per_run is not None:
+        for index, unit in enumerate(a.processed):
+            offset = unit["per_run_offset"]
+            records = unit["records"]
+            if (records or not unit["item_failures"]) and offset + limits.per_run < len(records):
+                units = a.processed[: index + 1]
+                paginating = index
+                position = unit["position"]
+                intra_item = offset + limits.per_run
+                break
+
+    # One resume point serves every cursor this call emits. The work list and
+    # the coverage list are paged independently, so each cursor has to carry
+    # BOTH offsets: one that dropped the work position would strand un-analyzed
+    # work, and one that dropped the coverage offset would replay missing cases
+    # already shown. Paged here, ahead of the cursors that have to quote it.
+    missing_page, missing_next = _page(a.missing, a.missing_offset, limits.missing)
+
+    # A rejection for work this response no longer reaches belongs to the call
+    # that resumes it, not to this one.
+    failures = [failure for at, failure in a.skipped if at < position]
+    observations = [*a.base_observations, *(o for unit in units for o in unit["observations"])]
+    results: dict[str, Any] = {}
+    analyzed_identities: set[tuple[Any, Any, Any]] = set()
+
+    for index, unit in enumerate(units):
+        key = unit["key"]
+        recipe = unit["recipe"]
+        records = unit["records"]
+        item_failures = unit["item_failures"]
+        for record in records:
+            record.pop("_manifest_id", None)
+        failures.extend(item_failures)
+        relevant_missing = [
+            case
+            for case in a.missing
+            if recipe.sources is None or case.get("label") in set(recipe.sources)
+        ]
+        entry, per_run_next = _result_entry(
+            recipe,
+            records,
+            item_failures,
+            a.group_by,
+            relevant_missing,
+            unit["per_run_offset"],
+            limits.per_run,
+            outliers,
+            a.include.fields,
+            values_limit=limits.values,
+        )
+        if records or not item_failures:
+            results[key] = entry
+        for record in records:
+            analyzed_identities.add((record["source"], record["case_id"], record["run_index"]))
+        if (
+            index == paginating
+            and key in results
+            and a.include.per_run is not None
+            and entry["per_run"]["truncated"]
+        ):
+            entry["per_run"]["next_cursor"] = result_store.encode_cursor(
+                item,
+                unit["position"],
+                intra_item=per_run_next,
+                missing_offset=missing_next,
+            )
+
+    next_value: dict[str, str] | None = None
+    if position < len(item.work):
+        next_value = {
+            "result_set_id": item.result_set_id,
+            "cursor": result_store.encode_cursor(
+                item,
+                position,
+                intra_item=intra_item,
+                missing_offset=missing_next,
+            ),
+        }
+    failure_total = len(failures)
+    if failure_total > _FAILURE_CAP:
+        failures = failures[:_FAILURE_CAP]
+        observations.append(
+            {
+                "code": "failures_truncated",
+                "kind": "coverage",
+                "detail": (
+                    f"Returned {_FAILURE_CAP} of {failure_total} failure records; "
+                    "coverage and recipe result presence still reflect the full call."
+                ),
+            }
+        )
+    runs_requested = len(a.runs) + len(a.missing)
+    outcome = (
+        "failed"
+        if not results and failures and next_value is None
+        else "partial"
+        if failures or a.missing or next_value is not None
+        else "complete"
+    )
+    if missing_page["truncated"]:
+        # Carries the live work position, not the end of the work list: this
+        # cursor advances the coverage view, and pointing it past the work would
+        # discard whatever work the caller had left to resume.
+        missing_page["next_cursor"] = result_store.encode_cursor(
+            item,
+            position,
+            intra_item=intra_item,
+            missing_offset=missing_next,
+        )
+    coverage = {
+        "runs_requested": runs_requested,
+        "runs_analyzed": len(analyzed_identities),
+        "missing_cases": missing_page,
+    }
+    data: dict[str, Any] = {
+        "outcome": outcome,
+        "coverage": coverage,
+        "results": results,
+        "observations": observations,
+        "failures": failures,
+        "source_hashes": _source_hashes(item, provenance=provenance),
+        "result_set_id": item.result_set_id,
+        "cursor": next_value["cursor"] if next_value is not None else None,
+        "next": next_value,
+    }
+    if signals is not None:
+        data["signals_available"] = signals
+    if rung is not None:
+        _degrade_analysis(data, rung)
+    hints: list[str] = []
+    if next_value is not None:
+        reason = "an artifact item was deferred intact" if a.deferred else "the call budget ended"
+        hints.append(
+            f"Analysis is partial because {reason}; call analyze_results with "
+            f"continue={{result_set_id, cursor}} from 'next'."
+        )
+    if missing_page["next_cursor"] is not None:
+        hints.append(
+            "coverage.missing_cases is truncated; call analyze_results with "
+            "continue={result_set_id, cursor: coverage.missing_cases.next_cursor} "
+            "for the next page of missing cases (no work is replayed)."
+        )
+    if hints:
+        data["hint"] = " ".join(hints)
+    text = (
+        f"analyze_results: {outcome}; {len(results)} recipe result(s), "
+        f"{failure_total} failure(s), "
+        f"{coverage['runs_analyzed']}/{runs_requested} run(s) analyzed"
+    )
+    return data, text
+
+
+def _analysis_rows(data: dict[str, Any]) -> list[Any]:
+    """Every row this response is currently showing, across all row surfaces."""
+    rows: list[Any] = []
+    for entry in data["results"].values():
+        rows.extend(entry.get("reduced", []))
+        rows.extend(entry.get("values", []))
+        per_run = entry.get("per_run")
+        if isinstance(per_run, dict):
+            rows.extend(per_run["items"])
+    rows.extend(data["coverage"]["missing_cases"]["items"])
+    return rows
+
+
+def _degrade_analysis(data: dict[str, Any], rung: response_budget.Rung) -> None:
+    """Apply the budget ladder's in-place presentation rungs to this envelope.
+
+    The answer rung and the shrink rung are not here: revoking an opt-in changes
+    what gets computed, and shrinking a page has to happen before its cursor is
+    minted, so both are inputs to :func:`_assemble` instead. The rung-0 keys are
+    enumerated here and nowhere else — a rung that exempts content is the one
+    place a checker can silently lose coverage. Nothing below touches failures,
+    observations, warnings, completeness or spec verdicts.
+    """
+    if rung.trim:
+        for entry in data["results"].values():
+            # Optional keys, removed only when they carry nothing.
+            response_budget.remove_when_empty(entry, "groups")
+            response_budget.remove_when_empty(entry, "values")
+        response_budget.remove_when_empty(data, "signals_available")
+        # Required per response, so emptied in place: the identity echo is the
+        # audit trail, not the way back — rows carry their own source label and
+        # case_id, and a run is addressed by manifest_id and job_id.
+        response_budget.empty_required(data, "source_hashes")
+    if rung.columnar:
+        for entry in data["results"].values():
+            response_budget.columnarize(entry, "reduced")
+            response_budget.columnarize(entry, "values")
+            per_run = entry.get("per_run")
+            if isinstance(per_run, dict):
+                response_budget.columnarize(per_run, "items")
+            spec = entry.get("spec")
+            if isinstance(spec, dict):
+                response_budget.columnarize(spec["fail_cases"], "items")
+        response_budget.columnarize(data["coverage"]["missing_cases"], "items")
+
+
+async def _negotiate_analysis(budget: int, a: _Assembly) -> types.CallToolResult:
+    """Assemble this analysis at the mildest ladder rung that fits ``budget``."""
+    base = _Limits.of(a.include)
+    text = ""
+    rendered: dict[str, Any] = {}
+
+    async def render(rung: response_budget.Rung) -> dict[str, Any]:
+        nonlocal text, rendered
+        limits = base.scaled(_analysis_rows(rendered), rung) if rung.shrink else base
+        data, text = _assemble(a, rung, limits)
+        rendered = data
+        return data
+
+    result = await response_budget.negotiate(budget, render)
+    if result.degraded:
+        result.data["observations"].append(
+            response_budget.truncated_observation(
+                result.rung,
+                result.estimate,
+                cut=(
+                    "presentation was reduced; every recipe that produced a result "
+                    "still has one, and its reductions and spec verdict are intact."
+                ),
+                route=(
+                    "Re-ask without 'budget', or continue with continue={result_set_id, cursor}."
+                ),
+            )
+        )
+    if not result.met:
+        result.data["observations"].append(
+            response_budget.not_met_observation(result.rung, result.estimate)
+        )
+    return format_response(text, result.data)
+
+
 @registry.tool(
     name="analyze_results",
     description=(
@@ -2378,10 +2710,11 @@ async def handle_analyze_results(
     runs = _deserialize_runs(item, state)
     manifests = {str(manifest["manifest_id"]): manifest for manifest in item.source_manifests}
     missing = list(item.inputs.get("missing", []))
-    failures: list[dict[str, Any]] = []
+    # Skipped work carries the position it was skipped at: the budget ladder can
+    # stop this response short of where the loop ended, and a rejection for work
+    # that now resumes unread would be reported twice.
+    skipped: list[tuple[int, dict[str, Any]]] = []
     observations = list(item.inputs.get("observations", []))
-    results: dict[str, Any] = {}
-    analyzed_identities: set[tuple[Any, Any, Any]] = set()
     include = AnalyzeInclude.model_validate(item.inputs.get("include", {}))
     group_by = list(item.inputs.get("group_by", []))
     declared_labels = {
@@ -2395,7 +2728,7 @@ async def handle_analyze_results(
     def _skip(failure: dict[str, Any]) -> None:
         """Record a per-recipe rejection and advance past it (item is done)."""
         nonlocal position, intra_item, work_done
-        failures.append(failure)
+        skipped.append((position, failure))
         position += 1
         intra_item = 0
         work_done = True
@@ -2491,12 +2824,14 @@ async def handle_analyze_results(
         # max_points bounds the INLINE series only; a csv artifact is written at
         # full fidelity over the requested window. Say so when the caller set it
         # on a csv recipe, so a silently inert argument becomes a stated fact.
+        # Carried on the unit, so it travels with the result it describes.
+        item_observations: list[dict[str, Any]] = []
         if (
             isinstance(recipe, WaveformRecipe)
             and recipe.format == "csv"
             and "max_points" in recipe.model_fields_set
         ):
-            observations.append(
+            item_observations.append(
                 {
                     "code": "max_points_not_applied",
                     "kind": "provenance",
@@ -2529,19 +2864,19 @@ async def handle_analyze_results(
             "eligible_ids": {run.manifest_id for run in eligible_runs},
             "per_run_offset": intra_item,
             "position": position,
-            "paginates": False,
+            "observations": item_observations,
         }
         processed.append(unit)
 
         # Per_run pagination: decided on record count so the break can stop the
-        # call here; the page and its cursor are built during assembly below.
+        # call here; the page and its cursor are built during assembly below,
+        # which re-decides this against whatever limit it assembles at.
         per_run_limit = include.per_run.limit if include.per_run else None
         if (
             per_run_limit is not None
             and (records or not item_failures)
             and intra_item + per_run_limit < len(records)
         ):
-            unit["paginates"] = True
             intra_item += per_run_limit
             work_done = True
             break
@@ -2619,140 +2954,32 @@ async def handle_analyze_results(
                 if isinstance(artifact, dict) and artifact["path"] in by_path:
                     artifact.update(by_path[artifact["path"]])
 
-    # One resume point serves every cursor this call emits. The work list and
-    # the coverage list are paged independently, so each cursor has to carry
-    # BOTH offsets: one that dropped the work position would strand un-analyzed
-    # work, and one that dropped the coverage offset would replay missing cases
-    # already shown. Paged here, ahead of the cursors that have to quote it.
-    missing_page, missing_next = _page(missing, missing_offset)
-
-    for unit in processed:
-        key = unit["key"]
-        recipe = unit["recipe"]
-        records = unit["records"]
-        item_failures = unit["item_failures"]
-        for record in records:
-            record.pop("_manifest_id", None)
-        failures.extend(item_failures)
-        per_run_limit = include.per_run.limit if include.per_run else None
-        relevant_missing = [
-            case
-            for case in missing
-            if recipe.sources is None or case.get("label") in set(recipe.sources)
-        ]
-        entry, per_run_next = _result_entry(
-            recipe,
-            records,
-            item_failures,
-            group_by,
-            relevant_missing,
-            unit["per_run_offset"],
-            per_run_limit,
-            include.outliers,
-            include.fields,
-        )
-        if records or not item_failures:
-            results[key] = entry
-        for record in records:
-            analyzed_identities.add((record["source"], record["case_id"], record["run_index"]))
-        if (
-            unit["paginates"]
-            and key in results
-            and include.per_run is not None
-            and entry["per_run"]["truncated"]
-        ):
-            entry["per_run"]["next_cursor"] = result_store.encode_cursor(
-                item,
-                unit["position"],
-                intra_item=per_run_next,
-                missing_offset=missing_next,
-            )
-
-    next_value: dict[str, str] | None = None
-    if position < len(item.work):
-        next_value = {
-            "result_set_id": item.result_set_id,
-            "cursor": result_store.encode_cursor(
-                item,
-                position,
-                intra_item=intra_item,
-                missing_offset=missing_next,
-            ),
-        }
-    failure_total = len(failures)
-    if failure_total > _FAILURE_CAP:
-        failures = failures[:_FAILURE_CAP]
-        observations.append(
-            {
-                "code": "failures_truncated",
-                "kind": "coverage",
-                "detail": (
-                    f"Returned {_FAILURE_CAP} of {failure_total} failure records; "
-                    "coverage and recipe result presence still reflect the full call."
-                ),
-            }
-        )
-    runs_requested = len(runs) + len(missing)
-    outcome = (
-        "failed"
-        if not results and failures and next_value is None
-        else "partial"
-        if failures or missing or next_value is not None
-        else "complete"
-    )
-    if missing_page["truncated"]:
-        # Carries the live work position, not the end of the work list: this
-        # cursor advances the coverage view, and pointing it past the work would
-        # discard whatever work the caller had left to resume.
-        missing_page["next_cursor"] = result_store.encode_cursor(
-            item,
-            position,
-            intra_item=intra_item,
-            missing_offset=missing_next,
-        )
-    coverage = {
-        "runs_requested": runs_requested,
-        "runs_analyzed": len(analyzed_identities),
-        "missing_cases": missing_page,
-    }
-    data: dict[str, Any] = {
-        "outcome": outcome,
-        "coverage": coverage,
-        "results": results,
-        "observations": observations,
-        "failures": failures,
-        "source_hashes": _source_hashes(item, provenance=include.provenance),
-        "result_set_id": item.result_set_id,
-        "cursor": next_value["cursor"] if next_value is not None else None,
-        "next": next_value,
-    }
+    signals: dict[str, list[str]] | None = None
     if include.signals_available:
-        available: dict[str, list[str]] = {}
+        signals = {}
         for run in runs:
             try:
                 raw = await services.load_raw(run.source.raw, state)
-                available[run.manifest_id] = list(raw.get_trace_names())
+                signals[run.manifest_id] = list(raw.get_trace_names())
             except LTSpiceMCPError:
-                available[run.manifest_id] = []
-        data["signals_available"] = available
-    hints: list[str] = []
-    if next_value is not None:
-        reason = "an artifact item was deferred intact" if deferred else "the call budget ended"
-        hints.append(
-            f"Analysis is partial because {reason}; call analyze_results with "
-            f"continue={{result_set_id, cursor}} from 'next'."
-        )
-    if missing_page["next_cursor"] is not None:
-        hints.append(
-            "coverage.missing_cases is truncated; call analyze_results with "
-            "continue={result_set_id, cursor: coverage.missing_cases.next_cursor} "
-            "for the next page of missing cases (no work is replayed)."
-        )
-    if hints:
-        data["hint"] = " ".join(hints)
-    text = (
-        f"analyze_results: {outcome}; {len(results)} recipe result(s), "
-        f"{failure_total} failure(s), "
-        f"{coverage['runs_analyzed']}/{runs_requested} run(s) analyzed"
+                signals[run.manifest_id] = []
+
+    assembly = _Assembly(
+        item=item,
+        processed=processed,
+        runs=runs,
+        missing=missing,
+        missing_offset=missing_offset,
+        skipped=skipped,
+        base_observations=observations,
+        include=include,
+        group_by=group_by,
+        natural_position=position,
+        natural_intra=intra_item,
+        deferred=deferred,
+        signals=signals,
     )
-    return format_response(text, data)
+    if args.budget is None:
+        data, text = _assemble(assembly, None, _Limits.of(include))
+        return format_response(text, data)
+    return await _negotiate_analysis(args.budget, assembly)
