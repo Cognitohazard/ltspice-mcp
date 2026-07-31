@@ -33,6 +33,7 @@ from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.job_types import SimulationJob
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
+from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import circuit_lock_target
 from ltspice_mcp.tools.circuit import handle_set_component_value
@@ -401,6 +402,29 @@ class TestScopedKill:
         assert not longer_id.killed, "a different job whose id extends ours must be spared"
         assert own_single.killed
         assert own_subrun.killed
+
+    def test_stemmed_id_kills_its_own_case_runs(self, monkeypatch):
+        # Experiment ids carry the deck's name; the token must still match the
+        # per-case run files staged as {job_id}_case_{n}.
+        token = generate_id("exp", "RC Filter.v2")
+        own_case = _FakeProc(501, "ngspice", ["ngspice", "-b", f"/runs/{token}_case_2.net"])
+        self._iter(monkeypatch, [own_case])
+
+        assert kill_simulator_by_token(token, {"ngspice"}) == 1
+        assert own_case.killed
+
+    def test_a_deck_named_after_an_older_job_id_does_not_cross_match(self, monkeypatch):
+        # The adversarial stem: a deck named after an artifact of an earlier
+        # job, so the older id appears verbatim inside the newer one. Folding
+        # the stem's underscores away is what keeps the older job's cancel from
+        # killing the newer job's simulator.
+        older = generate_id("exp", "amp")
+        newer = generate_id("exp", older)
+        victim = _FakeProc(502, "ngspice", ["ngspice", "-b", f"/runs/{newer}_case_0.net"])
+        self._iter(monkeypatch, [victim])
+
+        assert kill_simulator_by_token(older, {"ngspice"}) == 0
+        assert not victim.killed, "a later job whose deck was named after this id must be spared"
 
     def test_vanished_process_is_skipped(self, monkeypatch):
         token = "sim_1751000000_feedf00d"

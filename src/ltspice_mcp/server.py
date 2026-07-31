@@ -772,10 +772,10 @@ async def read_resource(uri: AnyUrl) -> Iterable[ReadResourceContents]:
 @server.list_prompts()
 async def list_prompts() -> list[types.Prompt]:
     """Return the workflow-starter prompts (registering this advertises the capability)."""
-    return prompts.list_prompts()
+    return prompts.list_prompts(_get_state(server).config.tool_profile)
 
 
 @server.get_prompt()
 async def get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptResult:
     """Return a prompt's messages with its arguments interpolated."""
-    return prompts.get_prompt(name, arguments)
+    return prompts.get_prompt(name, arguments, _get_state(server).config.tool_profile)
