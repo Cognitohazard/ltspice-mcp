@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Literal, Self
@@ -18,7 +19,7 @@ from ltspice_mcp.errors import (
     PathSecurityError,
     SimulationError,
 )
-from ltspice_mcp.lib import experiment_store, job_store, recent, services
+from ltspice_mcp.lib import experiment_store, job_store, recent, response_budget, services
 from ltspice_mcp.lib.deck_staging import (
     DeckStagingError,
     resolve_experiment_paths,
@@ -1119,6 +1120,7 @@ def _job_payload(
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
     provenance: bool = False,
     run_fields: list[str] | None = None,
+    runs_cap: int = _RUN_PAGE_LIMIT,
 ) -> dict[str, Any]:
     if lint_by_circuit is None:
         lint_map = {}
@@ -1137,7 +1139,7 @@ def _job_payload(
                 observations.append(observation)
                 seen_observations.add(key)
     outcome = _terminal_outcome(job)
-    runs = _runs_page(job.cases, run_fields)
+    runs = _runs_page(job.cases, run_fields, cap=runs_cap)
     hint = _terminal_hint(job, runs["truncated"])
     data: dict[str, Any] = {
         "job_id": job.job_id,
@@ -1228,8 +1230,13 @@ def _run_item(case: ExperimentCase) -> dict[str, Any]:
     }
 
 
-def _runs_page(cases: list[ExperimentCase], run_fields: list[str] | None = None) -> dict[str, Any]:
-    page, total, offset, limit = paginate(cases, None, cap=_RUN_PAGE_LIMIT)
+def _runs_page(
+    cases: list[ExperimentCase],
+    run_fields: list[str] | None = None,
+    *,
+    cap: int = _RUN_PAGE_LIMIT,
+) -> dict[str, Any]:
+    page, total, offset, limit = paginate(cases, None, cap=cap)
     pagination = pagination_metadata(total, offset, limit)
     rows = [_run_item(case) for case in page]
     if run_fields:
@@ -1584,6 +1591,14 @@ class JobsInput(ToolInput):
             "'list'/'runs': next_cursor from the previous page. Absent means the first page."
         ),
     )
+    budget: int | None = Field(
+        default=None,
+        ge=response_budget.BUDGET_MIN_TOKENS,
+        description=response_budget.budget_description(
+            "the staged-deck manifest echo, then the artifact paths on rows that "
+            "produced a result, then the run page itself"
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_action_fields(self) -> Self:
@@ -1596,7 +1611,9 @@ class JobsInput(ToolInput):
         if self.action == "list" and selected:
             raise ValueError("jobs action 'list' does not accept job_id or request_id")
 
-        allowed_fields = {
+        # 'budget' caps any action's response, so it is allowed everywhere
+        # rather than repeated in five sets that could drift apart.
+        allowed_fields = {"budget"} | {
             "status": {"action", "job_id", "request_id"},
             "wait": {
                 "action",
@@ -1661,11 +1678,36 @@ _JOBS_COMMON_REQUIRED = [
 
 _JOBS_PAGE_PROPERTIES: dict[str, Any] = {
     "items": {"type": "array"},
+    "items_columns": response_budget.COLUMNAR_ROWS_SCHEMA,
     "total": {"type": "integer"},
     "returned": {"type": "integer"},
     "truncated": {"type": "boolean"},
     "next_cursor": {"type": ["string", "null"]},
 }
+
+
+def _budget_row_items(item_schema: dict[str, Any]) -> dict[str, Any]:
+    """A page's ``items`` schema, widened for the budget ladder's columnar rung.
+
+    Rows stay objects at every other rung; under a budget tight enough to reach
+    the columnar rung they become arrays of values, with ``items_columns``
+    naming the positions. Both forms are declared so no rung can emit something
+    the tool's own schema rejects.
+    """
+    return {"type": "array", "items": {"anyOf": [item_schema, {"type": "array"}]}}
+
+
+def _budget_row_page(page_schema: dict[str, Any]) -> dict[str, Any]:
+    """A copy of ``page_schema`` that also admits the columnar row form.
+
+    A copy, not a mutation: this schema is shared with run_experiments, which
+    takes no budget and must keep exactly the shape it declares today.
+    """
+    properties = dict(page_schema["properties"])
+    properties["items"] = _budget_row_items(properties["items"]["items"])
+    properties["items_columns"] = response_budget.COLUMNAR_ROWS_SCHEMA
+    return {**page_schema, "properties": properties}
+
 
 _JOBS_RECEIPT_PROPERTIES: dict[str, Any] = {
     "job_id": {"type": ["string", "null"]},
@@ -1677,7 +1719,7 @@ _JOBS_RECEIPT_PROPERTIES: dict[str, Any] = {
     "source": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["source"],
     "completeness": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["completeness"],
     "lint": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["lint"],
-    "runs": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["runs"],
+    "runs": _budget_row_page(RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["runs"]),
     "analysis": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["analysis"],
     "artifacts": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["artifacts"],
 }
@@ -1765,7 +1807,7 @@ def _jobs_page_schema(
         **_JOBS_COMMON_PROPERTIES,
         **_JOBS_PAGE_PROPERTIES,
     }
-    properties["items"] = {"type": "array", "items": item_schema}
+    properties["items"] = _budget_row_items(item_schema)
     required = [*_JOBS_COMMON_REQUIRED, "items", "total", "returned", "truncated", "next_cursor"]
     if addressed:
         properties.update(
@@ -1874,6 +1916,90 @@ def _jobs_unpaged(items: list[dict[str, Any]]) -> dict[str, Any]:
         "truncated": False,
         "next_cursor": None,
     }
+
+
+# One jobs response, rendered at some page limit: the payload and its text line.
+_JobsBuilt = tuple[dict[str, Any], str]
+_JobsBuild = Callable[[int], _JobsBuilt]
+
+
+def _jobs_row_pages(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every page object a jobs response carries — the paged actions put it at
+    the top level, the receipt actions nest it under ``runs``."""
+    pages = [page for page in (data,) if isinstance(page.get("items"), list)]
+    runs = data.get("runs")
+    if isinstance(runs, dict) and isinstance(runs.get("items"), list):
+        pages.append(runs)
+    return pages
+
+
+def _degrade_jobs(data: dict[str, Any], rung: response_budget.Rung) -> None:
+    """Apply the budget ladder's presentation rungs to a jobs envelope.
+
+    The rung-0 keys are enumerated here and nowhere else: a rung that exempts
+    content is the one place a checker can silently lose coverage, so it is a
+    list to read, not a predicate to reason about. Nothing below touches
+    failures, observations, warnings, completeness or lint findings.
+    """
+    if rung.trim:
+        # Optional key, removed only when it carries nothing.
+        response_budget.remove_when_empty(data, "analysis")
+        # Required per receipt, so emptied in place: the staged-deck manifest
+        # echo is the audit trail, not the way back — a job is addressed by
+        # job_id and its rows by case_id, both of which stay.
+        response_budget.empty_required(data, "source")
+    if rung.answer_channel:
+        # The answer channel a produced run already gets on a run_experiments
+        # receipt: its artifact paths are provenance the analysis tools resolve
+        # by id. Every other status keeps them, because a failed row's log path
+        # is its diagnostic and failures entries carry only code and message.
+        for page in _jobs_row_pages(data):
+            for row in page["items"]:
+                if isinstance(row, dict) and row.get("status") == "produced":
+                    row.pop("raw", None)
+                    row.pop("log", None)
+    if rung.columnar:
+        for page in _jobs_row_pages(data):
+            response_budget.columnarize(page, "items")
+
+
+async def _negotiate_jobs(
+    budget: int,
+    build: _JobsBuild,
+    page_limit: int,
+) -> _JobsBuilt:
+    """Render this jobs response at the mildest ladder rung that fits ``budget``."""
+    text = ""
+    rendered: dict[str, Any] = {}
+
+    async def render(rung: response_budget.Rung) -> dict[str, Any]:
+        nonlocal text, rendered
+        limit = page_limit
+        if rung.shrink:
+            # Sized against the rows the previous rung actually emitted, which
+            # is what its measurement covered.
+            rows = [row for page in _jobs_row_pages(rendered) for row in page["items"]]
+            limit = response_budget.fit_limit(page_limit, rows, rung)
+        data, text = build(limit)
+        _degrade_jobs(data, rung)
+        rendered = data
+        return data
+
+    result = await response_budget.negotiate(budget, render)
+    if result.degraded:
+        result.data["observations"].append(
+            response_budget.truncated_observation(
+                result.rung,
+                result.estimate,
+                cut="presentation was reduced, no run or receipt was dropped.",
+                route="Re-ask without 'budget', or page on with next_cursor.",
+            )
+        )
+    if not result.met:
+        result.data["observations"].append(
+            response_budget.not_met_observation(result.rung, result.estimate)
+        )
+    return result.data, text
 
 
 def _without_control_tokens(value: Any) -> Any:
@@ -2056,9 +2182,10 @@ def _receipt_snapshot(
     state: SessionState,
     *,
     timed_out: bool | None = None,
+    runs_cap: int = _JOBS_PAGE_LIMIT,
 ) -> dict[str, Any]:
     if isinstance(job, ExperimentJob):
-        data = _job_payload(job, None)
+        data = _job_payload(job, None, runs_cap=runs_cap)
         data["job_type"] = "experiment"
         data["dialect"] = services.dialect_for_job(job, state)
     else:
@@ -2074,7 +2201,7 @@ def _receipt_snapshot(
             "source": [_legacy_source(job, dialect=dialect)],
             "completeness": _legacy_completeness(job, records),
             "lint": [],
-            "runs": _jobs_page(records, cursor=None, limit=_JOBS_PAGE_LIMIT),
+            "runs": _jobs_page(records, cursor=None, limit=runs_cap),
             "failures": _legacy_failures(job, records),
             "observations": observations,
             "warnings": [],
@@ -2510,6 +2637,9 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
     """Execute one jobs control-plane action with an action-discriminated response."""
     is_error = False
     try:
+        # The control-plane work runs once; each branch's ``build`` is the
+        # presentation over it, re-runnable at a smaller page so the budget
+        # ladder's shrink rung mints its cursor against what it returns.
         if args.action == "list":
             circuit = (
                 await asyncio.to_thread(safe_path, args.circuit, state)
@@ -2525,93 +2655,117 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
                 _collect_circuit_groups, state, circuit, own_experiments
             )
             observations = _merge_registry_observations(state, loaded.observations)
-            data = {
-                "action": "list",
-                "outcome": "complete",
-                **_jobs_page(loaded.groups, cursor=args.cursor, limit=args.limit),
-                "observations": observations,
-                "warnings": [],
-                "failures": [],
-                "hint": (
-                    "Recent circuit groups are ordered by the recent-circuits index."
-                    if circuit is None
-                    else f"Persisted job summary for {circuit}."
-                ),
-            }
-            text = f"Listed {data['returned']} of {data['total']} circuit group(s)"
+
+            def build(limit: int) -> _JobsBuilt:
+                data = {
+                    "action": "list",
+                    "outcome": "complete",
+                    **_jobs_page(loaded.groups, cursor=args.cursor, limit=limit),
+                    "observations": list(observations),
+                    "warnings": [],
+                    "failures": [],
+                    "hint": (
+                        "Recent circuit groups are ordered by the recent-circuits index."
+                        if circuit is None
+                        else f"Persisted job summary for {circuit}."
+                    ),
+                }
+                return data, f"Listed {data['returned']} of {data['total']} circuit group(s)"
+
+            page_limit = args.limit
         else:
             job = await _resolve_jobs_target(args, state)
             request_id = job.request_id if isinstance(job, ExperimentJob) else None
-            if args.action == "status":
-                data = _receipt_snapshot("status", job, state)
-                text = f"Job {job.job_id}: {job.status}"
-            elif args.action == "wait":
-                job, timed_out = await _wait_for_jobs_target(
-                    job,
-                    state,
-                    timeout_s=args.timeout_s,
-                    wait_for=args.wait_for,
-                )
-                data = _receipt_snapshot(
-                    "wait",
-                    job,
-                    state,
-                    timed_out=timed_out,
-                )
-                text = (
-                    f"Wait for job {job.job_id} timed out at status {job.status}"
-                    if timed_out
-                    else f"Job {job.job_id} reached {args.wait_for} terminality"
-                )
+            page_limit = _JOBS_PAGE_LIMIT
+            if args.action in {"status", "wait"}:
+                waited: Literal["status", "wait"] = "wait" if args.action == "wait" else "status"
+                timed_out: bool | None = None
+                if waited == "wait":
+                    job, timed_out = await _wait_for_jobs_target(
+                        job,
+                        state,
+                        timeout_s=args.timeout_s,
+                        wait_for=args.wait_for,
+                    )
+                snapshot_job = job
+
+                def build(limit: int) -> _JobsBuilt:
+                    data = _receipt_snapshot(
+                        waited,
+                        snapshot_job,
+                        state,
+                        timed_out=timed_out,
+                        runs_cap=limit,
+                    )
+                    if waited == "status":
+                        return data, f"Job {snapshot_job.job_id}: {snapshot_job.status}"
+                    return data, (
+                        f"Wait for job {snapshot_job.job_id} timed out at "
+                        f"status {snapshot_job.status}"
+                        if timed_out
+                        else f"Job {snapshot_job.job_id} reached {args.wait_for} terminality"
+                    )
+
             elif args.action == "runs":
                 dialect = services.dialect_for_job(job, state)
                 records = _run_records(job, state, dialect=dialect)
-                page = _jobs_page(
-                    records,
-                    cursor=args.cursor,
-                    limit=_JOBS_PAGE_LIMIT,
-                )
-                data = {
-                    "action": "runs",
-                    "outcome": _jobs_outcome(job),
-                    "job_id": job.job_id,
-                    "request_id": request_id,
-                    "status": job.status,
-                    "dialect": dialect,
-                    **page,
-                    "observations": [],
-                    "warnings": [],
-                    "failures": [],
-                    "hint": (
-                        "Use next_cursor to continue the run page."
-                        if page["truncated"]
-                        else f"Returned all recorded runs for job {job.job_id}."
-                    ),
-                }
-                text = f"Returned {data['returned']} of {data['total']} run record(s)"
+                runs_job = job
+
+                def build(limit: int) -> _JobsBuilt:
+                    job = runs_job
+                    page = _jobs_page(records, cursor=args.cursor, limit=limit)
+                    data = {
+                        "action": "runs",
+                        "outcome": _jobs_outcome(job),
+                        "job_id": job.job_id,
+                        "request_id": request_id,
+                        "status": job.status,
+                        "dialect": dialect,
+                        **page,
+                        "observations": [],
+                        "warnings": [],
+                        "failures": [],
+                        "hint": (
+                            "Use next_cursor to continue the run page."
+                            if page["truncated"]
+                            else f"Returned all recorded runs for job {job.job_id}."
+                        ),
+                    }
+                    return data, f"Returned {data['returned']} of {data['total']} run record(s)"
+
             else:
                 receipts = await _cancel_jobs_target(job, args, state)
-                job = state.all_jobs.get(job.job_id, job)
-                data = {
-                    "action": "cancel",
-                    "outcome": "complete",
-                    "job_id": job.job_id,
-                    "request_id": request_id,
-                    "status": job.status,
-                    **_jobs_unpaged(receipts),
-                    "observations": [],
-                    "warnings": [],
-                    "failures": [],
-                    "hint": (
-                        f"Job {job.job_id} was already terminal; no cancellation was needed."
-                        if not receipts
-                        else (
-                            f"Cancellation of job {job.job_id} is acknowledged; no further "
-                            "case can enter submission."
-                        )
-                    ),
-                }
-                text = f"Cancellation acknowledged for job {job.job_id}"
+                cancel_job = state.all_jobs.get(job.job_id, job)
+
+                def build(limit: int) -> _JobsBuilt:
+                    job = cancel_job
+                    data = {
+                        "action": "cancel",
+                        "outcome": "complete",
+                        "job_id": job.job_id,
+                        "request_id": request_id,
+                        "status": job.status,
+                        # Kill receipts are the acknowledgement itself, not a
+                        # page over a larger set: never shrunk.
+                        **_jobs_unpaged(receipts),
+                        "observations": [],
+                        "warnings": [],
+                        "failures": [],
+                        "hint": (
+                            f"Job {job.job_id} was already terminal; no cancellation was needed."
+                            if not receipts
+                            else (
+                                f"Cancellation of job {job.job_id} is acknowledged; no further "
+                                "case can enter submission."
+                            )
+                        ),
+                    }
+                    return data, f"Cancellation acknowledged for job {job.job_id}"
+
+        if args.budget is None:
+            data, text = build(page_limit)
+        else:
+            data, text = await _negotiate_jobs(args.budget, build, page_limit)
     except Exception as exc:
         code, stage, retryable = _jobs_error_details(exc)
         data = _jobs_error_payload(

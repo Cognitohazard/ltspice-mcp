@@ -39,7 +39,9 @@ in the handler coroutine.
 from __future__ import annotations
 
 import asyncio
+import copy
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAlias, get_args
 
@@ -47,7 +49,7 @@ from mcp import types
 from pydantic import Field, SkipValidation, TypeAdapter, ValidationError, model_validator
 
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
-from ltspice_mcp.lib import services
+from ltspice_mcp.lib import response_budget, services
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.encoding import read_spice_text
@@ -91,6 +93,24 @@ _PAGE_SIZE = 100
 _COORD_PAGE_SIZE = 500
 
 NETLIST_SUFFIXES = frozenset({".cir", ".net", ".sp"})
+
+
+@dataclass(frozen=True)
+class _View:
+    """How much of an answer a query pass renders — the budget ladder's inputs.
+
+    Frozen and hashable so a pass can be reused: the ladder walks four rungs but
+    only two of them change what a query has to read, and re-reading a library
+    tree per rung would pay for the budget twice.
+    """
+
+    # Read at construction, not at class definition, so the module constants
+    # stay the one place the default page size lives.
+    limit: int = field(default_factory=lambda: _PAGE_SIZE)
+    coord_limit: int = field(default_factory=lambda: _COORD_PAGE_SIZE)
+    #: Revoke the caller's detail opt-in (``detail='full'``) — the answer rung.
+    lean: bool = False
+
 
 # Every rotation LTspice can place a symbol at, in a stable reported order.
 ROTATIONS: tuple[str, ...] = ("R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270")
@@ -318,6 +338,15 @@ class InspectInput(ToolInput):
             "fails only its own item and every other query still returns its data."
         ),
     )
+    budget: int | None = Field(
+        default=None,
+        ge=response_budget.BUDGET_MIN_TOKENS,
+        description=response_budget.budget_description(
+            "the paging blocks of items with nothing left to fetch, then "
+            "detail='full' (rendered as the component list instead), then "
+            "columnar rows, then smaller pages"
+        ),
+    )
 
     # SkipValidation keeps the strict discriminated union in the published JSON
     # Schema while letting the handler validate each query independently, so a
@@ -373,12 +402,18 @@ def _paginate(
     identity: dict[str, Any],
     cursor: str | None,
     sources: Sequence[Path],
+    view: _View,
 ) -> dict[str, Any]:
     """Page ``items`` through the shared paginator, bound to this query's identity
-    and to the revision of the ``sources`` the rows came from."""
+    and to the revision of the ``sources`` the rows came from.
+
+    The limit comes from ``view``, so a budget that shrinks the page shrinks it
+    HERE — before the cursor is minted — and the token the caller gets back
+    always resumes at the row after the last one it was shown.
+    """
     try:
         return paginate_view(
-            items, _binding(kind, identity, sources), cursor=cursor, limit=_PAGE_SIZE
+            items, _binding(kind, identity, sources), cursor=cursor, limit=view.limit
         )
     except PageCursorError as exc:
         raise _invalid_cursor(exc) from exc
@@ -391,6 +426,7 @@ def _paginate_pair(
     identity: dict[str, Any],
     cursor: str | None,
     sources: Sequence[Path],
+    view: _View,
 ) -> dict[str, Any]:
     """Page an item's two collections under its single cursor (both offsets ride in it)."""
     try:
@@ -399,8 +435,8 @@ def _paginate_pair(
             secondary,
             _binding(kind, identity, sources),
             cursor=cursor,
-            limit=_PAGE_SIZE,
-            secondary_limit=_COORD_PAGE_SIZE,
+            limit=view.limit,
+            secondary_limit=view.coord_limit,
         )
     except PageCursorError as exc:
         raise _invalid_cursor(exc) from exc
@@ -560,7 +596,7 @@ def _symbols_payload(
     return prec_report, names
 
 
-async def _do_symbols(q: SymbolsQuery, state: SessionState) -> dict[str, Any]:
+async def _do_symbols(q: SymbolsQuery, state: SessionState, view: _View) -> dict[str, Any]:
     asc_dir: Path | None = None
     if q.path is not None:
         asc_dir = _resolve_path(q, q.path, state).parent
@@ -576,6 +612,7 @@ async def _do_symbols(q: SymbolsQuery, state: SessionState) -> dict[str, Any]:
         {"path": str(asc_dir) if asc_dir else None, "filter": q.filter},
         q.cursor,
         (),
+        view,
     )
     return {
         "data": {
@@ -718,7 +755,7 @@ def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
     return {"node": node, "members": members, "unparseable_cards": unparseable}
 
 
-async def _do_net(q: NetQuery, state: SessionState) -> dict[str, Any]:
+async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, Any]:
     path = _resolve_path(q, q.path, state)
     identity = {"path": str(path), "at": q.at}
 
@@ -732,7 +769,7 @@ async def _do_net(q: NetQuery, state: SessionState) -> dict[str, Any]:
         except SpiceLexError as exc:
             raise _QueryError("parse_error", str(exc)) from exc
         members = payload.pop("members")
-        page = _paginate(members, "net", identity, q.cursor, [path])
+        page = _paginate(members, "net", identity, q.cursor, [path], view)
         return {
             "data": {
                 "source": "netlist",
@@ -758,7 +795,7 @@ async def _do_net(q: NetQuery, state: SessionState) -> dict[str, Any]:
     # and the item carries one cursor — so both offsets ride in it and both
     # advance. A coordinate window that restarted every page would re-serve the
     # same vertices forever while claiming more existed.
-    page = _paginate_pair(pins, coords, "net.asc", identity, q.cursor, [path])
+    page = _paginate_pair(pins, coords, "net.asc", identity, q.cursor, [path], view)
     data: dict[str, Any] = {
         "source": "schematic",
         "start": tdata.get("start"),
@@ -872,10 +909,14 @@ def _components_asc_page(editor: Any, refs: list[str], detail: str) -> list[dict
     return rows
 
 
-async def _do_components(q: ComponentsQuery, state: SessionState) -> dict[str, Any]:
+async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -> dict[str, Any]:
     _check_prefix(q.prefix)
     path = _resolve_path(q, q.path, state)
-    identity = {"path": str(path), "prefix": q.prefix, "detail": q.detail}
+    # The answer rung revokes detail='full' — the one payload-growing opt-in
+    # inspect has. The cursor binds the detail it actually rendered, so a page
+    # taken under a budget cannot resume as an unbudgeted one at the same offset.
+    detail = "list" if view.lean else q.detail
+    identity = {"path": str(path), "prefix": q.prefix, "detail": detail}
 
     if _route_circuit_kind(path, "components") == "asc":
         # Cached editor + component reads stay on the event loop.
@@ -884,26 +925,24 @@ async def _do_components(q: ComponentsQuery, state: SessionState) -> dict[str, A
             refs = sorted(editor.get_components(q.prefix) if q.prefix else editor.get_components())
         except Exception as exc:
             raise _QueryError("parse_error", f"failed to list components: {exc}") from exc
-        page = _paginate(refs, "components", identity, q.cursor, [path])
-        rows = _components_asc_page(editor, page["items"], q.detail)
+        page = _paginate(refs, "components", identity, q.cursor, [path], view)
+        rows = _components_asc_page(editor, page["items"], detail)
     else:
         try:
             text = await asyncio.to_thread(read_spice_text, path)
         except OSError as exc:
             raise _QueryError("read_error", str(exc)) from exc
         try:
-            all_rows = await asyncio.to_thread(
-                _components_netlist_payload, text, q.prefix, q.detail
-            )
+            all_rows = await asyncio.to_thread(_components_netlist_payload, text, q.prefix, detail)
         except SpiceLexError as exc:
             raise _QueryError("parse_error", str(exc)) from exc
-        page = _paginate(all_rows, "components", identity, q.cursor, [path])
+        page = _paginate(all_rows, "components", identity, q.cursor, [path], view)
         rows = page["items"]
 
     return {
         "data": {
             "components": rows,
-            "detail": q.detail,
+            "detail": detail,
             "prefix": q.prefix,
             "total": page["total"],
             "returned": page["returned"],
@@ -958,7 +997,7 @@ def _search_libs(lib_paths: list[Path], query: str, cutoff: float = 0.6) -> list
     return [row for _, row in scored]
 
 
-async def _do_model(q: ModelQuery, state: SessionState) -> dict[str, Any]:
+async def _do_model(q: ModelQuery, state: SessionState, view: _View) -> dict[str, Any]:
     # The library files these rows were read from, so the cursor binds their
     # revision: an edited library must reject a stale token, not page into the
     # re-parsed list at the old offset.
@@ -991,7 +1030,7 @@ async def _do_model(q: ModelQuery, state: SessionState) -> dict[str, Any]:
                 raise _QueryError("search_error", str(exc)) from exc
         identity = {"mode": "search", "query": q.query, "libs": q.libs}
 
-    page = _paginate(rows, "model", identity, q.cursor, sources)
+    page = _paginate(rows, "model", identity, q.cursor, sources, view)
     return {
         "data": {
             "mode": q.mode,
@@ -1018,19 +1057,19 @@ def _resolve_path(q: Any, user_path: str, state: SessionState) -> Path:
         raise _QueryError("path_denied", str(exc)) from exc
 
 
-async def _dispatch(query: Query, state: SessionState) -> dict[str, Any]:
+async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str, Any]:
     if isinstance(query, CapabilitiesQuery):
         return {"data": _do_capabilities(state)}
     if isinstance(query, SymbolsQuery):
-        return await _do_symbols(query, state)
+        return await _do_symbols(query, state, view)
     if isinstance(query, SymbolQuery):
         return await _do_symbol(query, state)
     if isinstance(query, NetQuery):
-        return await _do_net(query, state)
+        return await _do_net(query, state, view)
     if isinstance(query, ComponentsQuery):
-        return await _do_components(query, state)
+        return await _do_components(query, state, view)
     # Exhaustive over the sealed union: ModelQuery is the only remaining member.
-    return await _do_model(query, state)
+    return await _do_model(query, state, view)
 
 
 _ERROR_SCHEMA: dict[str, Any] = {
@@ -1116,6 +1155,22 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "count": {"type": "integer"},
         "ok_count": {"type": "integer"},
         "error_count": {"type": "integer"},
+        # Emitted only when a caller-set 'budget' degraded the response — the
+        # one call-level fact inspect can reach. Per-query faults stay on their
+        # own item's 'error' and never surface here.
+        "observations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string"},
+                    "kind": {"type": "string"},
+                    "detail": {"type": "string"},
+                },
+                "required": ["code", "kind", "detail"],
+                "additionalProperties": True,
+            },
+        },
         "hint": HINT_SCHEMA,
     },
     "required": ["outcome", "results", "count"],
@@ -1148,20 +1203,27 @@ INSPECT_DESCRIPTION = (
 )
 async def handle_inspect(args: InspectInput, state: SessionState) -> types.CallToolResult:
     """Answer a batch of read-only queries with per-item success/failure isolation."""
+    if args.budget is None:
+        results = await _run_queries(args, state, _View())
+        return format_response(_summary_text(results), _inspect_envelope(results))
+    return await _negotiate_inspect(args, state)
+
+
+async def _run_queries(
+    args: InspectInput, state: SessionState, view: _View
+) -> list[dict[str, Any]]:
+    """Every query in the batch, answered at ``view``, isolated from each other."""
     results: list[dict[str, Any]] = []
-    ok_count = 0
-    error_count = 0
 
     for index, raw in enumerate(args.queries):
         try:
             query = _validate_query(raw)
-            outcome = await _dispatch(query, state)
+            outcome = await _dispatch(query, state, view)
         except _QueryError as exc:
             error = {"code": exc.code, "message": exc.message}
             if exc.supported is not None:
                 error["supported"] = exc.supported  # type: ignore[assignment]
             results.append(_failure_item(index, raw, error))
-            error_count += 1
             continue
         except ValidationError as exc:
             results.append(
@@ -1169,11 +1231,9 @@ async def handle_inspect(args: InspectInput, state: SessionState) -> types.CallT
                     index, raw, {"code": "invalid_query", "message": _compact_error(exc)}
                 )
             )
-            error_count += 1
             continue
         except LTSpiceMCPError as exc:
             results.append(_failure_item(index, raw, {"code": "error", "message": str(exc)}))
-            error_count += 1
             continue
         except Exception as exc:
             # Last-resort isolation: an unexpected fault in one query must not
@@ -1181,21 +1241,24 @@ async def handle_inspect(args: InspectInput, state: SessionState) -> types.CallT
             results.append(
                 _failure_item(index, raw, {"code": "internal_error", "message": str(exc)})
             )
-            error_count += 1
             continue
 
         item: dict[str, Any] = {"index": index, "kind": query.kind, "ok": True}
         item.update(outcome)
         results.append(item)
-        ok_count += 1
+    return results
 
+
+def _inspect_envelope(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """The shared envelope over an answered batch."""
+    error_count = sum(1 for item in results if not item["ok"])
     data: dict[str, Any] = {
         # Per-item failures isolate to their result and never fail the call, so
         # the batch is "partial" when any query failed and "complete" otherwise.
         "outcome": "partial" if error_count else "complete",
         "results": results,
         "count": len(results),
-        "ok_count": ok_count,
+        "ok_count": len(results) - error_count,
         "error_count": error_count,
     }
     if error_count:
@@ -1203,7 +1266,94 @@ async def handle_inspect(args: InspectInput, state: SessionState) -> types.CallT
             f"{error_count} of {len(results)} queries failed; see each result's "
             "'error.code'. Other queries returned normally."
         )
-    return format_response(_summary_text(results), data)
+    return data
+
+
+def _degrade_inspect(data: dict[str, Any], rung: response_budget.Rung) -> None:
+    """Apply the budget ladder's presentation rungs to an inspect envelope.
+
+    The answer rung and the shrink rung are not here: both change what a query
+    reads, so they are inputs to the query pass (``_View``) rather than edits to
+    its answer — a page shrunk after the fact would leave its cursor pointing
+    past rows the caller never saw. Nothing below touches an item's ``error``.
+    """
+    if rung.trim:
+        for item in data["results"]:
+            # Optional keys, removed only from an item with nothing left to
+            # fetch: for those the paging block restates counts the rows carry
+            # and a null cursor that leads nowhere.
+            page = item.get("page")
+            if item.get("next_cursor") is None and (
+                not isinstance(page, dict) or not page.get("truncated")
+            ):
+                item.pop("page", None)
+                item.pop("next_cursor", None)
+    if rung.columnar:
+        for item in data["results"]:
+            payload = item.get("data")
+            if not isinstance(payload, dict):
+                continue
+            for key in list(payload):
+                response_budget.columnarize(payload, key)
+
+
+def _paged_rows(data: dict[str, Any]) -> list[Any]:
+    """Every row the answered batch is currently showing, across all items."""
+    rows: list[Any] = []
+    for item in data["results"]:
+        payload = item.get("data")
+        if not isinstance(payload, dict):
+            continue
+        for value in payload.values():
+            if isinstance(value, list):
+                rows.extend(value)
+    return rows
+
+
+async def _negotiate_inspect(args: InspectInput, state: SessionState) -> types.CallToolResult:
+    """Answer the batch at the mildest ladder rung that fits the caller's budget."""
+    assert args.budget is not None
+    # One pass per distinct view, not one per rung: the trim and columnar rungs
+    # re-render an answered batch, only the answer and shrink rungs re-ask it.
+    passes: dict[_View, list[dict[str, Any]]] = {}
+    rendered: dict[str, Any] = {"results": []}
+
+    async def render(rung: response_budget.Rung) -> dict[str, Any]:
+        nonlocal rendered
+        view = _View(lean=rung.answer_channel)
+        if rung.shrink:
+            rows = _paged_rows(rendered)
+            view = _View(
+                limit=response_budget.fit_limit(_PAGE_SIZE, rows, rung),
+                coord_limit=response_budget.fit_limit(_COORD_PAGE_SIZE, rows, rung),
+                lean=rung.answer_channel,
+            )
+        if view not in passes:
+            passes[view] = await _run_queries(args, state, view)
+        data = _inspect_envelope(copy.deepcopy(passes[view]))
+        _degrade_inspect(data, rung)
+        rendered = data
+        return data
+
+    result = await response_budget.negotiate(args.budget, render)
+    data = result.data
+    if result.degraded:
+        observations = [
+            response_budget.truncated_observation(
+                result.rung,
+                result.estimate,
+                cut="presentation was reduced; no query was dropped and no error was hidden.",
+                route="Re-ask without 'budget', or page on with each item's next_cursor.",
+            )
+        ]
+        if not result.met:
+            observations.append(response_budget.not_met_observation(result.rung, result.estimate))
+        data["observations"] = observations
+        # Mirrored into the guidance channel: structured-aware clients render
+        # only structuredContent, and 'hint' is where this tool puts guidance.
+        budget_hint = observations[-1]["detail"]
+        data["hint"] = f"{data['hint']} {budget_hint}" if data.get("hint") else budget_hint
+    return format_response(_summary_text(data["results"]), data)
 
 
 def _failure_item(index: int, raw: Any, error: dict[str, Any]) -> dict[str, Any]:
