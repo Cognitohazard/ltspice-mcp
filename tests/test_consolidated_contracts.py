@@ -264,6 +264,65 @@ class TestOutputSchemaCoverage:
         assert _output_schemas()[name] is not None
 
 
+# Serialized size, in characters, of each tool's advertised definition — the
+# name, description and inputSchema a client loads before it can call anything.
+# Every session pays it whether or not the tool is used, so it is pinned rather
+# than left to drift. The pins sit exactly on the measured size: a field, an
+# option or a sentence that grows one fails here, and the number is then raised
+# deliberately, in the same change that earns it.
+_SURFACE_BUDGET_CHARS: dict[str, int] = {
+    "analyze_results": 21207,
+    "edit_schematic": 12685,
+    "inspect": 8628,
+    "jobs": 3955,
+    "run_experiments": 11781,
+    "verify_circuit": 5079,
+}
+
+# The pins are only a ratchet while they stay on top of the real number. A pin
+# left far above what the surface actually costs has stopped catching anything,
+# so shrinking without re-pinning fails too.
+_SURFACE_BUDGET_SLACK = 128
+
+
+def _wire_sizes() -> dict[str, int]:
+    """Serialized length of each advertised definition, as a client receives it."""
+    return {
+        name: len(tool_def.model_dump_json(by_alias=True, exclude_none=True))
+        for name, tool_def in _registered().items()
+    }
+
+
+class TestAdvertisedSurfaceBudget:
+    """The six tools' request schemas are pinned by size, in both directions."""
+
+    @pytest.mark.parametrize("name", CONSOLIDATED_TOOLS)
+    def test_tool_stays_within_its_pin(self, name: str):
+        actual = _wire_sizes()[name]
+        budget = _SURFACE_BUDGET_CHARS[name]
+        assert actual <= budget, (
+            f"{name}: advertised definition grew to {actual} chars (pinned at "
+            f"{budget}). Every client pays this before calling anything — either "
+            "spend the growth somewhere else in the schema or raise the pin "
+            "deliberately."
+        )
+
+    @pytest.mark.parametrize("name", CONSOLIDATED_TOOLS)
+    def test_pin_has_not_gone_slack(self, name: str):
+        actual = _wire_sizes()[name]
+        budget = _SURFACE_BUDGET_CHARS[name]
+        assert budget - actual <= _SURFACE_BUDGET_SLACK, (
+            f"{name}: pinned at {budget} chars but actually {actual} — a pin "
+            f"{budget - actual} chars above the truth catches nothing. Re-pin it "
+            "to the size you just achieved."
+        )
+
+    def test_whole_surface_is_pinned(self):
+        assert set(_wire_sizes()) == set(_SURFACE_BUDGET_CHARS), (
+            "the consolidated profile changed shape — every advertised tool needs a size pin"
+        )
+
+
 class TestStableErrorCodesAndIsError:
     """path_denied is the canonical code; isError is call-level only."""
 
