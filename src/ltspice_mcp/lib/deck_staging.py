@@ -12,7 +12,7 @@ from typing import Any
 from ltspice_mcp.lib import atomic_write_bytes, atomic_write_text
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.experiment_types import ManifestEntry
-from ltspice_mcp.lib.spice_lex import SpiceCard, Token, emit, lex, tokenize_body
+from ltspice_mcp.lib.spice_lex import SpiceCard, Token, TokenKind, emit, lex, tokenize_body
 
 # Sized for real foundry PDKs, which fan out further than a hand-written deck:
 # sky130 reaches a device model five levels down (deck -> sky130.lib.spice ->
@@ -244,7 +244,7 @@ def stage_deck(
             changed = False
             for reference in scan_include_references(parsed.cards, resolved, depth=depth):
                 target = resolve_reference(resolved.parent, reference.raw_path)
-                target_resolved = _resolve_existing(target)
+                target_resolved = resolve_existing(target)
                 target_root = (
                     _containing_root(target_resolved, roots)
                     if target_resolved is not None
@@ -557,6 +557,54 @@ def scan_include_references(
     return references
 
 
+def closure_depth(index: int) -> int:
+    """0 for the deck itself, 1 for anything it pulls in.
+
+    Only that distinction reaches the section predicate — a bare ``.lib X`` is
+    a section declaration in any file reached by following a reference — so a
+    file three includes deep still reads as depth 1. Written once here, beside
+    the predicate that consumes it, so a closure cannot number its files one
+    way and have them read another.
+    """
+    return 0 if index == 0 else 1
+
+
+def card_sections(cards: list[SpiceCard], source: Path, depth: int = 0) -> list[str | None]:
+    """Name the ``.lib``/``.endl`` section each card sits in, or ``None``.
+
+    The lexer tracks ``.SUBCKT`` nesting but not library sections, so this walks
+    the card list once and pairs each card with its enclosing section. With a
+    second argument a ``.lib`` is a *select* (``.lib mos.lib ff``) and never
+    opens anything; whether a single-argument one names a file or opens a
+    section is answered by ``looks_like_section_declaration`` right here, so a
+    caller cannot pair up an answer that disagrees with staging's.
+
+    Lives beside that predicate because a second copy that reads a plain include
+    as a section opens a section nothing closes: every later card is stamped
+    with it, no declaration reads as top level any more, and an exact-name
+    target that resolves today is refused as ambiguous.
+    """
+    sections: list[str | None] = []
+    stack: list[str] = []
+    for card in cards:
+        sections.append(stack[-1] if stack else None)
+        if card.kind != "directive":
+            continue
+        tokens = [
+            token for token in tokenize_body(card.body) if token.kind != TokenKind.COMMENT_TRAIL
+        ]
+        if not tokens:
+            continue
+        head = tokens[0].text.casefold()
+        if head == ".endl" and stack:
+            stack.pop()
+        elif head == ".lib" and len(tokens) == 2:
+            name = unquote(tokens[1].text)
+            if name and looks_like_section_declaration(name, source, depth):
+                stack.append(name)
+    return sections
+
+
 def looks_like_section_declaration(raw_path: str, source: Path, depth: int = 0) -> bool:
     """True when a single-token ``.lib X`` declares a section rather than
     naming a file to include.
@@ -626,7 +674,7 @@ def resolve_reference(parent: Path, raw_path: str) -> Path:
     return normalized if normalized.is_absolute() else parent / normalized
 
 
-def _resolve_existing(path: Path) -> Path | None:
+def resolve_existing(path: Path) -> Path | None:
     try:
         return path.resolve(strict=True)
     except OSError:
