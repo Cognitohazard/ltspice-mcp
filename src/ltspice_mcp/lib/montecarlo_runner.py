@@ -10,7 +10,7 @@ measurement_stats) can correlate measurements with the perturbed values.
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from spicelib import SpiceEditor
@@ -31,6 +31,7 @@ from ltspice_mcp.lib.montecarlo import (
     extract_model_card,
     extract_mosfet_instances,
     find_mismatch_rule,
+    matches_prefix,
     parse_model_params,
     parse_param_nominal,
     parse_value,
@@ -52,6 +53,16 @@ from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
     ModelCard,
     ParamCard,
+)
+from ltspice_mcp.lib.subckt_mismatch import (
+    ClosureFile,
+    MismatchPlan,
+    MismatchPlanError,
+    build_plan,
+    closure_from_deck,
+    draw_mismatch,
+    overlapping_claims,
+    render,
 )
 from ltspice_mcp.state import SessionState
 
@@ -125,6 +136,29 @@ class _MCPlan:
     stable_base_params: dict[str, dict[str, float]]
     param_tolerances: list[ParamTolerance]
     param_nominals: dict[str, float]
+    # Devices a mismatch rule reaches through one subcircuit level. None on a
+    # deck where the rules found no such device.
+    subckt_plan: MismatchPlan | None = None
+    subckt_closure: tuple[ClosureFile, ...] = ()
+    mismatch_rules: list[MismatchRule] = field(default_factory=list)
+
+    def mismatch_counts(self) -> dict[str, int]:
+        """Requested / matched / skipped devices, for the run receipt.
+
+        Requested counts the devices the rules SELECTED, not every device in
+        the deck: a netlist may hold transistors no rule names, and counting
+        those would report a shortfall against devices nobody asked to perturb.
+
+        Every planned target was selected BY a rule prefix, so planning them
+        and matching them are the same count — the skips are the gap.
+        """
+        planned = len(self.subckt_plan.targets) if self.subckt_plan is not None else 0
+        skipped = len(self.subckt_plan.skips) if self.subckt_plan is not None else 0
+        return {
+            "requested": len(self.instance_to_rule) + planned + skipped,
+            "matched": len(self.instance_to_rule) + planned,
+            "skipped": skipped,
+        }
 
 
 def _resolve_mc_plan(
@@ -132,13 +166,26 @@ def _resolve_mc_plan(
     baseline_text: str,
     baseline_cards: list[SpiceCard],
     mc_config: MonteCarloConfig,
+    source: Path,
 ) -> _MCPlan:
     """Resolve the perturbation plan once from the baseline netlist.
 
     Extracts nominal values and precomputes per-run lookups for each
     perturbation class: R/C/L component tolerances, per-.MODEL process
-    variation, per-instance MOSFET mismatch, and .PARAM tolerances. Raises
-    ``BatchJobError`` when no rule matches anything perturbable.
+    variation, per-instance MOSFET mismatch, and .PARAM tolerances.
+
+    Accounting is per category: a rule that names a ``.MODEL``, a ``.PARAM``,
+    or a device prefix the netlist does not answer raises ``BatchJobError``
+    naming what it asked for. A rule that quietly matches nothing produces a
+    Monte Carlo with no spread in that dimension, which reads as a clean run
+    and is indistinguishable from a design that is genuinely insensitive.
+
+    ``source`` is the netlist's own path, required rather than optional
+    because it is what the include closure is read relative to: a caller with
+    no path to give would silently plan against the deck alone and report a
+    library-defined device as absent. Used to read (never write) the
+    include closure so a mismatch rule can reach a device defined in a
+    library file.
     """
     # R/C/L tolerance resolution + nominal extraction. Walk the lexed cards
     # instead of editor.get_components — works uniformly across flat and
@@ -188,12 +235,11 @@ def _resolve_mc_plan(
     for mt in model_tolerances:
         card = extract_model_card(baseline_text, mt.model_name)
         if card is None:
-            logger.warning(
-                "MC job %s: .MODEL %s not found in netlist; ignoring rule",
-                job_id,
-                mt.model_name,
+            raise BatchJobError(
+                f"Monte Carlo: process-variation rule names .MODEL {mt.model_name!r}, "
+                "which the netlist does not declare. Every run would use the nominal "
+                "model, so the result would show no process spread at all."
             )
-            continue
         model_nominals[mt.model_name] = parse_model_params(card)
 
     # MOSFET instance geometry + per-instance caches.
@@ -209,6 +255,18 @@ def _resolve_mc_plan(
         for inst in mosfet_instances
         if (rule := find_mismatch_rule(inst.ref, mismatch_rules)) is not None
     }
+    subckt_plan: MismatchPlan | None = None
+    subckt_closure: tuple[ClosureFile, ...] = ()
+    if mismatch_rules:
+        # Descent is not conditional on the top level coming up empty: one rule
+        # can be answered by plain M cards while another only reaches devices
+        # inside a subcircuit, and a deck holding both is ordinary.
+        subckt_plan, subckt_closure = _resolve_subckt_mismatch(
+            baseline_text, source, mismatch_rules
+        )
+    _require_every_mismatch_rule_matched(
+        mismatch_rules, instance_to_rule, subckt_plan, mosfet_instances
+    )
     perturbed_models = set(model_nominals.keys())
     stable_base_params: dict[str, dict[str, float]] = {}
     for inst in mosfet_instances:
@@ -226,16 +284,28 @@ def _resolve_mc_plan(
     for pt in param_tolerances:
         nominal = parse_param_nominal(baseline_text, pt.name)
         if nominal is None:
-            logger.warning(
-                "MC job %s: .PARAM %s not found or non-numeric; ignoring rule",
-                job_id,
-                pt.name,
+            raise BatchJobError(
+                f"Monte Carlo: parameter rule names .PARAM {pt.name!r}, which the "
+                "netlist does not declare with a plain numeric value. Every run would "
+                "use the same value, so the result would show no spread from it."
             )
-            continue
         param_nominals[pt.name] = nominal
 
+    if (mc_config.type_tolerances or mc_config.component_overrides) and not rcl_nominals:
+        raise BatchJobError(
+            "Monte Carlo: the component tolerances matched no R/C/L device with a "
+            "numeric value. Check the prefixes and references against the netlist; "
+            "parameter-driven values are perturbed through param_tolerances instead."
+        )
+
     # Empty-perturbation guard — give the user something actionable.
-    if not (rcl_nominals or model_nominals or mosfet_instances or param_nominals):
+    if not (
+        rcl_nominals
+        or model_nominals
+        or mosfet_instances
+        or param_nominals
+        or subckt_plan is not None
+    ):
         raise BatchJobError(
             "Monte Carlo: no perturbable parameters matched the rules. "
             "Check that R/C/L prefixes, .MODEL names, M-instance W/L params, "
@@ -252,6 +322,101 @@ def _resolve_mc_plan(
         stable_base_params=stable_base_params,
         param_tolerances=param_tolerances,
         param_nominals=param_nominals,
+        subckt_plan=subckt_plan,
+        subckt_closure=subckt_closure,
+        mismatch_rules=mismatch_rules,
+    )
+
+
+def _resolve_subckt_mismatch(
+    baseline_text: str,
+    source: Path,
+    mismatch_rules: list[MismatchRule],
+) -> tuple[MismatchPlan | None, tuple[ClosureFile, ...]]:
+    """Reach MOS devices wrapped one subcircuit level down, foundry-deck style.
+
+    Returns no plan when the rules reach no such device, which is every flat
+    netlist — that deck then behaves exactly as it did before this path
+    existed.
+    """
+    closure = closure_from_deck(source, baseline_text)
+    try:
+        plan = build_plan(closure, prefix=[rule.prefix for rule in mismatch_rules])
+    except MismatchPlanError as exc:
+        raise BatchJobError(f"Monte Carlo mismatch: {exc}") from exc
+    if not plan.targets:
+        return None, ()
+    outside = sorted({t.x_ref for t in plan.targets if t.x_file != 0})
+    if outside:
+        raise BatchJobError(
+            "Monte Carlo mismatch: instances "
+            f"{', '.join(outside)} are declared inside an included file, which this "
+            "path only reads and never rewrites. Run them through run_experiments, "
+            "which stages the whole include closure, or move the instances into the "
+            "deck."
+        )
+    collision = overlapping_claims(plan, [rule.prefix for rule in mismatch_rules])
+    if collision is not None:
+        x_ref, prefixes = collision
+        raise BatchJobError(
+            f"Monte Carlo mismatch: instance {x_ref} is claimed by {len(prefixes)} rules "
+            f"(prefixes {', '.join(repr(p) for p in prefixes)}). Two mismatch rules on one "
+            "device have no defined composition, so narrow the prefixes until each "
+            "device is claimed once."
+        )
+    return plan, tuple(closure)
+
+
+def _require_every_mismatch_rule_matched(
+    mismatch_rules: list[MismatchRule],
+    instance_to_rule: dict[str, MismatchRule],
+    subckt_plan: MismatchPlan | None,
+    mosfet_instances: list[InstanceGeometry],
+) -> None:
+    """Refuse a mismatch rule that perturbs nothing, and say which kind of nothing.
+
+    The guard this replaces asked only whether SOMETHING in the job was
+    perturbable, so a mismatch rule matching no device left the runs identical
+    while the job still reported success — zero measured spread that a reader
+    would take for a mismatch-insensitive design.
+
+    Precedence among top-level rules is DECLARATION ORDER: the first rule whose
+    prefix fits a device claims it. A later rule that would also have fitted
+    therefore perturbs nothing, which is a different mistake from a prefix that
+    fits no device at all, and is reported as its own thing — the two read
+    identically otherwise, and the caller would go looking for a missing device
+    that is right there.
+    """
+    targets = subckt_plan.targets if subckt_plan is not None else ()
+    matched = set(instance_to_rule.values())
+    unmatched = [
+        rule
+        for rule in mismatch_rules
+        if rule not in matched
+        and not any(matches_prefix(target.x_ref, rule.prefix) for target in targets)
+    ]
+    if not unmatched:
+        return
+    for rule in unmatched:
+        claimed = [
+            instance.ref
+            for instance in mosfet_instances
+            if matches_prefix(instance.ref, rule.prefix)
+        ]
+        if claimed:
+            owner = instance_to_rule.get(claimed[0])
+            raise BatchJobError(
+                f"Monte Carlo: mismatch rule prefix {rule.prefix!r} fits "
+                f"{', '.join(sorted(claimed))} but an earlier rule (prefix "
+                f"{owner.prefix if owner else '?'!r}) already claims them, and the first "
+                "declared rule wins. Narrow the earlier prefix, or drop this rule."
+            )
+    prefixes = ", ".join(repr(rule.prefix) for rule in unmatched)
+    raise BatchJobError(
+        f"Monte Carlo: mismatch rule prefix {prefixes} matched no device. Top-level M "
+        "instances need numeric W and L; X instances were also followed one subcircuit "
+        "level down to their inner MOS device and none matched either. Every run would "
+        "be identical, so the result would show no mismatch spread at all."
     )
 
 
@@ -375,13 +540,54 @@ def _perturb_run(
             ParamCard.from_card(param_card).set_value(new_value)
         run_params[f"PARAM.{pt.name}"] = new_value
 
-    # Emit once and return the rewritten lines. SpiceEditor expects each
-    # entry to be one line ending in "\n".
-    new_text = emit(cards)
+    # Mismatch on X-wrapped devices: the values ride on the X line and the
+    # patched device subcircuit is appended, so this rewrites the whole deck
+    # rather than single cards.
+    if plan.subckt_plan is None:
+        new_text = emit(cards)
+    else:
+        new_text = _perturb_subckt_mismatch(cards, plan, run_sampler, run_params)
+
+    # SpiceEditor expects each entry to be one line ending in "\n".
     new_lines = new_text.splitlines(keepends=True)
     if new_lines and not new_lines[-1].endswith("\n"):
         new_lines[-1] = new_lines[-1] + "\n"
     return new_lines, run_params
+
+
+def _perturb_subckt_mismatch(
+    deck_cards: list[SpiceCard],
+    plan: _MCPlan,
+    run_sampler: MCSampler,
+    run_params: dict[str, float],
+) -> str:
+    """Draw and write one run's per-instance values for X-wrapped devices.
+
+    Takes the run's own cards and returns the emitted deck, so the values land
+    on the same card tree the rest of the run perturbed rather than on a copy
+    parsed back out of its text.
+    """
+    subckt_plan = plan.subckt_plan
+    if subckt_plan is None:
+        return emit(deck_cards)
+    drawn = draw_mismatch(subckt_plan, plan.mismatch_rules, run_sampler)
+    for ref, delvto in drawn.delvto.items():
+        run_params[f"{ref}.delvto"] = delvto
+        run_params[f"{ref}.mulu0"] = drawn.mulu0[ref]
+
+    counts = plan.mismatch_counts()
+    run_params["mismatch.requested"] = float(counts["requested"])
+    run_params["mismatch.matched"] = float(counts["matched"])
+    run_params["mismatch.applied"] = float(len(drawn.values))
+    run_params["mismatch.skipped"] = float(counts["skipped"])
+    for skip in subckt_plan.skips:
+        run_params[f"mismatch.{skip.x_ref}.{skip.code}"] = 1.0
+    if not drawn.values:
+        return emit(deck_cards)
+    # Only the deck moves per run; every included file is fed back exactly as
+    # planning read it, which is what lets a clone from one be copied once.
+    files = list(plan.subckt_closure)
+    return render(files, subckt_plan, drawn.values, cards={0: deck_cards})[0]
 
 
 class MonteCarloRunner(BatchRunnerBase):
@@ -455,7 +661,9 @@ class MonteCarloRunner(BatchRunnerBase):
             baseline_cards = lex(baseline_text).cards
             editor = SpiceEditor(str(src_netlist))
 
-            plan = _resolve_mc_plan(batch_job.job_id, baseline_text, baseline_cards, mc_config)
+            plan = _resolve_mc_plan(
+                batch_job.job_id, baseline_text, baseline_cards, mc_config, src_netlist
+            )
 
             sampler = MCSampler(seed=mc_config.seed)
 

@@ -5,8 +5,8 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import re
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from itertools import product
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAlias
@@ -24,10 +24,10 @@ from pydantic import (
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import atomic_write_text, component_value
 from ltspice_mcp.lib.deck_staging import (
-    looks_like_section_declaration,
+    card_sections,
+    closure_depth,
     rewrite_staged_references,
     staged_reference_targets,
-    unquote,
 )
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.montecarlo import (
@@ -35,6 +35,7 @@ from ltspice_mcp.lib.montecarlo import (
     ToleranceSpec,
     extract_mosfet_instances,
     inject_card_before_end,
+    matches_prefix,
     parse_model_params,
     parse_value,
     render_variant_model_card,
@@ -46,6 +47,19 @@ from ltspice_mcp.lib.montecarlo import (
 from ltspice_mcp.lib.montecarlo import MismatchRule as EngineMismatchRule
 from ltspice_mcp.lib.spice_lex import SpiceCard, Token, TokenKind, emit, lex, tokenize_body
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard
+from ltspice_mcp.lib.subckt_mismatch import (
+    MOBILITY_PARAM,
+    VTH_PARAM,
+    ClosureFile,
+    MismatchPlan,
+    MismatchPlanError,
+    MismatchValues,
+    XFetTarget,
+    build_plan,
+    draw_mismatch,
+    overlapping_claims,
+    render,
+)
 
 ScalarValue: TypeAlias = StrictInt | StrictFloat | str
 Distribution: TypeAlias = Literal["normal", "gaussian", "uniform"]
@@ -223,9 +237,15 @@ class ResolvedAssignment:
     """One assignment bound to a concrete deck edit."""
 
     target: str
-    kind: Literal["param", "component", "model"]
+    kind: Literal["param", "component", "model", "instance_param"]
     value: ScalarValue
     refs: tuple[str, ...] = ()
+    # Which of the two per-instance mismatch parameters an ``instance_param``
+    # edit writes. The instance it writes to is ``refs[0]``, still spelled the
+    # way the caller wrote it: which inner device that names is resolved once
+    # per case, over every such edit at a time, so the patched device
+    # subcircuit is cloned once no matter how many instances use it.
+    instance_param: str | None = None
     # Index into the deck closure: 0 is the root deck, 1.. its includes.
     file_index: int = 0
     # Where inside that file resolution chose to edit. Carried so the writer
@@ -288,17 +308,6 @@ class _DeckTargets:
     model_names: dict[str, list[_Site]]
 
 
-def _closure_depth(index: int) -> int:
-    """0 for the root deck, 1 for anything it pulls in.
-
-    Only that distinction reaches the section predicate — a bare ``.lib X`` is
-    a section declaration in any file reached by following a reference — so a
-    file three includes deep still reads as depth 1. Written once here because
-    the closure has to know it before a ``_ClosureFile`` exists to ask.
-    """
-    return 0 if index == 0 else 1
-
-
 @dataclass(frozen=True)
 class _ClosureFile:
     """One file of a deck's include closure, with its targets resolved."""
@@ -310,7 +319,7 @@ class _ClosureFile:
 
     @property
     def depth(self) -> int:
-        return _closure_depth(self.index)
+        return closure_depth(self.index)
 
 
 @dataclass(frozen=True)
@@ -335,9 +344,18 @@ class _DeckClosure:
 
     circuit_id: str
     files: tuple[_ClosureFile, ...]
+    # Mismatch plans built over the UNEDITED closure, keyed by what was
+    # selected. One circuit's cases select the same devices and differ only in
+    # the values written, and a plan costs a lex of every file in the closure —
+    # a PDK's worth, per case. Filled and read only by ``_mismatch_plan``.
+    plans: dict[tuple[Any, ...], MismatchPlan] = field(default_factory=dict, compare=False)
 
     def texts(self) -> dict[int, str]:
         return {file.index: file.text for file in self.files}
+
+    def unedited(self, files: Sequence[ClosureFile]) -> bool:
+        """Is this the closure's own text, or has a case already edited it?"""
+        return all(file.text is self.files[file.index].text for file in files)
 
 
 def normalize_circuit_decks(circuits: list[CircuitDeck]) -> list[CircuitDeck]:
@@ -451,7 +469,18 @@ def expand_variations(
                 continue
             if isinstance(variation, RandomVariation):
                 random_variation = variation
+                head = _mismatch_head(variation.rules)
+                mismatch_rules = [
+                    rule for rule in variation.rules if isinstance(rule, MismatchRule)
+                ]
                 for rule in variation.rules:
+                    if isinstance(rule, MismatchRule):
+                        # Validated as a set, at the position of the first of
+                        # them, so a rule is reported in declaration order the
+                        # way it is applied.
+                        if rule is head:
+                            _validate_mismatch_rules(closure, mismatch_rules)
+                        continue
                     _resolve_random_rule_targets(closure, rule)
                 continue
             families.append(_resolve_assign_family(closure, variation))
@@ -549,47 +578,13 @@ def _applies(variation: AssignVariation | RandomVariation, circuit_id: str) -> b
     }
 
 
-def _card_sections(cards: list[SpiceCard], source: Path, depth: int) -> list[str | None]:
-    """Name the ``.lib``/``.endl`` section each card sits in, or ``None``.
-
-    The lexer tracks ``.SUBCKT`` nesting but not library sections, so this
-    walks the card list once and pairs each card with its enclosing section.
-    With a second argument a ``.lib`` is a *select* (``.lib mos.lib ff``) and
-    never opens anything; whether a single-argument one names a file or opens a
-    section is staging's question, asked here with staging's own predicate. A
-    second answer to it could disagree, and one that reads a plain include as a
-    section opens a section nothing closes: every later card is stamped with
-    it, no declaration reads as top level any more, and an exact-name target
-    that resolves today is refused as ambiguous.
-    """
-    sections: list[str | None] = []
-    stack: list[str] = []
-    for card in cards:
-        sections.append(stack[-1] if stack else None)
-        if card.kind != "directive":
-            continue
-        tokens = [
-            token for token in tokenize_body(card.body) if token.kind != TokenKind.COMMENT_TRAIL
-        ]
-        if not tokens:
-            continue
-        head = tokens[0].text.casefold()
-        if head == ".endl" and stack:
-            stack.pop()
-        elif head == ".lib" and len(tokens) == 2:
-            name = unquote(tokens[1].text)
-            if name and looks_like_section_declaration(name, source, depth):
-                stack.append(name)
-    return sections
-
-
 def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
     params: dict[str, list[_Site]] = {}
     components: dict[str, list[_Site]] = {}
     models_by_ref: dict[str, str] = {}
     model_names: dict[str, list[_Site]] = {}
     cards = lex(text).cards
-    for card, section in zip(cards, _card_sections(cards, source, depth), strict=True):
+    for card, section in zip(cards, card_sections(cards, source, depth), strict=True):
         if card.kind == "param":
             for token in tokenize_body(card.body)[1:]:
                 if token.kind == TokenKind.KEY_VALUE and token.key:
@@ -625,7 +620,7 @@ def _build_closure(circuit: CircuitDeck) -> _DeckClosure:
             index=index,
             path=path,
             text=text,
-            targets=_deck_targets(text, path, _closure_depth(index)),
+            targets=_deck_targets(text, path, closure_depth(index)),
         )
         for index, (path, text) in enumerate(
             [(circuit.path, circuit.text)]
@@ -749,6 +744,8 @@ def _resolve_assignment(
     A ``REF@model`` target is a glob, so it fans out: one edit per file that
     holds a match. An exact ``.param``/component name binds to a single file.
     """
+    if ":" in target:
+        return _resolve_instance_param(closure, target, value)
     if target.casefold().endswith("@model"):
         pattern = target[:-6].casefold()
         edits: list[ResolvedAssignment] = []
@@ -820,6 +817,168 @@ def _resolve_assignment(
     )
 
 
+_INSTANCE_PARAM_RE = re.compile(
+    r"^(?P<instance>[A-Za-z][^\s:]*):(?P<param>[A-Za-z_][A-Za-z0-9_]*)$"
+)
+
+
+def _resolve_instance_param(
+    closure: _DeckClosure,
+    target: str,
+    value: ScalarValue,
+) -> tuple[ResolvedAssignment, ...]:
+    """Bind a per-instance mismatch target such as ``X1:delvto``.
+
+    ``X1:delvto`` names the single MOS device inside ``X1``; ``X1.M0:delvto``
+    names one device in a body that holds several, and is required there.
+    Only the two parameters the mismatch engine owns are addressable this way —
+    anything else would be a general hierarchical-parameter feature, which this
+    is not.
+
+    Resolution stops at the shape here. Which inner device the instance names
+    is settled once per case, over all such targets together, because the
+    patched device subcircuit is cloned once and two independently resolved
+    targets would clone it twice.
+    """
+    match = _INSTANCE_PARAM_RE.match(target)
+    if match is None:
+        raise VariationError(
+            "invalid_instance_param_target",
+            f"Circuit {closure.circuit_id!r}: target {target!r} is not a per-instance "
+            "parameter target; write INSTANCE:PARAM (for example 'X1:delvto', or "
+            "'X1.M0:delvto' when the subcircuit holds more than one device)",
+        )
+    instance = match.group("instance")
+    param = match.group("param").casefold()
+    if param not in (VTH_PARAM, MOBILITY_PARAM):
+        raise VariationError(
+            "invalid_instance_param_target",
+            f"Circuit {closure.circuit_id!r}: target {target!r} sets {param!r}, but "
+            f"only {VTH_PARAM} (a shift of the signed threshold) and {MOBILITY_PARAM} "
+            "(a mobility multiplier) can be set per instance",
+        )
+    folded = target.casefold()
+    clashes = sorted(
+        {
+            file.path.name
+            for file in closure.files
+            if folded in file.targets.params or folded in file.targets.components
+        }
+    )
+    if clashes:
+        raise VariationError(
+            "ambiguous_target",
+            f"Circuit {closure.circuit_id!r}: target {target!r} reads as a per-instance "
+            f"{param} target but is also declared as a .param or component in "
+            f"{', '.join(clashes)}; rename one of them so the target names one thing",
+        )
+    _require_numeric_assignment(closure.circuit_id, target, value)
+    return (
+        ResolvedAssignment(
+            target=target,
+            kind="instance_param",
+            value=value,
+            refs=(instance,),
+            instance_param=param,
+        ),
+    )
+
+
+def _closure_files(closure: _DeckClosure, texts: dict[int, str]) -> list[ClosureFile]:
+    """Project the closure into the mismatch engine's view of it."""
+    return [
+        ClosureFile(index=file.index, path=file.path, text=texts[file.index])
+        for file in closure.files
+    ]
+
+
+def _mismatch_plan(
+    closure: _DeckClosure,
+    files: list[ClosureFile],
+    *,
+    prefix: Sequence[str] | None = None,
+    selectors: Sequence[str] | None = None,
+    exact: bool = False,
+) -> MismatchPlan:
+    """Build a mismatch plan, relabelling its refusals as variation errors.
+
+    Reused across the cases of one circuit while the closure still reads as it
+    did when the plan was built: a plan resolves which devices a selection
+    names, and every case of a circuit names the same ones — only the values
+    differ. Each build lexes every file in the closure, which on a PDK deck is
+    the dominant cost of materializing a case.
+
+    A case that has already edited the closure gets its own plan rather than
+    the cached one, because the edit can be the very thing the plan reads.
+    """
+    prefixes = None if prefix is None else tuple(prefix)
+    key = (prefixes, tuple(selectors) if selectors is not None else None, exact)
+    unedited = closure.unedited(files)
+    if unedited and key in closure.plans:
+        return closure.plans[key]
+    try:
+        plan = build_plan(files, prefix=prefixes, selectors=selectors, exact=exact)
+    except MismatchPlanError as exc:
+        raise VariationError(exc.code, f"Circuit {closure.circuit_id!r}: {exc}") from exc
+    if unedited:
+        closure.plans[key] = plan
+    return plan
+
+
+def _apply_instance_params(
+    closure: _DeckClosure,
+    texts: dict[int, str],
+    edits: list[ResolvedAssignment],
+) -> None:
+    """Write every per-instance mismatch value this case asks for, at once.
+
+    One plan over all of them, so a device subcircuit two instances share is
+    cloned once and both instances point at the same patched copy.
+    """
+    if not edits:
+        return
+    files = _closure_files(closure, texts)
+    plan = _mismatch_plan(
+        closure,
+        files,
+        selectors=[edit.refs[0] for edit in edits],
+        exact=True,
+    )
+    values: dict[str, MismatchValues] = {}
+    written: dict[tuple[str, str], str] = {}
+    for edit in edits:
+        target = _instance_target(plan, edit.refs[0])
+        assert edit.instance_param is not None
+        key = (target.ref.casefold(), edit.instance_param)
+        previous = written.get(key)
+        if previous is not None:
+            raise VariationError(
+                "duplicate_assignment_target",
+                f"Circuit {closure.circuit_id!r}: targets {previous!r} and "
+                f"{edit.target!r} both set {edit.instance_param} on {target.ref}",
+            )
+        written[key] = edit.target
+        number = float(parse_spice_value(str(edit.value)))
+        current = values.get(target.ref, MismatchValues())
+        values[target.ref] = (
+            MismatchValues(delvto=number, mulu0=current.mulu0)
+            if edit.instance_param == VTH_PARAM
+            else MismatchValues(delvto=current.delvto, mulu0=number)
+        )
+    texts.update(render(files, plan, values))
+
+
+def _instance_target(plan: MismatchPlan, selector: str) -> XFetTarget:
+    x_ref, _, inner = selector.partition(".")
+    for target in plan.targets:
+        if target.x_ref.casefold() != x_ref.casefold():
+            continue
+        if inner and target.inner_ref.casefold() != inner.casefold():
+            continue
+        return target
+    raise KeyError(selector)
+
+
 def _closure_scope(closure: _DeckClosure) -> str:
     """Name what was searched, so a miss reads as a miss and not a blind spot."""
     includes = len(closure.files) - 1
@@ -847,19 +1006,22 @@ def _require_numeric_assignment(
 
 def _resolve_random_rule_targets(
     closure: _DeckClosure,
-    rule: RandomRule,
+    rule: ComponentRule | ParamRule | ModelRule,
 ) -> tuple[_RuleTarget, ...]:
     """Bind one random rule to every closure file it perturbs.
 
     Expansion and materialization both route through here, so a rule can never
-    validate against one file and then be applied to another.
+    validate against one file and then be applied to another. Mismatch rules do
+    not: they are resolved as a set rather than one at a time (see
+    ``_apply_mismatch_rules``), through ``_descend`` — which expansion calls
+    too, so they get the same guarantee.
 
-    A component glob and a mismatch prefix are set queries: they mean every
-    match, and a match set that stops at the root deck is a Monte Carlo that
-    varies half the devices while reporting a full one. An exact ``.param`` or
-    ``.model`` name is a singular reference and still resolves to one file and
-    one declaration inside it — and that declaration travels with the target,
-    so the edit lands where resolution said it would.
+    A component glob is a set query: it means every match, and a match set that
+    stops at the root deck is a Monte Carlo that varies half the devices while
+    reporting a full one. An exact ``.param`` or ``.model`` name is a singular
+    reference and still resolves to one file and one declaration inside it —
+    and that declaration travels with the target, so the edit lands where
+    resolution said it would.
     """
     if isinstance(rule, ComponentRule):
         pattern = rule.target.casefold()
@@ -883,23 +1045,6 @@ def _resolve_random_rule_targets(
             _RuleTarget(file=closure.files[index], refs=frozenset(refs))
             for index, refs in sorted(refs_by_file.items())
         )
-
-    if isinstance(rule, MismatchRule):
-        matches = [
-            file.index
-            for file in closure.files
-            if any(
-                instance.ref.upper().startswith(rule.prefix.upper())
-                for instance in extract_mosfet_instances(file.text)
-            )
-        ]
-        if not matches:
-            raise VariationError(
-                "ambiguous_target",
-                f"Circuit {closure.circuit_id!r}: mismatch prefix {rule.prefix!r} matches no "
-                f"top-level device with numeric W/L{_closure_scope(closure)}",
-            )
-        return tuple(_RuleTarget(file=closure.files[index]) for index in matches)
 
     if isinstance(rule, ParamRule):
         what, miss = "random param target", "is not a declared .param"
@@ -962,8 +1107,13 @@ def _apply_assignments(
     edits: tuple[ResolvedAssignment, ...],
 ) -> None:
     by_file: dict[int, list[ResolvedAssignment]] = {}
+    instance_params: list[ResolvedAssignment] = []
     for edit in edits:
+        if edit.kind == "instance_param":
+            instance_params.append(edit)
+            continue
         by_file.setdefault(edit.file_index, []).append(edit)
+    _apply_instance_params(closure, texts, instance_params)
     for index, file_edits in by_file.items():
         file = closure.files[index]
         cards = lex(texts[index]).cards
@@ -997,7 +1147,7 @@ def _card_at_site(
     """
     if len(matches) == 1:
         return matches[0]
-    sections = _card_sections(cards, file.path, file.depth)
+    sections = card_sections(cards, file.path, file.depth)
     at_site = [
         index
         for index in matches
@@ -1156,12 +1306,26 @@ def _apply_random_rules(
     sampler: MCSampler,
 ) -> dict[str, float]:
     draws: dict[str, float] = {}
+    head = _mismatch_head(rules)
     for rule in rules:
-        # One memo per rule, not per file: each lookup costs a walk of the
-        # whole closure, a mismatch rule asks for one per device, and the
-        # closure's .model cards do not move while the rule runs — a mismatch
-        # edit only adds per-instance variants, under names of their own.
-        model_card = _model_card_lookup(closure, texts)
+        if isinstance(rule, MismatchRule):
+            # The whole mismatch set is applied where the first of them sits,
+            # so the set keeps its place in declaration order. They share one
+            # plan: each plan clones the device subcircuit it patches, and two
+            # built one after the other would clone one device twice.
+            if rule is not head:
+                continue
+            # One memo for the set, not one per file: each lookup costs a walk
+            # of the whole closure, a mismatch rule asks for one per device,
+            # and the closure's .model cards do not move while the rules run —
+            # a mismatch edit only adds per-instance variants, under names of
+            # their own.
+            draws.update(
+                _apply_mismatch_rules(
+                    closure, texts, rules, sampler, _model_card_lookup(closure, texts)
+                )
+            )
+            continue
         for target in _resolve_random_rule_targets(closure, rule):
             index = target.file.index
             text = texts[index]
@@ -1171,11 +1335,9 @@ def _apply_random_rules(
             elif isinstance(rule, ParamRule):
                 assert site is not None
                 text, sampled = _apply_param_rule(text, rule, sampler, site=site, file=target.file)
-            elif isinstance(rule, ModelRule):
+            else:
                 assert site is not None
                 text, sampled = _apply_model_rule(text, rule, sampler, site=site, file=target.file)
-            else:
-                text, sampled = _apply_mismatch_rule(text, rule, sampler, model_card=model_card)
             texts[index] = text
             # Draws are keyed by the name of what they perturbed, never by a
             # position in the match list, so merging one file's results into
@@ -1241,7 +1403,7 @@ def _closure_model_card(closure: _DeckClosure, texts: dict[int, str], name: str)
         labels: set[str] = set()
         for file, cards, index in found:
             card = cards[index]
-            sections = _card_sections(cards, file.path, file.depth)
+            sections = card_sections(cards, file.path, file.depth)
             labels.add(
                 f"{file.path.name} "
                 f"{_site_label(_Site(card.name or name, card.scope, sections[index]))}"
@@ -1455,14 +1617,8 @@ def _apply_model_rule(
     return emit(cards), {f"random:model:{rule.target}.{rule.param}": sampled}
 
 
-def _apply_mismatch_rule(
-    text: str,
-    rule: MismatchRule,
-    sampler: MCSampler,
-    *,
-    model_card: Callable[[str], str | None],
-) -> tuple[str, dict[str, float]]:
-    engine_rule = EngineMismatchRule(
+def _engine_rule(rule: MismatchRule) -> EngineMismatchRule:
+    return EngineMismatchRule(
         prefix=rule.prefix,
         avt=rule.AVT,
         ak=rule.AK,
@@ -1471,10 +1627,231 @@ def _apply_mismatch_rule(
         k_param=rule.k_param,
         min_wl_um2=rule.min_wl_um2,
     )
+
+
+def _flat_mismatch_files(
+    closure: _DeckClosure,
+    texts: dict[int, str],
+    rules: list[MismatchRule],
+) -> tuple[tuple[int, ...], ...]:
+    """Per rule, in the rules' order, the files holding a top-level match.
+
+    One extraction per file for the whole rule set rather than one per rule:
+    the parse is what costs, and every rule asks the same question of the same
+    text. A file whose reference index holds nothing any prefix could claim is
+    not parsed at all — that index covers every scope while the extraction
+    reads top level only, so it can over-admit a file but never hide one.
+    """
+    prefixes = tuple(rule.prefix.casefold() for rule in rules)
+    if not prefixes:
+        return ()
+    hits: list[list[int]] = [[] for _ in rules]
+    for file in closure.files:
+        if not any(ref.startswith(prefixes) for ref in file.targets.components):
+            continue
+        refs = [instance.ref for instance in extract_mosfet_instances(texts[file.index])]
+        for position, rule in enumerate(rules):
+            if any(matches_prefix(ref, rule.prefix) for ref in refs):
+                hits[position].append(file.index)
+    return tuple(tuple(indexes) for indexes in hits)
+
+
+def _mismatch_head(rules: list[RandomRule]) -> MismatchRule | None:
+    """The mismatch rule that carries the whole set, or None if there is none."""
+    return next((rule for rule in rules if isinstance(rule, MismatchRule)), None)
+
+
+# The answer for a closure no prefix could reach into, so the descent walk is
+# skipped rather than run to prove itself empty.
+_NO_DESCENT = MismatchPlan(targets=(), skips=(), clones=())
+
+
+def _descend(
+    closure: _DeckClosure,
+    texts: dict[int, str],
+    rules: list[MismatchRule],
+) -> tuple[list[ClosureFile], MismatchPlan]:
+    """The plan covering every mismatch rule at once, and the files it read.
+
+    One plan for the whole set, not one per rule: the descent clones the device
+    subcircuit it patches, and per-rule plans would clone one device once per
+    rule, under a different name each time.
+    """
+    if not _has_subckt_candidate(closure, rules):
+        return [], _NO_DESCENT
+    files = _closure_files(closure, texts)
+    return files, _mismatch_plan(closure, files, prefix=[rule.prefix for rule in rules])
+
+
+def _refuse_unreached(
+    closure: _DeckClosure,
+    rules: list[MismatchRule],
+    flat: tuple[tuple[int, ...], ...],
+    plan: MismatchPlan,
+) -> None:
+    """Refuse a mismatch rule that reaches no device at either level.
+
+    A rule that quietly matches nothing leaves every run identical while the
+    job still reports success — zero measured spread, which reads as a design
+    that is insensitive to mismatch rather than one that was never perturbed.
+    """
+    unmatched = [
+        rule
+        for rule, indexes in zip(rules, flat, strict=True)
+        if not indexes
+        and not any(matches_prefix(target.x_ref, rule.prefix) for target in plan.targets)
+    ]
+    if not unmatched:
+        return
+    prefixes = ", ".join(repr(rule.prefix) for rule in unmatched)
+    raise VariationError(
+        "ambiguous_target",
+        f"Circuit {closure.circuit_id!r}: mismatch prefix {prefixes} matches no "
+        f"top-level device with numeric W/L, and no X instance reaching a MOS device "
+        f"one subcircuit level down{_closure_scope(closure)}",
+    )
+
+
+def _validate_mismatch_rules(closure: _DeckClosure, rules: list[MismatchRule]) -> None:
+    """Resolve the mismatch rules against the unedited closure and refuse misses.
+
+    Expansion's half of the resolution materialization runs, so a rule cannot
+    validate here and then reach nothing there. The plan it builds is the one
+    materialization reuses.
+    """
+    texts = closure.texts()
+    _, plan = _descend(closure, texts, rules)
+    _refuse_unreached(closure, rules, _flat_mismatch_files(closure, texts, rules), plan)
+
+
+def _apply_mismatch_rules(
+    closure: _DeckClosure,
+    texts: dict[int, str],
+    rules: list[RandomRule],
+    sampler: MCSampler,
+    model_card: Callable[[str], str | None],
+) -> dict[str, float]:
+    """Perturb every device the mismatch rules reach, at whichever level.
+
+    A rule answered by top-level ``M`` cards is applied on its own, in
+    declaration order, exactly as before subcircuit descent existed — each
+    injects its own variant model card and the next rule reads what the one
+    before it wrote. Descent is then attempted for every rule, not only for the
+    ones the top level left empty, because a deck holding plain transistors
+    alongside X-wrapped ones is ordinary and each rule should reach the devices
+    its prefix names.
+    """
+    mismatch_rules = [rule for rule in rules if isinstance(rule, MismatchRule)]
+    flat = _flat_mismatch_files(closure, texts, mismatch_rules)
+    draws: dict[str, float] = {}
+    for rule, indexes in zip(mismatch_rules, flat, strict=True):
+        for index in indexes:
+            text, sampled = _apply_mismatch_rule(
+                texts[index], rule, sampler, model_card=model_card
+            )
+            texts[index] = text
+            draws.update(sampled)
+
+    # Descent reads the closure as the flat pass left it: a variant model card
+    # injected above is part of the file the clone is copied out of.
+    files, plan = _descend(closure, texts, mismatch_rules)
+    _refuse_unreached(closure, mismatch_rules, flat, plan)
+    if plan.targets:
+        _refuse_overlapping_rules(closure, plan, mismatch_rules)
+        draws.update(_apply_subckt_mismatch(closure, texts, files, plan, mismatch_rules, sampler))
+    return draws
+
+
+def _has_subckt_candidate(closure: _DeckClosure, rules: list[MismatchRule]) -> bool:
+    """Is there an X reference any of these prefixes could reach?
+
+    Read off the target index the closure already built, so a deck of plain
+    transistors does not pay for a descent walk that can only come back empty.
+    """
+    prefixes = tuple(rule.prefix.casefold() for rule in rules)
+    if not prefixes:
+        return False
+    return any(
+        ref.startswith("x") and ref.startswith(prefixes)
+        for file in closure.files
+        for ref in file.targets.components
+    )
+
+
+def _refuse_overlapping_rules(
+    closure: _DeckClosure,
+    plan: MismatchPlan,
+    siblings: list[MismatchRule],
+) -> None:
+    """Refuse two rules that both claim one X-wrapped device.
+
+    A device reached through a subcircuit takes its values on its own instance
+    line, so a second rule would overwrite the first rather than layer on it —
+    unlike a top-level device, where each rule injects its own model card and
+    the next reads the one before. Rather than pick a winner by declaration
+    order, say which prefixes collide.
+    """
+    collision = overlapping_claims(plan, [rule.prefix for rule in siblings])
+    if collision is None:
+        return
+    x_ref, prefixes = collision
+    raise VariationError(
+        "overlapping_mismatch_rules",
+        f"Circuit {closure.circuit_id!r}: instance {x_ref} is claimed by "
+        f"{len(prefixes)} mismatch rules (prefixes "
+        f"{', '.join(repr(p) for p in prefixes)}); a device reached "
+        "through a subcircuit takes one rule's values, so narrow the prefixes "
+        "until each device is claimed once",
+    )
+
+
+def _apply_subckt_mismatch(
+    closure: _DeckClosure,
+    texts: dict[int, str],
+    files: list[ClosureFile],
+    plan: MismatchPlan,
+    rules: list[MismatchRule],
+    sampler: MCSampler,
+) -> dict[str, float]:
+    """Draw and write per-instance values for devices one subcircuit level down.
+
+    The receipt carries what the rules asked for against what they reached,
+    because a device the plan could not descend into is a fact the reader needs
+    — an aggregate that reports only the draws it made cannot be told apart
+    from one where every device was covered.
+    """
+    drawn = draw_mismatch(plan, [_engine_rule(rule) for rule in rules], sampler)
+    draws: dict[str, float] = {}
+    for ref, delvto in drawn.delvto.items():
+        draws[f"random:mismatch:{ref}.{VTH_PARAM}"] = delvto
+        draws[f"random:mismatch:{ref}.{MOBILITY_PARAM}"] = drawn.mulu0[ref]
+
+    draws["random:mismatch:requested"] = float(len(plan.targets) + len(plan.skips))
+    draws["random:mismatch:matched"] = float(len(plan.targets))
+    draws["random:mismatch:applied"] = float(len(drawn.values))
+    draws["random:mismatch:skipped"] = float(len(plan.skips))
+    for skip in plan.skips:
+        draws[f"random:mismatch:{skip.x_ref}:{skip.code}"] = 1.0
+    if drawn.values:
+        try:
+            texts.update(render(files, plan, drawn.values))
+        except MismatchPlanError as exc:
+            raise VariationError(exc.code, f"Circuit {closure.circuit_id!r}: {exc}") from exc
+    return draws
+
+
+def _apply_mismatch_rule(
+    text: str,
+    rule: MismatchRule,
+    sampler: MCSampler,
+    *,
+    model_card: Callable[[str], str | None],
+) -> tuple[str, dict[str, float]]:
+    engine_rule = _engine_rule(rule)
     instances = [
         instance
         for instance in extract_mosfet_instances(text)
-        if instance.ref.upper().startswith(rule.prefix.upper())
+        if matches_prefix(instance.ref, rule.prefix)
     ]
     if not instances:
         raise VariationError(

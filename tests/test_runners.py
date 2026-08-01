@@ -14,8 +14,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from ltspice_mcp.errors import BatchJobError
 from ltspice_mcp.lib import now
-from ltspice_mcp.lib.montecarlo_runner import MonteCarloRunner
+from ltspice_mcp.lib.montecarlo import MCSampler, MismatchRule
+from ltspice_mcp.lib.montecarlo_runner import MonteCarloRunner, _perturb_run, _resolve_mc_plan
 from ltspice_mcp.lib.proc_kill import simulator_executable_names
 from ltspice_mcp.lib.runner_base import discard_generated_netlist
 from ltspice_mcp.lib.sim_runner import (
@@ -26,8 +28,10 @@ from ltspice_mcp.lib.sim_runner import (
     ensure_output_alias,
     generate_job_id,
 )
+from ltspice_mcp.lib.spice_lex import lex
 from ltspice_mcp.lib.sweep_runner import SweepRunner
 from ltspice_mcp.state import BatchJob, MonteCarloConfig, SessionState, SimulationJob, SweepConfig
+from tests._mismatch_fixtures import MINI_FET, clone_body, instance_line
 
 
 async def _wait_for(cond, *, timeout_s: float = 5.0, interval: float = 0.01) -> None:
@@ -2095,6 +2099,262 @@ class TestMismatchRuleMatching:
         assert find_mismatch_rule("R7", rules) is None
 
 
+class TestMismatchRuleMatchAccounting:
+    """A rule that matches nothing has to say so.
+
+    The empty-perturbation guard used to fire only when NO category matched
+    anything, so a deck with perturbable devices and a mismatch rule matching
+    none of them ran completely unperturbed and reported success — a Monte
+    Carlo with zero spread that looks like a clean sweep.
+    """
+
+    DECK = (
+        "* mismatch accounting\n"
+        ".MODEL NMOS1 NMOS(VTO=0.7 KP=100u)\n"
+        "M1 out gate 0 0 NMOS1 W=10u L=1u\n"
+        "R1 vdd out 1k\n"
+        ".TRAN 1m\n"
+        ".END\n"
+    )
+
+    def _plan(self, mc_config):
+        return _resolve_mc_plan(
+            "job-1", self.DECK, lex(self.DECK).cards, mc_config, mc_config.netlist
+        )
+
+    def test_mismatch_rule_matching_no_device_is_an_error(self, work_dir: Path):
+        config = MonteCarloConfig(
+            netlist=work_dir / "n.cir",
+            type_tolerances={"R": (0.05, "normal")},
+            mismatch_rules=[MismatchRule(prefix="Q", avt=3e-3)],
+        )
+        with pytest.raises(BatchJobError, match="mismatch"):
+            self._plan(config)
+
+    def test_a_matching_rule_still_resolves(self, work_dir: Path):
+        config = MonteCarloConfig(
+            netlist=work_dir / "n.cir",
+            mismatch_rules=[MismatchRule(prefix="M", avt=3e-3)],
+        )
+        plan = self._plan(config)
+        assert [instance.ref for instance in plan.mosfet_instances] == ["M1"]
+        assert set(plan.instance_to_rule) == {"M1"}
+
+    def test_a_model_rule_naming_no_card_is_an_error(self, work_dir: Path):
+        from ltspice_mcp.lib.montecarlo import ModelTolerance, ToleranceSpec
+
+        config = MonteCarloConfig(
+            netlist=work_dir / "n.cir",
+            type_tolerances={"R": (0.05, "normal")},
+            model_tolerances=[
+                ModelTolerance(model_name="PMOS9", parameters={"VTO": ToleranceSpec(0.1)})
+            ],
+        )
+        with pytest.raises(BatchJobError, match="PMOS9"):
+            self._plan(config)
+
+    def test_a_param_rule_naming_no_directive_is_an_error(self, work_dir: Path):
+        from ltspice_mcp.lib.montecarlo import ParamTolerance, ToleranceSpec
+
+        config = MonteCarloConfig(
+            netlist=work_dir / "n.cir",
+            type_tolerances={"R": (0.05, "normal")},
+            param_tolerances=[ParamTolerance(name="vbias", spec=ToleranceSpec(0.1))],
+        )
+        with pytest.raises(BatchJobError, match="vbias"):
+            self._plan(config)
+
+
+class TestSubcircuitMismatchThroughTheRunner:
+    """Mismatch on devices the deck reaches through an X subcircuit.
+
+    Every foundry-PDK transistor is an X instance whose MOS device lives in a
+    shared subcircuit body, so a rule written against top-level M cards used to
+    match nothing at all on a PDK deck.
+    """
+
+    DECK = (
+        "* x-wrapped devices\n" + MINI_FET + "XM1 out1 gate 0 0 minifet W=10u L=1u\n"
+        "XM2 out2 gate 0 0 minifet W=10u L=1u\n"
+        "V1 out1 0 1\n"
+        ".TRAN 1m\n"
+        ".END\n"
+    )
+
+    LEGACY_DECK = (
+        "* flat level-1 devices\n"
+        ".MODEL NMOS1 NMOS(LEVEL=1 VTO=0.7 KP=100u)\n"
+        "M1 out gate 0 0 NMOS1 W=10u L=1u\n"
+        "M2 out gate 0 0 NMOS1 W=10u L=1u\n"
+        ".TRAN 1m\n"
+        ".END\n"
+    )
+
+    def _plan(self, deck: str, mc_config):
+        return _resolve_mc_plan("job-x", deck, lex(deck).cards, mc_config, mc_config.netlist)
+
+    def _config(self, work_dir: Path, prefix: str):
+        return MonteCarloConfig(
+            netlist=work_dir / "n.cir",
+            mismatch_rules=[MismatchRule(prefix=prefix, avt=5e-3, ak=0.02)],
+            seed=7,
+        )
+
+    def _run(self, deck: str, plan):
+        from ltspice_mcp.lib.montecarlo_runner import _perturb_run
+
+        lines, params = _perturb_run(deck, plan, MCSampler(seed=7).derive("run1"))
+        return "".join(lines), params
+
+    def test_the_rule_reaches_the_device_inside_the_subcircuit(self, work_dir: Path):
+        plan = self._plan(self.DECK, self._config(work_dir, "X"))
+        assert plan.subckt_plan is not None
+        assert [t.ref for t in plan.subckt_plan.targets] == ["XM1.m0", "XM2.m0"]
+
+    def test_each_instance_gets_its_own_value(self, work_dir: Path):
+        plan = self._plan(self.DECK, self._config(work_dir, "X"))
+        text, _ = self._run(self.DECK, plan)
+        xm1 = instance_line(text, "XM1")
+        xm2 = instance_line(text, "XM2")
+        assert xm1.model == "minifet__mcpatch"
+        assert xm2.model == "minifet__mcpatch"
+        assert xm1.get_param("mc_delvto__m0") != xm2.get_param("mc_delvto__m0")
+        # The patched device subcircuit is emitted once, not once per instance.
+        assert text.count(".subckt minifet__mcpatch") == 1
+
+    def test_the_receipt_records_every_draw_and_reconciles_the_counts(self, work_dir: Path):
+        plan = self._plan(self.DECK, self._config(work_dir, "X"))
+        text, params = self._run(self.DECK, plan)
+        assert set(params) >= {
+            "XM1.m0.delvto",
+            "XM1.m0.mulu0",
+            "XM2.m0.delvto",
+            "XM2.m0.mulu0",
+            "mismatch.requested",
+            "mismatch.matched",
+            "mismatch.applied",
+            "mismatch.skipped",
+        }
+        assert params["mismatch.requested"] == 2.0
+        assert params["mismatch.matched"] == 2.0
+        assert params["mismatch.applied"] == 2.0
+        assert params["mismatch.skipped"] == 0.0
+        # A draw is recorded in the units it was written in, so the receipt and
+        # the deck can be checked against each other.
+        written = instance_line(text, "XM1").get_param("mc_delvto__m0")
+        assert written is not None
+        assert float(written) == pytest.approx(params["XM1.m0.delvto"], rel=1e-9)
+
+    def test_a_matched_flat_deck_never_reaches_the_subcircuit_path(self, work_dir: Path):
+        plan = self._plan(self.LEGACY_DECK, self._config(work_dir, "M"))
+        assert plan.subckt_plan is None
+        text, params = self._run(self.LEGACY_DECK, plan)
+        # The legacy mechanism is untouched: per-instance variant .MODEL cards,
+        # and none of the instance parameters a LEVEL=1 device would reject.
+        assert "NMOS1__M1" in text and "NMOS1__M2" in text
+        assert "delvto" not in text.lower()
+        assert "mcpatch" not in text
+        assert set(params) == {"M1.dvth", "M1.dk_over_k", "M2.dvth", "M2.dk_over_k"}
+
+    def test_a_flat_deck_perturbs_identically_across_repeated_resolutions(self, work_dir: Path):
+        first, _ = self._run(
+            self.LEGACY_DECK, self._plan(self.LEGACY_DECK, self._config(work_dir, "M"))
+        )
+        second, _ = self._run(
+            self.LEGACY_DECK, self._plan(self.LEGACY_DECK, self._config(work_dir, "M"))
+        )
+        assert first == second
+
+    def test_a_device_with_no_mos_inside_is_a_named_skip(self, work_dir: Path):
+        deck = self.DECK.replace(
+            "V1 out1 0 1",
+            ".subckt divider a b\nR1 a b 1k\n.ends divider\nXD1 out1 0 divider\nV1 out1 0 1",
+        )
+        plan = self._plan(deck, self._config(work_dir, "X"))
+        assert plan.subckt_plan is not None
+        assert [(s.x_ref, s.code) for s in plan.subckt_plan.skips] == [("XD1", "no_mos_at_depth")]
+        _, params = self._run(deck, plan)
+        assert params["mismatch.skipped"] == 1.0
+        assert params["mismatch.XD1.no_mos_at_depth"] == 1.0
+
+    def test_a_transistor_no_rule_names_is_not_counted_as_requested(self, work_dir: Path):
+        # A deck can hold devices outside the rule's reach. Counting those
+        # would report a shortfall against devices nobody asked to perturb.
+        deck = self.DECK.replace(
+            "V1 out1 0 1",
+            ".model NMOS1 NMOS(LEVEL=1 VTO=0.7 KP=100u)\n"
+            "M9 out1 gate 0 0 NMOS1 W=10u L=1u\n"
+            "V1 out1 0 1",
+        )
+        plan = self._plan(deck, self._config(work_dir, "X"))
+        _, params = self._run(deck, plan)
+        assert params["mismatch.requested"] == 2.0
+        assert params["mismatch.matched"] == 2.0
+        assert "M9.dvth" not in params
+
+    def test_two_rules_claiming_one_instance_are_refused(self, work_dir: Path):
+        config = MonteCarloConfig(
+            netlist=work_dir / "n.cir",
+            mismatch_rules=[
+                MismatchRule(prefix="X", avt=5e-3),
+                MismatchRule(prefix="XM", avt=1e-3),
+            ],
+        )
+        with pytest.raises(BatchJobError, match="no defined composition"):
+            self._plan(self.DECK, config)
+
+    def test_a_device_defined_in_an_included_file_is_cloned_into_the_deck(
+        self, work_dir: Path, tmp_path: Path
+    ):
+        """The library is read, never written; the patched copy lands in the deck.
+
+        A definition outside the deck is one no run rewrites, so its patched
+        copy is emitted once and reused — which has to hold the body still and
+        the per-instance values apart, run to run.
+        """
+        (tmp_path / "lib.spice").write_text(MINI_FET)
+        deck = (
+            "* deck\n"
+            ".include lib.spice\n"
+            "XM1 out1 gate 0 0 minifet W=10u L=1u\n"
+            "XM2 out2 gate 0 0 minifet W=10u L=1u\n"
+            "V1 out1 0 1\n"
+            ".TRAN 1m\n"
+            ".END\n"
+        )
+        path = tmp_path / "deck.cir"
+        path.write_text(deck)
+        plan = _resolve_mc_plan(
+            "job-inc", deck, lex(deck).cards, self._config(work_dir, "X"), path
+        )
+        assert plan.subckt_plan is not None
+        assert [t.ref for t in plan.subckt_plan.targets] == ["XM1.m0", "XM2.m0"]
+
+        sampler = MCSampler(seed=7)
+        first = "".join(_perturb_run(deck, plan, sampler.derive("run1"))[0])
+        second = "".join(_perturb_run(deck, plan, sampler.derive("run2"))[0])
+
+        assert (tmp_path / "lib.spice").read_text() == MINI_FET
+        assert first.count(".subckt minifet__mcpatch") == 1
+        assert instance_line(first, "XM1").model == "minifet__mcpatch"
+        assert clone_body(first) == clone_body(second)
+        assert instance_line(first, "XM1").get_param("mc_delvto__m0") != instance_line(
+            second, "XM1"
+        ).get_param("mc_delvto__m0")
+
+    def test_an_x_instance_in_an_included_file_names_the_boundary(
+        self, work_dir: Path, tmp_path: Path
+    ):
+
+        library = self.DECK[self.DECK.index(".subckt") : self.DECK.index("XM1")]
+        (tmp_path / "dut.spice").write_text(library + "XM1 out1 gate 0 0 minifet W=10u L=1u\n")
+        deck = "* deck\n.include dut.spice\nV1 out1 0 1\n.TRAN 1m\n.END\n"
+        path = tmp_path / "deck.cir"
+        path.write_text(deck)
+        with pytest.raises(BatchJobError, match="run_experiments"):
+            _resolve_mc_plan("job-x", deck, lex(deck).cards, self._config(work_dir, "X"), path)
+
+
 class TestStreamIsolation:
     """Per-stream RNGs in MCSampler — adding/removing a perturbation
     source mustn't shift other sources' samples. This is the property
@@ -2592,3 +2852,217 @@ class TestDiscardGeneratedNetlist:
 
     def test_none_is_noop(self):
         discard_generated_netlist(None)  # must not raise
+
+
+class TestFlatDeckPerturbationIsPinned:
+    """Exact bytes for a matched LEVEL=1 deck, recorded before X descent shipped.
+
+    Recorded by running the same inputs through the engine as it stood before
+    devices could be reached through a subcircuit, and confirmed byte-identical
+    afterwards. It is the whole no-behaviour-change claim for the flat path:
+    the seed, the stream keys, the variant naming, the emitted layout, and the
+    order the perturbations land in are all held by this one comparison.
+    """
+
+    DECK = (
+        "* flat level-1 devices\n"
+        ".PARAM vb=1.2\n"
+        ".MODEL NMOS1 NMOS(LEVEL=1 VTO=0.7 KP=100u)\n"
+        "M1 out gate 0 0 NMOS1 W=10u L=1u\n"
+        "M2 out gate 0 0 NMOS1 W=20u L=1u\n"
+        "R1 vdd out 1k\n"
+        ".TRAN 1m\n"
+        ".END\n"
+    )
+
+    EXPECTED = (
+        "* flat level-1 devices\n"
+        ".PARAM vb=1.2\n"
+        ".MODEL NMOS1 NMOS(LEVEL=1 VTO=0.6878925354 KP=100u)\n"
+        "M1 out gate 0 0 NMOS1__M1 W=10u L=1u\n"
+        "M2 out gate 0 0 NMOS1__M2 W=20u L=1u\n"
+        "R1 vdd out 1013.126207\n"
+        ".TRAN 1m\n"
+        ".MODEL NMOS1__M1 NMOS(LEVEL=1 VTO=0.6877482032 KP=0.0001003171851)\n"
+        ".MODEL NMOS1__M2 NMOS(LEVEL=1 VTO=0.6871491806 KP=9.955255965e-05)\n"
+        ".END\n"
+    )
+
+    def test_the_emitted_deck_matches_the_recorded_bytes(self, work_dir: Path):
+        from ltspice_mcp.lib.montecarlo import (
+            MCSampler,
+            MismatchRule,
+            ModelTolerance,
+            ToleranceSpec,
+        )
+
+        config = MonteCarloConfig(
+            netlist=work_dir / "n.cir",
+            type_tolerances={"R": (0.05, "normal")},
+            mismatch_rules=[MismatchRule(prefix="M", avt=5e-3, ak=0.02)],
+            model_tolerances=[
+                ModelTolerance(model_name="NMOS1", parameters={"VTO": ToleranceSpec(0.1)})
+            ],
+            seed=7,
+        )
+        plan = _resolve_mc_plan("job-1", self.DECK, lex(self.DECK).cards, config, config.netlist)
+        lines, _ = _perturb_run(self.DECK, plan, MCSampler(seed=7).derive("run1"))
+        assert "".join(lines) == self.EXPECTED
+
+
+class TestScaleUnitsReachTheDraw:
+    """``.option scale`` decides what W=1 on an X line means.
+
+    Foundry decks set ``.option scale=1.0u`` and then write geometry in scale
+    units, so ``W=1 L=0.15`` is a 1 um x 0.15 um device. Reading those numbers
+    as metres inflates the Pelgrom denominator by a million and collapses every
+    draw to noise, which is a Monte Carlo with no spread at all — the exact
+    failure this capability exists to remove.
+    """
+
+    DECK = (
+        "* scaled foundry-shaped deck\n"
+        ".option scale=1.0u\n" + MINI_FET + "XM1 out1 gate 0 0 minifet W=1 L=0.15\n"
+        "V1 out1 0 1\n"
+        ".TRAN 1m\n"
+        ".END\n"
+    )
+
+    # sigma(dVth) = AVT / sqrt(W*L in um^2) = 5e-3 / sqrt(1 * 0.15).
+    AVT = 5e-3
+    ANALYTIC_SIGMA = 5e-3 / (0.15**0.5)
+
+    def test_the_draw_spread_matches_the_analytic_sigma(self, work_dir: Path):
+        import statistics
+
+        config = MonteCarloConfig(
+            netlist=work_dir / "n.cir",
+            mismatch_rules=[MismatchRule(prefix="X", avt=self.AVT)],
+            seed=11,
+        )
+        plan = _resolve_mc_plan(
+            "job-scale", self.DECK, lex(self.DECK).cards, config, config.netlist
+        )
+        sampler = MCSampler(seed=11)
+        draws = [
+            _perturb_run(self.DECK, plan, sampler.derive(f"run{run}"))[1]["XM1.m0.delvto"]
+            for run in range(1, 301)
+        ]
+        spread = statistics.stdev(draws)
+        # Truncation at 3 sigma trims the tails, so the sample spread runs a
+        # little under the analytic figure; a factor-of-two band is loose
+        # enough for that and still six orders away from the metres reading.
+        assert self.ANALYTIC_SIGMA / 2 < spread < self.ANALYTIC_SIGMA * 2, spread
+
+    def test_geometry_is_reported_in_metres_after_scaling(self, work_dir: Path):
+        from ltspice_mcp.lib.subckt_mismatch import require_geometry
+
+        config = MonteCarloConfig(
+            netlist=work_dir / "n.cir",
+            mismatch_rules=[MismatchRule(prefix="X", avt=self.AVT)],
+        )
+        plan = _resolve_mc_plan(
+            "job-scale", self.DECK, lex(self.DECK).cards, config, config.netlist
+        )
+        assert plan.subckt_plan is not None
+        assert require_geometry(plan.subckt_plan.targets[0]) == pytest.approx((1e-6, 0.15e-6))
+
+
+class TestProcessVariationReachesTheClone:
+    """A model card inside the device subcircuit is where foundry process
+    variation lands, and the patched copy has to carry the perturbed one.
+
+    The copy is emitted during the run rather than snapshotted when the plan
+    was built. Taken at plan time it holds the nominal model, so the instances
+    now pointing at it simulate unperturbed while the receipt reports process
+    variation applied — the run looks varied and is not.
+    """
+
+    DECK = (
+        "* body-scoped model under process variation\n"
+        + MINI_FET
+        + "XM1 out1 gate 0 0 minifet W=10u L=1u\n"
+        "XM2 out2 gate 0 0 minifet W=10u L=1u\n"
+        "V1 out1 0 1\n"
+        ".TRAN 1m\n"
+        ".END\n"
+    )
+
+    def test_the_run_deck_clone_carries_the_perturbed_model(self, work_dir: Path):
+        from ltspice_mcp.lib.montecarlo import (
+            MCSampler,
+            MismatchRule,
+            ModelTolerance,
+            ToleranceSpec,
+        )
+
+        config = MonteCarloConfig(
+            netlist=work_dir / "n.cir",
+            mismatch_rules=[MismatchRule(prefix="X", avt=5e-3)],
+            model_tolerances=[
+                ModelTolerance(model_name="minifet_model", parameters={"vth0": ToleranceSpec(0.1)})
+            ],
+            seed=3,
+        )
+        plan = _resolve_mc_plan(
+            "job-body", self.DECK, lex(self.DECK).cards, config, config.netlist
+        )
+        lines, params = _perturb_run(self.DECK, plan, MCSampler(seed=3).derive("run1"))
+        text = "".join(lines)
+
+        perturbed = params["minifet_model.vth0"]
+        assert perturbed != pytest.approx(0.7), "the process rule drew nothing to check"
+
+        clone_models = [
+            card
+            for card in lex(text).cards
+            if card.kind == "model" and card.scope == ("minifet__mcpatch",)
+        ]
+        assert len(clone_models) == 1
+        body = clone_models[0].body.replace(" ", "")
+        assert f"vth0={perturbed:.10g}" in body
+        # A copy taken before the run would still read the nominal here.
+        assert "vth0=0.7" not in body
+        # And the instances that now name the clone really do point at it.
+        assert instance_line(text, "XM1").model == "minifet__mcpatch"
+
+
+class TestMixedFlatAndSubcircuitDeck:
+    """One rule answered by plain M cards, another only inside a subcircuit.
+
+    Descent used to be attempted only when the top level came up empty, so the
+    first rule matching a plain transistor stopped the second from ever
+    reaching its X-wrapped devices — and the second was then refused as
+    matching nothing, on a deck where its devices are plainly present.
+    """
+
+    DECK = (
+        "* mixed deck\n" + MINI_FET + ".MODEL NMOS1 NMOS(LEVEL=1 VTO=0.7 KP=100u)\n"
+        "M9 out9 gate 0 0 NMOS1 W=10u L=1u\n"
+        "XM1 out1 gate 0 0 minifet W=10u L=1u\n"
+        "V1 out1 0 1\n"
+        ".TRAN 1m\n"
+        ".END\n"
+    )
+
+    def test_both_rules_apply(self, work_dir: Path):
+        config = MonteCarloConfig(
+            netlist=work_dir / "n.cir",
+            mismatch_rules=[
+                MismatchRule(prefix="M", avt=3e-3),
+                MismatchRule(prefix="X", avt=5e-3),
+            ],
+            seed=9,
+        )
+        plan = _resolve_mc_plan(
+            "job-mixed", self.DECK, lex(self.DECK).cards, config, config.netlist
+        )
+        assert set(plan.instance_to_rule) == {"M9"}
+        assert plan.subckt_plan is not None
+        assert [t.ref for t in plan.subckt_plan.targets] == ["XM1.m0"]
+
+        lines, params = _perturb_run(self.DECK, plan, MCSampler(seed=9).derive("run1"))
+        text = "".join(lines)
+        assert "NMOS1__M9" in text
+        assert instance_line(text, "XM1").model == "minifet__mcpatch"
+        assert {"M9.dvth", "XM1.m0.delvto"} <= set(params)

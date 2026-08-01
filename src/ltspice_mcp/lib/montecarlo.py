@@ -615,13 +615,23 @@ def extract_mosfet_instances(netlist_text: str) -> list[InstanceGeometry]:
     return instances
 
 
+def matches_prefix(instance_ref: str, prefix: str) -> bool:
+    """Does one mismatch-rule prefix claim this instance reference?
+
+    SPICE references are case-insensitive, so the comparison folds. Written
+    once because every caller that asks the question a different way is a
+    caller whose answer can disagree with the rule that was actually applied.
+    """
+    return instance_ref.upper().startswith(prefix.upper())
+
+
 def find_mismatch_rule(
     instance_ref: str,
     rules: list[MismatchRule],
 ) -> MismatchRule | None:
     """Return the first rule whose prefix matches the instance ref."""
     for rule in rules:
-        if instance_ref.upper().startswith(rule.prefix.upper()):
+        if matches_prefix(instance_ref, rule.prefix):
             return rule
     return None
 

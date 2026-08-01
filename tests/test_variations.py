@@ -20,6 +20,7 @@ from ltspice_mcp.lib.variations import (
     materialize_variants,
 )
 from ltspice_mcp.tools.advanced import MonteCarloMismatchRule
+from tests._mismatch_fixtures import MINI_FET, instance_params
 
 
 def _deck(path: Path, circuit_id: str = "dut") -> CircuitDeck:
@@ -837,3 +838,449 @@ class TestSeedStability:
                 "random:param:gain": 1.9275251793846904,
             },
         ]
+
+
+PDK_DECK = (
+    "* pdk-shaped deck\n" + MINI_FET + "XM1 out1 gate 0 0 minifet W=1 L=0.15\n"
+    "XM2 out2 gate 0 0 minifet W=1 L=0.15\n"
+    "V1 out1 0 1\n"
+    ".op\n"
+    ".end\n"
+)
+
+
+def _pdk_deck(path: Path, text: str = PDK_DECK, circuit_id: str = "pdk") -> CircuitDeck:
+    path.write_text(text)
+    return CircuitDeck(circuit_id, path, text)
+
+
+class TestInstanceParameterTargets:
+    """``X1:delvto`` — a per-instance mismatch value on an X-wrapped device."""
+
+    def _assign(self, **assign) -> AssignVariation:
+        return AssignVariation.model_validate({"kind": "assign", "assign": assign})
+
+    def test_a_value_lands_on_the_named_instance(self, tmp_path: Path):
+        circuit = _pdk_deck(tmp_path / "pdk.cir")
+        variation = self._assign(**{"XM1:delvto": [-0.02], "XM2:delvto": [0.03]})
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+        )
+        text = cases[0].text
+        assert instance_params(text, "XM1")["mc_delvto__m0"] == "-0.02"
+        assert instance_params(text, "XM2")["mc_delvto__m0"] == "0.03"
+        assert instance_params(text, "XM1")["__model__"] == "minifet__mcpatch"
+        # Two instances of one device type share a single patched copy.
+        assert text.count(".subckt minifet__mcpatch") == 1
+        assert cases[0].assignments["XM1:delvto"] == -0.02
+
+    def test_both_parameters_reach_one_instance(self, tmp_path: Path):
+        circuit = _pdk_deck(tmp_path / "pdk.cir")
+        variation = self._assign(**{"XM1:delvto": [-0.02], "XM1:mulu0": [1.05]})
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+        )
+        params = instance_params(cases[0].text, "XM1")
+        assert params["mc_delvto__m0"] == "-0.02"
+        assert params["mc_mulu0__m0"] == "1.05"
+
+    def test_a_sweep_over_one_instance_expands(self, tmp_path: Path):
+        circuit = _pdk_deck(tmp_path / "pdk.cir")
+        variation = self._assign(**{"XM1:delvto": [-0.02, 0.0, 0.02]})
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+        )
+        assert [instance_params(c.text, "XM1")["mc_delvto__m0"] for c in cases] == [
+            "-0.02",
+            "0",
+            "0.02",
+        ]
+
+    def test_only_the_two_mismatch_parameters_are_addressable(self, tmp_path: Path):
+        circuit = _pdk_deck(tmp_path / "pdk.cir")
+        with pytest.raises(VariationError) as exc:
+            expand_variations([circuit], [self._assign(**{"XM1:vth0": [0.7]})])
+        assert exc.value.code == "invalid_instance_param_target"
+
+    def test_a_multi_device_body_requires_naming_the_device(self, tmp_path: Path):
+        pair = (
+            ".subckt pairfet d1 d2 g s b\n"
+            ".param w = 1 l = 0.15\n"
+            "ma d1 g s b pair_model w = {w} l = {l}\n"
+            "mb d2 g s b pair_model w = {w} l = {l}\n"
+            ".model pair_model nmos level = 54 vth0 = 0.7\n"
+            ".ends pairfet\n"
+        )
+        text = "* pair\n" + pair + "XP0 da db g 0 0 pairfet W=1 L=0.15\nV1 da 0 1\n.op\n.end\n"
+        circuit = _pdk_deck(tmp_path / "pair.cir", text, "pair")
+        cases = expand_variations([circuit], [self._assign(**{"XP0:delvto": [-0.02]})])
+        with pytest.raises(VariationError) as exc:
+            materialize_variants(circuit, cases, tmp_path / "out")
+        assert exc.value.code == "ambiguous_inner_device"
+
+        named = expand_variations([circuit], [self._assign(**{"XP0.mb:delvto": [-0.02]})])
+        out = materialize_variants(circuit, named, tmp_path / "named")
+        assert instance_params(out[0].text, "XP0")["mc_delvto__mb"] == "-0.02"
+
+    def test_a_target_that_also_names_a_component_is_ambiguous(self, tmp_path: Path):
+        text = PDK_DECK.replace("V1 out1 0 1", "V1 out1 0 1\n.param XM1:delvto=0")
+        circuit = _pdk_deck(tmp_path / "clash.cir", text, "clash")
+        with pytest.raises(VariationError) as exc:
+            expand_variations([circuit], [self._assign(**{"XM1:delvto": [-0.02]})])
+        assert exc.value.code == "ambiguous_target"
+
+    def test_an_unknown_instance_is_named(self, tmp_path: Path):
+        circuit = _pdk_deck(tmp_path / "pdk.cir")
+        cases = expand_variations([circuit], [self._assign(**{"XZ9:delvto": [-0.02]})])
+        with pytest.raises(VariationError) as exc:
+            materialize_variants(circuit, cases, tmp_path / "out")
+        assert exc.value.code == "instance_not_found"
+
+
+class TestMismatchThroughSubcircuits:
+    """A mismatch rule aimed at X-wrapped devices."""
+
+    def _variation(self, prefix: str = "X") -> RandomVariation:
+        return RandomVariation.model_validate(
+            {
+                "kind": "random",
+                "runs": 2,
+                "seed": 11,
+                "rules": [{"rule": "mismatch", "prefix": prefix, "AVT": 5e-3, "AK": 0.02}],
+            }
+        )
+
+    def test_each_instance_draws_its_own_shift(self, tmp_path: Path):
+        circuit = _pdk_deck(tmp_path / "pdk.cir")
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [self._variation()]), tmp_path / "out"
+        )
+        first = instance_params(cases[0].text, "XM1")
+        second = instance_params(cases[0].text, "XM2")
+        assert first["mc_delvto__m0"] != second["mc_delvto__m0"]
+        assert first["__model__"] == "minifet__mcpatch"
+        # Two runs of the same rule are different draws.
+        assert instance_params(cases[1].text, "XM1")["mc_delvto__m0"] != first["mc_delvto__m0"]
+
+    def test_the_receipt_records_the_draws_and_reconciles(self, tmp_path: Path):
+        circuit = _pdk_deck(tmp_path / "pdk.cir")
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [self._variation()]), tmp_path / "out"
+        )
+        assignments = cases[0].assignments
+        assert set(assignments) >= {
+            "random:mismatch:XM1.m0.delvto",
+            "random:mismatch:XM1.m0.mulu0",
+            "random:mismatch:XM2.m0.delvto",
+            "random:mismatch:XM2.m0.mulu0",
+            "random:mismatch:requested",
+            "random:mismatch:matched",
+            "random:mismatch:applied",
+            "random:mismatch:skipped",
+        }
+        assert assignments["random:mismatch:requested"] == 2.0
+        assert assignments["random:mismatch:applied"] == 2.0
+
+    def test_a_body_without_a_device_is_a_named_skip(self, tmp_path: Path):
+        text = PDK_DECK.replace(
+            "V1 out1 0 1",
+            ".subckt divider a b\nR1 a b 1k\n.ends divider\nXD1 out1 0 divider\nV1 out1 0 1",
+        )
+        circuit = _pdk_deck(tmp_path / "skip.cir", text, "skip")
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [self._variation()]), tmp_path / "out"
+        )
+        assert cases[0].assignments["random:mismatch:XD1:no_mos_at_depth"] == 1.0
+        assert cases[0].assignments["random:mismatch:skipped"] == 1.0
+
+    def test_a_prefix_matching_nothing_says_both_levels_were_tried(self, tmp_path: Path):
+        circuit = _pdk_deck(tmp_path / "pdk.cir")
+        with pytest.raises(VariationError) as exc:
+            expand_variations([circuit], [self._variation(prefix="Q")])
+        assert "one subcircuit level down" in str(exc.value)
+
+    def test_a_flat_deck_still_uses_the_model_card_mechanism(self, tmp_path: Path):
+        circuit = _deck(tmp_path / "flat.cir")
+        cases = materialize_variants(
+            circuit,
+            expand_variations([circuit], [self._variation(prefix="M")]),
+            tmp_path / "out",
+        )
+        assert "NM__M1" in cases[0].text
+        assert "mcpatch" not in cases[0].text
+
+
+class TestMismatchAcrossIncludedFiles:
+    """The device library and the instances that use it live in includes."""
+
+    def _circuit(self, tmp_path: Path) -> CircuitDeck:
+        library = tmp_path / "lib.spice"
+        library.write_text(MINI_FET)
+        dut = tmp_path / "dut.spice"
+        dut_text = "XM1 out1 gate 0 0 minifet W=1 L=0.15\n"
+        dut.write_text(dut_text)
+        root = tmp_path / "top.cir"
+        root_text = "* top\n.include lib.spice\n.include dut.spice\nV1 out1 0 1\n.op\n.end\n"
+        root.write_text(root_text)
+        return CircuitDeck(
+            "hier",
+            root,
+            root_text,
+            includes=(DeckFile(library, MINI_FET), DeckFile(dut, dut_text)),
+        )
+
+    def test_the_instance_is_rewritten_in_its_own_file_and_the_chain_follows(self, tmp_path: Path):
+        circuit = self._circuit(tmp_path)
+        variation = AssignVariation.model_validate(
+            {"kind": "assign", "assign": {"XM1:delvto": [-0.02]}}
+        )
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+        )
+        root = cases[0].text
+        # The patched device subcircuit goes to the deck the simulator is handed.
+        assert ".subckt minifet__mcpatch" in root
+        # The edited include is written as a private per-case copy and the root
+        # deck's include chain points at it.
+        copy = tmp_path / "case-0000__dut.spice"
+        assert copy.exists()
+        assert "case-0000__dut.spice" in root
+        assert instance_params(copy.read_text(), "XM1")["mc_delvto__m0"] == "-0.02"
+        # The shared staged library is left exactly as it was.
+        assert (tmp_path / "lib.spice").read_text() == MINI_FET
+
+
+class TestOverlappingMismatchRules:
+    """Two rules cannot both claim one X-wrapped device."""
+
+    def _variation(self, *prefixes: str) -> RandomVariation:
+        return RandomVariation.model_validate(
+            {
+                "kind": "random",
+                "runs": 1,
+                "seed": 3,
+                "rules": [
+                    {"rule": "mismatch", "prefix": prefix, "AVT": 3e-3} for prefix in prefixes
+                ],
+            }
+        )
+
+    def test_two_prefixes_claiming_one_device_are_refused(self, tmp_path: Path):
+        circuit = _pdk_deck(tmp_path / "pdk.cir")
+        cases = expand_variations([circuit], [self._variation("X", "XM")])
+        with pytest.raises(VariationError) as exc:
+            materialize_variants(circuit, cases, tmp_path / "out")
+        assert exc.value.code == "overlapping_mismatch_rules"
+
+    def test_disjoint_prefixes_each_perturb_their_own_devices(self, tmp_path: Path):
+        text = PDK_DECK.replace("XM1 out1", "XA1 out1").replace("XM2 out2", "XB1 out2")
+        circuit = _pdk_deck(tmp_path / "split.cir", text, "split")
+        cases = materialize_variants(
+            circuit,
+            expand_variations([circuit], [self._variation("XA", "XB")]),
+            tmp_path / "out",
+        )
+        first = instance_params(cases[0].text, "XA1")
+        second = instance_params(cases[0].text, "XB1")
+        assert first["__model__"] == "minifet__mcpatch"
+        assert second["__model__"] == "minifet__mcpatch"
+        assert first["mc_delvto__m0"] != second["mc_delvto__m0"]
+
+    def test_a_flat_deck_still_composes_overlapping_rules(self, tmp_path: Path):
+        # The top-level mechanism layers variant model cards, and each rule
+        # reads what the one before it wrote; only the subcircuit path, where
+        # values share one instance line, has no way to compose.
+        circuit = _deck(tmp_path / "flat.cir")
+        cases = materialize_variants(
+            circuit,
+            expand_variations([circuit], [self._variation("M", "M1")]),
+            tmp_path / "out",
+        )
+        assert "NM__M1__M1" in cases[0].text
+
+
+class TestAssignedValueAndRuleOnOneDevice:
+    """An exact value and a random rule cannot both drive one device."""
+
+    def test_the_collision_is_refused_rather_than_applied_twice(self, tmp_path: Path):
+        circuit = _pdk_deck(tmp_path / "pdk.cir")
+        assign = AssignVariation.model_validate(
+            {"kind": "assign", "assign": {"XM1:delvto": [-0.02]}}
+        )
+        random = RandomVariation.model_validate(
+            {
+                "kind": "random",
+                "runs": 1,
+                "seed": 5,
+                "rules": [{"rule": "mismatch", "prefix": "X", "AVT": 3e-3}],
+            }
+        )
+        cases = expand_variations([circuit], [assign, random])
+        with pytest.raises(VariationError) as exc:
+            materialize_variants(circuit, cases, tmp_path / "out")
+        # The device already carries a shift, so a second one would silently
+        # stack on top of it instead of replacing it.
+        assert exc.value.code == "preexisting_mismatch_param"
+
+    def test_a_rule_on_a_different_device_still_runs(self, tmp_path: Path):
+        circuit = _pdk_deck(tmp_path / "pdk.cir")
+        assign = AssignVariation.model_validate(
+            {"kind": "assign", "assign": {"XM1:delvto": [-0.02]}}
+        )
+        random = RandomVariation.model_validate(
+            {
+                "kind": "random",
+                "runs": 1,
+                "seed": 5,
+                "rules": [{"rule": "mismatch", "prefix": "XM2", "AVT": 3e-3}],
+            }
+        )
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [assign, random]), tmp_path / "out"
+        )
+        text = cases[0].text
+        assert instance_params(text, "XM1")["mc_delvto__m0"] == "-0.02"
+        assert "mc_delvto__m0" in instance_params(text, "XM2")
+        assert instance_params(text, "XM2")["mc_delvto__m0"] != "-0.02"
+
+
+class TestMixedFlatAndSubcircuitDecks:
+    """Plain transistors and X-wrapped ones in one deck, one rule for each."""
+
+    DECK = (
+        "* mixed deck\n" + MINI_FET + ".model NM NMOS(LEVEL=1 VTO=0.7 KP=100u)\n"
+        "M9 out9 gate 0 0 NM W=10u L=1u\n"
+        "XM1 out1 gate 0 0 minifet W=1 L=0.15\n"
+        "V1 out1 0 1\n"
+        ".op\n"
+        ".end\n"
+    )
+
+    def _variation(self) -> RandomVariation:
+        return RandomVariation.model_validate(
+            {
+                "kind": "random",
+                "runs": 1,
+                "seed": 4,
+                "rules": [
+                    {"rule": "mismatch", "prefix": "M", "AVT": 3e-3},
+                    {"rule": "mismatch", "prefix": "X", "AVT": 5e-3},
+                ],
+            }
+        )
+
+    def test_both_rules_reach_their_own_devices(self, tmp_path: Path):
+        circuit = _pdk_deck(tmp_path / "mixed.cir", self.DECK, "mixed")
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [self._variation()]), tmp_path / "out"
+        )
+        text = cases[0].text
+        # The flat device gets its own variant model card, the wrapped one gets
+        # a value on its instance line; neither mechanism displaces the other.
+        assert "NM__M9" in text
+        assert instance_params(text, "M9")["__model__"] == "NM__M9"
+        assert instance_params(text, "XM1")["__model__"] == "minifet__mcpatch"
+        assert "mc_delvto__m0" in instance_params(text, "XM1")
+        assert {
+            "random:mismatch:M9.VTO",
+            "random:mismatch:XM1.m0.delvto",
+        } <= set(cases[0].assignments)
+
+    def test_a_rule_reaching_neither_level_is_still_refused(self, tmp_path: Path):
+        circuit = _pdk_deck(tmp_path / "mixed.cir", self.DECK, "mixed")
+        variation = RandomVariation.model_validate(
+            {
+                "kind": "random",
+                "runs": 1,
+                "seed": 4,
+                "rules": [
+                    {"rule": "mismatch", "prefix": "M", "AVT": 3e-3},
+                    {"rule": "mismatch", "prefix": "Q", "AVT": 5e-3},
+                ],
+            }
+        )
+        with pytest.raises(VariationError) as exc:
+            expand_variations([circuit], [variation])
+        assert exc.value.code == "ambiguous_target"
+
+
+class TestCaseBundleIsWrittenWhole:
+    """A case's edited includes and its root deck are one bundle.
+
+    Each case writes private copies rather than editing anything a sibling
+    case reads, and the root deck — the only file a simulator is handed — is
+    written after the includes it points at. A caller that finds the deck
+    therefore finds every file it names.
+    """
+
+    def _circuit(self, tmp_path: Path) -> CircuitDeck:
+        library = tmp_path / "lib.spice"
+        library.write_text(MINI_FET)
+        dut = tmp_path / "dut.spice"
+        dut_text = "XM1 out1 gate 0 0 minifet W=1 L=0.15\nXM2 out2 gate 0 0 minifet W=1 L=0.15\n"
+        dut.write_text(dut_text)
+        root = tmp_path / "top.cir"
+        root_text = "* top\n.include lib.spice\n.include dut.spice\nV1 out1 0 1\n.op\n.end\n"
+        root.write_text(root_text)
+        return CircuitDeck(
+            "bundle",
+            root,
+            root_text,
+            includes=(DeckFile(library, MINI_FET), DeckFile(dut, dut_text)),
+        )
+
+    def test_the_root_deck_is_written_after_the_includes_it_names(self, tmp_path: Path):
+        circuit = self._circuit(tmp_path)
+        written: list[str] = []
+        import ltspice_mcp.lib.variations as variations
+
+        real = variations.atomic_write_text
+
+        def record(path, text, **kwargs):
+            written.append(Path(path).name)
+            return real(path, text, **kwargs)
+
+        variations.atomic_write_text = record
+        try:
+            variation = RandomVariation.model_validate(
+                {
+                    "kind": "random",
+                    "runs": 2,
+                    "seed": 6,
+                    "rules": [{"rule": "mismatch", "prefix": "X", "AVT": 5e-3}],
+                }
+            )
+            cases = materialize_variants(
+                circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+            )
+        finally:
+            variations.atomic_write_text = real
+
+        for case in cases:
+            include_copy = f"case-{case.case_index:04d}__dut.spice"
+            deck = f"case-{case.case_index:04d}.cir"
+            assert written.index(include_copy) < written.index(deck)
+            assert include_copy in case.text
+
+    def test_each_run_gets_its_own_include_content(self, tmp_path: Path):
+        circuit = self._circuit(tmp_path)
+        variation = RandomVariation.model_validate(
+            {
+                "kind": "random",
+                "runs": 2,
+                "seed": 6,
+                "rules": [{"rule": "mismatch", "prefix": "X", "AVT": 5e-3}],
+            }
+        )
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+        )
+        copies = [
+            (tmp_path / f"case-{case.case_index:04d}__dut.spice").read_text() for case in cases
+        ]
+        # Per-run draws now differ inside an INCLUDED file, not only in the root
+        # deck, so the copies must not be the same file twice.
+        assert copies[0] != copies[1]
+        assert len(copies) == 2
+        # And the shared staged original is untouched by either run.
+        assert (tmp_path / "dut.spice").read_text() == circuit.includes[1].text
