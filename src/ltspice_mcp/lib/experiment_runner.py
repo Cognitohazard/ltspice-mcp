@@ -59,14 +59,18 @@ def canonical_fingerprint(request_model: Any) -> str:
     """Hash the normalized, explicit-default JSON representation of a request.
 
     Fields the model declares as PRESENTATION_FIELDS are excluded: they choose
-    how the receipt is rendered, not what runs. Hashing them would make asking
-    for the same experiment at a different verbosity an idempotency CONFLICT —
-    refusing to hand back a receipt precisely when the caller wants to read more
-    of it.
+    how the receipt is rendered or how long the call dwells, not what runs.
+    The declaration is a pydantic exclude object, so it can reach nested
+    sub-fields (execution.wait_s — the response dwell). Hashing them would
+    make asking for the same experiment at a different verbosity or dwell an
+    idempotency CONFLICT — refusing to hand back a receipt precisely when the
+    caller wants to read more of it.
     """
     if hasattr(request_model, "model_dump"):
-        excluded = getattr(type(request_model), "PRESENTATION_FIELDS", frozenset())
-        payload = request_model.model_dump(mode="json", exclude_unset=False, exclude=set(excluded))
+        excluded = getattr(type(request_model), "PRESENTATION_FIELDS", None)
+        if isinstance(excluded, set | frozenset):
+            excluded = set(excluded)
+        payload = request_model.model_dump(mode="json", exclude_unset=False, exclude=excluded)
     else:
         payload = request_model
     canonical = json.dumps(

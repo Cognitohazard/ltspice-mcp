@@ -77,11 +77,25 @@ Everything operates on ordinary LTspice and SPICE files, so the work passes back
 ## The command line, same engine
 
 `spice-mcp` drives the identical engine from a shell — for agents and scripts
-that live in a terminal rather than behind an MCP client. Six subcommands map
-one-to-one onto the experiment tools (`run-experiments`, `jobs`,
-`analyze-results`, `inspect`, `edit-schematic`, `verify-circuit`); `--json`
-output is exactly the structured payload the MCP tool would return, so a
+that live in a terminal rather than behind an MCP client.
+
+```bash
+spice-mcp run deck.cir --measure all --json    # one deck, one run, measured values
+```
+
+`run` is the one-deck on-ramp: it builds the canonical run-experiments payload
+from the deck path and flags (`--simulator`, `--measure NAME|all`) and enters
+the same dispatch and wait path — a translation layer, not a second engine.
+Six further subcommands map one-to-one onto the experiment tools
+(`run-experiments`, `jobs`, `analyze-results`, `inspect`, `edit-schematic`,
+`verify-circuit`); sweeps, Monte Carlo and multi-circuit comparisons are
+`run-experiments`' job.
+
+`--json` — accepted before or after the subcommand — prints exactly the
+structured payload the MCP tool would return, one line, parse-stable, so a
 pipeline can switch between the two front ends without re-parsing anything.
+Without it, the human rendering prints the tool's text summary followed by the
+same structured payload pretty-printed (readable, not parse-stable).
 
 ```bash
 spice-mcp run-experiments @experiment.json     # submits, then waits
