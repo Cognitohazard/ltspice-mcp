@@ -22,7 +22,10 @@ SKILL_PATH = ROOT / "skills" / "spice-experiments" / "SKILL.md"
 # number rather than something that happens one paragraph at a time.
 # Raised 3200 → 3600 when the doc was allowed to teach the caller-set
 # 'budget' response cap (the benchmark that froze that pitch is over).
-SKILL_BUDGET_CHARS = 3600
+# Raised 3600 → 3700 when the trigger description was rewritten to fire on
+# the circuit domain itself rather than on already-using-the-tools — a
+# listing line that only matches agents already converted cannot convert one.
+SKILL_BUDGET_CHARS = 3700
 
 # Two rules share this denylist. (1) Absent behavior: "rerun" and "case_axis"
 # name things this six-tool surface does not have, and a doc that names them

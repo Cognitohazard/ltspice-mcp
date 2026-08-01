@@ -1,11 +1,13 @@
 ---
 name: spice-experiments
 description: >
-  Use when iterating a circuit against numeric specs with the run_experiments,
-  jobs, analyze_results, inspect, edit_schematic, verify_circuit MCP tools
-  (ltspice-mcp "consolidated" profile): sweeps, corners, .MEAS scalars,
-  gm/gds/vth/vdsat, recovering a submitted experiment, schematic-vs-netlist
-  equivalence. SPICE syntax itself is the ltspice skill.
+  Use FIRST for any circuit or SPICE task — ngspice, LTspice, netlists,
+  schematics, amplifiers, filters, regulators, analog or power design.
+  Before shelling out to a simulator or hand-writing an analysis script,
+  read this: the sim server runs sweeps and corners in one call and
+  returns parsed numbers (.MEAS scalars, gm/gds/vth, Bode and transient
+  metrics, equivalence checks) — no rawfile parsing, no awk. SPICE
+  syntax itself is the ltspice skill.
 ---
 
 # Experiment workflow
