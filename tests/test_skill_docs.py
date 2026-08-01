@@ -9,6 +9,7 @@ test_doc_drift.py, which covers this doc too.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -16,20 +17,23 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_PATH = ROOT / "skills" / "spice-experiments" / "SKILL.md"
 
-# ~800 tokens at 4 chars/token: the doc is size-budgeted on purpose — it is
+# ~900 tokens at 4 chars/token: the doc is size-budgeted on purpose — it is
 # loaded before the work starts, so growth has to be a deliberate edit to this
 # number rather than something that happens one paragraph at a time.
-SKILL_BUDGET_CHARS = 3200
+# Raised 3200 → 3600 when the doc was allowed to teach the caller-set
+# 'budget' response cap (the benchmark that froze that pitch is over).
+SKILL_BUDGET_CHARS = 3600
 
-# Two rules share this denylist. (1) Absent behavior: "rerun", "columnar" and
-# "case_axis" name things this six-tool surface does not have, and a doc that
-# names them teaches calls that do not exist. (2) Positioning: the doc sells
-# coordination and parsed numbers, never response size — "token" and "budget"
-# are how that pitch would be made. Known collisions, deliberate until the
-# features ship: "token" also bars control_token (so the doc's cancel teaching
-# stays scoped to the submitting session) and "budget" also bars the live
-# analysis_budget_s deferral knob (the doc does not teach deferrals).
-FORBIDDEN_TERMS = ("rerun", "budget", "columnar", "case_axis", "token")
+# Two rules share this denylist. (1) Absent behavior: "rerun" and "case_axis"
+# name things this six-tool surface does not have, and a doc that names them
+# teaches calls that do not exist; "columnar" is the ladder rung's internal
+# name — the doc teaches the effect (rows as value arrays), not the jargon.
+# (2) Scoped knobs the doc deliberately does not teach: "control_token" (its
+# cancel teaching stays scoped to the submitting session) and the
+# analysis_budget_s deferral knob. The blanket "budget"/"token" bans that
+# once held those two were lifted when the doc was cleared to teach the
+# caller-set 'budget' response cap in estimated tokens.
+FORBIDDEN_TERMS = ("rerun", "columnar", "case_axis", "control_token", "analysis_budget_s")
 
 
 def _text() -> str:
@@ -44,9 +48,16 @@ class TestSpiceExperimentsSkill:
         )
 
     def test_names_no_forbidden_terms(self):
-        low = _text().lower()
+        # Separator-tolerant: "control token" / "control-token" / "Control_Token"
+        # all name the same knob the ban exists to keep out of the doc.
+        text = _text()
         for term in FORBIDDEN_TERMS:
-            assert term not in low, f"skill doc names forbidden term {term!r}"
+            pattern = re.compile(
+                r"\b" + r"[\s_-]?".join(re.escape(p) for p in term.split("_")) + r"\b",
+                re.IGNORECASE,
+            )
+            hit = pattern.search(text)
+            assert hit is None, f"skill doc names forbidden term {term!r} as {hit.group(0)!r}"
 
     def test_teaches_both_idioms(self):
         # Idiom 1: scalars come from .MEAS authored in the deck, read back
@@ -59,6 +70,14 @@ class TestSpiceExperimentsSkill:
         assert "measurements" in text
         assert "logopinfo" in text
         assert "operating_point" in text
+
+    def test_teaches_response_budget(self):
+        # The caller-set response cap: pin the parameter name, its unit
+        # convention, and the floor, so the section can't be gutted silently.
+        text = _text()
+        assert "`budget`" in text
+        assert "estimated tokens" in text
+        assert "500" in text
 
 
 @pytest.mark.parametrize(
