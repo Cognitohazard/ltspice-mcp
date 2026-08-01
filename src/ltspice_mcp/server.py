@@ -468,9 +468,9 @@ Build or edit .asc ONLY with the schematic tools (create_schematic, apply_schema
 # Claude Code silently truncates server instructions at 2048 chars, and the
 # tail (the result-trust paragraph) is the part that must survive.
 CONSOLIDATED_INSTRUCTIONS = """\
-For ANY circuit or SPICE task — amplifiers, filters, regulators, schematics: run ngspice/LTspice sweeps, corners and Monte-Carlo in one call and get parsed numbers back (.MEAS, gm/gds/vth, Bode/transient metrics, spec verdicts) instead of shelling out and hand-parsing output. Author .cir/.net/.sp decks with your own file tools; these six tools run, analyze, gate, and edit .asc geometry-aware.
+For ANY circuit or SPICE task — amplifiers, filters, regulators, schematics: run ngspice/LTspice sweeps, corners and Monte-Carlo in one call and get parsed numbers back (.MEAS, gm/gds/vth, Bode/transient metrics, spec verdicts) instead of shelling out and hand-parsing output. Author .cir/.net/.sp decks with your own file tools; this consolidated profile's six tools run, analyze, gate, and edit .asc geometry-aware.
 
-Simulate, don't deliberate: runs are cheap — spot-check ideas and sizings with quick experiments instead of reasoning them out.
+Simulate, don't deliberate: runs are cheap — spot-check ideas and sizings instead of reasoning them out.
 
 EXECUTE — run_experiments: staged decks across declared variations (strict assignments plus one random/MC); required request_id = durable, idempotent submission; quick jobs return inline, longer a receipt/job_id. jobs: status, wait (long-poll), cancel (owner/control_token), list, run pages; by job_id or request_id.
 

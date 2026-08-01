@@ -173,7 +173,10 @@ def test_top_level_properties_describe_what_every_action_shares():
             assert branch["properties"][name] == schema
 
 
-async def _wait_for(condition, *, timeout_s: float = 1.0) -> None:
+async def _wait_for(condition, *, timeout_s: float = 15.0) -> None:
+    # The bound exists to catch a hang, not to assert latency: the cancel
+    # paths under test run a real process-table scan, whose duration scales
+    # with system load (parallel test workers, live simulators on the box).
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_s
     while not condition():
@@ -564,7 +567,7 @@ class TestCancellationAuthority:
                     ),
                     foreign_state,
                 ),
-                2,
+                30,
             )
         )
 
