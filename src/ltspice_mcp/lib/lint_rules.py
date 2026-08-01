@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from ltspice_mcp.lib.deck_staging import (
+    DEFAULT_INCLUDE_DEPTH,
     is_absolute_reference,
+    resolve_reference,
     scan_include_references,
 )
 from ltspice_mcp.lib.encoding import read_spice_text
@@ -48,6 +50,11 @@ class _LintContext:
     cards: list[SpiceCard]
     dialect: str | None
     simulator_name: str
+    # The staged include closure, as (staged path, staged text) snapshots. On
+    # a deck staged for a Windows simulator the rewritten references cannot be
+    # re-read from the Linux side, so the snapshots are the authoritative
+    # source for declarations the deck reaches through an include.
+    includes: tuple[tuple[Path, str], ...] = ()
 
     @property
     def ngspice(self) -> bool:
@@ -216,24 +223,45 @@ def _declared_models(cards: list[SpiceCard]) -> set[str]:
 
 
 def _models_from_staged_dependencies(context: _LintContext) -> set[str]:
-    """Collect declarations from the staged include closure, to depth three."""
+    """Collect declarations the deck reaches through its include references.
+
+    The staged snapshots in ``context.includes`` are authoritative for the
+    staged closure: each is lexed once, in memory, and its staged path is
+    seeded into ``visited`` so a staged copy is never read back from disk.
+    The disk walk remains for the one reference class the staged closure
+    cannot carry — a live (unstaged) include, in the root deck or nested
+    inside a staged file — and for direct calls that pass no snapshots. It is
+    bounded by the depth staging itself stages to
+    (``DEFAULT_INCLUDE_DEPTH``): a chain shallow enough for staging to accept
+    must not lint as missing. Disk resolution goes through deck staging's
+    ``resolve_reference`` so the linter cannot read a different file than the
+    one staging staged.
+    """
     declared: set[str] = set()
-    visited: set[Path] = set()
+    snapshot: dict[Path, list[SpiceCard]] = {}
+    for path, text in context.includes:
+        cards = lex(text).cards
+        declared.update(_declared_models(cards))
+        snapshot[path.resolve(strict=False)] = cards
+    visited: set[Path] = set(snapshot)
 
     def walk(cards: list[SpiceCard], source: Path, depth: int) -> None:
-        if depth >= 3:
+        if depth >= DEFAULT_INCLUDE_DEPTH:
             return
-        for reference in scan_include_references(cards, source):
-            raw = reference.raw_path.replace("\\", "/")
-            dependency = Path(raw)
-            dependency = dependency if dependency.is_absolute() else source.parent / dependency
+        # ``depth`` here is the recursion budget; the scanner's parameter is
+        # the library-context bit (0 = the deck itself, nonzero = a file
+        # reached by following a reference). Keep the two separate.
+        for reference in scan_include_references(cards, source, depth=min(depth, 1)):
+            dependency = resolve_reference(source.parent, reference.raw_path)
             try:
-                resolved = dependency.resolve(strict=True)
+                resolved = dependency.resolve(strict=False)
             except OSError:
                 continue
-            if resolved in visited or not resolved.is_file():
+            if resolved in visited:
                 continue
             visited.add(resolved)
+            if not resolved.is_file():
+                continue
             try:
                 nested = lex(read_spice_text(resolved)).cards
             except (OSError, UnicodeError, ValueError):
@@ -242,6 +270,11 @@ def _models_from_staged_dependencies(context: _LintContext) -> set[str]:
             walk(nested, resolved, depth + 1)
 
     walk(context.cards, context.path, 0)
+    for staged_path, cards in snapshot.items():
+        # Scanned from the snapshot, never from disk; the only thing this can
+        # find that the snapshot itself does not carry is a live reference
+        # nested inside a staged file.
+        walk(cards, staged_path, 1)
     return declared
 
 
@@ -369,8 +402,14 @@ def lint_deck(
     simulator: type | str | None,
     *,
     suppress: list[str] | set[str] | tuple[str, ...] = (),
+    includes: Sequence[tuple[Path, str]] = (),
 ) -> list[LintFinding]:
-    """Run all unsuppressed rules and return fixable findings only."""
+    """Run all unsuppressed rules and return fixable findings only.
+
+    ``includes`` carries the staged include closure as (staged path, staged
+    text) snapshots so rules resolve declarations through the snapshot
+    instead of re-reading the deck's rewritten references from disk.
+    """
     suppressed = set(suppress)
     simulator_name = (
         simulator
@@ -385,6 +424,7 @@ def lint_deck(
         cards=lex(deck_text).cards,
         dialect=dialect,
         simulator_name=simulator_name,
+        includes=tuple(includes),
     )
     findings: list[LintFinding] = []
     for rule in RULES:

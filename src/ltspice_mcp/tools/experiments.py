@@ -237,8 +237,18 @@ class AttachedAnalysis(StrictModel):
 class RunExperimentsInput(ToolInput):
     # Fields that choose how the receipt is rendered rather than what runs.
     # canonical_fingerprint excludes them, so re-asking for the same experiment
-    # at a different verbosity replays instead of conflicting.
-    PRESENTATION_FIELDS: ClassVar[frozenset[str]] = frozenset({"provenance", "run_fields"})
+    # at a different verbosity replays instead of conflicting. execution.wait_s
+    # is excluded the same way: it bounds only this response's dwell (the job
+    # is durable either way), so a different dwell is the same experiment —
+    # which is what lets the CLI on-ramp submit with wait_s=0 and still hand
+    # back a receipt an explicit run-experiments call can replay. Changing
+    # this exclude set changes the canonical bytes: bump
+    # experiment_store.CANONICALIZER_VERSION with it.
+    PRESENTATION_FIELDS: ClassVar[dict[str, Any]] = {
+        "provenance": True,
+        "run_fields": True,
+        "execution": {"wait_s"},
+    }
 
     request_id: str = Field(
         default_factory=lambda: generate_id("req"),
@@ -829,6 +839,11 @@ async def _prepare_circuit(
                 dialect,
                 simulator,
                 suppress=args.suppress,
+                # The staged closure's own snapshots: on a Windows-native
+                # staging route the deck's rewritten references cannot be
+                # re-read from the Linux side, and a model defined in an
+                # include must not lint as missing.
+                includes=[(included.staged_path, included.text) for included in staged.includes],
             )
         )
         source = SourceRecord(
