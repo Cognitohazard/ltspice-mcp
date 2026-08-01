@@ -1,6 +1,58 @@
 """Error hierarchy for ltspice-mcp server."""
 
+from collections.abc import Mapping, Sequence
 from typing import Any
+
+from pydantic import ValidationError
+
+_MAX_VALIDATION_ERRORS = 6
+
+
+def compact_validation_error(
+    exc: ValidationError | ValueError,
+    *,
+    field_owners: Mapping[str, Sequence[str]] | None = None,
+) -> str:
+    """Render validation failures without input echoes or documentation URLs."""
+    if not isinstance(exc, ValidationError):
+        return str(exc)
+
+    entries: list[tuple[tuple[object, ...], str, str]] = []
+    seen: set[tuple[tuple[object, ...], str, str]] = set()
+    referral_fields: list[str] = []
+    for error in exc.errors(include_url=False, include_input=False):
+        loc = tuple(error["loc"])
+        error_type = error["type"]
+        message = error["msg"]
+        key = (loc, error_type, message)
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append(key)
+        if (
+            field_owners is not None
+            and error_type == "extra_forbidden"
+            and len(loc) == 1
+            and isinstance(loc[0], str)
+            and loc[0] in field_owners
+            and loc[0] not in referral_fields
+        ):
+            referral_fields.append(loc[0])
+
+    rendered = [
+        f"{'.'.join(str(part) for part in loc) or '<root>'}: {message}"
+        for loc, _, message in entries[:_MAX_VALIDATION_ERRORS]
+    ]
+    remaining = len(entries) - _MAX_VALIDATION_ERRORS
+    if remaining > 0:
+        rendered.append(f"… and {remaining} more")
+    text = "; ".join(rendered) or "Validation failed"
+
+    for field in referral_fields:
+        owners = tuple(dict.fromkeys(field_owners[field]))
+        if owners:
+            text += f" Field {field!r} is accepted by {', '.join(owners)}."
+    return text
 
 
 class LTSpiceMCPError(Exception):
