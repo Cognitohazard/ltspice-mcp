@@ -42,7 +42,11 @@ _MIGRATIONS: dict[int, Any] = {}
 
 POINTER_SCHEMA = "ltspice-mcp/experiment-pointer"
 POINTER_SCHEMA_VERSION = 1
-CANONICALIZER_VERSION = 1
+# Version 2: execution.wait_s left the canonical fingerprint (the dwell bounds
+# only the response, so a different dwell is the same experiment). A reused
+# request_id whose record was hashed under an older version raises the loud
+# idempotency conflict instead of silently mis-comparing fingerprints.
+CANONICALIZER_VERSION = 2
 
 SIDECAR_DIRNAME = ".ltspice-mcp"
 JOBS_SUBDIR = "jobs"

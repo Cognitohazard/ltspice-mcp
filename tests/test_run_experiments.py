@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
-import shutil
 from pathlib import Path
 from typing import Any, Literal
 from unittest.mock import AsyncMock
@@ -13,7 +13,7 @@ import jsonschema
 import pytest
 from pydantic import ValidationError
 
-from ltspice_mcp.lib import experiment_store
+from ltspice_mcp.lib import experiment_store, wsl
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.runner_base import RunOutcome
@@ -29,7 +29,12 @@ from ltspice_mcp.tools.experiments import (
     handle_jobs,
     handle_run_experiments,
 )
-from tests.conftest import FIXTURES_DIR, fake_simulator, make_sim_job, resolve_local_ref
+from tests.conftest import (
+    fake_simulator,
+    make_sim_job,
+    recorded_fixture_simulator,
+    resolve_local_ref,
+)
 
 
 def test_attached_per_run_limit_shares_the_analyze_page_cap():
@@ -150,25 +155,6 @@ async def _wait_for(condition, timeout_s: float = 1.0) -> None:
         if loop.time() >= deadline:
             pytest.fail("condition was not met before the test deadline")
         await asyncio.sleep(0.005)
-
-
-def _fixture_simulator(
-    monkeypatch: pytest.MonkeyPatch,
-    fixture_name: str = "ltspice_tran_rc",
-) -> None:
-    """Instant simulator that hands back a recorded raw the analyzers can read."""
-
-    def submit(self, _netlist: Path, run_filename: str, callback):
-        stem = Path(run_filename).stem
-        raw = self.output_folder / f"{stem}.raw"
-        log = self.output_folder / f"{stem}.log"
-        shutil.copy(FIXTURES_DIR / f"{fixture_name}.raw", raw)
-        shutil.copy(FIXTURES_DIR / f"{fixture_name}.log", log)
-        outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
-        self.loop.call_soon_threadsafe(callback, outcome)
-        return object()
-
-    monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
 
 
 # One assign variation plus one real recipe grouped by the assigned target, so
@@ -460,7 +446,7 @@ class TestLeanReceipt:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        _fixture_simulator(monkeypatch)
+        recorded_fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "lean_echo.cir")
 
         lean = _assert_schema(
@@ -895,6 +881,49 @@ class TestLintModes:
             finding["rule_id"] == "suffix-mega-milli" for finding in data["lint"][0]["findings"]
         )
 
+    async def test_block_resolves_models_through_staged_includes(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Windows-native staging spells the root deck's include references in
+        Windows form, which nothing on the Linux side can re-read from disk.
+        The staged include closure itself must satisfy the model lookup: the
+        include here defines the only subckt the deck instantiates, and a
+        model-missing false positive would refuse a perfectly runnable deck.
+        """
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        (work_dir / "amp.inc").write_text(".subckt AMP a b\nRA a b 1k\n.ends AMP\n")
+        deck = _deck(
+            work_dir / "with_include.cir",
+            '.include "amp.inc"\nX1 in 0 AMP\nV1 in 0 1\n.op\n.end\n',
+        )
+        route = experiments_mod.resolve_experiment_paths
+
+        def windows_native(working_dir, job_id, circuit_id, simulator):
+            return dataclasses.replace(
+                route(working_dir, job_id, circuit_id, simulator),
+                windows_native=True,
+            )
+
+        monkeypatch.setattr(experiments_mod, "resolve_experiment_paths", windows_native)
+        monkeypatch.setattr(
+            wsl, "to_windows_path", lambda path: "Z:" + str(path).replace("/", "\\")
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "staged-include-models"),
+                state_with_sim,
+            )
+        )
+
+        assert len(submissions) == 1
+        assert data["outcome"] == "complete"
+        assert data["failures"] == []
+
     async def test_off_skips_linter(
         self,
         state_with_sim: SessionState,
@@ -1070,7 +1099,7 @@ class TestAttachedAnalysis:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        _fixture_simulator(monkeypatch)
+        recorded_fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "attached.cir")
 
         data = _assert_schema(
@@ -1109,7 +1138,7 @@ class TestAttachedAnalysis:
         and dropped — a silent drop leaves the response looking exactly like a
         caller who never asked.
         """
-        _fixture_simulator(monkeypatch)
+        recorded_fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "attached-include.cir")
         analysis = {
             **_VARIED_ANALYSIS["analyze"],
@@ -1141,7 +1170,7 @@ class TestAttachedAnalysis:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        _fixture_simulator(monkeypatch)
+        recorded_fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "attached-complete.cir")
 
         data = _assert_schema(
@@ -1161,7 +1190,7 @@ class TestAttachedAnalysis:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        _fixture_simulator(monkeypatch)
+        recorded_fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "attached-bad.cir")
         # A malformed block is refused before submission now, so a STAGE-time
         # failure needs the engine itself to fail — patched through
@@ -1199,7 +1228,7 @@ class TestAttachedAnalysis:
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        _fixture_simulator(monkeypatch)
+        recorded_fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "attached-wait.cir")
         released = asyncio.Event()
         engine = analyze_mod.handle_analyze_results
@@ -1652,25 +1681,23 @@ class TestReceiptWeight:
     def test_the_fingerprint_covers_exactly_the_execution_arguments(self):
         """A new presentation field must not silently invalidate stored receipts.
 
-        CANONICALIZER_VERSION gates replay and did not change here, so if a
-        newly added field entered the fingerprint, every previously stored
-        receipt would hash differently and come back as "different request
-        payload" — an idempotency conflict reported as the caller's fault.
-        Pinning the covered key set makes the next such field fail here instead.
+        Any change to what the fingerprint covers must arrive together with a
+        CANONICALIZER_VERSION bump (the version gates replay, so old records
+        conflict loudly instead of mis-hashing silently). Pinning the covered
+        key set makes the next covered-set change fail here instead of in the
+        field.
         """
         from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
 
         model = RunExperimentsInput.model_validate(
             {"request_id": "r", "circuits": [{"path": "/tmp/a.cir", "id": "d"}]}
         )
-        covered = set(
-            model.model_dump(
-                mode="json",
-                exclude_unset=False,
-                exclude=set(RunExperimentsInput.PRESENTATION_FIELDS),
-            )
+        covered = model.model_dump(
+            mode="json",
+            exclude_unset=False,
+            exclude=RunExperimentsInput.PRESENTATION_FIELDS,
         )
-        assert covered == {
+        assert set(covered) == {
             "request_id",
             "circuits",
             "variations",
@@ -1689,6 +1716,23 @@ class TestReceiptWeight:
             }
         )
         assert canonical_fingerprint(model) == canonical_fingerprint(loud)
+
+    def test_the_fingerprint_ignores_the_dwell_but_not_the_rest_of_execution(self):
+        """execution.wait_s bounds only the response (the job is durable either
+        way), so the same experiment asked at a different dwell must REPLAY —
+        the CLI on-ramp submits with wait_s=0 and its receipt must stay
+        replayable by an explicit run-experiments call at the default dwell.
+        The rest of execution changes what runs and must keep conflicting."""
+        from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
+
+        base = {"request_id": "r", "circuits": [{"path": "/tmp/a.cir", "id": "d"}]}
+        quick = RunExperimentsInput.model_validate({**base, "execution": {"wait_s": 0}})
+        patient = RunExperimentsInput.model_validate({**base, "execution": {"wait_s": 60}})
+        other_engine = RunExperimentsInput.model_validate(
+            {**base, "execution": {"wait_s": 0, "simulator": "ngspice"}}
+        )
+        assert canonical_fingerprint(quick) == canonical_fingerprint(patient)
+        assert canonical_fingerprint(quick) != canonical_fingerprint(other_engine)
 
     def test_a_legacy_job_source_omits_provenance_it_never_had(self):
         """Empty-string digests and an empty manifest say nothing, at a cost.
