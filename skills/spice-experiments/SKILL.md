@@ -52,6 +52,16 @@ Author both lines — nothing is auto-injected here.
 They land in `device_op_points`, keyed literally `@m1[gm]` — no dotted
 shorthand resolves; narrow with `device`.
 
+## Cap a reply with `budget`
+
+`analyze_results`, `inspect` and `jobs` take `budget`: a response cap in
+estimated tokens (compact JSON chars/4, minimum 500); omitted, nothing
+changes. Set one when a call fans wide (`per_run`, many recipes, long lists).
+Over the cap the server degrades presentation down a fixed ladder — echoes,
+detail opt-ins, rows as value arrays, smaller pages with valid cursors —
+never facts: `failures`, `observations`, `warnings`, `completeness` arrive
+whole, and a `budget_truncated` observation names the cut and the route back.
+
 ## The rest
 
 - `analyze_results` defaults return the answer (`results`, `coverage`,
