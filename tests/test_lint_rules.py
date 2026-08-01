@@ -140,6 +140,101 @@ def test_model_missing_reads_staged_include_closure(tmp_path: Path):
     assert "model-missing" not in _ids(deck, tmp_path)
 
 
+def test_model_missing_resolves_through_staged_include_snapshots(tmp_path: Path):
+    """A deck staged for a Windows simulator names its includes in Windows
+    form, which nothing on the Linux side can re-read from disk; the staged
+    include closure arrives as snapshots and must satisfy the model lookup,
+    or a valid deck is refused as model-missing. The snapshot path is never
+    written, so a lookup that read disk could not pass."""
+    deck = '.include "C:\\Users\\u\\Temp\\staged\\amp.inc"\nX1 in out AMP\nV1 in 0 1\n.op\n.end\n'
+
+    findings = lint_deck(
+        deck,
+        tmp_path / "deck.cir",
+        None,
+        "LTspice",
+        includes=[(tmp_path / "staged" / "amp.inc", ".subckt AMP a b\nR1 a b 1k\n.ends AMP\n")],
+    )
+
+    assert "model-missing" not in {finding["rule_id"] for finding in findings}
+
+
+def test_snapshot_serves_models_without_reading_staged_files(tmp_path: Path):
+    """The snapshot is authoritative for staged content: the deck names its
+    staged include by the exact path the snapshot declares, that path was
+    never written to disk, and the model still resolves — so the staged
+    lookup performed no disk read."""
+    staged_include = tmp_path / "staged" / "models.inc"
+    deck = f'.include "{staged_include}"\nD1 in 0 DFAST\nV1 in 0 1\n.op\n.end\n'
+
+    findings = lint_deck(
+        deck,
+        tmp_path / "staged" / "deck.cir",
+        None,
+        "LTspice",
+        includes=[(staged_include, ".model DFAST D(Is=1e-12)\n")],
+    )
+
+    assert "model-missing" not in {finding["rule_id"] for finding in findings}
+
+
+def test_live_reference_nested_in_staged_include_is_still_read(tmp_path: Path):
+    """The staged closure cannot carry a live (unstaged) include; the walk
+    still follows one out of a staged file's snapshot to find its models."""
+    live = tmp_path / "live.inc"
+    live.write_text(".model DLIVE D(Is=1e-14)\n")
+    staged_include = tmp_path / "staged" / "wrap.inc"
+    deck = f'.include "{staged_include}"\nD1 in 0 DLIVE\nV1 in 0 1\n.op\n.end\n'
+
+    findings = lint_deck(
+        deck,
+        tmp_path / "staged" / "deck.cir",
+        None,
+        "LTspice",
+        includes=[(staged_include, f'.include "{live}"\n')],
+    )
+
+    assert "model-missing" not in {finding["rule_id"] for finding in findings}
+
+
+def test_five_level_live_include_chain_resolves_models(tmp_path: Path):
+    """Real PDK model trees sit about five includes down — the reason
+    staging's depth budget is eight — so the live-include walk must reach as
+    far as staging would stage, or an allowed chain lints as model-missing."""
+    deep = tmp_path / "l5.inc"
+    deep.write_text(".model DDEEP D(Is=1e-15)\n")
+    previous = deep
+    for level in (4, 3, 2, 1):
+        link = tmp_path / f"l{level}.inc"
+        link.write_text(f'.include "{previous}"\n')
+        previous = link
+    deck = f'.include "{previous}"\nD1 in 0 DDEEP\nV1 in 0 1\n.op\n.end\n'
+
+    assert "model-missing" not in _ids(deck, tmp_path)
+
+
+def test_cyclic_live_includes_terminate(tmp_path: Path):
+    """Two live includes referencing each other must not hang the walk, and
+    declarations found before the cycle closes still count."""
+    first = tmp_path / "a.inc"
+    second = tmp_path / "b.inc"
+    first.write_text(f'.include "{second}"\n')
+    second.write_text(f'.include "{first}"\n.model DCYC D(Is=1e-12)\n')
+    deck = f'.include "{first}"\nD1 in 0 DCYC\nV1 in 0 1\n.op\n.end\n'
+
+    assert "model-missing" not in _ids(deck, tmp_path)
+
+
+def test_sectioned_lib_reference_resolves_through_the_walk(tmp_path: Path):
+    """A ``.lib file section`` reference walks into the library file, and the
+    section declarations inside it read as sections, not as missing files."""
+    library = tmp_path / "corners.lib"
+    library.write_text(".lib TT\n.model DTT D(Is=1e-12)\n.endl TT\n")
+    deck = f'.lib "{library}" TT\nD1 in 0 DTT\nV1 in 0 1\n.op\n.end\n'
+
+    assert "model-missing" not in _ids(deck, tmp_path)
+
+
 def test_suppression_removes_named_rule(tmp_path: Path):
     deck = "V1 in 0 1\nR1 in 0 1M\n.op\n.end\n"
 

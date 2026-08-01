@@ -243,7 +243,7 @@ def stage_deck(
             parsed = lex(text)
             changed = False
             for reference in scan_include_references(parsed.cards, resolved, depth=depth):
-                target = _resolve_reference(resolved.parent, reference.raw_path)
+                target = resolve_reference(resolved.parent, reference.raw_path)
                 target_resolved = _resolve_existing(target)
                 target_root = (
                     _containing_root(target_resolved, roots)
@@ -410,7 +410,7 @@ def stage_deck(
 def staged_reference_targets(text: str, source: Path, *, depth: int) -> list[Path]:
     """Return the resolved paths one staged file's include references name."""
     return [
-        _resolve_reference(source.parent, reference.raw_path).resolve()
+        resolve_reference(source.parent, reference.raw_path).resolve()
         for reference in scan_include_references(lex(text).cards, source, depth=depth)
     ]
 
@@ -434,7 +434,7 @@ def rewrite_staged_references(
     cards = lex(text).cards
     changed = False
     for reference in scan_include_references(cards, source, depth=depth):
-        target = _resolve_reference(source.parent, reference.raw_path).resolve()
+        target = resolve_reference(source.parent, reference.raw_path).resolve()
         name = renames.get(target)
         if name is None:
             continue
@@ -607,7 +607,14 @@ def _portable_relative(raw_path: str) -> Path:
     return Path(raw_path.replace("\\", "/"))
 
 
-def _resolve_reference(parent: Path, raw_path: str) -> Path:
+def resolve_reference(parent: Path, raw_path: str) -> Path:
+    """Resolve a SPICE file reference — POSIX, Windows drive (via ``/mnt``),
+    or UNC — against ``parent``.
+
+    Public because it is the *only* answer to this question: a second resolver
+    written elsewhere can disagree, and then another layer (the linter) reads
+    a different file than the one staging staged.
+    """
     if _WINDOWS_DRIVE_RE.match(raw_path):
         windows = PureWindowsPath(raw_path)
         drive = windows.drive.rstrip(":").lower()
