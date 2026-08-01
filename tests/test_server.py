@@ -103,25 +103,28 @@ class TestBuildInstructions:
         assert "Active simulators: LTspice (default), ngspice." in text
         assert "LTspice not detected" not in text
 
-    def test_consolidated_instructions_fit_client_budget(self):
+    def test_every_instruction_edition_fits_client_budget(self):
         """Claude Code truncates server instructions at 2048 chars; the tail
-        (the result-trust paragraph) must survive under every prefix shape."""
-        from ltspice_mcp.server import _INSTRUCTIONS_BUDGET
+        (the result-trust guidance) must survive under every prefix shape,
+        for EVERY profile edition — an edition left out of this loop ships
+        silently truncated."""
+        from ltspice_mcp.server import _INSTRUCTIONS_BUDGET, _PROFILE_GUIDANCE
 
-        worst_cases = [
-            build_instructions({}, None, profile="consolidated"),
-            build_instructions({"ngspice": _NG}, _NG, profile="consolidated"),
-            build_instructions(
-                {"ltspice": _LT, "ngspice": _NG, "qspice": _LT, "xyce": _NG},
-                _LT,
-                profile="consolidated",
-            ),
-        ]
-        for text in worst_cases:
-            assert len(text) <= _INSTRUCTIONS_BUDGET, (
-                f"consolidated instructions {len(text)} chars > "
-                f"{_INSTRUCTIONS_BUDGET} client truncation budget"
-            )
+        for profile in _PROFILE_GUIDANCE:
+            worst_cases = [
+                build_instructions({}, None, profile=profile),
+                build_instructions({"ngspice": _NG}, _NG, profile=profile),
+                build_instructions(
+                    {"ltspice": _LT, "ngspice": _NG, "qspice": _LT, "xyce": _NG},
+                    _LT,
+                    profile=profile,
+                ),
+            ]
+            for text in worst_cases:
+                assert len(text) <= _INSTRUCTIONS_BUDGET, (
+                    f"{profile} instructions {len(text)} chars > "
+                    f"{_INSTRUCTIONS_BUDGET} client truncation budget"
+                )
 
 
 class TestProfileGuidanceIsTotal:
