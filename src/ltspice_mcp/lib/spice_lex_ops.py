@@ -83,21 +83,34 @@ def inject_card_before_end(
         )
     new_card = real_cards[0]
     new_card.scope = scope
-    # Guard the new card's OWN trailing newline: when it lands before a .END,
-    # emit would otherwise glue ".END" onto the injected card's last line (the
-    # predecessor guard below only fixes the line before the insertion point).
-    if new_card.raw_lines and not new_card.raw_lines[-1].endswith("\n"):
-        new_card.raw_lines = [*new_card.raw_lines[:-1], new_card.raw_lines[-1] + "\n"]
-    # Find the top-level .END (scope=()) and insert before it.
-    for i, c in enumerate(cards):
-        if c.kind == "end" and c.scope == ():
-            _ensure_predecessor_ends_with_newline(cards, i)
-            cards.insert(i, new_card)
-            return new_card
-    # No .END — append.
-    _ensure_predecessor_ends_with_newline(cards, len(cards))
-    cards.append(new_card)
+    inject_cards_before_end(cards, [new_card])
     return new_card
+
+
+def inject_cards_before_end(cards: list[SpiceCard], block: list[SpiceCard]) -> None:
+    """Splice a block of already-parsed cards in before the top-level ``.END``.
+
+    The multi-card form of ``inject_card_before_end``, for a caller that has
+    built its cards itself — a whole ``.SUBCKT`` body, say — and would only be
+    re-lexing them to hand over text. Same newline handling: both the block's
+    last line and the line it lands after are given a trailing newline if they
+    lack one, or ``emit`` glues two cards onto one line.
+
+    ``block`` is spliced in as given, so the caller's card objects (and any
+    scope they carry) are what ends up in ``cards``.
+    """
+    if not block:
+        return
+    # Guard the block's OWN trailing newline: when it lands before a .END,
+    # emit would otherwise glue ".END" onto its last line (the predecessor
+    # guard below only fixes the line before the insertion point).
+    last = block[-1]
+    if last.raw_lines and not last.raw_lines[-1].endswith("\n"):
+        last.raw_lines = [*last.raw_lines[:-1], last.raw_lines[-1] + "\n"]
+    # Find the top-level .END (scope=()) and insert before it; no .END, append.
+    at = next((i for i, c in enumerate(cards) if c.kind == "end" and c.scope == ()), len(cards))
+    _ensure_predecessor_ends_with_newline(cards, at)
+    cards[at:at] = block
 
 
 def _ensure_predecessor_ends_with_newline(cards: list[SpiceCard], insert_idx: int) -> None:
