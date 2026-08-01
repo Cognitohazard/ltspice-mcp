@@ -187,14 +187,14 @@ class TestManifestWalk:
             '.include "C:\\vendor\\windows.lib"\n'
             ".op\n.end\n",
         )
-        original = deck_staging._resolve_reference
+        original = deck_staging.resolve_reference
 
         def resolve(parent: Path, raw: str) -> Path:
             if raw.startswith("C:\\"):
                 return windows
             return original(parent, raw)
 
-        monkeypatch.setattr(deck_staging, "_resolve_reference", resolve)
+        monkeypatch.setattr(deck_staging, "resolve_reference", resolve)
 
         staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
 
