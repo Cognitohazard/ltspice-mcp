@@ -48,7 +48,7 @@ from typing import Annotated, Any, Literal, TypeAlias, get_args
 from mcp import types
 from pydantic import Field, SkipValidation, TypeAdapter, ValidationError, model_validator
 
-from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
+from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, compact_validation_error
 from ltspice_mcp.lib import response_budget, services
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.cursor_codec import canonical_hash
@@ -1390,7 +1390,7 @@ def _kind_of(raw: Any) -> str | None:
 
 
 def _compact_error(exc: ValidationError) -> str:
-    return "; ".join(err["msg"] for err in exc.errors(include_url=False)) or str(exc)
+    return compact_validation_error(exc)
 
 
 def _summary_text(results: list[dict[str, Any]]) -> str:

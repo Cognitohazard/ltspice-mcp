@@ -18,7 +18,7 @@ from pydantic import AnyUrl, ValidationError
 from ltspice_mcp import __version__, prompts
 from ltspice_mcp import errors as _err
 from ltspice_mcp.config import ServerConfig, generate_default_config
-from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
+from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, compact_validation_error
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
 from ltspice_mcp.lib.mcp_logging import mcp_log, set_log_fn
 from ltspice_mcp.lib.pathutil import resolve_safe_path
@@ -647,7 +647,13 @@ async def call_tool(name: str, arguments: dict | None):
     try:
         return await registered.handler(arguments or {}, state)
     except ValidationError as e:
-        raise ValueError(f"Invalid arguments for {name}: {e}") from None
+        from ltspice_mcp.tools._base import registry
+
+        detail = compact_validation_error(
+            e,
+            field_owners=registry.field_owners_for_profile(state.config.tool_profile),
+        )
+        raise ValueError(f"Invalid arguments for {name}: {detail}") from None
     except PathSecurityError as e:
         await mcp_log("warning", f"Path security violation in {name}: {e}")
         raise PathSecurityError(f"{e}\n\n{_path_reject_guidance(state)}") from None
