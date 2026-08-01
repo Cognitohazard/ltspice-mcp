@@ -446,20 +446,19 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 # handshake (forwarded by ``create_initialization_options`` ->
 # ``InitializationOptions.instructions``). Cross-cutting workflow guidance only —
 # per-tool detail stays in the individual tool descriptions, which remain the
-# contract (client injection of this string is not guaranteed). Kept terse
-# (~200 words) since every token is re-read on each LLM turn. The
+# contract (client injection of this string is not guaranteed). Claude Code
+# truncates instructions at 2048 chars, so this edition is budget-pinned
+# like the consolidated one, trigger and result-trust first. The
 # "completed can be degenerate" line warns the consuming LLM not to
 # equate a completed run with a correct result.
 SERVER_INSTRUCTIONS = """\
-LTspice-MCP runs author-written SPICE decks and returns parsed, structured results — node voltages, branch currents, and per-device small-signal params (gm/gds/vth/…) on either LTspice or ngspice — as numbers, with SI units where the simulator declares the trace type. It also edits LTspice .asc schematics. Prefer it over shelling out to a simulator yourself: run_simulation sets the right batch flags, handles the ngspice headerless-raw dialect, routes the raw/log artifacts, and surfaces convergence/timeout errors — so you never hand-parse a rawfile or a wrdata dump.
+LTspice-MCP: for ANY circuit or SPICE task — simulation, sweeps, Monte-Carlo, .asc schematic editing. Runs author-written SPICE decks on LTspice or ngspice and returns parsed numbers (node voltages, branch currents, per-device gm/gds/vth/…). Prefer it over shelling out: run_simulation sets the right batch flags, handles ngspice's raw dialect, and surfaces convergence/timeout errors — never hand-parse a rawfile or wrdata dump.
 
-Prefer the netlist path by default — fewer steps, more reliable: author a .cir/.net netlist, validate_netlist, then run_simulation and the analysis tools. Build or edit .asc schematics only when the task is about schematic graphics/layout, or the user asks.
+A run can report "completed" yet be degenerate (coerced value, skipped .meas): read the returned warnings/errors and `observations` — facts to weigh, not a verdict; empty means nothing tripped a check, NOT verified-correct. simulation_summary is one-call triage. validate_netlist pre-flights topology faults (floating nodes, capacitive islands); it won't catch value typos or undefined models.
 
-Match the analysis tool to the run type or it errors: bode_metrics/resonance/stability_metrics need a .AC run; signal_stats/edge_metrics/timing_between/periodic_metrics/transient_response/thd need .tran; operating_point needs .op and returns per-device small-signal params (gm/gds/vth/…) by name, not just nodes and branches — on LTspice (run_simulation auto-adds .options logopinfo) as well as ngspice; noise_integral needs .noise. For any scalar a .meas can express, prefer authoring a .meas directive in the deck: the simulator computes it (robust) and it lives in the deck (reproducible/portable), surfaced via measurement_stats (failures in failed_measurements). The exception is ngspice, which skips .meas under the server's batch mode (see spice://guide for the .control workaround) — on ngspice, read the trace with the analysis tools or use a .control meas block. Reach for the post-hoc analysis tools for derived metrics .meas can't express (FFT/THD, structural Bode, arbitrary windowed stats) or to avoid re-running — they parse the .raw in-process, which is a fragility surface .meas avoids. Read sweep/Monte-Carlo runs via batch_results or job_id+run_index, aggregates via measurement_stats. To visualize a waveform use plot_waveform (get_waveform for the raw numbers) — do not generate plots externally. Device operating-point params are addressed by name (`m1.gm` shorthand or literal `@m1[gm]`, subcircuit paths too); for the gm/ID-table idiom (`.dc` + `.save @m1[gm] @m1[gds]` → export_waveform) see spice://guide.
+Prefer the netlist path: author .cir/.net, validate_netlist, run_simulation, then the analysis tools. Match tool to run type: bode_metrics/resonance/stability_metrics need .AC; signal_stats/edge_metrics/timing_between/periodic_metrics/transient_response/thd need .tran; operating_point needs .op; noise_integral needs .noise. For any scalar, author .meas in the deck (robust, portable), read via measurement_stats — EXCEPT ngspice, which skips .meas in batch mode: use the analysis tools or a .control block (spice://guide). Sweep/MC results: batch_results or job_id+run_index. Waveforms: plot_waveform / get_waveform / export_waveform, not external plotting.
 
-A run can report "completed" yet be degenerate (coerced value, skipped .meas) — check the returned warnings/errors and the `observations` list, don't assume success means correct; simulation_summary is the one-call triage for a finished job (type, signals, .MEAS results, errors). `observations` reads the RESULT and does not re-run netlist topology analysis; it surfaces facts worth weighing (the simulator's own error lines, requested .meas/.four that weren't produced, extreme/non-finite node values, and scans that were skipped) — they are facts for you to judge, not a verdict; an empty list means nothing tripped a check, NOT that the result is verified. validate_netlist is the pre-flight gate: topology faults like a floating or capacitive-island node are caught there, not by observations, but it won't catch value typos or undefined models (resolved at run time).
-
-Build or edit .asc with the schematic tools, never by hand (hand-writing forfeits wire_pins's orthogonal routing and its pin-collision/junction checks): create_schematic, apply_schematic_ops for component placement and other mutations, and wire_pins for signal nets. The apply_schematic_ops add_component op returns the symbol-specific pin names + coordinates — a resistor's are A/B, not 1/2. Wire signal nets with wire_pins — do NOT net-label them; put a ground flag at each ground pin with an apply_schematic_ops add_net_label op (net="0"). The full schematic-layout playbook (tier alignment, orientations, bus routing) is the spice://guide resource.
+Build or edit .asc ONLY with the schematic tools (create_schematic, apply_schematic_ops, wire_pins) — hand-writing forfeits orthogonal routing and collision/junction checks. Wire signal nets with wire_pins — do NOT net-label them; ground pins get an add_net_label op with net="0". Layout playbook, gm/ID idiom, device-param addressing: spice://guide.
 """
 
 # Instructions for the EXPERIMENTAL consolidated profile — six tools over
@@ -469,22 +468,20 @@ Build or edit .asc with the schematic tools, never by hand (hand-writing forfeit
 # Claude Code silently truncates server instructions at 2048 chars, and the
 # tail (the result-trust paragraph) is the part that must survive.
 CONSOLIDATED_INSTRUCTIONS = """\
-EXPERIMENTAL consolidated profile: six tools for an agent with native file access (author .cir/.net/.sp decks with your own file tools; these tools run, analyze, gate, and edit .asc schematics geometry-aware).
+For ANY circuit or SPICE task — amplifiers, filters, regulators, schematics: run ngspice/LTspice sweeps, corners and Monte-Carlo in one call and get parsed numbers back (.MEAS, gm/gds/vth, Bode/transient metrics, spec verdicts) instead of shelling out and hand-parsing output. Author .cir/.net/.sp decks with your own file tools; these six tools run, analyze, gate, and edit .asc geometry-aware.
 
-Simulate, don't deliberate: runs are cheap — spot-check ideas, assumptions, and sizings with quick experiments instead of reasoning them out.
+Simulate, don't deliberate: runs are cheap — spot-check ideas and sizings with quick experiments instead of reasoning them out.
 
-EXECUTE — run_experiments: run staged decks across declared variations (strict assignments plus one random/Monte-Carlo); required request_id = durable, idempotent submission; quick jobs return inline, longer ones a receipt/job_id. jobs: status, wait (long-poll), cancel (owner/control_token), list, run-record pages; by job_id or request_id.
+EXECUTE — run_experiments: staged decks across declared variations (strict assignments plus one random/MC); required request_id = durable, idempotent submission; quick jobs return inline, longer a receipt/job_id. jobs: status, wait (long-poll), cancel (owner/control_token), list, run pages; by job_id or request_id.
 
 UNDERSTAND — analyze_results: typed recipes over completed runs/experiments; case/step-attributed values, reductions, spec verdicts; continuable via result_set_id + cursor. inspect: read-only — capabilities, symbols, net trace, components, models.
 
-AUTHOR — edit_schematic: typed op batch on one .asc sheet (base "blank" builds from empty, "existing" applies deltas); transactional, revision-guarded (expected_sha256 for existing targets); returns geometry facts. verify_circuit: lint, symbols, export, layout, quality, compare (equivalence/structural diff), optional render.
+AUTHOR — edit_schematic: typed op batch on one .asc sheet (base "blank" or "existing"); transactional, revision-guarded (expected_sha256 for existing targets); returns geometry facts. verify_circuit: lint, symbols, export, layout, quality, compare (equivalence/structural diff), optional render.
 
-Loops:
-  netlist: write deck -> run_experiments -> analyze_results -> edit -> ...
-  schematic new: inspect(symbols) -> edit_schematic{base:"blank", ops, render} -> revise
-  schematic edit: read .asc -> edit_schematic{ops, expected_sha256} -> verify_circuit
+Loops: deck -> run_experiments -> analyze_results -> edit -> ...; schematic:
+inspect(symbols) -> edit_schematic (blank build or expected_sha256 delta) -> verify_circuit
 
-A terminal run can still be degenerate (coerced value, skipped .meas): read observations/warnings and per-item failures — completed is not correct. Match recipe to run type (AC metrics need .AC, transient need .tran) or analyze_results errors.
+A terminal run can still be degenerate (coerced value, skipped .meas): read observations/warnings and per-item failures — completed is not correct. Match recipe to run type (.AC vs .tran) or analyze_results errors.
 """
 
 # Claude Code's client truncates MCP server instructions at 2048 characters;
@@ -528,6 +525,13 @@ def build_instructions(
     guidance = _PROFILE_GUIDANCE[profile]
     if not available:
         active = no_simulator_message(short=guidance.short_no_simulator)
+        if not guidance.short_no_simulator:
+            # The long setup message plus the workflow guide overflows the
+            # client's 2 KB instruction truncation — and a workflow for tools
+            # that cannot run yet is dead weight in exactly the state whose
+            # whole message is "configure a simulator first". Ship setup
+            # alone; the guide arrives with the post-configuration reconnect.
+            return active
     else:
 
         def disp(name: str) -> str:
