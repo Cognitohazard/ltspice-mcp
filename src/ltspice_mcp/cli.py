@@ -782,6 +782,7 @@ async def invoke(
         LTSpiceMCPError,
         NetlistError,
         PathSecurityError,
+        compact_validation_error,
     )
     from ltspice_mcp.server import _get_error_hint, _notice_circuit, _path_reject_guidance
 
@@ -799,7 +800,7 @@ async def invoke(
     try:
         return await registered.handler(arguments, state)
     except ValidationError as exc:
-        raise _Refused(f"invalid arguments for {tool}: {exc}") from None
+        raise _Refused(f"invalid arguments for {tool}: {compact_validation_error(exc)}") from None
     except PathSecurityError as exc:
         raise _Refused(f"{exc}\n\n{_path_reject_guidance(state)}") from None
     except LTSpiceMCPError as exc:

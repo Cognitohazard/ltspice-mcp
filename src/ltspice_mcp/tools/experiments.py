@@ -18,6 +18,7 @@ from ltspice_mcp.errors import (
     LTSpiceMCPError,
     PathSecurityError,
     SimulationError,
+    compact_validation_error,
 )
 from ltspice_mcp.lib import experiment_store, job_store, recent, response_budget, services
 from ltspice_mcp.lib.deck_staging import (
@@ -992,7 +993,8 @@ def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> None:
             validate_recipe(raw_recipe)
     except (ValidationError, ValueError) as exc:
         raise SimulationError(
-            f"The attached analyze block is not a valid analyze_results request: {exc}"
+            "The attached analyze block is not a valid analyze_results request: "
+            f"{compact_validation_error(exc)}"
         ) from exc
 
 
@@ -1009,7 +1011,8 @@ def _attached_analysis_callback(state: SessionState) -> AnalysisCallback:
             args = analyze.AnalyzeResultsInput.model_validate(payload)
         except ValidationError as exc:
             raise SimulationError(
-                f"The attached analyze block is not a valid analyze_results request: {exc}"
+                "The attached analyze block is not a valid analyze_results request: "
+                f"{compact_validation_error(exc)}"
             ) from exc
         # Resolved on the module, not bound at import: the analysis stage is
         # patched through ``tools.analyze`` in tests, and the attribute lookup

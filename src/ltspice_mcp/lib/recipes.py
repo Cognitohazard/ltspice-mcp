@@ -14,9 +14,10 @@ from pydantic import (
     ConfigDict,
     Field,
     TypeAdapter,
-    ValidationError,
     model_validator,
 )
+
+from ltspice_mcp.errors import compact_validation_error
 
 ReduceStat = Literal["min", "max", "mean", "stddev", "p50", "p90", "count"]
 
@@ -419,6 +420,4 @@ def validate_recipe(data: Any) -> Recipe:
 
 def recipe_error(exc: Exception) -> str:
     """Compact one-item validation error suitable for the failures channel."""
-    if isinstance(exc, ValidationError):
-        return "; ".join(error["msg"] for error in exc.errors(include_url=False))
-    return str(exc)
+    return compact_validation_error(exc) if isinstance(exc, ValueError) else str(exc)

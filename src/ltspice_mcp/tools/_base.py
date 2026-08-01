@@ -981,6 +981,18 @@ class ToolRegistry:
             a for rt in self._registered for a in rt.aliases
         }
 
+    def field_owners_for_profile(self, profile: str) -> dict[str, tuple[str, ...]]:
+        """Map advertised top-level wire fields to tools in one profile."""
+        effective_profile = profile if profile in VALID_PROFILES else "full"
+        owners: dict[str, list[str]] = {}
+        for registered in self._registered:
+            if effective_profile not in registered.profiles:
+                continue
+            properties = registered.definition.inputSchema.get("properties", {})
+            for field in properties:
+                owners.setdefault(field, []).append(registered.definition.name)
+        return {field: tuple(sorted(set(names))) for field, names in owners.items()}
+
     def get_for_profile(self, profile: str) -> tuple[list[types.Tool], dict[str, RegisteredTool]]:
         """Return the tool list and dispatch map for a profile."""
         effective_profile = profile if profile in VALID_PROFILES else "full"
