@@ -41,6 +41,17 @@ claude mcp add -s project ltspice -- ltspice-mcp
 
 Python 3.11+ required. Verify with `ltspice-mcp --help`. The same server is also published under two alias names — `circuit-mcp` and `ngspice-mcp` — so `uvx circuit-mcp` / `uvx ngspice-mcp` are drop-in equivalents of `uvx ltspice-mcp` if one of those names is more discoverable for you.
 
+**Make your agent actually reach for it.** Agent clients defer MCP tool schemas
+until first use, so at the moment your agent decides *how* to simulate, it may
+have seen nothing but bare tool names — and default to shelling out to a
+simulator it knows from training. Two lines fix that. Keep the server named
+`ltspice` (or `spice`) so every deferred tool name still carries the domain,
+and add one rule to your project's `CLAUDE.md` (or your client's equivalent):
+
+> Always use the ltspice MCP server for any SPICE/circuit simulation, sweep,
+> or analysis. Do not invoke ngspice or LTspice from the shell, and do not
+> hand-parse `.raw` files or `wrdata` output.
+
 Web clients (claude.ai, ChatGPT) need a stdio→HTTP bridge such as [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy) — only expose this server on a network you fully control, since it writes files and spawns processes inside `allowed_paths`.
 
 A **Claude Desktop extension** is also available: build the `.mcpb` in [`packaging/mcpb/`](packaging/mcpb/) and drag it onto Claude Desktop for a one-click install with a native folder picker for your circuits directory. Like the plugin, it wraps the PyPI package and needs `uv` and a simulator on the host (it does not bundle LTspice or ngspice).
