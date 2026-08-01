@@ -3,8 +3,13 @@
 One engine, two bindings. Each subcommand is a thin adapter onto a registered
 tool handler — the identical function ``server.call_tool`` invokes — so there is
 no second implementation of staging, linting, job ownership, locking or result
-parsing to keep in step. ``--json`` prints that handler's ``structuredContent``
-unchanged; the human channel is the handler's own text summary.
+parsing to keep in step. ``run`` is the one-deck on-ramp: it translates a deck
+path and a few flags into the canonical run-experiments payload and enters that
+same dispatch path, a translation layer rather than a second engine. ``--json``
+prints the handler's ``structuredContent`` unchanged on one line — the
+parse-stable contract. Human mode prints the handler's text summary and then the
+same ``structuredContent`` pretty-printed, so the data is never gated behind
+``--json``; only ``--json`` is parse-stable.
 
 Three rules shape everything here:
 
@@ -34,12 +39,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import signal
 import sys
 from contextlib import asynccontextmanager, contextmanager, suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn
 
 if TYPE_CHECKING:  # pragma: no cover - import-time weight is the point
     from collections.abc import AsyncIterator, Callable, Iterator, Sequence
@@ -105,6 +111,7 @@ _EXIT_BY_OUTCOME: dict[str, int] = {
 # ---------------------------------------------------------------------------
 
 COMMAND_TOOLS: dict[str, str] = {
+    "run": "run_experiments",
     "run-experiments": "run_experiments",
     "jobs": "jobs",
     "analyze-results": "analyze_results",
@@ -113,7 +120,9 @@ COMMAND_TOOLS: dict[str, str] = {
     "verify-circuit": "verify_circuit",
 }
 """Subcommand name -> the tool handler it dispatches to. The underscore form of
-each tool name is also accepted, so a caller who knows the MCP tool can type it."""
+each tool name is also accepted, so a caller who knows the MCP tool can type it.
+``run`` shares run-experiments' handler because it IS run-experiments with the
+payload built from flags — see :func:`build_run_payload`."""
 
 # How long one jobs(wait) leg blocks. The handler allows up to 300s; shorter
 # legs bound how long a Ctrl-C or a --timeout deadline waits to be noticed.
@@ -156,6 +165,10 @@ class _Failed(Exception):
 _DESCRIPTION = """\
 Run SPICE experiments and read the results as structured data.
 
+quick start:
+  spice-mcp run deck.cir --measure all --json    one deck, one run, measured values
+  spice-mcp run-experiments @exp.json --json     full payloads: sweeps, Monte Carlo
+
 This is the ltspice-mcp engine driven from a shell instead of over MCP. One
 coordinator owns each job: it expands the sweep, runs the cases in parallel up
 to the configured cap, holds the cancel authority, and reconciles what came back
@@ -163,8 +176,9 @@ against what was asked for. Results come back parsed — node voltages, branch
 currents, per-device small-signal parameters, measured values — so nothing has
 to scrape a rawfile.
 
-Every subcommand takes its arguments as a JSON object, the same object the
-matching MCP tool takes: inline, @FILE, or - to read stdin.
+Apart from run (which takes a deck path), every subcommand takes its arguments
+as a JSON object, the same object the matching MCP tool takes: inline, @FILE,
+or - to read stdin.
 """
 
 _EPILOG = """\
@@ -195,10 +209,43 @@ parallel invocations:
   [simulation] max_parallel.
 
 examples:
+  spice-mcp run deck.cir --measure all --json
   spice-mcp verify-circuit --path amp.cir --json
   spice-mcp run-experiments @sweep.json --json
   spice-mcp jobs --action status --job-id exp_a1b2c3 --json
 """
+
+
+_RUN_EXEMPLAR = "spice-mcp run deck.cir --measure all --json"
+"""The on-ramp's minimal valid invocation. Every refusal and every parser-level
+usage error appends its subcommand's exemplar (the other six live on their
+``_SUBCOMMANDS`` rows), because a strict shape that rejects a first guess
+without an example of a valid call leaves the caller no path back (the measured
+walk-away). Errors with no subcommand yet get this one: the caller is at the
+front door, and the on-ramp is the answer there."""
+
+
+class _Parser(argparse.ArgumentParser):
+    """ArgumentParser whose usage errors carry a recovery line.
+
+    A refused request appends its subcommand's minimal valid invocation; an
+    unknown flag or an extra positional must say the same thing, because the
+    caller who mistyped a flag is the same caller who needs the way back. Each
+    parser is told its own exemplar at construction. When the invocation asked
+    for ``--json``, the error is also emitted as the one-line JSON envelope so
+    a piping caller never gets bare prose on stdout; argparse no longer knows
+    the full invocation at error time, so ``build_parser`` records that at
+    build time.
+    """
+
+    exemplar: str = _RUN_EXEMPLAR
+    json_requested: bool = False
+
+    def error(self, message: str) -> NoReturn:
+        message = f"{message}\ntry: {self.exemplar}"
+        if self.json_requested:
+            _emit_error_json("usage", message)
+        super().error(message)
 
 
 class _VersionAction(argparse.Action):
@@ -230,8 +277,43 @@ class _VersionAction(argparse.Action):
         parser.exit()
 
 
+def _add_json_flag(parser: argparse.ArgumentParser, default: bool | str) -> None:
+    """One spelling of ``--json`` for the root parser and every subparser.
+
+    The root passes ``default=False``; subparsers pass ``argparse.SUPPRESS``,
+    because a subparser default would overwrite a flag given BEFORE the
+    subcommand.
+    """
+    parser.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        default=default,
+        help="Machine-readable one-line receipt (structuredContent, parse-stable).",
+    )
+
+
+def _add_common_options(parser: argparse.ArgumentParser) -> None:
+    """The global options, repeated on each subparser so they parse after the
+    subcommand too."""
+    _add_json_flag(parser, default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--config",
+        metavar="PATH",
+        help="Path to ltspice-mcp.toml (default: CWD or $LTSPICE_MCP_CONFIG).",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help=(
+            "Keep the configured log level. Without it (and with no explicit "
+            "LTSPICE_MCP_LOG_LEVEL) the ltspice_mcp logger tree is quieted to ERROR."
+        ),
+    )
+
+
 def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
-    """Options every subcommand accepts."""
+    """Options every JSON-argument subcommand accepts."""
     parser.add_argument(
         "args_json",
         metavar="ARGS",
@@ -241,21 +323,18 @@ def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
             "to read stdin. Omitted means no arguments."
         ),
     )
+    _add_common_options(parser)
+
+
+def _add_timeout_option(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--json",
-        dest="as_json",
-        action="store_true",
-        help="Print the result payload as JSON on stdout. This is the stable output.",
-    )
-    parser.add_argument(
-        "--config",
-        metavar="PATH",
-        help="Path to ltspice-mcp.toml (default: CWD or $LTSPICE_MCP_CONFIG).",
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Keep the configured log level. Without it startup logging is quieted to WARNING.",
+        "--timeout",
+        type=float,
+        metavar="SECONDS",
+        help=(
+            "Give up waiting after SECONDS and cancel the job. Without it the "
+            "wait is unbounded, because exiting early would abandon the run."
+        ),
     )
 
 
@@ -282,15 +361,7 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
     _add_field(
         parser, "--request-id", "request_id", "Idempotency key; reusing one replays its receipt."
     )
-    parser.add_argument(
-        "--timeout",
-        type=float,
-        metavar="SECONDS",
-        help=(
-            "Give up waiting after SECONDS and cancel the job. Without it the "
-            "wait is unbounded, because exiting early would abandon the run."
-        ),
-    )
+    _add_timeout_option(parser)
     parser.add_argument(
         "--no-wait",
         action="store_true",
@@ -319,20 +390,24 @@ def _add_verify_options(parser: argparse.ArgumentParser) -> None:
 
 
 class _Subcommand(NamedTuple):
-    """One subparser: its one-line help, its longer description, and the
+    """One subparser: its one-line help, its minimal valid invocation (appended
+    to every refusal and usage error), its longer description, and the
     shorthand flags it adds beyond the shared ones."""
 
     help: str
+    exemplar: str
     description: str | None = None
     options: Callable[[argparse.ArgumentParser], None] | None = None
 
 
-# Every subcommand, in the order --help lists them. The name is the hyphenated
+# Every JSON-argument subcommand, in the order --help lists them (the `run`
+# on-ramp rides its own definition in build_parser). The name is the hyphenated
 # spelling; the underscore form of a two-word name is registered as an alias, so
 # a caller who knows the MCP tool can type it.
 _SUBCOMMANDS: dict[str, _Subcommand] = {
     "run-experiments": _Subcommand(
         help="Run one or more decks, optionally as a sweep, and return the measured values.",
+        exemplar="spice-mcp run-experiments @exp.json --json",
         description=(
             "Stage the decks, lint them, expand the variation grid, run the cases in "
             "parallel, and return the receipt with any attached measurements. Blocks "
@@ -342,39 +417,95 @@ _SUBCOMMANDS: dict[str, _Subcommand] = {
     ),
     "jobs": _Subcommand(
         help="Check on, wait for, or stop a run; list recent circuits and their jobs.",
+        exemplar="spice-mcp jobs --action list --json",
         options=_add_jobs_options,
     ),
     "analyze-results": _Subcommand(
         help="Measure finished runs: metrics, comparisons and waveform extracts.",
+        exemplar="spice-mcp analyze-results @recipes.json --json",
     ),
     "inspect": _Subcommand(
         help="Read-only lookups over decks, schematics, symbols, models and libraries.",
+        exemplar='spice-mcp inspect \'{"queries": [{"kind": "capabilities"}]}\' --json',
     ),
     "edit-schematic": _Subcommand(
         help="Apply a typed op batch to an .asc schematic in one transactional call.",
+        exemplar="spice-mcp edit-schematic @ops.json --json",
     ),
     "verify-circuit": _Subcommand(
         help="Check a circuit file, optionally rendering it or comparing it to a reference.",
+        exemplar="spice-mcp verify-circuit --path amp.cir --json",
         options=_add_verify_options,
     ),
 }
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _exemplar_for(command: str) -> str:
+    """The minimal valid invocation for ``command`` (any spelling parse_args
+    accepts); the on-ramp's for anything else, per ``_RUN_EXEMPLAR``."""
+    spec = _SUBCOMMANDS.get(command)
+    return spec.exemplar if spec is not None else _RUN_EXEMPLAR
+
+
+def build_parser(argv: Sequence[str] | None = None) -> argparse.ArgumentParser:
     """Build the argument parser.
 
     Deliberately free of any ltspice_mcp import: ``--help`` must not pay for the
     version lookup, simulator detection, symbol-path resolution or the spicelib
     import chain.
+
+    ``argv`` is consulted only for the ``--json`` usage-error envelope: a
+    parser-level error must respect an asked-for JSON mode, and at error time
+    argparse no longer knows the full invocation, so it is recorded here.
     """
-    parser = argparse.ArgumentParser(
+    json_requested = argv is not None and "--json" in argv
+    parser = _Parser(
         prog="spice-mcp",
         description=_DESCRIPTION,
         epilog=_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.json_requested = json_requested
     parser.add_argument("--version", action=_VersionAction)
-    sub = parser.add_subparsers(dest="command", metavar="COMMAND")
+    # The global spelling, valid ahead of the subcommand and visible on the
+    # first help screen; each subparser re-accepts it after the subcommand.
+    _add_json_flag(parser, default=False)
+    sub = parser.add_subparsers(dest="command", metavar="COMMAND", parser_class=_Parser)
+
+    run_command = sub.add_parser(
+        "run",
+        help="Run one deck once and return the receipt — the on-ramp for a quick check.",
+        description=(
+            "Translate DECK plus flags into the canonical run-experiments payload\n"
+            '({"circuits": [{"path": DECK}]}) and dispatch it exactly as\n'
+            "run-experiments would: same staging, same lint gate, same\n"
+            "wait-to-terminality, same exit codes, same receipt. Anything beyond one\n"
+            "deck — variations, several circuits, custom analysis recipes — is\n"
+            "run-experiments' job."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    run_command.exemplar = _RUN_EXEMPLAR
+    run_command.json_requested = json_requested
+    run_command.add_argument(
+        "deck", metavar="DECK", help="The circuit deck to run (.cir, .net or .sp)."
+    )
+    _add_common_options(run_command)
+    run_command.add_argument(
+        "--simulator",
+        choices=("ngspice", "ltspice"),
+        help="Engine for the run; defaults to the configured simulator.",
+    )
+    run_command.add_argument(
+        "--measure",
+        metavar="NAME|all",
+        help=(
+            "Return measured values with the receipt: 'all' reads back every .MEAS "
+            "in the deck, a name reads back that one. Synthesizes the same attached "
+            "analysis block a run-experiments 'analyze' carries."
+        ),
+    )
+    _add_timeout_option(run_command)
 
     for name, spec in _SUBCOMMANDS.items():
         alias = name.replace("-", "_")
@@ -385,6 +516,8 @@ def build_parser() -> argparse.ArgumentParser:
             description=spec.description,
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
+        command.exemplar = spec.exemplar
+        command.json_requested = json_requested
         _add_shared_arguments(command)
         if spec.options is not None:
             spec.options(command)
@@ -398,8 +531,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     Usage errors exit 2 through argparse's own convention, which is the same
     code a refused request uses — both mean nothing ran.
     """
-    parser = build_parser()
-    namespace = parser.parse_args(argv)
+    arguments = list(argv) if argv is not None else sys.argv[1:]
+    parser = build_parser(arguments)
+    namespace = parser.parse_args(arguments)
     if namespace.command is None:
         parser.error("a COMMAND is required")
     namespace.command = namespace.command.replace("_", "-")
@@ -411,8 +545,52 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 
+def build_run_payload(namespace: argparse.Namespace) -> dict[str, Any]:
+    """Translate ``run DECK`` flags into the canonical run-experiments payload.
+
+    A translation layer, not a second engine: the dict built here is exactly
+    what a caller would pass to run-experiments, and it enters the identical
+    dispatch and wait path. Keys appear only when their flag was given, so the
+    engine's own defaults stay the single source of default behavior — except
+    ``execution.wait_s``, forced to 0: the handler's receipt dwell would hold
+    off ``--timeout`` and Ctrl-C for up to its 60s default, and the CLI's own
+    bounded wait loop is the supervisor here. wait_s is excluded from the
+    idempotency fingerprint (it bounds only the response), so an explicit
+    run-experiments replay of this request at any dwell still replays. The
+    synthesized ``analyze`` block is validated by the handler like an authored
+    one — a malformed block is refused before anything is staged.
+    """
+    deck: str = namespace.deck
+    # Classify the lstripped candidate: a shell-quoted argument with a leading
+    # space is the same caller mistake, and it must not reach deck staging as
+    # a filename.
+    candidate = deck.lstrip()
+    if candidate == "-" or candidate.startswith(("@", "{")):
+        raise _Refused(
+            "DECK is a single deck path, not a JSON payload. Multi-circuit, "
+            "variation or custom-analysis payloads belong to run-experiments: "
+            f"{_exemplar_for('run-experiments')}"
+        )
+    payload: dict[str, Any] = {"circuits": [{"path": deck}]}
+    execution: dict[str, Any] = {"wait_s": 0}
+    if namespace.simulator is not None:
+        execution["simulator"] = namespace.simulator
+    payload["execution"] = execution
+    if namespace.measure is not None:
+        recipe: dict[str, Any] = {"metric": "measurements"}
+        if namespace.measure == "all":
+            recipe["key"] = "measurements"
+        else:
+            recipe["key"] = namespace.measure
+            recipe["names"] = [namespace.measure]
+        payload["analyze"] = {"recipes": [recipe]}
+    return payload
+
+
 def build_payload(namespace: argparse.Namespace) -> dict[str, Any]:
     """Merge the JSON argument object with any shorthand flags that were set."""
+    if namespace.command == "run":
+        return build_run_payload(namespace)
     raw = namespace.args_json
     try:
         if raw is None:
@@ -453,13 +631,15 @@ def prepare_environment(namespace: argparse.Namespace) -> dict[str, str]:
     env: dict[str, str] = {}
     if namespace.config:
         env["LTSPICE_MCP_CONFIG"] = namespace.config
-    # The six subcommands are the consolidated tool set; that profile is what
+    # The subcommands are the consolidated tool set; that profile is what
     # registers their handlers, so it is not a user choice here.
     env["LTSPICE_MCP_TOOL_PROFILE"] = "consolidated"
     if not namespace.verbose and "LTSPICE_MCP_LOG_LEVEL" not in os.environ:
         # The server's startup banner is diagnostics for a long-lived process;
         # for a one-shot it is noise ahead of the answer. An explicitly exported
-        # level still wins.
+        # level still wins. This lowers the ROOT level; the ltspice_mcp tree is
+        # quieted further to ERROR in prepared_environment, keyed on this same
+        # entry.
         env["LTSPICE_MCP_LOG_LEVEL"] = "WARNING"
     return env
 
@@ -478,9 +658,31 @@ def prepared_environment(namespace: argparse.Namespace) -> Iterator[None]:
     env = prepare_environment(namespace)
     saved = {key: os.environ.get(key) for key in env}
     os.environ.update(env)
+    # Quiet by default: anything the caller must know belongs in the payload's
+    # observations/warnings channels, not the log stream. A WARNING root still
+    # passes this package's own WARNING spam (e.g. the experiment store
+    # skipping legacy records), so the ltspice_mcp tree goes to ERROR — keyed
+    # on the same env entry, so an explicitly exported LTSPICE_MCP_LOG_LEVEL
+    # and --verbose both keep the configured behavior, and the quieting cannot
+    # apply without also being restored.
+    tree = logging.getLogger("ltspice_mcp")
+    saved_level = tree.level if "LTSPICE_MCP_LOG_LEVEL" in env else None
+    if saved_level is not None:
+        tree.setLevel(logging.ERROR)
+    # The server lifespan this invocation enters calls
+    # logging.basicConfig(force=True), which strips the ROOT logger's handlers
+    # and resets its level — acceptable for a dedicated server process, not
+    # for a host application embedding run(). Snapshot and restore both.
+    root = logging.getLogger()
+    saved_root_level = root.level
+    saved_root_handlers = list(root.handlers)
     try:
         yield
     finally:
+        root.handlers[:] = saved_root_handlers
+        root.setLevel(saved_root_level)
+        if saved_level is not None:
+            tree.setLevel(saved_level)
         for key, value in saved.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -847,9 +1049,15 @@ def exit_code_for(result: types.CallToolResult) -> int:
 
 
 def emit(namespace: argparse.Namespace, result: types.CallToolResult, code: int) -> None:
-    """Write the result. ``--json`` prints the handler's structuredContent
-    unchanged — that is the contract; the human channel is the handler's own
-    text summary, which is presentation only."""
+    """Write the result.
+
+    ``--json`` prints the handler's structuredContent unchanged on one line —
+    that is the parse-stable contract. Human mode prints the handler's text
+    summary, then the same structuredContent pretty-printed: for the read tools
+    the text channel is an ack and the data lives only in the structured
+    payload, so a human rendering that stopped at the text would show no result
+    at all. Human mode is presentation, explicitly not parse-stable.
+    """
     from ltspice_mcp.tools._base import result_text
 
     data = result.structuredContent
@@ -863,22 +1071,44 @@ def emit(namespace: argparse.Namespace, result: types.CallToolResult, code: int)
             ),
             file=sys.stderr,
         )
+    if code == EXIT_REFUSED:
+        # A refusal the handler reported as a structured envelope carries no
+        # CLI recovery line of its own, and the stdout payload must stay
+        # exactly the handler's; stderr is where this front end speaks.
+        print(f"spice-mcp: try: {_exemplar_for(namespace.command)}", file=sys.stderr)
     if namespace.as_json:
         sys.stdout.write(json.dumps(data if data is not None else {}, ensure_ascii=False) + "\n")
         return
     text = result_text(result)
     if text:
         print(text)
+    if data is not None:
+        print(json.dumps(data, ensure_ascii=False, indent=1))
     hint = (data or {}).get("hint")
     if code != EXIT_OK and hint and hint not in text:
         print(hint, file=sys.stderr)
 
 
+def _emit_error_json(code: str, message: str) -> None:
+    """The parse-stable error envelope, shared by handler-level refusals and
+    parser-level usage errors so the shape cannot fork between the two."""
+    payload = {"error": {"code": code, "message": message, "stage": "cli"}}
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
 def emit_error(namespace: argparse.Namespace, code: str, message: str, exit_code: int) -> int:
-    """Report a failure the CLI itself classified, and return its exit code."""
+    """Report a failure the CLI itself classified, and return its exit code.
+
+    A refusal appends the subcommand's minimal valid invocation: nothing was
+    committed, so the next call is the whole remedy, and a rejection without an
+    example of a valid call is the measured walk-away.
+    """
+    if exit_code == EXIT_REFUSED:
+        exemplar = _exemplar_for(getattr(namespace, "command", "") or "")
+        if exemplar not in message:
+            message = f"{message}\ntry: {exemplar}"
     if namespace.as_json:
-        payload = {"error": {"code": code, "message": message, "stage": "cli"}}
-        sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        _emit_error_json(code, message)
     print(f"spice-mcp: {message}", file=sys.stderr)
     return exit_code
 

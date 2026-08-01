@@ -96,6 +96,24 @@ def fake_simulator(
     return recorded
 
 
+def recorded_fixture_simulator(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Instant engine behind ``ExperimentRunner.submit_netlist`` that hands back
+    the recorded real-LTspice ``ltspice_tran_rc`` raw+log pair, so analysis
+    stages parse genuine simulator artifacts rather than a mock byte string."""
+
+    def submit(self, _netlist: Path, run_filename: str, callback):
+        stem = Path(run_filename).stem
+        raw = self.output_folder / f"{stem}.raw"
+        log = self.output_folder / f"{stem}.log"
+        shutil.copy(FIXTURES_DIR / "ltspice_tran_rc.raw", raw)
+        shutil.copy(FIXTURES_DIR / "ltspice_tran_rc.log", log)
+        outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
+        self.loop.call_soon_threadsafe(callback, outcome)
+        return object()
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+
+
 def resolve_local_ref(schema: dict, node: dict) -> dict:
     """Follow a local ``$ref`` (possibly allOf-wrapped) into ``schema['$defs']``.
 

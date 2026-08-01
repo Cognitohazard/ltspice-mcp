@@ -3,7 +3,14 @@
 What these pin:
 
 - ``--json`` prints the same ``structuredContent`` the MCP tool returns, so a
-  shell caller and an MCP client read identical values off one handler.
+  shell caller and an MCP client read identical values off one handler. The
+  flag is global: it parses before or after the subcommand.
+- human mode prints the handler's text summary and then the same structured
+  payload pretty-printed — the data is never gated behind ``--json``, but only
+  ``--json`` is parse-stable.
+- ``run`` is a translation layer onto run-experiments: it builds the canonical
+  payload and enters the identical dispatch and wait path, never a second
+  engine. Anything beyond one deck points at run-experiments.
 - exit codes classify the envelope, not a message, across the whole matrix.
 - a run started from the shell blocks until it is terminal, and every early
   exit (deadline, Ctrl-C) cancels the job this process owns first — an exiting
@@ -11,12 +18,17 @@ What these pin:
 - ``--no-wait`` is refused before anything is staged.
 - an invocation is a parallel session: it takes the same cross-process file
   lock and reads a peer's live job as running.
+- refusals and parser-level usage errors carry the subcommand's minimal valid
+  invocation, so a rejected first guess includes the way back.
+- without ``--verbose`` and with no explicit LTSPICE_MCP_LOG_LEVEL, the
+  ltspice_mcp logger tree is quieted to ERROR for the invocation.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -45,9 +57,26 @@ from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.runner_base import RunnerBase
 from ltspice_mcp.tools import get_tools_for_profile
 from ltspice_mcp.tools._base import circuit_lock_target
-from tests.conftest import FakeSim, fake_simulator
+from tests.conftest import (
+    LTSPICE_TRAN_RC_VFINAL,
+    FakeSim,
+    fake_simulator,
+    recorded_fixture_simulator,
+)
 
 _GOOD_DECK = "V1 in 0 1\nR1 in 0 1k\n.op\n.end\n"
+
+# The circuit the recorded ltspice_tran_rc fixture pair was captured from: an
+# RC low-pass whose log carries ``vfinal: V(out)=0.999876166042 at 0.0009``.
+_RC_MEAS_DECK = (
+    "* rc lowpass step\n"
+    "V1 in 0 PULSE(0 1 0 1u 1u 1 2)\n"
+    "R1 in out 1k\n"
+    "C1 out 0 100n\n"
+    ".tran 0 1m 0 5u\n"
+    ".meas tran vfinal FIND V(out) AT=0.9m\n"
+    ".end\n"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +155,17 @@ async def _handler_payload(tool: str, arguments: dict[str, Any]) -> dict[str, An
     return result.structuredContent
 
 
+def _without_replay_note(payload: dict[str, Any]) -> dict[str, Any]:
+    """Receipt minus the observation the idempotency replay itself records —
+    the one legitimate difference between a first render and a re-read of the
+    same coordinator record."""
+    trimmed = dict(payload)
+    trimmed["observations"] = [
+        item for item in payload.get("observations", []) if item.get("code") != "idempotent_replay"
+    ]
+    return trimmed
+
+
 # ---------------------------------------------------------------------------
 # Startup cost
 # ---------------------------------------------------------------------------
@@ -172,6 +212,14 @@ class TestStartupCost:
         text = parser.format_help().lower()
         for banned in ("token", "context window", "cheaper", "cheap", "saves you"):
             assert banned not in text, f"help text advertises {banned!r}"
+
+    def test_json_and_run_sit_above_the_help_fold(self):
+        """Every fleet agent read ``--help | head -50`` and never saw ``--json``
+        or a one-shot entry point below the fold; the quick start guarantees
+        both appear in the first screen."""
+        head = "\n".join(cli.build_parser().format_help().splitlines()[:50])
+        assert "--json" in head
+        assert "spice-mcp run " in head
 
 
 # ---------------------------------------------------------------------------
@@ -262,15 +310,6 @@ class TestJsonParity:
 
         replayed = await _handler_payload("run_experiments", args)
 
-        def _without_replay_note(payload: dict[str, Any]) -> dict[str, Any]:
-            trimmed = dict(payload)
-            trimmed["observations"] = [
-                item
-                for item in payload.get("observations", [])
-                if item.get("code") != "idempotent_replay"
-            ]
-            return trimmed
-
         assert _without_replay_note(printed) == _without_replay_note(replayed)
         assert printed["job_id"] == replayed["job_id"]
 
@@ -292,14 +331,230 @@ class TestJsonParity:
         assert code == cli.EXIT_OK
         assert _stdout_json(capsys)["path"] == str(deck)
 
-    async def test_human_output_is_the_handler_text(
+    async def test_human_mode_prints_text_then_the_structured_payload(
+        self, cli_home: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        """Human mode leads with the handler's text summary and then renders
+        the same structuredContent pretty-printed. For the read tools the text
+        channel is an ack and the data lives only in structuredContent, so a
+        human mode that stopped at the text would show no result at all. Only
+        ``--json`` is parse-stable; this rendering is presentation."""
+        deck = _deck(cli_home)
+        args = {"path": str(deck), "checks": ["syntax"]}
+        await cli.run(["verify-circuit", json.dumps(args)])
+        out = capsys.readouterr().out
+
+        assert out.strip()
+        assert not out.startswith("{"), "the text summary still leads"
+        expected = await _handler_payload("verify_circuit", args)
+        assert json.dumps(expected, ensure_ascii=False, indent=1) in out
+
+    async def test_inspect_human_output_carries_the_geometry_numbers(
+        self, asc_cli_home: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        """The measured failure: a read tool's human output was an ack with the
+        geometry only in structuredContent, and the one agent that engaged got
+        no data and walked."""
+        args = {"queries": [{"kind": "symbol", "name": "res"}]}
+        await cli.run(["inspect", json.dumps(args)])
+        out = capsys.readouterr().out
+
+        assert "pins_by_rotation" in out
+        expected = await _handler_payload("inspect", args)
+        assert json.dumps(expected, ensure_ascii=False, indent=1) in out
+
+
+# ---------------------------------------------------------------------------
+# The `run` on-ramp: a translation layer onto run-experiments
+# ---------------------------------------------------------------------------
+
+
+class TestRunOnRamp:
+    def test_run_translates_to_the_canonical_run_experiments_payload(self):
+        """Pure translation: the flags become exactly the payload a caller
+        would hand run-experiments, so there is no second argument shape to
+        keep in step with the engine. wait_s=0 is the one key the on-ramp adds
+        on its own: the CLI's bounded wait loop is the supervisor, and the
+        handler's receipt dwell would hold off deadline and Ctrl-C."""
+        namespace = cli.parse_args(
+            ["run", "deck.cir", "--simulator", "ngspice", "--measure", "all"]
+        )
+        assert cli.build_payload(namespace) == {
+            "circuits": [{"path": "deck.cir"}],
+            "execution": {"wait_s": 0, "simulator": "ngspice"},
+            "analyze": {"recipes": [{"metric": "measurements", "key": "measurements"}]},
+        }
+
+    def test_run_bare_deck_adds_only_the_no_dwell_execution(self):
+        """No flags: beyond the no-dwell wait_s, keys appear only when asked
+        for, so the engine's own defaults stay the single source of default
+        behavior."""
+        namespace = cli.parse_args(["run", "deck.cir"])
+        assert cli.build_payload(namespace) == {
+            "circuits": [{"path": "deck.cir"}],
+            "execution": {"wait_s": 0},
+        }
+
+    def test_run_named_measure_filters_to_that_measurement(self):
+        namespace = cli.parse_args(["run", "deck.cir", "--measure", "vfinal"])
+        assert cli.build_payload(namespace)["analyze"] == {
+            "recipes": [{"metric": "measurements", "key": "vfinal", "names": ["vfinal"]}]
+        }
+
+    async def test_run_dispatch_parity_with_run_experiments(
+        self, cli_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        """`run` enters the exact dispatch/wait path run-experiments uses: the
+        printed receipt must match a run-experiments reading of the same job,
+        re-read through the idempotency replay. The replay side asks at the
+        default dwell while the on-ramp submitted with wait_s=0, so this also
+        pins that a dwell difference replays instead of conflicting (wait_s is
+        excluded from the idempotency fingerprint)."""
+        fake_simulator(monkeypatch)
+        deck = _deck(cli_home)
+
+        code = await cli.run(["run", str(deck), "--json"])
+        printed = json.loads(capsys.readouterr().out)
+        assert code == cli.EXIT_OK
+        assert printed["status"] == "completed"
+
+        replayed = await _handler_payload(
+            "run_experiments",
+            {"request_id": printed["request_id"], "circuits": [{"path": str(deck)}]},
+        )
+        assert _without_replay_note(printed) == _without_replay_note(replayed)
+
+    async def test_run_measure_all_returns_measured_numbers_end_to_end(
+        self, cli_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        """The quick-start invocation must deliver numbers, not a status: a
+        receipt without a measured value is exactly the walk-away the on-ramp
+        exists to fix. Runs a real deck through the full staging, dispatch,
+        wait and attached-analysis path over recorded real LTspice artifacts,
+        and asserts the numeric leaf."""
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(cli_home, "rc.cir", _RC_MEAS_DECK)
+
+        code = await cli.run(["run", str(deck), "--measure", "all", "--json"])
+        printed = json.loads(capsys.readouterr().out)
+
+        assert code == cli.EXIT_OK
+        analysis = printed["analysis"]
+        assert analysis["status"] == "completed", analysis.get("error")
+        rows = analysis["result"]["results"]["measurements"]["values"]
+        assert rows[0]["value"]["stats"]["vfinal"]["mean"] == pytest.approx(LTSPICE_TRAN_RC_VFINAL)
+
+    async def test_run_deadline_engages_without_an_authored_dwell(
+        self, cli_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        """--timeout must bite promptly on the on-ramp. The handler's own
+        receipt dwell defaults to 60s, and the CLI's deadline logic only
+        engages after the submission call returns — so the on-ramp has to
+        submit with no dwell and let the CLI's bounded wait loop supervise."""
+        fake_simulator(monkeypatch, delay_s=None)
+        deck = _deck(cli_home)
+
+        began = time.monotonic()
+        code = await cli.run(["run", str(deck), "--timeout", "0.3", "--json"])
+        elapsed = time.monotonic() - began
+        payload = _stdout_json(capsys)
+
+        assert payload["status"] == "cancelled"
+        assert code == cli.EXIT_PARTIAL
+        # Generous bound: the cancel's own kill-grace is the floor. Sitting in
+        # the handler's default dwell lands at 60s+, far past it.
+        assert elapsed < 15.0, f"--timeout waited out the handler dwell ({elapsed:.1f}s)"
+
+    async def test_run_interrupt_cancels_without_an_authored_dwell(
+        self, cli_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        """Ctrl-C during the on-ramp's wait must cancel promptly, not after the
+        handler's default receipt dwell runs out."""
+        if not hasattr(signal, "SIGINT"):  # pragma: no cover - POSIX-only path
+            pytest.skip("no SIGINT on this platform")
+        fake_simulator(monkeypatch, delay_s=None)
+        deck = _deck(cli_home)
+
+        async def interrupt_soon() -> None:
+            await asyncio.sleep(0.4)
+            os.kill(os.getpid(), signal.SIGINT)
+
+        interrupter = asyncio.create_task(interrupt_soon())
+        began = time.monotonic()
+        try:
+            code = await cli.run(["run", str(deck), "--json"])
+        finally:
+            await interrupter
+        elapsed = time.monotonic() - began
+
+        assert code == cli.EXIT_INTERRUPTED
+        assert _stdout_json(capsys)["status"] == "cancelled"
+        assert elapsed < 15.0, f"the interrupt waited out the handler dwell ({elapsed:.1f}s)"
+
+    async def test_run_refuses_a_payload_shaped_deck_and_points_at_run_experiments(
+        self, cli_home: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        """One deck is the whole surface; a JSON payload in the DECK slot is a
+        caller who wants run-experiments, and the refusal must say so."""
+        code = await cli.run(["run", '{"circuits": [{"path": "a.cir"}]}', "--json"])
+        message = _stdout_json(capsys)["error"]["message"]
+
+        assert code == cli.EXIT_REFUSED
+        assert "run-experiments" in message
+
+    def test_run_refuses_reserved_payload_forms_even_with_leading_whitespace(self):
+        """The payload guard classifies the lstripped candidate: a shell-quoted
+        argument with a leading space is the same caller mistake, and letting
+        it through would hand a JSON blob to deck staging as a filename."""
+        for deck in (' {"circuits": []}', "  @exp.json", " -"):
+            namespace = cli.parse_args(["run", deck])
+            with pytest.raises(cli._Refused):
+                cli.build_payload(namespace)
+
+    async def test_run_malformed_synthesized_measure_is_refused_at_the_door(
+        self, cli_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        """The synthesized analyze block passes through the same at-the-door
+        validation an authored one does — a malformed block is refused before
+        anything is staged, exactly as on the MCP surface."""
+        submissions = fake_simulator(monkeypatch)
+        deck = _deck(cli_home)
+
+        code = await cli.run(["run", str(deck), "--measure", "", "--json"])
+        payload = _stdout_json(capsys)
+
+        assert code == cli.EXIT_REFUSED
+        assert "attached analyze block" in json.dumps(payload)
+        assert submissions == [], "nothing may be submitted by a refused call"
+
+
+# ---------------------------------------------------------------------------
+# --json is a global flag
+# ---------------------------------------------------------------------------
+
+
+class TestGlobalJsonFlag:
+    def test_flag_parses_in_both_positions(self):
+        """The subparser copies default to SUPPRESS, so a root-level flag
+        survives the subcommand parse instead of being overwritten."""
+        assert cli.parse_args(["--json", "jobs"]).as_json is True
+        assert cli.parse_args(["jobs", "--json"]).as_json is True
+        assert cli.parse_args(["jobs"]).as_json is False
+
+    async def test_both_positions_emit_the_same_one_line_json(
         self, cli_home: Path, capsys: pytest.CaptureFixture[str]
     ):
         deck = _deck(cli_home)
-        await cli.run(["verify-circuit", "--path", str(deck)])
-        captured = capsys.readouterr()
-        assert captured.out.strip()
-        assert not captured.out.startswith("{")
+        args = json.dumps({"path": str(deck), "checks": ["syntax"]})
+
+        assert await cli.run(["--json", "verify-circuit", args]) == cli.EXIT_OK
+        before = capsys.readouterr().out
+        assert await cli.run(["verify-circuit", args, "--json"]) == cli.EXIT_OK
+        after = capsys.readouterr().out
+
+        assert before == after
+        assert before.count("\n") == 1
+        assert json.loads(before)["outcome"] == "complete"
 
 
 # ---------------------------------------------------------------------------
@@ -380,8 +635,12 @@ class TestExitCodes:
 
     async def test_unknown_argument_field_is_refused(self, cli_home: Path, capsys):
         code = await cli.run(["inspect", '{"queries": [], "nope": 1}', "--json"])
+        message = _stdout_json(capsys)["error"]["message"]
         assert code == cli.EXIT_REFUSED
-        assert "nope" in _stdout_json(capsys)["error"]["message"]
+        assert "nope" in message
+        # The strict-shape rejection includes the way back: a minimal valid
+        # invocation of the subcommand that was refused.
+        assert f"try: {cli._SUBCOMMANDS['inspect'].exemplar}" in message
 
     async def test_unknown_job_is_refused(self, cli_home: Path, capsys):
         code = await cli.run(["jobs", "--action", "status", "--job-id", "exp_missing", "--json"])
@@ -446,6 +705,148 @@ class TestExitCodes:
         help_text = cli.build_parser().format_help()
         for code in sorted(codes):
             assert f"  {code} " in help_text or f"  {code}   " in help_text
+
+
+# ---------------------------------------------------------------------------
+# Refusal exemplars and parser-level usage errors
+# ---------------------------------------------------------------------------
+
+
+class TestRefusalExemplars:
+    async def test_argparse_unknown_flag_carries_the_exemplar(
+        self, cli_home: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        with pytest.raises(SystemExit) as exc:
+            await cli.run(["run", "deck.cir", "--nope"])
+        assert exc.value.code == 2
+        assert f"try: {cli._RUN_EXEMPLAR}" in capsys.readouterr().err
+
+    async def test_argparse_extra_positional_carries_the_exemplar(
+        self, cli_home: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        with pytest.raises(SystemExit) as exc:
+            await cli.run(["run", "a.cir", "b.cir"])
+        assert exc.value.code == 2
+        assert f"try: {cli._RUN_EXEMPLAR}" in capsys.readouterr().err
+
+    async def test_argparse_error_respects_json_mode(
+        self, cli_home: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        """A piping caller who asked for --json must not get bare prose on
+        stdout even when the failure is argparse's, not a handler's."""
+        with pytest.raises(SystemExit) as exc:
+            await cli.run(["run", "deck.cir", "--nope", "--json"])
+        assert exc.value.code == 2
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["error"]["code"] == "usage"
+        assert payload["error"]["stage"] == "cli"
+        assert cli._RUN_EXEMPLAR in payload["error"]["message"]
+
+    def test_every_subcommand_has_an_exemplar(self):
+        """The exemplar is a required field of the subcommand table (and `run`
+        rides its own definition), so a new subcommand cannot ship refusals
+        with no way back; what's left to pin is the real program name."""
+        assert set(cli._SUBCOMMANDS) == set(cli.COMMAND_TOOLS) - {"run"}
+        for command in cli.COMMAND_TOOLS:
+            assert cli._exemplar_for(command).startswith("spice-mcp ")
+
+    async def test_handler_refusal_prints_the_exemplar_on_stderr(
+        self, cli_home: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        """Refusals the handler reports as a structured envelope (an unknown
+        job here) must carry the way back too, not only the ones the CLI
+        classifies itself — on stderr, never inside the parse-stable stdout
+        payload."""
+        code = await cli.run(["jobs", "--action", "status", "--job-id", "exp_missing", "--json"])
+        captured = capsys.readouterr()
+
+        assert code == cli.EXIT_REFUSED
+        assert f"try: {cli._SUBCOMMANDS['jobs'].exemplar}" in captured.err
+        assert "try:" not in captured.out, "the stdout payload stays the handler's"
+
+    async def test_path_denied_refusal_prints_the_exemplar_on_stderr(
+        self, cli_home: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        code = await cli.run(["verify-circuit", "--path", "/etc/hostname", "--json"])
+        captured = capsys.readouterr()
+
+        assert code == cli.EXIT_REFUSED
+        assert f"try: {cli._SUBCOMMANDS['verify-circuit'].exemplar}" in captured.err
+        assert "try:" not in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Quiet logging by default
+# ---------------------------------------------------------------------------
+
+
+class TestQuietLogging:
+    """Without --verbose and with no explicit LTSPICE_MCP_LOG_LEVEL, the
+    ltspice_mcp logger tree runs at ERROR for the invocation. The trigger is a
+    real one: an unreadable experiment record makes the store emit the exact
+    WARNING spam the fleet measured ahead of its first answer."""
+
+    @staticmethod
+    def _junk_record(work: Path) -> str:
+        job_id = "exp_junk_0001"
+        path = experiment_store.record_path(job_id, work)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{not json")
+        return job_id
+
+    async def test_quiet_then_verbose_then_quiet_in_one_process(
+        self, cli_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("LTSPICE_MCP_LOG_LEVEL")
+        job_id = self._junk_record(cli_home)
+        tree = logging.getLogger("ltspice_mcp")
+        level_before = tree.level
+        argv = ["jobs", "--action", "status", "--job-id", job_id, "--json"]
+
+        await cli.run(argv)
+        quiet = capsys.readouterr().err
+        assert "[WARNING]" not in quiet
+        assert "[INFO]" not in quiet
+
+        await cli.run([*argv, "--verbose"])
+        verbose = capsys.readouterr().err
+        assert "Skipping unreadable experiment job" in verbose
+
+        await cli.run(argv)
+        again = capsys.readouterr().err
+        assert "[WARNING]" not in again
+        assert tree.level == level_before, "the logger tree must be restored"
+
+    async def test_explicit_log_level_env_wins_over_the_default_quiet(
+        self, cli_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        """An exported LTSPICE_MCP_LOG_LEVEL is the caller's decision; the CLI
+        quiets only where the caller left the level to it."""
+        monkeypatch.setenv("LTSPICE_MCP_LOG_LEVEL", "WARNING")
+        job_id = self._junk_record(cli_home)
+
+        await cli.run(["jobs", "--action", "status", "--job-id", job_id, "--json"])
+
+        assert "Skipping unreadable experiment job" in capsys.readouterr().err
+
+    async def test_run_restores_the_host_processes_root_logging(self, cli_home: Path):
+        """run() is a documented reusable entry point, and the server lifespan
+        it enters calls logging.basicConfig(force=True), which strips the ROOT
+        logger's handlers. A host application embedding run() must get its own
+        root handlers and level back."""
+        root = logging.getLogger()
+        sentinel = logging.NullHandler()
+        saved_level = root.level
+        root.addHandler(sentinel)
+        root.setLevel(logging.CRITICAL)
+        try:
+            code = await cli.run(["jobs", "--action", "list", "--json"])
+            assert code == cli.EXIT_OK
+            assert sentinel in root.handlers, "the host's root handler must survive"
+            assert root.level == logging.CRITICAL, "the host's root level must survive"
+        finally:
+            root.removeHandler(sentinel)
+            root.setLevel(saved_level)
 
 
 def _running_peer_experiment(work: Path, owner_pid: int) -> ExperimentJob:
