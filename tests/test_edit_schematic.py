@@ -27,7 +27,12 @@ from ltspice_mcp.tools.circuit import (
     handle_apply_schematic_ops,
     handle_create_schematic,
 )
-from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
+from ltspice_mcp.tools.schematic_edit import (
+    EditSchematicInput,
+    complete_edit_schematic_data,
+    evaluate_edit_schematic,
+    handle_edit_schematic,
+)
 
 
 def _assert_schema(result) -> dict:
@@ -406,6 +411,76 @@ async def test_dry_run_surfaces_all_op_failures(asc_state):
     # Both bad ops surface at once (dry run does not stop on the first).
     assert data["outcome"] == "complete"
     assert len(data["failures"]) == 2
+
+
+async def test_dry_run_seam_keeps_full_views_while_mcp_pages_them(asc_state, work_dir):
+    args = _edit_input(
+        target="dry-full.asc",
+        base="blank",
+        dry_run=True,
+        return_views=["pin_legend"],
+        view_limit=2,
+        ops=_many_labeled_ops(5),
+    )
+    neutral = await evaluate_edit_schematic(args, asc_state)
+    assert neutral.views is not None
+    assert len(neutral.views.pin_legend) == 5
+    assert len(neutral.views.label_only_pins) == 5
+    complete = complete_edit_schematic_data(neutral, args)
+    assert complete["views"]["pin_legend"]["items"] == list(neutral.views.pin_legend)
+    assert complete["wiring"]["label_only_pins"]["items"] == list(neutral.views.label_only_pins)
+    assert complete["views"]["pin_legend"]["truncated"] is False
+    assert not (work_dir / "dry-full.asc").exists()
+
+    mcp = _assert_schema(await handle_edit_schematic(args, asc_state))
+    page = mcp["views"]["pin_legend"]
+    assert page["items"] == list(neutral.views.pin_legend[:2])
+    assert (page["total"], page["returned"], page["truncated"]) == (5, 2, True)
+    assert page["total"] - page["returned"] == len(neutral.views.pin_legend) - 2
+
+
+async def test_views_are_bound_to_the_committed_bytes_not_a_later_file_revision(
+    asc_state,
+    work_dir,
+    monkeypatch,
+):
+    original_commit = se._commit_asc
+    rendered_sources: list[str] = []
+    original_render = se._render_view
+
+    def commit_then_peer_revision(text, target, build_id, encoding):
+        outcome = original_commit(text, target, build_id, encoding)
+        if outcome.renamed:
+            target.write_text("Version 4.1\nSHEET 1 880 680\nTEXT 32 32 Left 2 ;peer revision\n")
+        return outcome
+
+    def record_render_source(path, *args, **kwargs):
+        rendered_sources.append(path.read_text())
+        return original_render(path, *args, **kwargs)
+
+    monkeypatch.setattr(se, "_commit_asc", commit_then_peer_revision)
+    monkeypatch.setattr(se, "_render_view", record_render_source)
+    args = _edit_input(
+        target="interleaved.asc",
+        base="blank",
+        return_views=["pin_legend", "render"],
+        render_format="svg",
+        ops=_DIVIDER_OPS,
+    )
+    neutral = await evaluate_edit_schematic(args, asc_state)
+    assert neutral.views is not None
+    assert neutral.data["sha256"] == neutral.views.sha256
+    assert neutral.views.sha256 != _sha(work_dir / "interleaved.asc")
+    assert {row["ref"] for row in neutral.views.pin_legend} == {"R1", "R2"}
+    assert rendered_sources and "SYMATTR InstName R1" in rendered_sources[0]
+    assert "peer revision" not in rendered_sources[0]
+
+    complete = complete_edit_schematic_data(neutral, args)
+    assert complete["sha256"] == neutral.views.sha256
+    assert {row["ref"] for row in complete["views"]["pin_legend"]["items"]} == {
+        "R1",
+        "R2",
+    }
 
 
 # ---------------------------------------------------------------------------

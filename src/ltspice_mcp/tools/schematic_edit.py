@@ -25,12 +25,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import hashlib
 import io
 import os
 import shutil
 import stat
 import tempfile
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, cast
 
@@ -460,11 +462,19 @@ def _wiring_and_legend(
 
 
 def _render_view(
-    asc_path: Path, fmt: Literal["png", "svg"], scale: float, artifacts_dir: Path
+    asc_path: Path,
+    fmt: Literal["png", "svg"],
+    scale: float,
+    artifacts_dir: Path,
+    *,
+    resolver_path: Path | None = None,
 ) -> dict:
     """Render ``asc_path`` to SVG (always) or PNG (when the raster extra is
     present), writing a content-hashed artifact under ``artifacts_dir``."""
-    scene = build_scene(asc_path, resolver=symbol_resolver_for(asc_path))
+    scene = build_scene(
+        asc_path,
+        resolver=symbol_resolver_for(resolver_path or asc_path),
+    )
     image, out_path, _ = render_scene_artifact(scene, artifacts_dir, image_format=fmt, scale=scale)
     view = dict(image.to_dict())
     if scene.diagnostics:
@@ -473,54 +483,115 @@ def _render_view(
     return view
 
 
-async def _paginate_views(
+def _render_committed_text(
+    text: str,
+    encoding: str,
+    target: Path,
+    fmt: Literal["png", "svg"],
+    scale: float,
+    artifacts_dir: Path,
+) -> dict:
+    """Render the transaction's bytes, never a later revision of ``target``."""
+    tmp_dir = Path(tempfile.mkdtemp(prefix="ltspice-edit-view-"))
+    try:
+        source = tmp_dir / target.name
+        source.write_text(text, encoding=encoding)
+        return _render_view(
+            source,
+            fmt,
+            scale,
+            artifacts_dir,
+            resolver_path=target,
+        )
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@dataclass(frozen=True)
+class EditSchematicViews:
+    """Complete requested views tied to the bytes produced by one transaction."""
+
+    sha256: str
+    wiring_profile: dict[str, int]
+    pin_legend: tuple[dict[str, Any], ...]
+    label_only_pins: tuple[dict[str, Any], ...]
+    render: dict[str, Any] | None
+    failures: tuple[dict[str, Any], ...]
+
+
+async def _build_edit_views(
     args: EditSchematicInput,
+    profile: dict[str, int],
     legend: list[dict],
     label_only: list[dict],
-    committed_target: Path | None,
-    build_id: str,
+    committed_text: str,
+    encoding: str,
+    target: Path,
     state: SessionState,
-) -> tuple[dict, dict, list[dict]]:
-    """Assemble the label_only_pins page, the requested views, and per-view failures."""
-    cursors = args.view_cursors or _ViewCursors()
-    label_only_page = paginate_view(
-        label_only, "label_only_pins", cursor=cursors.label_only_pins, limit=args.view_limit
-    )
-
-    views: dict[str, Any] = {}
-    failures: list[dict] = []
-    for view in args.return_views:
-        if view == "pin_legend":
-            views["pin_legend"] = paginate_view(
-                legend, "pin_legend", cursor=cursors.pin_legend, limit=args.view_limit
-            )
-        elif view == "render":
-            # A render needs a committed file on disk. In dry_run nothing is
-            # committed, so report metadata-only rather than writing an artifact
-            # (the dry_run contract leaves the target dir untouched).
-            if committed_target is None:
-                views["render"] = {
-                    "status": "dry_run",
-                    "note": (
-                        "render artifact is written only on commit; run without "
-                        "dry_run to persist it."
-                    ),
-                }
-                continue
+) -> EditSchematicViews:
+    """Build every requested view from transaction-owned memory."""
+    rendered: dict[str, Any] | None = None
+    failures: list[dict[str, Any]] = []
+    if "render" in args.return_views:
+        if args.dry_run:
+            rendered = {
+                "status": "dry_run",
+                "note": (
+                    "render artifact is written only on commit; run without dry_run to persist it."
+                ),
+            }
+        else:
             try:
                 artifacts_dir = state.working_dir / ".ltspice-mcp" / "renders"
-                # build_scene + rasterize are pure file/CPU work on already-
-                # committed bytes — offload so they don't stall the event loop.
-                views["render"] = await asyncio.to_thread(
-                    _render_view,
-                    committed_target,
+                rendered = await asyncio.to_thread(
+                    _render_committed_text,
+                    committed_text,
+                    encoding,
+                    target,
                     args.render_format,
                     args.render_scale,
                     artifacts_dir,
                 )
-            except Exception as exc:  # broad by design — a render failure is per-view, never fatal
+            except Exception as exc:  # broad by design — one view may fail independently
                 failures.append({"stage": "render", "error": str(exc)})
-    return label_only_page, views, failures
+    return EditSchematicViews(
+        sha256=hashlib.sha256(committed_text.encode(encoding)).hexdigest(),
+        wiring_profile=profile,
+        pin_legend=tuple(legend),
+        label_only_pins=tuple(label_only),
+        render=rendered,
+        failures=tuple(failures),
+    )
+
+
+def _present_edit_views(
+    args: EditSchematicInput,
+    neutral: EditSchematicViews,
+    *,
+    complete: bool = False,
+) -> tuple[dict, dict]:
+    """Apply MCP paging, or build the same page shapes without omissions."""
+    cursors = args.view_cursors or _ViewCursors()
+    limit = max(len(neutral.pin_legend), len(neutral.label_only_pins), 1)
+    label_only_page = paginate_view(
+        list(neutral.label_only_pins),
+        "label_only_pins",
+        cursor=None if complete else cursors.label_only_pins,
+        limit=limit if complete else args.view_limit,
+    )
+
+    views: dict[str, Any] = {}
+    for view in args.return_views:
+        if view == "pin_legend":
+            views["pin_legend"] = paginate_view(
+                list(neutral.pin_legend),
+                "pin_legend",
+                cursor=None if complete else cursors.pin_legend,
+                limit=limit if complete else args.view_limit,
+            )
+        elif view == "render" and neutral.render is not None:
+            views["render"] = neutral.render
+    return label_only_page, views
 
 
 # ---------------------------------------------------------------------------
@@ -683,31 +754,38 @@ def _envelope(
     return data
 
 
-@registry.tool(
-    name="edit_schematic",
-    description=(
-        "Apply a typed op batch to an LTspice .asc schematic in one revision-"
-        "guarded, transactional call. base='blank' builds a whole circuit from an "
-        "empty sheet; base='existing' applies deltas. Pass expected_sha256 of the "
-        "file you edited against (required when the target exists) — a peer that "
-        "committed first yields revision_conflict with nothing written. Returns "
-        "geometry facts (pin legend, wiring metric), an optional render, and an "
-        "optional post-commit netlist verification against a reference."
-    ),
-    input_model=EditSchematicInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=True,
-        idempotentHint=False,
-        openWorldHint=False,
-    ),
-    profiles=("consolidated",),
-    output_schema=_OUTPUT_SCHEMA,
-)
-async def handle_edit_schematic(
-    args: EditSchematicInput, state: SessionState
-) -> types.CallToolResult:
-    """Transactional .asc mutation with revision guard, commit protocol, and views."""
+@dataclass(frozen=True)
+class EditSchematicEvaluation:
+    """One mutation result plus its complete transaction-bound in-memory views."""
+
+    data: dict[str, Any]
+    text: str
+    format: Literal["json", "text"] | None
+    views: EditSchematicViews | None = None
+    mcp_result: types.CallToolResult | None = None
+
+
+def _finish_edit_evaluation(
+    evaluation: EditSchematicEvaluation,
+    *,
+    present_mcp_views: bool,
+) -> EditSchematicEvaluation:
+    """Optionally format inside the transaction's guarded error boundary."""
+    if not present_mcp_views:
+        return evaluation
+    return replace(
+        evaluation,
+        mcp_result=format_response(evaluation.text, evaluation.data, evaluation.format),
+    )
+
+
+async def _evaluate_edit_schematic(
+    args: EditSchematicInput,
+    state: SessionState,
+    *,
+    present_mcp_views: bool = False,
+) -> EditSchematicEvaluation:
+    """Implementation shared by the neutral seam and guarded MCP presentation."""
     target = safe_path(args.target, state)
     _require_asc(target)
     if not args.ops:
@@ -721,6 +799,12 @@ async def handle_edit_schematic(
 
     build_id = generate_id("build")
     stages: list[dict] = []
+
+    def finish(evaluation: EditSchematicEvaluation) -> EditSchematicEvaluation:
+        return _finish_edit_evaluation(
+            evaluation,
+            present_mcp_views=present_mcp_views,
+        )
 
     def _stage(name: str, ok: bool = True, error: str | None = None) -> None:
         """Append one commit-protocol stage entry (the ok path omits ``error``).
@@ -750,29 +834,34 @@ async def handle_edit_schematic(
             current = sha256_file(target)
             if current != expected:
                 _stage("revision_check", False, "sha mismatch")
-                return format_response(
-                    f"edit_schematic: revision_conflict on {target.name} — the file changed "
-                    "since you read it. Re-read it and resubmit with the current sha256.",
-                    _envelope(
-                        outcome="failed",
-                        commit_state="not_committed",
-                        target=target,
-                        build_id=build_id,
-                        base=args.base,
-                        stages=stages,
-                        sha256=current,
-                        error={
-                            "code": "revision_conflict",
-                            "message": (
-                                f"expected_sha256 {expected} does not match the current "
-                                f"file ({current}); nothing was written."
-                            ),
-                            "stage": "revision_check",
-                            "retryable": True,
-                        },
-                        hint="Re-read the target, then resubmit with its current sha256.",
-                    ),
-                    args.format,
+                return finish(
+                    EditSchematicEvaluation(
+                        data=_envelope(
+                            outcome="failed",
+                            commit_state="not_committed",
+                            target=target,
+                            build_id=build_id,
+                            base=args.base,
+                            stages=stages,
+                            sha256=current,
+                            error={
+                                "code": "revision_conflict",
+                                "message": (
+                                    f"expected_sha256 {expected} does not match the current "
+                                    f"file ({current}); nothing was written."
+                                ),
+                                "stage": "revision_check",
+                                "retryable": True,
+                            },
+                            hint="Re-read the target, then resubmit with its current sha256.",
+                        ),
+                        text=(
+                            f"edit_schematic: revision_conflict on {target.name} — the file "
+                            "changed since you read it. Re-read it and resubmit with the "
+                            "current sha256."
+                        ),
+                        format=args.format,
+                    )
                 )
         _stage("revision_check")
 
@@ -791,25 +880,30 @@ async def handle_edit_schematic(
             if abort_reason is not None:
                 state.editors.invalidate(target)
                 _stage("apply_ops", False, abort_reason)
-                return format_response(
-                    f"edit_schematic: transaction aborted — {abort_reason}. No changes saved.",
-                    _envelope(
-                        outcome="failed",
-                        commit_state="not_committed",
-                        target=target,
-                        build_id=build_id,
-                        base=args.base,
-                        stages=stages,
-                        failures=failures,
-                        error={
-                            "code": "op_failed",
-                            "message": abort_reason,
-                            "stage": "apply_ops",
-                            "retryable": False,
-                        },
-                        hint="Fix the failing op and resubmit with the same expected_sha256.",
-                    ),
-                    args.format,
+                return finish(
+                    EditSchematicEvaluation(
+                        data=_envelope(
+                            outcome="failed",
+                            commit_state="not_committed",
+                            target=target,
+                            build_id=build_id,
+                            base=args.base,
+                            stages=stages,
+                            failures=failures,
+                            error={
+                                "code": "op_failed",
+                                "message": abort_reason,
+                                "stage": "apply_ops",
+                                "retryable": False,
+                            },
+                            hint="Fix the failing op and resubmit with the same expected_sha256.",
+                        ),
+                        text=(
+                            f"edit_schematic: transaction aborted — {abort_reason}. "
+                            "No changes saved."
+                        ),
+                        format=args.format,
+                    )
                 )
             _stage("apply_ops")
 
@@ -823,27 +917,43 @@ async def handle_edit_schematic(
             # --- dry run: validate-only, nothing written, target dir untouched
             if args.dry_run:
                 state.editors.invalidate(target)
-                label_only_page, views, view_failures = await _paginate_views(
-                    args, legend, label_only, None, build_id, state
+                neutral_views = await _build_edit_views(
+                    args,
+                    profile,
+                    legend,
+                    label_only,
+                    committed_text,
+                    encoding,
+                    target,
+                    state,
                 )
-                wiring = _wiring_dict(profile, label_only_page)
-                return format_response(
-                    f"edit_schematic (dry run) on {target.name}: {len(results)} ops validated; "
-                    "nothing saved.",
-                    _envelope(
-                        outcome="complete",
-                        commit_state="not_committed",
-                        target=target,
-                        build_id=build_id,
-                        base=args.base,
-                        stages=stages,
-                        wiring=wiring,
-                        views=views,
-                        warnings=warnings,
-                        failures=failures + view_failures,
-                        hint="Dry run — resubmit without dry_run to commit.",
-                    ),
-                    args.format,
+                wiring = None
+                presented_views = None
+                if present_mcp_views:
+                    label_only_page, presented_views = _present_edit_views(args, neutral_views)
+                    wiring = _wiring_dict(profile, label_only_page)
+                return finish(
+                    EditSchematicEvaluation(
+                        data=_envelope(
+                            outcome="complete",
+                            commit_state="not_committed",
+                            target=target,
+                            build_id=build_id,
+                            base=args.base,
+                            stages=stages,
+                            wiring=wiring,
+                            views=presented_views,
+                            warnings=warnings,
+                            failures=failures + list(neutral_views.failures),
+                            hint="Dry run — resubmit without dry_run to commit.",
+                        ),
+                        text=(
+                            f"edit_schematic (dry run) on {target.name}: {len(results)} ops "
+                            "validated; nothing saved."
+                        ),
+                        format=args.format,
+                        views=neutral_views,
+                    )
                 )
 
             # --- commit protocol: assets (none today) → stage → rename LAST.
@@ -857,14 +967,28 @@ async def handle_edit_schematic(
                 state.editors.invalidate(target)
                 _stage("stage_asc", False, outcome.error)
                 return _commit_failure_response(
-                    args, target, build_id, committed_text, encoding, stages, outcome.error or ""
+                    args,
+                    target,
+                    build_id,
+                    committed_text,
+                    encoding,
+                    stages,
+                    outcome.error or "",
+                    present_mcp_views=present_mcp_views,
                 )
             _stage("stage_asc")
             if not outcome.renamed:
                 state.editors.invalidate(target)
                 _stage("rename", False, outcome.error)
                 return _commit_failure_response(
-                    args, target, build_id, committed_text, encoding, stages, outcome.error or ""
+                    args,
+                    target,
+                    build_id,
+                    committed_text,
+                    encoding,
+                    stages,
+                    outcome.error or "",
+                    present_mcp_views=present_mcp_views,
                 )
             _stage("rename")
             state.editors.invalidate(target)
@@ -876,12 +1000,24 @@ async def handle_edit_schematic(
             # Views report no stage entry of their own, so they open and close
             # their name by hand; a stage that calls _stage() only opens it.
             post_commit_stage = "views"
-            label_only_page, views, view_failures = await _paginate_views(
-                args, legend, label_only, target, build_id, state
+            neutral_views = await _build_edit_views(
+                args,
+                profile,
+                legend,
+                label_only,
+                committed_text,
+                encoding,
+                target,
+                state,
             )
+            wiring = None
+            presented_views = None
+            if present_mcp_views:
+                label_only_page, presented_views = _present_edit_views(args, neutral_views)
+                wiring = _wiring_dict(profile, label_only_page)
             post_commit_stage = "response"
-            wiring = _wiring_dict(profile, label_only_page)
-            artifacts = _artifacts_from_views(views)
+            artifact_views = {"render": neutral_views.render} if neutral_views.render else {}
+            artifacts = _artifacts_from_views(artifact_views)
 
             verification = None
             netlist = None
@@ -895,26 +1031,29 @@ async def handle_edit_schematic(
                 _stage("reference", bool(ok))
 
             hint = _commit_hint(profile, verification)
-            return format_response(
-                f"edit_schematic committed {target.name} (build {build_id}).",
-                _envelope(
-                    outcome="complete",
-                    commit_state="committed",
-                    target=target,
-                    build_id=build_id,
-                    base=args.base,
-                    stages=stages,
-                    sha256=committed_sha,
-                    wiring=wiring,
-                    views=views,
-                    verification=verification,
-                    netlist=netlist,
-                    warnings=warnings,
-                    failures=view_failures,
-                    artifacts=artifacts,
-                    hint=hint,
-                ),
-                args.format,
+            return finish(
+                EditSchematicEvaluation(
+                    data=_envelope(
+                        outcome="complete",
+                        commit_state="committed",
+                        target=target,
+                        build_id=build_id,
+                        base=args.base,
+                        stages=stages,
+                        sha256=committed_sha,
+                        wiring=wiring,
+                        views=presented_views,
+                        verification=verification,
+                        netlist=netlist,
+                        warnings=warnings,
+                        failures=list(neutral_views.failures),
+                        artifacts=artifacts,
+                        hint=hint,
+                    ),
+                    text=f"edit_schematic committed {target.name} (build {build_id}).",
+                    format=args.format,
+                    views=neutral_views,
+                )
             )
         except Exception as exc:
             # Any escape leaves the cached editor dirty — evict so the next read
@@ -927,13 +1066,78 @@ async def handle_edit_schematic(
             failed_stage = post_commit_stage
             _stage(failed_stage, False, str(exc))
             return _post_commit_failure_response(
-                args, target, build_id, stages, committed_sha, failed_stage, str(exc)
+                args,
+                target,
+                build_id,
+                stages,
+                committed_sha,
+                failed_stage,
+                str(exc),
+                present_mcp_views=present_mcp_views,
             )
         except BaseException:
             # Cancellation (and any other non-Exception escape) still propagates
             # unchanged — it is not ours to convert into a response.
             state.editors.invalidate(target)
             raise
+
+
+async def evaluate_edit_schematic(
+    args: EditSchematicInput,
+    state: SessionState,
+) -> EditSchematicEvaluation:
+    """Execute one transaction and retain its full views without replaying it."""
+    return await _evaluate_edit_schematic(args, state, present_mcp_views=False)
+
+
+def complete_edit_schematic_data(
+    evaluation: EditSchematicEvaluation,
+    args: EditSchematicInput,
+) -> dict[str, Any]:
+    """Return the existing response shape with every in-memory view row included."""
+    data = copy.deepcopy(evaluation.data)
+    if evaluation.views is None:
+        return data
+    label_only_page, views = _present_edit_views(
+        args,
+        evaluation.views,
+        complete=True,
+    )
+    data["wiring"] = _wiring_dict(evaluation.views.wiring_profile, label_only_page)
+    if views:
+        data["views"] = views
+    return data
+
+
+@registry.tool(
+    name="edit_schematic",
+    description=(
+        "Apply a typed op batch to an LTspice .asc schematic in one revision-"
+        "guarded, transactional call. base='blank' builds a whole circuit from an "
+        "empty sheet; base='existing' applies deltas. Pass expected_sha256 of the "
+        "file you edited against (required when the target exists) — a peer that "
+        "committed first yields revision_conflict with nothing written. Returns "
+        "geometry facts (pin legend, wiring metric), an optional render, and an "
+        "optional post-commit netlist verification against a reference."
+    ),
+    input_model=EditSchematicInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=False,
+    ),
+    profiles=("consolidated",),
+    output_schema=_OUTPUT_SCHEMA,
+)
+async def handle_edit_schematic(
+    args: EditSchematicInput, state: SessionState
+) -> types.CallToolResult:
+    """Transactional .asc mutation with revision guard, commit protocol, and views."""
+    evaluation = await _evaluate_edit_schematic(args, state, present_mcp_views=True)
+    if evaluation.mcp_result is None:  # pragma: no cover - enforced by the call above
+        raise RuntimeError("edit_schematic MCP presentation was not produced")
+    return evaluation.mcp_result
 
 
 def _validate_view_cursors(cursors: _ViewCursors | None) -> None:
@@ -988,7 +1192,9 @@ def _commit_failure_response(
     encoding: str,
     stages: list[dict],
     error: str,
-) -> types.CallToolResult:
+    *,
+    present_mcp_views: bool,
+) -> EditSchematicEvaluation:
     """Envelope for a commit failure before the rename; optionally quarantine a draft."""
     draft_path = None
     if args.write_failed_draft:
@@ -996,27 +1202,32 @@ def _commit_failure_response(
         with contextlib.suppress(OSError):
             draft_path.write_text(committed_text, encoding=encoding)
     artifacts = [{"kind": "draft", "path": str(draft_path)}] if draft_path else []
-    return format_response(
-        f"edit_schematic: commit failed before rename ({error}); target unchanged."
-        + (f" Draft written to {draft_path.name}." if draft_path else ""),
-        _envelope(
-            outcome="failed",
-            commit_state="not_committed",
-            target=target,
-            build_id=build_id,
-            base=args.base,
-            stages=stages,
-            error={
-                "code": "commit_failed",
-                "message": error,
-                # The failed commit phase is the last stage recorded before the abort.
-                "stage": stages[-1]["stage"] if stages else "commit",
-                "retryable": True,
-            },
-            artifacts=artifacts,
-            hint="The sheet was not modified; retry with the same expected_sha256.",
+    return _finish_edit_evaluation(
+        EditSchematicEvaluation(
+            data=_envelope(
+                outcome="failed",
+                commit_state="not_committed",
+                target=target,
+                build_id=build_id,
+                base=args.base,
+                stages=stages,
+                error={
+                    "code": "commit_failed",
+                    "message": error,
+                    # The failed commit phase is the last stage recorded before the abort.
+                    "stage": stages[-1]["stage"] if stages else "commit",
+                    "retryable": True,
+                },
+                artifacts=artifacts,
+                hint="The sheet was not modified; retry with the same expected_sha256.",
+            ),
+            text=(
+                f"edit_schematic: commit failed before rename ({error}); target unchanged."
+                + (f" Draft written to {draft_path.name}." if draft_path else "")
+            ),
+            format=args.format,
         ),
-        args.format,
+        present_mcp_views=present_mcp_views,
     )
 
 
@@ -1028,7 +1239,9 @@ def _post_commit_failure_response(
     committed_sha: str,
     stage: str,
     error: str,
-) -> types.CallToolResult:
+    *,
+    present_mcp_views: bool,
+) -> EditSchematicEvaluation:
     """Envelope for a failure AFTER the atomic rename — the sheet stays committed.
 
     The rename is the irreversible step: once it lands the caller MUST learn the
@@ -1038,30 +1251,35 @@ def _post_commit_failure_response(
     sha, never re-raised — a raise returns no structuredContent at all, which is
     exactly the state the caller cannot recover from.
     """
-    return format_response(
-        f"edit_schematic committed {target.name} (build {build_id}), then the post-commit "
-        f"{stage} stage failed: {error}. The sheet IS written.",
-        _envelope(
-            outcome="partial",
-            commit_state="committed",
-            target=target,
-            build_id=build_id,
-            base=args.base,
-            stages=stages,
-            sha256=committed_sha,
-            error={
-                "code": "post_commit_failed",
-                "message": error,
-                "stage": stage,
-                "retryable": False,
-            },
-            hint=(
-                f"The edit committed: {target.name} is now sha256 {committed_sha} — use that "
-                f"as expected_sha256 for your next edit. Only the post-commit {stage} stage "
-                "failed; re-run it separately if you need it."
+    return _finish_edit_evaluation(
+        EditSchematicEvaluation(
+            data=_envelope(
+                outcome="partial",
+                commit_state="committed",
+                target=target,
+                build_id=build_id,
+                base=args.base,
+                stages=stages,
+                sha256=committed_sha,
+                error={
+                    "code": "post_commit_failed",
+                    "message": error,
+                    "stage": stage,
+                    "retryable": False,
+                },
+                hint=(
+                    f"The edit committed: {target.name} is now sha256 {committed_sha} — use that "
+                    f"as expected_sha256 for your next edit. Only the post-commit {stage} stage "
+                    "failed; re-run it separately if you need it."
+                ),
             ),
+            text=(
+                f"edit_schematic committed {target.name} (build {build_id}), then the "
+                f"post-commit {stage} stage failed: {error}. The sheet IS written."
+            ),
+            format=args.format,
         ),
-        args.format,
+        present_mcp_views=present_mcp_views,
     )
 
 
