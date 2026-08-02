@@ -763,3 +763,59 @@ def test_every_wire_only_field_is_rejected_or_explicitly_allowlisted() -> None:
         + " — reject them in _enforce_auto_door or allowlist them with a reason"
     )
     assert not unnamed, "the door rejected but did not name: " + ", ".join(unnamed)
+
+
+def test_fire_and_forget_receipt_says_the_job_dies_with_this_process(
+    state_no_sim: SessionState,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """close() cancels every job this process owns, so wait=False is not durable.
+
+    The receipt is indistinguishable from a durable submission otherwise, and
+    the loss shows up only as a cancellation the caller never requested.
+    """
+    api = SyncApi(state_no_sim)
+    running = make_experiment_job(state_no_sim, job_id="exp-detached", status="running")
+    finished = make_experiment_job(state_no_sim, job_id="exp-settled", status="completed")
+
+    async def handler(args: experiments.RunExperimentsInput, _state: SessionState):
+        job = running if args.request_id == running.request_id else finished
+        return _result(
+            {
+                "job_id": job.job_id,
+                "request_id": job.request_id,
+                "control_token": job.control_token,
+                "status": job.status,
+                "outcome": "in_progress" if job is running else "complete",
+            }
+        )
+
+    monkeypatch.setattr(experiments, "handle_run_experiments", handler)
+
+    def codes(receipt: Mapping[str, Any]) -> set[str]:
+        return {item["code"] for item in receipt["observations"]}
+
+    detached = api.run_experiments(
+        wait=False,
+        request_id=running.request_id,
+        circuits=[{"path": "dut.cir"}],
+    )
+    settled = api.run_experiments(
+        wait=False,
+        request_id=finished.request_id,
+        circuits=[{"path": "dut.cir"}],
+    )
+    awaited = api.run_experiments(
+        request_id=finished.request_id,
+        circuits=[{"path": "dut.cir"}],
+    )
+
+    assert "process_owned_job" in codes(detached)
+    detail = next(
+        item["detail"] for item in detached["observations"] if item["code"] == "process_owned_job"
+    )
+    assert "long-lived server" in detail
+    # A job that is already terminal cannot be lost, and a caller that waited
+    # has nothing left to be warned about.
+    assert "process_owned_job" not in codes(settled)
+    assert "process_owned_job" not in codes(awaited)

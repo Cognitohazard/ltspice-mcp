@@ -1825,3 +1825,36 @@ async def test_every_metric_exposes_a_flat_numeric_headline(
             f"{metric} rows carry no flat numeric leaf — its headline is "
             "unprojectable; add a _HEADLINE_LEAVES entry (see bode_crossing)"
         )
+
+
+@pytest.mark.asyncio
+async def test_measurements_recipe_bins_the_distribution_on_request(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """Binning is reachable from the consolidated door, not just the legacy tool.
+
+    A Monte Carlo's spread is read off the histogram; hard-coding zero bins
+    here left one of the two doors unable to ask for it at all.
+    """
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    shutil.copy(FIXTURES_DIR / "ltspice_step_when.log", raw.with_suffix(".log"))
+
+    binned = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "m", "metric": "measurements", "histogram_bins": 3}],
+        include={"per_run": {"limit": 3}},
+    )
+    unbinned = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "m", "metric": "measurements"}],
+        include={"per_run": {"limit": 3}},
+    )
+
+    entry = binned["results"]["m"]["per_run"]["items"][0]["value"]["stats"]["vfinal"]
+    assert len(entry["histogram"]) == 3
+    assert sum(item["count"] for item in entry["histogram"]) == entry["valid_count"] == 3
+    plain = unbinned["results"]["m"]["per_run"]["items"][0]["value"]["stats"]["vfinal"]
+    assert plain["histogram"] == []

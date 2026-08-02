@@ -177,16 +177,67 @@ class ModelRule(RandomRuleBase):
 
 
 class MismatchRule(VariationModel):
-    """Pelgrom mismatch rule kept field-for-field with the shipped tool model."""
+    """Pelgrom mismatch rule kept field-for-field with the shipped tool model.
+
+    σ(ΔVTH) = AVT/√(W·L) and σ(ΔK)/K = AK/√(W·L), sampled INDEPENDENTLY per
+    instance per run. Descriptions mirror the sibling model in
+    ``tools/advanced.py`` — the coefficients are unit-bearing and a caller who
+    only ever sees this schema has no other place to read the units from.
+    """
 
     rule: Literal["mismatch"]
-    prefix: str = "M"
-    AVT: float = 0.0
-    AK: float = 0.0
-    distribution: Distribution = "normal"
-    vth_param: str = "VTO"
-    k_param: str = "KP"
-    min_wl_um2: float = Field(default=1e-3, gt=0.0)
+    prefix: str = Field(
+        default="M",
+        description=(
+            "Device prefix to apply mismatch to (case-insensitive). Default 'M' "
+            "(MOSFETs); 'X' reaches subckt-wrapped FETs. Matching is a plain "
+            "leading-character comparison, so 'M1' also claims M10/M11 — name "
+            "one rule per device when the pair must be scoped exactly. Other "
+            "letter prefixes (e.g. 'Q' for BJTs) work, but the Pelgrom math and "
+            "the vth_param/k_param defaults are MOSFET-shaped."
+        ),
+    )
+    AVT: float = Field(
+        default=0.0,
+        description=(
+            "VTH-mismatch coefficient in V·µm (e.g. 3e-3 = 3 mV·µm). For a target "
+            "sigma instead of a technology coefficient, invert the law: "
+            "AVT = sigma·√(W_µm·L_µm). 0 disables VTH mismatch."
+        ),
+    )
+    AK: float = Field(
+        default=0.0,
+        description=(
+            "K-mismatch coefficient in fraction·µm (e.g. 0.02 = 2%·µm). 0 disables K mismatch."
+        ),
+    )
+    distribution: Distribution = Field(
+        default="normal",
+        description="Distribution type for the per-instance offset (default normal).",
+    )
+    vth_param: str = Field(
+        default="VTO",
+        description=(
+            "Model-card parameter receiving ΔVTH. Defaults to 'VTO' (Level-1 SPICE); "
+            "use 'VTH0' for BSIM models."
+        ),
+    )
+    k_param: str = Field(
+        default="KP",
+        description=(
+            "Model-card parameter scaled by (1+ΔK/K). Defaults to 'KP' (Level-1); "
+            "use 'U0' for BSIM."
+        ),
+    )
+    min_wl_um2: float = Field(
+        default=1e-3,
+        gt=0.0,
+        description=(
+            "Lower bound on W·L (in µm²) used when computing Pelgrom σ — "
+            "guards against div-by-zero for behaviorally-described instances. "
+            "Must be positive (it is the √(W·L) denominator floor)."
+        ),
+    )
 
 
 RandomRule: TypeAlias = Annotated[

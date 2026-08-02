@@ -574,12 +574,18 @@ R1 in out {mc(10k, 0.1)}         ; uniform dist, 10k +/-10%
 Two distinct request shapes, both under `run_experiments` `variations`:
 
 **Statistical (Pelgrom) Monte Carlo** — one `random` entry with a mismatch
-rule; the engine draws per-instance `delvto`/`mulu0` from device area:
+rule; the engine draws per-instance `delvto`/`mulu0` from device area as
+`σ(ΔVTH) = AVT/√(W·L)` with W·L in µm². `AVT` is therefore in **V·µm**
+(`3.2e-3` = 3.2 mV·µm) and `AK` in fraction·µm — a coefficient written in
+V·m is 10⁶ too small and draws a spread of nothing while reporting success:
 
 ```json
 {"kind": "random", "id": "mc", "runs": 100,
- "rules": [{"rule": "mismatch", "prefix": "X", "AVT": 3.2e-9, "AK": 0.01}]}
+ "rules": [{"rule": "mismatch", "prefix": "X", "AVT": 3.2e-3, "AK": 0.01}]}
 ```
+
+To hit a target σ instead of a technology coefficient, invert it:
+`AVT = σ · √(W_µm · L_µm)` — 5 mV on a 20 µm × 1 µm pair is `2.24e-2`.
 
 A `prefix` that matches subckt instances (e.g. sky130 `X`-wrapped FETs)
 descends into the wrapper; that descent supports ngspice-compatible BSIM3/4

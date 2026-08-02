@@ -370,7 +370,14 @@ def _temp_as_param(
                 subject="TEMP",
                 evidence={
                     "directive": card.body,
-                    "reason": "temperature is a simulator axis; use .temp or .step temp",
+                    "reason": (
+                        "temperature is a simulator axis, not a parameter: a .param "
+                        "named TEMP is never read as the simulation temperature, so "
+                        "every point of a temperature sweep solves at the same "
+                        "temperature and the rows come back identical. Set it with "
+                        "'.temp <value ...>', '.step temp <list>', or "
+                        "'.options temp=<value>' instead."
+                    ),
                 },
             )
         )
@@ -389,7 +396,11 @@ RULES: tuple[LintRule, ...] = (
     LintRule("directive-arity", "blocking", _directive_arity),
     LintRule("include-relative", "warning", _include_relative),
     LintRule("suffix-mega-milli", "warning", _suffix_mega_milli),
-    LintRule("temp-as-param", "warning", _temp_as_param),
+    # Blocking, not a warning: a .param TEMP does not set temperature, so the
+    # deck simulates cleanly and returns one temperature's answers labelled as
+    # several. That silent-wrong-answer class is what this linter exists to
+    # stop, and a warning under the default lint mode does not stop it.
+    LintRule("temp-as-param", "blocking", _temp_as_param),
 )
 
 RULES_BY_ID: dict[str, LintRule] = {rule.rule_id: rule for rule in RULES}

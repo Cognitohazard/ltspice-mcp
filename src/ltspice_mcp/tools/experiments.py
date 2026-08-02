@@ -2192,6 +2192,11 @@ _KILL_RECEIPT_SCHEMA: dict[str, Any] = {
     "required": ["case_id", "run_index", "prior_status", "status"],
 }
 
+# A circuit group is a discovery row, not a job listing: it names enough recent
+# jobs to get back to one whose id was lost, and reports the true count so a
+# caller can tell a short list from a complete one.
+_RECENT_JOBS_CAP = 5
+
 _CIRCUIT_GROUP_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -2206,6 +2211,33 @@ _CIRCUIT_GROUP_SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": {"type": "string"},
         },
+        "recent_jobs": {
+            "type": "array",
+            "description": (
+                "The circuit's experiment jobs, newest activity first, capped at "
+                f"{_RECENT_JOBS_CAP}. These job_ids are what jobs(status)/"
+                "analyze_results address. Legacy .cir simulation runs are counted "
+                "in status_counts but carry no id here."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "string"},
+                    "status": {"type": "string"},
+                    "request_id": {"type": "string"},
+                    "finished_at": {"type": ["string", "null"]},
+                },
+                "required": ["job_id", "status", "request_id", "finished_at"],
+            },
+        },
+        "recent_jobs_total": {
+            "type": "integer",
+            "description": (
+                "How many experiment jobs the circuit has, before the recent_jobs "
+                "cap. Greater than len(recent_jobs) means older jobs exist that "
+                "this page does not name."
+            ),
+        },
     },
     "required": [
         "path",
@@ -2213,6 +2245,8 @@ _CIRCUIT_GROUP_SCHEMA: dict[str, Any] = {
         "last_activity",
         "status_counts",
         "interrupted_job_ids",
+        "recent_jobs",
+        "recent_jobs_total",
     ],
 }
 
@@ -2879,6 +2913,7 @@ def _collect_circuit_groups(
             if experiment.status == "interrupted":
                 interrupted.append(experiment.job_id)
             activities.append(_activity_timestamp(experiment))
+        newest_first = sorted(experiment_jobs, key=_activity_timestamp, reverse=True)
         groups.append(
             {
                 "path": str(circuit_path),
@@ -2886,6 +2921,20 @@ def _collect_circuit_groups(
                 "last_activity": max(activities) if activities else None,
                 "status_counts": counts,
                 "interrupted_job_ids": sorted(set(interrupted)),
+                "recent_jobs": [
+                    {
+                        "job_id": experiment.job_id,
+                        "status": experiment.status,
+                        "request_id": experiment.request_id,
+                        "finished_at": (
+                            experiment.completed_at.isoformat()
+                            if experiment.completed_at is not None
+                            else None
+                        ),
+                    }
+                    for experiment in newest_first[:_RECENT_JOBS_CAP]
+                ],
+                "recent_jobs_total": len(experiment_jobs),
             }
         )
     return _CircuitGroupsRead(groups=groups, observations=observations)
@@ -3190,9 +3239,14 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
                     "warnings": [],
                     "failures": [],
                     "hint": (
-                        "Recent circuit groups are ordered by the recent-circuits index."
-                        if circuit is None
-                        else f"Persisted job summary for {circuit}."
+                        (
+                            "Recent circuit groups are ordered by the recent-circuits index."
+                            if circuit is None
+                            else f"Persisted job summary for {circuit}."
+                        )
+                        + " Each group's recent_jobs names the job_ids to address with "
+                        "jobs(status) or analyze_results; recent_jobs_total says how "
+                        "many were left out."
                     ),
                 }
                 return data, f"Listed {data['returned']} of {data['total']} circuit group(s)"

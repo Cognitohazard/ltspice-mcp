@@ -2180,7 +2180,7 @@ class TestReceiptWeight:
         assert canonical_fingerprint(model) == canonical_fingerprint(loud)
 
     def test_day_one_presentation_fields_leave_old_canonical_bytes_unchanged(self):
-        assert experiment_store.CANONICALIZER_VERSION == 2
+        assert experiment_store.CANONICALIZER_VERSION == 3
         model = RunExperimentsInput.model_validate(
             {
                 "request_id": "stable-bytes",

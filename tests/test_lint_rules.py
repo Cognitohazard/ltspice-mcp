@@ -132,6 +132,27 @@ def test_temp_as_param_finds_nonfirst_declaration(tmp_path: Path):
     assert "temp-as-param" in _ids(deck, tmp_path)
 
 
+def test_temp_as_param_blocks_and_names_the_directives_that_work(tmp_path: Path):
+    """A .param TEMP deck runs and returns one temperature's answers as many.
+
+    Nothing downstream can detect that, so the finding has to stop submission
+    rather than annotate it — and it has to say which directives do work.
+    """
+    findings = lint_deck(
+        "V1 in 0 1\n.param TEMP=27\n.op\n.end\n",
+        tmp_path / "deck.cir",
+        None,
+        "LTspice",
+    )
+    finding = next(item for item in findings if item["rule_id"] == "temp-as-param")
+
+    assert RULES_BY_ID["temp-as-param"].disposition == "blocking"
+    assert finding["severity"] == "error"
+    reason = finding["evidence"]["reason"]
+    for directive in (".temp", ".step temp", ".options temp"):
+        assert directive in reason
+
+
 def test_model_missing_reads_staged_include_closure(tmp_path: Path):
     models = tmp_path / "models with spaces.lib"
     models.write_text(".model DFAST D(Is=1e-12)\n")
