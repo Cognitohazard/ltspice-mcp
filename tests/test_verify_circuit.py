@@ -29,10 +29,15 @@ import pytest
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import raster
+from ltspice_mcp.lib.schematic_scene import LayoutIssue, Scene
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify as vc
 from ltspice_mcp.tools.circuit import STRUCTURAL_DELTA_PROPS
-from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
+from ltspice_mcp.tools.verify import (
+    VerifyCircuitInput,
+    evaluate_verify_circuit,
+    handle_verify_circuit,
+)
 
 
 class FakeSim:
@@ -178,6 +183,44 @@ async def test_syntax_finding_shape(state_no_sim, work_dir):
         assert f["at"]["file"] == str(deck)
         assert f["subject"]
         assert f["severity"] == "error"
+
+
+async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
+    state_no_sim,
+    work_dir,
+    monkeypatch,
+):
+    asc = _write(work_dir, "crowded.asc", "Version 4.1\nSHEET 1 880 680\n")
+    issues = [
+        LayoutIssue(
+            kind="floating_pin",
+            refs=(f"R{index}.1",),
+            coords=((index * 16, 0),),
+            detail=f"floating pin {index}",
+        )
+        for index in range(vc.FINDING_RULE_CAP + 7)
+    ]
+
+    def crowded_scene(path, _state, *, compute_issues):
+        assert compute_issues is True
+        return Scene(source=path), issues
+
+    monkeypatch.setattr(vc, "_analyze_scene", crowded_scene)
+    args = VerifyCircuitInput(path=str(asc), checks=["layout"])
+    neutral = await evaluate_verify_circuit(args, state_no_sim)
+    full = neutral.findings_by_rule["floating_pin"]
+    assert len(full) == vc.FINDING_RULE_CAP + 7
+    assert not any("showing" in note for note in neutral.data["observations"])
+
+    mcp = await handle_verify_circuit(args, state_no_sim)
+    data = _assert_schema(mcp)
+    shown = [finding for finding in data["findings"] if finding["rule_id"] == "floating_pin"]
+    assert shown == full[: vc.FINDING_RULE_CAP]
+    assert len(full) - len(shown) == 7
+    assert any(
+        note == (f"floating_pin: showing {vc.FINDING_RULE_CAP} of {len(full)} findings")
+        for note in data["observations"]
+    )
 
 
 # ---------------------------------------------------------------------------
