@@ -74,8 +74,7 @@ def _consolidated_state(config) -> SessionState:
 async def test_top_level_budget_refers_to_accepting_tools(config):
     state = _consolidated_state(config)
     arguments = {
-        "request_id": "budget-referral",
-        "circuits": [{"path": "dut.cir"}],
+        "path": "dut.cir",
         "budget": 500,
     }
 
@@ -83,10 +82,12 @@ async def test_top_level_budget_refers_to_accepting_tools(config):
         patch("ltspice_mcp.server.server", _FakeServer(state)),
         pytest.raises(ValueError, match="Invalid arguments") as excinfo,
     ):
-        await call_tool("run_experiments", arguments)
+        await call_tool("verify_circuit", arguments)
 
     message = str(excinfo.value)
-    assert "Field 'budget' is accepted by analyze_results, inspect, jobs." in message
+    assert (
+        "Field 'budget' is accepted by analyze_results, inspect, jobs, run_experiments." in message
+    )
 
 
 @pytest.mark.asyncio

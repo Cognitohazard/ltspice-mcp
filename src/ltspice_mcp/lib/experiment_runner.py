@@ -67,10 +67,14 @@ def canonical_fingerprint(request_model: Any) -> str:
     caller wants to read more of it.
     """
     if hasattr(request_model, "model_dump"):
-        excluded = getattr(type(request_model), "PRESENTATION_FIELDS", None)
-        if isinstance(excluded, set | frozenset):
-            excluded = set(excluded)
-        payload = request_model.model_dump(mode="json", exclude_unset=False, exclude=excluded)
+        payload_builder = getattr(request_model, "canonical_fingerprint_payload", None)
+        if callable(payload_builder):
+            payload = payload_builder()
+        else:
+            excluded = getattr(type(request_model), "PRESENTATION_FIELDS", None)
+            if isinstance(excluded, set | frozenset):
+                excluded = set(excluded)
+            payload = request_model.model_dump(mode="json", exclude_unset=False, exclude=excluded)
     else:
         payload = request_model
     canonical = json.dumps(

@@ -108,6 +108,13 @@ def _as_type_set(node: dict[str, Any]) -> set[str]:
     return set()
 
 
+def test_budget_owner_matrix_pins_the_complete_consolidated_surface():
+    schemas = _input_schemas()
+    assert set(schemas) == set(CONSOLIDATED_TOOLS)
+    owners = {name for name, schema in schemas.items() if "budget" in schema.get("properties", {})}
+    assert owners == {"run_experiments", "jobs", "analyze_results", "inspect"}
+
+
 class TestPageObjectShape:
     """Every page declares {items, total, returned, truncated} (design section 2)."""
 
@@ -271,11 +278,13 @@ class TestOutputSchemaCoverage:
 # option or a sentence that grows one fails here, and the number is then raised
 # deliberately, in the same change that earns it.
 _SURFACE_BUDGET_CHARS: dict[str, int] = {
-    "analyze_results": 21207,
+    # Carries view-bound cursor semantics and the columnar response row form.
+    "analyze_results": 21099,
     "edit_schematic": 12685,
     "inspect": 8628,
     "jobs": 3955,
-    "run_experiments": 11781,
+    # Adds budget/attached-view inputs and a shared object/columnar receipt row.
+    "run_experiments": 12122,
     "verify_circuit": 5079,
 }
 

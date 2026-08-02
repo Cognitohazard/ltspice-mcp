@@ -48,10 +48,11 @@ def compact_validation_error(
         rendered.append(f"… and {remaining} more")
     text = "; ".join(rendered) or "Validation failed"
 
-    for field in referral_fields:
-        owners = tuple(dict.fromkeys(field_owners[field]))
-        if owners:
-            text += f" Field {field!r} is accepted by {', '.join(owners)}."
+    if field_owners is not None:
+        for field in referral_fields:
+            owners = tuple(dict.fromkeys(field_owners[field]))
+            if owners:
+                text += f" Field {field!r} is accepted by {', '.join(owners)}."
     return text
 
 
