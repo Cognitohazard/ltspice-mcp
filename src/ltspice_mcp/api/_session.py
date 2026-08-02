@@ -11,7 +11,7 @@ from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Any, Literal, TypeVar, cast
+from typing import Any, Literal, TypeVar
 
 from ltspice_mcp.api._exceptions import (
     ApiClosedError,
@@ -19,7 +19,7 @@ from ltspice_mcp.api._exceptions import (
     ApiSessionError,
 )
 from ltspice_mcp.api._methods import ApiMethodsMixin
-from ltspice_mcp.engine import bootstrap_engine
+from ltspice_mcp.engine import bootstrap_library_engine
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
@@ -117,10 +117,8 @@ class Api(ApiMethodsMixin):
             )
             self._loop_thread.start()
             self._loop_ready.wait()
-            library_bootstrap = cast(Any, bootstrap_engine)
             future = self._submit_to_loop(
-                library_bootstrap(
-                    mode="library",
+                bootstrap_library_engine(
                     working_dir=working_dir,
                     config_path=config_path,
                     **overrides,
@@ -182,10 +180,6 @@ class Api(ApiMethodsMixin):
         if threading.get_ident() == self._loop_thread.ident:
             raise ApiSessionError("Synchronous Api methods cannot run on the private loop thread")
 
-    @staticmethod
-    def _close_unsubmitted(coroutine: Coroutine[Any, Any, object]) -> None:
-        coroutine.close()
-
     async def _invoke_bridge(
         self,
         coroutine: Coroutine[Any, Any, _T],
@@ -209,7 +203,13 @@ class Api(ApiMethodsMixin):
         cancel_on_interrupt: bool = False,
         preserve_interrupt: bool = False,
     ) -> _T:
-        """Run one invocation on the private loop and block only this caller thread."""
+        """Run one invocation on the private loop and block only this caller thread.
+
+        The check here is the authoritative one — every marshalled call passes
+        through it. The public methods repeat it only to fail fast, so a call
+        from the loop thread or an inherited process raises ApiSessionError
+        before argument validation reports anything about the arguments.
+        """
         bridge: Coroutine[Any, Any, _T] | None = None
         try:
             self._check_process_and_thread()
@@ -221,7 +221,7 @@ class Api(ApiMethodsMixin):
         except BaseException:
             if bridge is not None:
                 bridge.close()
-            self._close_unsubmitted(coroutine)
+            coroutine.close()
             raise
 
         interrupted: KeyboardInterrupt | None = None

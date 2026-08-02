@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import threading
-from collections.abc import Coroutine
 from pathlib import Path
-from typing import Any, TypeVar, cast, get_args, get_origin, get_type_hints
+from typing import Any, cast, get_args, get_origin, get_type_hints
 
 import numpy as np
 import pytest
@@ -14,22 +12,17 @@ from spicelib.raw.raw_read import RawRead
 
 import ltspice_mcp.api as api_module
 import ltspice_mcp.api._primitives as primitives_module
-import ltspice_mcp.api._session as session_module
 from ltspice_mcp.api import Api, RawResult
-from ltspice_mcp.api._methods import ApiMethodsMixin
-from ltspice_mcp.engine import BootstrapResult
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import now, services
-from ltspice_mcp.lib.experiment_types import (
-    Completeness,
-    ExperimentCase,
-    ExperimentJob,
-    SourceRecord,
-)
 from ltspice_mcp.state import SessionState, SimulationJob
-from tests.conftest import LTSPICE_TRAN_RC_VFINAL, stage_recorded_fixture
-
-_T = TypeVar("_T")
+from tests.conftest import (
+    LTSPICE_TRAN_RC_VFINAL,
+    SyncApi,
+    make_experiment_job,
+    patch_stub_bootstrap,
+    stage_recorded_fixture,
+)
 
 EXPECTED_ALL = [
     "Api",
@@ -98,25 +91,6 @@ ALIAS_NAMES = EXPECTED_ALL[32:37]
 OUTPUT_TYPE_NAMES = EXPECTED_ALL[37:]
 
 
-class _SyncApi(ApiMethodsMixin):
-    def __init__(self, state: SessionState) -> None:
-        self._state = state
-
-    def _check_process_and_thread(self) -> None:
-        return None
-
-    def _call(
-        self,
-        coroutine: Coroutine[Any, Any, _T],
-        *,
-        cancelable: bool = False,
-        cancel_on_interrupt: bool = False,
-        preserve_interrupt: bool = False,
-    ) -> _T:
-        del cancelable, cancel_on_interrupt, preserve_interrupt
-        return asyncio.run(coroutine)
-
-
 def _legacy_job(state: SessionState, job_id: str, raw: Path) -> SimulationJob:
     deck = state.working_dir / f"{job_id}.cir"
     deck.write_text(".tran 1m\n.end\n", encoding="utf-8")
@@ -134,57 +108,11 @@ def _legacy_job(state: SessionState, job_id: str, raw: Path) -> SimulationJob:
     return job
 
 
-def _experiment_job(state: SessionState, job_id: str, raw: Path) -> ExperimentJob:
-    deck = state.working_dir / f"{job_id}.cir"
-    deck.write_text(".tran 1m\n.end\n", encoding="utf-8")
-    case = ExperimentCase(
-        case_id="case-selected",
-        run_index=4,
-        circuit="dut",
-        circuit_path=deck,
-        staged_deck=deck,
-        deck_sha256="a" * 64,
-        assignments={"R": "1k"},
-        status="produced",
-        raw_file=raw,
-        log_file=raw.with_suffix(".log"),
-    )
-    job = ExperimentJob(
-        job_id=job_id,
-        request_id=f"request-{job_id}",
-        fingerprint="fingerprint",
-        canonicalizer_version=1,
-        control_token="control-token",
-        store_path=state.working_dir / f"{job_id}.json",
-        cases=[case],
-        sources=[
-            SourceRecord(
-                circuit="dut",
-                path=deck,
-                sha256="a" * 64,
-                staged_deck=deck,
-                simulator="LTspice",
-            )
-        ],
-        simulator="LTspice",
-        completeness=Completeness(
-            declared=1,
-            expanded=1,
-            submitted=1,
-            produced=1,
-        ),
-        status="completed",
-        completed_at=now(),
-    )
-    state.add_experiment_job(job, already_persisted=True)
-    return job
-
-
 def test_raw_result_xor_step_slicing_and_mutation_isolation(
     state_no_sim: SessionState,
     work_dir: Path,
 ) -> None:
-    api = _SyncApi(state_no_sim)
+    api = SyncApi(state_no_sim)
     with pytest.raises(TypeError, match="exactly one"):
         api.load_raw()
     with pytest.raises(TypeError, match="exactly one"):
@@ -225,7 +153,7 @@ def test_raw_result_preserves_ac_complex_trace_and_real_axis(
     work_dir: Path,
 ) -> None:
     raw_path = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
-    result = _SyncApi(state_no_sim).load_raw(raw_path=raw_path)
+    result = SyncApi(state_no_sim).load_raw(raw_path=raw_path)
     trace = result.trace("V(out)")
     axis = result.axis()
 
@@ -283,7 +211,7 @@ def test_raw_result_uses_bounded_sibling_log_fallback(
 
     monkeypatch.setattr(services, "load_raw", fake_load)
     monkeypatch.setattr(services, "bounded_parse", observed_bounded)
-    result = _SyncApi(state_no_sim).load_raw(raw_path=raw_path)
+    result = SyncApi(state_no_sim).load_raw(raw_path=raw_path)
 
     assert result.steps == [{"gain": 1.0}, {"gain": 2.0}, {"gain": 4.0}]
     np.testing.assert_array_equal(result.trace("V(out)", step=2), np.array([2.0, 3.0]))
@@ -300,7 +228,9 @@ def test_experiment_and_legacy_addressing_use_disjoint_resolvers(
     experiment_raw.write_bytes(legacy_raw.read_bytes())
     experiment_raw.with_suffix(".log").write_bytes(legacy_raw.with_suffix(".log").read_bytes())
     legacy = _legacy_job(state_no_sim, "sim-api", legacy_raw)
-    experiment = _experiment_job(state_no_sim, "exp-api", experiment_raw)
+    experiment = make_experiment_job(
+        state_no_sim, job_id="exp-api", case_id="case-selected", run_index=4, raw=experiment_raw
+    )
 
     legacy_calls: list[str] = []
     experiment_calls: list[str] = []
@@ -317,7 +247,7 @@ def test_experiment_and_legacy_addressing_use_disjoint_resolvers(
 
     monkeypatch.setattr(services, "resolve_raw_file", track_legacy)
     monkeypatch.setattr(services, "resolve_experiment_run", track_experiment)
-    api = _SyncApi(state_no_sim)
+    api = SyncApi(state_no_sim)
 
     legacy_result = api.load_raw(job_id=legacy.job_id)
     experiment_result = api.load_raw(job_id=experiment.job_id, case_id="case-selected")
@@ -342,11 +272,7 @@ def test_raw_parse_deadline_propagates_through_api(
         release.wait(5)
         return cast(RawRead, object())
 
-    async def bootstrap(**kwargs: object) -> BootstrapResult:
-        del kwargs
-        return BootstrapResult(state=state_no_sim, preloaded_circuits=0)
-
-    monkeypatch.setattr(session_module, "bootstrap_engine", bootstrap)
+    patch_stub_bootstrap(monkeypatch, state_no_sim)
     monkeypatch.setattr(services, "load_raw_sync", slow_parse)
     monkeypatch.setattr(services, "RAW_PARSE_TIMEOUT_S", 0.05)
     api = Api()
@@ -368,15 +294,11 @@ def test_load_raw_runs_on_the_concrete_api_private_loop(
     seen_threads: list[int] = []
     original_load = services.load_raw
 
-    async def bootstrap(**kwargs: object) -> BootstrapResult:
-        del kwargs
-        return BootstrapResult(state=state_no_sim, preloaded_circuits=0)
-
     async def observed_load(path: Path, state: SessionState) -> RawRead:
         seen_threads.append(threading.get_ident())
         return await original_load(path, state)
 
-    monkeypatch.setattr(session_module, "bootstrap_engine", bootstrap)
+    patch_stub_bootstrap(monkeypatch, state_no_sim)
     monkeypatch.setattr(services, "load_raw", observed_load)
     with Api() as api:
         result = api.load_raw(raw_path=raw_path)
@@ -391,8 +313,10 @@ def test_measurements_support_cases_and_enforce_a_bounded_log_parse(
 ) -> None:
     raw_path = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     legacy = _legacy_job(state_no_sim, "sim-measurements", raw_path)
-    experiment = _experiment_job(state_no_sim, "exp-measurements", raw_path)
-    sync_api = _SyncApi(state_no_sim)
+    experiment = make_experiment_job(
+        state_no_sim, job_id="exp-measurements", case_id="case-selected", run_index=4, raw=raw_path
+    )
+    sync_api = SyncApi(state_no_sim)
     legacy_parsed = sync_api.measurements(job_id=legacy.job_id)
     parsed = sync_api.measurements(
         job_id=experiment.job_id,
@@ -407,11 +331,7 @@ def test_measurements_support_cases_and_enforce_a_bounded_log_parse(
         release.wait(5)
         return {}
 
-    async def bootstrap(**kwargs: object) -> BootstrapResult:
-        del kwargs
-        return BootstrapResult(state=state_no_sim, preloaded_circuits=0)
-
-    monkeypatch.setattr(session_module, "bootstrap_engine", bootstrap)
+    patch_stub_bootstrap(monkeypatch, state_no_sim)
     monkeypatch.setattr(primitives_module, "parse_measurements", slow_measurements)
     monkeypatch.setattr(services, "RAW_PARSE_TIMEOUT_S", 0.05)
     api = Api()
@@ -475,11 +395,7 @@ def test_archetype_build_verify_and_recorded_analysis_through_api(
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def bootstrap(**kwargs: object) -> BootstrapResult:
-        del kwargs
-        return BootstrapResult(state=asc_state, preloaded_circuits=0)
-
-    monkeypatch.setattr(session_module, "bootstrap_engine", bootstrap)
+    patch_stub_bootstrap(monkeypatch, asc_state)
     with Api() as api:
         built = api.edit_schematic(
             target="api_archetypes.asc",

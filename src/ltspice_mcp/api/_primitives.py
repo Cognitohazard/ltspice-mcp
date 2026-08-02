@@ -83,7 +83,9 @@ class RawResult:
     ) -> None:
         self._raw = raw
         self._signals = tuple(str(name) for name in raw.get_trace_names())
-        self._steps = tuple(copy.deepcopy(steps))
+        # Takes ownership of the rows the caller just built; the detachment
+        # contract is the per-read copy on the ``steps`` property.
+        self._steps = tuple(steps)
         self._step_count = step_count
         self._analysis_type = _analysis_type(raw)
         self._dialect = getattr(raw, "dialect", None) or dialect

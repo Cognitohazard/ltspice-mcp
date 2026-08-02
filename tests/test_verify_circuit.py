@@ -208,7 +208,7 @@ async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
     monkeypatch.setattr(vc, "_analyze_scene", crowded_scene)
     args = VerifyCircuitInput(path=str(asc), checks=["layout"])
     neutral = await evaluate_verify_circuit(args, state_no_sim)
-    full = neutral.findings_by_rule["floating_pin"]
+    full = [f for f in neutral.data["findings"] if f["rule_id"] == "floating_pin"]
     assert len(full) == vc.FINDING_RULE_CAP + 7
     assert not any("showing" in note for note in neutral.data["observations"])
 

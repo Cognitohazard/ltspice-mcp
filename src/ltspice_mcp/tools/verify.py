@@ -53,7 +53,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
-import copy
 import hashlib
 import shutil
 from dataclasses import dataclass
@@ -1529,14 +1528,6 @@ class VerifyCircuitEvaluation:
     capped_rules: frozenset[str] = frozenset()
     observation_events: tuple[str | _FindingCapSummary, ...] = ()
 
-    @property
-    def findings_by_rule(self) -> dict[str, list[dict[str, Any]]]:
-        """Uncapped findings grouped by rule, preserving evaluation order."""
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        for finding in self.data["findings"]:
-            grouped.setdefault(str(finding["rule_id"]), []).append(finding)
-        return grouped
-
 
 def _base_data(path: str) -> dict[str, Any]:
     return {
@@ -1786,11 +1777,15 @@ async def evaluate_verify_circuit(
 
 
 def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallToolResult:
-    """Apply the existing MCP cap and observation presentation to an evaluation."""
-    data = copy.deepcopy(evaluation.data)
+    """Apply the existing MCP cap and observation presentation to an evaluation.
+
+    Selects findings by reference before building the envelope, so the uncapped
+    evaluation is never copied wholesale; presentation replaces keys rather than
+    writing through any value it shares with the evaluation.
+    """
     shown: dict[str, int] = {}
     presented: list[dict[str, Any]] = []
-    for finding in data["findings"]:
+    for finding in evaluation.data["findings"]:
         rule = str(finding["rule_id"])
         if rule in evaluation.capped_rules:
             count = shown.get(rule, 0)
@@ -1798,6 +1793,7 @@ def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallTool
                 continue
             shown[rule] = count + 1
         presented.append(finding)
+    data = dict(evaluation.data)
     data["findings"] = presented
 
     observations: list[str] = []

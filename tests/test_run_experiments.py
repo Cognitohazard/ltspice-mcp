@@ -345,7 +345,7 @@ class TestReceiptThenDwell:
         def exploding_payload(*_args, **_kwargs):
             raise ValueError("payload exploded")
 
-        monkeypatch.setattr(experiments_mod, "_job_payload", exploding_payload)
+        monkeypatch.setattr(experiments_mod, "render_receipt_snapshot", exploding_payload)
         deck = _deck(work_dir / "payload-fail.cir")
 
         result = await handle_run_experiments(
@@ -1470,14 +1470,22 @@ class TestAttachedAnalysis:
             reserve=experiments_mod._RUN_BUDGET_NOTES.reserve,
         )
         answer_rung = dataclasses.replace(trim_rung, level=response_budget.RUNG_ANSWER)
-        trim_view = experiments_mod._finalize_receipt(
-            experiments_mod._job_payload(job, job.control_token)
+        manual_snapshot = experiments_mod.snapshot_receipt(
+            job,
+            None,
+            control_token=job.control_token,
+        )
+        trim_view = experiments_mod.finalize_receipt(
+            experiments_mod.render_receipt_snapshot(
+                manual_snapshot,
+                control_token=job.control_token,
+            )
         )
         experiments_mod._degrade_receipt(trim_view, trim_rung)
-        answer_view = experiments_mod._finalize_receipt(
-            experiments_mod._job_payload(
-                job,
-                job.control_token,
+        answer_view = experiments_mod.finalize_receipt(
+            experiments_mod.render_receipt_snapshot(
+                manual_snapshot,
+                control_token=job.control_token,
                 analysis_answer_channel=True,
             )
         )

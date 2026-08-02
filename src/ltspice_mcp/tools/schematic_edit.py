@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import copy
 import hashlib
 import io
 import os
@@ -528,8 +527,13 @@ async def _build_edit_views(
     encoding: str,
     target: Path,
     state: SessionState,
+    sheet_sha256: str,
 ) -> EditSchematicViews:
-    """Build every requested view from transaction-owned memory."""
+    """Build every requested view from transaction-owned memory.
+
+    ``sheet_sha256`` is the digest of the same bytes the commit protocol writes;
+    the caller already has it, so the sheet is encoded and hashed once per edit.
+    """
     rendered: dict[str, Any] | None = None
     failures: list[dict[str, Any]] = []
     if "render" in args.return_views:
@@ -555,7 +559,7 @@ async def _build_edit_views(
             except Exception as exc:  # broad by design — one view may fail independently
                 failures.append({"stage": "render", "error": str(exc)})
     return EditSchematicViews(
-        sha256=hashlib.sha256(committed_text.encode(encoding)).hexdigest(),
+        sha256=sheet_sha256,
         wiring_profile=profile,
         pin_legend=tuple(legend),
         label_only_pins=tuple(label_only),
@@ -592,6 +596,20 @@ def _present_edit_views(
         elif view == "render" and neutral.render is not None:
             views["render"] = neutral.render
     return label_only_page, views
+
+
+def _paged_edit_views(
+    args: EditSchematicInput,
+    profile: dict[str, int],
+    neutral: EditSchematicViews,
+    *,
+    present_mcp_views: bool,
+) -> tuple[dict | None, dict | None]:
+    """The wiring block and view pages an MCP response carries, or both absent."""
+    if not present_mcp_views:
+        return None, None
+    label_only_page, views = _present_edit_views(args, neutral)
+    return _wiring_dict(profile, label_only_page), views
 
 
 # ---------------------------------------------------------------------------
@@ -926,12 +944,14 @@ async def _evaluate_edit_schematic(
                     encoding,
                     target,
                     state,
+                    hashlib.sha256(committed_text.encode(encoding)).hexdigest(),
                 )
-                wiring = None
-                presented_views = None
-                if present_mcp_views:
-                    label_only_page, presented_views = _present_edit_views(args, neutral_views)
-                    wiring = _wiring_dict(profile, label_only_page)
+                wiring, presented_views = _paged_edit_views(
+                    args,
+                    profile,
+                    neutral_views,
+                    present_mcp_views=present_mcp_views,
+                )
                 return finish(
                     EditSchematicEvaluation(
                         data=_envelope(
@@ -1009,12 +1029,14 @@ async def _evaluate_edit_schematic(
                 encoding,
                 target,
                 state,
+                committed_sha,
             )
-            wiring = None
-            presented_views = None
-            if present_mcp_views:
-                label_only_page, presented_views = _present_edit_views(args, neutral_views)
-                wiring = _wiring_dict(profile, label_only_page)
+            wiring, presented_views = _paged_edit_views(
+                args,
+                profile,
+                neutral_views,
+                present_mcp_views=present_mcp_views,
+            )
             post_commit_stage = "response"
             artifact_views = {"render": neutral_views.render} if neutral_views.render else {}
             artifacts = _artifacts_from_views(artifact_views)
@@ -1094,8 +1116,12 @@ def complete_edit_schematic_data(
     evaluation: EditSchematicEvaluation,
     args: EditSchematicInput,
 ) -> dict[str, Any]:
-    """Return the existing response shape with every in-memory view row included."""
-    data = copy.deepcopy(evaluation.data)
+    """Return the existing response shape with every in-memory view row included.
+
+    The envelope was built for this evaluation and nothing else reads it, so the
+    complete views replace keys on a shallow copy of it.
+    """
+    data = dict(evaluation.data)
     if evaluation.views is None:
         return data
     label_only_page, views = _present_edit_views(

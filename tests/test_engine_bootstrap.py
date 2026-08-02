@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from datetime import timedelta
@@ -104,7 +105,7 @@ async def test_server_and_library_bootstrap_have_matching_startup_behavior(
     assert basic_config.call_args.kwargs["force"] is True
 
     library_expired = _stage_expired_result_set(working_dir)
-    boot = await engine.bootstrap_engine(working_dir=working_dir)
+    boot = await engine.bootstrap_library_engine(working_dir=working_dir)
     try:
         library_snapshot = _startup_snapshot(boot.state, library_expired)
         assert boot.preloaded_circuits == 1
@@ -148,7 +149,7 @@ async def test_library_working_dir_selects_its_toml_and_default_sandbox(
     monkeypatch.setattr(engine, "detect_simulators", _detect_without_simulators)
     monkeypatch.setattr("ltspice_mcp.lib.wsl.is_wsl", lambda: False)
 
-    boot = await engine.bootstrap_engine(
+    boot = await engine.bootstrap_library_engine(
         working_dir=working_dir,
         persist_jobs=False,
         preload_recent_count=0,
@@ -181,7 +182,7 @@ async def test_library_overrides_take_precedence_over_environment_toml_and_defau
     monkeypatch.setattr(engine, "detect_simulators", _detect_without_simulators)
     monkeypatch.setattr("ltspice_mcp.lib.wsl.is_wsl", lambda: False)
 
-    boot = await engine.bootstrap_engine(
+    boot = await engine.bootstrap_library_engine(
         working_dir=working_dir,
         default_timeout=30,
         allowed_paths=[explicit_sandbox],
@@ -202,9 +203,9 @@ async def test_library_bootstrap_rejects_unknown_and_irrelevant_overrides(
     tmp_path: Path,
 ) -> None:
     with pytest.raises(TypeError, match="unknown_setting"):
-        await engine.bootstrap_engine(working_dir=tmp_path, unknown_setting=True)
+        await engine.bootstrap_library_engine(working_dir=tmp_path, unknown_setting=True)
     with pytest.raises(TypeError, match="tool_profile"):
-        await engine.bootstrap_engine(working_dir=tmp_path, tool_profile="agentic")
+        await engine.bootstrap_library_engine(working_dir=tmp_path, tool_profile="agentic")
 
 
 @pytest.mark.asyncio
@@ -219,7 +220,7 @@ async def test_library_bootstrap_does_not_mutate_root_logging(
     root = logging.getLogger()
     before = (tuple(root.handlers), root.level, tuple(root.filters), root.disabled)
 
-    boot = await engine.bootstrap_engine(
+    boot = await engine.bootstrap_library_engine(
         working_dir=tmp_path,
         symbol_paths=[symbol_dir],
         persist_jobs=False,
@@ -230,3 +231,15 @@ async def test_library_bootstrap_does_not_mutate_root_logging(
         assert after == before
     finally:
         await boot.state.shutdown()
+
+
+def test_every_library_override_name_is_a_config_field() -> None:
+    """A renamed config field must not strand an override name behind it.
+
+    ``_LIBRARY_OVERRIDE_NAMES`` is the allowlist ``Api(**overrides)`` validates
+    against; a name in it that no longer exists on ``ServerConfig`` would be
+    accepted from the caller and then silently dropped by ``ServerConfig.load``.
+    """
+    config_fields = {field.name for field in dataclasses.fields(ServerConfig)}
+    stranded = sorted(engine._LIBRARY_OVERRIDE_NAMES - config_fields)
+    assert not stranded, f"override name(s) with no ServerConfig field: {', '.join(stranded)}"

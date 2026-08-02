@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import copy
-from collections.abc import Coroutine, Mapping
+import re
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, TypeVar, cast
+from typing import Any, cast, get_args
 
 import pytest
 from mcp import types
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from ltspice_mcp.api import (
     ApiCallError,
@@ -20,40 +20,11 @@ from ltspice_mcp.api import (
     ApiValidationError,
 )
 from ltspice_mcp.api import _methods as methods_module
-from ltspice_mcp.api._methods import ApiMethodsMixin, _unwrap
+from ltspice_mcp.api._methods import _unwrap
 from ltspice_mcp.errors import compact_validation_error
-from ltspice_mcp.lib.experiment_types import (
-    Completeness,
-    ExperimentCase,
-    ExperimentJob,
-    SourceRecord,
-)
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edit, verify
-from tests.conftest import stage_recorded_fixture
-
-_T = TypeVar("_T")
-
-
-class _SyncApi(ApiMethodsMixin):
-    """Small synchronous host that exercises the public mixin over a real state."""
-
-    def __init__(self, state: SessionState) -> None:
-        self._state = state
-
-    def _check_process_and_thread(self) -> None:
-        return None
-
-    def _call(
-        self,
-        coroutine: Coroutine[Any, Any, _T],
-        *,
-        cancelable: bool = False,
-        cancel_on_interrupt: bool = False,
-        preserve_interrupt: bool = False,
-    ) -> _T:
-        del cancelable, cancel_on_interrupt, preserve_interrupt
-        return asyncio.run(coroutine)
+from tests.conftest import SyncApi, make_experiment_job, stage_recorded_fixture
 
 
 def _result(payload: Mapping[str, Any], *, is_error: bool = False) -> types.CallToolResult:
@@ -68,7 +39,7 @@ def test_raw_page_returns_each_handler_payload_verbatim(
     state_no_sim: SessionState,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = _SyncApi(state_no_sim)
+    api = SyncApi(state_no_sim)
     cases = [
         (
             experiments,
@@ -142,7 +113,7 @@ def test_automatic_door_rejects_every_wire_control_before_dispatch(
     arguments: dict[str, Any],
     field: str,
 ) -> None:
-    api = _SyncApi(state_no_sim)
+    api = SyncApi(state_no_sim)
     method = getattr(api, method_name)
     with pytest.raises(ValueError, match=field.replace(".", r"\.")):
         method(**arguments)
@@ -151,7 +122,7 @@ def test_automatic_door_rejects_every_wire_control_before_dispatch(
 def test_validation_uses_the_server_renderer_and_field_owners(
     state_no_sim: SessionState,
 ) -> None:
-    api = _SyncApi(state_no_sim)
+    api = SyncApi(state_no_sim)
     raw = {"action": "status"}
     with pytest.raises(ValidationError) as model_error:
         experiments.JobsInput.model_validate(raw)
@@ -194,7 +165,7 @@ def test_jobs_list_collects_every_flat_page(
     state_no_sim: SessionState,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = _SyncApi(state_no_sim)
+    api = SyncApi(state_no_sim)
     rows = [{"path": f"circuit-{index}.cir"} for index in range(113)]
     calls: list[str | None] = []
 
@@ -228,65 +199,12 @@ def test_jobs_list_collects_every_flat_page(
     assert collected["observations"] == [{"code": "inventory", "detail": "stable"}]
 
 
-def _experiment_job(
-    state: SessionState,
-    *,
-    job_id: str,
-    count: int,
-    status: str = "completed",
-) -> ExperimentJob:
-    cases = [
-        ExperimentCase(
-            case_id=f"case-{index:04d}",
-            run_index=index,
-            circuit="dut",
-            circuit_path=state.working_dir / "dut.cir",
-            staged_deck=state.working_dir / "staged.cir",
-            deck_sha256="a" * 64,
-            assignments={"R": index},
-            status="produced" if status == "completed" else "queued",
-            raw_file=state.working_dir / f"case-{index}.raw",
-            log_file=state.working_dir / f"case-{index}.log",
-        )
-        for index in range(count)
-    ]
-    produced = count if status == "completed" else 0
-    job = ExperimentJob(
-        job_id=job_id,
-        request_id=f"request-{job_id}",
-        fingerprint="fingerprint",
-        canonicalizer_version=1,
-        control_token="control-token",
-        store_path=state.working_dir / f"{job_id}.json",
-        cases=cases,
-        sources=[
-            SourceRecord(
-                circuit="dut",
-                path=state.working_dir / "dut.cir",
-                sha256="a" * 64,
-                staged_deck=state.working_dir / "staged.cir",
-                simulator="ltspice",
-            )
-        ],
-        simulator="ltspice",
-        completeness=Completeness(
-            declared=count,
-            expanded=count,
-            submitted=produced,
-            produced=produced,
-        ),
-        status=cast(Any, status),
-    )
-    state.add_experiment_job(job, already_persisted=True)
-    return job
-
-
 def test_run_receipt_assembles_more_than_fifty_runs_with_original_projection(
     state_no_sim: SessionState,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = _SyncApi(state_no_sim)
-    job = _experiment_job(state_no_sim, job_id="exp-many", count=61)
+    api = SyncApi(state_no_sim)
+    job = make_experiment_job(state_no_sim, job_id="exp-many", count=61)
     captured: list[experiments.RunExperimentsInput] = []
 
     async def handler(args: experiments.RunExperimentsInput, _state: SessionState):
@@ -351,8 +269,8 @@ def test_interrupt_after_submission_keeps_receipt_and_does_not_cancel_job(
     state_no_sim: SessionState,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = _SyncApi(state_no_sim)
-    job = _experiment_job(
+    api = SyncApi(state_no_sim)
+    job = make_experiment_job(
         state_no_sim,
         job_id="exp-interrupted-wait",
         count=1,
@@ -375,7 +293,7 @@ def test_interrupt_after_submission_keeps_receipt_and_does_not_cancel_job(
         raise ApiInterrupted(job_id=job_id)
 
     monkeypatch.setattr(experiments, "handle_run_experiments", handler)
-    monkeypatch.setattr(_SyncApi, "wait", interrupted_wait)
+    monkeypatch.setattr(SyncApi, "wait", interrupted_wait)
     with pytest.raises(ApiInterrupted) as interrupted:
         api.run_experiments(circuits=[{"path": "dut.cir"}])
     assert interrupted.value.receipt is not None
@@ -388,7 +306,7 @@ def test_collector_failure_after_submission_keeps_original_recovery_handles(
     state_no_sim: SessionState,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = _SyncApi(state_no_sim)
+    api = SyncApi(state_no_sim)
     receipt = {
         "job_id": "exp-collector-failed",
         "request_id": "request-collector-failed",
@@ -415,8 +333,8 @@ def test_collector_failure_after_submission_keeps_original_recovery_handles(
 def test_wait_timeout_returns_snapshot_and_leaves_job_running(
     state_no_sim: SessionState,
 ) -> None:
-    api = _SyncApi(state_no_sim)
-    job = _experiment_job(
+    api = SyncApi(state_no_sim)
+    job = make_experiment_job(
         state_no_sim,
         job_id="exp-running",
         count=2,
@@ -458,7 +376,7 @@ def test_inspect_batches_live_cursors_and_merges_paired_net_collections(
     state_no_sim: SessionState,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = _SyncApi(state_no_sim)
+    api = SyncApi(state_no_sim)
     batch_sizes: list[int] = []
 
     async def handler(args: inspect_tools.InspectInput, _state: SessionState):
@@ -537,7 +455,7 @@ def test_inspect_stale_restart_discards_the_first_revision(
     state_no_sim: SessionState,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = _SyncApi(state_no_sim)
+    api = SyncApi(state_no_sim)
     calls = 0
 
     async def handler(args: inspect_tools.InspectInput, _state: SessionState):
@@ -598,7 +516,7 @@ def test_analyze_drives_neutral_continuations_without_flipping_request_fields(
     state_no_sim: SessionState,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = _SyncApi(state_no_sim)
+    api = SyncApi(state_no_sim)
     seen_positions: list[int | None] = []
     seen_requests: list[analyze.AnalyzeResultsInput] = []
 
@@ -607,16 +525,19 @@ def test_analyze_drives_neutral_continuations_without_flipping_request_fields(
         _state: SessionState,
         *,
         continuation: analyze.AnalysisContinuationPosition | None = None,
+        loaded: object | None = None,
     ):
+        del loaded
         seen_positions.append(None if continuation is None else continuation.work_index)
         seen_requests.append(request)
         next_position = len(seen_positions)
         return SimpleNamespace(
+            item=None,
             continuation=(
                 analyze.AnalysisContinuationPosition("set-1", next_position)
                 if next_position < 3
                 else None
-            )
+            ),
         )
 
     def complete(drives: list[object]) -> dict[str, Any]:
@@ -653,7 +574,7 @@ def test_analyze_complete_failure_inventory_reconciles_the_wire_cap(
     state_no_sim: SessionState,
     work_dir: Path,
 ) -> None:
-    api = _SyncApi(state_no_sim)
+    api = SyncApi(state_no_sim)
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     recipes = [{"key": f"invalid-{index}", "metric": "not_a_recipe"} for index in range(107)]
     sources = [{"raw_path": str(raw), "label": "dut"}]
@@ -674,7 +595,7 @@ def test_analyze_collects_projected_per_run_rows_and_missing_cases_together(
     state_no_sim: SessionState,
     work_dir: Path,
 ) -> None:
-    api = _SyncApi(state_no_sim)
+    api = SyncApi(state_no_sim)
     raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
     data = api.analyze_results(
         sources=[{"raw_path": str(raw), "label": "dut", "runs": [0, 3]}],
@@ -711,7 +632,7 @@ def test_verify_and_edit_return_uncapped_neutral_data(
     state_no_sim: SessionState,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = _SyncApi(state_no_sim)
+    api = SyncApi(state_no_sim)
     findings = [{"rule_id": "spacing", "subject": str(index)} for index in range(31)]
 
     async def evaluate_verify(_request: object, _state: SessionState):
@@ -751,3 +672,94 @@ def test_verify_and_edit_return_uncapped_neutral_data(
     assert legend["returned"] == legend["total"] == 121
     assert legend["truncated"] is False
     assert legend["next_cursor"] is None
+
+
+# ---------------------------------------------------------------------------
+# The automatic door's denylist, pinned fail-closed
+# ---------------------------------------------------------------------------
+
+#: A field name that reads like a wire-only paging or budget control. The door
+#: classifies by name, so this pattern is what the pin below sweeps for.
+_WIRE_ONLY_NAME = re.compile(
+    r"^(budget|continue|continuation|cursor|view_cursors|wait_s)$|_cursors?$"
+)
+
+#: Wire-only-looking fields the automatic door deliberately ACCEPTS, each with
+#: the reason it is not a paging or budget control. Empty today: every such
+#: field on the five input models is rejected. A new one must be added here
+#: with its justification, or the door must reject it — this test fails until
+#: one of the two happens, so a paging knob cannot reach the automatic door by
+#: nobody having classified it.
+_DOOR_ALLOWLIST: dict[tuple[str, ...], str] = {}
+
+_DOOR_MODELS = (
+    experiments.RunExperimentsInput,
+    experiments.JobsInput,
+    analyze.AnalyzeResultsInput,
+    inspect_tools.InspectInput,
+    schematic_edit.EditSchematicInput,
+    verify.VerifyCircuitInput,
+)
+
+
+def _nested_models(annotation: Any) -> Iterator[type[BaseModel]]:
+    """Every model reachable from one field annotation, through unions/lists."""
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        yield annotation
+        return
+    for argument in get_args(annotation):
+        yield from _nested_models(argument)
+
+
+def _field_paths(
+    model: type[BaseModel],
+    prefix: tuple[str, ...] = (),
+    seen: frozenset[type[BaseModel]] = frozenset(),
+) -> Iterator[tuple[str, ...]]:
+    """Every wire-name path a caller could spell inside this model's arguments."""
+    if model in seen:
+        return
+    for name, field in model.model_fields.items():
+        path = (*prefix, field.alias or name)
+        yield path
+        for nested in _nested_models(field.annotation):
+            yield from _field_paths(nested, path, seen | {model})
+
+
+def _nest(path: tuple[str, ...], value: Any) -> dict[str, Any]:
+    for key in reversed(path):
+        value = {key: value}
+    return value
+
+
+def _door_rejection(arguments: dict[str, Any]) -> str | None:
+    """The door's refusal for these arguments, or None if it lets them through."""
+    try:
+        methods_module._enforce_auto_door(arguments)
+    except ValueError as exc:
+        return str(exc)
+    return None
+
+
+def test_every_wire_only_field_is_rejected_or_explicitly_allowlisted() -> None:
+    paths = {path for model in _DOOR_MODELS for path in _field_paths(model)}
+    candidates = sorted(path for path in paths if _WIRE_ONLY_NAME.search(path[-1]))
+    assert candidates, "the sweep found no wire-only fields at all — the walk is broken"
+
+    unclassified: list[str] = []
+    unnamed: list[str] = []
+    for path in candidates:
+        if path in _DOOR_ALLOWLIST:
+            continue
+        dotted = ".".join(path)
+        rejection = _door_rejection(_nest(path, "x"))
+        if rejection is None:
+            unclassified.append(dotted)
+        elif dotted not in rejection:
+            unnamed.append(dotted)
+    assert not unclassified, (
+        "wire-only field(s) reach the automatic door unclassified: "
+        + ", ".join(unclassified)
+        + " — reject them in _enforce_auto_door or allowlist them with a reason"
+    )
+    assert not unnamed, "the door rejected but did not name: " + ", ".join(unnamed)

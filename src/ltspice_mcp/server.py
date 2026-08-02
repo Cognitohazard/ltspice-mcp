@@ -19,7 +19,7 @@ from ltspice_mcp import __version__, prompts
 from ltspice_mcp import errors as _err
 from ltspice_mcp.api._session import acquire_session_lease, release_session_lease
 from ltspice_mcp.config import ServerConfig, generate_default_config
-from ltspice_mcp.engine import bootstrap_engine, configure_asc_editor
+from ltspice_mcp.engine import bootstrap_server_engine
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, compact_validation_error
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
 from ltspice_mcp.lib.mcp_logging import mcp_log, set_log_fn
@@ -105,11 +105,6 @@ async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     task = asyncio.create_task(state.note_recent_circuit(resolved))
     _recent_touch_tasks.add(task)
     task.add_done_callback(_recent_touch_tasks.discard)
-
-
-def _configure_asc_editor(config: ServerConfig, available: dict) -> None:
-    """Preserve the server module's symbol-configuration helper."""
-    configure_asc_editor(config, available, target_logger=logger)
 
 
 class _ErrorHint(NamedTuple):
@@ -297,10 +292,9 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     lease_owner = object()
     lease_pid = acquire_session_lease(lease_owner)
     try:
-        boot = await bootstrap_engine(
-            mode="server",
-            _on_config_loaded=_configure_server_logging,
-            _logger=logger,
+        boot = await bootstrap_server_engine(
+            on_config_loaded=_configure_server_logging,
+            logger=logger,
         )
         state = boot.state
         config = state.config

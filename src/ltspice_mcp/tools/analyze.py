@@ -2453,20 +2453,6 @@ class AnalysisContinuationPosition:
 
 
 @dataclass(frozen=True)
-class AnalysisNeutralWork:
-    """Unprojected work produced for one recipe during one evaluator drive."""
-
-    key: str
-    position: int
-    row_offset: int
-    rows: tuple[dict[str, Any], ...]
-    reductions: tuple[dict[str, Any], ...]
-    facts: dict[str, Any]
-    failures: tuple[dict[str, Any], ...]
-    observations: tuple[dict[str, Any], ...]
-
-
-@dataclass(frozen=True)
 class AnalysisEvaluation:
     """Everything a response is built from, once the work behind it is done.
 
@@ -2491,64 +2477,11 @@ class AnalysisEvaluation:
     signals: dict[str, list[str]] | None
 
     @property
-    def neutral_work(self) -> tuple[AnalysisNeutralWork, ...]:
-        """Complete, unprojected rows and derived facts from this drive."""
-        work: list[AnalysisNeutralWork] = []
-        for unit in self.processed:
-            recipe = unit["recipe"]
-            rows = unit["records"]
-            relevant_missing = [
-                case
-                for case in self.missing
-                if recipe.sources is None or case.get("label") in set(recipe.sources)
-            ]
-            spec = _spec(
-                recipe,
-                rows,
-                incomplete=bool(unit["item_failures"] or relevant_missing),
-                include_outliers=True,
-                fail_case_limit=max(1, len(rows)),
-            )
-            if spec is not None:
-                fail_cases = spec["fail_cases"]["items"]
-                spec = {
-                    key: value
-                    for key, value in spec.items()
-                    if key not in {"fail_cases", "outliers"}
-                }
-                spec["fail_cases"] = fail_cases
-            facts: dict[str, Any] = {
-                "metric": recipe.metric,
-                "units": None,
-                "warnings": _record_warnings(rows),
-                "groups": _group_values(recipe, rows, self.group_by),
-                "spec": spec,
-            }
-            work.append(
-                AnalysisNeutralWork(
-                    key=unit["key"],
-                    position=unit["position"],
-                    row_offset=unit["per_run_offset"],
-                    rows=tuple(rows),
-                    reductions=tuple(_reduce(recipe, rows)),
-                    facts=facts,
-                    failures=tuple(unit["item_failures"]),
-                    observations=tuple(unit["observations"]),
-                )
-            )
-        return tuple(work)
-
-    @property
     def failure_inventory(self) -> tuple[dict[str, Any], ...]:
         """Every failure produced by this drive, without the MCP failure cap."""
         failures = [failure for _position, failure in self.skipped]
         failures.extend(failure for unit in self.processed for failure in unit["item_failures"])
         return tuple(failures)
-
-    @property
-    def missing_cases(self) -> tuple[dict[str, Any], ...]:
-        """The complete missing-case inventory, before MCP pagination."""
-        return tuple(self.missing)
 
     @property
     def continuation(self) -> AnalysisContinuationPosition | None:
@@ -2565,29 +2498,8 @@ class AnalysisEvaluation:
         )
 
 
-# Internal name retained for the rendering helpers while callers use the seam's
-# descriptive result type.
-_Assembly = AnalysisEvaluation
-
-
-def _encode_analysis_position(
-    item: result_store.ResultSet,
-    position: AnalysisContinuationPosition,
-    *,
-    view_fields: list[str] | None,
-) -> str:
-    """Render one neutral evaluator position as the existing opaque MCP cursor."""
-    return result_store.encode_cursor(
-        item,
-        position.work_index,
-        intra_item=position.row_offset,
-        missing_offset=position.missing_offset,
-        view_fields=view_fields,
-    )
-
-
 def _assemble(
-    a: _Assembly,
+    a: AnalysisEvaluation,
     rung: response_budget.Rung | None,
     limits: _Limits,
 ) -> tuple[dict[str, Any], str]:
@@ -2669,30 +2581,23 @@ def _assemble(
             and a.include.per_run is not None
             and entry["per_run"]["truncated"]
         ):
-            entry["per_run"]["next_cursor"] = _encode_analysis_position(
+            entry["per_run"]["next_cursor"] = result_store.encode_cursor(
                 item,
-                AnalysisContinuationPosition(
-                    result_set_id=item.result_set_id,
-                    work_index=unit["position"],
-                    row_offset=per_run_next,
-                    missing_offset=missing_next,
-                ),
+                unit["position"],
+                intra_item=per_run_next,
+                missing_offset=missing_next,
                 view_fields=a.include.fields,
             )
 
     next_value: dict[str, str] | None = None
     if position < len(item.work):
-        continuation = AnalysisContinuationPosition(
-            result_set_id=item.result_set_id,
-            work_index=position,
-            row_offset=intra_item,
-            missing_offset=missing_next,
-        )
         next_value = {
             "result_set_id": item.result_set_id,
-            "cursor": _encode_analysis_position(
+            "cursor": result_store.encode_cursor(
                 item,
-                continuation,
+                position,
+                intra_item=intra_item,
+                missing_offset=missing_next,
                 view_fields=a.include.fields,
             ),
         }
@@ -2721,14 +2626,11 @@ def _assemble(
         # Carries the live work position, not the end of the work list: this
         # cursor advances the coverage view, and pointing it past the work would
         # discard whatever work the caller had left to resume.
-        missing_page["next_cursor"] = _encode_analysis_position(
+        missing_page["next_cursor"] = result_store.encode_cursor(
             item,
-            AnalysisContinuationPosition(
-                result_set_id=item.result_set_id,
-                work_index=position,
-                row_offset=intra_item,
-                missing_offset=missing_next,
-            ),
+            position,
+            intra_item=intra_item,
+            missing_offset=missing_next,
             view_fields=a.include.fields,
         )
     coverage = {
@@ -2772,7 +2674,7 @@ def _assemble(
     return data, text
 
 
-def _snapshot_from_assembly(a: _Assembly) -> dict[str, Any]:
+def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
     """Persist facts and bounded unprojected rows, never a rendered response."""
     wide_include = a.include.model_copy(update={"fields": list(_ROW_KEYS)})
     wide = replace(a, include=wide_include)
@@ -3225,7 +3127,7 @@ _BUDGET_NOTES = response_budget.Notes(
 )
 
 
-async def _negotiate_analysis(budget: int, a: _Assembly) -> types.CallToolResult:
+async def _negotiate_analysis(budget: int, a: AnalysisEvaluation) -> types.CallToolResult:
     """Assemble this analysis at the mildest ladder rung that fits ``budget``."""
     base = _Limits.of(a.include)
     text = ""
@@ -3259,6 +3161,7 @@ async def _evaluate_analysis_drive(
     state: SessionState,
     *,
     continuation: AnalysisContinuationPosition | None = None,
+    loaded: result_store.ResultSet | None = None,
     stop_after_per_run_page: bool = False,
     per_run_reservoir_limit: int | None = None,
 ) -> AnalysisEvaluation:
@@ -3279,10 +3182,16 @@ async def _evaluate_analysis_drive(
     cursor_has_view = False
     cursor_fields: list[str] | None = None
     if continuation is not None:
-        item = await asyncio.to_thread(
-            result_store.load,
-            continuation.result_set_id,
-            state.working_dir,
+        # The set is immutable, so a caller driving successive continuations can
+        # hand back the one it already holds instead of re-reading it per drive.
+        item = (
+            loaded
+            if loaded is not None and loaded.result_set_id == continuation.result_set_id
+            else await asyncio.to_thread(
+                result_store.load,
+                continuation.result_set_id,
+                state.working_dir,
+            )
         )
         position = continuation.work_index
         intra_item = continuation.row_offset
@@ -3632,15 +3541,22 @@ async def evaluate_analysis_results(
     state: SessionState,
     *,
     continuation: AnalysisContinuationPosition | None = None,
+    loaded: result_store.ResultSet | None = None,
 ) -> AnalysisEvaluation:
     """Run one bounded neutral analysis drive.
 
     The returned rows, reductions, facts, failures, and missing cases are not
     projected or capped.  ``continuation`` is the evaluator's internal position;
     callers that need a complete result can pass it back repeatedly without
-    decoding or merging rendered MCP pages.
+    decoding or merging rendered MCP pages.  Passing the previous drive's
+    ``item`` as ``loaded`` skips re-reading the immutable set from disk.
     """
-    return await _evaluate_analysis_drive(args, state, continuation=continuation)
+    return await _evaluate_analysis_drive(
+        args,
+        state,
+        continuation=continuation,
+        loaded=loaded,
+    )
 
 
 def complete_analysis_evaluations(drives: list[AnalysisEvaluation]) -> dict[str, Any]:
