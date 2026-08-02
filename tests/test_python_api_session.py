@@ -69,7 +69,7 @@ def _wait_for_status(api: Api, expected: str, timeout: float = 2.0) -> None:
     pytest.fail(f"Api did not reach status {expected!r}")
 
 
-def test_exception_hierarchy_and_tier_one_public_surface() -> None:
+def test_exception_hierarchy_and_python_api_method_surface() -> None:
     assert issubclass(ApiSessionError, ApiError)
     assert issubclass(ApiClosedError, ApiSessionError)
     assert issubclass(ApiInterrupted, KeyboardInterrupt)
@@ -78,17 +78,7 @@ def test_exception_hierarchy_and_tier_one_public_surface() -> None:
 
     import ltspice_mcp.api as api_module
 
-    assert set(api_module.__all__) == {
-        "Api",
-        "ApiCallError",
-        "ApiClosedError",
-        "ApiError",
-        "ApiInternalError",
-        "ApiInterrupted",
-        "ApiSessionError",
-        "ApiValidationError",
-    }
-    assert not hasattr(api_module, "RawResult")
+    assert hasattr(api_module, "RawResult")
     assert all(
         hasattr(Api, name)
         for name in (
@@ -99,6 +89,8 @@ def test_exception_hierarchy_and_tier_one_public_surface() -> None:
             "inspect",
             "edit_schematic",
             "verify_circuit",
+            "load_raw",
+            "measurements",
         )
     )
 

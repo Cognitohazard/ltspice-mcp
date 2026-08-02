@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Coroutine, Iterator, Mapping, Sequence
@@ -17,6 +18,7 @@ from ltspice_mcp.api._exceptions import (
     ApiInterrupted,
     ApiValidationError,
 )
+from ltspice_mcp.api._primitives import RawResult, load_measurement_results, load_raw_result
 from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edit, verify
@@ -632,3 +634,49 @@ class ApiMethodsMixin(ABC):
             return payload
 
         return self._call(evaluate(), cancelable=True, cancel_on_interrupt=True)
+
+    def load_raw(
+        self,
+        *,
+        raw_path: str | os.PathLike[str] | None = None,
+        job_id: str | None = None,
+        run_index: int = 0,
+        case_id: str | None = None,
+    ) -> RawResult:
+        """Load one raw result through the bounded parser and return a safe wrapper."""
+        self._check_process_and_thread()
+        if (raw_path is None) == (job_id is None):
+            raise TypeError("Pass exactly one of raw_path or job_id")
+        if raw_path is not None and (run_index != 0 or case_id is not None):
+            raise TypeError("run_index and case_id are only valid with job_id")
+        return self._call(
+            load_raw_result(
+                state=self._state,
+                raw_path=None if raw_path is None else os.fspath(raw_path),
+                job_id=job_id,
+                run_index=run_index,
+                case_id=case_id,
+            ),
+            cancelable=True,
+            cancel_on_interrupt=True,
+        )
+
+    def measurements(
+        self,
+        *,
+        job_id: str,
+        run_index: int = 0,
+        case_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Return parsed ``.meas`` data for one legacy run or experiment case."""
+        self._check_process_and_thread()
+        return self._call(
+            load_measurement_results(
+                state=self._state,
+                job_id=job_id,
+                run_index=run_index,
+                case_id=case_id,
+            ),
+            cancelable=True,
+            cancel_on_interrupt=True,
+        )
