@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import re
+import warnings
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import SimpleNamespace
@@ -819,3 +820,37 @@ def test_fire_and_forget_receipt_says_the_job_dies_with_this_process(
     # has nothing left to be warned about.
     assert "process_owned_job" not in codes(settled)
     assert "process_owned_job" not in codes(awaited)
+
+
+def test_dict_shaped_inspect_queries_serialize_without_warning(
+    state_no_sim: SessionState,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dict query is the documented shape on both doors, so the successful
+    call must be silent. Dumping the whole request serialized each dict against
+    the union member it was declared as and wrote a pydantic serializer warning
+    to stderr per query — noise that reads as a malformed call."""
+    api = SyncApi(state_no_sim)
+
+    async def handler(args: inspect_tools.InspectInput, _state: SessionState):
+        return _result(
+            {
+                "results": [
+                    {"index": index, "ok": True, "kind": "symbol", "data": {}}
+                    for index, _query in enumerate(args.queries)
+                ]
+            }
+        )
+
+    monkeypatch.setattr(inspect_tools, "handle_inspect", handler)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        api.inspect(
+            queries=[
+                {"kind": "symbol", "name": "nmos4"},
+                {"kind": "symbol", "name": "pmos4"},
+            ]
+        )
+
+    assert [str(item.message) for item in caught] == []

@@ -171,6 +171,57 @@ def current_ngbehavior() -> str | None:
     return getattr(NGspiceSimulator, "_compatibility_mode", None)
 
 
+def simulator_library_roots(simulator_class: type | None) -> list[Path]:
+    """Directories holding the detected simulator's own shipped model library.
+
+    Same trust class as the ``.asy`` symbol paths resolved from the same
+    install (see ``engine.configure_asc_editor``): both are read out of the
+    simulator the server already runs, so a deck referencing a file inside one
+    is naming the simulator, not the user's filesystem. Staging therefore
+    accepts and snapshots them without the sandbox being widened — LTspice's
+    ``.asc`` netlister appends ``.lib <install>/lib/cmp/standard.mos`` to every
+    schematic carrying a MOSFET symbol, so under a default ``allowed_paths``
+    no transistor schematic could otherwise be staged at all.
+
+    Resolution mirrors the symbol path's: on WSL the install lives behind
+    ``%LOCALAPPDATA%`` and only the interop probe finds it, because spicelib's
+    own derivation expands ``~`` against the Linux home. Nonexistent
+    directories and any root already contained in an earlier one are dropped,
+    so the result is a minimal list of real directories.
+    """
+    if simulator_class is None:
+        return []
+    candidates: list[Path] = []
+    if issubclass(simulator_class, LTspice):
+        from ltspice_mcp.lib.wsl import get_ltspice_lib_paths
+
+        candidates += [Path(p) for p in get_ltspice_lib_paths()]
+    try:
+        candidates += [Path(p) for p in simulator_class.get_default_library_paths()]
+    except Exception as exc:
+        # spicelib derives these from spice_exe and the platform; a simulator
+        # class without one, or an install shape it does not know, must cost
+        # the caller nothing beyond the roots already found.
+        logger.debug(f"No default library paths for {simulator_class.__name__}: {exc}")
+
+    found: list[Path] = []
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        if resolved.is_dir() and resolved not in found:
+            found.append(resolved)
+    # Drop any root a broader one already covers, whichever order they arrived
+    # in: the probe reports both ``lib`` and ``lib/sym``, and the nested one
+    # adds no reach while giving the same files a second staging destination.
+    return [
+        root
+        for root in found
+        if not any(other != root and root.is_relative_to(other) for other in found)
+    ]
+
+
 def is_ngspice(simulator_class: type | None) -> bool:
     """True when the simulator is ngspice — whose compat-mode / sectioned-.lib
     quirks the ngbehavior diagnostic keys off. Checks class identity, not the

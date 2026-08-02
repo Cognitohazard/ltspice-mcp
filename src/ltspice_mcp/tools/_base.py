@@ -1321,18 +1321,41 @@ async def resolve_runnable_netlist(
 
 
 def _stage_deck_snapshot(net_path: Path) -> Path:
-    """Copy the exported deck to a content-addressed sibling and return it.
+    """Copy the exported deck to a content-addressed snapshot and return it.
 
     Named by a hash of its bytes so repeat exports of the same .asc reuse one
     file — the snapshots stay bounded to one per distinct deck content, not one
     per run (a plain per-call unique name accumulates unbounded). Written
     atomically so a concurrent reader sees a whole file, never a torn copy.
+
+    It lands in the schematic's ``.ltspice-mcp/exports`` sidecar rather than
+    beside the schematic: an experiment's replay identity names this file, so
+    it has to persist for as long as the receipt does, and one visible
+    ``<name>.run-<hash>.net`` per distinct edit accumulates in the author's
+    tree forever. A deck carrying a RELATIVE include stays a sibling — the
+    simulator resolves that include against the deck's own directory, so
+    moving the deck breaks it. That is the same question ``resolve_output_folder``
+    asks about relocating a run, answered by the same predicate so the two
+    cannot disagree about which decks may move.
     """
     from ltspice_mcp.lib import atomic_write_bytes
 
     data = net_path.read_bytes()
     digest = hashlib.sha1(data).hexdigest()[:12]
-    snapshot = net_path.with_name(f"{net_path.stem}.run-{digest}{net_path.suffix}")
+    name = f"{net_path.stem}.run-{digest}{net_path.suffix}"
+    directory = net_path.parent
+    if not _netlist_has_local_dependency(net_path):
+        sidecar = net_path.parent / ".ltspice-mcp" / "exports"
+        try:
+            sidecar.mkdir(parents=True, exist_ok=True)
+            directory = sidecar
+        except OSError as exc:
+            # A read-only or otherwise unusable sidecar must cost tidiness,
+            # never the run: the sibling always works.
+            logger.debug(
+                f"Export sidecar {sidecar} unavailable, keeping snapshot beside deck: {exc}"
+            )
+    snapshot = directory / name
     if not snapshot.exists():
         atomic_write_bytes(snapshot, data, durable=False)
     return snapshot
