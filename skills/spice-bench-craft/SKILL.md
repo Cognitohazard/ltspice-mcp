@@ -190,5 +190,7 @@ too if later server analysis needs a rawfile.
   they carry orthogonal routing and pin-collision/junction checks.
 - Open-ended interrogation — loops over results, compute-decide-compute,
   arbitrary math on traces: if `ltspice_mcp` is importable, write Python
-  against `ltspice_mcp.api` (`Api`, `load_raw`, the metric functions).
-  Complete results, no paging; intermediates stay in your interpreter.
+  against `ltspice_mcp.api` (`Api`, `load_raw`, the metric functions);
+  intermediates stay in your interpreter.
+- Result belongs on disk, not your reply, or no server connected:
+  `spice-mcp <op> @plan.json --json` — same ops; exit codes are verdicts.
