@@ -468,7 +468,7 @@ Build or edit .asc ONLY with the schematic tools (create_schematic, apply_schema
 # Claude Code silently truncates server instructions at 2048 chars, and the
 # tail (the result-trust paragraph) is the part that must survive.
 CONSOLIDATED_INSTRUCTIONS = """\
-For ANY circuit or SPICE task — amplifiers, filters, regulators, schematics: run ngspice/LTspice sweeps, corners and Monte-Carlo in one call and get parsed numbers back (.MEAS, gm/gds/vth, Bode/transient metrics, spec verdicts) instead of shelling out and hand-parsing output. Author .cir/.net/.sp decks with your own file tools; this consolidated profile's six tools run, analyze, gate, and edit .asc geometry-aware.
+For ANY circuit or SPICE task — amplifiers, filters, regulators, schematics. Author .cir/.net/.sp decks with your own file tools; this consolidated profile's six tools run, analyze, gate, and edit .asc geometry-aware. Routing: run quick one-off ngspice yourself and bring the .raw — analyze_results raw_path parses runs this server never executed (.MEAS, gm/gds/vth, Bode/transient metrics, spec verdicts). run_experiments earns its keep on LTspice (no native automation), sweep/corner/MC matrices, and jobs that outlive a call.
 
 Simulate, don't deliberate: runs are cheap — spot-check ideas and sizings instead of reasoning them out.
 
@@ -477,9 +477,6 @@ EXECUTE — run_experiments: staged decks across declared variations (strict ass
 UNDERSTAND — analyze_results: typed recipes over completed runs/experiments; case/step-attributed values, reductions, spec verdicts; continuable via result_set_id + cursor. inspect: read-only — capabilities, symbols, net trace, components, models.
 
 AUTHOR — edit_schematic: typed op batch on one .asc sheet (base "blank" or "existing"); transactional, revision-guarded (expected_sha256 for existing targets); returns geometry facts. verify_circuit: lint, symbols, export, layout, quality, compare (equivalence/structural diff), optional render.
-
-Loops: deck -> run_experiments -> analyze_results -> edit -> ...; schematic:
-inspect(symbols) -> edit_schematic (blank build or expected_sha256 delta) -> verify_circuit
 
 A terminal run can still be degenerate (coerced value, skipped .meas): read observations/warnings and per-item failures — completed is not correct. Match recipe to run type (.AC vs .tran) or analyze_results errors.
 """

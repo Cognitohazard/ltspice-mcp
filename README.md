@@ -85,6 +85,10 @@ Everything operates on ordinary LTspice and SPICE files, so the work passes back
 - Or the reverse: the assistant designs and verifies the circuit and writes the `.asc`; you open it in LTspice, inspect it, and tweak by hand. Your manual edits are simply the file's new state — the assistant picks up from there on the next request.
 - Changes can flow either direction mid-design: adjust a value in the GUI and ask for re-verification, or have the assistant sweep a change you're considering before you commit to it.
 
+### When to shell out instead
+
+An agent with a shell should run quick one-off ngspice simulations itself — ngspice is scriptable, local runs take under a second, and wrapping that in a protocol adds cost without adding capability. The server's lane is everything the shell doesn't give you: LTspice execution (which has no native automation on any platform), parsing binary rawfiles into named numbers, declared sweep/corner/Monte-Carlo matrices with durable idempotent submission, jobs that outlive a call, and geometry-checked `.asc` editing. The analysis tools accept artifacts from simulations this server never ran — `analyze_results` takes a bare `raw_path` — so "simulate in the shell, analyze here" is a first-class workflow, not a workaround.
+
 ## The command line, same engine
 
 `spice-mcp` drives the identical engine from a shell — for agents and scripts
