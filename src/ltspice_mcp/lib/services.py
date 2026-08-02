@@ -919,6 +919,31 @@ def load_raw_sync(raw_path: Path, state: SessionState) -> RawRead:
     return raw
 
 
+# A ``dev.param`` operating-point shorthand: everything before the LAST dot is
+# the device, so a flattened subcircuit path ('m.x1.mn.gm') parses too.
+DEV_PARAM_RE = re.compile(r"([a-z][\w.]*)\.([a-z]\w*)")
+
+
+def device_param_forms(signal: str) -> list[str]:
+    """The result names a ``dev.param`` operating-point shorthand can address.
+
+    ngspice writes a device parameter bare (``@m1[gm]``), v-wrapped
+    (``v(@m1[vth])``) or i-wrapped (``i(@m1[id])``) depending on the quantity,
+    and LTspice's ``.log`` block is folded into ``device_op_points`` under the
+    bare form. Empty when the name is not a shorthand.
+
+    Public because two readers resolve the shorthand the docs promise —
+    ``validate_signal`` against a raw's trace list, ``analyze_results``
+    against an operating-point result — and a second copy of the rule is how
+    one of them ends up rejecting a name the other accepts.
+    """
+    match = DEV_PARAM_RE.fullmatch(signal.lower())
+    if match is None:
+        return []
+    dev, param = match.group(1), match.group(2)
+    return [f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"]
+
+
 def validate_signal(raw: RawRead, signal: str) -> str:
     """Validate that a signal exists in a raw result and return the canonical trace name.
 
@@ -954,17 +979,8 @@ def validate_signal(raw: RawRead, signal: str) -> str:
     if "." in sig_lower:
         candidates.append(sig_lower.replace(".", ":"))
 
-    # Device operating-point small-signal / model parameters. ngspice writes these as
-    # @dev[param] depending on the quantity: bare (@m1[gm]), v-wrapped
-    # (v(@m1[vth])), or i-wrapped (i(@m1[id])). Accept a uniform 'dev.param'
-    # shorthand (e.g. 'm1.gm') and resolve to whichever form the raw contains.
-    # 'dev.param' shorthand (e.g. 'm1.gm'), including a flattened subcircuit-
-    # hierarchical device path ('m.x1.mn.gm'): everything before the LAST dot is
-    # the device, the last segment is the parameter.
-    dev_param = re.fullmatch(r"([a-z][\w.]*)\.([a-z]\w*)", sig_lower)
-    if dev_param:
-        dev, param = dev_param.group(1), dev_param.group(2)
-        candidates += [f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"]
+    dev_param = DEV_PARAM_RE.fullmatch(sig_lower)
+    candidates += device_param_forms(signal)
 
     for cand in candidates:
         if cand in by_lower:

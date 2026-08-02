@@ -639,7 +639,13 @@ def load_pointer_jobs(
                 "evidence": {"pointer": str(path)},
             }
             observations.append(observation)
-            logger.warning(observation["detail"])
+            # Debug, not warning: the pointer index is global, so a fresh
+            # working directory reaches other projects' stale records and
+            # narrates a dozen of them before the caller has done anything.
+            # The fact still reaches whoever asked — the registry accumulates
+            # these and the jobs listing returns them — so nothing is lost by
+            # keeping them out of a library's boot output.
+            logger.debug(observation["detail"])
     return jobs, observations
 
 

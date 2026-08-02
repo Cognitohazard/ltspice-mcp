@@ -1109,17 +1109,33 @@ async def _adapter_value(
                     values = operating_point.get(bucket)
                     if isinstance(values, dict):
                         flat.update(values)
+                # The 'm1.gm' shorthand the guide and read_device_op_points both
+                # promise resolves here too, not only against a raw's trace
+                # list: an op-point value read through this path is the one
+                # case where the params come from the .log and never appear as
+                # a trace, so refusing the documented spelling here refuses it
+                # everywhere it is the only route.
+                by_lower = {name.lower(): (name, value) for name, value in flat.items()}
                 match = next(
                     (
-                        (name, value)
-                        for name, value in flat.items()
-                        if name.lower() == recipe.expr.lower()
+                        by_lower[form]
+                        for form in (
+                            recipe.expr.lower(),
+                            *services.device_param_forms(recipe.expr),
+                        )
+                        if form in by_lower
                     ),
                     None,
                 )
                 if match is None:
+                    present = ", ".join(sorted(flat)[:8])
+                    if len(flat) > 8:
+                        present += f", ... ({len(flat)} total)"
                     raise ResultError(
-                        f"{recipe.expr!r} is not present in this operating-point result"
+                        f"{recipe.expr!r} is not present in this operating-point "
+                        "result. Address a value by the name it carries (e.g. "
+                        "'@m1[gm]', 'V(out)') or by the 'm1.gm' device.param "
+                        f"shorthand. Present here: {present}"
                     ) from None
                 name, value = match
                 return {
@@ -1395,6 +1411,44 @@ async def _adapter_value(
             )
         )
     raise ResultError(f"Recipe {recipe.metric!r} is not a scalar adapter recipe")
+
+
+def _absence_observations(
+    recipe: Recipe, key: str, records: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """State what a successful recipe looked for and did not find.
+
+    A keyed metric answers with a map, and an empty map is indistinguishable
+    from a healthy one once the row is rendered — the caller who asked a
+    transistor for its bias point gets 'complete' and no numbers, with no
+    channel saying the params were never in the run. Gated the way the
+    ``operating_point`` tool's own note is, on a terminal current proving a
+    semiconductor is present, so a passive circuit's bias point stays
+    note-free and the two channels cannot disagree about when to speak.
+    """
+    from ltspice_mcp.tools import analysis as an
+
+    if not isinstance(recipe, OperatingPointRecipe):
+        return []
+    values = [record["value"] for record in records if isinstance(record.get("value"), dict)]
+    if not values or any(value.get("device_op_points") for value in values):
+        return []
+    if not any(an.has_active_device(value.get("currents") or {}) for value in values):
+        return []
+    return [
+        {
+            "code": "device_op_points_absent",
+            "kind": "coverage",
+            "detail": (
+                f"Recipe {key!r} read the bias point of a run carrying "
+                f"semiconductor terminal currents, but no per-device @dev[param] "
+                f"values: neither the raw's @-param traces nor the run's .log "
+                f"'Semiconductor Device Operating Points:' block held any. "
+                f"{an.NO_DEVICE_OP_POINTS_NOTE}"
+            ),
+            "evidence": {"recipe": key, "runs": len(values)},
+        }
+    ]
 
 
 def _artifact_estimate(recipe: Recipe, runs: list[_ResolvedRun]) -> float:
@@ -1704,6 +1758,16 @@ _KEYED_EXTRACTORS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "measurements": _measurements_flat,
     "operating_point": _operating_point_flat,
 }
+
+
+# Metrics whose row value IS its nested structure, so the answer channel must
+# keep it whole. A waveform's value is the curve the caller asked for. A keyed
+# metric's value is a map addressed by name — and operating_point's only FLAT
+# leaves are ``step``/``step_count``/``device``, so leaning it returns the row's
+# bookkeeping and drops every number: a bias-point read that answers "complete"
+# and carries nothing. Derived from _KEYED_EXTRACTORS rather than listed, so a
+# new keyed metric cannot be added without this rule following it.
+_WHOLE_VALUE_METRICS: frozenset[str] = frozenset({"waveform", *_KEYED_EXTRACTORS})
 
 
 def _samples(
@@ -2122,11 +2186,10 @@ def _result_entry(
                     omitted=spec["fail_count"] - spec["fail_cases"]["returned"]
                 )
             )
-    # A waveform's value IS the curve — the caller asked for series data, so
-    # flattening it away would defeat the recipe. Everything else defaults
-    # to the scalar leaves. One plan serves both row surfaces, so projection
-    # never depends on an unrelated pagination choice.
-    render = _row_renderer(fields, whole=recipe.metric == "waveform")
+    # Everything outside _WHOLE_VALUE_METRICS defaults to the scalar leaves.
+    # One plan serves both row surfaces, so projection never depends on an
+    # unrelated pagination choice.
+    render = _row_renderer(fields, whole=recipe.metric in _WHOLE_VALUE_METRICS)
 
     per_run_next = per_run_offset
     if per_run_limit is not None:
@@ -2887,7 +2950,7 @@ def render_attached_analysis(
     for key, block in stored["results"].items():
         entry = copy.deepcopy(block["facts"])
         metric = entry.get("metric")
-        render_row = _row_renderer(fields, whole=metric == "waveform")
+        render_row = _row_renderer(fields, whole=metric in _WHOLE_VALUE_METRICS)
         rows_emitted = False
         value_rows: list[dict[str, Any]] | None = None
         if (answer_channel and block["answer_rows"]) or (
@@ -3396,6 +3459,7 @@ async def _evaluate_analysis_drive(
             step_cache,
         )
         item_failures[:0] = precheck_failures
+        item_observations.extend(_absence_observations(recipe, key, records))
         evaluated_ids.update(run.manifest_id for run in eligible_runs)
         all_pending.extend(pending)
         unit: dict[str, Any] = {

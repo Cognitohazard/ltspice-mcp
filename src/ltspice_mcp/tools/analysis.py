@@ -1935,9 +1935,27 @@ def _format_measurements(
     return "\n".join(lines)
 
 
-def _has_active_device(currents: dict[str, float]) -> bool:
+# What an empty ``device_op_points`` bucket means and how to fill it. One
+# string because two channels carry it — this tool's ``warnings`` and the
+# consolidated analyze path's ``observations`` — and a caller who reaches the
+# same dead end by either route must be given the same way out.
+NO_DEVICE_OP_POINTS_NOTE = (
+    "No small-signal device params (gm/gds/vth/vdsat) in this run. "
+    "On LTspice add '.options logopinfo' to the deck (run_simulation / "
+    "run_sweep / run_montecarlo add it automatically for .op runs); on "
+    "ngspice .save them, e.g. '.save all @m1[gm] @m1[gds] @m1[id]'."
+)
+
+
+def has_active_device(currents: dict[str, float]) -> bool:
     """True if any branch-current name belongs to an M/Q/J/D device — the ones
-    with a small-signal operating point (gm/gds/vth/...) — e.g. ``Id(M1)``, ``Ic(Q2)``."""
+    with a small-signal operating point (gm/gds/vth/...) — e.g. ``Id(M1)``, ``Ic(Q2)``.
+
+    Public because it gates two channels — this tool's empty-op-point warning
+    and the consolidated path's ``device_op_points_absent`` observation — and
+    a second copy of the rule is how one of them speaks while the other stays
+    silent about the same run.
+    """
     for name in currents:
         lp = name.find("(")
         if lp != -1 and lp + 1 < len(name) and name[lp + 1].lower() in "mqjd":
@@ -2308,14 +2326,9 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     # resolved per raw (the run's own simulator, not the session default).
     op_point_note: str | None = None
     if not op_data.get("device_op_points") and (
-        _has_active_device(op_data.get("currents", {})) or raw_dialect == "ngspice"
+        has_active_device(op_data.get("currents", {})) or raw_dialect == "ngspice"
     ):
-        op_point_note = (
-            "No small-signal device params (gm/gds/vth/vdsat) in this run. "
-            "On LTspice add '.options logopinfo' to the deck (run_simulation / "
-            "run_sweep / run_montecarlo add it automatically for .op runs); on "
-            "ngspice .save them, e.g. '.save all @m1[gm] @m1[gds] @m1[id]'."
-        )
+        op_point_note = NO_DEVICE_OP_POINTS_NOTE
         op_data["warnings"].append(op_point_note)
 
     # A DC sweep raw has no single "operating point". With at=, report which

@@ -62,7 +62,7 @@ from ltspice_mcp.lib.job_types import (
 )
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
 from ltspice_mcp.lib.recipes import validate_recipe
-from ltspice_mcp.lib.simulator import simulator_dialect
+from ltspice_mcp.lib.simulator import simulator_dialect, simulator_library_roots
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.variations import (
     CircuitDeck,
@@ -947,6 +947,11 @@ async def _prepare_circuit(
             origin=source_path,
             allow_live_includes=args.allow_live_includes,
             windows_paths=paths.windows_native,
+            # LTspice's own .asc netlister appends a .lib pointing into the
+            # install's model library on every schematic with a MOSFET on it,
+            # so without this no transistor sheet stages under a default
+            # sandbox. Resolved per run from the simulator this job uses.
+            simulator_roots=await asyncio.to_thread(simulator_library_roots, simulator),
         )
         dialect = simulator_dialect(simulator)
         findings = (
@@ -1148,6 +1153,7 @@ def _circuit_decks_for_validation(circuits: list[ExperimentCircuit]) -> list[Cir
             circuit_id=circuit.id or Path(circuit.path).stem,
             path=Path(circuit.path),
             text="",
+            id_from_file_stem=not circuit.id,
         )
         for circuit in circuits
     ]

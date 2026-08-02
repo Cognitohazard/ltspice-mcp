@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from typing import Any
@@ -23,6 +24,16 @@ DEFAULT_INCLUDE_DEPTH = 8
 
 INCLUDE_HEADS = frozenset({".include", ".inc", ".lib", ".libfile"})
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+# The two ways out of a root-escape refusal, named in the refusal itself: a
+# caller who cannot see the sandbox boundary cannot guess either one, and the
+# option is not called what the message used to imply.
+_ROOT_ESCAPE_REMEDY = (
+    "Either add its directory to [security] allowed_paths "
+    "(LTSPICE_MCP_ALLOWED_PATHS) so it is snapshotted with the deck, or pass "
+    "allow_live_includes=true to read it in place — a live include is read at "
+    "run time and its content is not covered by the deck's provenance hash."
+)
 
 
 class DeckStagingError(ValueError):
@@ -139,6 +150,7 @@ def stage_deck(
     allow_live_includes: bool = False,
     max_depth: int = DEFAULT_INCLUDE_DEPTH,
     windows_paths: bool = False,
+    simulator_roots: Sequence[Path] = (),
 ) -> StagedDeck:
     """Copy a primary deck and its include/lib closure into ``staging_root``.
 
@@ -159,12 +171,24 @@ def stage_deck(
     ``windows_paths`` renders the root deck's rewritten references in Windows
     form, for a Windows simulator reached across the WSL boundary: it cannot
     open the ``/mnt/c/...`` spelling of the very file it is being handed.
+
+    ``simulator_roots`` are the detected simulator's own library directories
+    (``simulator.simulator_library_roots``). They are appended AFTER the
+    caller's roots, so a reference inside one is staged and hashed like any
+    other dependency while every existing root keeps its index — but the deck
+    itself must still live in an allowed root, so this cannot be used to reach
+    a deck the sandbox denies.
     """
     if max_depth < 0:
         raise ValueError("max_depth must be non-negative")
-    roots = _resolved_roots(allowed_roots)
+    allowed = _resolved_roots(allowed_roots)
+    roots = allowed + _resolved_roots(list(simulator_roots), required=False)
     source = source_path.resolve(strict=True)
-    root_index = _containing_root(source, roots)
+    # Authored files are checked against ``allowed`` alone — a prefix of
+    # ``roots``, so the index means the same thing in both — which is what
+    # keeps the simulator's library a place references may POINT, never a
+    # place a deck may be RUN FROM.
+    root_index = _containing_root(source, allowed)
     if root_index is None:
         raise DeckStagingError(
             "include_unstaged",
@@ -259,10 +283,15 @@ def stage_deck(
                 )
                 if reason is not None:
                     if not allow_live_includes:
+                        # Only the root escape has these two remedies; a
+                        # missing file or an over-deep chain is not fixed by
+                        # either, and naming them there would misdirect.
+                        escaped = target_resolved is not None and target_root is None
                         raise DeckStagingError(
                             "include_unstaged",
                             f"Cannot stage reference {reference.raw_path!r} from "
-                            f"{resolved}: {reason}",
+                            f"{resolved}: {reason}"
+                            + (f". {_ROOT_ESCAPE_REMEDY}" if escaped else ""),
                             reference=reference.raw_path,
                         )
                     live_path = target_resolved or target
@@ -371,7 +400,7 @@ def stage_deck(
         resolved = authoring_source.resolve(strict=True)
         if resolved == source:
             return primary_sha
-        origin_root = _containing_root(resolved, roots)
+        origin_root = _containing_root(resolved, allowed)
         if origin_root is None:
             raise DeckStagingError(
                 "include_unstaged",
@@ -490,9 +519,11 @@ def verify_staged_manifest(manifest: list[ManifestEntry]) -> list[dict[str, Any]
     return observations
 
 
-def _resolved_roots(roots: list[Path]) -> list[Path]:
+def _resolved_roots(roots: list[Path], *, required: bool = True) -> list[Path]:
     if not roots:
-        raise DeckStagingError("include_unstaged", "No allowed roots are configured")
+        if required:
+            raise DeckStagingError("include_unstaged", "No allowed roots are configured")
+        return []
     resolved = []
     for root in roots:
         try:
@@ -694,7 +725,10 @@ def _unstaged_reason(
     if resolved is None:
         return f"referenced file does not exist: {target}"
     if root_index is None:
-        return f"referenced file resolves outside allowed roots: {resolved}"
+        return (
+            "referenced file resolves outside allowed roots and outside the "
+            f"simulator's own library: {resolved}"
+        )
     if not resolved.is_file():
         return f"referenced path is not a file: {resolved}"
     return None

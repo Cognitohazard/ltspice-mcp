@@ -1595,6 +1595,125 @@ async def test_projection_reaches_a_key_whose_own_name_contains_a_dot(
 
 
 @pytest.mark.asyncio
+async def test_the_bias_point_survives_the_default_answer_channel(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """An operating_point row IS its keyed buckets — leaning them away leaves a
+    successful call carrying nothing but the step counter it was asked about.
+
+    The lean row keeps a value's scalar leaves and drops its nested ones, which
+    is right for a metric whose numbers are the scalars and exactly wrong for
+    one whose scalars are ``step``/``step_count`` and whose numbers are all
+    nested. A caller asking for the bias point got ``{step, step_count,
+    device}`` back with outcome 'complete'.
+    """
+    raw = _hierarchical_op_raw(work_dir)
+
+    data = await _analyze(state_no_sim, raw, [_OP_RECIPE])
+
+    value = data["results"]["bias"]["values"][0]["value"]
+    assert value["voltages"]["V(x1.out)"] == pytest.approx(1.25)
+    assert value["device_op_points"]["@m.x1.m1[gm]"] == pytest.approx(3.1e-3)
+
+
+def _bare_device_op_raw(work_dir: Path) -> Path:
+    """An .op raw proving a MOSFET is in the circuit and carrying no params for
+    it — a deck run without ``.options logopinfo`` / without ``.save``."""
+    raw = work_dir / "bare_device_op.raw"
+    raw.write_text(
+        "Title: * bare\n"
+        "Date: Thu Jul 10 12:00:00 2026\n"
+        "Plotname: Operating Point\n"
+        "Flags: real\n"
+        "No. Variables: 2\n"
+        "No. Points: 1\n"
+        "Offset: 0.0000000000000000e+00\n"
+        "Command: Linear Technology Corporation LTspice\n"
+        "Variables:\n"
+        "\t0\tV(out)\tvoltage\n"
+        "\t1\tId(M1)\tdevice_current\n"
+        "Values:\n"
+        "0\t9.0000000000000000e-01\n"
+        "\t1.5200000000000000e-05\n"
+    )
+    return raw
+
+
+@pytest.mark.asyncio
+async def test_a_value_recipe_accepts_the_documented_device_param_shorthand(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """``read_device_op_points`` and the guide both tell a caller to address a
+    device parameter as ``m1.gm``. Only the literal ``@m1[gm]`` resolved here —
+    and for an LTspice log-sourced param this path is the only route, so the
+    documented spelling was refused everywhere it was the one that works."""
+    raw = _hierarchical_op_raw(work_dir)
+
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "gm", "metric": "value", "expr": "m.x1.m1.gm"}],
+    )
+
+    entry = data["results"]["gm"]["values"][0]["value"]
+    assert entry["signal"] == "@m.x1.m1[gm]"
+    assert entry["value"] == pytest.approx(3.1e-3)
+
+
+@pytest.mark.asyncio
+async def test_an_unresolvable_op_point_value_names_the_forms_that_work(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    raw = _hierarchical_op_raw(work_dir)
+
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "nope", "metric": "value", "expr": "m9.gm"}],
+    )
+
+    message = next(
+        failure["message"] for failure in data["failures"] if failure["code"] == "recipe_failed"
+    )
+    assert "m1.gm" in message
+    assert "@m.x1.m1[gm]" in message
+
+
+@pytest.mark.asyncio
+async def test_a_bias_point_with_no_device_params_says_so_on_observations(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """Never a bare success: the caller who asked for a device's operating point
+    and got none must be told what was looked for and where it was looked."""
+    raw = _bare_device_op_raw(work_dir)
+
+    data = await _analyze(state_no_sim, raw, [_OP_RECIPE])
+
+    observation = next(
+        item for item in data["observations"] if item["code"] == "device_op_points_absent"
+    )
+    assert observation["evidence"]["recipe"] == "bias"
+    assert "logopinfo" in observation["detail"]
+    assert ".save" in observation["detail"]
+
+
+@pytest.mark.asyncio
+async def test_a_bias_point_that_found_device_params_stays_note_free(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    raw = _hierarchical_op_raw(work_dir)
+
+    data = await _analyze(state_no_sim, raw, [_OP_RECIPE])
+
+    assert not [item for item in data["observations"] if item["code"] == "device_op_points_absent"]
+
+
+@pytest.mark.asyncio
 async def test_unreachable_parent_says_the_key_is_one_segment(
     state_no_sim: SessionState,
     work_dir: Path,
@@ -1797,7 +1916,10 @@ async def test_every_metric_exposes_a_flat_numeric_headline(
     weight that also fails."""
     # Whole-row payloads whose value is a keyed BUNDLE the caller projects by
     # name (measurements: per-.meas stats), not a single measurement with a
-    # headline. operating_point is NOT here: its row value carries flat leaves.
+    # headline. operating_point is NOT here only because 'step'/'step_count'
+    # are numeric — bookkeeping, not its answer, which is why the answer
+    # channel has to keep its buckets whole (_WHOLE_VALUE_METRICS) rather than
+    # trust this test to notice their loss.
     exempt = {"measurements"}
     raw = stage_recorded_fixture(work_dir, fixture_name)
     data = await _analyze(

@@ -283,7 +283,15 @@ async def _collect_inspect(
     state: SessionState,
 ) -> dict[str, Any]:
     initial = await _handler_page(inspect_tools.handle_inspect, request, state)
-    raw_queries = request.model_dump(mode="json")["queries"]
+    # ``queries`` is SkipValidation, so its items are whatever the caller
+    # passed — dicts on both doors, models when Python code builds them.
+    # Dumping the whole request makes pydantic serialize each dict against the
+    # union member it was declared as, which warns to stderr on every
+    # successful call; serialize the models and take the dicts as they are.
+    raw_queries = [
+        query.model_dump(mode="json") if isinstance(query, BaseModel) else dict(query)
+        for query in request.queries
+    ]
     accumulated: list[dict[str, Any] | None] = [None] * len(raw_queries)
     cursors: dict[int, str | None] = {}
     restarted: set[int] = set()
