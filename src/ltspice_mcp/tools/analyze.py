@@ -32,7 +32,11 @@ from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.format import format_spice_value
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.job_store import JOBS_SUBDIR, SIDECAR_DIRNAME
-from ltspice_mcp.lib.log_parser import extract_log_diagnostics, parse_step_iterations
+from ltspice_mcp.lib.log_parser import (
+    diagnostic_collapse_key,
+    extract_log_diagnostics,
+    parse_step_iterations,
+)
 from ltspice_mcp.lib.raw_parser import get_step_count, safe_magnitude_db
 from ltspice_mcp.lib.recipes import (
     AcStructureRecipe,
@@ -836,13 +840,16 @@ async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[dict[str, Any]
     same rule at ``analysis._finish_metric``; both classify through
     ``services.solve_failure_lines`` so they cannot drift.
 
-    One observation per distinct line rather than per run: a sweep that fails
-    to converge fails identically in every case, and the run labels are what
-    distinguishes them. A log the bounded parse could not read is reported as
-    such — an unread log is a gap in this relay's coverage, not an absence of
-    failures.
+    One observation per distinct cause rather than per run: a sweep that fails
+    to converge fails the same way in every case, and the run labels are what
+    distinguishes them. Distinct is measured by
+    :func:`diagnostic_collapse_key`, because the simulator's line ends in the
+    run's own numbers (``time = 4.4e-05, timestep = 1.2e-19``) and no two runs
+    of a sweep abort at the same instant; the relayed line is the first run's,
+    verbatim. A log the bounded parse could not read is reported as such — an
+    unread log is a gap in this relay's coverage, not an absence of failures.
     """
-    grouped: dict[str, list[str]] = {}
+    grouped: dict[str, tuple[str, list[str]]] = {}
     unread: list[str] = []
     for run in runs:
         log = run.source.log
@@ -856,7 +863,7 @@ async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[dict[str, Any]
             unread.append(run.label)
             continue
         for line in services.solve_failure_lines(diagnostics):
-            grouped.setdefault(line, []).append(run.label)
+            grouped.setdefault(diagnostic_collapse_key(line), (line, []))[1].append(run.label)
 
     relayed: list[dict[str, Any]] = [
         {
@@ -872,7 +879,7 @@ async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[dict[str, Any]
                 "run_count": len(labels),
             },
         }
-        for line, labels in grouped.items()
+        for line, labels in grouped.values()
     ]
     if unread:
         relayed.append(

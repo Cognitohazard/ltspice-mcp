@@ -818,6 +818,34 @@ def _file_line_family(item: str) -> tuple[str, str] | None:
     return (m.group("path"), m.group("msg"))
 
 
+# A whole numeric token: integer, decimal or exponent form, optionally signed.
+# The boundary guards are what keep it from eating the digits INSIDE an
+# identifier — ``2N3904`` and ``V(n001)`` carry no varying number, and folding
+# their digits would merge two different part numbers or two different nodes.
+_RE_NUMERIC_TOKEN = re.compile(
+    r"(?<![0-9A-Za-z_.])[-+]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?(?![0-9A-Za-z_])"
+)
+
+
+def diagnostic_collapse_key(text: str) -> str:
+    """The grouping key for diagnostics that say the same thing about a run.
+
+    A convergence abort carries the run's own numeric state — the abort time,
+    the timestep, the node-voltage dump — so in a sweep or Monte Carlo, where
+    every case has different component values, no two cases write a
+    byte-identical excerpt and a verbatim key groups nothing. Folding whole
+    numeric tokens to a placeholder makes the cause the key and the numbers
+    incidental, which is what lets a caller be told "this happened N times"
+    instead of being handed N kilobytes of it.
+
+    Only numbers fold. Quoted spans in a SPICE diagnostic are usually the model
+    or subcircuit name (``Unable to find definition of model "mystery"``), which
+    is the one fact that distinguishes two unresolved-reference failures from
+    each other; folding those would merge them and drop a name.
+    """
+    return _RE_NUMERIC_TOKEN.sub("<n>", text)
+
+
 def _render_file_line_family(members: list[str], counts: Counter[str]) -> str:
     """Render a near-duplicate ``filepath(line):`` family as one entry.
 

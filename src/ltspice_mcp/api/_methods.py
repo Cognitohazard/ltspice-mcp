@@ -23,6 +23,7 @@ from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.lib import services
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edit, verify
+from ltspice_mcp.tools._base import automatic_door
 
 _T = TypeVar("_T")
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
@@ -120,6 +121,17 @@ def _enforce_auto_door(arguments: Mapping[str, Any]) -> None:
     raise ApiValidationError(
         "Wire-only control(s) are not accepted in automatic mode. " + "; ".join(parts)
     )
+
+
+async def _through_auto_door(coroutine: Coroutine[Any, Any, _T]) -> _T:
+    """Run one automatic-mode coroutine with the door marked for the handlers.
+
+    Marked inside the coroutine, not around the ``_call`` that marshals it: the
+    handlers read the flag from the engine loop's task context, and a set on the
+    calling thread would never reach it.
+    """
+    with automatic_door():
+        return await coroutine
 
 
 def _message_for_error(payload: Mapping[str, Any], result: types.CallToolResult) -> str:
@@ -526,7 +538,7 @@ class ApiMethodsMixin(ABC):
         coroutine = (
             _handler_page(handler, request, self._state)
             if raw_page
-            else collector(request, self._state)
+            else _through_auto_door(collector(request, self._state))
         )
         return self._call(
             coroutine,
@@ -567,7 +579,9 @@ class ApiMethodsMixin(ABC):
             self._state,
         )
         receipt = self._call(
-            _handler_page(experiments.handle_run_experiments, request, self._state),
+            _through_auto_door(
+                _handler_page(experiments.handle_run_experiments, request, self._state)
+            ),
             preserve_interrupt=True,
         )
         # The handler's own receipt already says whether anything is still
@@ -582,7 +596,9 @@ class ApiMethodsMixin(ABC):
         try:
             if waited_job is not None:
                 self.wait(waited_job)
-            complete = self._call(_complete_run_receipt(receipt, request, self._state))
+            complete = self._call(
+                _through_auto_door(_complete_run_receipt(receipt, request, self._state))
+            )
             return complete if wait else _note_process_owned_job(complete)
         except KeyboardInterrupt as exc:
             raise ApiInterrupted(receipt=receipt, job_id=waited_job) from exc
