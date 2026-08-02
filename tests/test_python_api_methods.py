@@ -667,7 +667,10 @@ def test_verify_and_edit_return_uncapped_neutral_data(
     monkeypatch.setattr(verify, "evaluate_verify_circuit", evaluate_verify)
     monkeypatch.setattr(schematic_edit, "evaluate_edit_schematic", evaluate_edit)
     assert api.verify_circuit(path="deck.cir")["findings"] == findings
-    edit = api.edit_schematic(target="sheet.asc", ops=[])
+    # The whole-sheet legend is named explicitly: the default view is now the
+    # touched-scope one, which an empty op batch correctly leaves empty. What
+    # is under test here is that the API door does not PAGE what it returns.
+    edit = api.edit_schematic(target="sheet.asc", ops=[], return_views=["pin_legend"])
     legend = edit["views"]["pin_legend"]
     assert legend["items"] == list(pin_rows)
     assert legend["returned"] == legend["total"] == 121
@@ -764,6 +767,45 @@ def test_every_wire_only_field_is_rejected_or_explicitly_allowlisted() -> None:
         + " — reject them in _enforce_auto_door or allowlist them with a reason"
     )
     assert not unnamed, "the door rejected but did not name: " + ", ".join(unnamed)
+
+
+class TestAutoDoorRefusalsAreActionable:
+    """The refusal a caller who followed the skill actually hits.
+
+    ``budget`` is taught as a first-class knob on four tools and advertised in
+    the MCP schema; this door rejects it. That is the ruled contract — but the
+    refusal has to name the fix for the field it refused, and be catchable by
+    the exception the API's own documentation tells callers to catch.
+    """
+
+    def test_budget_is_refused_as_a_presentation_cap_not_a_paging_control(self):
+        with pytest.raises(ApiValidationError) as caught:
+            methods_module._enforce_auto_door({"budget": 4000})
+        message = str(caught.value)
+        assert "budget" in message
+        assert "complete results" in message
+        assert "raw_page" not in message, (
+            "raw_page returns one handler page instead of the collected result — "
+            "a semantic change, and the wrong fix for a presentation cap"
+        )
+
+    def test_wait_s_is_refused_by_pointing_at_the_doors_own_dwell(self):
+        with pytest.raises(ApiValidationError) as caught:
+            methods_module._enforce_auto_door({"execution": {"wait_s": 30}})
+        message = str(caught.value)
+        assert "execution.wait_s" in message
+        assert "api.wait" in message
+
+    def test_a_paging_control_still_gets_the_raw_page_remedy(self):
+        with pytest.raises(ApiValidationError) as caught:
+            methods_module._enforce_auto_door({"cursor": "o:5"})
+        assert "raw_page=True" in str(caught.value)
+
+    def test_the_refusal_is_catchable_as_the_documented_api_error(self):
+        """``ApiValidationError`` subclasses ValueError, not the reverse — a bare
+        ValueError here slips past every documented ``except ApiValidationError``."""
+        with pytest.raises(ApiValidationError):
+            methods_module._enforce_auto_door({"budget": 500})
 
 
 def test_fire_and_forget_receipt_says_the_job_dies_with_this_process(

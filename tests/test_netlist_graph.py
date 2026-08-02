@@ -602,3 +602,24 @@ def test_unreadable_included_file_degrades_to_a_recorded_fact(tmp_path: Path) ->
     graph = parse_netlist_graph(deck)
     assert graph.missing_includes, "a broken include should be recorded, not swallowed"
     assert flatten_graph(graph).unresolved_subckts == ("DIVBLOCK",)
+
+
+def test_windows_spelled_include_reaches_the_resolver_as_a_real_path(tmp_path: Path) -> None:
+    """The include walk resolves references the way staging does.
+
+    LTspice's own ``.asc`` netlister writes ``.lib C:\\...\\standard.mos``. Read
+    as a relative name and hung off the deck's directory, that becomes a path
+    that exists nowhere — so the sandbox seam is asked about the wrong file and
+    the deck's own library is reported unusable.
+    """
+    deck = tmp_path / "winref.cir"
+    deck.write_text(".lib C:\\Users\\dev\\LTspice\\lib\\cmp\\standard.mos\nR1 a 0 1k\n.end\n")
+    seen: list[Path] = []
+
+    def recording_resolver(candidate: Path) -> Path | None:
+        seen.append(candidate)
+        return None
+
+    parse_netlist_graph(deck, include_resolver=recording_resolver)
+
+    assert seen == [Path("/mnt/c/Users/dev/LTspice/lib/cmp/standard.mos")]

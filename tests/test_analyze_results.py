@@ -311,7 +311,6 @@ def _neutral_work(evaluation: analyze_mod.AnalysisEvaluation) -> list[_NeutralWo
                 reductions=tuple(analyze_mod._reduce(recipe, rows)),
                 facts={
                     "metric": recipe.metric,
-                    "units": None,
                     "warnings": analyze_mod._record_warnings(rows),
                     "groups": analyze_mod._group_values(recipe, rows, evaluation.group_by),
                     "spec": spec,
@@ -892,6 +891,52 @@ def _completed_with_failures_experiment(
         status="completed_with_failures",
         completed_at=now(),
     )
+
+
+@pytest.mark.asyncio
+async def test_solve_failure_in_the_log_is_relayed_into_observations(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A run that wrote a raw despite a failed solve must not read as clean.
+
+    The full profile relays this at its metric chokepoint; without the same
+    relay here a caller reads a number off diverged data with nothing on the
+    response to say the solve collapsed.
+    """
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    log = raw.with_suffix(".log")
+    log.write_text(log.read_text() + "\nIteration limit reached; no convergence.\n")
+
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}],
+    )
+
+    relayed = [item for item in data["observations"] if item["code"] == "solve_failure"]
+    assert len(relayed) == 1
+    assert relayed[0]["kind"] == "relay"
+    assert "iteration limit reached" in relayed[0]["evidence"]["log"].lower()
+    assert relayed[0]["evidence"]["run_count"] == 1
+    # The relay is a fact ABOUT the run, not a refusal to read it.
+    assert "v" in data["results"]
+
+
+@pytest.mark.asyncio
+async def test_a_clean_solve_relays_nothing(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}],
+    )
+
+    assert not [item for item in data["observations"] if item["code"] == "solve_failure"]
 
 
 @pytest.mark.asyncio
@@ -1875,6 +1920,42 @@ class TestHeadlineLeafPromotion:
             assert set(row) <= {"step_values", "value"}
             assert set(row["value"]) == {"first_crossing_hz"}
             assert isinstance(row["value"]["first_crossing_hz"], float)
+
+    @pytest.mark.asyncio
+    async def test_stability_rows_carry_the_crossover_frequency_flat(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """ "Give me the UGBW and phase margin" is one question, not two.
+
+        The margins shipped flat and the crossover frequency did not, so the
+        default row answered half of S1's first request and the other half cost
+        a second call for the whole nested value.
+        """
+        raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+        data = await _analyze(
+            state_no_sim,
+            raw,
+            [{"key": "loop", "metric": "stability", "signal": "V(out)"}],
+        )
+        row = data["results"]["loop"]["values"][0]["value"]
+        assert "unity_gain_hz" in row
+        # This fixture's loop never reaches unity; the leaf says so with a null
+        # rather than being absent, which is what makes it readable either way.
+        assert row["unity_gain_hz"] is None
+        assert row["stability"] == "always_below_unity"
+
+    def test_stability_headline_is_the_first_crossover_in_sweep_order(self):
+        """The recorded fixture has no crossover at all, so the end-to-end test
+        cannot tell the extraction rule from a hardcoded null."""
+        from ltspice_mcp.tools.analyze import _promote_headlines
+
+        value = {
+            "unity_gain_crossovers": [
+                {"frequency_hz": 1.2e6, "direction": "falling"},
+                {"frequency_hz": 8.0e6, "direction": "rising"},
+            ]
+        }
+        assert _promote_headlines("stability", value)["unity_gain_hz"] == 1.2e6
 
     def test_promotion_never_overwrites_an_existing_key(self):
         """setdefault contract: if an adapter ever grows its own flat leaf with

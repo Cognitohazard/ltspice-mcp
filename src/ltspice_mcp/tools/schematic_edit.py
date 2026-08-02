@@ -137,6 +137,9 @@ class _ViewCursors(StrictModel):
     pin_legend: str | None = Field(
         default=None, description="next_cursor from a previous views.pin_legend page."
     )
+    touched: str | None = Field(
+        default=None, description="next_cursor from a previous views.touched page."
+    )
 
 
 class EditSchematicInput(ToolInput):
@@ -194,13 +197,14 @@ class EditSchematicInput(ToolInput):
             "content to <target>.draft-<build_id>.asc for inspection."
         ),
     )
-    return_views: list[Literal["pin_legend", "render"]] = Field(
-        default_factory=lambda: ["pin_legend"],
+    return_views: list[Literal["touched", "pin_legend", "render"]] = Field(
+        default_factory=lambda: ["touched"],
         description=(
-            "Which geometry views to return. 'pin_legend' (default) is the per-"
-            "component pin/net table; 'render' is an SVG/PNG of the sheet. A render "
-            "needs a committed file, so under dry_run it reports metadata only and "
-            "writes no artifact."
+            "Which geometry views to return. 'touched' (default) is the pin/net table "
+            "for just the components this batch's ops named; 'pin_legend' is the same "
+            "table for the whole sheet; 'render' is an SVG/PNG of it. A render needs a "
+            "committed file, so under dry_run it reports metadata only and writes no "
+            "artifact."
         ),
     )
     view_cursors: _ViewCursors | None = Field(
@@ -330,6 +334,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "views": {
             "type": "object",
             "properties": {
+                "touched": _PAGE_SCHEMA,
                 "pin_legend": _PAGE_SCHEMA,
                 "render": {"type": "object"},
             },
@@ -570,6 +575,30 @@ async def _build_edit_views(
     )
 
 
+def touched_refs(ops: list[ConsolidatedOp]) -> set[str]:
+    """Component references this op batch named, casefolded.
+
+    Reads the ops' own addressing rather than diffing the sheet: an op names
+    the component it acts on, and a pin endpoint (``M1.D``) names one too. A
+    ``net:NAME`` endpoint and the coordinate forms name no component and
+    contribute nothing.
+    """
+    refs: set[str] = set()
+
+    def add_pin(pin: str | None) -> None:
+        if pin and not pin.lower().startswith("net:") and "." in pin:
+            refs.add(pin.split(".", 1)[0].casefold())
+
+    for op in ops:
+        reference = getattr(op, "reference", None)
+        if isinstance(reference, str) and reference:
+            refs.add(reference.casefold())
+        add_pin(getattr(op, "from_pin", None))
+        add_pin(getattr(op, "to_pin", None))
+        add_pin(getattr(op, "pin", None))
+    return refs
+
+
 def _present_edit_views(
     args: EditSchematicInput,
     neutral: EditSchematicViews,
@@ -588,11 +617,15 @@ def _present_edit_views(
 
     views: dict[str, Any] = {}
     for view in args.return_views:
-        if view == "pin_legend":
-            views["pin_legend"] = paginate_view(
-                list(neutral.pin_legend),
-                "pin_legend",
-                cursor=None if complete else cursors.pin_legend,
+        if view in ("pin_legend", "touched"):
+            rows = list(neutral.pin_legend)
+            if view == "touched":
+                wanted = touched_refs(args.ops)
+                rows = [row for row in rows if str(row.get("ref", "")).casefold() in wanted]
+            views[view] = paginate_view(
+                rows,
+                view,
+                cursor=None if complete else getattr(cursors, view),
                 limit=limit if complete else args.view_limit,
             )
         elif view == "render" and neutral.render is not None:
@@ -930,7 +963,7 @@ async def _evaluate_edit_schematic(
             _stage("apply_ops")
 
             profile, legend, label_only = _wiring_and_legend(
-                editor, include_legend="pin_legend" in args.return_views
+                editor, include_legend=bool({"pin_legend", "touched"} & set(args.return_views))
             )
             warnings = [w["message"] for w in _post_op_warnings(editor)]
             encoding = getattr(editor, "encoding", "utf-8") or "utf-8"

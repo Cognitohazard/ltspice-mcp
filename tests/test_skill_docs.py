@@ -28,9 +28,14 @@ BENCH_NOTES_PATH = BENCH_SKILL_PATH.parent / "references" / "BENCH_NOTES.md"
 # Raised 3600 → 3700 when the trigger description was rewritten to fire on
 # the circuit domain itself rather than on already-using-the-tools — a
 # listing line that only matches agents already converted cannot convert one.
+# Raised 8000 → 8300 for the payload-size routing clause: the four-way rule
+# routed on capability alone, and the same result set costs ~5,200 transcript
+# characters through a tool call against ~150 through a script that prints its
+# summary. The body loads only when the skill fires, so this pin guards
+# readability, not per-session context rent.
 SKILL_BUDGETS = (
     pytest.param(SKILL_PATH, 3700, id="spice-experiments"),
-    pytest.param(BENCH_SKILL_PATH, 8000, id="spice-bench-craft"),
+    pytest.param(BENCH_SKILL_PATH, 8300, id="spice-bench-craft"),
 )
 
 # Two rules share this denylist. (1) Absent behavior: "rerun" and "case_axis"

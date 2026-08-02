@@ -27,6 +27,7 @@ from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES, BatchJob
 from ltspice_mcp.lib.log_parser import (
+    classify_failure_code,
     extract_error_context,
     extract_log_diagnostics,
     is_op_stepping_failure,
@@ -70,6 +71,8 @@ class RunOutcome(NamedTuple):
     raw_size: int
     error: str | None
     observations: tuple[dict, ...] = ()
+    failure_code: str | None = None
+    failure_evidence: dict[str, list[str]] | None = None
 
 
 _RAW_PRODUCING_ANALYSES: frozenset[str] = frozenset(f".{kind}" for kind in ANALYSIS_KINDS)
@@ -209,8 +212,8 @@ def collect_run_outcome(
         log_exists = bool(log_file) and log_path.exists()
     except OSError:
         log_exists = False
+    errors = extract_log_diagnostics(log_path)["errors"] if log_exists else []
     if not sim_failed and log_exists:
-        errors = extract_log_diagnostics(log_path)["errors"]
         non_rung = [error for error in errors if not is_op_stepping_failure(error)]
         if not non_rung and not op_ladder_exhausted(errors):
             analyses, has_save = requirements if requirements is not None else ([], False)
@@ -223,7 +226,17 @@ def collect_run_outcome(
         error = f"Simulation failed (no output generated)\n\nLog excerpt:\n{context}"
     else:
         error = "Simulation failed (no output generated, log file missing)"
-    return RunOutcome("" if sim_failed else raw_file, log_file, 0, error)
+    # The diagnostics above already name the cause; classifying here is what
+    # turns it into a code a caller can branch on instead of prose it must read.
+    code, evidence = classify_failure_code(errors)
+    return RunOutcome(
+        "" if sim_failed else raw_file,
+        log_file,
+        0,
+        error,
+        failure_code=code,
+        failure_evidence=evidence,
+    )
 
 
 def inject_logopinfo(netlist_path: Path, simulator: type, job_id: str) -> Path:

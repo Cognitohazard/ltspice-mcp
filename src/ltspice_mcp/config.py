@@ -181,6 +181,13 @@ class ServerConfig:
     result_set_ttl_hours: float = 24.0
     """Retention for raw-path-only immutable analysis result sets."""
 
+    default_budget: int = 4000
+    """Server-side response budget, in estimated tokens, for a consolidated-profile
+    call that sets no ``budget`` of its own. It engages the ladder's trim rung ONLY
+    — empty presentation blocks and the identity echo — so it can never cut a fact
+    or revoke a detail the caller explicitly asked for. Set 0 to leave every default
+    response undegraded. ``[analysis] default_budget``."""
+
     log_level: str = "INFO"
     """Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)."""
 
@@ -290,6 +297,8 @@ class ServerConfig:
                     config_dict["max_points_returned"] = toml_data["analysis"]["max_points"]
                 if "analysis_budget_s" in toml_data["analysis"]:
                     config_dict["analysis_budget_s"] = toml_data["analysis"]["analysis_budget_s"]
+                if "default_budget" in toml_data["analysis"]:
+                    config_dict["default_budget"] = toml_data["analysis"]["default_budget"]
                 if "result_set_ttl_hours" in toml_data["analysis"]:
                     config_dict["result_set_ttl_hours"] = toml_data["analysis"][
                         "result_set_ttl_hours"
@@ -379,6 +388,14 @@ class ServerConfig:
             )
             _validate_numeric(
                 config_dict,
+                "default_budget",
+                int,
+                0,
+                10_000_000,
+                source="config",
+            )
+            _validate_numeric(
+                config_dict,
                 "result_set_ttl_hours",
                 float,
                 0,
@@ -440,6 +457,9 @@ class ServerConfig:
             0,
             3600,
             exclusive_min=True,
+        )
+        _load_bounded_env(
+            "LTSPICE_MCP_DEFAULT_BUDGET", config_dict, "default_budget", int, 0, 10_000_000
         )
         _load_bounded_env(
             "LTSPICE_MCP_RESULT_SET_TTL_HOURS",
@@ -583,6 +603,8 @@ def generate_default_config(path: Path) -> None:
     analysis.add("max_points", 10000)
     analysis.add(comment("Whole-call work budget for analyze_results, in seconds"))
     analysis.add("analysis_budget_s", 60.0)
+    analysis.add(comment("Default response budget in tokens for consolidated calls (0 disables)"))
+    analysis.add("default_budget", 4000)
     analysis.add(comment("Retention for raw-path-only analysis result sets, in hours"))
     analysis.add("result_set_ttl_hours", 24.0)
     doc.add("analysis", analysis)
