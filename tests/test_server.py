@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from ltspice_mcp.config import VALID_PROFILES, ServerConfig
+from ltspice_mcp.engine import configure_asc_editor
 from ltspice_mcp.errors import (
     LibraryError,
     LTSpiceMCPError,
@@ -14,7 +15,6 @@ from ltspice_mcp.errors import (
 )
 from ltspice_mcp.server import (
     SERVER_INSTRUCTIONS,
-    _configure_asc_editor,
     _get_error_hint,
     build_instructions,
     call_tool,
@@ -165,7 +165,7 @@ class TestConfigureAscEditor:
         cfg.symbol_paths = [symdir]
         with patch("spicelib.editor.asc_editor.AscEditor") as mock_cls:
             mock_cls.custom_lib_paths = []
-            _configure_asc_editor(cfg, available={})
+            configure_asc_editor(cfg, available={})
             assert str(symdir) in mock_cls.custom_lib_paths
 
     def test_explicit_symbol_paths_invalid_non_wsl(self, tmp_path: Path):
@@ -178,7 +178,7 @@ class TestConfigureAscEditor:
         ):
             mock_cls.custom_lib_paths = []
             mock_cls.simulator_lib_paths = []
-            _configure_asc_editor(cfg, available={})
+            configure_asc_editor(cfg, available={})
             assert mock_cls.custom_lib_paths == []
 
     def test_non_wsl_no_ltspice_disabled(self, tmp_path: Path):
@@ -189,7 +189,7 @@ class TestConfigureAscEditor:
             patch("spicelib.editor.asc_editor.AscEditor") as mock_cls,
         ):
             mock_cls.custom_lib_paths = []
-            _configure_asc_editor(cfg, available={})
+            configure_asc_editor(cfg, available={})
             assert mock_cls.custom_lib_paths == []
 
     def test_non_wsl_prepare_for_simulator(self, tmp_path: Path):
@@ -205,7 +205,7 @@ class TestConfigureAscEditor:
         ):
             mock_cls.custom_lib_paths = ["/x/lib/sym"]
             mock_cls.simulator_lib_paths = []
-            _configure_asc_editor(cfg, available={"ltspice": FakeLT})
+            configure_asc_editor(cfg, available={"ltspice": FakeLT})
             mock_cls.prepare_for_simulator.assert_called_once_with(FakeLT)
 
     def test_wsl_no_lib_paths_disabled(self, tmp_path: Path):
@@ -217,7 +217,7 @@ class TestConfigureAscEditor:
             patch("spicelib.editor.asc_editor.AscEditor") as mock_cls,
         ):
             mock_cls.custom_lib_paths = []
-            _configure_asc_editor(cfg, available={})
+            configure_asc_editor(cfg, available={})
             assert mock_cls.custom_lib_paths == []
 
     def test_wsl_symbols_decoupled_from_simulator(self, tmp_path: Path):
@@ -234,7 +234,7 @@ class TestConfigureAscEditor:
             patch("spicelib.editor.asc_editor.AscEditor") as mock_cls,
         ):
             mock_cls.custom_lib_paths = []
-            _configure_asc_editor(cfg, available={})  # empty: no simulator at all
+            configure_asc_editor(cfg, available={})  # empty: no simulator at all
             assert str(symdir) in mock_cls.custom_lib_paths
 
 

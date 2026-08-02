@@ -9,7 +9,7 @@ import shutil
 import time
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 from pydantic import ValidationError
@@ -262,19 +262,65 @@ async def test_oversized_artifact_defers_whole_after_progress_then_continues(
     assert resumed.structuredContent["next"] is None
 
 
-def _neutral_work(evaluation) -> list[tuple[Any, ...]]:
-    return [
-        (
-            item.key,
-            item.position,
-            item.rows,
-            item.reductions,
-            item.facts,
-            item.failures,
-            item.observations,
+class _NeutralWork(NamedTuple):
+    """Unprojected work produced for one recipe during one evaluator drive."""
+
+    key: str
+    position: int
+    rows: tuple[dict[str, Any], ...]
+    reductions: tuple[dict[str, Any], ...]
+    facts: dict[str, Any]
+    failures: tuple[dict[str, Any], ...]
+    observations: tuple[dict[str, Any], ...]
+
+
+def _neutral_work(evaluation: analyze_mod.AnalysisEvaluation) -> list[_NeutralWork]:
+    """The drive's complete unprojected rows and derived facts, per recipe.
+
+    This is the identity a resumed sequence of drives must reproduce exactly:
+    the same rows, reductions and facts the one-shot evaluation computes, with
+    every MCP cap lifted (spec fail cases uncapped, outliers always included).
+    """
+    work: list[_NeutralWork] = []
+    for unit in evaluation.processed:
+        recipe = unit["recipe"]
+        rows = unit["records"]
+        relevant_missing = [
+            case
+            for case in evaluation.missing
+            if recipe.sources is None or case.get("label") in set(recipe.sources)
+        ]
+        spec = analyze_mod._spec(
+            recipe,
+            rows,
+            incomplete=bool(unit["item_failures"] or relevant_missing),
+            include_outliers=True,
+            fail_case_limit=max(1, len(rows)),
         )
-        for item in evaluation.neutral_work
-    ]
+        if spec is not None:
+            fail_cases = spec["fail_cases"]["items"]
+            spec = {
+                key: value for key, value in spec.items() if key not in {"fail_cases", "outliers"}
+            }
+            spec["fail_cases"] = fail_cases
+        work.append(
+            _NeutralWork(
+                key=unit["key"],
+                position=unit["position"],
+                rows=tuple(rows),
+                reductions=tuple(analyze_mod._reduce(recipe, rows)),
+                facts={
+                    "metric": recipe.metric,
+                    "units": None,
+                    "warnings": analyze_mod._record_warnings(rows),
+                    "groups": analyze_mod._group_values(recipe, rows, evaluation.group_by),
+                    "spec": spec,
+                },
+                failures=tuple(unit["item_failures"]),
+                observations=tuple(unit["observations"]),
+            )
+        )
+    return work
 
 
 @pytest.mark.asyncio
@@ -345,7 +391,7 @@ async def test_neutral_failures_are_uncapped_while_mcp_keeps_its_cap(
     monkeypatch.setattr(analyze_mod, "_evaluate_item", fail_many)
     neutral = await evaluate_analysis_results(args, state_no_sim)
     assert list(neutral.failure_inventory) == failures
-    assert list(neutral.neutral_work[0].failures) == failures
+    assert list(_neutral_work(neutral)[0].failures) == failures
 
     mcp = await handle_analyze_results(args, state_no_sim)
     assert mcp.structuredContent is not None
@@ -380,7 +426,7 @@ async def test_neutral_rows_are_unprojected_before_mcp_paging_and_fields(
         include={"per_run": {"limit": 1}, "fields": ["step_index"]},
     )
     neutral = await evaluate_analysis_results(args, state_no_sim)
-    rows = list(neutral.neutral_work[0].rows)
+    rows = list(_neutral_work(neutral)[0].rows)
     assert len(rows) == 3
     assert all("value" in row and "source" in row for row in rows)
 
