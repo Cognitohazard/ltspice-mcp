@@ -463,6 +463,67 @@ class TestExperimentLifecycle:
         assert loaded.runs_done_event.is_set()
         assert loaded.done_event.is_set()
 
+    def test_restart_promotes_a_case_whose_results_outlived_its_checkpoint(
+        self,
+        work_dir: Path,
+    ):
+        """A produced run must not be reported as a failure because a crash beat
+        its checkpoint.
+
+        Case progress is persisted every ``total // 20``-th event, so a job over
+        ~20 cases can lose the terminal mark of a case that already wrote its
+        raw. Counting that as a shortfall is data loss dressed as accounting.
+        """
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        runs = work_dir / "runs"
+        runs.mkdir()
+        job = _job(work_dir, circuit, status="running")
+        job.owner_pid = 999_999_999
+        job.output_folder = runs
+        # On disk from the run that finished; never recorded on the case.
+        job.cases[0].run_token = f"{job.job_id}_case_0"
+        job.cases[0].status = "running"
+        (runs / f"{job.cases[0].run_token}.raw").write_bytes(b"Title: result")
+        (runs / f"{job.cases[0].run_token}.log").write_text("ok\n")
+        experiment_store.save_job(job)
+
+        loaded = experiment_store.load_job(job.job_id, work_dir)
+
+        assert loaded is not None
+        assert loaded.cases[0].status == "produced"
+        assert loaded.cases[0].raw_file == runs / f"{job.cases[0].run_token}.raw"
+        assert loaded.completeness.produced == 1
+        assert loaded.failures == []
+        assert any(item["code"] == "unpersisted_runs_recovered" for item in loaded.observations)
+
+    def test_restart_does_not_promote_a_case_with_no_readable_raw(self, work_dir: Path):
+        """The promotion is gated on the raw's header magic, not on a filename.
+
+        An empty or truncated file at the expected path is what a run killed
+        mid-write leaves behind; promoting it would report data that is not
+        there.
+        """
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        runs = work_dir / "runs"
+        runs.mkdir()
+        job = _job(work_dir, circuit, status="running")
+        job.owner_pid = 999_999_999
+        job.output_folder = runs
+        job.cases[0].run_token = f"{job.job_id}_case_0"
+        job.cases[0].status = "running"
+        (runs / f"{job.cases[0].run_token}.raw").write_bytes(b"\x00\x00truncated")
+        (runs / f"{job.cases[0].run_token}.log").write_text("ok\n")
+        experiment_store.save_job(job)
+
+        loaded = experiment_store.load_job(job.job_id, work_dir)
+
+        assert loaded is not None
+        assert loaded.cases[0].status == "failed"
+        assert loaded.cases[0].failure_code == "server_restarted"
+        assert [row["code"] for row in loaded.failures] == ["server_restarted"]
+
     def test_restart_recovers_completed_analysis_write_gap(self, work_dir: Path):
         circuit = work_dir / "deck.cir"
         raw = work_dir / "case.raw"

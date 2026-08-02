@@ -82,6 +82,7 @@ from ltspice_mcp.lib.variations import (
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
 from ltspice_mcp.tools._base import (
+    ResponseBudget,
     StrictModel,
     ToolInput,
     format_response,
@@ -89,6 +90,7 @@ from ltspice_mcp.tools._base import (
     paginate,
     project_row,
     registry,
+    resolve_response_budget,
     resolve_run_simulator,
     resolve_runnable_netlist,
     safe_path,
@@ -421,11 +423,7 @@ class RunExperimentsInput(ToolInput):
     budget: int | None = Field(
         default=None,
         ge=response_budget.BUDGET_MIN_TOKENS,
-        description=(
-            "Approximate response-token cap (minimum 500). Uses trim, answer, "
-            "columnar, then smaller pages; facts remain whole and an unmet floor "
-            "is reported. Presentation only; it does not change the fingerprint."
-        ),
+        description=response_budget.BUDGET_DESCRIPTION,
     )
 
 
@@ -486,10 +484,36 @@ _FAILURE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "case_id": {"type": "string"},
+        "case_ids": {"type": "array", "items": {"type": "string"}},
+        "count": {"type": "integer"},
         "code": {"type": "string"},
         "message": {"type": "string"},
+        "evidence": {"type": "object"},
+        "hint": {"type": "string"},
     },
     "required": ["case_id", "code", "message"],
+}
+
+# Recovery guidance per classified failure code, worded for the six tools this
+# profile exposes. These are the surviving arms of three exception hints that
+# were keyed by exception classes nothing ever raised, so no caller saw them;
+# the case-level failure code is the signal that actually reaches a caller.
+# They live beside the receipt that carries them because the failure channel
+# exists only here — another profile growing one would need its own wording,
+# not a share of this table.
+_FAILURE_CODE_HINTS: dict[str, str] = {
+    "convergence_failed": (
+        "Add a .OPTIONS directive to the deck (e.g. .OPTIONS reltol=0.003 or "
+        ".OPTIONS method=gear), or check component values for very large/small ratios."
+    ),
+    "singular_matrix": (
+        "This usually means a floating node or short circuit. Use inspect with a "
+        "net query to trace connectivity, or read the netlist directly."
+    ),
+    "missing_model": (
+        'Use inspect with a model query (mode:"search") to fuzzy-match against '
+        "loaded libraries, or add a .lib/.include for it to the deck."
+    ),
 }
 
 _ARTIFACT_SCHEMA: dict[str, Any] = {
@@ -555,25 +579,16 @@ _COMPLETENESS_SCHEMA: dict[str, Any] = {
     ],
 }
 
+# The derived view of ``completeness``, and only that: the seven raw counters
+# live in ``completeness`` and are not restated here.
 _PROGRESS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "expanded": {"type": "integer"},
         "terminal": {"type": "integer"},
         "remaining": {"type": "integer"},
-        **_COMPLETENESS_SCHEMA["properties"],
     },
-    "required": [
-        "expanded",
-        "terminal",
-        "remaining",
-        "declared",
-        "submitted",
-        "produced",
-        "failed",
-        "cancelled",
-        "skipped",
-    ],
+    "required": ["expanded", "terminal", "remaining"],
 }
 
 RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
@@ -725,6 +740,7 @@ async def handle_run_experiments(
         else None
     )
     fingerprint = canonical_fingerprint(args)
+    budget = resolve_response_budget(args.budget, state)
     try:
         replay = await _load_matching_replay(args, state, fingerprint)
         if replay is not None:
@@ -735,7 +751,7 @@ async def handle_run_experiments(
                 provenance=args.provenance,
                 run_fields=args.run_fields,
                 analysis_fields=analysis_fields,
-                budget=args.budget,
+                budget=budget,
             )
 
         simulator = resolve_run_simulator(args.execution.simulator, state)
@@ -766,7 +782,9 @@ async def handle_run_experiments(
                 simulator,
             )
         except DeckStagingError as exc:
-            return await _routing_failure_response(args, circuit_inputs, exc, projected)
+            return await _routing_failure_response(
+                args, circuit_inputs, exc, projected, budget=budget
+            )
         await asyncio.to_thread(route.output_folder.mkdir, parents=True, exist_ok=True)
 
         cases: list[ExperimentCase] = []
@@ -843,14 +861,14 @@ async def handle_run_experiments(
                 provenance=args.provenance,
                 run_fields=args.run_fields,
                 analysis_fields=analysis_fields,
-                budget=args.budget,
+                budget=budget,
             )
         except Exception as exc:
             return await _post_submit_error_response(
                 receipt,
                 exc,
                 lint_by_circuit,
-                budget=args.budget,
+                budget=budget,
             )
     except IdempotencyConflictError as exc:
         return await _error_response(
@@ -860,7 +878,7 @@ async def handle_run_experiments(
             stage="submission",
             retryable=False,
             commit_state="not_started",
-            budget=args.budget,
+            budget=budget,
         )
     except VariationError as exc:
         return await _error_response(
@@ -870,7 +888,7 @@ async def handle_run_experiments(
             stage="variation",
             retryable=False,
             commit_state="not_started",
-            budget=args.budget,
+            budget=budget,
         )
     except PathSecurityError as exc:
         return await _error_response(
@@ -880,7 +898,7 @@ async def handle_run_experiments(
             stage="resolution",
             retryable=False,
             commit_state="not_started",
-            budget=args.budget,
+            budget=budget,
         )
     except (SimulationError, ResultError, DeckStagingError, OSError, ValueError) as exc:
         return await _error_response(
@@ -890,7 +908,7 @@ async def handle_run_experiments(
             stage="submission",
             retryable=True,
             commit_state="not_started",
-            budget=args.budget,
+            budget=budget,
         )
 
 
@@ -1227,7 +1245,10 @@ _TRIM_EMPTY_RECEIPT: tuple[str, ...] = ("source",)
 
 _RUN_BUDGET_NOTES = response_budget.Notes(
     cut="presentation was reduced; no run, failure, or analysis fact was dropped.",
-    route="Re-ask without 'budget', or continue through the returned cursor/jobs route.",
+    route=(
+        "Ask again with a larger 'budget' for the full presentation, or continue "
+        "through the returned cursor/jobs route."
+    ),
 )
 
 
@@ -1277,7 +1298,7 @@ def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> None:
 
 
 async def _negotiate_receipt(
-    budget: int,
+    budget: ResponseBudget,
     build: _ReceiptBuild,
     page_limit: int,
     *,
@@ -1301,18 +1322,21 @@ async def _negotiate_receipt(
         _degrade_receipt(rendered, rung)
         return rendered
 
-    result = await response_budget.negotiate(budget, render, notes)
+    assert budget.tokens is not None  # the undegraded path never reaches here
+    result = await response_budget.negotiate(
+        budget.tokens, render, notes, max_rung=budget.max_rung
+    )
     response_budget.attach_notes(result, notes)
     return result.data, text
 
 
 async def _render_run_receipt(
-    budget: int | None,
+    budget: ResponseBudget,
     build: _ReceiptBuild,
     *,
     is_error: bool = False,
 ) -> types.CallToolResult:
-    if budget is None:
+    if budget.tokens is None:
         data, text = build(_RUN_PAGE_LIMIT, None)
     else:
         data, text = await _negotiate_receipt(
@@ -1330,7 +1354,7 @@ async def _render_run_receipt(
 async def _render_static_run_receipt(
     data: dict[str, Any],
     text: str,
-    budget: int | None,
+    budget: ResponseBudget,
     *,
     is_error: bool = False,
 ) -> types.CallToolResult:
@@ -1342,12 +1366,18 @@ async def _render_static_run_receipt(
 
 
 def progress_from_completeness(completeness: Completeness) -> dict[str, int]:
-    """Project durable accounting into the shared progress fact."""
+    """Project durable accounting into the shared progress fact.
+
+    The three DERIVED numbers only. ``completeness`` keeps all seven counters,
+    unchanged and always — this block used to restate every one of them beside
+    its own projection, so the same accounting arrived twice in one receipt and
+    a third time in the hint. Dropping the copy removes no fact: each counter is
+    one key away, in the block the completeness doctrine names.
+    """
     return {
         "expanded": completeness.expanded,
         "terminal": completeness.terminal,
         "remaining": completeness.expanded - completeness.terminal,
-        **asdict(completeness),
     }
 
 
@@ -1413,7 +1443,7 @@ async def _dwell_and_respond(
     provenance: bool = False,
     run_fields: list[str] | None = None,
     analysis_fields: list[str] | None = None,
-    budget: int | None = None,
+    budget: ResponseBudget,
 ) -> types.CallToolResult:
     job = receipt.job
     if job.status not in _TERMINAL_EXPERIMENT_STATUSES and wait_s > 0:
@@ -1487,7 +1517,7 @@ def render_receipt_snapshot(
         "completeness": snapshot.completeness,
         "lint": list(snapshot.lint),
         "runs": runs,
-        "failures": list(snapshot.failures),
+        "failures": _render_failures(snapshot.failures),
         "observations": list(snapshot.observations),
         "warnings": [],
         "artifacts": list(snapshot.artifacts),
@@ -1499,8 +1529,11 @@ def render_receipt_snapshot(
             else _terminal_hint(snapshot, runs["truncated"])
         ),
     }
+    # Cancel authority, only where a cancel can still do anything. A terminal
+    # job has nothing left to stop, so the token there is bytes on every receipt
+    # buying an action the lifecycle already refuses.
     emitted_control_token = control_token if control_token is not None else snapshot.control_token
-    if emitted_control_token is not None:
+    if emitted_control_token is not None and snapshot.status not in _TERMINAL_EXPERIMENT_STATUSES:
         data["control_token"] = emitted_control_token
     if snapshot.analysis_status != "not_requested":
         rendered_result: dict[str, Any] | None = None
@@ -1535,6 +1568,44 @@ def render_receipt_snapshot(
             # proof of what ran, not something to re-read every turn.
             data["analysis"]["request"] = copy.deepcopy(snapshot.analysis_request)
     return data
+
+
+_FAILURE_CASE_ID_CAP = 10
+"""How many case ids a collapsed failure row names before deferring to ``count``."""
+
+
+def _render_failures(
+    rows: tuple[dict[str, Any], ...] | list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Collapse repeated failures into one counted row and attach recovery hints.
+
+    A case failure carries a ~20-line log excerpt in its message, and a sweep
+    or Monte Carlo that fails for one reason fails identically in every case —
+    a hundred cases is a hundred copies of the same kilobyte in a channel the
+    budget ladder is forbidden to trim. Identical ``(code, message)`` rows
+    therefore become one row naming its cases, exactly as the log reader
+    already collapses a repeated diagnostic within one log.
+
+    No fact is dropped: ``count`` is the true number of cases, so a capped
+    ``case_ids`` list reports its own shortfall rather than rounding it away.
+    """
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault((str(row.get("code", "")), str(row.get("message", ""))), []).append(row)
+
+    collapsed: list[dict[str, Any]] = []
+    for (code, _message), group in grouped.items():
+        rendered = dict(group[0])
+        if len(group) > 1:
+            rendered["case_ids"] = [
+                str(item.get("case_id", "")) for item in group[:_FAILURE_CASE_ID_CAP]
+            ]
+            rendered["count"] = len(group)
+        hint = _FAILURE_CODE_HINTS.get(code)
+        if hint is not None:
+            rendered["hint"] = hint
+        collapsed.append(rendered)
+    return collapsed
 
 
 def _source_payload(source: SourceRecord, *, provenance: bool) -> dict[str, Any]:
@@ -1682,6 +1753,14 @@ def _terminal_outcome(
 
 
 def _terminal_hint(snapshot: ReceiptSnapshot, truncated: bool) -> str:
+    """Every recovery route this receipt has, not the first one that matched.
+
+    A server restart mid-run sets BOTH conditions: the abandoned cases become
+    failures AND the attached analysis is marked failed. Under an exclusive
+    ladder the failures branch won and the caller was never told that the runs
+    that DID produce data are still analyzable by job_id — so the obvious move
+    was to re-run an experiment whose results were sitting on disk.
+    """
     if snapshot.job_type != "experiment":
         return ""
     if truncated:
@@ -1689,15 +1768,18 @@ def _terminal_hint(snapshot: ReceiptSnapshot, truncated: bool) -> str:
             f"The inline run page is truncated; use jobs(runs) with job_id "
             f"{snapshot.job_id} for the remaining cases."
         )
-    if snapshot.failures:
-        return "Inspect failures and lint findings before retrying omitted cases."
+    routes: list[str] = []
     if snapshot.analysis_status in {"failed", "cancelled"}:
-        return (
-            f"All declared experiment cases reached terminality, but the attached "
-            f"analysis {snapshot.analysis_status}; read analysis.error and re-run it with "
-            f"analyze_results over job_id {snapshot.job_id}."
+        routes.append(
+            f"The attached analysis {snapshot.analysis_status}; read analysis.error and "
+            f"re-run it with analyze_results over job_id {snapshot.job_id} — the runs "
+            "that produced data need no re-run."
         )
-    return "All declared experiment cases reached terminality."
+    if snapshot.failures:
+        routes.append("Inspect failures and lint findings before retrying omitted cases.")
+    if not routes:
+        return "All declared experiment cases reached terminality."
+    return " ".join(routes)
 
 
 def _append_terminal_cases(
@@ -1771,6 +1853,8 @@ async def _routing_failure_response(
     circuits: list[CircuitDeck],
     exc: DeckStagingError,
     projected: int,
+    *,
+    budget: ResponseBudget,
 ) -> types.CallToolResult:
     cases: list[ExperimentCase] = []
     for circuit in circuits:
@@ -1819,7 +1903,7 @@ async def _routing_failure_response(
         rendered["runs"] = _runs_page(cases, args.run_fields, cap=limit)
         return rendered, str(exc)
 
-    return await _render_run_receipt(args.budget, build)
+    return await _render_run_receipt(budget, build)
 
 
 async def _error_response(
@@ -1830,7 +1914,7 @@ async def _error_response(
     stage: str,
     retryable: bool,
     commit_state: Literal["not_started", "committed", "unknown"],
-    budget: int | None,
+    budget: ResponseBudget,
 ) -> types.CallToolResult:
     data = _empty_payload(request_id)
     data.update(
@@ -1859,7 +1943,7 @@ async def _post_submit_error_response(
     exc: Exception,
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None,
     *,
-    budget: int | None,
+    budget: ResponseBudget,
 ) -> types.CallToolResult:
     """Envelope for a failure that escaped AFTER the cases were submitted.
 
@@ -2064,10 +2148,7 @@ class JobsInput(ToolInput):
     budget: int | None = Field(
         default=None,
         ge=response_budget.BUDGET_MIN_TOKENS,
-        description=response_budget.budget_description(
-            "the staged-deck manifest echo, then the artifact paths on rows that "
-            "produced a result, then the run page itself"
-        ),
+        description=response_budget.BUDGET_DESCRIPTION,
     )
 
     @model_validator(mode="after")
@@ -2408,12 +2489,14 @@ _JobsBuild = _ReceiptBuild
 #: ``observations`` without displacing it.
 _BUDGET_NOTES = response_budget.Notes(
     cut="presentation was reduced, no run or receipt was dropped.",
-    route="Re-ask without 'budget', or page on with next_cursor.",
+    route=(
+        "Ask again with a larger 'budget' for the full presentation, or page on with next_cursor."
+    ),
 )
 
 
 async def _negotiate_jobs(
-    budget: int,
+    budget: ResponseBudget,
     build: _JobsBuild,
     page_limit: int,
 ) -> _JobsBuilt:
@@ -3336,10 +3419,11 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
 
                 build = build_cancel
 
-        if args.budget is None:
+        budget = resolve_response_budget(args.budget, state)
+        if budget.tokens is None:
             data, text = build(page_limit, None)
         else:
-            data, text = await _negotiate_jobs(args.budget, build, page_limit)
+            data, text = await _negotiate_jobs(budget, build, page_limit)
     except Exception as exc:
         code, stage, retryable = _jobs_error_details(exc)
         data = _jobs_error_payload(

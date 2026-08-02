@@ -64,12 +64,31 @@ class ExperimentCase:
     log_file: Path | None = None
     error: str | None = None
     failure_code: str | None = None
+    failure_evidence: dict[str, Any] | None = None
     observations: list[dict[str, Any]] = field(default_factory=list)
     submitted_at: datetime | None = None
     completed_at: datetime | None = None
     run_token: str = ""
     step_index: int | None = None
     step_values: dict[str, Any] = field(default_factory=dict)
+
+
+def failure_row(case: ExperimentCase) -> dict[str, Any]:
+    """Project one non-produced case into the receipt's failure-channel row.
+
+    The single builder for that row: the coordinator seeds rows for cases that
+    were already terminal at construction, marks more as they fail, and the
+    store rewrites abandoned ones after a restart. Three writers of the same
+    shape is how ``evidence`` reaches one caller and not the next.
+    """
+    row: dict[str, Any] = {
+        "case_id": case.case_id,
+        "code": case.failure_code or case.status,
+        "message": case.error or case.status,
+    }
+    if case.failure_evidence:
+        row["evidence"] = case.failure_evidence
+    return row
 
 
 @dataclass
@@ -209,6 +228,12 @@ class ExperimentJob:
     started_at: datetime = field(default_factory=now)
     completed_at: datetime | None = None
     error: str | None = None
+    #: Where the runner wrote this job's artifacts. Recorded because a restart
+    #: has to reconstruct a case's raw/log path from ``run_token`` to see
+    #: whether a case that never persisted its terminal mark actually produced
+    #: data; absent on records written before it existed, which simply skips
+    #: that promotion.
+    output_folder: Path | None = None
     failures: list[dict[str, Any]] = field(default_factory=list)
     observations: list[dict[str, Any]] = field(default_factory=list)
     artifacts: list[dict[str, Any]] = field(default_factory=list)

@@ -69,24 +69,17 @@ _RUNG_NAMES: dict[int, str] = {
     RUNG_SHRINK: "shrink",
 }
 
-BUDGET_DESCRIPTION_HEAD = (
-    "Cap this response at roughly this many tokens (compact characters / 4), "
-    "minimum 500. Omitted, the response is exactly what it would be without "
-    "this argument. Set, the server measures the assembled response and, while "
-    "it is over, degrades presentation down a fixed ladder: empty blocks and "
-    "the identity echo, then your detail opt-ins, then columnar rows, then "
-    "smaller pages (with cursors minted against the smaller page, so paging "
-    "still walks every row). Facts are never cut at any budget — failures, "
-    "observations, warnings and completeness always come back whole, and a "
-    "budget too small for them returns them anyway and says so. The budget "
-    "changes presentation only: it is not part of a result's identity, so the "
-    "same request at two budgets shares one result set and one set of cursors."
+# One sentence per fact a caller needs to decide whether to set this: the unit,
+# that presentation is all it touches, and that omitting it is not "no budget".
+# The ladder's per-tool mechanics live in spice://guide — they are what a caller
+# reads once, not what every session should pay for on the wire.
+BUDGET_DESCRIPTION = (
+    "Approximate response-token cap (compact characters / 4, minimum 500). "
+    "Presentation degrades down a fixed ladder; facts — failures, observations, "
+    "warnings, completeness — are never cut. Omitted, the server's own default "
+    "budget applies and only strips empty blocks and the identity echo. "
+    "Presentation only: it is not part of a result's identity. See spice://guide."
 )
-
-
-def budget_description(cut_first: str) -> str:
-    """The shared budget prose plus the tool-specific note on what gives first."""
-    return f"{BUDGET_DESCRIPTION_HEAD} On this tool the first thing to give is {cut_first}."
 
 
 @dataclass(frozen=True)
@@ -420,6 +413,10 @@ class Negotiated:
     data: dict[str, Any]
     rung: Rung
     estimate: int
+    #: Whether the ladder was stopped short of its last rung by policy rather
+    #: than by fitting. A capped run that does not fit is the policy working,
+    #: not a shortfall, so it reports no unmet-budget note.
+    capped: bool = False
 
     @property
     def degraded(self) -> bool:
@@ -434,6 +431,8 @@ async def negotiate(
     budget: int,
     render: Callable[[Rung], Awaitable[dict[str, Any]]],
     notes: Notes,
+    *,
+    max_rung: int = RUNG_SHRINK,
 ) -> Negotiated:
     """Render at the mildest rung of the ladder that fits inside ``budget``.
 
@@ -442,19 +441,33 @@ async def negotiate(
     fits, the last rung's response stands — the caller is expected to attach
     :func:`not_met_observation` to it, which :func:`attach_notes` does.
 
+    ``max_rung`` stops the walk early. It exists for the server-side default
+    budget, which may strip presentation the caller never asked to keep (rung
+    0) but must not revoke opt-ins the caller DID ask for (rung 1 and below) —
+    doing that unasked would answer a different question than the one asked.
+
     Fit is judged against the budget less ``notes.reserve``, the room this
     tool's own budget notes will take once appended.
     """
     measured = 0
     data: dict[str, Any] = {}
     rung = Rung(level=RUNG_NONE, budget=budget, measured=0, reserve=notes.reserve)
+    met = False
     for level in LADDER:
+        if level > max_rung:
+            break
         rung = Rung(level=level, budget=budget, measured=measured, reserve=notes.reserve)
         data = await render(rung)
         measured = estimate_tokens(data)
-        if measured <= rung.body_budget:
+        met = measured <= rung.body_budget
+        if met:
             break
-    return Negotiated(data=data, rung=rung, estimate=measured)
+    return Negotiated(
+        data=data,
+        rung=rung,
+        estimate=measured,
+        capped=not met and max_rung < RUNG_SHRINK,
+    )
 
 
 def append_hint(data: dict[str, Any], detail: str, *, key: str = "hint") -> None:
@@ -483,7 +496,7 @@ def attach_notes(result: Negotiated, notes: Notes) -> None:
         written.append(
             truncated_observation(result.rung, result.estimate, cut=notes.cut, route=notes.route)
         )
-    if not result.met:
+    if not result.met and not result.capped:
         written.append(not_met_observation(result.rung, result.estimate))
     if not written:
         return

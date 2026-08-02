@@ -22,9 +22,11 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
     ManifestEntry,
     SourceRecord,
+    failure_row,
 )
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_lifecycle import reconcile_experiment_restart, runs_terminal
+from ltspice_mcp.lib.raw_parser import has_valid_raw_header
 from ltspice_mcp.lib.store_common import (
     accept_schema,
     atomic_write_json,
@@ -215,6 +217,7 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
                 "log_file": str(case.log_file) if case.log_file else None,
                 "error": case.error,
                 "failure_code": case.failure_code,
+                "failure_evidence": case.failure_evidence,
                 "observations": case.observations,
                 "submitted_at": case.submitted_at.isoformat() if case.submitted_at else None,
                 "completed_at": case.completed_at.isoformat() if case.completed_at else None,
@@ -266,6 +269,7 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
         started_at=job.started_at.isoformat(),
         completed_at=job.completed_at.isoformat() if job.completed_at else None,
         error=job.error,
+        output_folder=str(job.output_folder) if job.output_folder else None,
         completeness=asdict(job.completeness),
         cases=cases,
         sources=sources,
@@ -402,6 +406,7 @@ def _case_record(data: dict[str, Any]) -> ExperimentCase:
         log_file=_path_or_none(data.get("log_file")),
         error=data.get("error"),
         failure_code=data.get("failure_code"),
+        failure_evidence=data.get("failure_evidence"),
         observations=list(data.get("observations") or []),
         submitted_at=parse_iso_datetime(data.get("submitted_at")),
         completed_at=parse_iso_datetime(data.get("completed_at")),
@@ -424,6 +429,38 @@ def _analysis_stage(data: dict[str, Any] | None) -> AnalysisStage:
     )
 
 
+def _produced_artifacts(job: ExperimentJob, case: ExperimentCase) -> tuple[Path, Path] | None:
+    """A non-terminal case's raw/log pair when both verify on disk, else None.
+
+    Case progress is checkpointed sparsely (every ``total // 20``-th event), so
+    a crash can lose the terminal mark of a case that already wrote its results.
+    Counting that as a shortfall is data loss dressed as accounting: the run
+    happened and its artifacts are still there. The path is deterministic —
+    the runner names every artifact ``{run_token}.{ext}`` inside the job's
+    output folder, the same reconstruction ``_remove_case_artifacts`` uses to
+    DELETE them — and the raw's header magic is what keeps a truncated or
+    unrelated file from being promoted. Mirrors the legacy registry's
+    ``has_valid_raw_header`` promotion for single-run jobs.
+
+    Returns None (and the case stays a failure) for a record written before the
+    output folder was persisted: the honest direction when the artifacts cannot
+    be located at all.
+    """
+    if job.output_folder is None or not case.run_token:
+        return None
+    extension = ".qraw" if "qspice" in job.simulator.lower() else ".raw"
+    raw = case.raw_file or job.output_folder / f"{case.run_token}{extension}"
+    log = case.log_file or job.output_folder / f"{case.run_token}.log"
+    if not has_valid_raw_header(raw):
+        return None
+    try:
+        if not log.is_file():
+            return None
+    except OSError:
+        return None
+    return raw, log
+
+
 def _reconcile_restart(job: ExperimentJob, *, owner_alive: bool) -> None:
     if owner_alive or job.status not in _LIVE_STATUSES:
         return
@@ -443,29 +480,49 @@ def _reconcile_restart(job: ExperimentJob, *, owner_alive: bool) -> None:
             completed_at=now(),
             observations=[*job.analysis.observations, observation],
         )
-    abandoned = [case for case in job.cases if case.status not in TERMINAL_CASE_STATUSES]
-    if abandoned:
-        job.cases = [
-            (
-                case
-                if case.status in TERMINAL_CASE_STATUSES
-                else replace(
-                    case,
-                    status="failed",
-                    failure_code="server_restarted",
-                    error="Server restarted before this case reached terminality",
-                    completed_at=now(),
-                )
+    reconciled: list[ExperimentCase] = []
+    abandoned: list[ExperimentCase] = []
+    recovered: list[ExperimentCase] = []
+    for case in job.cases:
+        if case.status in TERMINAL_CASE_STATUSES:
+            reconciled.append(case)
+            continue
+        artifacts = _produced_artifacts(job, case)
+        if artifacts is not None:
+            raw, log = artifacts
+            promoted = replace(
+                case,
+                status="produced",
+                raw_file=raw,
+                log_file=log,
+                completed_at=case.completed_at or now(),
             )
-            for case in job.cases
-        ]
-        job.failures.extend(
+            recovered.append(promoted)
+            reconciled.append(promoted)
+            continue
+        failed = replace(
+            case,
+            status="failed",
+            failure_code="server_restarted",
+            error="Server restarted before this case reached terminality",
+            completed_at=now(),
+        )
+        abandoned.append(failed)
+        reconciled.append(failed)
+    job.cases = reconciled
+    job.failures.extend(failure_row(case) for case in abandoned)
+    if recovered:
+        job.observations.append(
             {
-                "case_id": case.case_id,
-                "code": "server_restarted",
-                "message": "Server restarted before this case reached terminality",
+                "code": "unpersisted_runs_recovered",
+                "kind": "reconciliation",
+                "detail": (
+                    f"{len(recovered)} case(s) had written their results before the "
+                    "server stopped but never recorded them; the artifacts were "
+                    "verified on disk and the cases count as produced."
+                ),
+                "evidence": {"case_ids": [case.case_id for case in recovered]},
             }
-            for case in abandoned
         )
     job.completeness.recount(job.cases)
     if runs_terminal(job.status) or runs_were_terminal:
@@ -515,6 +572,7 @@ def _deserialize_job(
         started_at=started_at,
         completed_at=parse_iso_datetime(data.get("completed_at")),
         error=data.get("error"),
+        output_folder=_path_or_none(data.get("output_folder")),
         failures=list(data.get("failures") or []),
         observations=list(data.get("observations") or []),
         artifacts=list(data.get("artifacts") or []),

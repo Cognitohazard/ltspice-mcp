@@ -91,18 +91,6 @@ class SimulationError(LTSpiceMCPError):
     """Simulation execution failed."""
 
 
-class ConvergenceError(SimulationError):
-    """Time step too small / failed to converge."""
-
-
-class SingularMatrixError(SimulationError):
-    """Singular matrix — floating node or short circuit."""
-
-
-class MissingModelError(SimulationError):
-    """Referenced subcircuit or model not found."""
-
-
 class ResultError(LTSpiceMCPError):
     """Error reading simulation results."""
 

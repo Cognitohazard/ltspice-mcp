@@ -14,14 +14,14 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from functools import cache, wraps
 from pathlib import Path
-from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
+from typing import Any, Literal, NamedTuple, Union, get_args, get_origin, get_type_hints
 
 from mcp import types
 from pydantic import BaseModel, ConfigDict
 
 from ltspice_mcp.config import VALID_PROFILES
 from ltspice_mcp.errors import NetlistError, PathSecurityError, SimulationError
-from ltspice_mcp.lib import atomic_write_bytes
+from ltspice_mcp.lib import atomic_write_bytes, response_budget
 from ltspice_mcp.lib.filelock import DEFAULT_TIMEOUT, file_lock
 from ltspice_mcp.lib.job_store import SIDECAR_DIRNAME
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
@@ -35,7 +35,7 @@ from ltspice_mcp.lib.runner_base import NGSPICE_CONTROL_WRITE_MARKER
 from ltspice_mcp.lib.runner_base import inject_logopinfo as inject_logopinfo
 from ltspice_mcp.lib.schematic_renderer import render_svg
 from ltspice_mcp.lib.schematic_scene import Scene, SymbolResolver, default_stock_paths
-from ltspice_mcp.lib.simulator import no_simulator_message
+from ltspice_mcp.lib.simulator import no_simulator_message, simulator_library_roots
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
@@ -1078,6 +1078,35 @@ def pagination_metadata(total: int, offset: int, limit: int) -> dict[str, Any]:
     }
 
 
+class ResponseBudget(NamedTuple):
+    """The budget one call negotiates against, and how far its ladder may go."""
+
+    tokens: int | None
+    max_rung: int = response_budget.RUNG_SHRINK
+
+
+def resolve_response_budget(explicit: int | None, state: SessionState) -> ResponseBudget:
+    """Resolve one call's budget: the caller's, else the server's default.
+
+    An explicit budget is the caller's decision and runs the full ladder. Absent
+    one, the server's ``[analysis] default_budget`` applies at the trim rung
+    ONLY. That asymmetry is the whole safety argument: rung 0 removes empty
+    presentation blocks and the identity echo and nothing else, so it can cut no
+    fact and revoke no detail the caller asked for, while rung 1 revokes opt-ins
+    — doing that unasked would silently answer a different question.
+
+    Only the four consolidated tools that advertise ``budget`` consult this, so
+    the default reaches exactly the surface it was ruled for; ``0`` disables it
+    and restores the fully undegraded default response.
+    """
+    if explicit is not None:
+        return ResponseBudget(explicit)
+    default = state.config.default_budget
+    if default <= 0:
+        return ResponseBudget(None)
+    return ResponseBudget(default, response_budget.RUNG_TRIM)
+
+
 # ---------------------------------------------------------------------------
 # Simulation helpers — shared pre-checks
 # ---------------------------------------------------------------------------
@@ -1682,13 +1711,33 @@ def make_include_resolver(state: SessionState) -> IncludeResolver:
 
     The graph engine calls this before opening any include, so an in-deck include
     that escapes the allowed roots is denied and never read.
+
+    The detected simulator's own library directories are a second allowed set,
+    the same trust class ``deck_staging.stage_deck`` accepts as
+    ``simulator_roots``: LTspice's ``.asc`` netlister appends a ``.lib`` into the
+    install's model library on every sheet carrying a MOSFET, so with only
+    ``allowed_paths`` this resolver denies a file the run path just staged —
+    and ``verify_circuit`` reports the schematic's own library as an unusable
+    include. The two doors must answer "may I read this referenced file?" the
+    same way, or the answer depends on which one you asked. The roots are
+    resolved once per resolver rather than per include, and a deck still may
+    not RUN from one — staging checks the authored file against
+    ``allowed_paths`` alone.
     """
+    simulator_roots = simulator_library_roots(state.default_simulator)
 
     def resolver(candidate: Path) -> Path | None:
         try:
             return safe_path(str(candidate), state)
         except PathSecurityError:
+            pass
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
             return None
+        if any(resolved.is_relative_to(root) for root in simulator_roots):
+            return resolved
+        return None
 
     return resolver
 

@@ -68,25 +68,58 @@ def _walk_fields(value: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[str, 
             yield from _walk_fields(child, path)
 
 
+#: Why each class of wire-only control is refused here, and what to do instead.
+#: One remedy per class rather than one for all three: ``raw_page=True`` is the
+#: right answer for a pagination control and a semantic change for the other
+#: two, and a refusal that hands back the wrong fix costs a retry that ends
+#: somewhere worse than where it started.
+_DOOR_REMEDIES: dict[str, str] = {
+    "budget": (
+        "budget is a wire-door presentation cap; this door returns complete "
+        "results — remove the field"
+    ),
+    "dwell": (
+        "execution.wait_s is the wire door's response dwell; this door already "
+        "blocks — use wait=False for a fire-and-forget receipt, or api.wait(job_id)"
+    ),
+    "paging": (
+        "pagination controls belong to a single handler page; this door collects "
+        "every page — remove them, or pass raw_page=True to drive paging yourself"
+    ),
+}
+
+
+def _door_class(path: tuple[str, ...]) -> str | None:
+    """Which refusal class this argument path falls in, or None if it is fine."""
+    key = path[-1]
+    if key == "budget":
+        return "budget"
+    if path == ("execution", "wait_s"):
+        return "dwell"
+    if (
+        key in {"cursor", "continuation", "continue", "view_cursors"}
+        or key.endswith("_cursor")
+        or key.endswith("_cursors")
+    ):
+        return "paging"
+    return None
+
+
 def _enforce_auto_door(arguments: Mapping[str, Any]) -> None:
-    rejected: list[str] = []
+    rejected: dict[str, list[str]] = {}
     for path in _walk_fields(arguments):
-        key = path[-1]
-        dotted = ".".join(path)
-        if (
-            key == "budget"
-            or key in {"cursor", "continuation", "continue", "view_cursors"}
-            or key.endswith("_cursor")
-            or key.endswith("_cursors")
-            or path == ("execution", "wait_s")
-        ):
-            rejected.append(dotted)
-    if rejected:
-        fields = ", ".join(dict.fromkeys(rejected))
-        raise ValueError(
-            f"Wire-only control(s) are not accepted in automatic mode: {fields}; "
-            "pass raw_page=True to request exactly one handler page"
-        )
+        kind = _door_class(path)
+        if kind is not None:
+            rejected.setdefault(kind, []).append(".".join(path))
+    if not rejected:
+        return
+    parts = [
+        f"{', '.join(dict.fromkeys(fields))}: {_DOOR_REMEDIES[kind]}"
+        for kind, fields in rejected.items()
+    ]
+    raise ApiValidationError(
+        "Wire-only control(s) are not accepted in automatic mode. " + "; ".join(parts)
+    )
 
 
 def _message_for_error(payload: Mapping[str, Any], result: types.CallToolResult) -> str:

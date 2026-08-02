@@ -71,10 +71,12 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     HINT_SCHEMA,
     RO_ANNOTATIONS,
+    ResponseBudget,
     StrictModel,
     ToolInput,
     format_response,
     registry,
+    resolve_response_budget,
     safe_path,
     symbol_resolver_for,
 )
@@ -349,11 +351,7 @@ class InspectInput(ToolInput):
     budget: int | None = Field(
         default=None,
         ge=response_budget.BUDGET_MIN_TOKENS,
-        description=response_budget.budget_description(
-            "the paging blocks of items with nothing left to fetch, then "
-            "detail='full' (rendered as the component list instead), then "
-            "columnar rows, then smaller pages"
-        ),
+        description=response_budget.BUDGET_DESCRIPTION,
     )
 
     # SkipValidation keeps the strict discriminated union in the published JSON
@@ -473,7 +471,9 @@ def _page_meta(page: dict[str, Any], primary: str, secondary: str | None = None)
     wire-vertex coordinates under one cursor, and pins-only counters read
     ``returned == total`` while hundreds of coordinates are still unfetched.
     Summed instead, ``truncated`` implies ``returned < total`` on every page, and
-    ``collections`` says which collection is the one that continues.
+    ``collections`` says which collection is the one that continues. It is
+    omitted for an item that pages exactly one collection: with nothing to
+    disambiguate it restates the three counters directly above it.
     """
     collections: dict[str, dict[str, Any]] = {
         primary: {
@@ -488,12 +488,14 @@ def _page_meta(page: dict[str, Any], primary: str, secondary: str | None = None)
             "returned": page["secondary_returned"],
             "truncated": page["secondary_truncated"],
         }
-    return {
+    meta: dict[str, Any] = {
         "total": sum(c["total"] for c in collections.values()),
         "returned": sum(c["returned"] for c in collections.values()),
         "truncated": page["truncated"],
-        "collections": collections,
     }
+    if secondary is not None:
+        meta["collections"] = collections
+    return meta
 
 
 # ---------------------------------------------------------------------------
@@ -1176,8 +1178,9 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                                 "type": "object",
                                 "description": (
                                     "Per-collection counters, keyed by the data key they page "
-                                    "('pins', 'coordinates', 'components', …) — this is what "
-                                    "says which collection still has rows."
+                                    "— which collection still has rows. Present only for an "
+                                    "item paging more than one (a .asc net's pins and "
+                                    "coordinates); otherwise the counters above describe it."
                                 ),
                                 "additionalProperties": {
                                     "type": "object",
@@ -1246,10 +1249,11 @@ INSPECT_DESCRIPTION = (
 )
 async def handle_inspect(args: InspectInput, state: SessionState) -> types.CallToolResult:
     """Answer a batch of read-only queries with per-item success/failure isolation."""
-    if args.budget is None:
+    budget = resolve_response_budget(args.budget, state)
+    if budget.tokens is None:
         results = await _run_queries(args, state, _View())
         return format_response(_summary_text(results), inspect_envelope(results))
-    return await _negotiate_inspect(args, state)
+    return await _negotiate_inspect(args, state, budget)
 
 
 async def _run_queries(
@@ -1357,7 +1361,10 @@ def _degrade_inspect(data: dict[str, Any], rung: response_budget.Rung) -> None:
 #: this tool puts guidance, so the mirror is not optional.
 _BUDGET_NOTES = response_budget.Notes(
     cut="presentation was reduced; no query was dropped and no error was hidden.",
-    route="Re-ask without 'budget', or page on with each item's next_cursor.",
+    route=(
+        "Ask again with a larger 'budget' for the full presentation, or page on "
+        "with each item's next_cursor."
+    ),
     hint_key="hint",
 )
 
@@ -1385,9 +1392,10 @@ def _paged_rows(data: dict[str, Any]) -> list[Any]:
     return rows
 
 
-async def _negotiate_inspect(args: InspectInput, state: SessionState) -> types.CallToolResult:
-    """Answer the batch at the mildest ladder rung that fits the caller's budget."""
-    assert args.budget is not None
+async def _negotiate_inspect(
+    args: InspectInput, state: SessionState, budget: ResponseBudget
+) -> types.CallToolResult:
+    """Answer the batch at the mildest ladder rung that fits ``budget``."""
     # One pass per distinct view, not one per rung: the trim and columnar rungs
     # re-render an answered batch, only the answer and shrink rungs re-ask it.
     passes: dict[_View, list[dict[str, Any]]] = {}
@@ -1417,7 +1425,10 @@ async def _negotiate_inspect(args: InspectInput, state: SessionState) -> types.C
         _degrade_inspect(rendered, rung)
         return rendered
 
-    result = await response_budget.negotiate(args.budget, render, _BUDGET_NOTES)
+    assert budget.tokens is not None  # the undegraded path never reaches here
+    result = await response_budget.negotiate(
+        budget.tokens, render, _BUDGET_NOTES, max_rung=budget.max_rung
+    )
     response_budget.attach_notes(result, _BUDGET_NOTES)
     data = result.data
     return format_response(_summary_text(data["results"]), data)

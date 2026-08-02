@@ -351,7 +351,16 @@ class NoiseIntegralRecipe(_ScalarRecipe):
 
 class OperatingPointRecipe(_KeyedRecipe):
     metric: Literal["operating_point"]
-    device: str | None = None
+    device: str | None = Field(
+        default=None,
+        description=(
+            "Return one device's small-signal params and terminal currents (e.g. "
+            "'M6') instead of the whole bias point. Unscoped, the value carries "
+            "every node voltage, every branch current, and every device's "
+            "params — tens of KB on a real opamp against a few hundred bytes "
+            "for the one device a question is usually about."
+        ),
+    )
 
 
 class WaveformRecipe(_VariableRecipe):

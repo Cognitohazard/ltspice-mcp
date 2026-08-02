@@ -33,6 +33,7 @@ from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.library_manager import LibraryManager
 from ltspice_mcp.lib.log_parser import (
+    LogDiagnostics,
     extract_missing_refs,
     missing_refs_from_text,
     parse_measurements,
@@ -408,6 +409,43 @@ def resolve_run(job_id: str, state: SessionState, run_index: int = 0) -> RunRef:
             f"Run index {run_index} out of range for job {job_id!r}; valid indices: {sorted(runs)}"
         )
     return runs[run_index]
+
+
+# TERMINAL SPICE solve-failure phrases. When the log carries one, the solve
+# genuinely failed — it taints every value read, not one trace — so a read tool
+# relays it regardless of which signal was asked for. Deliberately terminal-only:
+# a bare "singular matrix" is NOT listed, because a transient can recover from it
+# via gmin/source stepping and still write a valid raw (log_parser classifies it
+# as non-terminal for exactly this reason). Flagging it would be a false
+# accusation on a recovered run; a genuine non-recovery still trips one of the
+# terminal phrases below (e.g. "gmin stepping failed"). ("no convergence", not
+# bare "convergence", so a benign "convergence achieved" line doesn't match.)
+#
+# They live here rather than in either tool module because both profiles must
+# classify a failed solve the same way: the full profile relays into its
+# ``warnings`` channel and the consolidated one into ``observations``, and a
+# rule kept in one of them is a rule the other can forget.
+SOLVE_FAILURE_PHRASES = (
+    "no convergence",
+    "time step too small",
+    "timestep too small",
+    "gmin stepping failed",
+    "source stepping failed",
+    "iteration limit reached",
+)
+
+
+def solve_failure_lines(diagnostics: LogDiagnostics) -> list[str]:
+    """The run-level solve-failure lines in an ``extract_log_diagnostics`` result.
+
+    Reads both channels: LTspice prints these as errors, ngspice prints the
+    same failures under a ``Warning:`` prefix.
+    """
+    return [
+        line
+        for line in (*diagnostics["warnings"], *diagnostics["errors"])
+        if any(phrase in line.lower() for phrase in SOLVE_FAILURE_PHRASES)
+    ]
 
 
 @dataclass(frozen=True)

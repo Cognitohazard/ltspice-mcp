@@ -18,7 +18,7 @@ from ltspice_mcp.lib import experiment_store, recent, response_budget, result_st
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
-from ltspice_mcp.lib.runner_base import RunOutcome
+from ltspice_mcp.lib.runner_base import RunOutcome, collect_run_outcome
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments as experiments_mod
@@ -238,10 +238,15 @@ class TestReceiptThenDwell:
 
         assert data["outcome"] == "complete"
         assert data["status"] == "completed"
-        assert data["control_token"]
+        # No cancel authority on a terminal receipt: there is nothing left to
+        # stop, and jobs(cancel) refuses a finished job anyway.
+        assert "control_token" not in data
         assert data["completeness"]["produced"] == 1
         assert data["progress"]["terminal"] == data["progress"]["expanded"] == 1
         assert data["progress"]["remaining"] == 0
+        # progress is the DERIVED view; the raw counters live in completeness and
+        # are not restated here (they arrived twice in one receipt before).
+        assert set(data["progress"]) == {"expanded", "terminal", "remaining"}
         assert len(submissions) == 1
 
     async def test_zero_dwell_returns_receipt_then_job_finishes(
@@ -395,9 +400,11 @@ class TestIdempotency:
         monkeypatch: pytest.MonkeyPatch,
     ):
         submissions: list[str] = []
-        fake_simulator(monkeypatch, submissions)
+        # A job still in flight, so the receipt carries the cancel handle whose
+        # stability across a replay is what this test is about.
+        fake_simulator(monkeypatch, submissions, delay_s=None)
         deck = _deck(work_dir / "replay.cir")
-        args = _args(deck, "same-payload")
+        args = _args(deck, "same-payload", wait_s=0)
 
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
         replay = _assert_schema(await handle_run_experiments(args, state_with_sim))
@@ -405,6 +412,9 @@ class TestIdempotency:
         assert replay["job_id"] == first["job_id"]
         assert replay["control_token"] == first["control_token"]
         assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        # A zero dwell returns before the coordinator has necessarily reached the
+        # simulator, so wait for the one submission rather than racing it.
+        await _wait_for(lambda: len(submissions) == 1)
         assert len(submissions) == 1
 
     async def test_different_payload_replay_conflicts(
@@ -1204,6 +1214,98 @@ class TestPerCircuitFailuresAndAccounting:
         _assert_schema(result)
 
         note.assert_awaited_once_with(deck.resolve())
+
+
+def _failing_simulator(monkeypatch: pytest.MonkeyPatch, log_text: str) -> None:
+    """Every case aborts the way the simulator aborts: non-zero exit, .fail log."""
+
+    def submit(self, _netlist: Path, run_filename: str, callback):
+        log = self.output_folder / f"{Path(run_filename).stem}.fail"
+        log.write_text(log_text)
+        self.loop.call_soon_threadsafe(callback, collect_run_outcome(".", str(log)))
+        return object()
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+
+
+@pytest.mark.asyncio
+class TestFailureChannel:
+    """What a caller learns from a batch that failed the same way N times."""
+
+    async def test_identical_failures_collapse_into_one_counted_row(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The channel the budget ladder may never trim must bound itself.
+
+        Twelve cases failing for one reason is one fact and twelve copies of a
+        20-line log excerpt; the row names its cases and its true count so
+        nothing is rounded away by the collapse.
+        """
+        _failing_simulator(
+            monkeypatch,
+            "Direct Newton iteration failed to find operating point.\n"
+            "Time step too small; time = 1.2e-06, timestep = 1e-18\n",
+        )
+        deck = _deck(work_dir / "stiff.cir")
+        args = _args(
+            deck,
+            "collapsing-failures",
+            variations=[{"kind": "assign", "assign": {"R1": [f"{n}k" for n in range(1, 13)]}}],
+        )
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert data["completeness"]["expanded"] == 12
+        assert data["completeness"]["failed"] == 12
+        assert len(data["failures"]) == 1
+        row = data["failures"][0]
+        assert row["count"] == 12
+        assert len(row["case_ids"]) == 10
+        assert row["case_id"] == row["case_ids"][0]
+        assert json.dumps(data["failures"]).count("Time step too small") == 1
+
+    async def test_a_classified_failure_carries_its_code_and_recovery_route(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _failing_simulator(
+            monkeypatch,
+            "Time step too small; time = 1.2e-06, timestep = 1e-18\n",
+        )
+        deck = _deck(work_dir / "stiff-one.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "classified-failure"), state_with_sim)
+        )
+
+        row = data["failures"][0]
+        assert row["code"] == "convergence_failed"
+        assert "reltol" in row["hint"]
+
+    async def test_missing_model_failure_names_the_unresolved_reference(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _failing_simulator(
+            monkeypatch,
+            'Error on line 2 : q1 c b e mystery Unable to find definition of model "mystery"\n',
+        )
+        deck = _deck(work_dir / "unresolved.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "missing-model-failure"), state_with_sim)
+        )
+
+        row = data["failures"][0]
+        assert row["code"] == "missing_model"
+        assert row["evidence"] == {"missing_refs": ["mystery"]}
 
 
 @pytest.mark.asyncio

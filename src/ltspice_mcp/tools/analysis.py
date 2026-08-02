@@ -2052,25 +2052,6 @@ def _operating_point_units(raw, op_data: dict) -> dict[str, str]:
     return units
 
 
-# TERMINAL SPICE solve-failure phrases. When the log carries one, the solve
-# genuinely failed — it taints every value read, not one trace — so a read tool
-# relays it regardless of which signal was asked for. Deliberately terminal-only:
-# a bare "singular matrix" is NOT listed, because a transient can recover from it
-# via gmin/source stepping and still write a valid raw (log_parser classifies it
-# as non-terminal for exactly this reason). Flagging it would be a false
-# accusation on a recovered run; a genuine non-recovery still trips one of the
-# terminal phrases below (e.g. "gmin stepping failed"). ("no convergence", not
-# bare "convergence", so a benign "convergence achieved" line doesn't match.)
-_SOLVE_FAILURE_PHRASES = (
-    "no convergence",
-    "time step too small",
-    "timestep too small",
-    "gmin stepping failed",
-    "source stepping failed",
-    "iteration limit reached",
-)
-
-
 def _read_log_warnings(
     raw_path: Path, log_path: Path | None = None
 ) -> tuple[list[str], list[str]]:
@@ -2092,12 +2073,7 @@ def _read_log_warnings(
         for w in diags["warnings"]
         if "unrecognized" in w.lower() or "can't find" in w.lower() or "@" in w
     ]
-    solve_failures = [
-        line
-        for line in (*diags["warnings"], *diags["errors"])
-        if any(p in line.lower() for p in _SOLVE_FAILURE_PHRASES)
-    ]
-    return unrecognized, solve_failures
+    return unrecognized, services.solve_failure_lines(diags)
 
 
 def _unrecognized_matches(warning: str, signal: str) -> bool:

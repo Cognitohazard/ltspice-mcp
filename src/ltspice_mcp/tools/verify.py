@@ -145,11 +145,10 @@ _LAYOUT_ISSUE_KINDS = (
 )
 _QUALITY_ISSUE_KINDS = ("text_in_symbol_body",)
 
-# Stated inline so an empty findings list is not read as a clean drawing.
-LAYOUT_COVERAGE = (
-    "Symbol bounding boxes are built from graphics and pins and exclude WINDOW "
-    "anchors, so attribute text spilling onto a neighbouring symbol is not detected."
-)
+# Stated inline so an empty findings list is not read as a clean drawing. Kept
+# to the one fact that changes what a caller concludes — the scan's blind spot,
+# not how bounding boxes are built.
+LAYOUT_COVERAGE = "Layout scan excludes WINDOW attribute text."
 
 
 # ---------------------------------------------------------------------------

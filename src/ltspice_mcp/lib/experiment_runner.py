@@ -23,6 +23,7 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentCase,
     ExperimentJob,
     SourceRecord,
+    failure_row,
 )
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_lifecycle import transition
@@ -270,11 +271,7 @@ class ExperimentRunner(RunnerBase):
         )
         completeness.recount(request.cases)
         failures = [
-            {
-                "case_id": case.case_id,
-                "code": case.failure_code or case.status,
-                "message": case.error or case.status,
-            }
+            failure_row(case)
             for case in request.cases
             if case.status in {"failed", "cancelled", "skipped"}
         ]
@@ -297,6 +294,7 @@ class ExperimentRunner(RunnerBase):
             sources=request.sources,
             simulator=request.simulator,
             completeness=completeness,
+            output_folder=self.output_folder,
             failures=failures,
             analysis=analysis,
         )
@@ -706,8 +704,9 @@ class ExperimentRunner(RunnerBase):
                         execution,
                         case,
                         "failed",
-                        code="execution_failed",
+                        code=outcome.failure_code or "execution_failed",
                         error=outcome.error,
+                        evidence=outcome.failure_evidence,
                     )
                 self._release_slot(execution, case.case_id)
         except asyncio.CancelledError:
@@ -864,21 +863,17 @@ class ExperimentRunner(RunnerBase):
         *,
         code: str | None = None,
         error: str | None = None,
+        evidence: dict[str, Any] | None = None,
     ) -> None:
         if case.status in TERMINAL_CASE_STATUSES:
             return
         case.status = status
         case.failure_code = code
+        case.failure_evidence = evidence
         case.error = error
         case.completed_at = now()
         if status in {"failed", "cancelled", "skipped"}:
-            execution.job.failures.append(
-                {
-                    "case_id": case.case_id,
-                    "code": code or status,
-                    "message": error or status,
-                }
-            )
+            execution.job.failures.append(failure_row(case))
         self._checkpoint_case_transition(execution)
 
     def _checkpoint_case_transition(self, execution: _Execution) -> None:

@@ -4,16 +4,13 @@ import pytest
 
 from ltspice_mcp.errors import (
     BatchJobError,
-    ConvergenceError,
     JobNotFoundError,
     LibraryError,
     LTSpiceMCPError,
-    MissingModelError,
     NetlistError,
     PathSecurityError,
     ResultError,
     SimulationError,
-    SingularMatrixError,
 )
 
 
@@ -30,7 +27,7 @@ class TestSuggestions:
 
     @pytest.mark.parametrize(
         "cls",
-        [LibraryError, MissingModelError, NetlistError, ResultError, BatchJobError],
+        [LibraryError, SimulationError, NetlistError, ResultError, BatchJobError],
     )
     def test_all_subclasses_accept_suggestions(self, cls):
         e = cls("msg", suggestions=[{"name": "X"}])
@@ -44,19 +41,12 @@ class TestErrorHierarchy:
             PathSecurityError,
             NetlistError,
             SimulationError,
-            ConvergenceError,
-            SingularMatrixError,
-            MissingModelError,
             ResultError,
             JobNotFoundError,
             LibraryError,
             BatchJobError,
         ):
             assert issubclass(cls, LTSpiceMCPError), f"{cls.__name__} not subclass of base"
-
-    def test_simulation_subtypes(self):
-        for cls in (ConvergenceError, SingularMatrixError, MissingModelError):
-            assert issubclass(cls, SimulationError), f"{cls.__name__} not SimulationError"
 
     def test_job_not_found_is_result_error(self):
         """except ResultError must keep catching unknown-job-id errors."""
@@ -77,17 +67,8 @@ class TestErrorHierarchy:
 
     def test_message_preserved(self):
         msg = "timestep too small at t=1.234e-6"
-        err = ConvergenceError(msg)
+        err = SimulationError(msg)
         assert msg in str(err)
-
-    def test_catch_simulation_catches_subtypes(self):
-        """try/except SimulationError catches ConvergenceError — the real handler pattern."""
-        caught = False
-        try:
-            raise ConvergenceError("timestep too small")
-        except SimulationError:
-            caught = True
-        assert caught
 
 
 class TestErrorHints:
@@ -95,9 +76,9 @@ class TestErrorHints:
         """Full-profile hints should reference MCP tool names."""
         from ltspice_mcp.server import _get_error_hint
 
-        hint = _get_error_hint(ConvergenceError, "full")
+        hint = _get_error_hint(NetlistError, "full")
         assert hint is not None
-        assert "edit_directive" in hint
+        assert "read_circuit" in hint
 
     def test_agentic_hints_no_filtered_tools(self):
         """Agentic hints should not reference tools excluded from the profile."""
@@ -114,11 +95,10 @@ class TestErrorHints:
         agentic_defs, _ = get_tools_for_profile("agentic")
         agentic_tools = {tool_def.name for tool_def in agentic_defs}
         for err_type in (
-            ConvergenceError,
-            SingularMatrixError,
+            SimulationError,
             NetlistError,
             LibraryError,
-            MissingModelError,
+            ResultError,
         ):
             hint = _get_error_hint(err_type, "agentic")
             if hint is None:

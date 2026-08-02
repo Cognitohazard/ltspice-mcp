@@ -33,6 +33,7 @@ from ltspice_mcp.lib.job_types import (
     SimulationJob,
 )
 from ltspice_mcp.lib.observability import emit_job_event
+from ltspice_mcp.lib.raw_parser import has_valid_raw_header
 
 logger = logging.getLogger(__name__)
 
@@ -50,27 +51,6 @@ _MAX_FINISHED_JOBS = 200
 # await would hold shutdown open indefinitely, and with it the job-persistence
 # flush that follows.
 _SHUTDOWN_CANCEL_TIMEOUT_S = 10.0
-
-# LTspice .raw header magic. Classic files start with ASCII ``Title:``;
-# newer LTspice writes a UTF-16 LE BOM followed by the same ``Title:``.
-_RAW_HEADER_ASCII = b"Title:"
-_RAW_HEADER_UTF16 = b"\xff\xfeT\x00i\x00t\x00l\x00e\x00:\x00"
-
-
-def _has_valid_raw(path: Path | None) -> bool:
-    """True if ``path`` looks like a real LTspice ``.raw`` file.
-
-    Checks the header magic so a truncated or unrelated file at the same
-    path doesn't mis-promote an ``interrupted`` job to ``completed``.
-    """
-    if path is None:
-        return False
-    try:
-        with path.open("rb") as f:
-            header = f.read(len(_RAW_HEADER_UTF16))
-    except OSError:
-        return False
-    return header.startswith(_RAW_HEADER_ASCII) or header.startswith(_RAW_HEADER_UTF16)
 
 
 def _discard_outcome(task: asyncio.Future[Any]) -> None:
@@ -578,7 +558,7 @@ class JobRegistry:
             # just before the crash — promote interrupted → completed via
             # the recovery path so the emitted event is
             # 'interrupted_recovered', not 'completed'.
-            if sj.status == "interrupted" and _has_valid_raw(sj.raw_file):
+            if sj.status == "interrupted" and has_valid_raw_header(sj.raw_file):
                 sj.error = None
                 # No state arg — the registry owns persistence below.
                 recover(sj, "completed")

@@ -43,6 +43,32 @@ for `symbol_info` / `component_info` use `inspect(kind="symbol")`, for
 `inspect(kind="components")`, for `find_model` `inspect(kind="model")`, and for
 `export_netlist`'s equivalence check `verify_circuit`. The SPICE is identical.
 
+### The response budget
+
+`run_experiments`, `jobs`, `analyze_results` and `inspect` take a `budget` in
+estimated tokens (compact characters / 4, minimum 500). While the assembled
+response is over it, the server re-renders one rung further down a fixed
+ladder:
+
+| rung | what it gives up |
+|-|-|
+| 0 trim | empty presentation blocks and the identity echo (`source`, `source_hashes`) |
+| 1 answer | your detail opt-ins — `include.provenance`, `outliers`, `detail:"full"` |
+| 2 columnar | per-row key repetition: rows become a column list plus value rows |
+| 3 shrink | page size, with cursors minted against the smaller page so paging still walks every row |
+
+Facts are never cut at any rung: `failures`, `observations`, `warnings`,
+`completeness` and spec verdicts always come back whole, and a budget too small
+for them returns them anyway and says so. The budget is presentation only — it
+is not part of a result's identity, so the same request at two budgets shares
+one result set and one set of cursors.
+
+Setting no `budget` is not "no budget": the server applies its own
+(`[analysis] default_budget`, 4000 tokens by default) at **rung 0 only**, so a
+large default response loses empty blocks and the identity echo and nothing
+else. Nothing you asked for is ever revoked unasked. Set `0` in the config to
+turn that off.
+
 <!-- /profile -->
 ## SPICE Fundamentals
 
@@ -569,7 +595,7 @@ R1 in out {mc(10k, 0.1)}         ; uniform dist, 10k +/-10%
 `mc(nominal, tolerance)` — uniform between `nom*(1-tol)` and `nom*(1+tol)`.
 
 <!-- profile: consolidated -->
-### Per-instance mismatch on subckt-wrapped devices
+### Per-instance mismatch (flat devices and subckt-wrapped devices)
 
 Two distinct request shapes, both under `run_experiments` `variations`:
 
@@ -585,12 +611,29 @@ V·m is 10⁶ too small and draws a spread of nothing while reporting success:
 ```
 
 To hit a target σ instead of a technology coefficient, invert it:
-`AVT = σ · √(W_µm · L_µm)` — 5 mV on a 20 µm × 1 µm pair is `2.24e-2`.
+`AVT = σ · √(W_µm · L_µm)` — 5 mV **per device** on a 20 µm × 1 µm FET is
+`2.24e-2`. Each instance is drawn independently, so a differential pair's
+input-referred offset σ is √2 × the per-device figure.
+
+**Flat devices on a sheet** — `.model`-based MOSFETs (what an `.asc` with
+plain `nmos`/`pmos` symbols exports) take the same rule with `prefix:"M"`,
+and the mismatch lands on the model card's `VTO`/`KP`:
+
+```json
+{"kind": "random", "id": "mc", "runs": 100,
+ "rules": [{"rule": "mismatch", "prefix": "M", "AVT": 2.24e-2, "AK": 0.01}]}
+```
+
+Scope it to one pair by naming the rule per device (`prefix` matches leading
+characters, so `"M1"` also claims M10/M11 — use the full reference when the
+pair must be exact). On BSIM model cards set `vth_param:"VTH0"` and
+`k_param:"U0"`; the `VTO`/`KP` defaults are Level-1 names. Other letter
+prefixes (`"Q"` for BJTs) are accepted, but the Pelgrom law and those
+parameter defaults are MOSFET-shaped.
 
 A `prefix` that matches subckt instances (e.g. sky130 `X`-wrapped FETs)
 descends into the wrapper; that descent supports ngspice-compatible BSIM3/4
-devices through exactly one X→M level. Flat devices (`prefix:"M"`) have no
-such constraint.
+devices through exactly one X→M level. Flat devices have no such constraint.
 
 **Explicit per-instance values** — when the offsets themselves are chosen
 (worst-case corners, a specific measured die), use `assign` + `combine:"zip"`

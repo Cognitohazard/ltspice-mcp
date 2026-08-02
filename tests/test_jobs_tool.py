@@ -494,6 +494,34 @@ class TestReceiptSnapshotCoherence:
         assert new_receipt["analysis"]["error"] is None
         assert "jobs(wait)" not in new_receipt["hint"]
 
+    async def test_restart_hint_carries_both_recovery_routes(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+    ):
+        """A restart sets failures AND a failed analysis; both routes must show.
+
+        The exclusive ladder let the failures branch win, so the receipt's first
+        line of guidance never mentioned that the produced runs are analyzable
+        by job_id — pointing the caller at a re-run of results already on disk.
+        """
+        circuit = _circuit(work_dir)
+        job = _experiment(work_dir, circuit, count=2, status="running")
+        job.cases[0].status = "produced"
+        job.analysis = AnalysisStage(status="running", request={"recipes": []})
+        job.owner_pid = 999_999_999
+        experiment_store.save_job(job)
+
+        restarted = experiment_store.load_job(job.job_id, work_dir)
+        assert restarted is not None
+        assert restarted.failures and restarted.analysis.status == "failed"
+
+        hint = render_receipt_snapshot(snapshot_receipt(restarted, state_no_sim))["hint"]
+
+        assert "analyze_results" in hint
+        assert restarted.job_id in hint
+        assert "Inspect failures" in hint
+
     async def test_scheduled_mutation_cannot_run_inside_snapshot(
         self,
         state_no_sim: SessionState,
@@ -919,7 +947,11 @@ class TestCancellationAuthority:
                 )
             )
         )
-        await _wait_for(lambda: bool(callbacks))
+        # Wait for the case to reach 'running': its submitted/running
+        # checkpoints each re-persist the record under THIS pid, so a foreign
+        # pid written before them is overwritten and the job reads as locally
+        # owned with no live coordinator.
+        await _wait_for(lambda: bool(callbacks) and receipt.job.cases[0].status == "running")
         receipt.job.owner_pid = _FOREIGN_PID
         await asyncio.to_thread(experiment_store.save_job, receipt.job)
         foreign_state = SessionState.create(state_no_sim.config, available={})
