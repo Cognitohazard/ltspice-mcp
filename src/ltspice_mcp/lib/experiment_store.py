@@ -36,9 +36,16 @@ from ltspice_mcp.lib.store_common import (
 logger = logging.getLogger(__name__)
 
 SCHEMA = "ltspice-mcp/experiment-job"
-SCHEMA_VERSION = 1
-SUPPORTED_VERSIONS: frozenset[int] = frozenset({1})
-_MIGRATIONS: dict[int, Any] = {}
+SCHEMA_VERSION = 2
+SUPPORTED_VERSIONS: frozenset[int] = frozenset({1, 2})
+
+
+def _migrate_v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
+    """Admit v1 records; their untagged analysis result remains legacy public data."""
+    return data
+
+
+_MIGRATIONS: dict[int, Any] = {1: _migrate_v1_to_v2}
 
 POINTER_SCHEMA = "ltspice-mcp/experiment-pointer"
 POINTER_SCHEMA_VERSION = 1
