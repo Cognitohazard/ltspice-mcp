@@ -1289,7 +1289,7 @@ class TestAttachedAnalysis:
         assert "keys present" in warning
         job = state_with_sim.experiment_jobs[lean["job_id"]]
         assert job.analysis.result is not None
-        assert job.analysis.result["kind"] == "ltspice-mcp/attached-analysis-snapshot"
+        assert job.analysis.result["schema"] == "ltspice-mcp/attached-analysis-snapshot"
         assert job.analysis.request is not None
         assert job.analysis.request["include"] is None
 
@@ -1409,6 +1409,10 @@ class TestAttachedAnalysis:
         await state_with_sim.job_registry.drain_pending()
         job = state_with_sim.experiment_jobs[full["job_id"]]
         assert job.analysis.result is not None
+        assert "answer_top" not in job.analysis.result
+        assert all(
+            "answer_facts" not in block for block in job.analysis.result["results"].values()
+        )
         snapshot_identity = job.analysis.result
         pristine_snapshot = copy.deepcopy(job.analysis.result)
         pristine_job = copy.deepcopy(experiment_store.serialize_job(job))
@@ -1419,14 +1423,18 @@ class TestAttachedAnalysis:
             reserve=experiments_mod._RUN_BUDGET_NOTES.reserve,
         )
         answer_rung = dataclasses.replace(trim_rung, level=response_budget.RUNG_ANSWER)
-        trim_view = experiments_mod._job_payload(job, job.control_token)
-        experiments_mod._degrade_run_receipt(trim_view, trim_rung)
-        answer_view = experiments_mod._job_payload(
-            job,
-            job.control_token,
-            analysis_answer_channel=True,
+        trim_view = experiments_mod._finalize_receipt(
+            experiments_mod._job_payload(job, job.control_token)
         )
-        experiments_mod._degrade_run_receipt(answer_view, answer_rung)
+        experiments_mod._degrade_receipt(trim_view, trim_rung)
+        answer_view = experiments_mod._finalize_receipt(
+            experiments_mod._job_payload(
+                job,
+                job.control_token,
+                analysis_answer_channel=True,
+            )
+        )
+        experiments_mod._degrade_receipt(answer_view, answer_rung)
         trim_size = response_budget.estimate_tokens(trim_view)
         answer_size = response_budget.estimate_tokens(answer_view)
         assert answer_size < trim_size

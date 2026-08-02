@@ -30,6 +30,7 @@ SCHEMA_VERSION = 1
 SUPPORTED_VERSIONS = frozenset({SCHEMA_VERSION})
 RESULTS_SUBDIR = "results"
 ARTIFACTS_SUBDIR = "artifacts"
+NO_VIEW = object()
 
 
 def result_root(working_dir: Path) -> Path:
@@ -269,16 +270,15 @@ def encode_cursor(
     *,
     intra_item: int = 0,
     missing_offset: int = 0,
-    view_fields: list[str] | None = None,
-    carry_view: bool = False,
+    view_fields: list[str] | None | object = NO_VIEW,
 ) -> str:
     """Encode a resume point: work position, per-run offset, coverage offset.
 
     ``missing_offset`` pages the coverage view (``missing_cases``), which lives
     in the immutable inputs rather than the work list — a cursor that carries it
     with ``position == len(work)`` pages that view without redoing any work.
-    New analyze cursors also carry the selected row view; compatibility cursors
-    leave ``carry_view`` false.
+    New analyze cursors pass the selected row view, including ``None`` for the
+    lean view. Compatibility cursors omit it by leaving ``view_fields`` unset.
     """
     body: dict[str, Any] = {
         "result_set_id": item.result_set_id,
@@ -287,7 +287,7 @@ def encode_cursor(
         "missing_offset": missing_offset,
         "work_hash": item.work_hash,
     }
-    if carry_view:
+    if view_fields is not NO_VIEW:
         body["view"] = {"fields": view_fields}
     return _encode_body_cursor(body)
 
