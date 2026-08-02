@@ -444,6 +444,20 @@ def _paginate_pair(
         raise _invalid_cursor(exc) from exc
 
 
+#: Per-collection restatement keys: collection name → the ``data`` keys that
+#: repeat its total, its returned count, and (where one exists) its truncation
+#: flag. Declared beside the handlers that emit them so a collector recomputing
+#: those counters cannot drift from what a page actually carries.
+COLLECTION_COUNTERS: dict[str, tuple[str, str, str | None]] = {
+    "symbols": ("total", "returned", None),
+    "members": ("total_members", "returned", None),
+    "pins": ("total_pins", "returned", None),
+    "coordinates": ("total_coordinates", "returned_coordinates", "coordinates_truncated"),
+    "components": ("total", "returned", None),
+    "results": ("total", "returned", None),
+}
+
+
 def _page_meta(page: dict[str, Any], primary: str, secondary: str | None = None) -> dict[str, Any]:
     """The paged-collection facts surfaced in each item's ``page`` field.
 
@@ -1207,7 +1221,7 @@ async def handle_inspect(args: InspectInput, state: SessionState) -> types.CallT
     """Answer a batch of read-only queries with per-item success/failure isolation."""
     if args.budget is None:
         results = await _run_queries(args, state, _View())
-        return format_response(_summary_text(results), _inspect_envelope(results))
+        return format_response(_summary_text(results), inspect_envelope(results))
     return await _negotiate_inspect(args, state)
 
 
@@ -1253,7 +1267,7 @@ async def _run_queries(
     return results
 
 
-def _inspect_envelope(results: list[dict[str, Any]]) -> dict[str, Any]:
+def inspect_envelope(results: list[dict[str, Any]]) -> dict[str, Any]:
     """The shared envelope over an answered batch."""
     error_count = sum(1 for item in results if not item["ok"])
     data: dict[str, Any] = {
@@ -1271,11 +1285,6 @@ def _inspect_envelope(results: list[dict[str, Any]]) -> dict[str, Any]:
             "'error.code'. Other queries returned normally."
         )
     return data
-
-
-def inspect_envelope(results: list[dict[str, Any]]) -> dict[str, Any]:
-    """Build the public inspect envelope from fully collected query items."""
-    return _inspect_envelope(results)
 
 
 # Rung 0's allowlist, declared as data rather than spelled inside the ``if``
@@ -1376,7 +1385,7 @@ async def _negotiate_inspect(args: InspectInput, state: SessionState) -> types.C
                 passes[view] = await _run_queries(args, state, view)
             # A copy per envelope, because a pass is cached and reused across
             # rungs while the envelope built from it is degraded in place.
-            rendered = _inspect_envelope(copy.deepcopy(passes[view]))
+            rendered = inspect_envelope(copy.deepcopy(passes[view]))
             built_from = view
         _degrade_inspect(rendered, rung)
         return rendered

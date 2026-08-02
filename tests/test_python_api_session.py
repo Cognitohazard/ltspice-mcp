@@ -55,7 +55,7 @@ def _patch_stub_bootstrap(
         del kwargs
         return _boot_result(selected)
 
-    monkeypatch.setattr(session_module, "bootstrap_engine", bootstrap)
+    monkeypatch.setattr(session_module, "bootstrap_library_engine", bootstrap)
     return selected
 
 
@@ -106,7 +106,7 @@ def test_api_routes_constructor_inputs_to_library_bootstrap(
         captured.update(kwargs)
         return _boot_result(state)
 
-    monkeypatch.setattr(session_module, "bootstrap_engine", bootstrap)
+    monkeypatch.setattr(session_module, "bootstrap_library_engine", bootstrap)
     config_path = tmp_path / "custom.toml"
 
     api = Api(
@@ -117,7 +117,6 @@ def test_api_routes_constructor_inputs_to_library_bootstrap(
     api.close()
 
     assert captured == {
-        "mode": "library",
         "working_dir": tmp_path,
         "config_path": config_path,
         "default_timeout": 17,
@@ -135,7 +134,9 @@ def test_api_explicit_config_path_uses_real_shared_bootstrap(
     monkeypatch.setattr(engine_module, "detect_simulators", lambda config, diagnostics: {})
     monkeypatch.setattr("ltspice_mcp.lib.wsl.is_wsl", lambda: False)
 
-    with pytest.raises(TypeError, match="server startup hooks"):
+    with pytest.raises(
+        TypeError, match=r"Unsupported library configuration override\(s\): _logger"
+    ):
         Api(working_dir=working_dir, config_path=config_path, _logger=object())
 
     api = Api(
@@ -169,7 +170,7 @@ def test_concurrent_constructors_allow_exactly_one_session(
         await asyncio.to_thread(release_bootstrap.wait)
         return _boot_result(_StubState())
 
-    monkeypatch.setattr(session_module, "bootstrap_engine", bootstrap)
+    monkeypatch.setattr(session_module, "bootstrap_library_engine", bootstrap)
 
     def construct() -> None:
         try:
@@ -213,7 +214,7 @@ def test_bootstrap_failure_releases_session_lease(
             raise RuntimeError("bootstrap failed")
         return _boot_result(_StubState())
 
-    monkeypatch.setattr(session_module, "bootstrap_engine", bootstrap)
+    monkeypatch.setattr(session_module, "bootstrap_library_engine", bootstrap)
 
     with pytest.raises(RuntimeError, match="bootstrap failed"):
         Api()
@@ -345,8 +346,8 @@ async def test_server_lifespan_and_api_are_mutually_exclusive(
         del kwargs
         return _boot_result(new_state())
 
-    monkeypatch.setattr(session_module, "bootstrap_engine", bootstrap)
-    monkeypatch.setattr(server_module, "bootstrap_engine", bootstrap)
+    monkeypatch.setattr(session_module, "bootstrap_library_engine", bootstrap)
+    monkeypatch.setattr(server_module, "bootstrap_server_engine", bootstrap)
 
     async with server_module.server_lifespan(server_module.server):
         with pytest.raises(ApiSessionError, match="already active"):
@@ -369,7 +370,7 @@ async def test_server_bootstrap_failure_releases_shared_lease(
         del kwargs
         raise RuntimeError("server bootstrap failed")
 
-    monkeypatch.setattr(server_module, "bootstrap_engine", failed_bootstrap)
+    monkeypatch.setattr(server_module, "bootstrap_server_engine", failed_bootstrap)
     with pytest.raises(RuntimeError, match="server bootstrap failed"):
         async with server_module.server_lifespan(server_module.server):
             pytest.fail("server lifespan entered after bootstrap failure")

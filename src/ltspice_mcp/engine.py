@@ -8,14 +8,12 @@ import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import result_store
 from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.state import SessionState
 
-BootstrapMode = Literal["library", "server"]
 ConfigLoadedHook = Callable[[ServerConfig], None]
 
 logger = logging.getLogger(__name__)
@@ -169,43 +167,51 @@ def configure_asc_editor(
         log.warning(f"AscEditor prepare_for_simulator failed: {exc}")
 
 
-async def bootstrap_engine(
-    *,
-    mode: BootstrapMode = "library",
-    working_dir: str | os.PathLike[str] | None = None,
-    config_path: str | os.PathLike[str] | None = None,
-    _on_config_loaded: ConfigLoadedHook | None = None,
-    _logger: logging.Logger | None = None,
-    **overrides: object,
+async def _bootstrap(
+    config: ServerConfig,
+    target_logger: logging.Logger | None,
 ) -> BootstrapResult:
-    """Create an engine session with the same initialization in every host.
-
-    Library overrides are applied after environment and TOML values. Supplying
-    ``working_dir`` makes the directory the default sandbox root and selects
-    its TOML unless ``config_path`` is explicit. Server mode accepts no library
-    overrides; its config-loaded hook keeps process-wide logging setup in the
-    MCP startup path.
-    """
-    if mode == "server":
-        if working_dir is not None or config_path is not None or overrides:
-            raise TypeError("Server bootstrap does not accept library configuration overrides")
-        config = ServerConfig.load()
-        if _on_config_loaded is not None:
-            _on_config_loaded(config)
-    elif mode == "library":
-        if _on_config_loaded is not None or _logger is not None:
-            raise TypeError("Library bootstrap does not accept server startup hooks")
-        config = _library_config(working_dir, config_path, overrides)
-    else:
-        raise ValueError(f"Unknown bootstrap mode: {mode!r}")
-
+    """The initialization every host shares, once its config is resolved."""
     diagnostics: list[str] = []
     available = detect_simulators(config, diagnostics)
     state = SessionState.create(config, available, diagnostics)
-    configure_asc_editor(config, available, target_logger=_logger)
+    configure_asc_editor(config, available, target_logger=target_logger)
     await asyncio.to_thread(result_store.cleanup, state.working_dir)
 
     preloaded = 0
     if config.persist_jobs and config.preload_recent_count > 0:
         preloaded = state.job_registry.preload_recent(max_circuits=config.preload_recent_count)
     return BootstrapResult(state=state, preloaded_circuits=preloaded)
+
+
+async def bootstrap_server_engine(
+    *,
+    on_config_loaded: ConfigLoadedHook,
+    logger: logging.Logger,
+) -> BootstrapResult:
+    """Create the engine session behind the MCP server's lifespan.
+
+    Configuration comes from the process environment and TOML only — there is
+    no override channel here. ``on_config_loaded`` keeps process-wide logging
+    setup in the MCP startup path, where it belongs.
+    """
+    config = ServerConfig.load()
+    on_config_loaded(config)
+    return await _bootstrap(config, logger)
+
+
+async def bootstrap_library_engine(
+    *,
+    working_dir: str | os.PathLike[str] | None = None,
+    config_path: str | os.PathLike[str] | None = None,
+    **overrides: object,
+) -> BootstrapResult:
+    """Create the engine session behind an in-process :class:`Api`.
+
+    Overrides are applied after environment and TOML values, and every name
+    must be a ``ServerConfig`` field the library exposes. Supplying
+    ``working_dir`` makes the directory the default sandbox root and selects
+    its TOML unless ``config_path`` is explicit.
+    """
+    config = _library_config(working_dir, config_path, overrides)
+    return await _bootstrap(config, None)

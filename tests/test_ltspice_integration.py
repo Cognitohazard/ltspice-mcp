@@ -58,9 +58,9 @@ def _make_ltspice_state(work_dir: Path) -> SessionState | None:
         return None
 
     # Configure AscEditor library paths (same as server_lifespan does)
-    from ltspice_mcp.server import _configure_asc_editor
+    from ltspice_mcp.engine import configure_asc_editor
 
-    _configure_asc_editor(config, available)
+    configure_asc_editor(config, available)
 
     return SessionState.create(config, available)
 

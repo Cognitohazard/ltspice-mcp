@@ -1,19 +1,31 @@
 """Shared fixtures and helpers for ltspice-mcp tests."""
 
+import asyncio
 import shutil
 import typing
-from collections.abc import Iterator
+from collections.abc import Coroutine, Iterator
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
 from spicelib import AscEditor
 
+from ltspice_mcp.api import _session as _api_session
+from ltspice_mcp.api._methods import ApiMethodsMixin
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.engine import BootstrapResult
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
+from ltspice_mcp.lib.experiment_types import (
+    Completeness,
+    ExperimentCase,
+    ExperimentJob,
+    SourceRecord,
+)
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.state import BatchJob, SessionState, SimulationJob
+
+_T = typing.TypeVar("_T")
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 _FIXTURE_SYMBOLS = FIXTURES_DIR / "symbols"
@@ -149,6 +161,111 @@ def make_sim_job(job_id: str = "j1", *, status: str = "completed", **overrides) 
         started_at=started_at,
         **fields,
     )
+
+
+class SyncApi(ApiMethodsMixin):
+    """Synchronous host that exercises the public mixin over a real state.
+
+    Stands in for :class:`ltspice_mcp.api.Api` where the private loop thread
+    and the process lease are not what a test is about: every call runs to
+    completion on a throwaway loop, and the marshalling flags are discarded.
+    """
+
+    def __init__(self, state: SessionState) -> None:
+        self._state = state
+
+    def _check_process_and_thread(self) -> None:
+        return None
+
+    def _call(
+        self,
+        coroutine: Coroutine[typing.Any, typing.Any, _T],
+        *,
+        cancelable: bool = False,
+        cancel_on_interrupt: bool = False,
+        preserve_interrupt: bool = False,
+    ) -> _T:
+        del cancelable, cancel_on_interrupt, preserve_interrupt
+        return asyncio.run(coroutine)
+
+
+def patch_stub_bootstrap(monkeypatch: pytest.MonkeyPatch, state: object) -> None:
+    """Make a real ``Api()`` adopt ``state`` instead of bootstrapping its own."""
+
+    async def bootstrap(**kwargs: object) -> BootstrapResult:
+        del kwargs
+        return BootstrapResult(
+            state=typing.cast(SessionState, state),
+            preloaded_circuits=0,
+        )
+
+    monkeypatch.setattr(_api_session, "bootstrap_library_engine", bootstrap)
+
+
+def make_experiment_job(
+    state: SessionState,
+    *,
+    job_id: str,
+    count: int = 1,
+    status: str = "completed",
+    case_id: str | None = None,
+    run_index: int | None = None,
+    raw: Path | None = None,
+) -> ExperimentJob:
+    """ExperimentJob registered on ``state``, for the Python API door tests.
+
+    ``count`` expands that many synthetic cases (``case-0000``…), each with its
+    own unwritten artifact pair. ``case_id`` / ``run_index`` name a single case
+    instead, and ``raw`` points every case at one real recorded artifact pair —
+    which is what the run-addressing tests resolve through.
+    """
+    deck = state.working_dir / f"{job_id}.cir"
+    deck.write_text(".tran 1m\n.end\n", encoding="utf-8")
+    complete = status == "completed"
+    cases = [
+        ExperimentCase(
+            case_id=case_id or f"case-{index:04d}",
+            run_index=index if run_index is None else run_index,
+            circuit="dut",
+            circuit_path=deck,
+            staged_deck=deck,
+            deck_sha256="a" * 64,
+            assignments={"R": index},
+            status="produced" if complete else "queued",
+            raw_file=raw or state.working_dir / f"case-{index}.raw",
+            log_file=(raw or state.working_dir / f"case-{index}.raw").with_suffix(".log"),
+        )
+        for index in range(count)
+    ]
+    job = ExperimentJob(
+        job_id=job_id,
+        request_id=f"request-{job_id}",
+        fingerprint="fingerprint",
+        canonicalizer_version=1,
+        control_token="control-token",
+        store_path=state.working_dir / f"{job_id}.json",
+        cases=cases,
+        sources=[
+            SourceRecord(
+                circuit="dut",
+                path=deck,
+                sha256="a" * 64,
+                staged_deck=deck,
+                simulator="ltspice",
+            )
+        ],
+        simulator="ltspice",
+        completeness=Completeness(
+            declared=count,
+            expanded=count,
+            submitted=count if complete else 0,
+            produced=count if complete else 0,
+        ),
+        status=typing.cast(typing.Any, status),
+        completed_at=now() if complete else None,
+    )
+    state.add_experiment_job(job, already_persisted=True)
+    return job
 
 
 def make_batch_job(job_id: str = "b1", *, status: str = "completed", **overrides) -> BatchJob:

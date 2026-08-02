@@ -1345,7 +1345,7 @@ def progress_from_completeness(completeness: Completeness) -> dict[str, int]:
     }
 
 
-def _finalize_receipt(data: dict[str, Any]) -> dict[str, Any]:
+def finalize_receipt(data: dict[str, Any]) -> dict[str, Any]:
     """Normalize completeness and attach its two public progress projections."""
     raw = data["completeness"]
     completeness = raw if isinstance(raw, Completeness) else Completeness(**raw)
@@ -1358,11 +1358,6 @@ def _finalize_receipt(data: dict[str, Any]) -> dict[str, Any]:
         f"{progress['remaining']} remaining.",
     )
     return data
-
-
-def finalize_receipt(data: dict[str, Any]) -> dict[str, Any]:
-    """Public completion seam for an already-rendered receipt snapshot."""
-    return _finalize_receipt(data)
 
 
 @dataclass(frozen=True)
@@ -1434,9 +1429,9 @@ async def _dwell_and_respond(
     )
 
     def build(limit: int, rung: response_budget.Rung | None) -> _ReceiptBuilt:
-        data = _job_payload(
+        data = render_receipt_snapshot(
             snapshot,
-            receipt.control_token,
+            control_token=receipt.control_token,
             provenance=provenance,
             run_fields=run_fields,
             runs_cap=limit,
@@ -1444,43 +1439,9 @@ async def _dwell_and_respond(
             analysis_answer_channel=rung is not None and rung.answer_channel,
             analysis_rows_cap=limit if rung is not None and rung.shrink else None,
         )
-        return _finalize_receipt(data), text
+        return finalize_receipt(data), text
 
     return await _render_run_receipt(budget, build)
-
-
-def _job_payload(
-    job: ExperimentJob | ReceiptSnapshot,
-    control_token: str | None,
-    *,
-    lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
-    provenance: bool = False,
-    run_fields: list[str] | None = None,
-    runs_cap: int = _RUN_PAGE_LIMIT,
-    analysis_fields: list[str] | None = None,
-    analysis_answer_channel: bool = False,
-    analysis_rows_cap: int | None = None,
-) -> dict[str, Any]:
-    snapshot = (
-        snapshot_receipt(
-            job,
-            None,
-            control_token=control_token,
-            lint_by_circuit=lint_by_circuit,
-        )
-        if isinstance(job, ExperimentJob)
-        else job
-    )
-    return render_receipt_snapshot(
-        snapshot,
-        control_token=control_token,
-        provenance=provenance,
-        run_fields=run_fields,
-        runs_cap=runs_cap,
-        analysis_fields=analysis_fields,
-        analysis_answer_channel=analysis_answer_channel,
-        analysis_rows_cap=analysis_rows_cap,
-    )
 
 
 def render_receipt_snapshot(
@@ -1494,7 +1455,12 @@ def render_receipt_snapshot(
     analysis_answer_channel: bool = False,
     analysis_rows_cap: int | None = None,
 ) -> dict[str, Any]:
-    """Render the existing receipt envelope from detached neutral facts."""
+    """Render the existing receipt envelope from detached neutral facts.
+
+    The snapshot's leaves are already detached from the job, and rendering
+    never writes through them — the only row edits build or own their dicts —
+    so the envelope shares them rather than copying them per render.
+    """
     runs = project_receipt_runs(
         snapshot,
         run_fields,
@@ -1509,16 +1475,16 @@ def render_receipt_snapshot(
         "source": [
             _source_payload(source, provenance=provenance)
             if isinstance(source, SourceRecord)
-            else copy.deepcopy(source)
+            else dict(source)
             for source in snapshot.sources
         ],
-        "completeness": copy.deepcopy(snapshot.completeness),
-        "lint": copy.deepcopy(list(snapshot.lint)),
+        "completeness": snapshot.completeness,
+        "lint": list(snapshot.lint),
         "runs": runs,
-        "failures": copy.deepcopy(list(snapshot.failures)),
-        "observations": copy.deepcopy(list(snapshot.observations)),
+        "failures": list(snapshot.failures),
+        "observations": list(snapshot.observations),
         "warnings": [],
-        "artifacts": copy.deepcopy(list(snapshot.artifacts)),
+        "artifacts": list(snapshot.artifacts),
         "hint": (
             f"Experiment {snapshot.job_id} is still running; use jobs(wait) with this "
             "job_id to continue waiting."
@@ -1535,12 +1501,12 @@ def render_receipt_snapshot(
         legacy_result = False
         if snapshot.analysis_result is not None:
             rendered_result, legacy_result = analyze.render_attached_analysis(
-                copy.deepcopy(snapshot.analysis_result),
+                snapshot.analysis_result,
                 fields=analysis_fields,
                 answer_channel=analysis_answer_channel,
                 row_limit=analysis_rows_cap,
             )
-        analysis_observations = copy.deepcopy(list(snapshot.analysis_observations))
+        analysis_observations = list(snapshot.analysis_observations)
         if legacy_result:
             analysis_observations.append(
                 {
@@ -1617,18 +1583,17 @@ def _run_item(case: ExperimentCase) -> dict[str, Any]:
     }
 
 
-def _runs_page(
-    cases: list[ExperimentCase],
-    run_fields: list[str] | None = None,
+def _project_run_rows(
+    rows: list[dict[str, Any]],
+    run_fields: list[str] | None,
     *,
-    cap: int = _RUN_PAGE_LIMIT,
-) -> dict[str, Any]:
-    page, total, offset, _limit = paginate(cases, None, cap=cap)
-    rows = [_run_item(case) for case in page]
+    lean_default: bool,
+) -> list[dict[str, Any]]:
+    """Apply one request's run-row projection policy to rows the caller owns."""
     if run_fields:
         plan = keep_plan(run_fields)
-        rows = [project_row(row, plan) for row in rows]
-    else:
+        return [project_row(row, plan) for row in rows]
+    if lean_default:
         # Lean default: a produced row's artifact paths are provenance the
         # analysis tools resolve by id (fetch them via jobs(runs) or
         # run_fields). Every other status keeps them — failures entries
@@ -1637,6 +1602,21 @@ def _runs_page(
         for row in rows:
             if row["status"] == "produced":
                 del row["raw"], row["log"]
+    return rows
+
+
+def _runs_page(
+    cases: list[ExperimentCase],
+    run_fields: list[str] | None = None,
+    *,
+    cap: int = _RUN_PAGE_LIMIT,
+) -> dict[str, Any]:
+    page, total, offset, _limit = paginate(cases, None, cap=cap)
+    rows = _project_run_rows(
+        [_run_item(case) for case in page],
+        run_fields,
+        lean_default=True,
+    )
     # Same "o:<offset>" grammar jobs(action="runs") decodes; the shared
     # receipt assembly reads this key to build the continuation hint.
     # Nullable-key-always-present is the ruled cursor convention: readers may
@@ -1670,14 +1650,11 @@ def project_receipt_runs(
     fields were supplied; ``jobs(runs)`` requests use the full-row policy.
     ``limit=None`` renders the complete page shape for an in-process consumer.
     """
-    rows = [copy.deepcopy(row) for row in snapshot.runs_by_key.values()]
-    if run_fields:
-        plan = keep_plan(run_fields)
-        rows = [project_row(row, plan) for row in rows]
-    elif lean_default:
-        for row in rows:
-            if row["status"] == "produced":
-                del row["raw"], row["log"]
+    rows = _project_run_rows(
+        [dict(row) for row in snapshot.runs_by_key.values()],
+        run_fields,
+        lean_default=lean_default,
+    )
     page_limit = max(1, len(rows)) if limit is None else limit
     return _jobs_page(rows, cursor=cursor, limit=page_limit)
 
@@ -1829,7 +1806,7 @@ async def _routing_failure_response(
             ),
         }
     )
-    _finalize_receipt(data)
+    finalize_receipt(data)
 
     def build(limit: int, _rung: response_budget.Rung | None) -> _ReceiptBuilt:
         rendered = copy.deepcopy(data)
@@ -1862,7 +1839,7 @@ async def _error_response(
             },
         }
     )
-    _finalize_receipt(data)
+    finalize_receipt(data)
     return await _render_static_run_receipt(
         data,
         message,
@@ -1911,7 +1888,7 @@ async def _post_submit_error_response(
             "control_token": receipt.control_token,
             "completeness": copy.deepcopy(snapshot.completeness),
         }
-        data = _job_payload(snapshot, receipt.control_token)
+        data = render_receipt_snapshot(snapshot, control_token=receipt.control_token)
     except Exception as payload_exc:
         build_error = payload_exc
         # The snapshot itself can be what failed. These minimum handles are the
@@ -1941,7 +1918,7 @@ async def _post_submit_error_response(
         "retryable": True,
         "commit_state": "committed",
     }
-    _finalize_receipt(data)
+    finalize_receipt(data)
     text = (
         f"Experiment {job.job_id} was submitted, but building its receipt failed: {exc}. "
         f"The cases ARE running."
@@ -1967,7 +1944,7 @@ async def _post_submit_error_response(
                 },
             }
         )
-        _finalize_receipt(minimal)
+        finalize_receipt(minimal)
         result = format_response(text, minimal)
         result.isError = True
         return result
@@ -2370,7 +2347,8 @@ def _jobs_page(
     return data
 
 
-def _jobs_unpaged(items: list[dict[str, Any]]) -> dict[str, Any]:
+def unpaged_jobs_items(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return the established jobs page shape with every item included."""
     return {
         "items": items,
         "total": len(items),
@@ -2378,11 +2356,6 @@ def _jobs_unpaged(items: list[dict[str, Any]]) -> dict[str, Any]:
         "truncated": False,
         "next_cursor": None,
     }
-
-
-def unpaged_jobs_items(items: list[dict[str, Any]]) -> dict[str, Any]:
-    """Return the established jobs page shape with every item included."""
-    return _jobs_unpaged(items)
 
 
 # One jobs response, rendered at some page limit: the payload and its text line.
@@ -2680,7 +2653,7 @@ def snapshot_receipt(
     )
 
 
-def _render_jobs_receipt_snapshot(
+def render_jobs_receipt_snapshot(
     action: Literal["status", "wait"],
     snapshot: ReceiptSnapshot,
     *,
@@ -2689,9 +2662,9 @@ def _render_jobs_receipt_snapshot(
     analysis_answer_channel: bool = False,
     analysis_rows_cap: int | None = None,
 ) -> dict[str, Any]:
-    data = _job_payload(
+    """Render one complete jobs receipt from detached snapshot facts."""
+    data = render_receipt_snapshot(
         snapshot,
-        None,
         runs_cap=runs_cap,
         analysis_answer_channel=analysis_answer_channel,
         analysis_rows_cap=analysis_rows_cap,
@@ -2735,23 +2708,44 @@ def _render_jobs_receipt_snapshot(
         )
     elif not data.get("hint"):
         data["hint"] = f"Job {snapshot.job_id} is {snapshot.status}."
-    return _finalize_receipt(data)
+    return finalize_receipt(data)
 
 
-def render_jobs_receipt_snapshot(
-    action: Literal["status", "wait"],
+def render_runs_envelope(
     snapshot: ReceiptSnapshot,
     *,
-    timed_out: bool | None = None,
-    runs_cap: int = _JOBS_PAGE_LIMIT,
+    cursor: str | None = None,
+    limit: int | None = None,
 ) -> dict[str, Any]:
-    """Render one complete jobs receipt from detached snapshot facts."""
-    return _render_jobs_receipt_snapshot(
-        action,
+    """Render one jobs(runs) envelope over a snapshot's full run records.
+
+    ``limit=None`` returns every recorded run, which is also what makes the
+    truncation hint below collapse to the complete-page wording.
+    """
+    page = project_receipt_runs(
         snapshot,
-        timed_out=timed_out,
-        runs_cap=runs_cap,
+        None,
+        lean_default=False,
+        cursor=cursor,
+        limit=limit,
     )
+    return {
+        "action": "runs",
+        "outcome": _jobs_outcome(snapshot),
+        "job_id": snapshot.job_id,
+        "request_id": snapshot.request_id,
+        "status": snapshot.status,
+        "dialect": snapshot.dialect,
+        **page,
+        "observations": [],
+        "warnings": [],
+        "failures": [],
+        "hint": (
+            "Use next_cursor to continue the run page."
+            if page["truncated"]
+            else f"Returned all recorded runs for job {snapshot.job_id}."
+        ),
+    }
 
 
 def _runs_finished(job: Job, wait_for: Literal["all", "runs"]) -> bool:
@@ -3105,8 +3099,8 @@ def _jobs_error_payload(
         )
         if args.action == "wait":
             common["timed_out"] = False
-        return _finalize_receipt(common)
-    common.update(_jobs_unpaged([]))
+        return finalize_receipt(common)
+    common.update(unpaged_jobs_items([]))
     if args.action in {"cancel", "runs"}:
         common.update(
             {
@@ -3222,7 +3216,7 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
                 snapshot = snapshot_receipt(job, state)
 
                 def build_receipt(limit: int, rung: response_budget.Rung | None) -> _JobsBuilt:
-                    data = _render_jobs_receipt_snapshot(
+                    data = render_jobs_receipt_snapshot(
                         waited,
                         snapshot,
                         timed_out=timed_out,
@@ -3244,30 +3238,7 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
                 snapshot = snapshot_receipt(job, state)
 
                 def build_runs(limit: int, _rung: response_budget.Rung | None) -> _JobsBuilt:
-                    page = project_receipt_runs(
-                        snapshot,
-                        None,
-                        lean_default=False,
-                        cursor=args.cursor,
-                        limit=limit,
-                    )
-                    data = {
-                        "action": "runs",
-                        "outcome": _jobs_outcome(snapshot),
-                        "job_id": snapshot.job_id,
-                        "request_id": snapshot.request_id,
-                        "status": snapshot.status,
-                        "dialect": snapshot.dialect,
-                        **page,
-                        "observations": [],
-                        "warnings": [],
-                        "failures": [],
-                        "hint": (
-                            "Use next_cursor to continue the run page."
-                            if page["truncated"]
-                            else f"Returned all recorded runs for job {snapshot.job_id}."
-                        ),
-                    }
+                    data = render_runs_envelope(snapshot, cursor=args.cursor, limit=limit)
                     return data, f"Returned {data['returned']} of {data['total']} run record(s)"
 
                 build = build_runs
@@ -3287,7 +3258,7 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
                         "status": cancelled.status,
                         # Kill receipts are the acknowledgement itself, not a
                         # page over a larger set: never shrunk.
-                        **_jobs_unpaged(receipts),
+                        **unpaged_jobs_items(receipts),
                         "observations": [],
                         "warnings": [],
                         "failures": [],

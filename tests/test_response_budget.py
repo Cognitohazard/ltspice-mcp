@@ -605,7 +605,7 @@ async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
                 },
             }
         )
-        return exp_mod._finalize_receipt(data), "completed"
+        return exp_mod.finalize_receipt(data), "completed"
 
     result = await exp_mod._render_run_receipt(
         response_budget.BUDGET_MIN_TOKENS,
