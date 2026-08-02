@@ -8,8 +8,8 @@ path and a few flags into the canonical run-experiments payload and enters that
 same dispatch path, a translation layer rather than a second engine. ``--json``
 prints the handler's ``structuredContent`` unchanged on one line — the
 parse-stable contract. Human mode prints the handler's text summary and then the
-same ``structuredContent`` pretty-printed, so the data is never gated behind
-``--json``; only ``--json`` is parse-stable.
+same ``structuredContent`` pretty-printed, unless ``--table`` selects the
+supported analysis or jobs table view. Only ``--json`` is parse-stable.
 
 Three rules shape everything here:
 
@@ -293,10 +293,22 @@ def _add_json_flag(parser: argparse.ArgumentParser, default: bool | str) -> None
     )
 
 
+def _add_table_flag(parser: argparse.ArgumentParser, default: bool | str) -> None:
+    """One spelling of ``--table`` for the root parser and every subparser."""
+    parser.add_argument(
+        "--table",
+        dest="as_table",
+        action="store_true",
+        default=default,
+        help="Human-readable table for analysis results and jobs list/run pages.",
+    )
+
+
 def _add_common_options(parser: argparse.ArgumentParser) -> None:
     """The global options, repeated on each subparser so they parse after the
     subcommand too."""
     _add_json_flag(parser, default=argparse.SUPPRESS)
+    _add_table_flag(parser, default=argparse.SUPPRESS)
     parser.add_argument(
         "--config",
         metavar="PATH",
@@ -447,7 +459,7 @@ def _exemplar_for(command: str) -> str:
     return spec.exemplar if spec is not None else _RUN_EXEMPLAR
 
 
-def build_parser(argv: Sequence[str] | None = None) -> argparse.ArgumentParser:
+def build_parser(argv: Sequence[str] | None = None) -> _Parser:
     """Build the argument parser.
 
     Deliberately free of any ltspice_mcp import: ``--help`` must not pay for the
@@ -470,6 +482,7 @@ def build_parser(argv: Sequence[str] | None = None) -> argparse.ArgumentParser:
     # The global spelling, valid ahead of the subcommand and visible on the
     # first help screen; each subparser re-accepts it after the subcommand.
     _add_json_flag(parser, default=False)
+    _add_table_flag(parser, default=False)
     sub = parser.add_subparsers(dest="command", metavar="COMMAND", parser_class=_Parser)
 
     run_command = sub.add_parser(
@@ -537,6 +550,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if namespace.command is None:
         parser.error("a COMMAND is required")
     namespace.command = namespace.command.replace("_", "-")
+    if namespace.as_json and namespace.as_table:
+        parser.exemplar = _exemplar_for(namespace.command)
+        parser.error("--json and --table cannot be used together")
     return namespace
 
 
@@ -1025,6 +1041,376 @@ async def _wait_leg(
 # ---------------------------------------------------------------------------
 
 
+_TABLE_PATH_LIMIT = 56
+_FACT_CHANNELS = ("error", "failures", "observations", "warnings", "hint")
+_PATH_KEYS = {"circuit", "log", "path", "raw", "staged_deck"}
+_ATTRIBUTION_KEYS = (
+    "source",
+    "case_id",
+    "run_index",
+    "step_index",
+    "step_values",
+    "assignments",
+    "circuit",
+    "deck_sha256",
+)
+
+
+def _truncate_text(value: str) -> str:
+    if len(value) <= _TABLE_PATH_LIMIT:
+        return value
+    left = (_TABLE_PATH_LIMIT - 3) // 2
+    right = _TABLE_PATH_LIMIT - 3 - left
+    return f"{value[:left]}...{value[-right:]}"
+
+
+def _compact_nested(value: Any, key: str | None = None) -> Any:
+    """Copy nested display data, shortening path leaves without touching input."""
+    if isinstance(value, dict):
+        return {name: _compact_nested(item, str(name)) for name, item in value.items()}
+    if isinstance(value, list):
+        return [_compact_nested(item, key) for item in value]
+    if isinstance(value, str) and (key in _PATH_KEYS or (key or "").endswith("_path")):
+        return _truncate_text(value)
+    return value
+
+
+def _compact_cell(value: Any) -> str:
+    """Render one cell on one line, keeping nested values deterministic."""
+    if value is None:
+        return "-"
+    if isinstance(value, str):
+        return value.replace("\r", "\\r").replace("\n", "\\n")
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return str(value)
+    return json.dumps(
+        _compact_nested(value),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _middle_truncate(value: Any) -> str:
+    """Keep both the directory root and basename visible for long paths."""
+    return _truncate_text(_compact_cell(value))
+
+
+def _format_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> list[str]:
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for index, cell in enumerate(row):
+            widths[index] = max(widths[index], len(cell))
+
+    def line(cells: tuple[str, ...]) -> str:
+        return " | ".join(cell.ljust(widths[index]) for index, cell in enumerate(cells)).rstrip()
+
+    output = [line(headers), "-+-".join("-" * width for width in widths)]
+    output.extend(line(row) for row in rows)
+    if not rows:
+        output.append("(no rows)")
+    return output
+
+
+def _expanded_rows(container: dict[str, Any], key: str) -> list[dict[str, Any]] | None:
+    """Read object or budget-columnar rows without changing the response."""
+    raw_rows = container.get(key, [])
+    if not isinstance(raw_rows, list):
+        return None
+    columns = container.get(f"{key}_columns")
+    if columns is None:
+        if not all(isinstance(row, dict) for row in raw_rows):
+            return None
+        return [dict(row) for row in raw_rows]
+    if not isinstance(columns, list) or not all(isinstance(column, str) for column in columns):
+        return None
+    if not all(isinstance(row, list) and len(row) == len(columns) for row in raw_rows):
+        return None
+    return [dict(zip(columns, row, strict=True)) for row in raw_rows]
+
+
+def _expanded_page(page: Any) -> dict[str, Any] | None:
+    if not isinstance(page, dict):
+        return None
+    rows = _expanded_rows(page, "items")
+    if rows is None:
+        return None
+    expanded = dict(page)
+    expanded["items"] = rows
+    expanded.pop("items_columns", None)
+    return expanded
+
+
+def _has_footer_value(value: Any) -> bool:
+    return value is not None and value != "" and value != [] and value != {}
+
+
+def _fact_rows(
+    sources: list[tuple[str, dict[str, Any]]],
+) -> list[tuple[str, Any]]:
+    facts: list[tuple[str, Any]] = []
+    for prefix, source in sources:
+        for channel in _FACT_CHANNELS:
+            value = source.get(channel)
+            if _has_footer_value(value):
+                label = f"{prefix}.{channel}" if prefix else channel
+                facts.append((label, value))
+    return facts
+
+
+def _finish_table(
+    headers: tuple[str, ...],
+    rows: list[tuple[str, ...]],
+    *,
+    metadata: list[str],
+    facts: list[tuple[str, Any]],
+) -> str:
+    output = _format_table(headers, rows)
+    if metadata:
+        output.append("")
+        output.extend(metadata)
+    if facts:
+        output.extend(("", "Facts:"))
+        output.extend(f"  {label}: {_compact_cell(value)}" for label, value in facts)
+    return "\n".join(output)
+
+
+def _attribution(row: dict[str, Any]) -> str:
+    attributed: dict[str, Any] = {}
+    for key in _ATTRIBUTION_KEYS:
+        value = row.get(key)
+        if value is None or value == {} or value == []:
+            continue
+        attributed[key] = _middle_truncate(value) if key == "circuit" else value
+    return _compact_cell(attributed) if attributed else "-"
+
+
+def _analysis_stat(row: dict[str, Any], default: str) -> str:
+    stat = _compact_cell(row.get("stat", default))
+    field = row.get("field")
+    return f"{_compact_cell(field)} / {stat}" if field is not None else stat
+
+
+def _analysis_table(
+    data: dict[str, Any],
+    *,
+    fact_sources: list[tuple[str, dict[str, Any]]],
+    receipt: dict[str, Any] | None = None,
+) -> str | None:
+    results = data.get("results")
+    if not isinstance(results, dict):
+        return None
+
+    rows: list[tuple[str, ...]] = []
+    facts = _fact_rows(fact_sources)
+    for recipe_key, entry in results.items():
+        if not isinstance(entry, dict):
+            return None
+        recipe = str(recipe_key)
+        emitted = False
+
+        reduced = _expanded_rows(entry, "reduced")
+        values = _expanded_rows(entry, "values")
+        if reduced is None or values is None:
+            return None
+        for reduced_row in reduced:
+            rows.append(
+                (
+                    recipe,
+                    "-",
+                    _analysis_stat(reduced_row, "reduced"),
+                    _compact_cell(reduced_row.get("value")),
+                    _attribution(reduced_row),
+                )
+            )
+            emitted = True
+
+        groups = entry.get("groups", [])
+        if not isinstance(groups, list) or not all(isinstance(group, dict) for group in groups):
+            return None
+        for group in groups:
+            group_rows = _expanded_rows(group, "reduced")
+            if group_rows is None:
+                return None
+            group_cell = _compact_cell(group.get("by", {}))
+            for reduced_row in group_rows:
+                rows.append(
+                    (
+                        recipe,
+                        group_cell,
+                        _analysis_stat(reduced_row, "reduced"),
+                        _compact_cell(reduced_row.get("value")),
+                        _attribution(reduced_row),
+                    )
+                )
+                emitted = True
+            if "count" in group:
+                rows.append((recipe, group_cell, "count", _compact_cell(group["count"]), "-"))
+                emitted = True
+
+        for value_row in values:
+            rows.append(
+                (
+                    recipe,
+                    "-",
+                    "value",
+                    _compact_cell(value_row.get("value")),
+                    _attribution(value_row),
+                )
+            )
+            emitted = True
+
+        per_run = entry.get("per_run")
+        if per_run is not None:
+            page = _expanded_page(per_run)
+            if page is None:
+                return None
+            for value_row in page["items"]:
+                rows.append(
+                    (
+                        recipe,
+                        "-",
+                        "per run",
+                        _compact_cell(value_row.get("value")),
+                        _attribution(value_row),
+                    )
+                )
+                emitted = True
+
+        spec = entry.get("spec")
+        if spec is not None:
+            if not isinstance(spec, dict):
+                return None
+            displayed_spec = dict(spec)
+            if "fail_cases" in spec:
+                fail_cases = _expanded_page(spec["fail_cases"])
+                if fail_cases is None:
+                    return None
+                displayed_spec["fail_cases"] = fail_cases
+            rows.append((recipe, "-", "spec", _compact_cell(displayed_spec), "-"))
+            emitted = True
+
+        if entry.get("steps"):
+            rows.append((recipe, "-", "steps", _compact_cell(entry["steps"]), "-"))
+            emitted = True
+        if not emitted:
+            rows.append((recipe, "-", "metric", _compact_cell(entry.get("metric")), "-"))
+        if _has_footer_value(entry.get("warnings")):
+            facts.append((f"results.{recipe}.warnings", entry["warnings"]))
+
+    metadata: list[str] = []
+    coverage = data.get("coverage")
+    if isinstance(coverage, dict):
+        displayed_coverage = dict(coverage)
+        if "missing_cases" in coverage:
+            missing = _expanded_page(coverage["missing_cases"])
+            if missing is None:
+                return None
+            displayed_coverage["missing_cases"] = missing
+        metadata.append(f"Coverage: {_compact_cell(displayed_coverage)}")
+    if data.get("result_set_id"):
+        metadata.append(f"Result set: {_compact_cell(data['result_set_id'])}")
+    if data.get("next"):
+        metadata.append(f"Next: {_compact_cell(data['next'])}")
+    if receipt is not None:
+        receipt_fields = {
+            key: receipt.get(key)
+            for key in ("job_id", "request_id", "status", "outcome")
+            if key in receipt
+        }
+        if receipt_fields:
+            metadata.insert(0, f"Receipt: {_compact_cell(receipt_fields)}")
+    return _finish_table(
+        ("recipe key", "group", "stat", "value", "attribution"),
+        rows,
+        metadata=metadata,
+        facts=facts,
+    )
+
+
+def _jobs_table(data: dict[str, Any]) -> str | None:
+    action = data.get("action")
+    if action not in {"list", "runs"}:
+        return None
+    items = _expanded_rows(data, "items")
+    if items is None:
+        return None
+
+    if action == "list":
+        headers = ("path", "exists", "last_activity", "status_counts", "interrupted_job_ids")
+        rows = [
+            (
+                _middle_truncate(row.get("path")),
+                _compact_cell(row.get("exists")),
+                _compact_cell(row.get("last_activity")),
+                _compact_cell(row.get("status_counts")),
+                _compact_cell(row.get("interrupted_job_ids")),
+            )
+            for row in items
+        ]
+    else:
+        headers = ("case_id", "run_index", "circuit", "assignments", "status", "raw", "log")
+        rows = [
+            (
+                _compact_cell(row.get("case_id")),
+                _compact_cell(row.get("run_index")),
+                _middle_truncate(row.get("circuit")),
+                _compact_cell(row.get("assignments")),
+                _compact_cell(row.get("status")),
+                _middle_truncate(row.get("raw")),
+                _middle_truncate(row.get("log")),
+            )
+            for row in items
+        ]
+
+    page = {
+        key: data.get(key)
+        for key in ("returned", "total", "truncated", "next_cursor")
+        if key in data
+    }
+    metadata = [f"Page: {_compact_cell(page)}"] if page else []
+    if action == "runs":
+        job = {
+            key: data.get(key)
+            for key in ("job_id", "request_id", "status", "dialect")
+            if key in data
+        }
+        if job:
+            metadata.insert(0, f"Job: {_compact_cell(job)}")
+    return _finish_table(
+        headers,
+        rows,
+        metadata=metadata,
+        facts=_fact_rows([("", data)]),
+    )
+
+
+def _table_view(command: str, data: dict[str, Any]) -> str | None:
+    """Select one explicitly supported envelope; all other shapes fall back."""
+    if command == "analyze-results":
+        return _analysis_table(data, fact_sources=[("", data)])
+    if command in {"run", "run-experiments"}:
+        analysis = data.get("analysis")
+        if not isinstance(analysis, dict) or not isinstance(analysis.get("result"), dict):
+            return None
+        result = analysis["result"]
+        return _analysis_table(
+            result,
+            fact_sources=[
+                ("receipt", data),
+                ("analysis", analysis),
+                ("analysis.result", result),
+            ],
+            receipt=data,
+        )
+    if command == "jobs":
+        return _jobs_table(data)
+    return None
+
+
 def exit_code_for(result: types.CallToolResult) -> int:
     """Classify a handler result into an exit code.
 
@@ -1054,10 +1440,10 @@ def emit(namespace: argparse.Namespace, result: types.CallToolResult, code: int)
 
     ``--json`` prints the handler's structuredContent unchanged on one line —
     that is the parse-stable contract. Human mode prints the handler's text
-    summary, then the same structuredContent pretty-printed: for the read tools
-    the text channel is an ack and the data lives only in the structured
-    payload, so a human rendering that stopped at the text would show no result
-    at all. Human mode is presentation, explicitly not parse-stable.
+    summary, then the same structuredContent pretty-printed or, for the
+    explicitly supported envelopes, rendered by ``--table``. The table branch
+    reads but never rewrites the payload. Human mode is presentation,
+    explicitly not parse-stable.
     """
     from ltspice_mcp.tools._base import result_text
 
@@ -1084,7 +1470,10 @@ def emit(namespace: argparse.Namespace, result: types.CallToolResult, code: int)
     if text:
         print(text)
     if data is not None:
-        print(json.dumps(data, ensure_ascii=False, indent=1))
+        table = _table_view(namespace.command, data) if namespace.as_table else None
+        if namespace.as_table and table is None:
+            print("Table view is unavailable for this response; showing JSON.")
+        print(table if table is not None else json.dumps(data, ensure_ascii=False, indent=1))
     hint = (data or {}).get("hint")
     if code != EXIT_OK and hint and hint not in text:
         print(hint, file=sys.stderr)
