@@ -61,6 +61,7 @@ from ltspice_mcp.lib.job_types import (
     SimulationJob,
 )
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
+from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.recipes import validate_recipe
 from ltspice_mcp.lib.simulator import simulator_dialect, simulator_library_roots
 from ltspice_mcp.lib.sweep_utils import generate_id
@@ -1241,7 +1242,13 @@ _ReceiptRows = Callable[[dict[str, Any]], list[Any]]
 # Rung 0's allowlist, shared by run_experiments and jobs status/wait because
 # both render the same receipt envelope.
 _TRIM_REMOVE_RECEIPT: tuple[str, ...] = ("analysis",)
-_TRIM_EMPTY_RECEIPT: tuple[str, ...] = ("source",)
+# `source` is deliberately absent, and no other rung empties it either. It is
+# not an identity echo the way the analysis envelope's `source_hashes` is: with
+# `provenance` off it still carries the staging disclosures — the live,
+# unstaged or unexplained manifest entries `_source_payload` keeps precisely so
+# a caller is told about them — and with `provenance` on it carries an opt-in
+# the caller asked for, which the trim rung's charter forbids revoking. Facts
+# under one flag and an opt-in under the other leaves no rung a claim on it.
 
 _RUN_BUDGET_NOTES = response_budget.Notes(
     cut="presentation was reduced; no run, failure, or analysis fact was dropped.",
@@ -1278,11 +1285,7 @@ def _run_receipt_rows(data: dict[str, Any]) -> list[Any]:
 def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> None:
     """Apply presentation rungs to either public receipt envelope."""
     if rung.trim:
-        response_budget.apply_trim(
-            data,
-            remove=_TRIM_REMOVE_RECEIPT,
-            empty=_TRIM_EMPTY_RECEIPT,
-        )
+        response_budget.apply_trim(data, remove=_TRIM_REMOVE_RECEIPT)
     if rung.answer_channel:
         for page in _receipt_row_pages(data):
             for row in page["items"]:
@@ -1580,18 +1583,24 @@ def _render_failures(
     """Collapse repeated failures into one counted row and attach recovery hints.
 
     A case failure carries a ~20-line log excerpt in its message, and a sweep
-    or Monte Carlo that fails for one reason fails identically in every case —
-    a hundred cases is a hundred copies of the same kilobyte in a channel the
-    budget ladder is forbidden to trim. Identical ``(code, message)`` rows
+    or Monte Carlo that fails for one reason fails that way in every case — a
+    hundred cases is a hundred copies of the same kilobyte in a channel the
+    budget ladder is forbidden to trim. Rows sharing a ``(code, message)`` key
     therefore become one row naming its cases, exactly as the log reader
     already collapses a repeated diagnostic within one log.
+
+    The key runs through :func:`diagnostic_collapse_key` because the excerpt
+    ends in the case's own numeric state, so cases that failed for one reason
+    are byte-identical only when they are also numerically identical — which in
+    a Monte Carlo they never are. The emitted row is the first member verbatim.
 
     No fact is dropped: ``count`` is the true number of cases, so a capped
     ``case_ids`` list reports its own shortfall rather than rounding it away.
     """
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for row in rows:
-        grouped.setdefault((str(row.get("code", "")), str(row.get("message", ""))), []).append(row)
+        key = (str(row.get("code", "")), diagnostic_collapse_key(str(row.get("message", ""))))
+        grouped.setdefault(key, []).append(row)
 
     collapsed: list[dict[str, Any]] = []
     for (code, _message), group in grouped.items():

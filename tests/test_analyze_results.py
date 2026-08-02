@@ -924,6 +924,52 @@ async def test_solve_failure_in_the_log_is_relayed_into_observations(
 
 
 @pytest.mark.asyncio
+async def test_one_cause_relays_once_though_each_run_logged_its_own_numbers(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """A sweep that fails to converge fails at a different instant in every run.
+
+    The simulator's line ends in that run's own time and timestep, so keying the
+    relay on the verbatim line yields one observation per run in a channel the
+    budget ladder may not trim.
+    """
+    template = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    base_log = template.with_suffix(".log").read_text()
+    sources: list[dict[str, Any]] = []
+    for index in range(4):
+        raw = work_dir / f"corner{index}.raw"
+        raw.write_bytes(template.read_bytes())
+        raw.with_suffix(".log").write_text(
+            base_log + f"\nTime step too small; time = {4.4e-05 + index * 1e-7:.7e}, "
+            f"timestep = {1.2e-19 / (index + 1):.4e}\n"
+        )
+        sources.append({"raw_path": str(raw), "label": f"corner{index}"})
+
+    result = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {
+                "sources": sources,
+                "recipes": [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}],
+            }
+        ),
+        state_no_sim,
+    )
+    assert result.structuredContent is not None
+    relayed = [
+        item
+        for item in result.structuredContent["observations"]
+        if item["code"] == "solve_failure"
+    ]
+
+    assert len(relayed) == 1
+    assert relayed[0]["evidence"]["run_count"] == 4
+    assert sorted(relayed[0]["evidence"]["runs"]) == [f"corner{i}" for i in range(4)]
+    # The relayed line is one run's own, verbatim — not a normalized rewrite.
+    assert "time = 4.4000000e-05" in relayed[0]["evidence"]["log"]
+
+
+@pytest.mark.asyncio
 async def test_a_clean_solve_relays_nothing(
     state_no_sim: SessionState,
     work_dir: Path,
