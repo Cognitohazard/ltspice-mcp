@@ -25,6 +25,7 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.experiments import (
+    _RECENT_JOBS_CAP,
     JOBS_OUTPUT_SCHEMA,
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     JobsInput,
@@ -1042,6 +1043,47 @@ class TestListAndRunsPagination:
         assert any(item["path"] == str(circuit.resolve()) for item in data["items"])
         group = next(item for item in data["items"] if item["path"] == str(circuit.resolve()))
         assert group["status_counts"]["completed"] == 1
+
+    async def test_list_names_recent_job_ids_and_the_count_it_capped(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A completed job has to be addressable from discovery, not just counted.
+
+        Without an id on the group, "find the Monte Carlo I ran earlier" has no
+        answer inside the product — the store holds the identity and the read
+        path declines to show it.
+        """
+        monkeypatch.setenv("LTSPICE_MCP_HOME", str(work_dir / "recent-state"))
+        circuit = _circuit(work_dir, "addressable.cir")
+        await asyncio.to_thread(recent.touch, circuit)
+        overflow = _RECENT_JOBS_CAP + 2
+        for index in range(overflow):
+            job = _experiment(
+                work_dir,
+                circuit,
+                job_id=f"exp_listed_{index:04d}",
+                request_id=f"listed-request-{index}",
+                status="completed",
+                case_status="produced",
+            )
+            await asyncio.to_thread(_persist_experiment, job, work_dir)
+
+        data = _assert_jobs_schema(await handle_jobs(_args("list"), state_no_sim))
+        group = next(item for item in data["items"] if item["path"] == str(circuit.resolve()))
+
+        assert group["recent_jobs_total"] == overflow
+        assert len(group["recent_jobs"]) == _RECENT_JOBS_CAP
+        assert {record["job_id"] for record in group["recent_jobs"]} <= {
+            f"exp_listed_{index:04d}" for index in range(overflow)
+        }
+        newest = group["recent_jobs"][0]
+        assert newest["status"] == "completed"
+        assert newest["request_id"].startswith("listed-request-")
+        assert newest["finished_at"] is not None
+        assert "recent_jobs" in data["hint"]
 
     async def test_runs_cursor_resumes_after_first_page(
         self,

@@ -157,6 +157,35 @@ async def _complete_run_receipt(
     return experiments.finalize_receipt(data)
 
 
+def _note_process_owned_job(receipt: dict[str, Any]) -> dict[str, Any]:
+    """Say, on the receipt itself, that this job dies with the interpreter.
+
+    ``Api.close()`` shuts the engine down, which cancels every job this process
+    owns. A ``wait=False`` receipt otherwise looks exactly like a durable
+    submission, and the loss is silent — the caller learns of it only when a
+    later status read reports a cancellation nobody asked for. The contract
+    states the rule; this is the same rule at the point of use.
+    """
+    if receipt.get("status") in experiments._TERMINAL_EXPERIMENT_STATUSES:
+        return receipt
+    observations = receipt.setdefault("observations", [])
+    if isinstance(observations, list):
+        observations.append(
+            {
+                "code": "process_owned_job",
+                "kind": "lifecycle",
+                "detail": (
+                    "This job is owned by the current process and is cancelled when "
+                    "the Api closes (including at the end of a 'with' block or when "
+                    "the interpreter exits). Wait for it in this process, or submit "
+                    "work that must outlive the interpreter through a long-lived "
+                    "server."
+                ),
+            }
+        )
+    return receipt
+
+
 async def _collect_analysis(
     request: analyze.AnalyzeResultsInput,
     state: SessionState,
@@ -512,7 +541,8 @@ class ApiMethodsMixin(ABC):
         try:
             if waited_job is not None:
                 self.wait(waited_job)
-            return self._call(_complete_run_receipt(receipt, request, self._state))
+            complete = self._call(_complete_run_receipt(receipt, request, self._state))
+            return complete if wait else _note_process_owned_job(complete)
         except KeyboardInterrupt as exc:
             raise ApiInterrupted(receipt=receipt, job_id=waited_job) from exc
         except Exception as exc:

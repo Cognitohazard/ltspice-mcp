@@ -279,7 +279,10 @@ class TestOutputSchemaCoverage:
 # deliberately, in the same change that earns it.
 _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Carries view-bound cursor semantics and the columnar response row form.
-    "analyze_results": 21099,
+    # histogram_bins on the measurements recipe: the legacy tool could bin a
+    # .MEAS distribution and this door hard-coded zero, so a Monte Carlo's
+    # spread was readable through one door only.
+    "analyze_results": 21330,
     # expected_sha256 now names where a caller gets one (an inspect
     # components/net query). No read tool reported the digest before, so a
     # first edit on an existing sheet had no in-product route to its token.
@@ -290,7 +293,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # and the assign-target grammar (REF@model / INSTANCE:delvto forms) — the
     # instance form went undiscovered by every agent while undocumented, so
     # those bytes buy a capability that otherwise does not exist for callers.
-    "run_experiments": 12785,
+    # Also carries the mismatch rule's field documentation. Those six numbers
+    # were bare before: AVT is unit-bearing (V·µm), and a coefficient written
+    # in V·m runs a hundred cases at nominal and reports success, which no
+    # result inspection can detect. Units at the call site are the only place
+    # that error is catchable.
+    "run_experiments": 14249,
     "verify_circuit": 5079,
 }
 

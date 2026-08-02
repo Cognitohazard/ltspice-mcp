@@ -1077,7 +1077,7 @@ async def _adapter_value(
             await an.handle_measurement_stats(
                 an.MeasurementStatsInput(
                     log_file=str(source.log),
-                    histogram_bins=0,
+                    histogram_bins=recipe.histogram_bins,
                     include_per_run=False,
                 ),
                 state,

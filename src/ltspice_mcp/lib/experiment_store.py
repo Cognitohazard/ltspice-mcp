@@ -53,7 +53,12 @@ POINTER_SCHEMA_VERSION = 1
 # only the response, so a different dwell is the same experiment). A reused
 # request_id whose record was hashed under an older version raises the loud
 # idempotency conflict instead of silently mis-comparing fingerprints.
-CANONICALIZER_VERSION = 2
+# Version 3: the measurements recipe gained histogram_bins. It participates
+# (asking for bins computes something new, like include.outliers does), so a
+# request carrying that recipe now hashes different bytes than it did before
+# the field existed — which is exactly the condition a version bump exists to
+# report accurately instead of as "your arguments differ".
+CANONICALIZER_VERSION = 3
 
 SIDECAR_DIRNAME = ".ltspice-mcp"
 JOBS_SUBDIR = "jobs"

@@ -6,6 +6,7 @@ descriptions), a just-in-time checklist (create_schematic result), and the
 single-sourced ``spice://guide`` resource.
 """
 
+import re
 from importlib.resources import files
 from pathlib import Path
 from typing import cast
@@ -21,6 +22,7 @@ from ltspice_mcp.resources import (
 )
 from ltspice_mcp.server import SERVER_INSTRUCTIONS
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools.advanced import MonteCarloMismatchRule
 from ltspice_mcp.tools.circuit import (
     CreateSchematicInput,
     handle_create_schematic,
@@ -75,6 +77,38 @@ class TestGuideIsEngineGeneral:
         ngspice_anchors = ("### .control / .endc Blocks", "### XSPICE", "### .save Directive")
         for anchor in ltspice_anchors + ngspice_anchors:
             assert anchor in guide, f"guide is missing section: {anchor}"
+
+
+class TestMismatchExemplarMatchesTheEngineUnit:
+    """The guide's worked AVT number and the engine that reads it are one class.
+
+    ``montecarlo.py`` converts W/L to µm before dividing, so AVT is V·µm. The
+    same coefficient written in V·m is 1e6 too small, and nothing errors: the
+    draw is negligible, every run is the nominal deck, and the receipt says
+    complete. A wrong exponent here is unfalsifiable from the result, so it is
+    pinned against the engine's own field documentation instead.
+    """
+
+    # Real technology coefficients are single-digit to tens of mV·µm; a V·m
+    # value lands at 1e-9 and a naive "5 mV" at 5e-3 is still inside the band.
+    _PLAUSIBLE_V_UM = (1e-4, 1e-1)
+
+    def test_exemplar_value_is_in_the_engines_unit(self):
+        guide = _GUIDE_ASSET.read_text("utf-8")
+        values = [float(match) for match in re.findall(r'"AVT":\s*([0-9.eE+-]+)', guide)]
+        assert values, "the guide no longer ships a worked AVT exemplar"
+        low, high = self._PLAUSIBLE_V_UM
+        for value in values:
+            assert low <= value <= high, (
+                f"guide AVT exemplar {value:g} is outside the V·µm band "
+                f"[{low:g}, {high:g}] — montecarlo.py divides by √(W·L) in µm²"
+            )
+
+    def test_guide_and_engine_name_the_same_unit(self):
+        guide = _GUIDE_ASSET.read_text("utf-8")
+        engine_description = MonteCarloMismatchRule.model_fields["AVT"].description or ""
+        assert "V·µm" in engine_description
+        assert "V·µm" in guide, "the guide states the exemplar's unit nowhere"
 
 
 def _guide_for(profile: str, work_dir: Path) -> str:
