@@ -13,6 +13,7 @@ keys at all, and capabilities key presence (pinned loosely, not by value).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import typing
 from pathlib import Path
 
@@ -36,6 +37,11 @@ class NGspiceSimulator:
     """Stub ngspice class; the name is what dialect_for_simulator_name keys on."""
 
     spice_exe: typing.ClassVar[list[str]] = ["/fake/ngspice"]
+
+
+def _digest(p: Path) -> str:
+    """SHA-256 of a file (sync helper; keeps blocking I/O out of async tests)."""
+    return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
 def _real(p: str | Path) -> Path:
@@ -352,6 +358,24 @@ async def test_components_full_asc(asc_file: Path, asc_state: SessionState):
     assert c1["symbol"] == "cap"
     assert "position" in c1 and "rotation" in c1
     assert "pins" in c1 and "bounding_box" in c1
+
+
+async def test_components_asc_reports_sheet_digest(asc_file: Path, asc_state: SessionState):
+    # edit_schematic refuses to touch an existing sheet without its sha256, and
+    # a read is the only supported way to get one — so the .asc component query
+    # reports it. Netlists carry no such token and get no key.
+    (res,) = await _run(asc_state, [{"kind": "components", "path": str(asc_file)}])
+    assert res["data"]["sha256"] == _digest(asc_file)
+
+
+async def test_components_netlist_has_no_digest(netlist: Path, state_no_sim: SessionState):
+    (res,) = await _run(state_no_sim, [{"kind": "components", "path": str(netlist)}])
+    assert "sha256" not in res["data"]
+
+
+async def test_net_asc_reports_sheet_digest(asc_file: Path, asc_state: SessionState):
+    (res,) = await _run(asc_state, [{"kind": "net", "path": str(asc_file), "at": "net:filtered"}])
+    assert res["data"]["sha256"] == _digest(asc_file)
 
 
 async def test_components_prefix_filter(netlist: Path, state_no_sim: SessionState):

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from spicelib.simulators.ltspice_simulator import LTspice
 
 from ltspice_mcp.lib import experiment_store
 from ltspice_mcp.lib.deck_staging import sha256_file
@@ -168,6 +169,104 @@ class TestSubmitPrimitive:
         assert calls[0]["run_filename"] == "case-token.cir"
         assert calls[0]["callback_on_error"] is True
         assert calls[0]["exe_log"] is True
+
+
+def _capturing_submit(
+    monkeypatch: pytest.MonkeyPatch,
+    runner: ExperimentRunner,
+) -> tuple[dict[str, Any], list[tuple[Path, bytes]]]:
+    """Like ``_controlled_submit``, but also snapshots the deck AS SUBMITTED.
+
+    The bytes are read inside the fake submit because a generated runnable copy
+    is deleted the moment submit returns — reading it afterwards would find
+    nothing and prove only that the file is gone.
+    """
+    callbacks: dict[str, Any] = {}
+    submitted: list[tuple[Path, bytes]] = []
+
+    def submit(netlist: Path, run_filename: str, callback):
+        submitted.append((netlist, netlist.read_bytes()))
+        callbacks[Path(run_filename).stem] = callback
+        return object()
+
+    monkeypatch.setattr(runner, "submit_netlist", submit)
+    return callbacks, submitted
+
+
+@pytest.mark.asyncio
+class TestLogopinfoInjection:
+    """An LTspice ``.op`` case must reach the simulator with ``.options
+    logopinfo``, or its log carries no per-device operating-point block and
+    gm/vth/vdsat read back empty. The experiments path is the consolidated
+    profile's only execution door, so the injection the single-run path already
+    does has to happen here too — at submit time, on a copy, because the staged
+    deck and its recorded digest are what replay and provenance compare against.
+    """
+
+    async def test_ltspice_op_case_submits_augmented_copy_leaving_staged_deck_intact(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        runner = ExperimentRunner(
+            asyncio.get_running_loop(),
+            LTspice,
+            work_dir,
+            max_parallel=1,
+        )
+        callbacks, submitted = _capturing_submit(monkeypatch, runner)
+        request = _request(state_no_sim, work_dir, request_id="logopinfo-op")
+        case = request.cases[0]
+        staged = case.staged_deck
+        staged_bytes = staged.read_bytes()
+        case.deck_sha256 = sha256_file(staged)
+
+        receipt = await asyncio.shield(runner.submit(request))
+        await _wait_for(lambda: len(submitted) == 1)
+        run_deck, run_bytes = submitted[0]
+
+        assert run_deck != staged
+        assert b".options logopinfo" in run_bytes
+        # The staged deck is byte-identical and still hashes to what the record
+        # pins — an idempotent replay compares against exactly these.
+        assert staged.read_bytes() == staged_bytes
+        assert sha256_file(staged) == case.deck_sha256
+        # The augmented copy is per-case scratch, gone once spicelib staged it.
+        assert not run_deck.exists()
+
+        token = next(iter(callbacks))
+        callbacks[token](_success(work_dir, token))
+        assert await runner.wait(receipt.job, 1)
+        assert receipt.job.completeness.produced == 1
+
+    async def test_non_ltspice_case_is_submitted_unmodified(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # ngspice reads device params off @dev[param] raw traces and has no
+        # logopinfo option, so its decks must reach the simulator untouched.
+        runner = ExperimentRunner(
+            asyncio.get_running_loop(),
+            MockSimulator,
+            work_dir,
+            max_parallel=1,
+        )
+        callbacks, submitted = _capturing_submit(monkeypatch, runner)
+        request = _request(state_no_sim, work_dir, request_id="logopinfo-ngspice")
+        staged = request.cases[0].staged_deck
+
+        receipt = await asyncio.shield(runner.submit(request))
+        await _wait_for(lambda: len(submitted) == 1)
+        run_deck, run_bytes = submitted[0]
+
+        assert run_deck == staged
+        assert b"logopinfo" not in run_bytes.lower()
+        token = next(iter(callbacks))
+        callbacks[token](_success(work_dir, token))
+        assert await runner.wait(receipt.job, 1)
 
 
 class TestArtifactCleanup:

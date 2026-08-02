@@ -280,7 +280,10 @@ class TestOutputSchemaCoverage:
 _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Carries view-bound cursor semantics and the columnar response row form.
     "analyze_results": 21099,
-    "edit_schematic": 12685,
+    # expected_sha256 now names where a caller gets one (an inspect
+    # components/net query). No read tool reported the digest before, so a
+    # first edit on an existing sheet had no in-product route to its token.
+    "edit_schematic": 12786,
     "inspect": 8628,
     "jobs": 3955,
     # Adds budget/attached-view inputs, a shared object/columnar receipt row,

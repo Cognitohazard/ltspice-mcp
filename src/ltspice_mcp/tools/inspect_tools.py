@@ -18,6 +18,11 @@ and the circuits it can reach. Each query is one of six kinds:
   reference the node — carrying **no geometry** at all.
 * ``components`` — the component list (``detail:"list"``) or full per-component
   detail (``detail:"full"``) of any circuit file.
+
+Both circuit kinds report the sheet's ``sha256`` when the target is a ``.asc``
+— the token ``edit_schematic`` requires as ``expected_sha256``. This is the only
+place on the profile that hands it out, so a read here is what lets a first
+edit commit in one call instead of mining the digest out of an error.
 * ``model`` — model/subcircuit lookup: ``search`` fuzzy-matches a ``query``;
   ``enumerate`` lists every model defined in the given ``libs``.
 
@@ -52,6 +57,7 @@ from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, compact_valid
 from ltspice_mcp.lib import response_budget, services
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.cursor_codec import canonical_hash
+from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.library_manager import _part_aware_score, parse_library_file_cached
 from ltspice_mcp.lib.lint_rules import linter_version
@@ -725,6 +731,20 @@ def _netlist_node_from_at(at: str | list[int], nodes_of: dict[str, list[str]]) -
     return at
 
 
+async def _asc_digest(path: Path) -> str:
+    """The sheet's SHA-256 — the edit token ``edit_schematic`` takes as
+    ``expected_sha256``.
+
+    Read tools are where a caller can get it: nothing else on this profile
+    reports it, so without this a fresh session has no supported way to obtain
+    its first one. Taken BEFORE the rows are read, so the digest can never be
+    newer than the content reported alongside it — a token from the future
+    would let an edit made against stale rows commit, while a stale token only
+    conflicts, which is the safe direction.
+    """
+    return await asyncio.to_thread(sha256_file, path)
+
+
 def _route_circuit_kind(path: Path, query: str) -> Literal["asc", "netlist"]:
     """Classify a resolved circuit ``path`` as an ``.asc`` schematic or a netlist.
 
@@ -801,6 +821,7 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
 
     # .asc: geometric trace via trace_net internals. The cached AscEditor is
     # touched only on the event loop, so this runs inline (never offloaded).
+    digest = await _asc_digest(path)
     trace_input = _trace_input_for(q.path, q.at)
     trace = await handle_trace_net(trace_input, state)
     tdata = trace.structuredContent or {}
@@ -814,6 +835,7 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
     page = _paginate_pair(pins, coords, "net.asc", identity, q.cursor, [path], view)
     data: dict[str, Any] = {
         "source": "schematic",
+        "sha256": digest,
         "start": tdata.get("start"),
         "labels": tdata.get("labels", []),
         "pins": page["items"],
@@ -933,8 +955,10 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
     # taken under a budget cannot resume as an unbudgeted one at the same offset.
     detail = "list" if view.lean else q.detail
     identity = {"path": str(path), "prefix": q.prefix, "detail": detail}
+    digest: str | None = None
 
     if _route_circuit_kind(path, "components") == "asc":
+        digest = await _asc_digest(path)
         # Cached editor + component reads stay on the event loop.
         editor = _get_asc_editor(path, state)
         try:
@@ -955,14 +979,17 @@ async def _do_components(q: ComponentsQuery, state: SessionState, view: _View) -
         page = _paginate(all_rows, "components", identity, q.cursor, [path], view)
         rows = page["items"]
 
+    data: dict[str, Any] = {
+        "components": rows,
+        "detail": detail,
+        "prefix": q.prefix,
+        "total": page["total"],
+        "returned": page["returned"],
+    }
+    if digest is not None:
+        data["sha256"] = digest
     return {
-        "data": {
-            "components": rows,
-            "detail": detail,
-            "prefix": q.prefix,
-            "total": page["total"],
-            "returned": page["returned"],
-        },
+        "data": data,
         "next_cursor": page["next_cursor"],
         "page": _page_meta(page, "components"),
     }
