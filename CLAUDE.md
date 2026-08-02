@@ -242,6 +242,23 @@ argument shapes, and the rationale are in `.claude/plans/mcp_v1_design.md` — r
 changing any of the six; it is the ratified spec and this file deliberately does not
 duplicate it.
 
+### Public Python API (`ltspice_mcp.api`)
+
+The same six ops are importable: `Api(working_dir=...)` boots the engine in-process
+(`engine.bootstrap_library_engine` — the same bootstrap `server_lifespan` enters via
+`bootstrap_server_engine`) and exposes them as synchronous methods with **complete** results
+where the wire pages or caps, plus `load_raw`/`measurements` (numpy access, detached copies)
+and the AC/transient metric functions under their existing names. One evaluator, three doors
+(MCP / CLI / Python) — the handlers and the API consume the same evaluate/render seams, so
+anything that would fork semantics between doors is a defect. Things that will bite you if
+unknown: one live engine session per PID (an atomic lease shared with the server lifespan —
+an `Api` inside a server process raises); the `Api` owns a private persistent event loop
+(per-call loops would invalidate the runner cache); `close()` cancels jobs this process owns,
+exactly like server shutdown; default mode *rejects* wire-only controls (budget, cursors,
+dwell) instead of rewriting them so API/MCP replays stay idempotent (`raw_page=True` is the
+single-page parity hatch). The contract with full rationale (five review rounds) is
+`.claude/plans/python_api_contract.md`; `__all__` is the stability boundary and is pinned.
+
 Profile-filtered tool defs and dispatch live on `SessionState` (`state.tool_defs`, `state.tool_dispatch`). Each tool's `profiles` frozenset (set at registration via `@registry.tool(profiles=...)`) determines visibility. Error hints in `server.py` are profile-aware (tuples of `(full_hint, agentic_hint)`) so they don't reference tools the client can't see.
 
 **Every registered tool's `output_schema` must be an object schema at the top level.** A bare
