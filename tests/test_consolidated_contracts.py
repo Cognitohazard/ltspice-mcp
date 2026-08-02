@@ -283,8 +283,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     "edit_schematic": 12685,
     "inspect": 8628,
     "jobs": 3955,
-    # Adds budget/attached-view inputs and a shared object/columnar receipt row.
-    "run_experiments": 12122,
+    # Adds budget/attached-view inputs, a shared object/columnar receipt row,
+    # and the assign-target grammar (REF@model / INSTANCE:delvto forms) — the
+    # instance form went undiscovered by every agent while undocumented, so
+    # those bytes buy a capability that otherwise does not exist for callers.
+    "run_experiments": 12785,
     "verify_circuit": 5079,
 }
 
