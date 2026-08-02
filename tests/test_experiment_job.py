@@ -241,8 +241,42 @@ class TestExperimentTypesAndStore:
         data = experiment_store.serialize_job(job)
 
         assert data["schema_version"] == 2
-        assert data["analysis"]["result"]["kind"] == analysis_snapshot.SNAPSHOT_KIND
-        assert data["analysis"]["result"]["snapshot_version"] == 1
+        assert data["analysis"]["result"]["schema"] == analysis_snapshot.SCHEMA
+        assert data["analysis"]["result"]["schema_version"] == analysis_snapshot.SNAPSHOT_VERSION
+
+    def test_v1_analysis_snapshot_migrates_to_the_single_assembly_shape(self):
+        stored = {
+            "kind": analysis_snapshot.SCHEMA,
+            "snapshot_version": 1,
+            "top": {},
+            "answer_top": {},
+            "answer_coverage_cursor_base": "old-answer-cursor",
+            "results": {
+                "summary": {
+                    "facts": {},
+                    "answer_facts": {},
+                    "answer_rows": [],
+                    "projection_presence": {
+                        "present": True,
+                        "children": {
+                            "value": {
+                                "present": True,
+                                "children": {"nested": {"present": True, "children": {}}},
+                            }
+                        },
+                    },
+                }
+            },
+        }
+
+        assert analysis_snapshot.classify(stored) == "snapshot"
+        assert stored["schema"] == analysis_snapshot.SCHEMA
+        assert stored["schema_version"] == analysis_snapshot.SNAPSHOT_VERSION
+        assert "answer_top" not in stored
+        assert "answer_coverage_cursor_base" not in stored
+        block = stored["results"]["summary"]
+        assert "answer_facts" not in block
+        assert block["projection_presence"] == {"value": {"nested": {}}}
 
     def test_new_reader_admits_v1_public_analysis_results_without_rewriting_them(
         self, work_dir: Path
@@ -290,7 +324,7 @@ class TestExperimentTypesAndStore:
 
         assert accepted is False
         assert "unsupported schema_version 2" in caplog.text
-        assert data["analysis"]["result"]["kind"] == analysis_snapshot.SNAPSHOT_KIND
+        assert data["analysis"]["result"]["schema"] == analysis_snapshot.SCHEMA
 
     @pytest.mark.asyncio
     async def test_pre_stem_job_id_still_loads_and_resolves(

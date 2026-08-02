@@ -644,11 +644,9 @@ async def call_tool(name: str, arguments: dict | None):
     try:
         return await registered.handler(arguments or {}, state)
     except ValidationError as e:
-        from ltspice_mcp.tools._base import registry
-
         detail = compact_validation_error(
             e,
-            field_owners=registry.field_owners_for_profile(state.config.tool_profile),
+            field_owners=state.field_owners,
         )
         raise ValueError(f"Invalid arguments for {name}: {detail}") from None
     except PathSecurityError as e:

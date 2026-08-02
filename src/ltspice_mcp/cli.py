@@ -1117,10 +1117,12 @@ def _format_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> list
 
 def _expanded_rows(container: dict[str, Any], key: str) -> list[dict[str, Any]] | None:
     """Read object or budget-columnar rows without changing the response."""
+    from ltspice_mcp.lib import response_budget
+
     raw_rows = container.get(key, [])
     if not isinstance(raw_rows, list):
         return None
-    columns = container.get(f"{key}_columns")
+    columns = container.get(response_budget.columnar_key(key))
     if columns is None:
         if not all(isinstance(row, dict) for row in raw_rows):
             return None
@@ -1133,6 +1135,8 @@ def _expanded_rows(container: dict[str, Any], key: str) -> list[dict[str, Any]] 
 
 
 def _expanded_page(page: Any) -> dict[str, Any] | None:
+    from ltspice_mcp.lib import response_budget
+
     if not isinstance(page, dict):
         return None
     rows = _expanded_rows(page, "items")
@@ -1140,7 +1144,7 @@ def _expanded_page(page: Any) -> dict[str, Any] | None:
         return None
     expanded = dict(page)
     expanded["items"] = rows
-    expanded.pop("items_columns", None)
+    expanded.pop(response_budget.columnar_key("items"), None)
     return expanded
 
 
@@ -1204,83 +1208,34 @@ def _analysis_table(
     if not isinstance(results, dict):
         return None
 
-    rows: list[tuple[str, ...]] = []
-    facts = _fact_rows(fact_sources)
+    prepared: list[dict[str, Any]] = []
     for recipe_key, entry in results.items():
         if not isinstance(entry, dict):
             return None
-        recipe = str(recipe_key)
-        emitted = False
-
         reduced = _expanded_rows(entry, "reduced")
         values = _expanded_rows(entry, "values")
-        if reduced is None or values is None:
-            return None
-        for reduced_row in reduced:
-            rows.append(
-                (
-                    recipe,
-                    "-",
-                    _analysis_stat(reduced_row, "reduced"),
-                    _compact_cell(reduced_row.get("value")),
-                    _attribution(reduced_row),
-                )
-            )
-            emitted = True
-
         groups = entry.get("groups", [])
-        if not isinstance(groups, list) or not all(isinstance(group, dict) for group in groups):
+        if (
+            reduced is None
+            or values is None
+            or not isinstance(groups, list)
+            or not all(isinstance(group, dict) for group in groups)
+        ):
             return None
+        group_views: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
         for group in groups:
             group_rows = _expanded_rows(group, "reduced")
             if group_rows is None:
                 return None
-            group_cell = _compact_cell(group.get("by", {}))
-            for reduced_row in group_rows:
-                rows.append(
-                    (
-                        recipe,
-                        group_cell,
-                        _analysis_stat(reduced_row, "reduced"),
-                        _compact_cell(reduced_row.get("value")),
-                        _attribution(reduced_row),
-                    )
-                )
-                emitted = True
-            if "count" in group:
-                rows.append((recipe, group_cell, "count", _compact_cell(group["count"]), "-"))
-                emitted = True
-
-        for value_row in values:
-            rows.append(
-                (
-                    recipe,
-                    "-",
-                    "value",
-                    _compact_cell(value_row.get("value")),
-                    _attribution(value_row),
-                )
-            )
-            emitted = True
+            group_views.append((group, group_rows))
 
         per_run = entry.get("per_run")
-        if per_run is not None:
-            page = _expanded_page(per_run)
-            if page is None:
-                return None
-            for value_row in page["items"]:
-                rows.append(
-                    (
-                        recipe,
-                        "-",
-                        "per run",
-                        _compact_cell(value_row.get("value")),
-                        _attribution(value_row),
-                    )
-                )
-                emitted = True
+        per_run_page = _expanded_page(per_run) if per_run is not None else None
+        if per_run is not None and per_run_page is None:
+            return None
 
         spec = entry.get("spec")
+        displayed_spec: dict[str, Any] | None = None
         if spec is not None:
             if not isinstance(spec, dict):
                 return None
@@ -1290,18 +1245,20 @@ def _analysis_table(
                 if fail_cases is None:
                     return None
                 displayed_spec["fail_cases"] = fail_cases
-            rows.append((recipe, "-", "spec", _compact_cell(displayed_spec), "-"))
-            emitted = True
 
-        if entry.get("steps"):
-            rows.append((recipe, "-", "steps", _compact_cell(entry["steps"]), "-"))
-            emitted = True
-        if not emitted:
-            rows.append((recipe, "-", "metric", _compact_cell(entry.get("metric")), "-"))
-        if _has_footer_value(entry.get("warnings")):
-            facts.append((f"results.{recipe}.warnings", entry["warnings"]))
+        prepared.append(
+            {
+                "recipe": str(recipe_key),
+                "entry": entry,
+                "reduced": reduced,
+                "values": values,
+                "groups": group_views,
+                "per_run": per_run_page,
+                "spec": displayed_spec,
+            }
+        )
 
-    metadata: list[str] = []
+    displayed_coverage: dict[str, Any] | None = None
     coverage = data.get("coverage")
     if isinstance(coverage, dict):
         displayed_coverage = dict(coverage)
@@ -1310,6 +1267,54 @@ def _analysis_table(
             if missing is None:
                 return None
             displayed_coverage["missing_cases"] = missing
+
+    rows: list[tuple[str, ...]] = []
+    facts = _fact_rows(fact_sources)
+
+    def emit(recipe: str, group: str, stat: str, row: dict[str, Any]) -> None:
+        rows.append(
+            (
+                recipe,
+                group,
+                stat,
+                _compact_cell(row.get("value")),
+                _attribution(row),
+            )
+        )
+
+    for view in prepared:
+        recipe = view["recipe"]
+        entry = view["entry"]
+        before = len(rows)
+        for reduced_row in view["reduced"]:
+            emit(recipe, "-", _analysis_stat(reduced_row, "reduced"), reduced_row)
+
+        for group, group_rows in view["groups"]:
+            group_cell = _compact_cell(group.get("by", {}))
+            for reduced_row in group_rows:
+                emit(recipe, group_cell, _analysis_stat(reduced_row, "reduced"), reduced_row)
+            if "count" in group:
+                rows.append((recipe, group_cell, "count", _compact_cell(group["count"]), "-"))
+
+        for value_row in view["values"]:
+            emit(recipe, "-", "value", value_row)
+
+        if view["per_run"] is not None:
+            for value_row in view["per_run"]["items"]:
+                emit(recipe, "-", "per run", value_row)
+
+        if view["spec"] is not None:
+            rows.append((recipe, "-", "spec", _compact_cell(view["spec"]), "-"))
+
+        if entry.get("steps"):
+            rows.append((recipe, "-", "steps", _compact_cell(entry["steps"]), "-"))
+        if len(rows) == before:
+            rows.append((recipe, "-", "metric", _compact_cell(entry.get("metric")), "-"))
+        if _has_footer_value(entry.get("warnings")):
+            facts.append((f"results.{recipe}.warnings", entry["warnings"]))
+
+    metadata: list[str] = []
+    if displayed_coverage is not None:
         metadata.append(f"Coverage: {_compact_cell(displayed_coverage)}")
     if data.get("result_set_id"):
         metadata.append(f"Result set: {_compact_cell(data['result_set_id'])}")
@@ -1352,19 +1357,19 @@ def _jobs_table(data: dict[str, Any]) -> str | None:
             for row in items
         ]
     else:
-        headers = ("case_id", "run_index", "circuit", "assignments", "status", "raw", "log")
-        rows = [
-            (
-                _compact_cell(row.get("case_id")),
-                _compact_cell(row.get("run_index")),
-                _middle_truncate(row.get("circuit")),
-                _compact_cell(row.get("assignments")),
-                _compact_cell(row.get("status")),
-                _middle_truncate(row.get("raw")),
-                _middle_truncate(row.get("log")),
+        from ltspice_mcp.tools.experiments import _RUN_RECORD_SCHEMA
+
+        headers = tuple(_RUN_RECORD_SCHEMA["properties"])
+
+        def run_cell(row: dict[str, Any], key: str) -> str:
+            value = row.get(key)
+            return (
+                _middle_truncate(value)
+                if key in {"circuit", "raw", "log"}
+                else _compact_cell(value)
             )
-            for row in items
-        ]
+
+        rows = [tuple(run_cell(row, key) for key in headers) for row in items]
 
     page = {
         key: data.get(key)

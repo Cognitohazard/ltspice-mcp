@@ -418,6 +418,6 @@ def validate_recipe(data: Any) -> Recipe:
     return RECIPE_ADAPTER.validate_python(data)
 
 
-def recipe_error(exc: Exception) -> str:
+def recipe_error(exc: ValueError | TypeError) -> str:
     """Compact one-item validation error suitable for the failures channel."""
-    return compact_validation_error(exc) if isinstance(exc, ValueError) else str(exc)
+    return compact_validation_error(exc)

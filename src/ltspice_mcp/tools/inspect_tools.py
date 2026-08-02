@@ -1230,7 +1230,9 @@ async def _run_queries(
         except ValidationError as exc:
             results.append(
                 _failure_item(
-                    index, raw, {"code": "invalid_query", "message": _compact_error(exc)}
+                    index,
+                    raw,
+                    {"code": "invalid_query", "message": compact_validation_error(exc)},
                 )
             )
             continue
@@ -1387,10 +1389,6 @@ def _failure_item(index: int, raw: Any, error: dict[str, Any]) -> dict[str, Any]
 def _kind_of(raw: Any) -> str | None:
     kind = raw.get("kind") if isinstance(raw, dict) else getattr(raw, "kind", None)
     return kind if isinstance(kind, str) else None
-
-
-def _compact_error(exc: ValidationError) -> str:
-    return compact_validation_error(exc)
 
 
 def _summary_text(results: list[dict[str, Any]]) -> str:

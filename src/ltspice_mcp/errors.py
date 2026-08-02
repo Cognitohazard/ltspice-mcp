@@ -9,7 +9,7 @@ _MAX_VALIDATION_ERRORS = 6
 
 
 def compact_validation_error(
-    exc: ValidationError | ValueError,
+    exc: ValidationError | ValueError | TypeError,
     *,
     field_owners: Mapping[str, Sequence[str]] | None = None,
 ) -> str:

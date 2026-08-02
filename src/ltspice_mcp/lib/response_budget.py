@@ -457,6 +457,15 @@ async def negotiate(
     return Negotiated(data=data, rung=rung, estimate=measured)
 
 
+def append_hint(data: dict[str, Any], detail: str, *, key: str = "hint") -> None:
+    """Append caller guidance once without displacing an existing route."""
+    existing = data.get(key)
+    if not isinstance(existing, str) or not existing:
+        data[key] = detail
+    elif detail not in existing:
+        data[key] = f"{existing} {detail}"
+
+
 def attach_notes(result: Negotiated, notes: Notes) -> None:
     """Append the budget's own notes to a negotiated response, in place.
 
@@ -482,6 +491,4 @@ def attach_notes(result: Negotiated, notes: Notes) -> None:
     observations = data.setdefault("observations", [])
     observations.extend(written)
     if notes.hint_key is not None:
-        detail = written[-1]["detail"]
-        existing = data.get(notes.hint_key)
-        data[notes.hint_key] = f"{existing} {detail}" if existing else detail
+        append_hint(data, written[-1]["detail"], key=notes.hint_key)

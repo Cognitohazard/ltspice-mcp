@@ -42,8 +42,8 @@ _TRIM_ALLOWLISTS: list[tuple[Any, str, dict[str, Any]]] = [
     (analyze_mod, "_TRIM_REMOVE_RESULT", analyze_mod._RESULT_ENTRY_SCHEMA),
     (analyze_mod, "_TRIM_REMOVE_ENVELOPE", OUTPUT_SCHEMA),
     (analyze_mod, "_TRIM_EMPTY_ENVELOPE", OUTPUT_SCHEMA),
-    (exp_mod, "_TRIM_REMOVE_RUN_RECEIPT", exp_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA),
-    (exp_mod, "_TRIM_EMPTY_RUN_RECEIPT", exp_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA),
+    (exp_mod, "_TRIM_REMOVE_RECEIPT", exp_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA),
+    (exp_mod, "_TRIM_EMPTY_RECEIPT", exp_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA),
     (exp_mod, "_TRIM_REMOVE_RECEIPT", exp_mod._jobs_receipt_schema("status")),
     (exp_mod, "_TRIM_EMPTY_RECEIPT", exp_mod._jobs_receipt_schema("status")),
     (insp, "_TRIM_REMOVE_EXHAUSTED", insp._OUTPUT_SCHEMA["properties"]["results"]["items"]),
@@ -238,6 +238,13 @@ class TestLadderPrimitives:
         codes = [o["code"] for o in result.data["observations"]]
         assert codes == ["prior", "budget_truncated", "budget_not_met"]
         assert result.data["hint"].startswith("keep me ")
+
+    def test_append_hint_preserves_the_route_and_deduplicates_detail(self):
+        data = {"hint": "keep me"}
+        response_budget.append_hint(data, "continue here")
+        response_budget.append_hint(data, "continue here")
+
+        assert data["hint"] == "keep me continue here"
 
     async def test_ladder_terminates_and_reports_a_budget_it_cannot_meet(self):
         """A budget under the floor gets the floor, not an endless descent."""
@@ -549,7 +556,7 @@ class TestAnalysisBudget:
             },
             "coverage": {"missing_cases": {"items": ["missing-row"]}},
         }
-        assert sorted(analyze_mod._analysis_rows(data)) == [
+        assert sorted(analyze_mod.analysis_rows(data)) == [
             "fail-row",
             "group-row",
             "missing-row",
@@ -576,11 +583,13 @@ async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
             "circuit": "dut",
             "assignments": {"R1": f"{index + 1}k"},
             "status": "produced",
+            "raw": f"/tmp/run-{index:03d}.raw",
+            "log": f"/tmp/run-{index:03d}.log",
         }
         for index in range(80)
     ]
 
-    def build(_rung: Rung | None, limit: int):
+    def build(limit: int, _rung: Rung | None):
         data = exp_mod._empty_payload("budgeted-runs")
         selected = rows[:limit]
         data.update(
@@ -596,7 +605,7 @@ async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
                 },
             }
         )
-        return data, "completed"
+        return exp_mod._finalize_receipt(data), "completed"
 
     result = await exp_mod._render_run_receipt(
         response_budget.BUDGET_MIN_TOKENS,
@@ -618,6 +627,7 @@ async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
     offset = exp_mod._decode_jobs_cursor(page["next_cursor"])
     assert offset == page["returned"]
     rendered_rows = _uncolumnar(page, "items")
+    assert all("raw" not in row and "log" not in row for row in rendered_rows)
     assert [item["case_id"] for item in rendered_rows] == [
         item["case_id"] for item in rows[:offset]
     ]
