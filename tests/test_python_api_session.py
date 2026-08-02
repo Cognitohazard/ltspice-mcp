@@ -69,7 +69,7 @@ def _wait_for_status(api: Api, expected: str, timeout: float = 2.0) -> None:
     pytest.fail(f"Api did not reach status {expected!r}")
 
 
-def test_exception_hierarchy_and_unit_b_public_surface() -> None:
+def test_exception_hierarchy_and_tier_one_public_surface() -> None:
     assert issubclass(ApiSessionError, ApiError)
     assert issubclass(ApiClosedError, ApiSessionError)
     assert issubclass(ApiInterrupted, KeyboardInterrupt)
@@ -89,11 +89,12 @@ def test_exception_hierarchy_and_unit_b_public_surface() -> None:
         "ApiValidationError",
     }
     assert not hasattr(api_module, "RawResult")
-    assert not any(
+    assert all(
         hasattr(Api, name)
         for name in (
             "run_experiments",
             "jobs",
+            "wait",
             "analyze_results",
             "inspect",
             "edit_schematic",
@@ -228,6 +229,39 @@ def test_bootstrap_failure_releases_session_lease(
     api = Api()
     api.close()
     assert calls == 2
+
+
+def test_call_preserves_durable_result_when_interrupt_precedes_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_stub_bootstrap(monkeypatch)
+    api = Api()
+    original_result = session_module.Future.result
+    calls = 0
+
+    def interrupt_once(future, timeout=None):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise KeyboardInterrupt
+        return original_result(future, timeout=timeout)
+
+    monkeypatch.setattr(session_module.Future, "result", interrupt_once)
+
+    async def durable_receipt() -> dict[str, str]:
+        await asyncio.sleep(0.01)
+        return {"job_id": "exp-preserved", "control_token": "token"}
+
+    try:
+        with pytest.raises(ApiInterrupted) as interrupted:
+            api._call(durable_receipt(), preserve_interrupt=True)
+        assert interrupted.value.receipt == {
+            "job_id": "exp-preserved",
+            "control_token": "token",
+        }
+        assert interrupted.value.job_id == "exp-preserved"
+    finally:
+        api.close()
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork")

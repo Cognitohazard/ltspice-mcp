@@ -1273,6 +1273,11 @@ def _inspect_envelope(results: list[dict[str, Any]]) -> dict[str, Any]:
     return data
 
 
+def inspect_envelope(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the public inspect envelope from fully collected query items."""
+    return _inspect_envelope(results)
+
+
 # Rung 0's allowlist, declared as data rather than spelled inside the ``if``
 # that applies it: a rung that exempts content is the one place a checker can
 # silently lose coverage, so it has to be a list a test can read. Both keys are

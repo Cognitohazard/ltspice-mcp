@@ -1,4 +1,4 @@
-"""Public in-process Python API."""
+"""Public in-process Python API for the six consolidated engine operations."""
 
 from ltspice_mcp.api._exceptions import (
     ApiCallError,

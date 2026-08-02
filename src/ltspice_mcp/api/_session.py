@@ -13,7 +13,12 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Literal, TypeVar, cast
 
-from ltspice_mcp.api._exceptions import ApiClosedError, ApiSessionError
+from ltspice_mcp.api._exceptions import (
+    ApiClosedError,
+    ApiInterrupted,
+    ApiSessionError,
+)
+from ltspice_mcp.api._methods import ApiMethodsMixin
 from ltspice_mcp.engine import bootstrap_engine
 from ltspice_mcp.state import SessionState
 
@@ -84,7 +89,7 @@ async def _cancel_residual_tasks(timeout_s: float) -> None:
         logger.warning("Closing the API loop with %d task(s) still pending", len(pending))
 
 
-class Api:
+class Api(ApiMethodsMixin):
     """Synchronous owner of one engine state on a private persistent event loop."""
 
     def __init__(
@@ -201,6 +206,8 @@ class Api:
         coroutine: Coroutine[Any, Any, _T],
         *,
         cancelable: bool = False,
+        cancel_on_interrupt: bool = False,
+        preserve_interrupt: bool = False,
     ) -> _T:
         """Run one invocation on the private loop and block only this caller thread."""
         bridge: Coroutine[Any, Any, _T] | None = None
@@ -217,14 +224,29 @@ class Api:
             self._close_unsubmitted(coroutine)
             raise
 
-        try:
-            return future.result()
-        except FutureCancelledError as exc:
-            with self._lifecycle_lock:
-                closing = self._status != "open"
-            if closing:
-                raise ApiClosedError("The Api call was cancelled during close") from exc
-            raise
+        interrupted: KeyboardInterrupt | None = None
+        while True:
+            try:
+                result = future.result()
+                break
+            except KeyboardInterrupt as exc:
+                if cancel_on_interrupt:
+                    future.cancel()
+                    raise
+                if preserve_interrupt:
+                    interrupted = exc
+                    continue
+                raise
+            except FutureCancelledError as exc:
+                with self._lifecycle_lock:
+                    closing = self._status != "open"
+                if closing:
+                    raise ApiClosedError("The Api call was cancelled during close") from exc
+                raise
+        if interrupted is not None:
+            receipt = result if isinstance(result, dict) else None
+            raise ApiInterrupted(receipt=receipt) from interrupted
+        return result
 
     async def _shutdown_bridge(self) -> None:
         cancelable = [task for task, may_cancel in self._bridge_tasks.items() if may_cancel]
