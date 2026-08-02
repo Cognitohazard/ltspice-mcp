@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +32,9 @@ from ltspice_mcp.tools.experiments import (
     handle_jobs,
     handle_run_experiments,
     progress_from_completeness,
+    project_receipt_runs,
+    render_receipt_snapshot,
+    snapshot_receipt,
 )
 from tests.conftest import fake_simulator, make_batch_job, make_sim_job
 
@@ -374,6 +378,204 @@ class TestActionShapesAndTokenSecrecy:
         )
 
         assert data["outcome"] == "partial"
+
+
+@pytest.mark.asyncio
+class TestReceiptSnapshotCoherence:
+    async def test_mutation_after_snapshot_cannot_mix_receipt_generations(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+    ):
+        circuit = _circuit(work_dir)
+        job = _experiment(work_dir, circuit, count=2, status="running")
+        job.analysis = AnalysisStage(status="pending", request={"recipes": []})
+
+        before = snapshot_receipt(job, state_no_sim)
+
+        produced, failed = job.cases
+        produced.status = "produced"
+        produced.raw_file = work_dir / "coherent.raw"
+        produced.log_file = work_dir / "coherent.log"
+        failed.status = "failed"
+        failed.log_file = work_dir / "failed.log"
+        job.completeness.recount(job.cases)
+        job.failures.append(
+            {
+                "case_id": failed.case_id,
+                "code": "execution_failed",
+                "message": "simulator failed",
+            }
+        )
+        job.observations.append(
+            {
+                "code": "job_finished",
+                "kind": "execution",
+                "detail": "The terminal generation was recorded.",
+            }
+        )
+        job.artifacts.append(
+            {
+                "path": str(work_dir / "summary.json"),
+                "content_type": "application/json",
+                "sha256": "a" * 64,
+                "bytes": 1,
+            }
+        )
+        job.analysis = AnalysisStage(
+            status="completed",
+            request={"recipes": []},
+            result={
+                "rows": [
+                    {"case_id": produced.case_id, "status": produced.status},
+                    {"case_id": failed.case_id, "status": failed.status},
+                ]
+            },
+            observations=[
+                {
+                    "code": "analysis_finished",
+                    "kind": "analysis",
+                    "detail": "The attached result describes the terminal rows.",
+                }
+            ],
+        )
+        job.status = "completed_with_failures"
+
+        old_receipt = render_receipt_snapshot(before)
+        after = snapshot_receipt(job, state_no_sim)
+        job.analysis.status = "failed"
+        job.analysis.result = None
+        job.analysis.error = "later analysis failure"
+        job.analysis.observations.append(
+            {
+                "code": "later_analysis_failure",
+                "kind": "analysis",
+                "detail": "This belongs to the next job generation.",
+            }
+        )
+        new_receipt = render_receipt_snapshot(after)
+
+        old_rows = old_receipt["runs"]["items"]
+        assert all(row["status"] == "queued" for row in old_rows)
+        assert before.completeness.produced == before.completeness.failed == 0
+        assert old_receipt["outcome"] == "in_progress"
+        assert old_receipt["failures"] == []
+        assert old_receipt["observations"] == []
+        assert old_receipt["artifacts"] == []
+        assert old_receipt["analysis"] == {
+            "status": "pending",
+            "result": None,
+            "error": None,
+            "observations": [],
+        }
+        assert "jobs(wait)" in old_receipt["hint"]
+
+        new_rows = new_receipt["runs"]["items"]
+        assert sum(row["status"] == "produced" for row in new_rows) == 1
+        assert sum(row["status"] == "failed" for row in new_rows) == 1
+        assert after.completeness.produced == 1
+        assert after.completeness.failed == 1
+        assert new_receipt["outcome"] == "partial"
+        assert new_receipt["failures"][0]["case_id"] == failed.case_id
+        assert new_receipt["observations"][0]["code"] == "job_finished"
+        assert new_receipt["artifacts"][0]["path"].endswith("summary.json")
+        assert new_receipt["analysis"]["status"] == "completed"
+        assert new_receipt["analysis"]["result"]["rows"] == [
+            {"case_id": row["case_id"], "status": row["status"]} for row in new_rows
+        ]
+        assert any(
+            item["code"] == "analysis_finished" for item in new_receipt["analysis"]["observations"]
+        )
+        assert all(
+            item["code"] != "later_analysis_failure"
+            for item in new_receipt["analysis"]["observations"]
+        )
+        assert new_receipt["analysis"]["error"] is None
+        assert "jobs(wait)" not in new_receipt["hint"]
+
+    async def test_scheduled_mutation_cannot_run_inside_snapshot(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+    ):
+        circuit = _circuit(work_dir)
+        job = _experiment(work_dir, circuit, status="running")
+
+        async def finish_job() -> None:
+            job.cases[0].status = "produced"
+            job.completeness.recount(job.cases)
+            job.status = "completed"
+
+        mutator = asyncio.create_task(finish_job())
+        snapshot = snapshot_receipt(job, state_no_sim)
+        await mutator
+
+        rendered = render_receipt_snapshot(snapshot)
+        assert job.status == "completed"
+        assert snapshot.status == "running"
+        assert snapshot.completeness.produced == 0
+        assert rendered["runs"]["items"][0]["status"] == "queued"
+        assert rendered["outcome"] == "in_progress"
+        assert "jobs(wait)" in rendered["hint"]
+
+    async def test_jobs_runs_and_receipt_share_one_canonical_inventory(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+    ):
+        circuit = _circuit(work_dir)
+        job = _experiment(
+            work_dir,
+            circuit,
+            count=2,
+            status="completed",
+            case_status="produced",
+        )
+        state_no_sim.all_jobs[job.job_id] = job
+
+        receipt = _assert_jobs_schema(
+            await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
+        )
+        runs = _assert_jobs_schema(
+            await handle_jobs(_args("runs", job_id=job.job_id), state_no_sim)
+        )
+
+        receipt_rows = receipt["runs"]["items"]
+        assert [
+            {key: row[key] for key in receipt_row}
+            for row, receipt_row in zip(runs["items"], receipt_rows, strict=True)
+        ] == receipt_rows
+        assert runs["status"] == receipt["status"]
+        assert runs["outcome"] == receipt["outcome"]
+        assert runs["total"] == receipt["runs"]["total"]
+        assert runs["total"] == receipt["completeness"]["expanded"]
+
+    async def test_projection_is_pure_over_copied_rows(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+    ):
+        circuit = _circuit(work_dir)
+        job = _experiment(
+            work_dir,
+            circuit,
+            status="completed",
+            case_status="produced",
+        )
+        snapshot = snapshot_receipt(job, state_no_sim)
+        original = copy.deepcopy(snapshot.runs_by_key)
+
+        projected = project_receipt_runs(
+            snapshot,
+            ["case_id", "assignments"],
+            lean_default=True,
+        )
+        lean = project_receipt_runs(snapshot, None, lean_default=True)
+
+        assert set(projected["items"][0]) == {"case_id", "assignments"}
+        assert "raw" not in lean["items"][0] and "log" not in lean["items"][0]
+        assert snapshot.runs_by_key == original
+        assert "raw" in next(iter(snapshot.runs_by_key.values()))
 
 
 @pytest.mark.asyncio
@@ -869,6 +1071,31 @@ class TestListAndRunsPagination:
         assert first["returned"] == 50
         assert second["returned"] == 1
         assert second["items"][0]["run_index"] == 50
+
+    async def test_runs_cursor_applies_to_a_fresh_invocation_snapshot(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+    ):
+        circuit = _circuit(work_dir)
+        job = _experiment(work_dir, circuit, count=51, status="running")
+        state_no_sim.all_jobs[job.job_id] = job
+
+        first = _assert_jobs_schema(
+            await handle_jobs(_args("runs", job_id=job.job_id), state_no_sim)
+        )
+        job.cases[50].status = "produced"
+        job.completeness.recount(job.cases)
+        second = _assert_jobs_schema(
+            await handle_jobs(
+                _args("runs", job_id=job.job_id, cursor=first["next_cursor"]),
+                state_no_sim,
+            )
+        )
+
+        assert first["items"][-1]["status"] == "queued"
+        assert second["items"][0]["run_index"] == 50
+        assert second["items"][0]["status"] == "produced"
 
 
 @pytest.mark.asyncio

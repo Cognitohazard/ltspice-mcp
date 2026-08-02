@@ -1360,6 +1360,44 @@ def _finalize_receipt(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+@dataclass(frozen=True)
+class ReceiptSnapshot:
+    """One loop-atomic copy of every job-derived receipt fact.
+
+    The coordinator mutates jobs only on the event loop.  Constructing this
+    value is deliberately synchronous, and every mutable leaf is detached from
+    the job before control can return to the loop.  Presentation can therefore
+    page, project, and budget-negotiate repeatedly without observing a later
+    job transition.
+    """
+
+    job_id: str
+    request_id: str | None
+    job_type: str
+    status: str
+    dialect: str | None
+    control_token: str | None
+    sources: tuple[SourceRecord | dict[str, Any], ...]
+    lint: tuple[dict[str, Any], ...]
+    runs_by_key: dict[tuple[str, int], dict[str, Any]]
+    completeness: Completeness
+    failures: tuple[dict[str, Any], ...]
+    observations: tuple[dict[str, Any], ...]
+    artifacts: tuple[dict[str, Any], ...]
+    analysis_status: str
+    analysis_result: dict[str, Any] | None
+    analysis_error: str | None
+    analysis_observations: tuple[dict[str, Any], ...]
+    analysis_request: dict[str, Any] | None
+
+    @property
+    def outcome(self) -> Literal["complete", "partial", "failed", "in_progress"]:
+        """Receipt outcome derived only from copied status and completeness."""
+        if self.job_type == "experiment":
+            return _terminal_outcome(self)
+        return _jobs_outcome(self)
+
+
 async def _dwell_and_respond(
     receipt: ExperimentReceipt,
     wait_s: float,
@@ -1379,16 +1417,21 @@ async def _dwell_and_respond(
         else:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(job.done_event.wait(), wait_s)
+    snapshot = snapshot_receipt(
+        job,
+        None,
+        control_token=receipt.control_token,
+        lint_by_circuit=lint_by_circuit,
+    )
     text = (
-        f"Experiment {job.job_id}: {job.status} "
-        f"({job.completeness.terminal}/{job.completeness.expanded} terminal cases)"
+        f"Experiment {snapshot.job_id}: {snapshot.status} "
+        f"({snapshot.completeness.terminal}/{snapshot.completeness.expanded} terminal cases)"
     )
 
     def build(limit: int, rung: response_budget.Rung | None) -> _ReceiptBuilt:
         data = _job_payload(
-            job,
+            snapshot,
             receipt.control_token,
-            lint_by_circuit=lint_by_circuit,
             provenance=provenance,
             run_fields=run_fields,
             runs_cap=limit,
@@ -1396,18 +1439,13 @@ async def _dwell_and_respond(
             analysis_answer_channel=rung is not None and rung.answer_channel,
             analysis_rows_cap=limit if rung is not None and rung.shrink else None,
         )
-        if job.status not in _TERMINAL_EXPERIMENT_STATUSES:
-            data["hint"] = (
-                f"Experiment {job.job_id} is still running; use jobs(wait) with this "
-                "job_id to continue waiting."
-            )
         return _finalize_receipt(data), text
 
     return await _render_run_receipt(budget, build)
 
 
 def _job_payload(
-    job: ExperimentJob,
+    job: ExperimentJob | ReceiptSnapshot,
     control_token: str | None,
     *,
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
@@ -1418,59 +1456,86 @@ def _job_payload(
     analysis_answer_channel: bool = False,
     analysis_rows_cap: int | None = None,
 ) -> dict[str, Any]:
-    if lint_by_circuit is None:
-        lint_map = {}
-        for case in job.cases:
-            lint_map.setdefault(case.circuit, [])
-        for source in job.sources:
-            lint_map[source.circuit] = source.lint_findings
-    else:
-        lint_map = lint_by_circuit
-    observations = list(job.observations)
-    seen_observations = {(item.get("code"), item.get("detail")) for item in observations}
-    for case in job.cases:
-        for observation in case.observations:
-            key = (observation.get("code"), observation.get("detail"))
-            if key not in seen_observations:
-                observations.append(observation)
-                seen_observations.add(key)
-    outcome = _terminal_outcome(job)
-    runs = _runs_page(job.cases, run_fields, cap=runs_cap)
-    hint = _terminal_hint(job, runs["truncated"])
+    snapshot = (
+        snapshot_receipt(
+            job,
+            None,
+            control_token=control_token,
+            lint_by_circuit=lint_by_circuit,
+        )
+        if isinstance(job, ExperimentJob)
+        else job
+    )
+    return render_receipt_snapshot(
+        snapshot,
+        control_token=control_token,
+        provenance=provenance,
+        run_fields=run_fields,
+        runs_cap=runs_cap,
+        analysis_fields=analysis_fields,
+        analysis_answer_channel=analysis_answer_channel,
+        analysis_rows_cap=analysis_rows_cap,
+    )
+
+
+def render_receipt_snapshot(
+    snapshot: ReceiptSnapshot,
+    *,
+    control_token: str | None = None,
+    provenance: bool = False,
+    run_fields: list[str] | None = None,
+    runs_cap: int = _RUN_PAGE_LIMIT,
+    analysis_fields: list[str] | None = None,
+    analysis_answer_channel: bool = False,
+    analysis_rows_cap: int | None = None,
+) -> dict[str, Any]:
+    """Render the existing receipt envelope from detached neutral facts."""
+    runs = project_receipt_runs(
+        snapshot,
+        run_fields,
+        lean_default=True,
+        limit=runs_cap,
+    )
     data: dict[str, Any] = {
-        "job_id": job.job_id,
-        "request_id": job.request_id,
-        "status": job.status,
-        "outcome": outcome,
-        "source": [_source_payload(source, provenance=provenance) for source in job.sources],
-        "completeness": job.completeness,
-        # Findings always emit; a circuit absent from the list is clean —
-        # the empty-findings entry was per-circuit ceremony.
-        "lint": [
-            {"circuit": circuit, "findings": findings}
-            for circuit, findings in lint_map.items()
-            if findings
+        "job_id": snapshot.job_id,
+        "request_id": snapshot.request_id,
+        "status": snapshot.status,
+        "outcome": snapshot.outcome,
+        "source": [
+            _source_payload(source, provenance=provenance)
+            if isinstance(source, SourceRecord)
+            else copy.deepcopy(source)
+            for source in snapshot.sources
         ],
+        "completeness": copy.deepcopy(snapshot.completeness),
+        "lint": copy.deepcopy(list(snapshot.lint)),
         "runs": runs,
-        "failures": list(job.failures),
-        "observations": observations,
+        "failures": copy.deepcopy(list(snapshot.failures)),
+        "observations": copy.deepcopy(list(snapshot.observations)),
         "warnings": [],
-        "artifacts": list(job.artifacts),
-        "hint": hint,
+        "artifacts": copy.deepcopy(list(snapshot.artifacts)),
+        "hint": (
+            f"Experiment {snapshot.job_id} is still running; use jobs(wait) with this "
+            "job_id to continue waiting."
+            if snapshot.job_type == "experiment"
+            and snapshot.status not in _TERMINAL_EXPERIMENT_STATUSES
+            else _terminal_hint(snapshot, runs["truncated"])
+        ),
     }
-    if control_token is not None:
-        data["control_token"] = control_token
-    if job.analysis.status != "not_requested":
+    emitted_control_token = control_token if control_token is not None else snapshot.control_token
+    if emitted_control_token is not None:
+        data["control_token"] = emitted_control_token
+    if snapshot.analysis_status != "not_requested":
         rendered_result: dict[str, Any] | None = None
         legacy_result = False
-        if job.analysis.result is not None:
+        if snapshot.analysis_result is not None:
             rendered_result, legacy_result = analyze.render_attached_analysis(
-                job.analysis.result,
+                copy.deepcopy(snapshot.analysis_result),
                 fields=analysis_fields,
                 answer_channel=analysis_answer_channel,
                 row_limit=analysis_rows_cap,
             )
-        analysis_observations = list(job.analysis.observations)
+        analysis_observations = copy.deepcopy(list(snapshot.analysis_observations))
         if legacy_result:
             analysis_observations.append(
                 {
@@ -1483,15 +1548,15 @@ def _job_payload(
                 }
             )
         data["analysis"] = {
-            "status": job.analysis.status,
+            "status": snapshot.analysis_status,
             "result": rendered_result,
-            "error": job.analysis.error,
+            "error": snapshot.analysis_error,
             "observations": analysis_observations,
         }
         if provenance:
             # The caller's own attached-analysis input, replayed back —
             # proof of what ran, not something to re-read every turn.
-            data["analysis"]["request"] = job.analysis.request
+            data["analysis"]["request"] = copy.deepcopy(snapshot.analysis_request)
     return data
 
 
@@ -1585,33 +1650,64 @@ def _runs_page(
     return data
 
 
-def _terminal_outcome(job: ExperimentJob) -> str:
-    if job.status not in _TERMINAL_EXPERIMENT_STATUSES:
+def project_receipt_runs(
+    snapshot: ReceiptSnapshot,
+    run_fields: list[str] | None,
+    *,
+    lean_default: bool,
+    cursor: str | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Purely apply one invocation's run projection to copied canonical rows.
+
+    ``run_fields`` and ``lean_default`` together are the original request's
+    projection policy.  Receipt requests use the lean default when no explicit
+    fields were supplied; ``jobs(runs)`` requests use the full-row policy.
+    ``limit=None`` renders the complete page shape for an in-process consumer.
+    """
+    rows = [copy.deepcopy(row) for row in snapshot.runs_by_key.values()]
+    if run_fields:
+        plan = keep_plan(run_fields)
+        rows = [project_row(row, plan) for row in rows]
+    elif lean_default:
+        for row in rows:
+            if row["status"] == "produced":
+                del row["raw"], row["log"]
+    page_limit = max(1, len(rows)) if limit is None else limit
+    return _jobs_page(rows, cursor=cursor, limit=page_limit)
+
+
+def _terminal_outcome(
+    snapshot: ReceiptSnapshot,
+) -> Literal["complete", "partial", "failed", "in_progress"]:
+    if snapshot.status not in _TERMINAL_EXPERIMENT_STATUSES:
         return "in_progress"
-    if job.status == "failed":
+    if snapshot.status == "failed":
         return "failed"
-    if job.status == "cancelled":
+    if snapshot.status == "cancelled":
         # A cancelled experiment never delivered what it promised, whatever the
         # counters say: a cancel landing after every run but before the
         # analysis leaves them fully reconciled, and one landing before
         # expansion leaves them all at zero.
         return "partial"
-    return "partial" if job.completeness.fell_short else "complete"
+    return "partial" if snapshot.completeness.fell_short else "complete"
 
 
-def _terminal_hint(job: ExperimentJob, truncated: bool) -> str:
+def _terminal_hint(snapshot: ReceiptSnapshot, truncated: bool) -> str:
+    if snapshot.job_type != "experiment":
+        return ""
     if truncated:
         return (
             f"The inline run page is truncated; use jobs(runs) with job_id "
-            f"{job.job_id} for the remaining cases."
+            f"{snapshot.job_id} for the remaining cases."
         )
-    if job.failures:
+    if snapshot.failures:
         return "Inspect failures and lint findings before retrying omitted cases."
-    if job.analysis.status in {"failed", "cancelled"}:
+    if snapshot.analysis_status in {"failed", "cancelled"}:
         return (
             f"All declared experiment cases reached terminality, but the attached "
-            f"analysis {job.analysis.status}; read analysis.error and re-run it with "
-            f"analyze_results over job_id {job.job_id}."
+            f"analysis {snapshot.analysis_status}; read analysis.error and re-run it with "
+            f"analyze_results over job_id {snapshot.job_id}."
         )
     return "All declared experiment cases reached terminality."
 
@@ -1787,13 +1883,6 @@ async def _post_submit_error_response(
     exists to prevent, so a post-submit escape is always reported as committed.
     """
     job = receipt.job
-    handles = {
-        "job_id": job.job_id,
-        "status": job.status,
-        "outcome": "in_progress",
-        "control_token": receipt.control_token,
-        "completeness": job.completeness,
-    }
 
     def error_message(*errors: Exception | None) -> str:
         messages: list[str] = []
@@ -1804,9 +1893,32 @@ async def _post_submit_error_response(
 
     build_error: Exception | None = None
     try:
-        data = _job_payload(job, receipt.control_token, lint_by_circuit=lint_by_circuit)
+        snapshot = snapshot_receipt(
+            job,
+            None,
+            control_token=receipt.control_token,
+            lint_by_circuit=lint_by_circuit,
+        )
+        handles = {
+            "job_id": snapshot.job_id,
+            "status": snapshot.status,
+            "outcome": "in_progress",
+            "control_token": receipt.control_token,
+            "completeness": copy.deepcopy(snapshot.completeness),
+        }
+        data = _job_payload(snapshot, receipt.control_token)
     except Exception as payload_exc:
         build_error = payload_exc
+        # The snapshot itself can be what failed. These minimum handles are the
+        # last-resort recovery surface and avoid copying any other mutable
+        # receipt field independently.
+        handles = {
+            "job_id": job.job_id,
+            "status": job.status,
+            "outcome": "in_progress",
+            "control_token": receipt.control_token,
+            "completeness": copy.deepcopy(job.completeness),
+        }
         # Even the receipt builder failed. Fall back to the minimum that keeps
         # the running job reachable rather than losing the handles with it.
         data = _empty_payload(job.request_id)
@@ -2335,26 +2447,24 @@ def _job_type_name(job: Job) -> str:
     return "single"
 
 
-def _analysis_status(job: Job) -> str:
-    return job.analysis.status if isinstance(job, ExperimentJob) else "not_requested"
-
-
-def _jobs_outcome(job: Job) -> Literal["complete", "partial", "failed", "in_progress"]:
-    if job.status in NON_TERMINAL_LIVE_STATUSES:
+def _jobs_outcome(
+    snapshot: ReceiptSnapshot,
+) -> Literal["complete", "partial", "failed", "in_progress"]:
+    if snapshot.status in NON_TERMINAL_LIVE_STATUSES:
         return "in_progress"
-    if job.status in {"failed", "timeout", "interrupted"}:
+    if snapshot.status in {"failed", "timeout", "interrupted"}:
         return "failed"
-    if job.status == "completed_with_failures":
+    if snapshot.status == "completed_with_failures":
         # The coordinator marks an experiment completed_with_failures when its
         # attached analysis fails even though every run landed, so read an
         # experiment's outcome off its own run counters rather than its status.
         # Only this status: a cancelled experiment is partial no matter how the
         # counters read, including the cancel that lands before expansion and
         # leaves them all at zero.
-        if isinstance(job, ExperimentJob):
-            return "partial" if job.completeness.fell_short else "complete"
+        if snapshot.job_type == "experiment":
+            return "partial" if snapshot.completeness.fell_short else "complete"
         return "partial"
-    if job.status == "cancelled":
+    if snapshot.status == "cancelled":
         return "partial"
     return "complete"
 
@@ -2368,14 +2478,11 @@ def _legacy_run_status(job: SimulationJob, raw_file: Path | None) -> str:
 
 
 def _run_records(
-    job: Job,
+    job: SimulationJob | BatchJob,
     state: SessionState,
     *,
     dialect: str | None,
 ) -> list[dict[str, Any]]:
-    if isinstance(job, ExperimentJob):
-        return [_run_item(case) for case in sorted(job.cases, key=lambda item: item.run_index)]
-
     records: list[dict[str, Any]] = []
     for run in services.runs_of(job):
         if run.raw_file is not None:
@@ -2465,64 +2572,159 @@ def _legacy_source(
     }
 
 
-def _receipt_snapshot(
-    action: Literal["status", "wait"],
+def snapshot_receipt(
     job: Job,
-    state: SessionState,
+    state: SessionState | None,
+    *,
+    control_token: str | None = None,
+    lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
+) -> ReceiptSnapshot:
+    """Copy a job's complete receipt state without suspending the event loop.
+
+    The first job read through the last mutable copy occur in this synchronous
+    call.  Outcome and guidance are intentionally absent from that live-read
+    interval; renderers derive them only from the returned detached value.
+    """
+    if isinstance(job, ExperimentJob):
+        lint_map: dict[str, list[dict[str, Any]]]
+        if lint_by_circuit is None:
+            lint_map = {}
+            for case in job.cases:
+                lint_map.setdefault(case.circuit, [])
+            for source in job.sources:
+                lint_map[source.circuit] = source.lint_findings
+        else:
+            lint_map = lint_by_circuit
+
+        observations = copy.deepcopy(job.observations)
+        seen_observations = {(item.get("code"), item.get("detail")) for item in observations}
+        runs_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+        for case in job.cases:
+            row = copy.deepcopy(_run_item(case))
+            runs_by_key[(case.case_id, case.run_index)] = row
+            for observation in case.observations:
+                copied = copy.deepcopy(observation)
+                key = (copied.get("code"), copied.get("detail"))
+                if key not in seen_observations:
+                    observations.append(copied)
+                    seen_observations.add(key)
+
+        analysis = job.analysis
+        return ReceiptSnapshot(
+            job_id=job.job_id,
+            request_id=job.request_id,
+            job_type="experiment",
+            status=job.status,
+            dialect=services.dialect_for_job(job, state) if state is not None else None,
+            control_token=control_token,
+            sources=tuple(copy.deepcopy(job.sources)),
+            lint=tuple(
+                copy.deepcopy(
+                    [
+                        {"circuit": circuit, "findings": findings}
+                        for circuit, findings in lint_map.items()
+                        if findings
+                    ]
+                )
+            ),
+            runs_by_key=runs_by_key,
+            completeness=copy.deepcopy(job.completeness),
+            failures=tuple(copy.deepcopy(job.failures)),
+            observations=tuple(observations),
+            artifacts=tuple(copy.deepcopy(job.artifacts)),
+            analysis_status=analysis.status,
+            analysis_result=copy.deepcopy(analysis.result),
+            analysis_error=analysis.error,
+            analysis_observations=tuple(copy.deepcopy(analysis.observations)),
+            analysis_request=copy.deepcopy(analysis.request),
+        )
+
+    if state is None:
+        raise ValueError("A session state is required to snapshot a legacy job")
+    dialect = services.dialect_for_job(job, state)
+    records = _run_records(job, state, dialect=dialect)
+    completeness = _legacy_completeness(job, records)
+    observations = copy.deepcopy(job.observations or []) if isinstance(job, SimulationJob) else []
+    return ReceiptSnapshot(
+        job_id=job.job_id,
+        request_id=None,
+        job_type=_job_type_name(job),
+        status=job.status,
+        dialect=dialect,
+        control_token=control_token,
+        sources=(copy.deepcopy(_legacy_source(job, dialect=dialect)),),
+        lint=(),
+        runs_by_key={
+            (str(record["case_id"]), int(record["run_index"])): copy.deepcopy(record)
+            for record in records
+        },
+        completeness=completeness,
+        failures=tuple(copy.deepcopy(_legacy_failures(job, records))),
+        observations=tuple(observations),
+        artifacts=(),
+        analysis_status="not_requested",
+        analysis_result=None,
+        analysis_error=None,
+        analysis_observations=(),
+        analysis_request=None,
+    )
+
+
+def _render_jobs_receipt_snapshot(
+    action: Literal["status", "wait"],
+    snapshot: ReceiptSnapshot,
     *,
     timed_out: bool | None = None,
     runs_cap: int = _JOBS_PAGE_LIMIT,
     analysis_answer_channel: bool = False,
     analysis_rows_cap: int | None = None,
 ) -> dict[str, Any]:
-    if isinstance(job, ExperimentJob):
-        data = _job_payload(
-            job,
-            None,
-            runs_cap=runs_cap,
-            analysis_answer_channel=analysis_answer_channel,
-            analysis_rows_cap=analysis_rows_cap,
-        )
-        data["job_type"] = "experiment"
-        data["dialect"] = services.dialect_for_job(job, state)
+    data = _job_payload(
+        snapshot,
+        None,
+        runs_cap=runs_cap,
+        analysis_answer_channel=analysis_answer_channel,
+        analysis_rows_cap=analysis_rows_cap,
+    )
+    if snapshot.job_type == "experiment":
+        data["job_type"] = snapshot.job_type
+        data["dialect"] = snapshot.dialect
     else:
-        dialect = services.dialect_for_job(job, state)
-        records = _run_records(job, state, dialect=dialect)
-        observations = list(job.observations or []) if isinstance(job, SimulationJob) else []
-        completeness = _legacy_completeness(job, records)
+        # Preserve the legacy receipt's established key order as well as its
+        # values; structured payloads are serialized in insertion order.
         data = {
-            "job_id": job.job_id,
-            "request_id": None,
-            "job_type": _job_type_name(job),
-            "status": job.status,
-            "outcome": _jobs_outcome(job),
-            "source": [_legacy_source(job, dialect=dialect)],
-            "completeness": completeness,
-            "lint": [],
-            "runs": _jobs_page(records, cursor=None, limit=runs_cap),
-            "failures": _legacy_failures(job, records),
-            "observations": observations,
-            "warnings": [],
-            "artifacts": [],
-            "hint": "",
-            "dialect": dialect,
+            "job_id": data["job_id"],
+            "request_id": data["request_id"],
+            "job_type": snapshot.job_type,
+            "status": data["status"],
+            "outcome": data["outcome"],
+            "source": data["source"],
+            "completeness": data["completeness"],
+            "lint": data["lint"],
+            "runs": data["runs"],
+            "failures": data["failures"],
+            "observations": data["observations"],
+            "warnings": data["warnings"],
+            "artifacts": data["artifacts"],
+            "hint": data["hint"],
+            "dialect": snapshot.dialect,
         }
     data["action"] = action
-    data["analysis_status"] = _analysis_status(job)
+    data["analysis_status"] = snapshot.analysis_status
     if timed_out is not None:
         data["timed_out"] = timed_out
-    if job.status in NON_TERMINAL_LIVE_STATUSES:
+    if snapshot.status in NON_TERMINAL_LIVE_STATUSES:
         data["hint"] = (
-            f"Job {job.job_id} is still {job.status}; continue with "
-            f"jobs(action='wait', job_id='{job.job_id}')."
+            f"Job {snapshot.job_id} is still {snapshot.status}; continue with "
+            f"jobs(action='wait', job_id='{snapshot.job_id}')."
         )
     elif data["runs"]["truncated"]:
         data["hint"] = (
             f"Run records are paged; continue with jobs(action='runs', "
-            f"job_id='{job.job_id}', cursor={data['runs']['next_cursor']!r})."
+            f"job_id='{snapshot.job_id}', cursor={data['runs']['next_cursor']!r})."
         )
     elif not data.get("hint"):
-        data["hint"] = f"Job {job.job_id} is {job.status}."
+        data["hint"] = f"Job {snapshot.job_id} is {snapshot.status}."
     return _finalize_receipt(data)
 
 
@@ -2991,40 +3193,45 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
                         timeout_s=args.timeout_s,
                         wait_for=args.wait_for,
                     )
+                snapshot = snapshot_receipt(job, state)
 
                 def build_receipt(limit: int, rung: response_budget.Rung | None) -> _JobsBuilt:
-                    data = _receipt_snapshot(
+                    data = _render_jobs_receipt_snapshot(
                         waited,
-                        job,
-                        state,
+                        snapshot,
                         timed_out=timed_out,
                         runs_cap=limit,
                         analysis_answer_channel=rung is not None and rung.answer_channel,
                         analysis_rows_cap=limit if rung is not None and rung.shrink else None,
                     )
                     if waited == "status":
-                        return data, f"Job {job.job_id}: {job.status}"
+                        return data, f"Job {snapshot.job_id}: {snapshot.status}"
                     return data, (
-                        f"Wait for job {job.job_id} timed out at status {job.status}"
+                        f"Wait for job {snapshot.job_id} timed out at status {snapshot.status}"
                         if timed_out
-                        else f"Job {job.job_id} reached {args.wait_for} terminality"
+                        else f"Job {snapshot.job_id} reached {args.wait_for} terminality"
                     )
 
                 build = build_receipt
 
             elif args.action == "runs":
-                dialect = services.dialect_for_job(job, state)
-                records = _run_records(job, state, dialect=dialect)
+                snapshot = snapshot_receipt(job, state)
 
                 def build_runs(limit: int, _rung: response_budget.Rung | None) -> _JobsBuilt:
-                    page = _jobs_page(records, cursor=args.cursor, limit=limit)
+                    page = project_receipt_runs(
+                        snapshot,
+                        None,
+                        lean_default=False,
+                        cursor=args.cursor,
+                        limit=limit,
+                    )
                     data = {
                         "action": "runs",
-                        "outcome": _jobs_outcome(job),
-                        "job_id": job.job_id,
-                        "request_id": request_id,
-                        "status": job.status,
-                        "dialect": dialect,
+                        "outcome": _jobs_outcome(snapshot),
+                        "job_id": snapshot.job_id,
+                        "request_id": snapshot.request_id,
+                        "status": snapshot.status,
+                        "dialect": snapshot.dialect,
                         **page,
                         "observations": [],
                         "warnings": [],
@@ -3032,7 +3239,7 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
                         "hint": (
                             "Use next_cursor to continue the run page."
                             if page["truncated"]
-                            else f"Returned all recorded runs for job {job.job_id}."
+                            else f"Returned all recorded runs for job {snapshot.job_id}."
                         ),
                     }
                     return data, f"Returned {data['returned']} of {data['total']} run record(s)"
