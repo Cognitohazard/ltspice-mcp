@@ -44,6 +44,14 @@ from ltspice_mcp.lib.ac_analysis import (
     prepare_ac_arrays,
     unwrap_phase_safe,
 )
+from ltspice_mcp.lib.ac_structure import (
+    AcStructureResult,
+    Corner,
+    CornerKind,
+    analyze_ac_structure,
+)
+from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.result_observations import Observation
 from ltspice_mcp.lib.signal_analysis import (
     DisturbanceResponseOutput,
     EdgeMetricsOutput,
@@ -99,11 +107,16 @@ __all__ = [  # noqa: RUF022 - grouped in the contract's published order
     "analyze_thd",
     "compute_signal_stats",
     "compute_measurement_stats",
+    "analyze_ac_structure",
+    # Variation values round-trip as SPICE literals ('5p'), so the code door
+    # needs the same reader the wire door parses them with.
+    "parse_spice_value",
     "Quantity",
     "SearchDirection",
     "CrossingDirection",
     "FilterType",
     "StabilityLabel",
+    "CornerKind",
     "CrossingWithQuantity",
     "GainAtPoint",
     "ReturnLossOutput",
@@ -126,4 +139,7 @@ __all__ = [  # noqa: RUF022 - grouped in the contract's published order
     "HarmonicEntry",
     "MeasurementStatsEntry",
     "HistogramBin",
+    "AcStructureResult",
+    "Corner",
+    "Observation",
 ]

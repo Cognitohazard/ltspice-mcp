@@ -203,6 +203,15 @@ class SummaryRecipe(_VariableRecipe):
 class MeasurementsRecipe(_KeyedRecipe):
     metric: Literal["measurements"]
     names: list[str] | None = None
+    histogram_bins: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Bin count for a distribution histogram over each .MEAS name's "
+            "per-run values (the shape a Monte Carlo spread is read from). "
+            "0, the default, computes none."
+        ),
+    )
 
 
 class ValueRecipe(_ScalarRecipe):

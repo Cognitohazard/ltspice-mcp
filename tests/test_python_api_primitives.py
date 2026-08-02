@@ -57,11 +57,14 @@ EXPECTED_ALL = [
     "analyze_thd",
     "compute_signal_stats",
     "compute_measurement_stats",
+    "analyze_ac_structure",
+    "parse_spice_value",
     "Quantity",
     "SearchDirection",
     "CrossingDirection",
     "FilterType",
     "StabilityLabel",
+    "CornerKind",
     "CrossingWithQuantity",
     "GainAtPoint",
     "ReturnLossOutput",
@@ -84,11 +87,17 @@ EXPECTED_ALL = [
     "HarmonicEntry",
     "MeasurementStatsEntry",
     "HistogramBin",
+    "AcStructureResult",
+    "Corner",
+    "Observation",
 ]
 
-METRIC_NAMES = EXPECTED_ALL[9:32]
-ALIAS_NAMES = EXPECTED_ALL[32:37]
-OUTPUT_TYPE_NAMES = EXPECTED_ALL[37:]
+METRIC_NAMES = EXPECTED_ALL[9:33]
+# Not a metric: a value reader, published because SPICE literals cross the
+# boundary in both directions and nothing else on the facade parses one.
+VALUE_HELPER_NAMES = EXPECTED_ALL[33:34]
+ALIAS_NAMES = EXPECTED_ALL[34:40]
+OUTPUT_TYPE_NAMES = EXPECTED_ALL[40:]
 
 
 def _legacy_job(state: SessionState, job_id: str, raw: Path) -> SimulationJob:
@@ -366,6 +375,7 @@ def test_literal_all_is_complete_and_excludes_unpublished_types() -> None:
     assert not hasattr(api_module, "StatEnvelopeOutput")
     assert not hasattr(api_module, "WaveformBucket")
     assert all(callable(getattr(api_module, name)) for name in METRIC_NAMES)
+    assert all(callable(getattr(api_module, name)) for name in VALUE_HELPER_NAMES)
     assert all(getattr(api_module, name) is not None for name in ALIAS_NAMES)
     assert all(callable(getattr(api_module, name)) for name in OUTPUT_TYPE_NAMES)
     assert set(EXPECTED_ALL) == {
@@ -376,7 +386,7 @@ def test_literal_all_is_complete_and_excludes_unpublished_types() -> None:
 def test_every_metric_annotation_resolves_through_the_public_facade() -> None:
     facade_types = {getattr(api_module, name) for name in [*ALIAS_NAMES, *OUTPUT_TYPE_NAMES]}
     referenced: set[Any] = set()
-    for name in METRIC_NAMES:
+    for name in [*METRIC_NAMES, *VALUE_HELPER_NAMES]:
         function = getattr(api_module, name)
         for annotation in get_type_hints(function).values():
             _walk_project_types(annotation, referenced)
