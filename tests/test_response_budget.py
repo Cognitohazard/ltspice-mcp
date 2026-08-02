@@ -42,6 +42,8 @@ _TRIM_ALLOWLISTS: list[tuple[Any, str, dict[str, Any]]] = [
     (analyze_mod, "_TRIM_REMOVE_RESULT", analyze_mod._RESULT_ENTRY_SCHEMA),
     (analyze_mod, "_TRIM_REMOVE_ENVELOPE", OUTPUT_SCHEMA),
     (analyze_mod, "_TRIM_EMPTY_ENVELOPE", OUTPUT_SCHEMA),
+    (exp_mod, "_TRIM_REMOVE_RUN_RECEIPT", exp_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA),
+    (exp_mod, "_TRIM_EMPTY_RUN_RECEIPT", exp_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA),
     (exp_mod, "_TRIM_REMOVE_RECEIPT", exp_mod._jobs_receipt_schema("status")),
     (exp_mod, "_TRIM_EMPTY_RECEIPT", exp_mod._jobs_receipt_schema("status")),
     (insp, "_TRIM_REMOVE_EXHAUSTED", insp._OUTPUT_SCHEMA["properties"]["results"]["items"]),
@@ -281,6 +283,16 @@ class TestAnalysisBudget:
         plain = _request_hash(_wide_args(raw))
         budgeted = _request_hash(_wide_args(raw, budget=600))
         assert budgeted == plain
+
+    async def test_fields_view_is_not_part_of_per_run_request_identity(self, work_dir: Path):
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
+        first = _request_hash(
+            _wide_args(raw, include={"per_run": {"limit": 5}, "fields": ["value"]})
+        )
+        second = _request_hash(
+            _wide_args(raw, include={"per_run": {"limit": 5}, "fields": ["case_id"]})
+        )
+        assert first == second
 
     async def test_a_cursor_minted_under_a_budget_resumes_without_one(
         self, state_no_sim: SessionState, work_dir: Path
@@ -555,6 +567,63 @@ class TestAnalysisBudget:
             )
 
 
+@pytest.mark.asyncio
+async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
+    rows = [
+        {
+            "case_id": f"case-{index:03d}",
+            "run_index": index,
+            "circuit": "dut",
+            "assignments": {"R1": f"{index + 1}k"},
+            "status": "produced",
+        }
+        for index in range(80)
+    ]
+
+    def build(_rung: Rung | None, limit: int):
+        data = exp_mod._empty_payload("budgeted-runs")
+        selected = rows[:limit]
+        data.update(
+            {
+                "status": "completed",
+                "outcome": "complete",
+                "runs": {
+                    "items": selected,
+                    "total": len(rows),
+                    "returned": len(selected),
+                    "truncated": len(selected) < len(rows),
+                    "next_cursor": f"o:{len(selected)}" if len(selected) < len(rows) else None,
+                },
+            }
+        )
+        return data, "completed"
+
+    result = await exp_mod._render_run_receipt(
+        response_budget.BUDGET_MIN_TOKENS,
+        build,
+    )
+    data = result.structuredContent
+    assert data is not None
+    jsonschema.Draft202012Validator(exp_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
+    page = data["runs"]
+    assert 0 < page["returned"] < 50
+    assert page["items_columns"] == [
+        "case_id",
+        "run_index",
+        "circuit",
+        "assignments",
+        "status",
+    ]
+    assert page["next_cursor"] is not None
+    offset = exp_mod._decode_jobs_cursor(page["next_cursor"])
+    assert offset == page["returned"]
+    rendered_rows = _uncolumnar(page, "items")
+    assert [item["case_id"] for item in rendered_rows] == [
+        item["case_id"] for item in rows[:offset]
+    ]
+    assert rows[offset]["case_id"] == f"case-{offset:03d}"
+
+
 # ---------------------------------------------------------------------------
 # jobs
 # ---------------------------------------------------------------------------
@@ -585,6 +654,30 @@ async def _jobs(state: SessionState, **values: Any) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 class TestJobsBudget:
+    async def test_answer_rung_rebuilds_a_receipt_at_the_same_page_limit(self):
+        built_for: list[bool] = []
+
+        def build(_limit: int, rung: Rung | None):
+            answer_channel = rung is not None and rung.answer_channel
+            built_for.append(answer_channel)
+            return (
+                {
+                    "analysis": {
+                        "view": "answer" if answer_channel else "detail",
+                        "payload": "" if answer_channel else "x" * 4_000,
+                    },
+                    "observations": [],
+                    "warnings": [],
+                    "failures": [],
+                },
+                "receipt",
+            )
+
+        data, _ = await exp_mod._negotiate_jobs(600, build, 50)
+
+        assert built_for == [False, True]
+        assert data["analysis"]["view"] == "answer"
+
     async def test_a_met_budget_changes_nothing(self, state_no_sim: SessionState, work_dir: Path):
         job = _batch_with_runs(work_dir, 60)
         state_no_sim.all_jobs[job.job_id] = job

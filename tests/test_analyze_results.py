@@ -14,7 +14,7 @@ import pytest
 from pydantic import ValidationError
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib import atomic_write, experiment_store, now, result_store
+from ltspice_mcp.lib import atomic_write, cursor_codec, experiment_store, now, result_store
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
     ExperimentCase,
@@ -385,6 +385,123 @@ async def test_per_run_page_cursor_replays_same_immutable_request(
     second = await handle_analyze_results(second_args, state_no_sim)
     assert second.structuredContent is not None
     assert second.structuredContent["results"]["values"]["per_run"]["items"][0]["step_index"] == 1
+
+
+@pytest.mark.asyncio
+async def test_per_run_cursor_rejects_an_explicitly_different_fields_view(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    request = {
+        "sources": [_source(raw)],
+        "recipes": [
+            {
+                "key": "values",
+                "metric": "value",
+                "expr": "V(out)",
+                "at": "900u",
+                "all_steps": True,
+            }
+        ],
+        "include": {"per_run": {"limit": 1}, "fields": ["step_index"]},
+    }
+    first = await handle_analyze_results(AnalyzeResultsInput.model_validate(request), state_no_sim)
+    assert first.structuredContent is not None
+    cursor = first.structuredContent["results"]["values"]["per_run"]["next_cursor"]
+    assert cursor is not None
+
+    with pytest.raises(ResultError, match="replay page 1"):
+        await handle_analyze_results(
+            AnalyzeResultsInput.model_validate(
+                {
+                    **request,
+                    "include": {
+                        "per_run": {"limit": 1, "cursor": cursor},
+                        "fields": ["value"],
+                    },
+                }
+            ),
+            state_no_sim,
+        )
+
+    inherited = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {
+                **request,
+                "include": {"per_run": {"limit": 1, "cursor": cursor}},
+            }
+        ),
+        state_no_sim,
+    )
+    assert inherited.structuredContent is not None
+    inherited_row = inherited.structuredContent["results"]["values"]["per_run"]["items"][0]
+    assert set(inherited_row) == {"step_index"}
+
+
+@pytest.mark.asyncio
+async def test_viewless_legacy_cursor_falls_back_to_the_stored_fields_view(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    request = {
+        "sources": [_source(raw)],
+        "recipes": [
+            {
+                "key": "values",
+                "metric": "value",
+                "expr": "V(out)",
+                "at": "900u",
+                "all_steps": True,
+            }
+        ],
+        "include": {"per_run": {"limit": 1}, "fields": ["step_index"]},
+    }
+    validated = AnalyzeResultsInput.model_validate(request)
+    first = await handle_analyze_results(validated, state_no_sim)
+    assert first.structuredContent is not None
+    cursor = first.structuredContent["results"]["values"]["per_run"]["next_cursor"]
+    assert cursor is not None
+    result_set_id = first.structuredContent["result_set_id"]
+
+    record = result_store.result_path(result_set_id, work_dir)
+    stored = json.loads(record.read_text())
+    stored["inputs"]["request_hash"] = analyze_mod._request_hash(
+        validated,
+        include_fields=True,
+    )
+    snapshot = {
+        key: stored[key]
+        for key in (
+            "result_set_id",
+            "created_at",
+            "expires_at",
+            "inputs",
+            "work",
+            "source_manifests",
+            "source_jobs",
+        )
+    }
+    stored["snapshot_hash"] = result_store.canonical_hash(snapshot)
+    record.write_text(json.dumps(stored))
+
+    body = cursor_codec.decode_cursor(cursor)
+    body.pop("view")
+    legacy_cursor = cursor_codec.encode_cursor(body)
+
+    resumed = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {
+                **request,
+                "include": {"per_run": {"limit": 1, "cursor": legacy_cursor}},
+            }
+        ),
+        state_no_sim,
+    )
+    assert resumed.structuredContent is not None
+    row = resumed.structuredContent["results"]["values"]["per_run"]["items"][0]
+    assert set(row) == {"step_index"}
 
 
 def test_invalid_and_expired_cursor_errors(work_dir: Path):
@@ -885,8 +1002,8 @@ async def test_artifact_too_large_names_only_levers_that_move_the_bound(
     ],
 )
 def test_continuation_rejects_request_shaping_arguments(extra: dict[str, Any]):
-    """A continuation replays the stored request, so include/group_by passed
-    alongside it were validated and then silently dropped."""
+    """A continuation replays stored execution state plus its cursor view, so
+    include/group_by passed alongside it must not be silently dropped."""
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError, match="mutually exclusive"):

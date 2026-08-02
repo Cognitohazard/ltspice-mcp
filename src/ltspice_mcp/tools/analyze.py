@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import math
 import os
 import statistics
@@ -19,7 +20,14 @@ from mcp import types
 from pydantic import Field, SkipValidation, model_validator
 
 from ltspice_mcp.errors import LTSpiceMCPError, ResultError
-from ltspice_mcp.lib import _fsync_dir, _fsync_fd, response_budget, result_store, services
+from ltspice_mcp.lib import (
+    _fsync_dir,
+    _fsync_fd,
+    analysis_snapshot,
+    response_budget,
+    result_store,
+    services,
+)
 from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.format import format_spice_value
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
@@ -173,9 +181,8 @@ class PerRunInclude(StrictModel):
     cursor: str | None = Field(
         default=None,
         description=(
-            "Resume paging from a previous response's per_run.next_cursor. The "
-            "cursor is bound to those sources, recipes and grouping and is refused "
-            "against any other request."
+            "Resume from per_run.next_cursor. It is bound to the request and its "
+            "include.fields view; an explicit conflicting view is rejected."
         ),
     )
 
@@ -320,17 +327,16 @@ class AnalyzeResultsInput(ToolInput):
         default=None,
         alias="continue",
         description=(
-            "Resume a response truncated by the call budget. The stored request is "
-            "replayed verbatim, so sources, recipes, group_by and include are "
-            "rejected alongside it — to change any of those, start a new analysis."
+            "Resume a budget-truncated response using its stored execution request "
+            "and cursor fields view. Other request fields are rejected."
         ),
     )
 
     @model_validator(mode="after")
     def _new_or_continue(self) -> AnalyzeResultsInput:
         if self.continuation is not None:
-            # A continuation replays the request stored in the result set, so
-            # every request-shaping field is read from there, not from these
+            # A continuation replays the execution request stored in the result
+            # set and takes its presentation view from the cursor, never these
             # args. Reject them rather than accept and drop them: raising
             # include.per_run.limit on resume is the obvious thing to try, and
             # silently ignoring it hands back a page the caller did not ask for.
@@ -339,7 +345,8 @@ class AnalyzeResultsInput(ToolInput):
                 raise ValueError(
                     "'continue' is mutually exclusive with "
                     + "/".join(sorted(supplied))
-                    + "; a continuation replays the stored request unchanged. "
+                    + "; a continuation replays the stored execution request and "
+                    "the cursor's fields view. "
                     "To change sources, recipes, grouping or include options, "
                     "start a new analysis."
                 )
@@ -481,6 +488,65 @@ def _projection_warnings(records: list[dict[str, Any]], fields: list[str]) -> li
                 if present
                 else f"no row reaches {parent!r} — a key whose own name contains a "
                 r"'.' is one segment, so address it with '\.' (e.g. 'value.v(x1\.out)')"
+            )
+        )
+    return warnings
+
+
+def _projection_presence(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Bounded union tree used to reproduce projection warnings after persistence."""
+    root: dict[str, Any] = {"present": True, "children": {}}
+
+    def add(node: dict[str, Any], value: Any) -> None:
+        node["present"] = True
+        if not isinstance(value, dict):
+            return
+        children = node["children"]
+        for key, child_value in value.items():
+            if str(key).startswith("_"):
+                continue
+            child = children.setdefault(str(key), {"present": False, "children": {}})
+            add(child, child_value)
+
+    for record in records:
+        add(root, record)
+    return root
+
+
+def _projection_warnings_from_presence(presence: dict[str, Any], fields: list[str]) -> list[str]:
+    warnings: list[str] = []
+    for path in fields:
+        segments = split_field_path(path)
+        if len(segments) == 1:
+            continue
+        node = presence
+        reached = True
+        for segment in segments:
+            child = node.get("children", {}).get(segment)
+            if not isinstance(child, dict):
+                reached = False
+                break
+            node = child
+        if reached and node.get("present") is True:
+            continue
+        parent = presence
+        for segment in segments[:-1]:
+            child = parent.get("children", {}).get(segment)
+            if not isinstance(child, dict):
+                parent = {"children": {}}
+                break
+            parent = child
+        parent_text = ".".join(escape_field_segment(segment) for segment in segments[:-1])
+        present = sorted(parent.get("children", {}))
+        addressable = ", ".join(escape_field_segment(key) for key in present)
+        warnings.append(
+            f"include.fields path {path!r} is absent from every row of this recipe; "
+            + (
+                f"keys present at {parent_text!r}: {addressable}"
+                if addressable
+                else f"no row reaches {parent_text!r} — a key whose own name contains a "
+                r"'.' is one segment, so address it with '\.' (e.g. "
+                r"'value.v(x1\.out)')"
             )
         )
     return warnings
@@ -821,11 +887,13 @@ def _work_items(recipes: list[Any]) -> list[dict[str, Any]]:
     return work
 
 
-def _request_hash(args: AnalyzeResultsInput) -> str:
+def _request_hash(args: AnalyzeResultsInput, *, include_fields: bool = False) -> str:
     assert args.sources is not None and args.recipes is not None
     include = args.include.model_dump(mode="json")
     if isinstance(include.get("per_run"), dict):
         include["per_run"]["cursor"] = None
+    if not include_fields:
+        include.pop("fields", None)
     return result_store.canonical_hash(
         {
             "sources": [source.model_dump(mode="json") for source in args.sources],
@@ -2458,7 +2526,7 @@ def _assemble(
     for index, unit in enumerate(units):
         key = unit["key"]
         recipe = unit["recipe"]
-        records = unit["records"]
+        records = copy.deepcopy(unit["records"])
         item_failures = unit["item_failures"]
         for record in records:
             record.pop("_manifest_id", None)
@@ -2497,6 +2565,8 @@ def _assemble(
                 unit["position"],
                 intra_item=per_run_next,
                 missing_offset=missing_next,
+                view_fields=a.include.fields,
+                carry_view=True,
             )
 
     next_value: dict[str, str] | None = None
@@ -2508,6 +2578,8 @@ def _assemble(
                 position,
                 intra_item=intra_item,
                 missing_offset=missing_next,
+                view_fields=a.include.fields,
+                carry_view=True,
             ),
         }
     failure_total = len(failures)
@@ -2540,6 +2612,8 @@ def _assemble(
             position,
             intra_item=intra_item,
             missing_offset=missing_next,
+            view_fields=a.include.fields,
+            carry_view=True,
         )
     coverage = {
         "runs_requested": runs_requested,
@@ -2580,6 +2654,374 @@ def _assemble(
         f"{coverage['runs_analyzed']}/{runs_requested} run(s) analyzed"
     )
     return data, text
+
+
+def _snapshot_from_assembly(a: _Assembly) -> dict[str, Any]:
+    """Persist facts and bounded unprojected rows, never a rendered response."""
+    wide_include = a.include.model_copy(update={"fields": list(_ROW_KEYS)})
+    wide = replace(a, include=wide_include)
+    requested, _ = _assemble(wide, None, _Limits.of(wide_include))
+    answer_include = AnalyzeInclude(fields=list(_ROW_KEYS))
+    answer, _ = _assemble(
+        replace(wide, include=answer_include),
+        response_budget.Rung(
+            level=response_budget.RUNG_ANSWER,
+            budget=response_budget.BUDGET_MIN_TOKENS,
+            measured=0,
+        ),
+        _Limits.of(answer_include),
+    )
+
+    top = copy.deepcopy(requested)
+    requested_results = top.pop("results")
+    answer_top = copy.deepcopy(answer)
+    answer_results = answer_top.pop("results")
+
+    def coverage_cursor_base(view: dict[str, Any]) -> str:
+        missing_page = view["coverage"]["missing_cases"]
+        cursor = missing_page.get("next_cursor")
+        if not isinstance(cursor, str):
+            next_value = view.get("next")
+            cursor = next_value.get("cursor") if isinstance(next_value, dict) else None
+        if isinstance(cursor, str):
+            return cursor
+        return result_store.encode_cursor(
+            a.item,
+            a.natural_position,
+            intra_item=a.natural_intra,
+            missing_offset=a.missing_offset,
+        )
+
+    requested_coverage_cursor = coverage_cursor_base(top)
+    answer_coverage_cursor = coverage_cursor_base(answer_top)
+    units = {unit["key"]: unit for unit in a.processed}
+    missing_next = min(a.missing_offset + MAX_PAGE_SIZE, len(a.missing))
+    results: dict[str, Any] = {}
+    for key, requested_entry in requested_results.items():
+        unit = units[key]
+        answer_entry = copy.deepcopy(answer_results.get(key, requested_entry))
+        entry = copy.deepcopy(requested_entry)
+        per_run = entry.pop("per_run", None)
+        entry.pop("values", None)
+        answer_rows = answer_entry.pop("values", [])
+        answer_entry.pop("per_run", None)
+        block: dict[str, Any] = {
+            "facts": entry,
+            "answer_facts": answer_entry,
+            "answer_rows": answer_rows[:MAX_PAGE_SIZE],
+            "answer_total": len(unit["records"]),
+            "surface": (
+                "per_run"
+                if per_run is not None
+                else "values"
+                if "values" in requested_entry
+                else "none"
+            ),
+            "projection_presence": _projection_presence(unit["records"]),
+        }
+        if per_run is not None:
+            block["per_run"] = per_run
+            block["per_run_offset"] = unit["per_run_offset"]
+            block["per_run_cursor_base"] = result_store.encode_cursor(
+                a.item,
+                unit["position"],
+                intra_item=unit["per_run_offset"],
+                missing_offset=missing_next,
+            )
+        results[key] = block
+    return analysis_snapshot.envelope(
+        {
+            "top": top,
+            "answer_top": answer_top,
+            "results": results,
+            "missing_offset": a.missing_offset,
+            "coverage_cursor_base": requested_coverage_cursor,
+            "answer_coverage_cursor_base": answer_coverage_cursor,
+        }
+    )
+
+
+def _render_snapshot_row(
+    row: dict[str, Any], fields: list[str] | None, *, whole_value: bool
+) -> dict[str, Any]:
+    if fields:
+        return project_row(row, keep_plan(fields))
+    return _lean_row(row, keep_value_whole=whole_value)
+
+
+def _rebind_snapshot_cursors(data: dict[str, Any], fields: list[str] | None) -> None:
+    cursor = data.get("cursor")
+    if isinstance(cursor, str):
+        data["cursor"] = result_store.reencode_cursor(cursor, view_fields=fields)
+    next_value = data.get("next")
+    if isinstance(next_value, dict) and isinstance(next_value.get("cursor"), str):
+        next_value["cursor"] = result_store.reencode_cursor(
+            next_value["cursor"], view_fields=fields
+        )
+        data["cursor"] = next_value["cursor"]
+    coverage = data.get("coverage")
+    if isinstance(coverage, dict):
+        missing = coverage.get("missing_cases")
+        if isinstance(missing, dict) and isinstance(missing.get("next_cursor"), str):
+            missing["next_cursor"] = result_store.reencode_cursor(
+                missing["next_cursor"], view_fields=fields
+            )
+
+
+def _shrink_snapshot_page(
+    page: dict[str, Any],
+    limit: int,
+    *,
+    offset: int = 0,
+    cursor_base: str | None = None,
+    fields: list[str] | None = None,
+) -> None:
+    items = page["items"][:limit]
+    page["items"] = items
+    page["returned"] = len(items)
+    page["truncated"] = offset + len(items) < page["total"]
+    page["next_cursor"] = (
+        result_store.reencode_cursor(
+            cursor_base,
+            view_fields=fields,
+            missing_offset=offset + len(items),
+        )
+        if page["truncated"] and cursor_base is not None
+        else None
+    )
+
+
+def _without_value_omission_warning(warnings: list[str]) -> list[str]:
+    return [
+        warning
+        for warning in warnings
+        if not (
+            " value(s) omitted; request include.per_run" in warning
+            or " value(s) omitted to fit the response budget" in warning
+        )
+    ]
+
+
+def _without_fail_case_omission_warning(warnings: list[str]) -> list[str]:
+    return [
+        warning
+        for warning in warnings
+        if " failing case(s) omitted from spec.fail_cases" not in warning
+    ]
+
+
+def _append_result_hint(data: dict[str, Any], detail: str) -> None:
+    current = data.get("hint")
+    if not isinstance(current, str) or not current:
+        data["hint"] = detail
+    elif detail not in current:
+        data["hint"] = f"{current} {detail}"
+
+
+def _legacy_passthrough(result: dict[str, Any], fields: list[str] | None) -> dict[str, Any]:
+    """Return a legacy public result verbatim when the requested view is recoverable."""
+    rendered = copy.deepcopy(result)
+    if not fields:
+        return rendered
+    unavailable: list[str] = [
+        "include.fields='value' requests the whole value block, whose nested "
+        "content was not retained by legacy lean rendering"
+        for field in fields
+        if split_field_path(field) == ["value"]
+    ]
+    for entry in rendered.get("results", {}).values():
+        surfaces: list[list[dict[str, Any]]] = []
+        values = entry.get("values")
+        if isinstance(values, list):
+            surfaces.append([row for row in values if isinstance(row, dict)])
+        per_run = entry.get("per_run")
+        if isinstance(per_run, dict) and isinstance(per_run.get("items"), list):
+            surfaces.append([row for row in per_run["items"] if isinstance(row, dict)])
+        records = [row for surface in surfaces for row in surface]
+        if records:
+            unavailable.extend(_projection_warnings(records, fields))
+            for field in fields:
+                segments = split_field_path(field)
+                if (
+                    len(segments) == 1
+                    and segments != ["value"]
+                    and not any(segments[0] in row for row in records)
+                ):
+                    unavailable.append(
+                        f"include.fields={field!r} names a row key absent from this legacy result"
+                    )
+    if unavailable:
+        raise ResultError(
+            "The stored attached analysis is a legacy rendered result and cannot "
+            "recover the requested projection: " + " ".join(unavailable)
+        )
+    return rendered
+
+
+def render_attached_analysis(
+    stored: dict[str, Any],
+    *,
+    fields: list[str] | None,
+    answer_channel: bool = False,
+    row_limit: int | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """Render one public attached result from a snapshot copy or legacy response."""
+    if not analysis_snapshot.is_snapshot(stored):
+        if analysis_snapshot.has_snapshot_kind(stored):
+            raise ResultError(
+                "The attached analysis snapshot version is unsupported by this build"
+            )
+        return _legacy_passthrough(stored, fields), True
+
+    data = copy.deepcopy(stored["answer_top"] if answer_channel else stored["top"])
+    _rebind_snapshot_cursors(data, fields)
+    rendered_results: dict[str, Any] = {}
+    for key, block in stored["results"].items():
+        entry = copy.deepcopy(block["answer_facts"] if answer_channel else block["facts"])
+        metric = entry.get("metric")
+        whole_value = metric == "waveform"
+        rows_emitted = False
+        if answer_channel and block["answer_rows"]:
+            rows = copy.deepcopy(block["answer_rows"])
+            if row_limit is not None:
+                rows = rows[:row_limit]
+            entry["values"] = [
+                _render_snapshot_row(row, fields, whole_value=whole_value) for row in rows
+            ]
+            rows_emitted = bool(rows)
+            if row_limit is not None:
+                entry["warnings"] = _without_value_omission_warning(entry.get("warnings", []))
+                omitted = int(block["answer_total"]) - len(rows)
+                if omitted > 0:
+                    entry["warnings"].append(
+                        f"{omitted} value(s) omitted; request include.per_run "
+                        "for callable pagination."
+                    )
+        elif not answer_channel and block["surface"] == "values":
+            rows = copy.deepcopy(block["answer_rows"])
+            if row_limit is not None:
+                rows = rows[:row_limit]
+            entry["values"] = [
+                _render_snapshot_row(row, fields, whole_value=whole_value) for row in rows
+            ]
+            rows_emitted = bool(rows)
+        elif not answer_channel and block["surface"] == "per_run":
+            page = copy.deepcopy(block["per_run"])
+            rows = page["items"]
+            if row_limit is not None:
+                rows = rows[:row_limit]
+            page["items"] = [
+                _render_snapshot_row(row, fields, whole_value=whole_value) for row in rows
+            ]
+            page["returned"] = len(rows)
+            offset = int(block["per_run_offset"])
+            page["truncated"] = offset + len(rows) < page["total"]
+            page["next_cursor"] = (
+                result_store.reencode_cursor(
+                    block["per_run_cursor_base"],
+                    view_fields=fields,
+                    intra_item=offset + len(rows),
+                )
+                if page["truncated"]
+                else None
+            )
+            entry["per_run"] = page
+            rows_emitted = bool(rows)
+            if page["next_cursor"] is not None:
+                data["cursor"] = page["next_cursor"]
+                data["next"] = {
+                    "result_set_id": data["result_set_id"],
+                    "cursor": page["next_cursor"],
+                }
+                data["outcome"] = "partial"
+                _append_result_hint(
+                    data,
+                    "Analysis is partial because the response budget reduced the "
+                    "per_run page; call analyze_results with "
+                    "continue={result_set_id, cursor} from 'next'.",
+                )
+        if row_limit is not None:
+            groups = entry.get("groups")
+            if isinstance(groups, list) and len(groups) > row_limit:
+                omitted = len(groups) - row_limit
+                entry["groups"] = groups[:row_limit]
+                entry.setdefault("warnings", []).append(
+                    f"{omitted} of {len(groups)} group(s) omitted to fit the response "
+                    "budget; re-ask without 'budget' for every group."
+                )
+            spec = entry.get("spec")
+            if isinstance(spec, dict) and isinstance(spec.get("fail_cases"), dict):
+                fail_cases = spec["fail_cases"]
+                _shrink_snapshot_page(fail_cases, row_limit)
+                entry["warnings"] = _without_fail_case_omission_warning(entry.get("warnings", []))
+                if fail_cases["truncated"]:
+                    entry["warnings"].append(
+                        f"{spec['fail_count'] - fail_cases['returned']} failing case(s) "
+                        "omitted from spec.fail_cases, which is not pageable; request "
+                        "include.per_run for callable pagination over every attributed "
+                        "value."
+                    )
+        if fields and rows_emitted:
+            entry.setdefault("warnings", []).extend(
+                _projection_warnings_from_presence(block["projection_presence"], fields)
+            )
+        if answer_channel:
+            spec = entry.get("spec")
+            if isinstance(spec, dict):
+                spec.pop("outliers", None)
+        rendered_results[key] = entry
+    data["results"] = rendered_results
+    if row_limit is not None:
+        coverage = data.get("coverage")
+        if isinstance(coverage, dict) and isinstance(coverage.get("missing_cases"), dict):
+            _shrink_snapshot_page(
+                coverage["missing_cases"],
+                row_limit,
+                offset=int(stored["missing_offset"]),
+                cursor_base=str(
+                    stored[
+                        "answer_coverage_cursor_base" if answer_channel else "coverage_cursor_base"
+                    ]
+                ),
+                fields=fields,
+            )
+            if coverage["missing_cases"]["next_cursor"] is not None:
+                _append_result_hint(
+                    data,
+                    "coverage.missing_cases is truncated; call analyze_results with "
+                    "continue={result_set_id, cursor: "
+                    "coverage.missing_cases.next_cursor} for the next page of "
+                    "missing cases (no work is replayed).",
+                )
+    if answer_channel:
+        data.pop("signals_available", None)
+        hashes = data.get("source_hashes")
+        if isinstance(hashes, list):
+            data["source_hashes"] = [
+                _pick(item, _RUN_IDENTITY_KEYS) for item in hashes if isinstance(item, dict)
+            ]
+    return data, False
+
+
+def columnarize_analysis_view(data: dict[str, Any]) -> None:
+    """Render every declared attached-analysis row surface positionally."""
+    for entry in data.get("results", {}).values():
+        response_budget.columnarize(entry, "reduced")
+        response_budget.columnarize(entry, "values")
+        per_run = entry.get("per_run")
+        if isinstance(per_run, dict):
+            response_budget.columnarize(per_run, "items")
+        spec = entry.get("spec")
+        if isinstance(spec, dict):
+            response_budget.columnarize(spec["fail_cases"], "items")
+    coverage = data.get("coverage")
+    if isinstance(coverage, dict) and isinstance(coverage.get("missing_cases"), dict):
+        response_budget.columnarize(coverage["missing_cases"], "items")
+
+
+def analysis_view_rows(data: dict[str, Any]) -> list[Any]:
+    """Expose the shared row inventory to enclosing receipt budget renderers."""
+    return _analysis_rows(data)
 
 
 def _analysis_rows(data: dict[str, Any]) -> list[Any]:
@@ -2687,30 +3129,12 @@ async def _negotiate_analysis(budget: int, a: _Assembly) -> types.CallToolResult
     return format_response(text, result.data)
 
 
-@registry.tool(
-    name="analyze_results",
-    description=(
-        "Measure finished simulation results: apply typed recipes to completed "
-        "jobs and/or .raw files and get values, reductions, group splits and spec "
-        "verdicts attributed to case, run and .step. One call spans many sources "
-        "and many metrics, so batch them instead of calling per metric. Work is "
-        "bounded by a compute budget; a partial response returns a result_set_id "
-        "and cursor to resume with 'continue'. On a wide sweep set include.fields "
-        "to return only the numbers you need."
-    ),
-    input_model=AnalyzeResultsInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-    ),
-    profiles=("consolidated",),
-    output_schema=OUTPUT_SCHEMA,
-)
-async def handle_analyze_results(
-    args: AnalyzeResultsInput, state: SessionState
-) -> types.CallToolResult:
+async def _evaluate_analysis(
+    args: AnalyzeResultsInput,
+    state: SessionState,
+    *,
+    per_run_reservoir_limit: int | None = None,
+) -> _Assembly:
     loop = asyncio.get_running_loop()
     call_started = loop.time()
     call_deadline = call_started + state.config.analysis_budget_s
@@ -2724,6 +3148,8 @@ async def handle_analyze_results(
         if args.continuation is None and args.include.per_run is not None
         else None
     )
+    cursor_has_view = False
+    cursor_fields: list[str] | None = None
     if args.continuation is None and page_cursor is None:
         item = await _create_result_set(args, state, call_deadline, digest_cache)
         position = 0
@@ -2738,6 +3164,7 @@ async def handle_analyze_results(
         position, intra_item, missing_offset = result_store.decode_cursor(
             args.continuation.cursor, item
         )
+        cursor_has_view, cursor_fields = result_store.cursor_view(args.continuation.cursor)
     else:
         assert page_cursor is not None
         item = await asyncio.to_thread(
@@ -2745,7 +3172,24 @@ async def handle_analyze_results(
             result_store.cursor_result_set_id(page_cursor),
             state.working_dir,
         )
-        if item.inputs.get("request_hash") != _request_hash(args):
+        cursor_has_view, cursor_fields = result_store.cursor_view(page_cursor)
+        stored_include = AnalyzeInclude.model_validate(item.inputs.get("include", {}))
+        inherited_fields = cursor_fields if cursor_has_view else stored_include.fields
+        if "fields" in args.include.model_fields_set and args.include.fields != inherited_fields:
+            raise ResultError(
+                "The per_run cursor carries a different include.fields view; replay "
+                "page 1 with the new fields projection instead of changing fields on "
+                "a cursor call."
+            )
+        request_matches = item.inputs.get("request_hash") == _request_hash(args)
+        if not request_matches and not cursor_has_view:
+            legacy_include = args.include.model_copy(update={"fields": stored_include.fields})
+            legacy_args = args.model_copy(update={"include": legacy_include})
+            request_matches = item.inputs.get("request_hash") == _request_hash(
+                legacy_args,
+                include_fields=True,
+            )
+        if not request_matches:
             raise ResultError(
                 "The per_run cursor does not match these sources, recipes, grouping, "
                 "and include options."
@@ -2761,6 +3205,10 @@ async def handle_analyze_results(
     skipped: list[tuple[int, dict[str, Any]]] = []
     observations = list(item.inputs.get("observations", []))
     include = AnalyzeInclude.model_validate(item.inputs.get("include", {}))
+    if args.continuation is not None or page_cursor is not None:
+        include = include.model_copy(
+            update={"fields": cursor_fields if cursor_has_view else include.fields}
+        )
     group_by = list(item.inputs.get("group_by", []))
     declared_labels = {
         str(source.get("label"))
@@ -2916,7 +3364,11 @@ async def handle_analyze_results(
         # Per_run pagination: decided on record count so the break can stop the
         # call here; the page and its cursor are built during assembly below,
         # which re-decides this against whatever limit it assembles at.
-        per_run_limit = include.per_run.limit if include.per_run else None
+        # Attached capture raises only this evaluation bound: the result set
+        # keeps the caller's requested limit, so its cursor resumes that view.
+        per_run_limit = include.per_run.limit if include.per_run is not None else None
+        if per_run_limit is not None and per_run_reservoir_limit is not None:
+            per_run_limit = per_run_reservoir_limit
         if (
             per_run_limit is not None
             and (records or not item_failures)
@@ -3009,7 +3461,7 @@ async def handle_analyze_results(
             except LTSpiceMCPError:
                 signals[run.manifest_id] = []
 
-    assembly = _Assembly(
+    return _Assembly(
         item=item,
         processed=processed,
         runs=runs,
@@ -3024,7 +3476,47 @@ async def handle_analyze_results(
         deferred=deferred,
         signals=signals,
     )
+
+
+async def capture_attached_analysis(
+    args: AnalyzeResultsInput, state: SessionState
+) -> dict[str, Any]:
+    """Evaluate once and retain the neutral bounded snapshot for a job sidecar."""
+    return _snapshot_from_assembly(
+        await _evaluate_analysis(
+            args,
+            state,
+            per_run_reservoir_limit=MAX_PAGE_SIZE,
+        )
+    )
+
+
+@registry.tool(
+    name="analyze_results",
+    description=(
+        "Measure finished simulation results: apply typed recipes to completed "
+        "jobs and/or .raw files and get values, reductions, group splits and spec "
+        "verdicts attributed to case, run and .step. One call spans many sources "
+        "and many metrics, so batch them instead of calling per metric. Work is "
+        "bounded by a compute budget; a partial response returns a result_set_id "
+        "and cursor to resume with 'continue'. On a wide sweep set include.fields "
+        "to return only the numbers you need."
+    ),
+    input_model=AnalyzeResultsInput,
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+    profiles=("consolidated",),
+    output_schema=OUTPUT_SCHEMA,
+)
+async def handle_analyze_results(
+    args: AnalyzeResultsInput, state: SessionState
+) -> types.CallToolResult:
+    assembly = await _evaluate_analysis(args, state)
     if args.budget is None:
-        data, text = _assemble(assembly, None, _Limits.of(include))
+        data, text = _assemble(assembly, None, _Limits.of(assembly.include))
         return format_response(text, data)
     return await _negotiate_analysis(args.budget, assembly)

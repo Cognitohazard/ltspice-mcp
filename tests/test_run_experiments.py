@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
 import json
 from pathlib import Path
@@ -13,14 +14,16 @@ import jsonschema
 import pytest
 from pydantic import ValidationError
 
-from ltspice_mcp.lib import experiment_store, wsl
+from ltspice_mcp.lib import experiment_store, recent, response_budget, result_store, wsl
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
+from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments as experiments_mod
 from ltspice_mcp.tools._base import _build_input_schema
+from ltspice_mcp.tools.analyze import AnalyzeResultsInput
 from ltspice_mcp.tools.experiments import (
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     AnalysisPerRun,
@@ -61,6 +64,24 @@ def test_attached_per_run_limit_shares_the_analyze_page_cap():
                 },
             }
         )
+
+
+def test_wait_caps_keep_the_submission_and_control_plane_contracts():
+    run_schema = _build_input_schema(RunExperimentsInput)
+    execution_schema = resolve_local_ref(
+        run_schema,
+        run_schema["properties"]["execution"],
+    )
+    jobs_schema = _build_input_schema(JobsInput)
+
+    assert execution_schema["properties"]["wait_s"]["maximum"] == 120
+    assert jobs_schema["properties"]["timeout_s"]["maximum"] == 300
+
+    with pytest.raises(ValidationError) as excinfo:
+        experiments_mod.ExperimentExecution.model_validate({"wait_s": 121})
+    message = str(excinfo.value)
+    assert 'jobs(action="wait"' in message
+    assert "timeout_s<=300" in message
 
 
 def test_variation_schema_keeps_discriminated_union_through_defs():
@@ -331,6 +352,32 @@ class TestReceiptThenDwell:
         assert data["job_id"] in state_with_sim.experiment_jobs
         assert data["control_token"]
 
+    async def test_budget_renderer_failure_after_submit_keeps_minimal_handles(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        fake_simulator(monkeypatch)
+
+        async def exploding_renderer(*_args, **_kwargs):
+            raise RuntimeError("budget renderer exploded")
+
+        monkeypatch.setattr(experiments_mod, "_render_run_receipt", exploding_renderer)
+        deck = _deck(work_dir / "budget-render-fail.cir")
+
+        result = await handle_run_experiments(
+            _args(deck, "budget-render-fail", budget=500),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert result.isError
+        assert data["error"]["commit_state"] == "committed"
+        assert "budget renderer exploded" in data["error"]["message"]
+        assert data["job_id"] in state_with_sim.experiment_jobs
+        assert data["control_token"]
+
 
 @pytest.mark.asyncio
 class TestIdempotency:
@@ -368,13 +415,29 @@ class TestIdempotency:
         )
 
         result = await handle_run_experiments(
-            _args(deck, "conflicting-payload", lint="off"),
+            _args(deck, "conflicting-payload", lint="off", budget=500),
             state_with_sim,
         )
         data = _assert_schema(result)
 
         assert result.isError
-        assert data["error"]["code"] == "idempotency_conflict"
+        assert set(data["error"]) == {
+            "code",
+            "message",
+            "stage",
+            "retryable",
+            "commit_state",
+        }
+        assert data["error"] == {
+            "code": "idempotency_conflict",
+            "message": (
+                "request_id 'conflicting-payload' was already used for a different "
+                "request payload or canonicalizer version"
+            ),
+            "stage": "submission",
+            "retryable": False,
+            "commit_state": "not_started",
+        }
         assert "control_token" not in data
         assert len(submissions) == 1
 
@@ -1164,6 +1227,329 @@ class TestAttachedAnalysis:
         assert {row["run_index"] for row in entry["per_run"]["items"]} == {0, 1}
         assert result["signals_available"]
 
+    async def test_replay_projects_nested_content_from_the_neutral_snapshot(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached-neutral.cir")
+        base = {
+            "recipes": [{"key": "summary", "metric": "summary"}],
+        }
+
+        lean = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "attached-neutral", analyze=base),
+                state_with_sim,
+            )
+        )
+        wide = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-neutral",
+                    analyze={**base, "include": {"fields": ["value"]}},
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert wide["request_id"] == lean["request_id"]
+        assert any(item["code"] == "idempotent_replay" for item in wide["observations"])
+
+        lean_value = lean["analysis"]["result"]["results"]["summary"]["values"][0]["value"]
+        wide_value = wide["analysis"]["result"]["results"]["summary"]["values"][0]["value"]
+        assert not any(isinstance(value, (dict, list)) for value in lean_value.values())
+        assert any(isinstance(value, (dict, list)) for value in wide_value.values())
+        missing = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-neutral",
+                    analyze={
+                        **base,
+                        "include": {"fields": ["value.not_recorded"]},
+                    },
+                ),
+                state_with_sim,
+            )
+        )
+        warning = missing["analysis"]["result"]["results"]["summary"]["warnings"][-1]
+        assert "value.not_recorded" in warning
+        assert "absent from every row" in warning
+        assert "keys present" in warning
+        job = state_with_sim.experiment_jobs[lean["job_id"]]
+        assert job.analysis.result is not None
+        assert job.analysis.result["kind"] == "ltspice-mcp/attached-analysis-snapshot"
+        assert job.analysis.request is not None
+        assert job.analysis.request["include"] is None
+
+    async def test_projection_survives_the_attached_continuation_and_replay_view_change(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached-pages.cir")
+        analyze_request = {
+            "recipes": [{"key": "summary", "metric": "summary"}],
+            "include": {"per_run": {"limit": 1}, "fields": ["value"]},
+        }
+        first = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-pages",
+                    variations=[{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}],
+                    analyze=analyze_request,
+                ),
+                state_with_sim,
+            )
+        )
+        result = first["analysis"]["result"]
+        page = result["results"]["summary"]["per_run"]
+        assert page["returned"] == 1 and page["next_cursor"] is not None
+        assert set(page["items"][0]) == {"value"}
+        assert any(isinstance(value, (dict, list)) for value in page["items"][0]["value"].values())
+
+        continuation = AnalyzeResultsInput.model_validate(
+            {
+                "continue": {
+                    "result_set_id": result["result_set_id"],
+                    "cursor": page["next_cursor"],
+                }
+            }
+        )
+        continued = await analyze_mod.handle_analyze_results(continuation, state_with_sim)
+        assert continued.structuredContent is not None
+        continued_page = continued.structuredContent["results"]["summary"]["per_run"]
+        assert set(continued_page["items"][0]) == {"value"}
+        assert continued_page["items"][0] == page["items"][0]
+        assert any(
+            isinstance(value, (dict, list))
+            for value in continued_page["items"][0]["value"].values()
+        )
+
+        changed = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-pages",
+                    variations=[{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}],
+                    analyze={
+                        **analyze_request,
+                        "include": {"per_run": {"limit": 1}, "fields": ["case_id"]},
+                    },
+                ),
+                state_with_sim,
+            )
+        )
+        changed_cursor = changed["analysis"]["result"]["results"]["summary"]["per_run"][
+            "next_cursor"
+        ]
+        assert result_store.cursor_view(changed_cursor) == (True, ["case_id"])
+
+    async def test_budget_answer_reconstructs_values_independent_of_requested_page(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        recorded_fixture_simulator(monkeypatch)
+        original_trace_names = OffsetAwareRawRead.get_trace_names
+
+        def wide_trace_names(raw: OffsetAwareRawRead) -> list[str]:
+            return [
+                *original_trace_names(raw),
+                *(f"budget_trace_{index:03d}" for index in range(500)),
+            ]
+
+        monkeypatch.setattr(OffsetAwareRawRead, "get_trace_names", wide_trace_names)
+        deck = _deck(work_dir / "attached-answer.cir")
+        variations = [{"kind": "assign", "assign": {"R1": ["1k", "2k", "3k"]}}]
+        recipe = [{"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}]
+        expected_result = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-answer-expected",
+                    variations=variations,
+                    analyze={"recipes": recipe},
+                ),
+                state_with_sim,
+            )
+        )["analysis"]["result"]
+        expected = expected_result["results"]["vout"]["values"]
+
+        request = _args(
+            deck,
+            "attached-answer-budget",
+            variations=variations,
+            analyze={
+                "recipes": recipe,
+                "include": {
+                    "per_run": {"limit": 1},
+                    "signals_available": True,
+                },
+            },
+        )
+        full = _assert_schema(await handle_run_experiments(request, state_with_sim))
+        replay = _assert_schema(await handle_run_experiments(request, state_with_sim))
+        assert any(item["code"] == "idempotent_replay" for item in replay["observations"])
+        await state_with_sim.job_registry.drain_pending()
+        job = state_with_sim.experiment_jobs[full["job_id"]]
+        assert job.analysis.result is not None
+        snapshot_identity = job.analysis.result
+        pristine_snapshot = copy.deepcopy(job.analysis.result)
+        pristine_job = copy.deepcopy(experiment_store.serialize_job(job))
+        trim_rung = response_budget.Rung(
+            response_budget.RUNG_TRIM,
+            budget=10_000,
+            measured=0,
+            reserve=experiments_mod._RUN_BUDGET_NOTES.reserve,
+        )
+        answer_rung = dataclasses.replace(trim_rung, level=response_budget.RUNG_ANSWER)
+        trim_view = experiments_mod._job_payload(job, job.control_token)
+        experiments_mod._degrade_run_receipt(trim_view, trim_rung)
+        answer_view = experiments_mod._job_payload(
+            job,
+            job.control_token,
+            analysis_answer_channel=True,
+        )
+        experiments_mod._degrade_run_receipt(answer_view, answer_rung)
+        trim_size = response_budget.estimate_tokens(trim_view)
+        answer_size = response_budget.estimate_tokens(answer_view)
+        assert answer_size < trim_size
+        budget = answer_size + experiments_mod._RUN_BUDGET_NOTES.reserve
+        assert trim_size > budget - experiments_mod._RUN_BUDGET_NOTES.reserve
+        answer = _assert_schema(
+            await handle_run_experiments(
+                request.model_copy(update={"budget": budget}),
+                state_with_sim,
+            )
+        )
+        assert job.analysis.result is snapshot_identity
+        assert job.analysis.result == pristine_snapshot
+        assert experiment_store.serialize_job(job) == pristine_job
+        note = next(
+            item for item in answer["observations"] if item.get("code") == "budget_truncated"
+        )
+        assert "(answer)" in note["detail"]
+        answer_result = answer["analysis"]["result"]
+        entry = answer_result["results"]["vout"]
+        values = entry["values"]
+        columns = entry.get("values_columns")
+        if columns is not None:
+            values = [dict(zip(columns, row, strict=True)) for row in values]
+        assert values == expected
+        assert answer_result["outcome"] == expected_result["outcome"]
+        assert answer_result["coverage"] == expected_result["coverage"]
+        assert answer_result["next"] is None
+        assert answer_result["cursor"] is None
+        assert "signals_available" not in answer_result
+        assert "signals_available" in job.analysis.result["top"]
+        restored = _assert_schema(await handle_run_experiments(request, state_with_sim))
+        assert restored["analysis"]["result"]["signals_available"]
+
+    async def test_v1_public_result_survives_restart_replay_and_foreign_status(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        monkeypatch.setenv("LTSPICE_MCP_HOME", str(work_dir / "state"))
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached-v1.cir")
+        request = _args(
+            deck,
+            "attached-v1",
+            analyze={
+                "recipes": [{"key": "summary", "metric": "summary"}],
+                "include": {"signals_available": True},
+            },
+        )
+        first = _assert_schema(await handle_run_experiments(request, state_with_sim))
+        legacy_result = first["analysis"]["result"]
+        await state_with_sim.job_registry.drain_pending()
+
+        record = experiment_store.record_path(first["job_id"], work_dir)
+        stored = json.loads(record.read_text())
+        stored["schema_version"] = 1
+        stored["analysis"]["result"] = legacy_result
+        record.write_text(json.dumps(stored))
+        recent.touch(deck)
+
+        restarted = SessionState.create(
+            state_with_sim.config,
+            available=state_with_sim.available_simulators,
+        )
+        foreign = SessionState.create(
+            state_with_sim.config,
+            available=state_with_sim.available_simulators,
+        )
+        assert restarted.job_registry.preload_recent() == 1
+        assert foreign.job_registry.preload_recent() == 1
+
+        replay = _assert_schema(await handle_run_experiments(request, restarted))
+        assert replay["analysis"]["result"] == legacy_result
+        assert any(
+            item["code"] == "legacy_analysis_result" for item in replay["analysis"]["observations"]
+        )
+
+        status_call = await handle_jobs(
+            JobsInput.model_validate({"action": "status", "job_id": first["job_id"]}),
+            foreign,
+        )
+        status = status_call.structuredContent
+        assert status is not None
+        assert status["analysis"]["result"] == legacy_result
+        assert any(
+            item["code"] == "legacy_analysis_result" for item in status["analysis"]["observations"]
+        )
+
+        assert request.analyze is not None and request.analyze.include is not None
+        available_projection = await handle_run_experiments(
+            request.model_copy(
+                update={
+                    "analyze": request.analyze.model_copy(
+                        update={
+                            "include": request.analyze.include.model_copy(
+                                update={"fields": ["case_id"]}
+                            )
+                        }
+                    )
+                }
+            ),
+            restarted,
+        )
+        available_data = _assert_schema(available_projection)
+        assert not available_projection.isError
+        assert available_data["analysis"]["result"] == legacy_result
+
+        projected = await handle_run_experiments(
+            request.model_copy(
+                update={
+                    "analyze": request.analyze.model_copy(
+                        update={
+                            "include": request.analyze.include.model_copy(
+                                update={"fields": ["value"]}
+                            )
+                        }
+                    )
+                }
+            ),
+            restarted,
+        )
+        projected_data = _assert_schema(projected)
+        assert projected.isError
+        assert "legacy rendered result" in projected_data["error"]["message"]
+
+        intact = _assert_schema(await handle_run_experiments(request, restarted))
+        assert intact["analysis"]["result"] == legacy_result
+
     async def test_successful_analysis_does_not_report_partial(
         self,
         state_with_sim: SessionState,
@@ -1202,7 +1588,7 @@ class TestAttachedAnalysis:
         async def exploding_engine(args, state):
             raise ValueError("analysis engine failure injected by test")
 
-        monkeypatch.setattr(analyze_mod, "handle_analyze_results", exploding_engine)
+        monkeypatch.setattr(analyze_mod, "capture_attached_analysis", exploding_engine)
         data = _assert_schema(
             await handle_run_experiments(
                 _args(deck, "attached-bad-request", analyze=analyze),
@@ -1231,13 +1617,13 @@ class TestAttachedAnalysis:
         recorded_fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "attached-wait.cir")
         released = asyncio.Event()
-        engine = analyze_mod.handle_analyze_results
+        engine = analyze_mod.capture_attached_analysis
 
         async def gated(args, state):
             await released.wait()
             return await engine(args, state)
 
-        monkeypatch.setattr(analyze_mod, "handle_analyze_results", gated)
+        monkeypatch.setattr(analyze_mod, "capture_attached_analysis", gated)
 
         receipt = _assert_schema(
             await handle_run_experiments(
@@ -1681,11 +2067,9 @@ class TestReceiptWeight:
     def test_the_fingerprint_covers_exactly_the_execution_arguments(self):
         """A new presentation field must not silently invalidate stored receipts.
 
-        Any change to what the fingerprint covers must arrive together with a
-        CANONICALIZER_VERSION bump (the version gates replay, so old records
-        conflict loudly instead of mis-hashing silently). Pinning the covered
-        key set makes the next covered-set change fail here instead of in the
-        field.
+        A canonicalizer bump belongs only to a changed representation of a
+        previously valid request. Pinning the covered key set makes a real
+        execution-field change fail here instead of silently changing replay.
         """
         from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
 
@@ -1716,6 +2100,88 @@ class TestReceiptWeight:
             }
         )
         assert canonical_fingerprint(model) == canonical_fingerprint(loud)
+
+    def test_day_one_presentation_fields_leave_old_canonical_bytes_unchanged(self):
+        assert experiment_store.CANONICALIZER_VERSION == 2
+        model = RunExperimentsInput.model_validate(
+            {
+                "request_id": "stable-bytes",
+                "circuits": [{"path": "/tmp/a.cir", "id": "d"}],
+                "analyze": {
+                    "recipes": [{"key": "summary", "metric": "summary"}],
+                    "include": {"per_run": {"limit": 3}},
+                },
+            }
+        )
+        current = model.model_dump(
+            mode="json",
+            exclude_unset=False,
+            exclude=RunExperimentsInput.PRESENTATION_FIELDS,
+        )
+        legacy = model.model_dump(mode="json", exclude_unset=False)
+        legacy.pop("budget")
+        legacy["analyze"]["include"].pop("fields")
+        legacy["execution"].pop("wait_s")
+        legacy.pop("provenance")
+        legacy.pop("run_fields")
+
+        def encode(value: Any) -> bytes:
+            return json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+
+        assert encode(current) == encode(legacy)
+
+    def test_budget_and_attached_fields_do_not_change_the_fingerprint(self):
+        from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
+
+        base = {
+            "request_id": "presentation-only",
+            "circuits": [{"path": "/tmp/a.cir", "id": "d"}],
+            "analyze": {
+                "recipes": [{"key": "summary", "metric": "summary"}],
+                "include": {"per_run": {"limit": 3}},
+            },
+        }
+        lean = RunExperimentsInput.model_validate({**base, "budget": 500})
+        roomy = RunExperimentsInput.model_validate({**base, "budget": 5000})
+        wide = RunExperimentsInput.model_validate(
+            {
+                **base,
+                "budget": 5000,
+                "analyze": {
+                    **base["analyze"],
+                    "include": {
+                        "per_run": {"limit": 3},
+                        "fields": ["value"],
+                    },
+                },
+            }
+        )
+        assert canonical_fingerprint(lean) == canonical_fingerprint(roomy)
+        assert canonical_fingerprint(lean) == canonical_fingerprint(wide)
+
+        without_include = RunExperimentsInput.model_validate(
+            {
+                "request_id": "presentation-only-container",
+                "circuits": [{"path": "/tmp/a.cir", "id": "d"}],
+                "analyze": {"recipes": [{"key": "summary", "metric": "summary"}]},
+            }
+        )
+        fields_only = RunExperimentsInput.model_validate(
+            {
+                "request_id": "presentation-only-container",
+                "circuits": [{"path": "/tmp/a.cir", "id": "d"}],
+                "analyze": {
+                    "recipes": [{"key": "summary", "metric": "summary"}],
+                    "include": {"fields": ["value"]},
+                },
+            }
+        )
+        assert canonical_fingerprint(without_include) == canonical_fingerprint(fields_only)
 
     def test_the_fingerprint_ignores_the_dwell_but_not_the_rest_of_execution(self):
         """execution.wait_s bounds only the response (the job is durable either

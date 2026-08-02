@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -11,12 +12,19 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal, Self
 
 from mcp import types
-from pydantic import Field, ValidationError, model_validator
+from pydantic import (
+    Field,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+    model_validator,
+)
 
 from ltspice_mcp.errors import (
     JobNotFoundError,
     LTSpiceMCPError,
     PathSecurityError,
+    ResultError,
     SimulationError,
     compact_validation_error,
 )
@@ -84,12 +92,13 @@ from ltspice_mcp.tools._base import (
     registry,
     resolve_run_simulator,
     resolve_runnable_netlist,
-    result_text,
     safe_path,
 )
 from ltspice_mcp.tools.analyze import MAX_PAGE_SIZE
 
 _RUN_PAGE_LIMIT = 50
+SUBMISSION_DWELL_CAP_S = 120.0
+JOBS_WAIT_CAP_S = 300.0
 # The source label an attached analysis analyzes its own experiment under.
 _ATTACHED_ANALYSIS_LABEL = "experiment"
 _TERMINAL_EXPERIMENT_STATUSES = frozenset(
@@ -134,13 +143,31 @@ class ExperimentExecution(StrictModel):
     wait_s: float = Field(
         default=60.0,
         ge=0.0,
-        le=120.0,
+        le=SUBMISSION_DWELL_CAP_S,
         description=(
-            "How long this call waits for the job before returning a receipt, "
-            "0-120s. It bounds the RESPONSE only: the job is durable and keeps "
-            "running past it, and 0 returns the receipt immediately."
+            "Dwell 0-120s before returning; the durable job keeps running. "
+            "Continue with jobs(action='wait'); 0 returns immediately."
         ),
     )
+
+    @field_validator("wait_s", mode="wrap")
+    @classmethod
+    def _wait_s_names_the_continuation_route(
+        cls,
+        value: Any,
+        handler: ValidatorFunctionWrapHandler,
+    ) -> float:
+        try:
+            return handler(value)
+        except ValidationError as exc:
+            if any(error["type"] == "less_than_equal" for error in exc.errors()):
+                raise ValueError(
+                    f"execution.wait_s cannot exceed {SUBMISSION_DWELL_CAP_S:g}s; "
+                    "submit within that dwell, then continue with "
+                    f'jobs(action="wait", ..., timeout_s<={JOBS_WAIT_CAP_S:g})'
+                ) from exc
+            raise
+
     run_timeout_s: float | None = Field(
         default=None,
         gt=0.0,
@@ -208,6 +235,15 @@ class AnalysisInclude(StrictModel):
             "run — a discovery aid, not something to leave on."
         ),
     )
+    fields: list[str] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=32,
+        description=(
+            "Dotted row paths to keep on per_run/values rows, using "
+            "analyze_results include.fields grammar. Presentation only."
+        ),
+    )
 
 
 class AttachedAnalysis(StrictModel):
@@ -227,11 +263,7 @@ class AttachedAnalysis(StrictModel):
     )
     include: AnalysisInclude | None = Field(
         default=None,
-        description=(
-            "Optional analysis blocks. Field projection (analyze_results "
-            "include.fields) is not available on the attached stage — for that, "
-            "analyze the finished job with analyze_results."
-        ),
+        description="Optional per-run, outlier, signal-listing, and row-view controls.",
     )
 
 
@@ -242,14 +274,29 @@ class RunExperimentsInput(ToolInput):
     # is excluded the same way: it bounds only this response's dwell (the job
     # is durable either way), so a different dwell is the same experiment —
     # which is what lets the CLI on-ramp submit with wait_s=0 and still hand
-    # back a receipt an explicit run-experiments call can replay. Changing
-    # this exclude set changes the canonical bytes: bump
-    # experiment_store.CANONICALIZER_VERSION with it.
+    # back a receipt an explicit run-experiments call can replay. A version
+    # bump is required only when a previously valid request's canonical bytes
+    # change; a presentation field excluded from its first valid day changes no
+    # old bytes and does not bump the canonicalizer.
     PRESENTATION_FIELDS: ClassVar[dict[str, Any]] = {
         "provenance": True,
         "run_fields": True,
+        "budget": True,
         "execution": {"wait_s"},
+        "analyze": {"include": {"fields"}},
     }
+
+    def canonical_fingerprint_payload(self) -> dict[str, Any]:
+        """Exclude receipt fields without changing old include=None bytes."""
+        payload = self.model_dump(
+            mode="json",
+            exclude_unset=False,
+            exclude=self.PRESENTATION_FIELDS,
+        )
+        include = self.analyze.include if self.analyze is not None else None
+        if include is not None and include.model_fields_set == {"fields"}:
+            payload["analyze"]["include"] = None
+        return payload
 
     request_id: str = Field(
         default_factory=lambda: generate_id("req"),
@@ -348,6 +395,15 @@ class RunExperimentsInput(ToolInput):
             "name as '\\.'."
         ),
     )
+    budget: int | None = Field(
+        default=None,
+        ge=response_budget.BUDGET_MIN_TOKENS,
+        description=(
+            "Approximate response-token cap (minimum 500). Uses trim, answer, "
+            "columnar, then smaller pages; facts remain whole and an unmet floor "
+            "is reported. Presentation only; it does not change the fingerprint."
+        ),
+    )
 
 
 _FINDING_SCHEMA: dict[str, Any] = {
@@ -424,6 +480,36 @@ _ARTIFACT_SCHEMA: dict[str, Any] = {
     "required": ["path", "content_type", "sha256", "bytes"],
 }
 
+_RUN_RECORD_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "case_id": {"type": "string"},
+        "run_index": {"type": "integer"},
+        "circuit": {"type": "string"},
+        "assignments": {"type": "object"},
+        "status": {"type": "string"},
+        "raw": {"type": ["string", "null"]},
+        "log": {"type": ["string", "null"]},
+    },
+    # run_fields may project away any key, so the shared object/columnar row
+    # fragment deliberately requires none of them.
+}
+
+_RUNS_PAGE_SCHEMA: dict[str, Any] = response_budget.row_page_schema(
+    {
+        "type": "object",
+        "properties": {
+            "items": {"type": "array", "items": _RUN_RECORD_SCHEMA},
+            "total": {"type": "integer"},
+            "returned": {"type": "integer"},
+            "truncated": {"type": "boolean"},
+            "next_cursor": {"type": ["string", "null"]},
+        },
+        "required": ["items", "total", "returned", "truncated", "next_cursor"],
+    },
+    item_schema=_RUN_RECORD_SCHEMA,
+)
+
 RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -495,36 +581,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                 "required": ["circuit", "findings"],
             },
         },
-        "runs": {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "case_id": {"type": "string"},
-                            "run_index": {"type": "integer"},
-                            "circuit": {"type": "string"},
-                            "assignments": {"type": "object"},
-                            "status": {"type": "string"},
-                            "raw": {"type": ["string", "null"]},
-                            "log": {"type": ["string", "null"]},
-                        },
-                        # Nothing is required: 'run_fields' lets the caller keep
-                        # only the keys it wants, so any key here is one a
-                        # projection may legitimately have dropped. Declaring
-                        # them required would make a projected receipt violate
-                        # this tool's own schema.
-                    },
-                },
-                "total": {"type": "integer"},
-                "returned": {"type": "integer"},
-                "truncated": {"type": "boolean"},
-                "next_cursor": {"type": ["string", "null"]},
-            },
-            "required": ["items", "total", "returned", "truncated", "next_cursor"],
-        },
+        "runs": _RUNS_PAGE_SCHEMA,
         "analysis": {
             "type": "object",
             "properties": {
@@ -624,6 +681,12 @@ async def handle_run_experiments(
                 state,
                 provenance=args.provenance,
                 run_fields=args.run_fields,
+                analysis_fields=(
+                    args.analyze.include.fields
+                    if args.analyze is not None and args.analyze.include is not None
+                    else None
+                ),
+                budget=args.budget,
             )
 
         simulator = resolve_run_simulator(args.execution.simulator, state)
@@ -654,7 +717,7 @@ async def handle_run_experiments(
                 simulator,
             )
         except DeckStagingError as exc:
-            return _routing_failure_response(args, circuit_inputs, exc, projected)
+            return await _routing_failure_response(args, circuit_inputs, exc, projected)
         await asyncio.to_thread(route.output_folder.mkdir, parents=True, exist_ok=True)
 
         cases: list[ExperimentCase] = []
@@ -698,6 +761,14 @@ async def handle_run_experiments(
             if args.analyze is not None
             else None
         )
+        if analysis_request is not None and isinstance(analysis_request.get("include"), dict):
+            analysis_request["include"].pop("fields", None)
+            if (
+                args.analyze is not None
+                and args.analyze.include is not None
+                and args.analyze.include.model_fields_set == {"fields"}
+            ):
+                analysis_request["include"] = None
         runner = state.runners.get_experiment_runner(
             loop=asyncio.get_running_loop(),
             simulator_class=simulator,
@@ -734,44 +805,59 @@ async def handle_run_experiments(
                 lint_by_circuit=lint_by_circuit,
                 provenance=args.provenance,
                 run_fields=args.run_fields,
+                analysis_fields=(
+                    args.analyze.include.fields
+                    if args.analyze is not None and args.analyze.include is not None
+                    else None
+                ),
+                budget=args.budget,
             )
         except Exception as exc:
-            return _post_submit_error_response(receipt, exc, lint_by_circuit)
+            return await _post_submit_error_response(
+                receipt,
+                exc,
+                lint_by_circuit,
+                budget=args.budget,
+            )
     except IdempotencyConflictError as exc:
-        return _error_response(
+        return await _error_response(
             args.request_id,
             code="idempotency_conflict",
             message=str(exc),
             stage="submission",
             retryable=False,
             commit_state="not_started",
+            budget=args.budget,
         )
     except VariationError as exc:
-        return _error_response(
+        return await _error_response(
             args.request_id,
             code=exc.code,
             message=str(exc),
             stage="variation",
             retryable=False,
             commit_state="not_started",
+            budget=args.budget,
         )
     except PathSecurityError as exc:
-        return _error_response(
+        return await _error_response(
             args.request_id,
             code="path_denied",
             message=str(exc),
             stage="resolution",
             retryable=False,
             commit_state="not_started",
+            budget=args.budget,
         )
-    except (SimulationError, DeckStagingError, OSError, ValueError) as exc:
-        return _error_response(
+    except (SimulationError, ResultError, DeckStagingError, OSError, ValueError) as exc:
+        return await _error_response(
             args.request_id,
             code=getattr(exc, "code", "submission_failed"),
             message=str(exc),
             stage="submission",
             retryable=True,
             commit_state="not_started",
+            budget=args.budget,
         )
 
 
@@ -952,8 +1038,9 @@ async def _prepare_circuit(
 def _attached_analysis_payload(job_id: str, request: dict[str, Any]) -> dict[str, Any]:
     """The analyze_results request an attached block expands to.
 
-    One builder for the submission pre-flight AND the post-run analysis
-    stage, so what the pre-flight validates is byte-for-byte what will run.
+    One builder serves submission pre-flight and post-run execution. Pre-flight
+    also validates presentation-only fields; the persisted execution request
+    has already removed them before the post-run call reaches this builder.
     """
     payload: dict[str, Any] = {
         "sources": [
@@ -1017,14 +1104,7 @@ def _attached_analysis_callback(state: SessionState) -> AnalysisCallback:
         # Resolved on the module, not bound at import: the analysis stage is
         # patched through ``tools.analyze`` in tests, and the attribute lookup
         # is what keeps that seam where the engine actually lives.
-        result = await analyze.handle_analyze_results(args, state)
-        data = result.structuredContent
-        if result.isError or data is None:
-            raise SimulationError(
-                result_text(result, joined=True)
-                or "Attached analysis returned no structured result"
-            )
-        return data
+        return await analyze.capture_attached_analysis(args, state)
 
     return run_attached_analysis
 
@@ -1097,6 +1177,93 @@ async def _load_matching_replay(
     return ExperimentReceipt(job=job, replayed=True, control_token=job.control_token)
 
 
+_RunReceiptBuilt = tuple[dict[str, Any], str]
+_RunReceiptBuild = Callable[[response_budget.Rung | None, int], _RunReceiptBuilt]
+
+_TRIM_REMOVE_RUN_RECEIPT: tuple[str, ...] = ("analysis",)
+_TRIM_EMPTY_RUN_RECEIPT: tuple[str, ...] = ("source",)
+
+_RUN_BUDGET_NOTES = response_budget.Notes(
+    cut="presentation was reduced; no run, failure, or analysis fact was dropped.",
+    route="Re-ask without 'budget', or continue through the returned cursor/jobs route.",
+)
+
+
+def _run_receipt_rows(data: dict[str, Any]) -> list[Any]:
+    rows: list[Any] = []
+    runs = data.get("runs")
+    if isinstance(runs, dict) and isinstance(runs.get("items"), list):
+        rows.extend(runs["items"])
+    analysis_block = data.get("analysis")
+    if isinstance(analysis_block, dict):
+        result = analysis_block.get("result")
+        if isinstance(result, dict):
+            rows.extend(analyze.analysis_view_rows(result))
+    return rows
+
+
+def _degrade_run_receipt(data: dict[str, Any], rung: response_budget.Rung) -> None:
+    if rung.trim:
+        response_budget.apply_trim(
+            data,
+            remove=_TRIM_REMOVE_RUN_RECEIPT,
+            empty=_TRIM_EMPTY_RUN_RECEIPT,
+        )
+    if rung.columnar:
+        runs = data.get("runs")
+        if isinstance(runs, dict):
+            response_budget.columnarize(runs, "items")
+        analysis_block = data.get("analysis")
+        if isinstance(analysis_block, dict) and isinstance(analysis_block.get("result"), dict):
+            analyze.columnarize_analysis_view(analysis_block["result"])
+
+
+async def _render_run_receipt(
+    budget: int | None,
+    build: _RunReceiptBuild,
+    *,
+    is_error: bool = False,
+) -> types.CallToolResult:
+    if budget is None:
+        data, text = build(None, _RUN_PAGE_LIMIT)
+    else:
+        text = ""
+        rendered: dict[str, Any] = {}
+
+        async def render(rung: response_budget.Rung) -> dict[str, Any]:
+            nonlocal text, rendered
+            limit = _RUN_PAGE_LIMIT
+            if rung.shrink:
+                limit = response_budget.RowMeasure.of(_run_receipt_rows(rendered)).fit_limit(
+                    _RUN_PAGE_LIMIT,
+                    rung,
+                )
+            rendered, text = build(rung, limit)
+            _degrade_run_receipt(rendered, rung)
+            return rendered
+
+        negotiated = await response_budget.negotiate(budget, render, _RUN_BUDGET_NOTES)
+        response_budget.attach_notes(negotiated, _RUN_BUDGET_NOTES)
+        data = negotiated.data
+    result = format_response(text, data)
+    result.isError = is_error
+    return result
+
+
+async def _render_static_run_receipt(
+    data: dict[str, Any],
+    text: str,
+    budget: int | None,
+    *,
+    is_error: bool = False,
+) -> types.CallToolResult:
+    return await _render_run_receipt(
+        budget,
+        lambda _rung, _limit: (copy.deepcopy(data), text),
+        is_error=is_error,
+    )
+
+
 async def _dwell_and_respond(
     receipt: ExperimentReceipt,
     wait_s: float,
@@ -1105,6 +1272,8 @@ async def _dwell_and_respond(
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
     provenance: bool = False,
     run_fields: list[str] | None = None,
+    analysis_fields: list[str] | None = None,
+    budget: int | None = None,
 ) -> types.CallToolResult:
     job = receipt.job
     if job.status not in _TERMINAL_EXPERIMENT_STATUSES and wait_s > 0:
@@ -1114,23 +1283,31 @@ async def _dwell_and_respond(
         else:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(job.done_event.wait(), wait_s)
-    data = _job_payload(
-        job,
-        receipt.control_token,
-        lint_by_circuit=lint_by_circuit,
-        provenance=provenance,
-        run_fields=run_fields,
-    )
-    if job.status not in _TERMINAL_EXPERIMENT_STATUSES:
-        data["hint"] = (
-            f"Experiment {job.job_id} is still running; use jobs(wait) with this "
-            "job_id to continue waiting."
-        )
     text = (
         f"Experiment {job.job_id}: {job.status} "
         f"({job.completeness.terminal}/{job.completeness.expanded} terminal cases)"
     )
-    return format_response(text, data)
+
+    def build(rung: response_budget.Rung | None, limit: int) -> _RunReceiptBuilt:
+        data = _job_payload(
+            job,
+            receipt.control_token,
+            lint_by_circuit=lint_by_circuit,
+            provenance=provenance,
+            run_fields=run_fields,
+            runs_cap=limit,
+            analysis_fields=analysis_fields,
+            analysis_answer_channel=rung is not None and rung.answer_channel,
+            analysis_rows_cap=limit if rung is not None and rung.shrink else None,
+        )
+        if job.status not in _TERMINAL_EXPERIMENT_STATUSES:
+            data["hint"] = (
+                f"Experiment {job.job_id} is still running; use jobs(wait) with this "
+                "job_id to continue waiting."
+            )
+        return data, text
+
+    return await _render_run_receipt(budget, build)
 
 
 def _job_payload(
@@ -1141,6 +1318,9 @@ def _job_payload(
     provenance: bool = False,
     run_fields: list[str] | None = None,
     runs_cap: int = _RUN_PAGE_LIMIT,
+    analysis_fields: list[str] | None = None,
+    analysis_answer_channel: bool = False,
+    analysis_rows_cap: int | None = None,
 ) -> dict[str, Any]:
     if lint_by_circuit is None:
         lint_map = {}
@@ -1185,11 +1365,32 @@ def _job_payload(
     if control_token is not None:
         data["control_token"] = control_token
     if job.analysis.status != "not_requested":
+        rendered_result: dict[str, Any] | None = None
+        legacy_result = False
+        if job.analysis.result is not None:
+            rendered_result, legacy_result = analyze.render_attached_analysis(
+                job.analysis.result,
+                fields=analysis_fields,
+                answer_channel=analysis_answer_channel,
+                row_limit=analysis_rows_cap,
+            )
+        analysis_observations = list(job.analysis.observations)
+        if legacy_result:
+            analysis_observations.append(
+                {
+                    "code": "legacy_analysis_result",
+                    "kind": "provenance",
+                    "detail": (
+                        "This job predates neutral attached-analysis snapshots; its "
+                        "stored public result was served without reinterpreting it."
+                    ),
+                }
+            )
         data["analysis"] = {
             "status": job.analysis.status,
-            "result": job.analysis.result,
+            "result": rendered_result,
             "error": job.analysis.error,
-            "observations": job.analysis.observations,
+            "observations": analysis_observations,
         }
         if provenance:
             # The caller's own attached-analysis input, replayed back —
@@ -1383,7 +1584,7 @@ def _circuit_error(exc: Exception, source_path: Path | None) -> tuple[str, str]:
     return "submission_failed", str(exc)
 
 
-def _routing_failure_response(
+async def _routing_failure_response(
     args: RunExperimentsInput,
     circuits: list[CircuitDeck],
     exc: DeckStagingError,
@@ -1422,7 +1623,6 @@ def _routing_failure_response(
             "outcome": "partial",
             "completeness": asdict(completeness),
             "lint": [{"circuit": circuit.circuit_id, "findings": []} for circuit in circuits],
-            "runs": _runs_page(cases),
             "failures": failures,
             "hint": (
                 "Configure an available Windows-native temp directory before "
@@ -1430,10 +1630,16 @@ def _routing_failure_response(
             ),
         }
     )
-    return format_response(str(exc), data)
+
+    def build(_rung: response_budget.Rung | None, limit: int) -> _RunReceiptBuilt:
+        rendered = copy.deepcopy(data)
+        rendered["runs"] = _runs_page(cases, args.run_fields, cap=limit)
+        return rendered, str(exc)
+
+    return await _render_run_receipt(args.budget, build)
 
 
-def _error_response(
+async def _error_response(
     request_id: str,
     *,
     code: str,
@@ -1441,6 +1647,7 @@ def _error_response(
     stage: str,
     retryable: bool,
     commit_state: Literal["not_started", "committed", "unknown"],
+    budget: int | None,
 ) -> types.CallToolResult:
     data = _empty_payload(request_id)
     data.update(
@@ -1455,15 +1662,20 @@ def _error_response(
             },
         }
     )
-    result = format_response(message, data)
-    result.isError = True
-    return result
+    return await _render_static_run_receipt(
+        data,
+        message,
+        budget,
+        is_error=True,
+    )
 
 
-def _post_submit_error_response(
+async def _post_submit_error_response(
     receipt: ExperimentReceipt,
     exc: Exception,
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None,
+    *,
+    budget: int | None,
 ) -> types.CallToolResult:
     """Envelope for a failure that escaped AFTER the cases were submitted.
 
@@ -1475,9 +1687,11 @@ def _post_submit_error_response(
     exists to prevent, so a post-submit escape is always reported as committed.
     """
     job = receipt.job
+    build_error: Exception | None = None
     try:
         data = _job_payload(job, receipt.control_token, lint_by_circuit=lint_by_circuit)
-    except Exception:
+    except Exception as payload_exc:
+        build_error = payload_exc
         # Even the receipt builder failed. Fall back to the minimum that keeps
         # the running job reachable rather than losing the handles with it.
         data = _empty_payload(job.request_id)
@@ -1492,18 +1706,46 @@ def _post_submit_error_response(
     )
     data["error"] = {
         "code": getattr(exc, "code", "receipt_failed"),
-        "message": str(exc),
+        "message": (
+            str(exc)
+            if build_error is None or str(build_error) == str(exc)
+            else f"{exc}; full receipt rendering also failed: {build_error}"
+        ),
         "stage": "receipt",
         "retryable": True,
         "commit_state": "committed",
     }
-    result = format_response(
+    text = (
         f"Experiment {job.job_id} was submitted, but building its receipt failed: {exc}. "
-        f"The cases ARE running.",
-        data,
+        f"The cases ARE running."
     )
-    result.isError = True
-    return result
+    try:
+        return await _render_static_run_receipt(
+            data,
+            text,
+            budget,
+            is_error=True,
+        )
+    except Exception as render_exc:
+        # Non-recursive rescue boundary: no renderer or full payload builder is
+        # called again after it fails. The minimum durable handles survive.
+        minimal = _empty_payload(job.request_id)
+        minimal.update(
+            {
+                "job_id": job.job_id,
+                "status": job.status,
+                "outcome": "in_progress",
+                "control_token": receipt.control_token,
+                "hint": data["hint"],
+                "error": {
+                    **data["error"],
+                    "message": f"{exc}; receipt rendering also failed: {render_exc}",
+                },
+            }
+        )
+        result = format_response(text, minimal)
+        result.isError = True
+        return result
 
 
 def _empty_payload(request_id: str) -> dict[str, Any]:
@@ -1567,7 +1809,7 @@ class JobsInput(ToolInput):
     timeout_s: float = Field(
         default=60.0,
         ge=0.0,
-        le=300.0,
+        le=JOBS_WAIT_CAP_S,
         description=(
             "'wait' only: how long to block, 0-300s. Timing out is not a failure — "
             "the response comes back with timed_out set and the job keeps running, "
@@ -1716,7 +1958,7 @@ _JOBS_RECEIPT_PROPERTIES: dict[str, Any] = {
     "source": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["source"],
     "completeness": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["completeness"],
     "lint": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["lint"],
-    "runs": response_budget.row_page_schema(RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["runs"]),
+    "runs": _RUNS_PAGE_SCHEMA,
     "analysis": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["analysis"],
     "artifacts": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["artifacts"],
 }
@@ -1769,10 +2011,6 @@ _CIRCUIT_GROUP_SCHEMA: dict[str, Any] = {
         "interrupted_job_ids",
     ],
 }
-
-_RUN_RECORD_SCHEMA = RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["runs"]["properties"]["items"][
-    "items"
-]
 
 
 def _jobs_receipt_schema(action: Literal["status", "wait"]) -> dict[str, Any]:
@@ -1917,7 +2155,7 @@ def _jobs_unpaged(items: list[dict[str, Any]]) -> dict[str, Any]:
 
 # One jobs response, rendered at some page limit: the payload and its text line.
 _JobsBuilt = tuple[dict[str, Any], str]
-_JobsBuild = Callable[[int], _JobsBuilt]
+_JobsBuild = Callable[[int, response_budget.Rung | None], _JobsBuilt]
 
 
 def _jobs_row_pages(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1983,22 +2221,25 @@ async def _negotiate_jobs(
     """Render this jobs response at the mildest ladder rung that fits ``budget``."""
     text = ""
     rendered: dict[str, Any] = {}
-    # The page limit the standing response was built at. Nothing else about a
-    # jobs envelope depends on the rung, so every rung but a shrinking one is
-    # the previous one degraded a step further rather than a second build.
-    built_at: int | None = None
+    # Status/wait receipts also re-render attached analysis when the ladder
+    # reaches its answer channel. Other branches ignore that bit, but sharing
+    # this key keeps the negotiator generic and prevents a detailed analysis
+    # candidate from surviving into the answer rung merely because its page
+    # limit stayed unchanged.
+    built_for: tuple[int, bool] | None = None
 
     async def render(rung: response_budget.Rung) -> dict[str, Any]:
-        nonlocal text, rendered, built_at
+        nonlocal text, rendered, built_for
         limit = page_limit
         if rung.shrink:
             # Sized against the rows the previous rung actually emitted, which
             # is what its measurement covered.
             rows = [row for page in _jobs_row_pages(rendered) for row in page["items"]]
             limit = response_budget.RowMeasure.of(rows).fit_limit(page_limit, rung)
-        if built_at != limit:
-            rendered, text = build(limit)
-            built_at = limit
+        candidate = (limit, rung.answer_channel)
+        if built_for != candidate:
+            rendered, text = build(limit, rung)
+            built_for = candidate
         _degrade_jobs(rendered, rung)
         return rendered
 
@@ -2188,9 +2429,17 @@ def _receipt_snapshot(
     *,
     timed_out: bool | None = None,
     runs_cap: int = _JOBS_PAGE_LIMIT,
+    analysis_answer_channel: bool = False,
+    analysis_rows_cap: int | None = None,
 ) -> dict[str, Any]:
     if isinstance(job, ExperimentJob):
-        data = _job_payload(job, None, runs_cap=runs_cap)
+        data = _job_payload(
+            job,
+            None,
+            runs_cap=runs_cap,
+            analysis_answer_channel=analysis_answer_channel,
+            analysis_rows_cap=analysis_rows_cap,
+        )
         data["job_type"] = "experiment"
         data["dialect"] = services.dialect_for_job(job, state)
     else:
@@ -2641,6 +2890,7 @@ def _jobs_error_details(exc: Exception) -> tuple[str, str, bool]:
 async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolResult:
     """Execute one jobs control-plane action with an action-discriminated response."""
     is_error = False
+    build: _JobsBuild
     try:
         # The control-plane work runs once; each branch's ``build`` is the
         # presentation over it, re-runnable at a smaller page so the budget
@@ -2664,7 +2914,7 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
             )
             observations = _merge_registry_observations(state, loaded.observations)
 
-            def build(limit: int) -> _JobsBuilt:
+            def build_list(limit: int, _rung: response_budget.Rung | None) -> _JobsBuilt:
                 data = {
                     "action": "list",
                     "outcome": "complete",
@@ -2680,6 +2930,7 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
                 }
                 return data, f"Listed {data['returned']} of {data['total']} circuit group(s)"
 
+            build = build_list
             page_limit = args.limit
         else:
             job = await _resolve_jobs_target(args, state)
@@ -2696,13 +2947,15 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
                         wait_for=args.wait_for,
                     )
 
-                def build(limit: int) -> _JobsBuilt:
+                def build_receipt(limit: int, rung: response_budget.Rung | None) -> _JobsBuilt:
                     data = _receipt_snapshot(
                         waited,
                         job,
                         state,
                         timed_out=timed_out,
                         runs_cap=limit,
+                        analysis_answer_channel=rung is not None and rung.answer_channel,
+                        analysis_rows_cap=limit if rung is not None and rung.shrink else None,
                     )
                     if waited == "status":
                         return data, f"Job {job.job_id}: {job.status}"
@@ -2712,11 +2965,13 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
                         else f"Job {job.job_id} reached {args.wait_for} terminality"
                     )
 
+                build = build_receipt
+
             elif args.action == "runs":
                 dialect = services.dialect_for_job(job, state)
                 records = _run_records(job, state, dialect=dialect)
 
-                def build(limit: int) -> _JobsBuilt:
+                def build_runs(limit: int, _rung: response_budget.Rung | None) -> _JobsBuilt:
                     page = _jobs_page(records, cursor=args.cursor, limit=limit)
                     data = {
                         "action": "runs",
@@ -2737,13 +2992,15 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
                     }
                     return data, f"Returned {data['returned']} of {data['total']} run record(s)"
 
+                build = build_runs
+
             else:
                 receipts = await _cancel_jobs_target(job, args, state)
                 # Re-read after the cancel: the registry entry is what carries
                 # the status the receipt reports.
                 cancelled = state.all_jobs.get(job.job_id, job)
 
-                def build(limit: int) -> _JobsBuilt:
+                def build_cancel(limit: int, _rung: response_budget.Rung | None) -> _JobsBuilt:
                     data = {
                         "action": "cancel",
                         "outcome": "complete",
@@ -2768,8 +3025,10 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
                     }
                     return data, f"Cancellation acknowledged for job {cancelled.job_id}"
 
+                build = build_cancel
+
         if args.budget is None:
-            data, text = build(page_limit)
+            data, text = build(page_limit, None)
         else:
             data, text = await _negotiate_jobs(args.budget, build, page_limit)
     except Exception as exc:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import multiprocessing
 from datetime import timedelta
 from pathlib import Path
@@ -14,7 +15,16 @@ import pytest
 from pydantic import BaseModel
 
 from ltspice_mcp.errors import BatchJobError, ResultError, SimulationError
-from ltspice_mcp.lib import experiment_store, job_registry, job_store, now, recent, services
+from ltspice_mcp.lib import (
+    analysis_snapshot,
+    experiment_store,
+    job_registry,
+    job_store,
+    now,
+    recent,
+    services,
+    store_common,
+)
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import (
     CANONICALIZER_VERSION,
@@ -218,6 +228,69 @@ class TestExperimentTypesAndStore:
         assert loaded.sources[0].manifest[0].staged_path == circuit
         assert loaded.analysis.status == "pending"
         assert loaded.store_path == job.store_path.resolve()
+
+    def test_v2_store_writes_a_self_describing_analysis_snapshot(self, work_dir: Path):
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        job = _job(work_dir, circuit)
+        job.analysis = AnalysisStage(
+            status="completed",
+            result=analysis_snapshot.envelope({"top": {}, "results": {}}),
+        )
+
+        data = experiment_store.serialize_job(job)
+
+        assert data["schema_version"] == 2
+        assert data["analysis"]["result"]["kind"] == analysis_snapshot.SNAPSHOT_KIND
+        assert data["analysis"]["result"]["snapshot_version"] == 1
+
+    def test_new_reader_admits_v1_public_analysis_results_without_rewriting_them(
+        self, work_dir: Path
+    ):
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        job = _job(work_dir, circuit, status="completed")
+        legacy_result = {"outcome": "complete", "results": {"summary": {"values": []}}}
+        job.analysis = AnalysisStage(status="completed", result=legacy_result)
+        experiment_store.save_job(job)
+        data = json.loads(job.store_path.read_text())
+        data["schema_version"] = 1
+        job.store_path.write_text(json.dumps(data))
+
+        loaded = experiment_store.load_job(job.job_id, work_dir, own_is_alive=True)
+
+        assert loaded is not None
+        assert loaded.analysis.result == legacy_result
+        assert json.loads(job.store_path.read_text())["schema_version"] == 1
+
+    def test_old_reader_rejects_a_v2_snapshot_before_deserialization(
+        self,
+        work_dir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        job = _job(work_dir, circuit)
+        job.analysis = AnalysisStage(
+            status="completed",
+            result=analysis_snapshot.envelope({"top": {}, "results": {}}),
+        )
+        data = experiment_store.serialize_job(job)
+
+        with caplog.at_level(logging.WARNING, logger="old-experiment-reader"):
+            accepted = store_common.accept_schema(
+                data,
+                job.store_path,
+                schema=experiment_store.SCHEMA,
+                current_version=1,
+                supported_versions=frozenset({1}),
+                migrations={},
+                logger=logging.getLogger("old-experiment-reader"),
+            )
+
+        assert accepted is False
+        assert "unsupported schema_version 2" in caplog.text
+        assert data["analysis"]["result"]["kind"] == analysis_snapshot.SNAPSHOT_KIND
 
     @pytest.mark.asyncio
     async def test_pre_stem_job_id_still_loads_and_resolves(

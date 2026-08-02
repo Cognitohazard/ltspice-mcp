@@ -264,23 +264,32 @@ def invalidate_for_job(working_dir: Path, job_id: str) -> int:
 
 
 def encode_cursor(
-    item: ResultSet, position: int, *, intra_item: int = 0, missing_offset: int = 0
+    item: ResultSet,
+    position: int,
+    *,
+    intra_item: int = 0,
+    missing_offset: int = 0,
+    view_fields: list[str] | None = None,
+    carry_view: bool = False,
 ) -> str:
     """Encode a resume point: work position, per-run offset, coverage offset.
 
     ``missing_offset`` pages the coverage view (``missing_cases``), which lives
     in the immutable inputs rather than the work list — a cursor that carries it
     with ``position == len(work)`` pages that view without redoing any work.
+    New analyze cursors also carry the selected row view; compatibility cursors
+    leave ``carry_view`` false.
     """
-    return _encode_body_cursor(
-        {
-            "result_set_id": item.result_set_id,
-            "position": position,
-            "intra_item": intra_item,
-            "missing_offset": missing_offset,
-            "work_hash": item.work_hash,
-        }
-    )
+    body: dict[str, Any] = {
+        "result_set_id": item.result_set_id,
+        "position": position,
+        "intra_item": intra_item,
+        "missing_offset": missing_offset,
+        "work_hash": item.work_hash,
+    }
+    if carry_view:
+        body["view"] = {"fields": view_fields}
+    return _encode_body_cursor(body)
 
 
 def _decode_cursor_body(cursor: str) -> dict[str, Any]:
@@ -296,6 +305,42 @@ def cursor_result_set_id(cursor: str) -> str:
     if not result_set_id:
         raise ResultError("Invalid analyze_results cursor: result_set_id is missing")
     return result_set_id
+
+
+def cursor_view(cursor: str) -> tuple[bool, list[str] | None]:
+    """Return whether a cursor carries a row view and its fields projection."""
+    body = _decode_cursor_body(cursor)
+    if "view" not in body:
+        return False, None
+    view = body["view"]
+    if not isinstance(view, dict) or set(view) != {"fields"}:
+        raise ResultError("Invalid analyze_results cursor: malformed render view")
+    fields = view["fields"]
+    if fields is not None and (
+        not isinstance(fields, list) or not all(isinstance(field, str) for field in fields)
+    ):
+        raise ResultError("Invalid analyze_results cursor: malformed fields render view")
+    return True, fields
+
+
+def reencode_cursor(
+    cursor: str,
+    *,
+    view_fields: list[str] | None,
+    position: int | None = None,
+    intra_item: int | None = None,
+    missing_offset: int | None = None,
+) -> str:
+    """Re-render one immutable resume point with a selected view or offset."""
+    body = _decode_cursor_body(cursor)
+    body["view"] = {"fields": view_fields}
+    if position is not None:
+        body["position"] = position
+    if intra_item is not None:
+        body["intra_item"] = intra_item
+    if missing_offset is not None:
+        body["missing_offset"] = missing_offset
+    return _encode_body_cursor(body)
 
 
 def decode_cursor(cursor: str, item: ResultSet) -> tuple[int, int, int]:
