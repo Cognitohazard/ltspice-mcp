@@ -53,8 +53,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import copy
 import hashlib
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -864,26 +866,18 @@ def _issue_finding(issue: LayoutIssue, path: Path, severity: str) -> dict[str, A
     )
 
 
-def _bounded_issue_findings(
+def _issue_findings(
     issues: list[LayoutIssue], path: Path, kinds: tuple[str, ...], severity: str
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """Findings for the given issue kinds, capped per kind with a truncation note."""
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Return every finding for the requested issue kinds and counts by rule."""
     findings: list[dict[str, Any]] = []
-    shown: dict[str, int] = {}
     total: dict[str, int] = {}
     for issue in issues:
         if issue.kind not in kinds:
             continue
         total[issue.kind] = total.get(issue.kind, 0) + 1
-        if shown.get(issue.kind, 0) < FINDING_RULE_CAP:
-            shown[issue.kind] = shown.get(issue.kind, 0) + 1
-            findings.append(_issue_finding(issue, path, severity))
-    notes = [
-        f"{kind}: showing {FINDING_RULE_CAP} of {count} findings"
-        for kind, count in sorted(total.items())
-        if count > FINDING_RULE_CAP
-    ]
-    return findings, notes
+        findings.append(_issue_finding(issue, path, severity))
+    return findings, total
 
 
 def _label_island_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
@@ -950,7 +944,7 @@ def _dropped_wire_findings(scene: Scene, path: Path) -> list[dict[str, Any]]:
     segments = [(w.x1, w.y1, w.x2, w.y2) for w in scene.wires]
 
     findings: list[dict[str, Any]] = []
-    for drop in _same_instance_dropped_segments(owners, segments)[:FINDING_RULE_CAP]:
+    for drop in _same_instance_dropped_segments(owners, segments):
         x1, y1, x2, y2 = drop["segment"]
         findings.append(
             _finding(
@@ -1512,6 +1506,38 @@ def _hint(data: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class _FindingCapSummary:
+    """A presentation note inserted where one capped rule family was evaluated."""
+
+    totals: dict[str, int]
+
+
+@dataclass(frozen=True)
+class VerifyCircuitEvaluation:
+    """Neutral verify result before the MCP finding cap is applied.
+
+    ``data["findings"]`` contains every evaluated finding.  The remaining
+    fields are the same evaluator facts used by the wire renderer; the inline
+    image is held separately because it is MCP content rather than structured
+    data.
+    """
+
+    data: dict[str, Any]
+    inline_image: RenderedImage | None = None
+    is_error: bool = False
+    capped_rules: frozenset[str] = frozenset()
+    observation_events: tuple[str | _FindingCapSummary, ...] = ()
+
+    @property
+    def findings_by_rule(self) -> dict[str, list[dict[str, Any]]]:
+        """Uncapped findings grouped by rule, preserving evaluation order."""
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for finding in self.data["findings"]:
+            grouped.setdefault(str(finding["rule_id"]), []).append(finding)
+        return grouped
+
+
 def _base_data(path: str) -> dict[str, Any]:
     return {
         "path": path,
@@ -1530,33 +1556,15 @@ def _base_data(path: str) -> dict[str, Any]:
     }
 
 
-def _error_result(data: dict[str, Any], hint: str) -> types.CallToolResult:
+def _error_evaluation(data: dict[str, Any], hint: str) -> VerifyCircuitEvaluation:
     data["hint"] = hint
-    result = format_response(hint, data)
-    result.isError = True
-    return result
+    return VerifyCircuitEvaluation(data=data, is_error=True)
 
 
-@registry.tool(
-    name="verify_circuit",
-    description=VERIFY_DESCRIPTION,
-    input_model=VerifyCircuitInput,
-    # Not read-only: export writes a file on every path (managed scratch by
-    # default), and export_to:sidecar overwrites the deck's .net. The annotation
-    # states the worst case; the description carries the conditional nuance.
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=True,
-        idempotentHint=True,
-        openWorldHint=False,
-    ),
-    profiles=("consolidated",),
-    output_schema=_OUTPUT_SCHEMA,
-)
-async def handle_verify_circuit(
+async def evaluate_verify_circuit(
     args: VerifyCircuitInput, state: SessionState
-) -> types.CallToolResult:
-    """Check (and optionally render/compare) a circuit file without changing it."""
+) -> VerifyCircuitEvaluation:
+    """Evaluate every requested check without applying MCP finding caps."""
     data = _base_data(args.path)
 
     try:
@@ -1572,15 +1580,15 @@ async def handle_verify_circuit(
                 evidence={"detail": str(exc)},
             )
         ]
-        return _error_result(data, str(exc))
+        return _error_evaluation(data, str(exc))
 
     data["path"] = str(path)
     if not path.is_file():
-        return _error_result(data, f"'{path}' does not exist or is not a file")
+        return _error_evaluation(data, f"'{path}' does not exist or is not a file")
 
     suffix = path.suffix.lower()
     if suffix != ".asc" and suffix not in NETLIST_SUFFIXES:
-        return _error_result(
+        return _error_evaluation(
             data,
             f"'{suffix}' is not a circuit file this tool can check; pass a .asc "
             "schematic or a .cir / .net / .sp netlist",
@@ -1595,10 +1603,11 @@ async def handle_verify_circuit(
 
     findings: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
-    observations: list[str] = []
     warnings: list[str] = []
     checks_run: list[str] = []
     skipped: list[dict[str, str]] = []
+    capped_rules: set[str] = set()
+    observation_events: list[str | _FindingCapSummary] = []
 
     def skip(check: str, reason: str) -> None:
         skipped.append({"check": check, "reason": reason})
@@ -1655,7 +1664,7 @@ async def handle_verify_circuit(
             failures.append(_failure("scene", str(exc), where=str(path)))
 
     if scene is not None:
-        observations.extend(scene.diagnostics)
+        observation_events.extend(scene.diagnostics)
         bbox = scene.content_bbox()
         data["scene"] = {
             "symbols": len(scene.symbols),
@@ -1668,20 +1677,22 @@ async def handle_verify_circuit(
             findings.extend(_symbol_findings(scene, path))
             checks_run.append("symbols")
         if wanted.get("layout"):
-            layout_findings, notes = _bounded_issue_findings(
+            layout_findings, totals = _issue_findings(
                 scene_issues, path, _LAYOUT_ISSUE_KINDS, "observation"
             )
             findings.extend(layout_findings)
-            observations.extend(notes)
-            observations.append(LAYOUT_COVERAGE)
+            capped_rules.update(totals)
+            observation_events.append(_FindingCapSummary(totals))
+            observation_events.append(LAYOUT_COVERAGE)
             checks_run.append("layout")
         if wanted.get("quality"):
-            quality_findings, notes = _bounded_issue_findings(
+            quality_findings, totals = _issue_findings(
                 scene_issues, path, _QUALITY_ISSUE_KINDS, "observation"
             )
             quality_findings.extend(_label_island_findings(scene, path))
             findings.extend(quality_findings)
-            observations.extend(notes)
+            capped_rules.update(totals)
+            observation_events.append(_FindingCapSummary(totals))
             checks_run.append("quality")
 
     # --- export -------------------------------------------------------------
@@ -1694,10 +1705,13 @@ async def handle_verify_circuit(
             export_payload, export_failure, export_obs, export_warnings = await _run_export(
                 path, state, args.export_to, simulator_cls
             )
-            observations.extend(export_obs)
+            observation_events.extend(export_obs)
             warnings.extend(export_warnings)
             if scene is not None:
-                findings.extend(_dropped_wire_findings(scene, path))
+                dropped = _dropped_wire_findings(scene, path)
+                findings.extend(dropped)
+                if dropped:
+                    capped_rules.add("dropped_wire")
             data["export"] = export_payload
             checks_run.append("export")
             if export_failure is not None:
@@ -1749,22 +1763,84 @@ async def handle_verify_circuit(
         if render_payload is not None:
             data["render"] = render_payload
         failures.extend(render_failures)
-        observations.extend(render_obs)
+        observation_events.extend(render_obs)
 
     data.update(
         {
             "checks_run": checks_run,
             "checks_skipped": skipped,
             "findings": findings,
-            "observations": observations,
+            "observations": [event for event in observation_events if isinstance(event, str)],
             "warnings": warnings,
             "failures": failures,
         }
     )
     data["outcome"] = _outcome(findings, failures, data.get("comparison"))
     data["hint"] = _hint(data)
+    return VerifyCircuitEvaluation(
+        data=data,
+        inline_image=inline_image,
+        capped_rules=frozenset(capped_rules),
+        observation_events=tuple(observation_events),
+    )
+
+
+def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallToolResult:
+    """Apply the existing MCP cap and observation presentation to an evaluation."""
+    data = copy.deepcopy(evaluation.data)
+    shown: dict[str, int] = {}
+    presented: list[dict[str, Any]] = []
+    for finding in data["findings"]:
+        rule = str(finding["rule_id"])
+        if rule in evaluation.capped_rules:
+            count = shown.get(rule, 0)
+            if count >= FINDING_RULE_CAP:
+                continue
+            shown[rule] = count + 1
+        presented.append(finding)
+    data["findings"] = presented
+
+    observations: list[str] = []
+    for event in evaluation.observation_events:
+        if isinstance(event, str):
+            observations.append(event)
+            continue
+        observations.extend(
+            f"{kind}: showing {FINDING_RULE_CAP} of {count} findings"
+            for kind, count in sorted(event.totals.items())
+            if count > FINDING_RULE_CAP
+        )
+    data["observations"] = observations
+    if not evaluation.is_error:
+        data["outcome"] = _outcome(data["findings"], data["failures"], data.get("comparison"))
+        data["hint"] = _hint(data)
 
     result = format_response(data["hint"], data)
-    if inline_image is not None:
-        result.content.insert(0, _image_content(inline_image))
+    if evaluation.is_error:
+        result.isError = True
+    if evaluation.inline_image is not None:
+        result.content.insert(0, _image_content(evaluation.inline_image))
     return result
+
+
+@registry.tool(
+    name="verify_circuit",
+    description=VERIFY_DESCRIPTION,
+    input_model=VerifyCircuitInput,
+    # Not read-only: export writes a file on every path (managed scratch by
+    # default), and export_to:sidecar overwrites the deck's .net. The annotation
+    # states the worst case; the description carries the conditional nuance.
+    annotations=types.ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+    profiles=("consolidated",),
+    output_schema=_OUTPUT_SCHEMA,
+)
+async def handle_verify_circuit(
+    args: VerifyCircuitInput, state: SessionState
+) -> types.CallToolResult:
+    """Check (and optionally render/compare) a circuit file without changing it."""
+    return render_verify_circuit(await evaluate_verify_circuit(args, state))

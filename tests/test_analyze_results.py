@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import shutil
 import time
@@ -24,7 +25,11 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
-from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
+from ltspice_mcp.tools.analyze import (
+    AnalyzeResultsInput,
+    evaluate_analysis_results,
+    handle_analyze_results,
+)
 from tests.conftest import FIXTURES_DIR, make_sim_job, stage_recorded_fixture
 
 
@@ -255,6 +260,137 @@ async def test_oversized_artifact_defers_whole_after_progress_then_continues(
     artifact_size = await asyncio.to_thread(lambda: Path(artifact["path"]).stat().st_size)
     assert artifact["bytes"] == artifact_size
     assert resumed.structuredContent["next"] is None
+
+
+def _neutral_work(evaluation) -> list[tuple[Any, ...]]:
+    return [
+        (
+            item.key,
+            item.position,
+            item.rows,
+            item.reductions,
+            item.facts,
+            item.failures,
+            item.observations,
+        )
+        for item in evaluation.neutral_work
+    ]
+
+
+@pytest.mark.asyncio
+async def test_neutral_evaluator_resumes_to_the_same_work_as_one_shot(
+    state_no_sim: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    args = _args(
+        raw,
+        [
+            {"key": "first", "metric": "value", "expr": "V(out)", "at": "800u"},
+            {"key": "second", "metric": "value", "expr": "V(out)", "at": "900u"},
+            {"key": "summary", "metric": "summary"},
+        ],
+    )
+    state_no_sim.config.analysis_budget_s = 0.01
+    monkeypatch.setattr(
+        analyze_mod,
+        "_artifact_estimate",
+        lambda recipe, _runs: 0.01 if recipe.key != "first" else 0.0,
+    )
+
+    accumulated: list[tuple[Any, ...]] = []
+    position = None
+    drives = 0
+    while True:
+        evaluation = await evaluate_analysis_results(
+            args,
+            state_no_sim,
+            continuation=position,
+        )
+        accumulated.extend(_neutral_work(evaluation))
+        drives += 1
+        position = evaluation.continuation
+        if position is None:
+            break
+    assert drives > 1, "the tiny drive budget must exercise internal resumption"
+
+    state_no_sim.config.analysis_budget_s = 60.0
+    one_shot = await evaluate_analysis_results(args, state_no_sim)
+    assert one_shot.continuation is None
+    assert accumulated == _neutral_work(one_shot)
+
+
+@pytest.mark.asyncio
+async def test_neutral_failures_are_uncapped_while_mcp_keeps_its_cap(
+    state_no_sim: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    args = _args(raw, [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}])
+    failures = [
+        {
+            "code": "recipe_failed",
+            "stage": "analyze",
+            "where": f"run-{index}",
+            "message": f"failure {index}",
+        }
+        for index in range(analyze_mod._FAILURE_CAP + 7)
+    ]
+
+    async def fail_many(*_args, **_kwargs):
+        return [], copy.deepcopy(failures), []
+
+    monkeypatch.setattr(analyze_mod, "_evaluate_item", fail_many)
+    neutral = await evaluate_analysis_results(args, state_no_sim)
+    assert list(neutral.failure_inventory) == failures
+    assert list(neutral.neutral_work[0].failures) == failures
+
+    mcp = await handle_analyze_results(args, state_no_sim)
+    assert mcp.structuredContent is not None
+    presented = mcp.structuredContent
+    assert presented["failures"] == failures[: analyze_mod._FAILURE_CAP]
+    note = next(
+        observation
+        for observation in presented["observations"]
+        if observation["code"] == "failures_truncated"
+    )
+    assert f"of {len(failures)} failure records" in note["detail"]
+    assert len(failures) - len(presented["failures"]) == 7
+
+
+@pytest.mark.asyncio
+async def test_neutral_rows_are_unprojected_before_mcp_paging_and_fields(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    args = _args(
+        raw,
+        [
+            {
+                "key": "values",
+                "metric": "value",
+                "expr": "V(out)",
+                "at": "900u",
+                "all_steps": True,
+            }
+        ],
+        include={"per_run": {"limit": 1}, "fields": ["step_index"]},
+    )
+    neutral = await evaluate_analysis_results(args, state_no_sim)
+    rows = list(neutral.neutral_work[0].rows)
+    assert len(rows) == 3
+    assert all("value" in row and "source" in row for row in rows)
+
+    mcp = await handle_analyze_results(args, state_no_sim)
+    assert mcp.structuredContent is not None
+    page = mcp.structuredContent["results"]["values"]["per_run"]
+    assert page["items"] == [{"step_index": rows[0]["step_index"]}]
+    assert (page["total"], page["returned"], page["truncated"]) == (3, 1, True)
+    assert page["next_cursor"] is not None
+    assert page["total"] - page["returned"] == len(rows) - 1
 
 
 @pytest.mark.asyncio
