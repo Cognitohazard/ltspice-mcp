@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import copy
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Literal, Self
@@ -510,6 +510,49 @@ _RUNS_PAGE_SCHEMA: dict[str, Any] = response_budget.row_page_schema(
     item_schema=_RUN_RECORD_SCHEMA,
 )
 
+_COMPLETENESS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "declared": {"type": "integer"},
+        "expanded": {"type": "integer"},
+        "submitted": {"type": "integer"},
+        "produced": {"type": "integer"},
+        "failed": {"type": "integer"},
+        "cancelled": {"type": "integer"},
+        "skipped": {"type": "integer"},
+    },
+    "required": [
+        "declared",
+        "expanded",
+        "submitted",
+        "produced",
+        "failed",
+        "cancelled",
+        "skipped",
+    ],
+}
+
+_PROGRESS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "expanded": {"type": "integer"},
+        "terminal": {"type": "integer"},
+        "remaining": {"type": "integer"},
+        **_COMPLETENESS_SCHEMA["properties"],
+    },
+    "required": [
+        "expanded",
+        "terminal",
+        "remaining",
+        "declared",
+        "submitted",
+        "produced",
+        "failed",
+        "cancelled",
+        "skipped",
+    ],
+}
+
 RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -549,27 +592,8 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                 ],
             },
         },
-        "completeness": {
-            "type": "object",
-            "properties": {
-                "declared": {"type": "integer"},
-                "expanded": {"type": "integer"},
-                "submitted": {"type": "integer"},
-                "produced": {"type": "integer"},
-                "failed": {"type": "integer"},
-                "cancelled": {"type": "integer"},
-                "skipped": {"type": "integer"},
-            },
-            "required": [
-                "declared",
-                "expanded",
-                "submitted",
-                "produced",
-                "failed",
-                "cancelled",
-                "skipped",
-            ],
-        },
+        "completeness": _COMPLETENESS_SCHEMA,
+        "progress": _PROGRESS_SCHEMA,
         "lint": {
             "type": "array",
             "items": {
@@ -631,6 +655,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         "outcome",
         "source",
         "completeness",
+        "progress",
         "lint",
         "runs",
         "failures",
@@ -1264,6 +1289,35 @@ async def _render_static_run_receipt(
     )
 
 
+def progress_from_completeness(
+    completeness: Completeness | Mapping[str, int],
+) -> dict[str, int]:
+    """Project durable accounting into the shared progress fact."""
+    counts = asdict(completeness) if isinstance(completeness, Completeness) else completeness
+    terminal = counts["produced"] + counts["failed"] + counts["cancelled"] + counts["skipped"]
+    return {
+        "expanded": counts["expanded"],
+        "terminal": terminal,
+        "remaining": counts["expanded"] - terminal,
+        "declared": counts["declared"],
+        "submitted": counts["submitted"],
+        "produced": counts["produced"],
+        "failed": counts["failed"],
+        "cancelled": counts["cancelled"],
+        "skipped": counts["skipped"],
+    }
+
+
+def _append_progress_hint(data: dict[str, Any]) -> None:
+    progress = data["progress"]
+    detail = (
+        f"Progress: {progress['terminal']}/{progress['expanded']} terminal; "
+        f"{progress['remaining']} remaining."
+    )
+    hint = data.get("hint")
+    data["hint"] = f"{hint} {detail}" if hint else detail
+
+
 async def _dwell_and_respond(
     receipt: ExperimentReceipt,
     wait_s: float,
@@ -1305,6 +1359,7 @@ async def _dwell_and_respond(
                 f"Experiment {job.job_id} is still running; use jobs(wait) with this "
                 "job_id to continue waiting."
             )
+        _append_progress_hint(data)
         return data, text
 
     return await _render_run_receipt(budget, build)
@@ -1341,13 +1396,15 @@ def _job_payload(
     outcome = _terminal_outcome(job)
     runs = _runs_page(job.cases, run_fields, cap=runs_cap)
     hint = _terminal_hint(job, runs["truncated"])
+    completeness = asdict(job.completeness)
     data: dict[str, Any] = {
         "job_id": job.job_id,
         "request_id": job.request_id,
         "status": job.status,
         "outcome": outcome,
         "source": [_source_payload(source, provenance=provenance) for source in job.sources],
-        "completeness": asdict(job.completeness),
+        "completeness": completeness,
+        "progress": progress_from_completeness(completeness),
         # Findings always emit; a circuit absent from the list is clean —
         # the empty-findings entry was per-circuit ceremony.
         "lint": [
@@ -1622,6 +1679,7 @@ async def _routing_failure_response(
             "status": "failed",
             "outcome": "partial",
             "completeness": asdict(completeness),
+            "progress": progress_from_completeness(completeness),
             "lint": [{"circuit": circuit.circuit_id, "findings": []} for circuit in circuits],
             "failures": failures,
             "hint": (
@@ -1630,6 +1688,7 @@ async def _routing_failure_response(
             ),
         }
     )
+    _append_progress_hint(data)
 
     def build(_rung: response_budget.Rung | None, limit: int) -> _RunReceiptBuilt:
         rendered = copy.deepcopy(data)
@@ -1662,6 +1721,7 @@ async def _error_response(
             },
         }
     )
+    _append_progress_hint(data)
     return await _render_static_run_receipt(
         data,
         message,
@@ -1699,6 +1759,9 @@ async def _post_submit_error_response(
         data["status"] = job.status
         data["outcome"] = "in_progress"
         data["control_token"] = receipt.control_token
+        completeness = asdict(job.completeness)
+        data["completeness"] = completeness
+        data["progress"] = progress_from_completeness(completeness)
     data["hint"] = (
         f"The experiment was submitted and is running. Use jobs(status) with job_id "
         f"{job.job_id} to follow it, or jobs(cancel) with that job_id and its "
@@ -1715,6 +1778,7 @@ async def _post_submit_error_response(
         "retryable": True,
         "commit_state": "committed",
     }
+    _append_progress_hint(data)
     text = (
         f"Experiment {job.job_id} was submitted, but building its receipt failed: {exc}. "
         f"The cases ARE running."
@@ -1736,6 +1800,8 @@ async def _post_submit_error_response(
                 "status": job.status,
                 "outcome": "in_progress",
                 "control_token": receipt.control_token,
+                "completeness": asdict(job.completeness),
+                "progress": progress_from_completeness(job.completeness),
                 "hint": data["hint"],
                 "error": {
                     **data["error"],
@@ -1749,13 +1815,15 @@ async def _post_submit_error_response(
 
 
 def _empty_payload(request_id: str) -> dict[str, Any]:
+    completeness = Completeness()
     return {
         "job_id": None,
         "request_id": request_id,
         "status": "failed",
         "outcome": "failed",
         "source": [],
-        "completeness": asdict(Completeness()),
+        "completeness": asdict(completeness),
+        "progress": progress_from_completeness(completeness),
         "lint": [],
         "runs": _runs_page([]),
         "failures": [],
@@ -1957,6 +2025,7 @@ _JOBS_RECEIPT_PROPERTIES: dict[str, Any] = {
     "dialect": {"type": ["string", "null"]},
     "source": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["source"],
     "completeness": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["completeness"],
+    "progress": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["progress"],
     "lint": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["lint"],
     "runs": _RUNS_PAGE_SCHEMA,
     "analysis": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["analysis"],
@@ -1972,6 +2041,7 @@ _JOBS_RECEIPT_REQUIRED = [
     "dialect",
     "source",
     "completeness",
+    "progress",
     "lint",
     "runs",
     "artifacts",
@@ -2183,9 +2253,9 @@ _TRIM_EMPTY_RECEIPT: tuple[str, ...] = ("source",)
 def _degrade_jobs(data: dict[str, Any], rung: response_budget.Rung) -> None:
     """Apply the budget ladder's presentation rungs to a jobs envelope.
 
-    Nothing below touches failures, observations, warnings, completeness or
-    lint findings. Idempotent, so the ladder may re-apply it to an envelope it
-    already degraded on the way down.
+    Nothing below touches failures, observations, warnings, completeness,
+    progress or lint findings. Idempotent, so the ladder may re-apply it to an
+    envelope it already degraded on the way down.
     """
     if rung.trim:
         response_budget.apply_trim(data, remove=_TRIM_REMOVE_RECEIPT, empty=_TRIM_EMPTY_RECEIPT)
@@ -2368,7 +2438,7 @@ def _legacy_completeness(
         submitted = int(job.status != "queued")
     remaining = max(0, expanded - produced - failed)
     cancelled = remaining if job.status == "cancelled" else 0
-    if job.status == "interrupted":
+    if job.status in {"failed", "interrupted"}:
         failed += remaining
     return {
         "declared": expanded,
@@ -2446,6 +2516,7 @@ def _receipt_snapshot(
         dialect = services.dialect_for_job(job, state)
         records = _run_records(job, state, dialect=dialect)
         observations = list(job.observations or []) if isinstance(job, SimulationJob) else []
+        completeness = _legacy_completeness(job, records)
         data = {
             "job_id": job.job_id,
             "request_id": None,
@@ -2453,7 +2524,8 @@ def _receipt_snapshot(
             "status": job.status,
             "outcome": _jobs_outcome(job),
             "source": [_legacy_source(job, dialect=dialect)],
-            "completeness": _legacy_completeness(job, records),
+            "completeness": completeness,
+            "progress": progress_from_completeness(completeness),
             "lint": [],
             "runs": _jobs_page(records, cursor=None, limit=runs_cap),
             "failures": _legacy_failures(job, records),
@@ -2479,6 +2551,7 @@ def _receipt_snapshot(
         )
     elif not data.get("hint"):
         data["hint"] = f"Job {job.job_id} is {job.status}."
+    _append_progress_hint(data)
     return data
 
 
@@ -2815,6 +2888,7 @@ def _jobs_error_payload(
         },
     }
     if args.action in {"status", "wait"}:
+        completeness = Completeness()
         common.update(
             {
                 "job_id": args.job_id,
@@ -2824,7 +2898,8 @@ def _jobs_error_payload(
                 "analysis_status": "not_requested",
                 "dialect": None,
                 "source": [],
-                "completeness": asdict(Completeness()),
+                "completeness": asdict(completeness),
+                "progress": progress_from_completeness(completeness),
                 "lint": [],
                 "runs": _jobs_page([], cursor=None, limit=_JOBS_PAGE_LIMIT),
                 "artifacts": [],
@@ -2832,6 +2907,7 @@ def _jobs_error_payload(
         )
         if args.action == "wait":
             common["timed_out"] = False
+        _append_progress_hint(common)
         return common
     common.update(_jobs_unpaged([]))
     if args.action in {"cancel", "runs"}:
