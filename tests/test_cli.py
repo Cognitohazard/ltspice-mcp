@@ -92,7 +92,7 @@ def cli_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     ``cli.run(argv)`` entry, so config load, simulator selection, the job
     registry and shutdown all run exactly as they do for a shell invocation.
     """
-    import ltspice_mcp.server as server_mod
+    import ltspice_mcp.engine as engine_mod
 
     work = tmp_path / "work"
     work.mkdir()
@@ -105,9 +105,11 @@ def cli_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # again at teardown, so no later test inherits this process-wide state.
     monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "consolidated")
     monkeypatch.setenv("LTSPICE_MCP_LOG_LEVEL", "WARNING")
-    # A simulator identity, not a binary: nothing here launches one.
+    # A simulator identity, not a binary: nothing here launches one. Detection
+    # is patched where the shared bootstrap resolves it (server_lifespan and
+    # the CLI both boot through ltspice_mcp.engine).
     monkeypatch.setattr(
-        server_mod, "detect_simulators", lambda config, diagnostics: {"ltspice": FakeSim}
+        engine_mod, "detect_simulators", lambda config, diagnostics: {"ltspice": FakeSim}
     )
     monkeypatch.chdir(work)
     return work

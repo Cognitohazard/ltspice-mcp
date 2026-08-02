@@ -3,6 +3,7 @@
 import logging
 import os
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -212,12 +213,19 @@ class ServerConfig:
             self.allowed_paths = [self.working_dir]
 
     @classmethod
-    def load(cls, config_path: Path | None = None) -> "ServerConfig":
-        """Load configuration from defaults, TOML file, and environment variables.
+    def load(
+        cls,
+        config_path: Path | None = None,
+        *,
+        overrides: Mapping[str, object] | None = None,
+    ) -> "ServerConfig":
+        """Load configuration from defaults, TOML, environment, and overrides.
 
         Args:
             config_path: Path to TOML config file. If None, looks for ltspice-mcp.toml
                         in the current working directory.
+            overrides: Explicit values applied after environment variables. Callers
+                       are responsible for validating names and value types.
 
         Returns:
             Populated ServerConfig instance.
@@ -493,6 +501,9 @@ class ServerConfig:
                     env_preload,
                     e,
                 )
+
+        if overrides:
+            config_dict.update(overrides)
 
         config_dict["config_path"] = config_path
         return cls(**config_dict)
