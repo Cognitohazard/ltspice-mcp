@@ -188,3 +188,7 @@ too if later server analysis needs a rawfile.
   submission, then `jobs` to wait or cancel.
 - Schematic (`.asc`) work: the schematic tools, never hand-written files —
   they carry orthogonal routing and pin-collision/junction checks.
+- Open-ended interrogation — loops over results, compute-decide-compute,
+  arbitrary math on traces: if `ltspice_mcp` is importable, write Python
+  against `ltspice_mcp.api` (`Api`, `load_raw`, the metric functions).
+  Complete results, no paging; intermediates stay in your interpreter.
