@@ -26,7 +26,13 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_lifecycle import transition
-from ltspice_mcp.lib.runner_base import DEFAULT_MAX_PARALLEL, RunnerBase, RunOutcome
+from ltspice_mcp.lib.runner_base import (
+    DEFAULT_MAX_PARALLEL,
+    RunnerBase,
+    RunOutcome,
+    discard_generated_netlist,
+    inject_logopinfo,
+)
 from ltspice_mcp.lib.sweep_utils import generate_id
 
 if TYPE_CHECKING:
@@ -615,15 +621,31 @@ class ExperimentRunner(RunnerBase):
         ):
             if experiment_store.cancellation_requested(execution.job.job_id, working_dir):
                 return False
-        self.submit_netlist(
-            case.staged_deck,
-            f"{case.run_token}{suffix}",
-            lambda outcome: self._handle_case_completion(
-                execution.job.job_id,
-                case.case_id,
-                outcome,
-            ),
-        )
+        # On LTspice .op cases, hand the simulator a sibling copy carrying
+        # '.options logopinfo' — without it the log has no per-device
+        # small-signal block and analysis reads back no gm/vth/vdsat. Injecting
+        # here rather than at staging is what keeps the staged deck and the
+        # deck_sha256 the record pins byte-identical: those are what a replay
+        # and every provenance check compare against. No-op for ngspice and for
+        # decks with no .op. The run_token stamp keeps concurrent cases sharing
+        # one staged deck from clobbering each other's copy.
+        run_deck = inject_logopinfo(case.staged_deck, self.simulator_class, case.run_token)
+        try:
+            self.submit_netlist(
+                run_deck,
+                f"{case.run_token}{suffix}",
+                lambda outcome: self._handle_case_completion(
+                    execution.job.job_id,
+                    case.case_id,
+                    outcome,
+                ),
+            )
+        finally:
+            # spicelib stages the deck synchronously inside run(), so the copy
+            # has done its job by the time submit returns — and on a submit that
+            # raised, nothing will ever read it. The marker guard inside the
+            # helper makes this incapable of touching the staged deck itself.
+            discard_generated_netlist(run_deck)
         return True
 
     async def _run_case(self, execution: _Execution, case: ExperimentCase) -> None:

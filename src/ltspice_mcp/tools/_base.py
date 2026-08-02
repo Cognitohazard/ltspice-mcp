@@ -27,7 +27,12 @@ from ltspice_mcp.lib.job_store import SIDECAR_DIRNAME
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.raster import RenderedImage, render_image
-from ltspice_mcp.lib.runner_base import LOGOPINFO_MARKER, NGSPICE_CONTROL_WRITE_MARKER
+from ltspice_mcp.lib.runner_base import NGSPICE_CONTROL_WRITE_MARKER
+
+# Re-exported, not defined here: the logopinfo injection lives in the runner
+# layer so the experiment coordinator (lib/) can call it without importing
+# tools/, and the tool handlers keep reaching it through this module as before.
+from ltspice_mcp.lib.runner_base import inject_logopinfo as inject_logopinfo
 from ltspice_mcp.lib.schematic_renderer import render_svg
 from ltspice_mcp.lib.schematic_scene import Scene, SymbolResolver, default_stock_paths
 from ltspice_mcp.lib.simulator import no_simulator_message
@@ -1333,65 +1338,6 @@ def _stage_deck_snapshot(net_path: Path) -> Path:
     return snapshot
 
 
-def inject_logopinfo(netlist_path: Path, simulator: type, job_id: str) -> Path:
-    """Return a runnable netlist with ``.options logopinfo`` added, for LTspice ``.op`` runs.
-
-    LTspice writes each semiconductor's small-signal operating point (gm, gds,
-    vth, vdsat, junction caps) to the ``.log`` only under ``.options logopinfo``,
-    and only for ``.op`` analyses — so adding it lets ``operating_point`` read
-    those params back by name. ngspice uses ``@dev[param]`` raw traces instead
-    and needs nothing here.
-
-    Append-only into a per-job sibling file (a leading-dot, ``job_id``-stamped
-    name) so the simulator sees the user's deck byte-for-byte plus the one
-    directive; the original is never touched and relative ``.include``/``.lib``
-    paths still resolve from the same directory. The ``job_id`` stamp keeps two
-    concurrent or queued runs of the same netlist from clobbering each other's
-    augmented copy; ``start_simulation`` deletes it once spicelib has staged the
-    run. Returns the original path unchanged when injection doesn't apply
-    (non-LTspice, non-text netlist, no ``.op``, or ``logopinfo`` already
-    present) or the sibling can't be written.
-    """
-    from spicelib.simulators.ltspice_simulator import LTspice
-
-    if not (isinstance(simulator, type) and issubclass(simulator, LTspice)):
-        return netlist_path
-    if netlist_path.suffix.lower() not in (".cir", ".net", ".sp"):
-        return netlist_path
-    try:
-        data = netlist_path.read_bytes()
-    except OSError:
-        return netlist_path
-
-    # Detect on the raw bytes (the directives are ASCII) — same plane the .end
-    # splice below works on, so no decode round-trip is needed.
-    if b"logopinfo" in data.lower():
-        return netlist_path
-    # ``.op\b`` excludes ``.options`` (the 't' blocks the word boundary); only a
-    # real .op analysis emits the operating-point block. ``.dc`` does not.
-    if not re.search(rb"(?im)^[ \t]*\.op\b", data):
-        return netlist_path
-
-    # Byte-level insertion before the final ``.end`` keeps the original encoding
-    # intact (the added line is pure ASCII). ``.end\b`` skips ``.ends``.
-    line = b".options logopinfo\n"
-    ends = list(re.finditer(rb"(?im)^[ \t]*\.end\b.*$", data))
-    if ends:
-        at = ends[-1].start()
-        augmented = data[:at] + line + data[at:]
-    else:
-        augmented = data + (b"" if not data or data.endswith(b"\n") else b"\n") + line
-
-    run_path = netlist_path.with_name(
-        f".{netlist_path.stem}.{job_id}{LOGOPINFO_MARKER}{netlist_path.suffix}"
-    )
-    try:
-        run_path.write_bytes(augmented)
-    except OSError:
-        return netlist_path
-    return run_path
-
-
 # A ``.control``...``.endc`` block, case-insensitive. Group 1 is the body —
 # everything between the ``.control`` line and the ``.endc`` line — so
 # ``match.end(1)`` is exactly where the ``.endc`` line begins (the fallback
@@ -1462,8 +1408,8 @@ def inject_ngspice_control_write(
     placed after one would never fire; otherwise inserted just before
     ``.endc``.
 
-    Same per-job sibling-file technique as ``inject_logopinfo`` (see its
-    docstring): append-only into a leading-dot, ``job_id``-stamped copy so
+    Same per-job sibling-file technique as ``runner_base.inject_logopinfo``
+    (see its docstring): append-only into a leading-dot, ``job_id``-stamped copy so
     the user's deck is never touched and relative ``.include``/``.lib``
     paths still resolve. Returns the original path when injection doesn't
     apply or the sibling can't be written.

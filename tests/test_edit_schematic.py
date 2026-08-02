@@ -27,6 +27,7 @@ from ltspice_mcp.tools.circuit import (
     handle_apply_schematic_ops,
     handle_create_schematic,
 )
+from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.schematic_edit import (
     EditSchematicInput,
     complete_edit_schematic_data,
@@ -170,6 +171,80 @@ async def test_stale_sha_returns_revision_conflict(asc_state, work_dir):
     # Nothing written: the file is unchanged and R4 never landed.
     assert _sha(work_dir / "conflict.asc") == sha1
     assert "R4" not in (work_dir / "conflict.asc").read_text()
+
+
+async def test_revision_conflict_payload_carries_current_sha(asc_state, work_dir):
+    """A conflict names the revision now in force, so the retry needs no re-read.
+
+    Without it the caller learns only that its token is stale and has to go
+    fetch the current one — the error would report the problem while withholding
+    the handle that fixes it.
+    """
+    first = await _build_blank(asc_state, "conflictsha", _DIVIDER_OPS)
+    add = [{"op": "add_component", "reference": "R3", "symbol": "res", "x": 1000, "y": 300}]
+    await handle_edit_schematic(
+        _edit_input(target="conflictsha.asc", expected_sha256=first["sha256"], ops=add),
+        asc_state,
+    )
+    current = _sha(work_dir / "conflictsha.asc")
+
+    loser = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                target="conflictsha.asc",
+                expected_sha256=first["sha256"],  # stale
+                ops=[
+                    {
+                        "op": "add_component",
+                        "reference": "R4",
+                        "symbol": "res",
+                        "x": 1300,
+                        "y": 300,
+                    }
+                ],
+            ),
+            asc_state,
+        )
+    )
+    assert loser["error"]["code"] == "revision_conflict"
+    assert loser["sha256"] == current
+
+
+async def test_first_edit_commits_with_the_digest_inspect_reported(asc_state, work_dir):
+    """A fresh session must be able to obtain its first edit token through the
+    product: read the sheet, edit it, one call each. Before inspect reported the
+    digest, no read tool did — the only way to get one was to provoke an error
+    or hash the file outside the server."""
+    await _build_blank(asc_state, "firstedit", _DIVIDER_OPS)
+    (found,) = (
+        await handle_inspect(
+            InspectInput.model_validate(
+                {"queries": [{"kind": "components", "path": "firstedit.asc"}]}
+            ),
+            asc_state,
+        )
+    ).structuredContent["results"]
+
+    committed = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                target="firstedit.asc",
+                expected_sha256=found["data"]["sha256"],
+                ops=[
+                    {
+                        "op": "add_component",
+                        "reference": "R3",
+                        "symbol": "res",
+                        "x": 1000,
+                        "y": 300,
+                    }
+                ],
+            ),
+            asc_state,
+        )
+    )
+    assert committed["outcome"] == "complete"
+    assert "R3" in (work_dir / "firstedit.asc").read_text()
 
 
 async def test_missing_expected_sha_on_existing_target_is_validation_error(asc_state, work_dir):
