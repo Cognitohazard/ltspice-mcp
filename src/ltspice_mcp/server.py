@@ -17,6 +17,7 @@ from pydantic import AnyUrl, ValidationError
 
 from ltspice_mcp import __version__, prompts
 from ltspice_mcp import errors as _err
+from ltspice_mcp.api._session import acquire_session_lease, release_session_lease
 from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.engine import bootstrap_engine, configure_asc_editor
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, compact_validation_error
@@ -293,87 +294,92 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     Raises:
         Various exceptions during config/simulator setup (allowed to propagate)
     """
-    boot = await bootstrap_engine(
-        mode="server",
-        _on_config_loaded=_configure_server_logging,
-        _logger=logger,
-    )
-    state = boot.state
-    config = state.config
-    available = state.available_simulators
-    config_file = config.config_path
-
-    if config_file.exists():
-        config_source = str(config_file)
-    else:
-        # No file: boot on built-in defaults. The default config is written
-        # lazily on the first tool call instead of here (see call_tool), so the
-        # server doesn't litter directories where its tools are never used.
-        config_source = f"{config_file} (defaults; written on first tool use)"
-
-    # Rewrite the initialize instructions to name the actually-detected
-    # simulators. main.py stashes the InitializationOptions it passed to
-    # server.run() here; lifespan startup completes before the initialize
-    # request is answered, and that request reads the same object, so the
-    # client sees the dynamic line. Falls back to the static text if unset.
-    if _dynamic_init_options is not None:
-        _dynamic_init_options.instructions = build_instructions(
-            available, state.default_simulator, config.tool_profile
-        )
-
-    logger.info("=== LTSpice MCP Server Starting ===")
-    logger.info(f"Server name: {server.name}")
-    logger.info(f"Config source: {config_source}")
-    logger.info(f"Working directory: {state.working_dir}")
-    logger.info(f"Tool profile: {config.tool_profile} ({len(state.tool_defs)} tools)")
-    logger.info(f"Log level: {config.log_level}")
-
-    logger.info("Detected simulators:")
-    if available:
-        for name, cls in available.items():
-            is_default = cls == state.default_simulator
-            default_marker = " (default)" if is_default else ""
-            logger.info(f"  - {name}{default_marker}")
-            try:
-                # Try to get executable path if available
-                if hasattr(cls, "spice_exe"):
-                    exe_path = (
-                        cls.spice_exe[0] if isinstance(cls.spice_exe, list) else cls.spice_exe
-                    )
-                    logger.info(f"    Executable: {exe_path}")
-            except Exception:
-                pass
-    else:
-        logger.warning(
-            "No simulators detected. Circuit editing will work but simulation tools will return errors."
-        )
-
-    logger.info(
-        f"Default simulator: {state.default_simulator.__name__ if state.default_simulator else 'None'}"
-    )
-
-    if state.diagnostics:
-        logger.warning("Startup diagnostics (also surfaced via server_status):")
-        for diag in state.diagnostics:
-            logger.warning(f"  - {diag}")
-
-    logger.info("Allowed paths (sandbox):")
-    for allowed_path in config.allowed_paths:
-        logger.info(f"  - {allowed_path.resolve()}")
-
-    if boot.preloaded_circuits:
-        logger.info(
-            "Preloaded persisted jobs for %d recent circuit(s)",
-            boot.preloaded_circuits,
-        )
-
-    logger.info("Startup complete. Server ready for MCP connections.")
-
+    lease_owner = object()
+    lease_pid = acquire_session_lease(lease_owner)
     try:
-        yield {"state": state}
+        boot = await bootstrap_engine(
+            mode="server",
+            _on_config_loaded=_configure_server_logging,
+            _logger=logger,
+        )
+        state = boot.state
+        config = state.config
+        available = state.available_simulators
+        config_file = config.config_path
+
+        if config_file.exists():
+            config_source = str(config_file)
+        else:
+            # No file: boot on built-in defaults. The default config is written
+            # lazily on the first tool call instead of here (see call_tool), so the
+            # server doesn't litter directories where its tools are never used.
+            config_source = f"{config_file} (defaults; written on first tool use)"
+
+        # Rewrite the initialize instructions to name the actually-detected
+        # simulators. main.py stashes the InitializationOptions it passed to
+        # server.run() here; lifespan startup completes before the initialize
+        # request is answered, and that request reads the same object, so the
+        # client sees the dynamic line. Falls back to the static text if unset.
+        if _dynamic_init_options is not None:
+            _dynamic_init_options.instructions = build_instructions(
+                available, state.default_simulator, config.tool_profile
+            )
+
+        logger.info("=== LTSpice MCP Server Starting ===")
+        logger.info(f"Server name: {server.name}")
+        logger.info(f"Config source: {config_source}")
+        logger.info(f"Working directory: {state.working_dir}")
+        logger.info(f"Tool profile: {config.tool_profile} ({len(state.tool_defs)} tools)")
+        logger.info(f"Log level: {config.log_level}")
+
+        logger.info("Detected simulators:")
+        if available:
+            for name, cls in available.items():
+                is_default = cls == state.default_simulator
+                default_marker = " (default)" if is_default else ""
+                logger.info(f"  - {name}{default_marker}")
+                try:
+                    # Try to get executable path if available
+                    if hasattr(cls, "spice_exe"):
+                        exe_path = (
+                            cls.spice_exe[0] if isinstance(cls.spice_exe, list) else cls.spice_exe
+                        )
+                        logger.info(f"    Executable: {exe_path}")
+                except Exception:
+                    pass
+        else:
+            logger.warning(
+                "No simulators detected. Circuit editing will work but simulation tools will return errors."
+            )
+
+        logger.info(
+            f"Default simulator: {state.default_simulator.__name__ if state.default_simulator else 'None'}"
+        )
+
+        if state.diagnostics:
+            logger.warning("Startup diagnostics (also surfaced via server_status):")
+            for diag in state.diagnostics:
+                logger.warning(f"  - {diag}")
+
+        logger.info("Allowed paths (sandbox):")
+        for allowed_path in config.allowed_paths:
+            logger.info(f"  - {allowed_path.resolve()}")
+
+        if boot.preloaded_circuits:
+            logger.info(
+                "Preloaded persisted jobs for %d recent circuit(s)",
+                boot.preloaded_circuits,
+            )
+
+        logger.info("Startup complete. Server ready for MCP connections.")
+
+        try:
+            yield {"state": state}
+        finally:
+            await state.shutdown()
+            logger.info("Server shutdown complete")
     finally:
-        await state.shutdown()
-        logger.info("Server shutdown complete")
+        release_session_lease(lease_owner, lease_pid)
 
 
 # Server-level guidance surfaced to the consuming LLM at the MCP initialize
