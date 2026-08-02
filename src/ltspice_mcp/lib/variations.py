@@ -295,6 +295,11 @@ class CircuitDeck:
     # against every file in it, so factoring a circuit into a reusable core
     # does not put that core's components out of a sweep's reach.
     includes: tuple[DeckFile, ...] = ()
+    # True when ``circuit_id`` was taken from the file stem because the caller
+    # named none. Carried on the deck so the one validator can say where a
+    # rejected id came from: the rule is about the id, but the fix is about the
+    # argument, and a caller who never wrote an id cannot see the connection.
+    id_from_file_stem: bool = False
 
 
 @dataclass(frozen=True)
@@ -423,6 +428,18 @@ class _DeckClosure:
         return all(file.text is self.files[file.index].text for file in files)
 
 
+def _id_suggestion(circuit_id: str) -> str:
+    """A valid id built out of the rejected one, or '' when nothing survives.
+
+    Offered rather than imposed: silently repairing the id would run the file
+    under a name the caller never chose and cannot predict.
+    """
+    cleaned = "".join(
+        char for char in circuit_id if char.isascii() and (char.isalnum() or char in "_-")
+    )
+    return cleaned.lstrip("_-")[:64]
+
+
 def normalize_circuit_decks(circuits: list[CircuitDeck]) -> list[CircuitDeck]:
     """Validate circuit ids and preserve caller order."""
     seen: set[str] = set()
@@ -430,10 +447,23 @@ def normalize_circuit_decks(circuits: list[CircuitDeck]) -> list[CircuitDeck]:
     for circuit in circuits:
         circuit_id = circuit.circuit_id
         if _CIRCUIT_ID_RE.fullmatch(circuit_id) is None:
+            # Spell the positional part of the rule out: "letters, digits,
+            # underscores ... starting with a letter or digit" reads as
+            # self-contradictory to anyone whose id starts with an underscore.
             raise VariationError(
                 "invalid_circuit_id",
-                f"Circuit id {circuit_id!r} must be 1-64 letters, digits, underscores, "
-                "or hyphens, starting with a letter or digit",
+                f"Circuit id {circuit_id!r} must be 1-64 characters long, start "
+                "with a letter or digit, and use only letters, digits, "
+                "underscores and hyphens after that"
+                + (
+                    f". This id was derived from the file stem of {circuit.path.name!r} "
+                    "because the circuit carried no 'id'; pass one explicitly "
+                    "(e.g. id='"
+                    + (_id_suggestion(circuit_id) or "amp")
+                    + "') to run this file under a valid id without renaming it"
+                    if circuit.id_from_file_stem
+                    else ""
+                ),
             )
         folded = circuit_id.casefold()
         if folded in seen:

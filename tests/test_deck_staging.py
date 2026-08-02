@@ -15,6 +15,7 @@ from ltspice_mcp.lib.deck_staging import (
     stage_deck,
     verify_staged_manifest,
 )
+from ltspice_mcp.lib.simulator import simulator_library_roots
 
 
 def _write(path: Path, text: str) -> Path:
@@ -411,3 +412,123 @@ class TestRootDeckSurvivesTheRun:
         reference = staged.staged_deck.read_text().splitlines()[1].split()[1].strip('"')
         included = next(item for item in staged.includes if item.source.name == "core.inc")
         assert reference == included.staged_path.as_posix()
+
+
+class TestSimulatorLibraryRoots:
+    """The simulator's own model library is trusted like its symbol library.
+
+    LTspice's .asc netlister appends ``.lib <install>/lib/cmp/standard.mos`` to
+    every schematic carrying a MOSFET symbol. Under a default
+    ``allowed_paths = ["."]`` that reference sits outside the sandbox, so
+    before this every transistor schematic failed to stage.
+    """
+
+    def test_a_reference_into_the_simulator_library_stages(self, tmp_path: Path):
+        root = tmp_path / "root"
+        install = tmp_path / "LTspice" / "lib"
+        models = _write(install / "cmp" / "standard.mos", ".model NMOS1 NMOS(VTO=0.7)\n")
+        schematic = _write(root / "amp.asc", "Version 4\n")
+        deck = _write(
+            root / "amp.net",
+            f"M1 d g s s NMOS1\n.lib {models}\n.op\n.end\n",
+        )
+
+        staged = stage_deck(
+            deck,
+            tmp_path / "stage",
+            [root],
+            origin=schematic,
+            simulator_roots=[install],
+        )
+
+        entry = next(item for item in staged.manifest if item.path == models.resolve())
+        assert entry.staged and not entry.live
+        assert entry.staged_path is not None
+        assert entry.staged_path.read_text() == models.read_text()
+        # Snapshotted, not read live: the deck now names the staged copy, so the
+        # run is covered by the manifest hash like any other dependency.
+        assert str(entry.staged_path) in staged.text
+        assert not any(item["code"] == "live_include" for item in staged.observations)
+
+    def test_the_netlisters_windows_lib_spelling_lands_under_the_mount(self):
+        """The reference the netlister really writes is a Windows path.
+
+        The trusted root is discovered as its ``/mnt/<drive>`` spelling, so the
+        two only meet if the reference resolver maps one onto the other.
+        """
+        resolved = deck_staging.resolve_reference(
+            Path("/work"),
+            r"C:\Users\me\AppData\Local\LTspice\lib\cmp\standard.mos",
+        )
+        assert resolved == Path("/mnt/c/Users/me/AppData/Local/LTspice/lib/cmp/standard.mos")
+
+    def test_a_reference_outside_both_still_refuses_and_names_the_remedies(self, tmp_path: Path):
+        root = tmp_path / "root"
+        install = tmp_path / "LTspice" / "lib"
+        _write(install / "cmp" / "standard.mos", ".model NMOS1 NMOS(VTO=0.7)\n")
+        outside = _write(tmp_path / "vendor" / "secret.lib", ".model DX D\n")
+        deck = _write(root / "deck.cir", f'.include "{outside}"\n.op\n.end\n')
+
+        with pytest.raises(DeckStagingError) as excinfo:
+            stage_deck(
+                deck,
+                tmp_path / "stage",
+                [root],
+                origin=deck,
+                simulator_roots=[install],
+            )
+
+        message = str(excinfo.value)
+        assert "allowed_paths" in message
+        assert "allow_live_includes" in message
+
+    def test_a_missing_file_is_not_offered_the_root_remedies(self, tmp_path: Path):
+        """Neither remedy fixes a reference to a file that is not there, and a
+        refusal that names them sends the caller to edit the wrong thing."""
+        root = tmp_path / "root"
+        deck = _write(root / "deck.cir", '.include "absent.inc"\n.op\n.end\n')
+
+        with pytest.raises(DeckStagingError) as excinfo:
+            stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+
+        message = str(excinfo.value)
+        assert "does not exist" in message
+        assert "allowed_paths" not in message
+
+    def test_the_simulator_library_is_not_a_place_a_deck_may_run_from(self, tmp_path: Path):
+        """Trusting it for references must not turn it into a second sandbox."""
+        root = tmp_path / "root"
+        root.mkdir()
+        install = tmp_path / "LTspice" / "lib"
+        deck = _write(install / "deck.cir", ".op\n.end\n")
+
+        with pytest.raises(DeckStagingError, match="outside the configured allowed roots"):
+            stage_deck(
+                deck,
+                tmp_path / "stage",
+                [root],
+                origin=deck,
+                simulator_roots=[install],
+            )
+
+    def test_roots_are_real_directories_with_no_nested_duplicates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """``get_ltspice_lib_paths`` reports ``lib`` AND ``lib/sym``; the nested
+        one adds no reach and a second root index for the same files."""
+        install = tmp_path / "LTspice" / "lib"
+        (install / "sym").mkdir(parents=True)
+        missing = tmp_path / "gone"
+        monkeypatch.setattr(
+            wsl,
+            "get_ltspice_lib_paths",
+            lambda: [str(install / "sym"), str(install), str(missing)],
+        )
+        roots = simulator_library_roots(LTspice)
+
+        assert install.resolve() in roots
+        assert (install / "sym").resolve() not in roots
+        assert missing.resolve() not in roots
+
+    def test_no_simulator_has_no_roots(self):
+        assert simulator_library_roots(None) == []

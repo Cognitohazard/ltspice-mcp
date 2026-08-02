@@ -18,6 +18,7 @@ from ltspice_mcp.lib.variations import (
     VariationError,
     expand_variations,
     materialize_variants,
+    normalize_circuit_decks,
 )
 from ltspice_mcp.tools.advanced import MonteCarloMismatchRule
 from tests._mismatch_fixtures import MINI_FET, instance_params
@@ -1284,3 +1285,38 @@ class TestCaseBundleIsWrittenWhole:
         assert len(copies) == 2
         # And the shared staged original is untouched by either run.
         assert (tmp_path / "dut.spice").read_text() == circuit.includes[1].text
+
+
+class TestCircuitIdRejection:
+    def test_a_derived_id_says_where_it_came_from_and_how_to_override(self, tmp_path: Path):
+        """A caller who never wrote the id cannot connect the rule to a fix.
+
+        The refusal reports the id, not the argument, so a file named
+        ``_truth_op.asc`` reads as an unusable file rather than a missing
+        ``id``.
+        """
+        deck = CircuitDeck(
+            "_truth_op",
+            tmp_path / "_truth_op.asc",
+            "",
+            (),
+            True,
+        )
+
+        with pytest.raises(VariationError) as excinfo:
+            normalize_circuit_decks([deck])
+
+        message = str(excinfo.value)
+        assert "_truth_op.asc" in message
+        assert "id=" in message
+        assert "id='truth_op'" in message
+
+    def test_an_explicit_id_is_not_blamed_on_the_filename(self, tmp_path: Path):
+        deck = CircuitDeck("_chosen", tmp_path / "amp.asc", "")
+
+        with pytest.raises(VariationError) as excinfo:
+            normalize_circuit_decks([deck])
+
+        message = str(excinfo.value)
+        assert "derived" not in message
+        assert "start with a letter or digit" in message

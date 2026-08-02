@@ -91,15 +91,50 @@ class TestSimulationWithoutSimulator:
 
         # Serialized (never overlapped) ...
         assert max_active == 1
-        # ... and each caller got a content-addressed snapshot beside the shared
+        # ... and each caller got a content-addressed snapshot of the shared
         # .net, carrying its exported deck. Identical exports dedupe to one
         # snapshot (content-hash name) so the files stay bounded per distinct
-        # deck, not one-per-run.
+        # deck, not one-per-run. It lands in the sidecar, not the author's
+        # tree: an experiment receipt names this file, so it outlives the run
+        # and one visible copy per distinct edit would accumulate forever.
         assert results[0] == results[1]
         for p in results:
-            assert p.parent == net.parent
+            assert p.parent == net.parent / ".ltspice-mcp" / "exports"
             assert p.name.startswith("race.run-") and p.suffix == ".net"
             assert p.read_text() == "* exported\n.end\n"
+        assert not list(net.parent.glob("*.run-*.net")), (
+            "the schematic's own directory must stay free of run snapshots"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_relative_include_keeps_the_snapshot_beside_the_deck(
+        self,
+        state_no_sim,
+        work_dir,
+    ):
+        """A simulator resolves a relative include against the deck's own
+        directory, so this one deck cannot be moved into the sidecar."""
+        from ltspice_mcp.tools._base import resolve_runnable_netlist
+
+        asc = work_dir / "local.asc"
+        asc.write_text("Version 4\nSHEET 1 880 680\n")
+        (work_dir / "models.lib").write_text(".model NM NMOS\n")
+        net = work_dir / "local.net"
+
+        class FakeLTspice:
+            @classmethod
+            def create_netlist(cls, path: str, timeout: float | None = None) -> str:
+                net.write_text("* exported\n.include models.lib\n.end\n")
+                return str(net)
+
+        state_no_sim.available_simulators["ltspice"] = FakeLTspice
+        try:
+            snapshot = await resolve_runnable_netlist(asc.name, state_no_sim)
+        finally:
+            del state_no_sim.available_simulators["ltspice"]
+
+        assert snapshot.parent == net.parent
+        assert (snapshot.parent / "models.lib").is_file()
 
 
 class TestNgspiceExportSanitizer:

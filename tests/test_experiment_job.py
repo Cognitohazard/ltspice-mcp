@@ -813,6 +813,35 @@ class TestExperimentDiscovery:
         assert job.job_id not in registry.experiment_jobs
         assert any(item["code"] == "experiment_pointer_invalid" for item in registry.observations)
 
+    def test_a_skipped_pointer_does_not_narrate_itself_at_startup(
+        self,
+        work_dir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        """The pointer index is global, so a brand-new working directory
+        reaches other projects' stale records: at warning level a library's
+        first call opened with a dozen lines about someone else's tempdirs.
+        The observation channel is what carries the fact to whoever asked."""
+        circuit = work_dir / "subdir" / "deck.cir"
+        circuit.parent.mkdir()
+        circuit.write_text(".op\n.end\n")
+        job = _job(work_dir, circuit, status="completed")
+        experiment_store.save_job(job)
+        pointer = experiment_store.save_pointers(job)[0]
+        payload = json.loads(pointer.read_text())
+        payload["target"] = str(work_dir / "outside.json")
+        pointer.write_text(json.dumps(payload))
+
+        registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
+        with caplog.at_level(logging.DEBUG, logger="ltspice_mcp.lib.experiment_store"):
+            registry.ensure_loaded_for(circuit)
+
+        skipped = [
+            record for record in caplog.records if "Skipped experiment pointer" in record.message
+        ]
+        assert skipped, "the fact must still be logged, just not shouted"
+        assert [record.levelno for record in skipped] == [logging.DEBUG] * len(skipped)
+
     @pytest.mark.asyncio
     async def test_direct_store_lookup_finds_non_recent_experiment(
         self,

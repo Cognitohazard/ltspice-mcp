@@ -412,15 +412,15 @@ class TestQueryValue:
 
 
 def test_has_active_device_detects_transistor_currents():
-    # _has_active_device is one arm of the empty op-point note's gate (the other
+    # has_active_device is one arm of the empty op-point note's gate (the other
     # is an ngspice run); an RC circuit trips neither, so it stays note-free. Sync
     # test, kept out of the asyncio-marked class so pytest-asyncio doesn't flag it.
-    from ltspice_mcp.tools.analysis import _has_active_device
+    from ltspice_mcp.tools.analysis import has_active_device
 
-    assert _has_active_device({"Id(M1)": 1e-3, "V(out)": 5.0})
-    assert _has_active_device({"Ic(Q2)": 1e-3})
-    assert not _has_active_device({"I(R1)": 1e-3, "I(V1)": 2e-3})
-    assert not _has_active_device({})
+    assert has_active_device({"Id(M1)": 1e-3, "V(out)": 5.0})
+    assert has_active_device({"Ic(Q2)": 1e-3})
+    assert not has_active_device({"I(R1)": 1e-3, "I(V1)": 2e-3})
+    assert not has_active_device({})
 
 
 @pytest.mark.asyncio
