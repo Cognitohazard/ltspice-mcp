@@ -153,8 +153,10 @@ class EditSchematicInput(ToolInput):
         default=None,
         description=(
             "REQUIRED whenever the target already exists (either base). The SHA-256 "
-            "of the file you edited against; a mismatch means a peer committed first "
-            "and the call returns revision_conflict with nothing written."
+            "of the file you edited against, reported as 'sha256' by an inspect "
+            "components/net query on the sheet and by every edit that commits; a "
+            "mismatch means a peer committed first and the call returns "
+            "revision_conflict with nothing written."
         ),
     )
     ops: list[ConsolidatedOp] = Field(
@@ -847,7 +849,9 @@ async def _evaluate_edit_schematic(
             if expected is None:
                 raise NetlistError(
                     f"{target.name} already exists; pass expected_sha256 (the SHA-256 of "
-                    "the file you edited against) so a concurrent edit can't be lost."
+                    "the file you edited against) so a concurrent edit can't be lost. "
+                    "An inspect components or net query on this sheet returns it as "
+                    "'sha256'."
                 )
             current = sha256_file(target)
             if current != expected:
