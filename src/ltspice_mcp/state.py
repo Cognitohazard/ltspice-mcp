@@ -79,7 +79,7 @@ class SessionState:
         libraries: Loaded component libraries
         runners: RunnerManager (sim/sweep/MC/experiment runner lifecycle)
         working_dir: Base directory for relative paths
-        tool_defs / tool_dispatch: Profile-filtered MCP tool exposure
+        tool_defs / tool_dispatch / field_owners: Profile-filtered MCP tool exposure
         sweep_configs / mc_configs: Saved configs keyed by config_id
         job_registry: Owns the union job store + disk persistence
     """
@@ -95,6 +95,7 @@ class SessionState:
     job_registry: JobRegistry = field(default_factory=lambda: JobRegistry(persist_enabled=False))
     tool_defs: list[types.Tool] = field(default_factory=list)
     tool_dispatch: dict[str, "RegisteredTool"] = field(default_factory=dict)
+    field_owners: dict[str, tuple[str, ...]] = field(default_factory=dict)
     sweep_configs: dict[str, SweepConfig] = field(default_factory=dict)
     mc_configs: dict[str, MonteCarloConfig] = field(default_factory=dict)
     diagnostics: list[str] = field(default_factory=list)
@@ -146,10 +147,12 @@ class SessionState:
         """
         from ltspice_mcp.lib.simulator import select_default_simulator
         from ltspice_mcp.tools import get_tools_for_profile
+        from ltspice_mcp.tools._base import registry as tool_registry
 
         diagnostics = diagnostics if diagnostics is not None else []
         default = select_default_simulator(available, config, diagnostics)
         tool_defs, tool_dispatch = get_tools_for_profile(config.tool_profile)
+        field_owners = tool_registry.field_owners_for_profile(config.tool_profile)
         registry = JobRegistry(
             persist_enabled=config.persist_jobs,
             working_dir=config.working_dir,
@@ -171,6 +174,7 @@ class SessionState:
             job_registry=registry,
             tool_defs=tool_defs,
             tool_dispatch=tool_dispatch,
+            field_owners=field_owners,
             diagnostics=diagnostics,
         )
 

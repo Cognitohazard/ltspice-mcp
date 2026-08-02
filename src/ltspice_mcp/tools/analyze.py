@@ -87,6 +87,18 @@ MAX_PAGE_SIZE = 100
 _FAIL_CASE_PAGE_CAP = 100
 _FAILURE_CAP = 100
 
+_GROUPS_OMITTED_WARNING = (
+    "{omitted} of {total} group(s) omitted to fit the response budget; "
+    "re-ask without 'budget' for every group."
+)
+_FAIL_CASES_OMITTED_WARNING = (
+    "{omitted} failing case(s) omitted from spec.fail_cases, which is not pageable; "
+    "request include.per_run for callable pagination over every attributed value."
+)
+_VALUES_OMITTED_WARNING = (
+    "{omitted} value(s) omitted; request include.per_run for callable pagination."
+)
+
 # Per-call digest memo keyed by (path, mtime_ns, size); one hash per unchanged
 # source across manifest build, precheck and postcheck.
 _DigestCache = dict[tuple[str, int, int], str]
@@ -395,15 +407,27 @@ def _page(
     returned offset rather than re-deriving it, so where the next page begins
     is decided here only.
     """
-    shown = items[offset : offset + limit]
-    next_offset = offset + len(shown)
-    return {
-        "items": shown,
+    page: dict[str, Any] = {
+        "items": [],
         "total": len(items),
-        "returned": len(shown),
-        "truncated": next_offset < len(items),
+        "returned": 0,
+        "truncated": False,
         "next_cursor": None,
-    }, next_offset
+    }
+    shown = items[offset : offset + limit]
+    return page, retotal_page(page, shown, offset)
+
+
+def retotal_page(page: dict[str, Any], rows: list[Any], offset: int) -> int:
+    """Replace a page's rows and reconcile its pagination metadata."""
+    next_offset = offset + len(rows)
+    page.update(
+        items=rows,
+        returned=len(rows),
+        truncated=next_offset < page["total"],
+        next_cursor=None,
+    )
+    return next_offset
 
 
 def _pick(source: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
@@ -450,6 +474,22 @@ def _lean_row(row: dict[str, Any], *, keep_value_whole: bool = False) -> dict[st
     return out
 
 
+def _row_renderer(
+    fields: list[str] | None,
+    *,
+    whole: bool,
+) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """Build one reusable renderer for every row on a result surface."""
+    plan = keep_plan(fields) if fields else None
+
+    def render(row: dict[str, Any]) -> dict[str, Any]:
+        if plan is not None:
+            return project_row(row, plan)
+        return _lean_row(row, keep_value_whole=whole)
+
+    return render
+
+
 def _projection_warnings(records: list[dict[str, Any]], fields: list[str]) -> list[str]:
     """One warning per requested path that no row of this recipe carries.
 
@@ -494,62 +534,21 @@ def _projection_warnings(records: list[dict[str, Any]], fields: list[str]) -> li
 
 
 def _projection_presence(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """Bounded union tree used to reproduce projection warnings after persistence."""
-    root: dict[str, Any] = {"present": True, "children": {}}
+    """Bounded record-shaped union used for warnings after persistence."""
+    root: dict[str, Any] = {}
 
     def add(node: dict[str, Any], value: Any) -> None:
-        node["present"] = True
         if not isinstance(value, dict):
             return
-        children = node["children"]
         for key, child_value in value.items():
             if str(key).startswith("_"):
                 continue
-            child = children.setdefault(str(key), {"present": False, "children": {}})
+            child = node.setdefault(str(key), {})
             add(child, child_value)
 
     for record in records:
         add(root, record)
     return root
-
-
-def _projection_warnings_from_presence(presence: dict[str, Any], fields: list[str]) -> list[str]:
-    warnings: list[str] = []
-    for path in fields:
-        segments = split_field_path(path)
-        if len(segments) == 1:
-            continue
-        node = presence
-        reached = True
-        for segment in segments:
-            child = node.get("children", {}).get(segment)
-            if not isinstance(child, dict):
-                reached = False
-                break
-            node = child
-        if reached and node.get("present") is True:
-            continue
-        parent = presence
-        for segment in segments[:-1]:
-            child = parent.get("children", {}).get(segment)
-            if not isinstance(child, dict):
-                parent = {"children": {}}
-                break
-            parent = child
-        parent_text = ".".join(escape_field_segment(segment) for segment in segments[:-1])
-        present = sorted(parent.get("children", {}))
-        addressable = ", ".join(escape_field_segment(key) for key in present)
-        warnings.append(
-            f"include.fields path {path!r} is absent from every row of this recipe; "
-            + (
-                f"keys present at {parent_text!r}: {addressable}"
-                if addressable
-                else f"no row reaches {parent_text!r} — a key whose own name contains a "
-                r"'.' is one segment, so address it with '\.' (e.g. "
-                r"'value.v(x1\.out)')"
-            )
-        )
-    return warnings
 
 
 def _identity(
@@ -2097,8 +2096,10 @@ def _result_entry(
             # omission is stated rather than flagged — there is no cursor that
             # walks the rest.
             entry["warnings"].append(
-                f"{len(groups) - groups_limit} of {len(groups)} group(s) omitted to fit "
-                "the response budget; re-ask without 'budget' for every group."
+                _GROUPS_OMITTED_WARNING.format(
+                    omitted=len(groups) - groups_limit,
+                    total=len(groups),
+                )
             )
             groups = groups[:groups_limit]
         entry["groups"] = groups
@@ -2117,25 +2118,15 @@ def _result_entry(
             # that does page every attributed value instead of leaving the
             # caller with a truncation flag and nowhere to go.
             entry["warnings"].append(
-                f"{spec['fail_count'] - spec['fail_cases']['returned']} failing case(s) "
-                "omitted from spec.fail_cases, which is not pageable; request "
-                "include.per_run for callable pagination over every attributed value."
+                _FAIL_CASES_OMITTED_WARNING.format(
+                    omitted=spec["fail_count"] - spec["fail_cases"]["returned"]
+                )
             )
-    # One plan, applied at both row surfaces — a projection that reached only
-    # per_run or only values would be a lever whose effect depends on an
-    # unrelated argument. Without a plan, rows render through the lean
-    # default (_lean_row); include.fields is the named opt-in that restores
-    # any dropped detail, up to the whole block via fields=["value"].
-    plan = keep_plan(fields) if fields else None
     # A waveform's value IS the curve — the caller asked for series data, so
     # flattening it away would defeat the recipe. Everything else defaults
-    # to the scalar leaves.
-    whole = recipe.metric == "waveform"
-
-    def render(row: dict[str, Any]) -> dict[str, Any]:
-        if plan is not None:
-            return project_row(row, plan)
-        return _lean_row(row, keep_value_whole=whole)
+    # to the scalar leaves. One plan serves both row surfaces, so projection
+    # never depends on an unrelated pagination choice.
+    render = _row_renderer(fields, whole=recipe.metric == "waveform")
 
     per_run_next = per_run_offset
     if per_run_limit is not None:
@@ -2147,8 +2138,7 @@ def _result_entry(
         entry["values"] = [render(row) for row in shown]
         if len(records) > values_limit:
             entry["warnings"].append(
-                f"{len(records) - values_limit} value(s) omitted; request include.per_run "
-                "for callable pagination."
+                _VALUES_OMITTED_WARNING.format(omitted=len(records) - values_limit)
             )
     # Only report unresolved paths where rows were actually emitted: a
     # reduce-only recipe has no row surface by construction, so its fields did
@@ -2433,7 +2423,7 @@ class _Limits:
     def scaled(self, measure: response_budget.RowMeasure, rung: response_budget.Rung) -> _Limits:
         """These limits, shrunk to what the previous rung's measurement affords.
 
-        Every surface named here is also in :func:`_analysis_rows`. That pairing
+        Every surface named here is also in :func:`analysis_rows`. That pairing
         is the cost model: a surface this shrinks but the measurement omits is
         charged to the fixed envelope, and one the measurement counts but this
         cannot shrink makes the fixed envelope look smaller than it is.
@@ -2526,10 +2516,8 @@ def _assemble(
     for index, unit in enumerate(units):
         key = unit["key"]
         recipe = unit["recipe"]
-        records = copy.deepcopy(unit["records"])
+        records = unit["records"]
         item_failures = unit["item_failures"]
-        for record in records:
-            record.pop("_manifest_id", None)
         failures.extend(item_failures)
         relevant_missing = [
             case
@@ -2566,7 +2554,6 @@ def _assemble(
                 intra_item=per_run_next,
                 missing_offset=missing_next,
                 view_fields=a.include.fields,
-                carry_view=True,
             )
 
     next_value: dict[str, str] | None = None
@@ -2579,7 +2566,6 @@ def _assemble(
                 intra_item=intra_item,
                 missing_offset=missing_next,
                 view_fields=a.include.fields,
-                carry_view=True,
             ),
         }
     failure_total = len(failures)
@@ -2613,7 +2599,6 @@ def _assemble(
             intra_item=intra_item,
             missing_offset=missing_next,
             view_fields=a.include.fields,
-            carry_view=True,
         )
     coverage = {
         "runs_requested": runs_requested,
@@ -2661,21 +2646,8 @@ def _snapshot_from_assembly(a: _Assembly) -> dict[str, Any]:
     wide_include = a.include.model_copy(update={"fields": list(_ROW_KEYS)})
     wide = replace(a, include=wide_include)
     requested, _ = _assemble(wide, None, _Limits.of(wide_include))
-    answer_include = AnalyzeInclude(fields=list(_ROW_KEYS))
-    answer, _ = _assemble(
-        replace(wide, include=answer_include),
-        response_budget.Rung(
-            level=response_budget.RUNG_ANSWER,
-            budget=response_budget.BUDGET_MIN_TOKENS,
-            measured=0,
-        ),
-        _Limits.of(answer_include),
-    )
-
-    top = copy.deepcopy(requested)
+    top = requested
     requested_results = top.pop("results")
-    answer_top = copy.deepcopy(answer)
-    answer_results = answer_top.pop("results")
 
     def coverage_cursor_base(view: dict[str, Any]) -> str:
         missing_page = view["coverage"]["missing_cases"]
@@ -2693,30 +2665,29 @@ def _snapshot_from_assembly(a: _Assembly) -> dict[str, Any]:
         )
 
     requested_coverage_cursor = coverage_cursor_base(top)
-    answer_coverage_cursor = coverage_cursor_base(answer_top)
     units = {unit["key"]: unit for unit in a.processed}
     missing_next = min(a.missing_offset + MAX_PAGE_SIZE, len(a.missing))
+    natural_cursor_base = result_store.encode_cursor(
+        a.item,
+        a.natural_position,
+        intra_item=a.natural_intra,
+        missing_offset=missing_next,
+    )
     results: dict[str, Any] = {}
     for key, requested_entry in requested_results.items():
         unit = units[key]
-        answer_entry = copy.deepcopy(answer_results.get(key, requested_entry))
-        entry = copy.deepcopy(requested_entry)
+        entry = requested_entry
         per_run = entry.pop("per_run", None)
+        had_values = "values" in entry
         entry.pop("values", None)
-        answer_rows = answer_entry.pop("values", [])
-        answer_entry.pop("per_run", None)
+        answer_rows = (
+            unit["records"][:MAX_PAGE_SIZE] if not getattr(unit["recipe"], "reduce", []) else []
+        )
         block: dict[str, Any] = {
             "facts": entry,
-            "answer_facts": answer_entry,
-            "answer_rows": answer_rows[:MAX_PAGE_SIZE],
+            "answer_rows": answer_rows,
             "answer_total": len(unit["records"]),
-            "surface": (
-                "per_run"
-                if per_run is not None
-                else "values"
-                if "values" in requested_entry
-                else "none"
-            ),
+            "surface": ("per_run" if per_run is not None else "values" if had_values else "none"),
             "projection_presence": _projection_presence(unit["records"]),
         }
         if per_run is not None:
@@ -2732,21 +2703,14 @@ def _snapshot_from_assembly(a: _Assembly) -> dict[str, Any]:
     return analysis_snapshot.envelope(
         {
             "top": top,
-            "answer_top": answer_top,
             "results": results,
             "missing_offset": a.missing_offset,
             "coverage_cursor_base": requested_coverage_cursor,
-            "answer_coverage_cursor_base": answer_coverage_cursor,
+            "natural_cursor_base": natural_cursor_base,
+            "natural_has_next": a.natural_position < len(a.item.work),
+            "natural_deferred": a.deferred,
         }
     )
-
-
-def _render_snapshot_row(
-    row: dict[str, Any], fields: list[str] | None, *, whole_value: bool
-) -> dict[str, Any]:
-    if fields:
-        return project_row(row, keep_plan(fields))
-    return _lean_row(row, keep_value_whole=whole_value)
 
 
 def _rebind_snapshot_cursors(data: dict[str, Any], fields: list[str] | None) -> None:
@@ -2777,45 +2741,24 @@ def _shrink_snapshot_page(
     fields: list[str] | None = None,
 ) -> None:
     items = page["items"][:limit]
-    page["items"] = items
-    page["returned"] = len(items)
-    page["truncated"] = offset + len(items) < page["total"]
+    next_offset = retotal_page(page, items, offset)
     page["next_cursor"] = (
         result_store.reencode_cursor(
             cursor_base,
             view_fields=fields,
-            missing_offset=offset + len(items),
+            missing_offset=next_offset,
         )
         if page["truncated"] and cursor_base is not None
         else None
     )
 
 
-def _without_value_omission_warning(warnings: list[str]) -> list[str]:
+def _without_warnings(warnings: list[str], *substrings: str) -> list[str]:
     return [
         warning
         for warning in warnings
-        if not (
-            " value(s) omitted; request include.per_run" in warning
-            or " value(s) omitted to fit the response budget" in warning
-        )
+        if not any(substring in warning for substring in substrings)
     ]
-
-
-def _without_fail_case_omission_warning(warnings: list[str]) -> list[str]:
-    return [
-        warning
-        for warning in warnings
-        if " failing case(s) omitted from spec.fail_cases" not in warning
-    ]
-
-
-def _append_result_hint(data: dict[str, Any], detail: str) -> None:
-    current = data.get("hint")
-    if not isinstance(current, str) or not current:
-        data["hint"] = detail
-    elif detail not in current:
-        data["hint"] = f"{current} {detail}"
 
 
 def _legacy_passthrough(result: dict[str, Any], fields: list[str] | None) -> dict[str, Any]:
@@ -2866,61 +2809,85 @@ def render_attached_analysis(
     row_limit: int | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Render one public attached result from a snapshot copy or legacy response."""
-    if not analysis_snapshot.is_snapshot(stored):
-        if analysis_snapshot.has_snapshot_kind(stored):
+    snapshot_kind = analysis_snapshot.classify(stored)
+    if snapshot_kind != "snapshot":
+        if snapshot_kind == "unsupported":
             raise ResultError(
                 "The attached analysis snapshot version is unsupported by this build"
             )
         return _legacy_passthrough(stored, fields), True
 
-    data = copy.deepcopy(stored["answer_top"] if answer_channel else stored["top"])
+    data = copy.deepcopy(stored["top"])
     _rebind_snapshot_cursors(data, fields)
+    natural_cursor_base = stored.get("natural_cursor_base")
+    if answer_channel:
+        data.pop("hint", None)
+        if not isinstance(natural_cursor_base, str):
+            raise ResultError("The attached analysis snapshot lacks its continuation handle")
+        natural_cursor = result_store.reencode_cursor(
+            natural_cursor_base,
+            view_fields=fields,
+        )
+        if stored.get("natural_has_next"):
+            data["cursor"] = natural_cursor
+            data["next"] = {
+                "result_set_id": data["result_set_id"],
+                "cursor": natural_cursor,
+            }
+        else:
+            data["cursor"] = None
+            data["next"] = None
+        coverage = data.get("coverage")
+        if isinstance(coverage, dict):
+            missing = coverage.get("missing_cases")
+            if isinstance(missing, dict):
+                missing["next_cursor"] = (
+                    result_store.reencode_cursor(
+                        natural_cursor_base,
+                        view_fields=fields,
+                        missing_offset=int(stored["missing_offset"]) + int(missing["returned"]),
+                    )
+                    if missing.get("truncated")
+                    else None
+                )
     rendered_results: dict[str, Any] = {}
     for key, block in stored["results"].items():
-        entry = copy.deepcopy(block["answer_facts"] if answer_channel else block["facts"])
+        entry = copy.deepcopy(block["facts"])
         metric = entry.get("metric")
-        whole_value = metric == "waveform"
+        render_row = _row_renderer(fields, whole=metric == "waveform")
         rows_emitted = False
-        if answer_channel and block["answer_rows"]:
-            rows = copy.deepcopy(block["answer_rows"])
-            if row_limit is not None:
-                rows = rows[:row_limit]
-            entry["values"] = [
-                _render_snapshot_row(row, fields, whole_value=whole_value) for row in rows
-            ]
+        value_rows: list[dict[str, Any]] | None = None
+        if (answer_channel and block["answer_rows"]) or (
+            not answer_channel and block["surface"] == "values"
+        ):
+            value_rows = block["answer_rows"]
+        if value_rows is not None:
+            selected = value_rows if row_limit is None else value_rows[:row_limit]
+            rows = copy.deepcopy(selected)
+            entry["values"] = [render_row(row) for row in rows]
             rows_emitted = bool(rows)
-            if row_limit is not None:
-                entry["warnings"] = _without_value_omission_warning(entry.get("warnings", []))
+            if answer_channel:
+                entry["warnings"] = _without_warnings(
+                    entry.get("warnings", []),
+                    " value(s) omitted; request include.per_run",
+                    " value(s) omitted to fit the response budget",
+                )
                 omitted = int(block["answer_total"]) - len(rows)
                 if omitted > 0:
-                    entry["warnings"].append(
-                        f"{omitted} value(s) omitted; request include.per_run "
-                        "for callable pagination."
-                    )
-        elif not answer_channel and block["surface"] == "values":
-            rows = copy.deepcopy(block["answer_rows"])
-            if row_limit is not None:
-                rows = rows[:row_limit]
-            entry["values"] = [
-                _render_snapshot_row(row, fields, whole_value=whole_value) for row in rows
-            ]
-            rows_emitted = bool(rows)
+                    entry["warnings"].append(_VALUES_OMITTED_WARNING.format(omitted=omitted))
         elif not answer_channel and block["surface"] == "per_run":
-            page = copy.deepcopy(block["per_run"])
-            rows = page["items"]
-            if row_limit is not None:
-                rows = rows[:row_limit]
-            page["items"] = [
-                _render_snapshot_row(row, fields, whole_value=whole_value) for row in rows
-            ]
-            page["returned"] = len(rows)
+            page = dict(block["per_run"])
+            stored_rows = page["items"]
+            selected = stored_rows if row_limit is None else stored_rows[:row_limit]
+            rows = copy.deepcopy(selected)
+            rendered_rows = [render_row(row) for row in rows]
             offset = int(block["per_run_offset"])
-            page["truncated"] = offset + len(rows) < page["total"]
+            next_offset = retotal_page(page, rendered_rows, offset)
             page["next_cursor"] = (
                 result_store.reencode_cursor(
                     block["per_run_cursor_base"],
                     view_fields=fields,
-                    intra_item=offset + len(rows),
+                    intra_item=next_offset,
                 )
                 if page["truncated"]
                 else None
@@ -2934,7 +2901,7 @@ def render_attached_analysis(
                     "cursor": page["next_cursor"],
                 }
                 data["outcome"] = "partial"
-                _append_result_hint(
+                response_budget.append_hint(
                     data,
                     "Analysis is partial because the response budget reduced the "
                     "per_run page; call analyze_results with "
@@ -2946,24 +2913,28 @@ def render_attached_analysis(
                 omitted = len(groups) - row_limit
                 entry["groups"] = groups[:row_limit]
                 entry.setdefault("warnings", []).append(
-                    f"{omitted} of {len(groups)} group(s) omitted to fit the response "
-                    "budget; re-ask without 'budget' for every group."
+                    _GROUPS_OMITTED_WARNING.format(
+                        omitted=omitted,
+                        total=len(groups),
+                    )
                 )
             spec = entry.get("spec")
             if isinstance(spec, dict) and isinstance(spec.get("fail_cases"), dict):
                 fail_cases = spec["fail_cases"]
                 _shrink_snapshot_page(fail_cases, row_limit)
-                entry["warnings"] = _without_fail_case_omission_warning(entry.get("warnings", []))
+                entry["warnings"] = _without_warnings(
+                    entry.get("warnings", []),
+                    " failing case(s) omitted from spec.fail_cases",
+                )
                 if fail_cases["truncated"]:
                     entry["warnings"].append(
-                        f"{spec['fail_count'] - fail_cases['returned']} failing case(s) "
-                        "omitted from spec.fail_cases, which is not pageable; request "
-                        "include.per_run for callable pagination over every attributed "
-                        "value."
+                        _FAIL_CASES_OMITTED_WARNING.format(
+                            omitted=spec["fail_count"] - fail_cases["returned"]
+                        )
                     )
         if fields and rows_emitted:
             entry.setdefault("warnings", []).extend(
-                _projection_warnings_from_presence(block["projection_presence"], fields)
+                _projection_warnings([block["projection_presence"]], fields)
             )
         if answer_channel:
             spec = entry.get("spec")
@@ -2979,14 +2950,12 @@ def render_attached_analysis(
                 row_limit,
                 offset=int(stored["missing_offset"]),
                 cursor_base=str(
-                    stored[
-                        "answer_coverage_cursor_base" if answer_channel else "coverage_cursor_base"
-                    ]
+                    natural_cursor_base if answer_channel else stored["coverage_cursor_base"]
                 ),
                 fields=fields,
             )
             if coverage["missing_cases"]["next_cursor"] is not None:
-                _append_result_hint(
+                response_budget.append_hint(
                     data,
                     "coverage.missing_cases is truncated; call analyze_results with "
                     "continue={result_set_id, cursor: "
@@ -3000,6 +2969,36 @@ def render_attached_analysis(
             data["source_hashes"] = [
                 _pick(item, _RUN_IDENTITY_KEYS) for item in hashes if isinstance(item, dict)
             ]
+        if data["next"] is not None:
+            reason = (
+                "an artifact item was deferred intact"
+                if stored.get("natural_deferred")
+                else "the call budget ended"
+            )
+            response_budget.append_hint(
+                data,
+                f"Analysis is partial because {reason}; call analyze_results with "
+                "continue={result_set_id, cursor} from 'next'.",
+            )
+        coverage = data.get("coverage")
+        missing_page = coverage.get("missing_cases") if isinstance(coverage, dict) else None
+        if isinstance(missing_page, dict) and missing_page.get("next_cursor") is not None:
+            response_budget.append_hint(
+                data,
+                "coverage.missing_cases is truncated; call analyze_results with "
+                "continue={result_set_id, cursor: coverage.missing_cases.next_cursor} "
+                "for the next page of missing cases (no work is replayed).",
+            )
+        failures = data.get("failures")
+        has_failures = isinstance(failures, list) and bool(failures)
+        missing_total = int(missing_page.get("total", 0)) if isinstance(missing_page, dict) else 0
+        data["outcome"] = (
+            "failed"
+            if not rendered_results and has_failures and data["next"] is None
+            else "partial"
+            if has_failures or missing_total or data["next"] is not None
+            else "complete"
+        )
     return data, False
 
 
@@ -3019,12 +3018,7 @@ def columnarize_analysis_view(data: dict[str, Any]) -> None:
         response_budget.columnarize(coverage["missing_cases"], "items")
 
 
-def analysis_view_rows(data: dict[str, Any]) -> list[Any]:
-    """Expose the shared row inventory to enclosing receipt budget renderers."""
-    return _analysis_rows(data)
-
-
-def _analysis_rows(data: dict[str, Any]) -> list[Any]:
+def analysis_rows(data: dict[str, Any]) -> list[Any]:
     """Every row this response is currently showing, across all row surfaces.
 
     Every surface :meth:`_Limits.scaled` shrinks appears here, and nothing else
@@ -3114,7 +3108,7 @@ async def _negotiate_analysis(budget: int, a: _Assembly) -> types.CallToolResult
     async def render(rung: response_budget.Rung) -> dict[str, Any]:
         nonlocal text, rendered, built_for
         limits = (
-            base.scaled(response_budget.RowMeasure.of(_analysis_rows(rendered)), rung)
+            base.scaled(response_budget.RowMeasure.of(analysis_rows(rendered)), rung)
             if rung.shrink
             else base
         )
@@ -3421,6 +3415,13 @@ async def _evaluate_analysis(
                 for manifest_id, code in relevant.items()
             )
 
+    # Source drift is the last consumer of this evaluation-only join key.
+    # Remove it once so every assembly and durable snapshot can use the records
+    # directly without copying their nested values.
+    for unit in processed:
+        for record in unit["records"]:
+            record.pop("_manifest_id", None)
+
     # Publish every surviving artifact once, then merge the handles back into the
     # records that reference them (shared dicts, so entries built below see them).
     try:
@@ -3482,13 +3483,12 @@ async def capture_attached_analysis(
     args: AnalyzeResultsInput, state: SessionState
 ) -> dict[str, Any]:
     """Evaluate once and retain the neutral bounded snapshot for a job sidecar."""
-    return _snapshot_from_assembly(
-        await _evaluate_analysis(
-            args,
-            state,
-            per_run_reservoir_limit=MAX_PAGE_SIZE,
-        )
+    assembly = await _evaluate_analysis(
+        args,
+        state,
+        per_run_reservoir_limit=MAX_PAGE_SIZE,
     )
+    return await asyncio.to_thread(_snapshot_from_assembly, assembly)
 
 
 @registry.tool(

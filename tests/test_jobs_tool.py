@@ -482,7 +482,7 @@ class TestDurableProgress:
         assert data["completeness"]["produced"] == 1
         assert data["completeness"]["failed"] == expected_failed
         assert data["completeness"]["cancelled"] == expected_cancelled
-        assert data["progress"] == progress_from_completeness(data["completeness"])
+        assert data["progress"] == progress_from_completeness(Completeness(**data["completeness"]))
         assert data["progress"]["terminal"] == 4
         assert data["progress"]["remaining"] == 0
 
@@ -518,7 +518,7 @@ class TestDurableProgress:
             await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
         )
 
-        assert data["progress"] == progress_from_completeness(data["completeness"])
+        assert data["progress"] == progress_from_completeness(Completeness(**data["completeness"]))
         assert data["progress"]["expanded"] == 1
         assert data["progress"]["terminal"] == terminal
         assert data["progress"]["remaining"] == remaining
