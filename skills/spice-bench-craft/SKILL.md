@@ -175,3 +175,16 @@ vector: dumping `v(out)` and `i(VDD)` yields `scale, v(out), scale, i(VDD)`,
 not one shared scale followed by both values. Parse repeated scale/value groups,
 and remember that `wrdata` writes only the text table; add an explicit `write`
 too if later server analysis needs a rawfile.
+
+## Routing: which vehicle runs what
+
+- A quick one-off ngspice run: shell out and run it yourself — it is the
+  cheapest path. Keep the rawfile.
+- Reading numbers out of any rawfile (yours or the server's): the server's
+  analysis tools — `analyze_results` accepts a bare `raw_path` for runs it
+  never executed, and returns parsed values, reductions, and spec verdicts.
+- LTspice execution, declared sweep/corner/Monte-Carlo matrices, or a run
+  long enough to outlive one call: `run_experiments` — durable idempotent
+  submission, then `jobs` to wait or cancel.
+- Schematic (`.asc`) work: the schematic tools, never hand-written files —
+  they carry orthogonal routing and pin-collision/junction checks.
