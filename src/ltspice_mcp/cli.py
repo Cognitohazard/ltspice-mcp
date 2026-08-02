@@ -501,7 +501,7 @@ def build_parser(argv: Sequence[str] | None = None) -> _Parser:
     run_command.exemplar = _RUN_EXEMPLAR
     run_command.json_requested = json_requested
     run_command.add_argument(
-        "deck", metavar="DECK", help="The circuit deck to run (.cir, .net or .sp)."
+        "deck", metavar="DECK", help="The circuit to run (.cir, .net, .sp or .asc)."
     )
     _add_common_options(run_command)
     run_command.add_argument(
