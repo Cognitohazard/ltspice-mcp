@@ -488,6 +488,43 @@ async def test_dry_run_surfaces_all_op_failures(asc_state):
     assert len(data["failures"]) == 2
 
 
+async def test_default_view_covers_only_the_refs_the_batch_touched(asc_state, work_dir):
+    """An ack-shaped edit returns the geometry of what it edited, not the sheet.
+
+    R8 adds one net label and used to be handed every pin on the sheet. The
+    whole-sheet table is still one explicit ``return_views`` away.
+    """
+    built = await _build_blank(asc_state, "touched-scope", _DIVIDER_OPS)
+    assert {row["ref"] for row in built["views"]["touched"]["items"]} == {"R1", "R2"}
+    assert "pin_legend" not in built["views"]
+
+    follow_up = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                target="touched-scope.asc",
+                expected_sha256=_sha(work_dir / "touched-scope.asc"),
+                ops=[{"op": "set_component_value", "reference": "R2", "value": "4k7"}],
+            ),
+            asc_state,
+        )
+    )
+
+    assert [row["ref"] for row in follow_up["views"]["touched"]["items"]] == ["R2"]
+    # Nothing was lost — the sheet still has both, on request.
+    whole_sheet = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                target="touched-scope.asc",
+                expected_sha256=_sha(work_dir / "touched-scope.asc"),
+                return_views=["pin_legend"],
+                ops=[{"op": "set_component_value", "reference": "R2", "value": "5k"}],
+            ),
+            asc_state,
+        )
+    )
+    assert {row["ref"] for row in whole_sheet["views"]["pin_legend"]["items"]} == {"R1", "R2"}
+
+
 async def test_dry_run_seam_keeps_full_views_while_mcp_pages_them(asc_state, work_dir):
     args = _edit_input(
         target="dry-full.asc",

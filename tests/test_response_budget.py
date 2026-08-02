@@ -20,6 +20,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments as exp_mod
 from ltspice_mcp.tools import inspect_tools as insp
+from ltspice_mcp.tools._base import ResponseBudget
 from ltspice_mcp.tools.analyze import (
     OUTPUT_SCHEMA,
     AnalyzeResultsInput,
@@ -274,8 +275,13 @@ class TestLadderPrimitives:
 class TestAnalysisBudget:
     async def test_a_met_budget_changes_nothing(self, state_no_sim: SessionState, work_dir: Path):
         """Absent and comfortably-met budgets return the same bytes: a budget
-        is a ceiling, not a rendering mode."""
+        is a ceiling, not a rendering mode.
+
+        The server's own default is switched off here so 'absent' means what it
+        says — with it on, a large default response is trimmed at rung 0 and the
+        two are legitimately different (TestServerDefaultBudget covers that)."""
         raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
+        state_no_sim.config.default_budget = 0
         plain = await _analysis(state_no_sim, raw)
         met = await _analysis(state_no_sim, raw, budget=1_000_000)
         assert _stable(met) == _stable(plain)
@@ -387,6 +393,9 @@ class TestAnalysisBudget:
         once: empty identity echo, revoked opt-ins, columnar rows, shrunk page."""
         raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
         include = {"per_run": {"limit": 45}, "provenance": True, "signals_available": True}
+        # The undegraded reference this test measures the rungs against; the
+        # server's own default would already have applied rung 0 to it.
+        state_no_sim.config.default_budget = 0
         plain = await _analysis(state_no_sim, raw, include=include)
         assert plain["source_hashes"][0].get("raw_sha256") is not None
         assert "signals_available" in plain
@@ -608,7 +617,7 @@ async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
         return exp_mod.finalize_receipt(data), "completed"
 
     result = await exp_mod._render_run_receipt(
-        response_budget.BUDGET_MIN_TOKENS,
+        ResponseBudget(response_budget.BUDGET_MIN_TOKENS),
         build,
     )
     data = result.structuredContent
@@ -663,6 +672,85 @@ async def _jobs(state: SessionState, **values: Any) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
+class TestServerDefaultBudget:
+    """The budget that runs when the caller sets none.
+
+    The ladder used to be entirely opt-in, and opting in requires already
+    knowing the response is too big — which a caller learns by receiving it. The
+    server therefore applies its own budget, but only at rung 0: that rung
+    removes empty presentation blocks and the identity echo, and nothing else,
+    so it can cut no fact and revoke no detail the caller asked for.
+    """
+
+    async def test_a_large_default_response_loses_the_identity_echo_only(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
+        state_no_sim.config.default_budget = 500
+        trimmed = await _analysis(state_no_sim, raw)
+
+        # Rung 0's own allowlist, and the whole of what the default may do: the
+        # identity echo emptied, the answer untouched.
+        assert trimmed["source_hashes"] == []
+        assert trimmed["results"]["loop"]["values"]
+        # No note claiming a budget the caller never set went unmet — the ladder
+        # stopped at rung 0 by policy, which is the policy working.
+        assert _observation(trimmed, "budget_not_met") is None
+
+    async def test_the_default_stops_at_rung_zero_where_a_caller_budget_would_not(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """Same tiny number, two sources of authority, two different ladders."""
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
+        state_no_sim.config.default_budget = 500
+        defaulted = await _analysis(state_no_sim, raw, include={"per_run": {"limit": 20}})
+        state_no_sim.config.default_budget = 0
+        explicit = await _analysis(
+            state_no_sim, raw, budget=500, include={"per_run": {"limit": 20}}
+        )
+
+        # The explicit budget walks past rung 0 and shrinks what the caller
+        # asked for; the server's default leaves the requested page standing.
+        assert defaulted["results"]["loop"]["per_run"]["returned"] == 20
+        assert explicit["results"]["loop"]["per_run"]["returned"] < 20
+        assert _observation(explicit, "budget_truncated") is not None
+        # The default degraded too — at rung 0 — and says so. What it must not
+        # say is "re-ask without 'budget'" to a caller who never passed one.
+        defaulted_note = _observation(defaulted, "budget_truncated")
+        assert defaulted_note is not None
+        assert "rung 0" in defaulted_note["detail"]
+        assert "larger 'budget'" in defaulted_note["detail"]
+
+    async def test_zero_disables_the_default_entirely(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
+        state_no_sim.config.default_budget = 0
+        undegraded = await _analysis(state_no_sim, raw, include={"provenance": True})
+        assert undegraded["source_hashes"], "nothing should have been trimmed"
+
+    async def test_facts_come_back_whole_under_the_default(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
+        state_no_sim.config.default_budget = 500
+        args = AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"raw_path": str(raw), "label": "dut"}],
+                "recipes": [
+                    _WIDE_RECIPE,
+                    {"key": "absent", "metric": "bode_filter", "signal": "V(nope)"},
+                ],
+            }
+        )
+        result = await handle_analyze_results(args, state_no_sim)
+        data = result.structuredContent
+        assert data is not None
+        assert data["failures"], "a failing recipe is a fact, not presentation"
+        assert data["coverage"]["runs_analyzed"] >= 1
+
+
+@pytest.mark.asyncio
 class TestJobsBudget:
     async def test_answer_rung_rebuilds_a_receipt_at_the_same_page_limit(self):
         built_for: list[bool] = []
@@ -683,7 +771,7 @@ class TestJobsBudget:
                 "receipt",
             )
 
-        data, _ = await exp_mod._negotiate_jobs(600, build, 50)
+        data, _ = await exp_mod._negotiate_jobs(ResponseBudget(600), build, 50)
 
         assert built_for == [False, True]
         assert data["analysis"]["view"] == "answer"
@@ -691,6 +779,8 @@ class TestJobsBudget:
     async def test_a_met_budget_changes_nothing(self, state_no_sim: SessionState, work_dir: Path):
         job = _batch_with_runs(work_dir, 60)
         state_no_sim.all_jobs[job.job_id] = job
+        # As above: 'no budget' has to mean no budget for this comparison.
+        state_no_sim.config.default_budget = 0
         plain = await _jobs(state_no_sim, action="runs", job_id=job.job_id)
         met = await _jobs(state_no_sim, action="runs", job_id=job.job_id, budget=1_000_000)
         assert _stable(met) == _stable(plain)

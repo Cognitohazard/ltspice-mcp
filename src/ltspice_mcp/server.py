@@ -125,56 +125,6 @@ class _ErrorHint(NamedTuple):
 # Error type → profile-aware hint appended to error messages.
 # PathSecurityError is handled separately (needs dynamic allowed_paths).
 _ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
-    _err.MissingModelError: _ErrorHint(
-        full=(
-            "Try find_model to fuzzy-match against loaded libraries "
-            "(catches typos and near-neighbour part numbers), or load_library "
-            "to load a library file containing it."
-        ),
-        agentic=(
-            "Try find_model to fuzzy-match against loaded libraries "
-            "(catches typos), or load a library containing it and rerun."
-        ),
-        consolidated=(
-            'Use inspect with a model query (mode:"search") to fuzzy-match '
-            "against loaded libraries, or add a .lib/.include for it to the deck."
-        ),
-    ),
-    _err.ConvergenceError: _ErrorHint(
-        full=(
-            "Suggestions:\n"
-            "  - Add .OPTIONS (e.g., .OPTIONS reltol=0.003 or .OPTIONS method=gear)\n"
-            "  - Use edit_directive to add a .OPTIONS directive\n"
-            "  - Check component values for very large/small ratios"
-        ),
-        agentic=(
-            "Suggestions:\n"
-            "  - Add a .OPTIONS directive to the netlist "
-            "(e.g., .OPTIONS reltol=0.003 or .OPTIONS method=gear)\n"
-            "  - Check component values for very large/small ratios"
-        ),
-        consolidated=(
-            "Suggestions:\n"
-            "  - Add a .OPTIONS directive to the netlist "
-            "(e.g., .OPTIONS reltol=0.003 or .OPTIONS method=gear)\n"
-            "  - Check component values for very large/small ratios"
-        ),
-    ),
-    _err.SingularMatrixError: _ErrorHint(
-        full=(
-            "This usually means a floating node or short circuit.\n"
-            "Use read_circuit to inspect the netlist for connectivity issues."
-        ),
-        agentic=(
-            "This usually means a floating node or short circuit.\n"
-            "Inspect the netlist for connectivity issues."
-        ),
-        consolidated=(
-            "This usually means a floating node or short circuit.\n"
-            "Use inspect with a net query to trace connectivity, or read the "
-            "netlist directly."
-        ),
-    ),
     _err.SimulationError: _ErrorHint(
         full="Use server_status to verify simulator availability.",
         agentic="Use server_status to verify simulator availability.",

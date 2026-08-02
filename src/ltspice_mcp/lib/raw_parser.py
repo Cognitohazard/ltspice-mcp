@@ -29,6 +29,30 @@ from ltspice_mcp.lib.log_parser import (
 )
 from ltspice_mcp.lib.result_observations import surface_observations
 
+# LTspice .raw header magic. Classic files start with ASCII ``Title:``; newer
+# LTspice writes a UTF-16 LE BOM followed by the same ``Title:``.
+_RAW_HEADER_ASCII = b"Title:"
+_RAW_HEADER_UTF16 = b"\xff\xfeT\x00i\x00t\x00l\x00e\x00:\x00"
+
+
+def has_valid_raw_header(path: Path | None) -> bool:
+    """True if ``path`` looks like a real ``.raw`` file, by header magic.
+
+    The one answer to "did this run actually write results?" for the two restart
+    paths that promote an interrupted job from the filesystem — the legacy job
+    registry and the experiment store. A truncated or unrelated file at the
+    expected path must not be mistaken for a result, and two copies of that
+    check are how one of them comes to accept what the other rejects.
+    """
+    if path is None:
+        return False
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(len(_RAW_HEADER_UTF16))
+    except OSError:
+        return False
+    return header.startswith(_RAW_HEADER_ASCII) or header.startswith(_RAW_HEADER_UTF16)
+
 
 class _MultiPlotAsciiGuard:
     """Break spicelib's trailing-empty-line skip when it meets the next plot.

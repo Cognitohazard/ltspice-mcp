@@ -282,23 +282,37 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # histogram_bins on the measurements recipe: the legacy tool could bin a
     # .MEAS distribution and this door hard-coded zero, so a Monte Carlo's
     # spread was readable through one door only.
-    "analyze_results": 21330,
+    # LOWERED 21330 -> 21024: the budget field's 786-char ladder walkthrough
+    # became one sentence (the mechanics live in spice://guide), against a
+    # +150-char description on the operating_point recipe's `device` — the one
+    # knob that turns a 45 KB unscoped bias point into a 5 KB answer, and which
+    # no caller could discover from the schema.
+    "analyze_results": 21024,
     # expected_sha256 now names where a caller gets one (an inspect
     # components/net query). No read tool reported the digest before, so a
     # first edit on an existing sheet had no in-product route to its token.
-    "edit_schematic": 12786,
-    "inspect": 8628,
-    "jobs": 3955,
+    # RAISED 12786 -> 12987: return_views gained the touched-scope legend and
+    # its cursor. An ack-shaped edit returned all 46 pins of the sheet; the
+    # default now returns the pins of what the batch touched, which is ~2,300
+    # response chars saved on every edit for 201 chars of schema.
+    "edit_schematic": 12987,
+    # LOWERED 8628 -> 8008: budget prose, as above.
+    "inspect": 8008,
+    # LOWERED 3955 -> 3378: budget prose, as above.
+    "jobs": 3378,
     # Adds budget/attached-view inputs, a shared object/columnar receipt row,
     # and the assign-target grammar (REF@model / INSTANCE:delvto forms) — the
     # instance form went undiscovered by every agent while undocumented, so
     # those bytes buy a capability that otherwise does not exist for callers.
-    # Also carries the mismatch rule's field documentation. Those six numbers
-    # were bare before: AVT is unit-bearing (V·µm), and a coefficient written
-    # in V·m runs a hundred cases at nominal and reports success, which no
-    # result inspection can detect. Units at the call site are the only place
-    # that error is catchable.
-    "run_experiments": 14249,
+    # Also carries the mismatch rule's field documentation: AVT is unit-bearing
+    # (V·µm), and a coefficient written in V·m runs a hundred cases at nominal
+    # and reports success, which no result inspection can detect. Units at the
+    # call site are the only place that error is catchable.
+    # LOWERED 14249 -> 14081: budget prose, plus the mismatch descriptions cut
+    # to the two facts a result cannot recover — the units and the inversion.
+    # The prefix/BSIM prose they lost duplicated tools/advanced.py and now lives
+    # in spice://guide, which is read once rather than shipped every session.
+    "run_experiments": 14081,
     "verify_circuit": 5079,
 }
 

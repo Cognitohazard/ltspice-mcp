@@ -495,6 +495,42 @@ async def test_escaping_include_denied_no_read(state_no_sim, work_dir):
     assert "CANARY" in unresolved
 
 
+async def test_simulator_library_include_is_read_though_the_sandbox_denies_it(
+    config, work_dir, monkeypatch
+):
+    """The run path and the verify path agree on the simulator's own library.
+
+    Staging accepts a reference into the detected install's library so a MOSFET
+    sheet can run at all (LTspice's netlister appends that ``.lib`` itself). If
+    only staging accepts it, verify_circuit reports the schematic's own library
+    as an unusable include on the one request that asks whether the schematic
+    still matches the circuit being simulated.
+    """
+    install = work_dir.parent / "fake_ltspice_install" / "lib" / "cmp"
+    install.mkdir(parents=True, exist_ok=True)
+    shipped = install / "standard.mos"
+    shipped.write_text(".subckt SHIPPED 1 2\nR9 1 2 1\n.ends\n")
+    # The detected install reports its own library dirs; that discovery is the
+    # environment, the acceptance of what it reports is what is under test.
+    monkeypatch.setattr(
+        FakeSim,
+        "get_default_library_paths",
+        classmethod(lambda _cls: [str(install)]),
+        raising=False,
+    )
+    state = _with_ltspice(config)
+
+    body = f"* c\nX1 in out SHIPPED\nR1 in out 1k\n.lib {shipped}\n.end\n"
+    deck = _write(work_dir, "cand.cir", body)
+    ref = _write(work_dir, "ref.cir", body)
+
+    data = await _run(state, path=str(deck), reference=str(ref), checks=["compare"])
+
+    assert not [f for f in data["findings"] if f["rule_id"] == "path_denied"]
+    assert data["comparison"]["unresolved_subckts"] == []
+    assert data["comparison"]["equivalent"] is True
+
+
 # ---------------------------------------------------------------------------
 # quality checks (label-island / text-overlap / clean sheet)
 # ---------------------------------------------------------------------------

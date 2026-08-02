@@ -32,7 +32,7 @@ from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.format import format_spice_value
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.job_store import JOBS_SUBDIR, SIDECAR_DIRNAME
-from ltspice_mcp.lib.log_parser import parse_step_iterations
+from ltspice_mcp.lib.log_parser import extract_log_diagnostics, parse_step_iterations
 from ltspice_mcp.lib.raw_parser import get_step_count, safe_magnitude_db
 from ltspice_mcp.lib.recipes import (
     AcStructureRecipe,
@@ -66,6 +66,7 @@ from ltspice_mcp.lib.recipes import (
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     ABSENT,
+    ResponseBudget,
     StrictModel,
     ToolInput,
     escape_field_segment,
@@ -73,6 +74,7 @@ from ltspice_mcp.tools._base import (
     keep_plan,
     project_row,
     registry,
+    resolve_response_budget,
     safe_path,
     split_field_path,
 )
@@ -329,11 +331,7 @@ class AnalyzeResultsInput(ToolInput):
     budget: int | None = Field(
         default=None,
         ge=response_budget.BUDGET_MIN_TOKENS,
-        description=response_budget.budget_description(
-            "the source identity echo and empty blocks, then include.provenance / "
-            "outliers / signals_available, then columnar rows, then smaller pages "
-            "of per_run rows and values"
-        ),
+        description=response_budget.BUDGET_DESCRIPTION,
     )
     continuation: ContinueInput | None = Field(
         default=None,
@@ -820,7 +818,78 @@ async def _resolve_sources(
                 )
             )
         await state.note_recent_circuit(job.netlist.resolve())
+    observations.extend(await _relay_solve_failures(runs))
     return runs, missing, source_jobs, observations
+
+
+_SOLVE_FAILURE_RUN_CAP = 10
+"""How many run labels a relayed solve failure names before deferring to ``runs``."""
+
+
+async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[dict[str, Any]]:
+    """Relay each resolved run's simulator-declared solve failures.
+
+    The doctrine's chokepoint for this profile: a run that produced a raw
+    despite a failed solve is analyzed and reported like any other, so unless
+    the simulator's own line is relayed here the caller reads a number with no
+    way to know the solve behind it collapsed. The full profile enforces the
+    same rule at ``analysis._finish_metric``; both classify through
+    ``services.solve_failure_lines`` so they cannot drift.
+
+    One observation per distinct line rather than per run: a sweep that fails
+    to converge fails identically in every case, and the run labels are what
+    distinguishes them. A log the bounded parse could not read is reported as
+    such — an unread log is a gap in this relay's coverage, not an absence of
+    failures.
+    """
+    grouped: dict[str, list[str]] = {}
+    unread: list[str] = []
+    for run in runs:
+        log = run.source.log
+        if log is None or not log.exists():
+            continue
+        try:
+            diagnostics = await services.bounded_parse(
+                log, lambda log=log: extract_log_diagnostics(log)
+            )
+        except ResultError:
+            unread.append(run.label)
+            continue
+        for line in services.solve_failure_lines(diagnostics):
+            grouped.setdefault(line, []).append(run.label)
+
+    relayed: list[dict[str, Any]] = [
+        {
+            "code": "solve_failure",
+            "kind": "relay",
+            "detail": (
+                f"The simulator reported a failed solve on {len(labels)} run(s); "
+                f"every value read from them is affected. Simulator line: {line}"
+            ),
+            "evidence": {
+                "log": line,
+                "runs": labels[:_SOLVE_FAILURE_RUN_CAP],
+                "run_count": len(labels),
+            },
+        }
+        for line, labels in grouped.items()
+    ]
+    if unread:
+        relayed.append(
+            {
+                "code": "log_unread",
+                "kind": "coverage",
+                "detail": (
+                    f"{len(unread)} run log(s) could not be parsed within the analysis "
+                    "deadline, so a solve failure on them would not be reported here."
+                ),
+                "evidence": {
+                    "runs": unread[:_SOLVE_FAILURE_RUN_CAP],
+                    "run_count": len(unread),
+                },
+            }
+        )
+    return relayed
 
 
 async def _digest(path: Path, deadline: float, cache: _DigestCache) -> str:
@@ -1134,8 +1203,10 @@ async def _adapter_value(
                     raise ResultError(
                         f"{recipe.expr!r} is not present in this operating-point "
                         "result. Address a value by the name it carries (e.g. "
-                        "'@m1[gm]', 'V(out)') or by the 'm1.gm' device.param "
-                        f"shorthand. Present here: {present}"
+                        "'@m1[gm]', 'V(out)'); a TOP-LEVEL device also accepts the "
+                        "'m1.gm' shorthand, but a subcircuit device keeps LTspice's "
+                        "colon-qualified name ('@q:q2:1:2[gm]') and must be named "
+                        f"literally. Present here: {present}"
                     ) from None
                 name, value = match
                 return {
@@ -1700,6 +1771,18 @@ def _crossing_sample(value: dict[str, Any]) -> tuple[str, Any]:
     return "first_crossing_hz", (crossings[0].get("frequency_hz") if crossings else None)
 
 
+def _unity_gain_sample(value: dict[str, Any]) -> tuple[str, Any]:
+    """The unity-gain crossover frequency — the bandwidth half of "UGBW and PM".
+
+    An engineer's prior for stability metrics is gain margin, phase margin, AND
+    the crossover frequency; only the first two shipped flat, so the very first
+    question an S1 session asks got half an answer and paid a second call for
+    the rest. None when the loop never reaches unity, which is what
+    ``stability`` already says in words."""
+    crossovers = value.get("unity_gain_crossovers") or []
+    return "unity_gain_hz", (crossovers[0].get("frequency_hz") if crossovers else None)
+
+
 # Scalar metrics whose sample lives in a nested structure rather than a flat
 # top-level field. Keyed alongside _SCALAR_FIELDS so no discriminant is special
 # cased inside the loop.
@@ -1715,8 +1798,9 @@ _SCALAR_NESTED: dict[str, Callable[[dict[str, Any]], tuple[str, Any]]] = {
 # at row-build time. bode_point's extractor is the reducer's own, so the
 # projected leaf and a reduce over that recipe can never disagree;
 # bode_crossing is a variable-length recipe whose category rejects ``reduce``
-# at validation, so its rule lives only here. stability already ships its
-# worst-case scalars flat; this is that rule applied uniformly.
+# at validation, so its rule lives only here. stability shipped its worst-case
+# margins flat but left the crossover frequency in a list; this is that rule
+# applied uniformly.
 _HEADLINE_LEAVES: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "bode_point": lambda value: dict([_bode_point_sample(value)]),
     # No crossing COUNT here: the adapter caps its list (max_results, default
@@ -1724,6 +1808,7 @@ _HEADLINE_LEAVES: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     # wrong number dressed as a fact. Null first_crossing_hz carries "never
     # crossed"; ambiguity is visible in the list itself.
     "bode_crossing": lambda value: dict([_crossing_sample(value)]),
+    "stability": lambda value: dict([_unity_gain_sample(value)]),
 }
 
 
@@ -2148,7 +2233,6 @@ def _result_entry(
     incomplete = bool(failures or missing)
     entry: dict[str, Any] = {
         "metric": recipe.metric,
-        "units": None,
         "reduced": _reduce(recipe, records),
         "warnings": _record_warnings(records),
     }
@@ -2329,7 +2413,6 @@ _RESULT_ENTRY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "metric": {"type": "string"},
-        "units": {"type": ["string", "object", "null"]},
         "reduced": response_budget.row_items_schema(_REDUCED_SCHEMA),
         "reduced_columns": response_budget.COLUMNAR_ROWS_SCHEMA,
         "groups": {"type": "array", "items": {"type": "object"}},
@@ -2342,7 +2425,7 @@ _RESULT_ENTRY_SCHEMA: dict[str, Any] = {
         "values_columns": response_budget.COLUMNAR_ROWS_SCHEMA,
         "warnings": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["metric", "units", "reduced", "warnings"],
+    "required": ["metric", "reduced", "warnings"],
     "additionalProperties": False,
 }
 
@@ -2372,6 +2455,7 @@ OUTPUT_SCHEMA: dict[str, Any] = {
                     "code": {"type": "string"},
                     "kind": {"type": "string"},
                     "detail": {"type": "string"},
+                    "evidence": {"type": "object"},
                 },
                 "required": ["code", "kind", "detail"],
                 "additionalProperties": True,
@@ -3150,7 +3234,12 @@ _TRIM_REMOVE_ENVELOPE: tuple[str, ...] = ("signals_available",)
 _TRIM_EMPTY_ENVELOPE: tuple[str, ...] = ("source_hashes",)
 
 
-def _degrade_analysis(data: dict[str, Any], rung: response_budget.Rung) -> None:
+def _degrade_analysis(
+    data: dict[str, Any],
+    rung: response_budget.Rung,
+    *,
+    preserve_provenance: bool = False,
+) -> None:
     """Apply the budget ladder's in-place presentation rungs to this envelope.
 
     The answer rung and the shrink rung are not here: revoking an opt-in changes
@@ -3164,7 +3253,14 @@ def _degrade_analysis(data: dict[str, Any], rung: response_budget.Rung) -> None:
     if rung.trim:
         for entry in data["results"].values():
             response_budget.apply_trim(entry, remove=_TRIM_REMOVE_RESULT)
-        response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=_TRIM_EMPTY_ENVELOPE)
+        # An explicit include.provenance is a caller opt-in, and the trim rung's
+        # charter is to revoke none — so below the answer rung (the rung whose
+        # documented job IS revoking opt-ins) an enriched identity echo
+        # survives. Once the answer rung has revoked the opt-in, emptying the
+        # echo is the ladder working as specified, not a second revocation.
+        keep = preserve_provenance and not rung.answer_channel
+        empty = () if keep else _TRIM_EMPTY_ENVELOPE
+        response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=empty)
     if rung.columnar:
         for entry in data["results"].values():
             response_budget.columnarize(entry, "reduced")
@@ -3186,11 +3282,16 @@ _BUDGET_NOTES = response_budget.Notes(
         "presentation was reduced; every recipe that produced a result "
         "still has one, and its reductions and spec verdict are intact."
     ),
-    route="Re-ask without 'budget', or continue with continue={result_set_id, cursor}.",
+    route=(
+        "Ask again with a larger 'budget' for the full presentation, or continue "
+        "with continue={result_set_id, cursor}."
+    ),
 )
 
 
-async def _negotiate_analysis(budget: int, a: AnalysisEvaluation) -> types.CallToolResult:
+async def _negotiate_analysis(
+    budget: ResponseBudget, a: AnalysisEvaluation
+) -> types.CallToolResult:
     """Assemble this analysis at the mildest ladder rung that fits ``budget``."""
     base = _Limits.of(a.include)
     text = ""
@@ -3211,10 +3312,13 @@ async def _negotiate_analysis(budget: int, a: AnalysisEvaluation) -> types.CallT
         if built_for != (rung.answer_channel, limits):
             rendered, text = _assemble(a, rung, limits)
             built_for = (rung.answer_channel, limits)
-        _degrade_analysis(rendered, rung)
+        _degrade_analysis(rendered, rung, preserve_provenance=a.include.provenance)
         return rendered
 
-    result = await response_budget.negotiate(budget, render, _BUDGET_NOTES)
+    assert budget.tokens is not None  # the undegraded path never reaches here
+    result = await response_budget.negotiate(
+        budget.tokens, render, _BUDGET_NOTES, max_rung=budget.max_rung
+    )
     response_budget.attach_notes(result, _BUDGET_NOTES)
     return format_response(text, result.data)
 
@@ -3706,7 +3810,8 @@ async def handle_analyze_results(
         state,
         stop_after_per_run_page=True,
     )
-    if args.budget is None:
+    budget = resolve_response_budget(args.budget, state)
+    if budget.tokens is None:
         data, text = _assemble(assembly, None, _Limits.of(assembly.include))
         return format_response(text, data)
-    return await _negotiate_analysis(args.budget, assembly)
+    return await _negotiate_analysis(budget, assembly)

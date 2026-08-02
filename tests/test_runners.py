@@ -431,6 +431,64 @@ class TestSimulationRunnerHandleCompletion:
         assert fail_log.exists()
 
 
+class TestFailureClassification:
+    """A failed run names its physics cause, not just 'it failed'.
+
+    Every cause used to arrive as one code, so a caller could not tell a
+    convergence abort from an unresolved model without reading the log excerpt
+    embedded in the message.
+    """
+
+    def test_convergence_abort_is_classified(self, work_dir: Path):
+        log = work_dir / "conv.fail"
+        log.write_text(
+            "Direct Newton iteration failed to find operating point.\n"
+            "Time step too small; time = 1.2e-06, timestep = 1e-18\n"
+        )
+
+        outcome = collect_run_outcome(".", str(log))
+
+        assert outcome.failure_code == "convergence_failed"
+        assert outcome.failure_evidence is None
+
+    def test_missing_model_carries_the_unresolved_names(self, work_dir: Path):
+        log = work_dir / "model.fail"
+        log.write_text(
+            'Error on line 2 : q1 c b e mystery Unable to find definition of model "mystery"\n'
+        )
+
+        outcome = collect_run_outcome(".", str(log))
+
+        assert outcome.failure_code == "missing_model"
+        assert outcome.failure_evidence == {"missing_refs": ["mystery"]}
+
+    def test_singular_matrix_is_classified(self, work_dir: Path):
+        log = work_dir / "singular.fail"
+        log.write_text("singular matrix: check node n003\n")
+
+        outcome = collect_run_outcome(".", str(log))
+
+        assert outcome.failure_code == "singular_matrix"
+
+    def test_unrecognized_failure_stays_the_fallback_code(self, work_dir: Path):
+        log = work_dir / "opaque.fail"
+        log.write_text("Fatal Error: the simulator gave up for reasons of its own\n")
+
+        outcome = collect_run_outcome(".", str(log))
+
+        assert outcome.failure_code == "execution_failed"
+
+    def test_a_successful_run_is_not_classified(self, work_dir: Path):
+        raw = work_dir / "ok.raw"
+        raw.write_text("Title: mock")
+        log = work_dir / "ok.log"
+        log.write_text("ok\n")
+
+        outcome = collect_run_outcome(str(raw), str(log))
+
+        assert outcome.failure_code is None
+
+
 class TestDeckRequestsRaw:
     """deck_requests_raw's scanner scope: scanning stops at .end, and
     .include/.inc/.lib references are followed best-effort."""

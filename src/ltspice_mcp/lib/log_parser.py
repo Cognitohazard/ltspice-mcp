@@ -545,6 +545,49 @@ def extract_missing_refs(log_path: Path) -> list[str]:
     return missing_refs_from_text(read_log_text(log_path))
 
 
+# Phrases every simulator we support prints when the solver gave up. Grouped
+# with the OP-solve rung wording because a bias point that no method could find
+# IS a convergence failure — it just fails before the analysis starts.
+_CONVERGENCE_CODE_PHRASES = (
+    "time step too small",
+    "timestep too small",
+    "iteration limit reached",
+    "no convergence",
+    "trouble with node",
+    "failed to find operating point",
+)
+
+
+def classify_failure_code(errors: list[str]) -> tuple[str, dict[str, list[str]] | None]:
+    """Name the physics cause behind a failed run's log errors, with evidence.
+
+    Returns one of ``missing_model`` / ``singular_matrix`` /
+    ``convergence_failed`` / ``execution_failed`` (the fallback for a failure
+    whose log says nothing we recognize) plus any evidence the classification
+    itself produced. Every cause used to arrive as one code, so a caller could
+    not tell an unresolved model from a convergence abort without reading
+    prose — and the phrase tables that CAN tell them apart were already being
+    run on the failing log and discarded.
+
+    Classifies off the diagnostics-extracted error lines rather than the whole
+    log so the anchoring those rules apply (a bare phrase must start its line)
+    carries over: a log narrating "the singular matrix decomposition succeeded"
+    must not classify as a singular matrix. Most specific cause first — a deck
+    that cannot resolve a model never reaches the solver, so any convergence
+    noise beneath it is downstream of the real failure.
+    """
+    blob = "\n".join(errors)
+    refs = missing_refs_from_text(blob)
+    if refs:
+        return "missing_model", {"missing_refs": refs}
+    lowered = blob.lower()
+    if "singular matrix" in lowered:
+        return "singular_matrix", None
+    if any(phrase in lowered for phrase in _CONVERGENCE_CODE_PHRASES):
+        return "convergence_failed", None
+    return "execution_failed", None
+
+
 def _op_block_recovered(lines: list[str], idx: int) -> bool:
     """Whether the OP-solve block holding a stepping-failure at ``idx`` converged.
 

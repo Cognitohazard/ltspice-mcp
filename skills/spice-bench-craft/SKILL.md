@@ -194,3 +194,7 @@ too if later server analysis needs a rawfile.
   intermediates stay in your interpreter.
 - Result belongs on disk, not your reply, or no server connected:
   `spice-mcp <op> @plan.json --json` — same ops; exit codes are verdicts.
+- Route on the ANSWER's size too: a table past a handful of rows costs its full
+  width in your context through a tool call and nothing through the API, where
+  the object stays in your interpreter. Run it through Python and print the
+  summary — the crossing, the worst corner — not the table.

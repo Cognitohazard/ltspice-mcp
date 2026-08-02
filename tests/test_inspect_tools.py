@@ -547,9 +547,9 @@ async def test_cursor_paging_and_resumption(
     assert pages == 3  # 5 components at 2 per page
     assert set(seen) == {"C1", "R1", "R2", "V1", "X1"}
     assert len(seen) == 5  # no overlap across pages
-    # A single-collection kind still names the collection its counters describe.
-    assert set(res["page"]["collections"]) == {"components"}
-    assert res["page"]["collections"]["components"]["total"] == res["page"]["total"] == 5
+    # A single-collection kind omits 'collections': with one collection there is
+    # nothing to disambiguate, so it only restated the three counters above it.
+    assert "collections" not in res["page"]
 
 
 async def test_cursor_minted_before_an_edit_is_rejected(

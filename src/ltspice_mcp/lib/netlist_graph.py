@@ -75,6 +75,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ltspice_mcp.lib.deck_staging import resolve_reference
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
     LexResult,
@@ -116,11 +117,13 @@ _MICRO_CHARS = ("µ", "μ")
 _LTSPICE_INSTANCE_MARKER = "§"
 
 # Directives that pull another file into the deck. Semantics mirror
-# ``sim_runner.deck_requests_raw`` / ``_include_target`` (kept in step with that
-# module deliberately rather than imported — this stays a leaf module): a target
-# is resolved against the INCLUDING file's own directory, the walk is
+# ``sim_runner.deck_requests_raw`` / ``_include_target``: the walk is
 # depth-bounded and cycle-guarded, and the ``.lib file section`` form takes the
-# file token (the section name is irrelevant to a subcircuit scan).
+# file token (the section name is irrelevant to a subcircuit scan). Resolving a
+# target against the INCLUDING file's directory is NOT restated here — that is
+# ``deck_staging.resolve_reference``, imported rather than mirrored, because a
+# second copy of that rule is how this module comes to disagree with staging
+# about which file a reference names.
 _INCLUDE_DIRECTIVES: frozenset[str] = frozenset({".include", ".inc", ".lib"})
 _MAX_INCLUDE_DEPTH = 3
 
@@ -723,8 +726,12 @@ def _follow_include(
             MissingInclude(target, f"include depth limit ({_MAX_INCLUDE_DEPTH}) reached")
         )
         return
-    raw = Path(target)
-    path = raw if raw.is_absolute() else base_dir / raw
+    # One resolver for the whole product: staging's answer to "which file does
+    # this reference name?" is the answer here too. A local join would read
+    # `C:\...\standard.mos` — the spelling LTspice's own netlister writes — as a
+    # relative name and hang it off base_dir, producing a path that exists
+    # nowhere and a missing-include finding for a file staging just staged.
+    path = resolve_reference(base_dir, target)
     if include_resolver is not None:
         # Gate the open BEFORE any read: a denied include contributes nothing and
         # its bytes are never touched (the sandbox property U6/the tool layer
