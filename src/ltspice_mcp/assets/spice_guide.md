@@ -568,6 +568,40 @@ R1 in out {mc(10k, 0.1)}         ; uniform dist, 10k +/-10%
 
 `mc(nominal, tolerance)` — uniform between `nom*(1-tol)` and `nom*(1+tol)`.
 
+<!-- profile: consolidated -->
+### Per-instance mismatch on subckt-wrapped devices
+
+Two distinct request shapes, both under `run_experiments` `variations`:
+
+**Statistical (Pelgrom) Monte Carlo** — one `random` entry with a mismatch
+rule; the engine draws per-instance `delvto`/`mulu0` from device area:
+
+```json
+{"kind": "random", "id": "mc", "runs": 100,
+ "rules": [{"rule": "mismatch", "prefix": "X", "AVT": 3.2e-9, "AK": 0.01}]}
+```
+
+A `prefix` that matches subckt instances (e.g. sky130 `X`-wrapped FETs)
+descends into the wrapper; that descent supports ngspice-compatible BSIM3/4
+devices through exactly one X→M level. Flat devices (`prefix:"M"`) have no
+such constraint.
+
+**Explicit per-instance values** — when the offsets themselves are chosen
+(worst-case corners, a specific measured die), use `assign` + `combine:"zip"`
+so each row is one case:
+
+```json
+{"kind": "assign", "combine": "zip",
+ "assign": {"X1:delvto": [0.002, -0.002], "X2:delvto": [-0.002, 0.002]}}
+```
+
+`X1:delvto` binds when the subckt body holds a single FET; a multi-FET body
+needs the qualified form `X1.M0:delvto`. These instance targets are assign
+targets only — they are not valid inside `random` rules, whose mismatch path
+is the Pelgrom rule above.
+
+<!-- /profile -->
+
 ### Convergence
 
 ```spice
