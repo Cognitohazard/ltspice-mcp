@@ -12,12 +12,12 @@ description: >
 
 # Experiment workflow
 
-Author the deck yourself as a plain `.cir` — your editor beats any edit tool.
+Author a plain `.cir` deck.
 Validate (`verify_circuit {"path":"ldo.cir","checks":["syntax"]}`), run the
 sweep in one `run_experiments` call, read the numbers with `analyze_results`.
 
-Those N cases run as one coordinated batch: a job registry with a parallelism
-cap, safe alongside parallel sessions. Numbers arrive parsed with SI units,
+Those N cases run as one coordinated batch, safe alongside parallel sessions.
+Numbers arrive parsed with SI units,
 and `completeness` surfaces any shortfall as fact with `outcome:"partial"`.
 Pass a `request_id`: same id + args replays the receipt (decks are
 content-addressed — a later edit can't change what ran), so a crashed client
@@ -56,9 +56,9 @@ shorthand resolves; narrow with `device`.
 
 ## Cap a reply with `budget`
 
-`analyze_results`, `inspect` and `jobs` take `budget`: a response cap in
-estimated tokens (compact JSON chars/4, minimum 500); omitted, nothing
-changes. Set one when a call fans wide (`per_run`, many recipes, long lists).
+`run_experiments`, `analyze_results`, `inspect` and `jobs` take `budget`: a
+response cap in estimated tokens (compact JSON chars/4, minimum 500); omitted,
+nothing changes. Set one when a call fans wide (`per_run`, many recipes, long lists).
 Over the cap the server degrades presentation down a fixed ladder — echoes,
 detail opt-ins, rows as value arrays, smaller pages with valid cursors —
 never facts: `failures`, `observations`, `warnings`, `completeness` arrive
@@ -66,6 +66,8 @@ whole, and a `budget_truncated` observation names the cut and the route back.
 
 ## The rest
 
+- For open-loop/DC-servo benches and reusable templates, read the
+  `spice-bench-craft` skill.
 - `analyze_results` defaults return the answer (`results`, `coverage`,
   `observations`, `failures`); name detail under `include` (`fields`,
   `per_run`, `outliers`, `signals_available`). `group_by` is top-level, never

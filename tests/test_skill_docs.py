@@ -1,4 +1,4 @@
-"""Pins on the experiment-workflow skill doc shipped in the plugin.
+"""Pins on the SPICE workflow and bench-craft skill docs shipped in the plugin.
 
 These are cheap string checks, not behavior tests: a skill file is read by an
 agent before it ever calls a tool, so the failure mode is a doc that promises a
@@ -9,6 +9,7 @@ test_doc_drift.py, which covers this doc too.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -16,16 +17,21 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_PATH = ROOT / "skills" / "spice-experiments" / "SKILL.md"
+BENCH_SKILL_PATH = ROOT / "skills" / "spice-bench-craft" / "SKILL.md"
+BENCH_NOTES_PATH = BENCH_SKILL_PATH.parent / "references" / "BENCH_NOTES.md"
 
-# ~900 tokens at 4 chars/token: the doc is size-budgeted on purpose — it is
-# loaded before the work starts, so growth has to be a deliberate edit to this
-# number rather than something that happens one paragraph at a time.
+# Skill docs are size-budgeted on purpose: they are loaded before the work
+# starts, so growth has to be a deliberate edit to these rows rather than
+# something that happens one paragraph at a time.
 # Raised 3200 → 3600 when the doc was allowed to teach the caller-set
 # 'budget' response cap (the benchmark that froze that pitch is over).
 # Raised 3600 → 3700 when the trigger description was rewritten to fire on
 # the circuit domain itself rather than on already-using-the-tools — a
 # listing line that only matches agents already converted cannot convert one.
-SKILL_BUDGET_CHARS = 3700
+SKILL_BUDGETS = (
+    pytest.param(SKILL_PATH, 3700, id="spice-experiments"),
+    pytest.param(BENCH_SKILL_PATH, 8000, id="spice-bench-craft"),
+)
 
 # Two rules share this denylist. (1) Absent behavior: "rerun" and "case_axis"
 # name things this six-tool surface does not have, and a doc that names them
@@ -43,13 +49,15 @@ def _text() -> str:
     return SKILL_PATH.read_text(encoding="utf-8")
 
 
-class TestSpiceExperimentsSkill:
-    def test_size_is_pinned(self):
-        text = _text()
-        assert len(text) <= SKILL_BUDGET_CHARS, (
-            f"skill doc grew to {len(text)} characters (limit {SKILL_BUDGET_CHARS})"
-        )
+@pytest.mark.parametrize(("path", "budget"), SKILL_BUDGETS)
+def test_skill_size_is_pinned(path: Path, budget: int):
+    text = path.read_text(encoding="utf-8")
+    assert len(text) <= budget, (
+        f"{path.parent.name} skill doc grew to {len(text)} characters (limit {budget})"
+    )
 
+
+class TestSpiceExperimentsSkill:
     def test_names_no_forbidden_terms(self):
         # Separator-tolerant: "control token" / "control-token" / "Control_Token"
         # all name the same knob the ban exists to keep out of the doc.
@@ -79,8 +87,31 @@ class TestSpiceExperimentsSkill:
         # convention, and the floor, so the section can't be gutted silently.
         text = _text()
         assert "`budget`" in text
+        budget_section = text.split("## Cap a reply with `budget`", 1)[1].split("##", 1)[0]
+        assert "`run_experiments`" in budget_section
         assert "estimated tokens" in text
         assert "500" in text
+
+
+class TestSpiceBenchCraftSkill:
+    def test_trigger_covers_each_bench_need(self):
+        text = BENCH_SKILL_PATH.read_text(encoding="utf-8")
+        description = text.split("---", 2)[1].lower()
+        for trigger in ("authoring", "servo-loop", "dc-servo", "biasing", "template"):
+            assert trigger in description
+
+    def test_vendored_notes_are_pinned(self):
+        digest = hashlib.sha256(BENCH_NOTES_PATH.read_bytes()).hexdigest()
+        assert digest == "61917d4b411659b53a77d162af5f2e9c53405a1f3fb41c26a1abba89596fd4a1"
+
+    def test_teaches_servo_templates_and_ngspice_output(self):
+        text = BENCH_SKILL_PATH.read_text(encoding="utf-8")
+        assert "LFB  out  inn  1T" in text
+        assert "Operating-point and supply-current archetype" in text
+        assert "Open-loop AC archetype" in text
+        assert "Closed-loop transient and load-step archetype" in text
+        assert "dot-less interactive `meas`" in text
+        assert "scale, v(out), scale, i(VDD)" in text
 
 
 @pytest.mark.parametrize(
