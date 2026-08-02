@@ -66,6 +66,7 @@ def _path_list(value: object, name: str) -> list[Path]:
 
 def _library_config(
     working_dir: str | os.PathLike[str] | None,
+    config_path: str | os.PathLike[str] | None,
     overrides: Mapping[str, object],
 ) -> ServerConfig:
     unsupported = sorted(set(overrides) - _LIBRARY_OVERRIDE_NAMES)
@@ -87,13 +88,19 @@ def _library_config(
             raise TypeError("enabled_simulators must be a sequence of strings")
         normalized["enabled_simulators"] = [item.strip().lower() for item in value]
 
-    if working_dir is None:
-        return ServerConfig.load(overrides=normalized)
+    resolved_working_dir: Path | None = None
+    if working_dir is not None:
+        resolved_working_dir = _expanded_path(working_dir, "working_dir").resolve()
+        normalized["working_dir"] = resolved_working_dir
 
-    resolved_working_dir = _expanded_path(working_dir, "working_dir").resolve()
-    normalized["working_dir"] = resolved_working_dir
+    if config_path is not None:
+        selected_config = _expanded_path(config_path, "config_path").resolve()
+    elif resolved_working_dir is not None:
+        selected_config = resolved_working_dir / "ltspice-mcp.toml"
+    else:
+        selected_config = None
     return ServerConfig.load(
-        resolved_working_dir / "ltspice-mcp.toml",
+        selected_config,
         overrides=normalized,
     )
 
@@ -166,6 +173,7 @@ async def bootstrap_engine(
     *,
     mode: BootstrapMode = "library",
     working_dir: str | os.PathLike[str] | None = None,
+    config_path: str | os.PathLike[str] | None = None,
     _on_config_loaded: ConfigLoadedHook | None = None,
     _logger: logging.Logger | None = None,
     **overrides: object,
@@ -173,21 +181,21 @@ async def bootstrap_engine(
     """Create an engine session with the same initialization in every host.
 
     Library overrides are applied after environment and TOML values. Supplying
-    ``working_dir`` selects the TOML file in that directory and makes the
-    directory the default sandbox root. Server mode accepts no library
+    ``working_dir`` makes the directory the default sandbox root and selects
+    its TOML unless ``config_path`` is explicit. Server mode accepts no library
     overrides; its config-loaded hook keeps process-wide logging setup in the
     MCP startup path.
     """
     if mode == "server":
-        if working_dir is not None or overrides:
+        if working_dir is not None or config_path is not None or overrides:
             raise TypeError("Server bootstrap does not accept library configuration overrides")
         config = ServerConfig.load()
         if _on_config_loaded is not None:
             _on_config_loaded(config)
     elif mode == "library":
-        if _on_config_loaded is not None:
-            raise TypeError("Library bootstrap does not accept a config-loaded hook")
-        config = _library_config(working_dir, overrides)
+        if _on_config_loaded is not None or _logger is not None:
+            raise TypeError("Library bootstrap does not accept server startup hooks")
+        config = _library_config(working_dir, config_path, overrides)
     else:
         raise ValueError(f"Unknown bootstrap mode: {mode!r}")
 
