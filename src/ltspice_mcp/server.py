@@ -18,11 +18,12 @@ from pydantic import AnyUrl, ValidationError
 from ltspice_mcp import __version__, prompts
 from ltspice_mcp import errors as _err
 from ltspice_mcp.config import ServerConfig, generate_default_config
+from ltspice_mcp.engine import bootstrap_engine, configure_asc_editor
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, compact_validation_error
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
 from ltspice_mcp.lib.mcp_logging import mcp_log, set_log_fn
 from ltspice_mcp.lib.pathutil import resolve_safe_path
-from ltspice_mcp.lib.simulator import detect_simulators, no_simulator_message
+from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.resources import (
     get_resource_templates,
     get_static_resources,
@@ -106,69 +107,8 @@ async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
 
 
 def _configure_asc_editor(config: ServerConfig, available: dict) -> None:
-    """Configure AscEditor library paths for .asc schematic support.
-
-    Schematic editing only needs the ``.asy`` symbol library — NOT a working
-    simulator binary — so symbol resolution is deliberately decoupled from
-    simulator detection. A WSL box with the symbols present but a mis-pathed
-    (or absent) LTspice executable can still edit ``.asc`` files.
-
-    Resolution order:
-    1. Explicit config.symbol_paths / LTSPICE_MCP_SYMBOL_PATHS override (any platform)
-    2. WSL — resolve symbols via Windows %LOCALAPPDATA%, regardless of whether
-       the LTspice *executable* was detected
-    3. Windows native / Linux+Wine — spicelib's prepare_for_simulator (needs
-       the detected LTspice class)
-    4. Otherwise — no symbols available, .asc editing disabled
-    """
-    from spicelib.editor.asc_editor import AscEditor
-
-    # 1. Explicit config override takes priority on all platforms
-    if config.symbol_paths:
-        valid = [str(p) for p in config.symbol_paths if p.is_dir()]
-        if valid:
-            AscEditor.custom_lib_paths = valid
-            logger.info(f"AscEditor symbol paths from config: {valid}")
-            return
-        logger.warning(f"Configured symbol_paths do not exist: {config.symbol_paths}")
-
-    from ltspice_mcp.lib.wsl import get_ltspice_lib_paths, is_wsl
-
-    # 2. WSL — symbol libs live under %LOCALAPPDATA%/LTspice/lib/sym and resolve
-    #    independently of simulator-executable detection (spicelib can't find
-    #    them via /mnt/c/ on its own). This is the key decoupling: a stale
-    #    simulator path must not also disable schematic editing.
-    if is_wsl():
-        lib_paths = get_ltspice_lib_paths()
-        if lib_paths:
-            AscEditor.custom_lib_paths = lib_paths
-            logger.info(f"AscEditor WSL library paths: {lib_paths}")
-            return
-        logger.info(
-            ".asc schematic graphics editing unavailable on WSL (no LTspice symbol "
-            "library found); SPICE simulation and netlist editing are unaffected. "
-            "To enable it, set [schematic] symbol_paths in ltspice-mcp.toml or "
-            "LTSPICE_MCP_SYMBOL_PATHS env var."
-        )
-        return
-
-    # 3. Windows native (or Linux with Wine) — needs the detected LTspice class
-    ltspice_cls = available.get("ltspice")
-    if ltspice_cls is None:
-        logger.info(
-            ".asc schematic graphics editing unavailable (no LTspice symbol library "
-            "found); SPICE simulation and netlist editing are unaffected"
-        )
-        return
-
-    try:
-        AscEditor.prepare_for_simulator(ltspice_cls)
-        if AscEditor.simulator_lib_paths or AscEditor.custom_lib_paths:
-            logger.info("AscEditor configured via prepare_for_simulator()")
-            return
-        logger.warning("prepare_for_simulator() found no library paths")
-    except Exception as e:
-        logger.warning(f"AscEditor prepare_for_simulator failed: {e}")
+    """Preserve the server module's symbol-configuration helper."""
+    configure_asc_editor(config, available, target_logger=logger)
 
 
 class _ErrorHint(NamedTuple):
@@ -330,6 +270,16 @@ def _path_reject_guidance(state: SessionState) -> str:
     )
 
 
+def _configure_server_logging(config: ServerConfig) -> None:
+    """Install the server process's stderr logging configuration."""
+    logging.basicConfig(
+        level=getattr(logging, config.log_level.upper()),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[logging.StreamHandler(sys.stderr)],
+        force=True,
+    )
+
+
 @asynccontextmanager
 async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     """Initialize session state on startup, clean up on shutdown.
@@ -343,7 +293,14 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     Raises:
         Various exceptions during config/simulator setup (allowed to propagate)
     """
-    config = ServerConfig.load()
+    boot = await bootstrap_engine(
+        mode="server",
+        _on_config_loaded=_configure_server_logging,
+        _logger=logger,
+    )
+    state = boot.state
+    config = state.config
+    available = state.available_simulators
     config_file = config.config_path
 
     if config_file.exists():
@@ -353,20 +310,6 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
         # lazily on the first tool call instead of here (see call_tool), so the
         # server doesn't litter directories where its tools are never used.
         config_source = f"{config_file} (defaults; written on first tool use)"
-
-    logging.basicConfig(
-        level=getattr(logging, config.log_level.upper()),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[logging.StreamHandler(sys.stderr)],
-        force=True,  # Override any existing config
-    )
-    logger = logging.getLogger("ltspice_mcp.server")
-
-    diagnostics: list[str] = []
-    available = detect_simulators(config, diagnostics)
-    _configure_asc_editor(config, available)
-
-    state = SessionState.create(config, available, diagnostics)
 
     # Rewrite the initialize instructions to name the actually-detected
     # simulators. main.py stashes the InitializationOptions it passed to
@@ -418,20 +361,11 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
     for allowed_path in config.allowed_paths:
         logger.info(f"  - {allowed_path.resolve()}")
 
-    # Immutable analysis sets are cheap to scan and are cleaned at startup as
-    # well as on each write. Job-backed sets follow job-record retention;
-    # raw-only sets follow the configured TTL.
-    from ltspice_mcp.lib import result_store
-
-    await asyncio.to_thread(result_store.cleanup, state.working_dir)
-
-    # Eager-load persisted jobs for the top-N recently-touched circuits so
-    # first-tool-call latency on those circuits doesn't surprise the user.
-    # Circuits outside this budget fall back to lazy load on first tool call.
-    if config.persist_jobs and config.preload_recent_count > 0:
-        preloaded = state.job_registry.preload_recent(max_circuits=config.preload_recent_count)
-        if preloaded:
-            logger.info("Preloaded persisted jobs for %d recent circuit(s)", preloaded)
+    if boot.preloaded_circuits:
+        logger.info(
+            "Preloaded persisted jobs for %d recent circuit(s)",
+            boot.preloaded_circuits,
+        )
 
     logger.info("Startup complete. Server ready for MCP connections.")
 
