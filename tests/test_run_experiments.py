@@ -240,6 +240,8 @@ class TestReceiptThenDwell:
         assert data["status"] == "completed"
         assert data["control_token"]
         assert data["completeness"]["produced"] == 1
+        assert data["progress"]["terminal"] == data["progress"]["expanded"] == 1
+        assert data["progress"]["remaining"] == 0
         assert len(submissions) == 1
 
     async def test_zero_dwell_returns_receipt_then_job_finishes(
@@ -265,6 +267,11 @@ class TestReceiptThenDwell:
 
         assert data["outcome"] == "in_progress"
         assert data["job_id"] in state_with_sim.experiment_jobs
+        assert data["progress"]["expanded"] == 1
+        assert data["progress"]["terminal"] == 0
+        assert data["progress"]["remaining"] == 1
+        assert "jobs(wait)" in data["hint"]
+        assert "Progress: 0/1 terminal; 1 remaining." in data["hint"]
 
         await _wait_for(lambda: bool(callbacks))
         for run_filename, callback in callbacks.items():
@@ -1423,7 +1430,15 @@ class TestAttachedAnalysis:
         trim_size = response_budget.estimate_tokens(trim_view)
         answer_size = response_budget.estimate_tokens(answer_view)
         assert answer_size < trim_size
-        budget = answer_size + experiments_mod._RUN_BUDGET_NOTES.reserve
+        # The handler's real response carries envelope text this manual view
+        # does not (replay observation, progress-augmented hint), so aim the
+        # budget a third of the rung gap above the measured answer size —
+        # still below trim — instead of exactly at it.
+        budget = (
+            answer_size
+            + (trim_size - answer_size) // 3
+            + experiments_mod._RUN_BUDGET_NOTES.reserve
+        )
         assert trim_size > budget - experiments_mod._RUN_BUDGET_NOTES.reserve
         answer = _assert_schema(
             await handle_run_experiments(

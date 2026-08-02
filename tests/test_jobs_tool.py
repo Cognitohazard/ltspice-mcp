@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -24,10 +25,12 @@ from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.experiments import (
     JOBS_OUTPUT_SCHEMA,
+    RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     JobsInput,
     RunExperimentsInput,
     handle_jobs,
     handle_run_experiments,
+    progress_from_completeness,
 )
 from tests.conftest import fake_simulator, make_batch_job, make_sim_job
 
@@ -156,6 +159,19 @@ def test_jobs_output_schema_is_discriminated_by_action():
     assert actions == {"status", "wait", "cancel", "list", "runs"}
 
 
+def test_receipt_schemas_require_progress():
+    assert "progress" in RUN_EXPERIMENTS_OUTPUT_SCHEMA["required"]
+    assert "progress" in RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]
+    for action in ("status", "wait"):
+        branch = next(
+            item
+            for item in JOBS_OUTPUT_SCHEMA["oneOf"]
+            if item["properties"]["action"]["const"] == action
+        )
+        assert "progress" in branch["required"]
+        assert "progress" in branch["properties"]
+
+
 def test_top_level_properties_describe_what_every_action_shares():
     """A client that reads `properties` and stops there must not be told this
     tool returns one key. Registration injects `warnings` into any schema that
@@ -275,6 +291,7 @@ class TestActionShapesAndTokenSecrecy:
             assert runs["total"] == 60
             assert runs["next_cursor"] == "o:50"
             assert runs["next_cursor"] in data["hint"]
+            assert "Progress: 60/60 terminal; 0 remaining." in data["hint"]
 
         follow = _assert_jobs_schema(
             await handle_jobs(
@@ -357,6 +374,154 @@ class TestActionShapesAndTokenSecrecy:
         )
 
         assert data["outcome"] == "partial"
+
+
+@pytest.mark.asyncio
+class TestDurableProgress:
+    async def test_midflight_poll_is_monotonic_and_keeps_the_wait_route(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+    ):
+        circuit = _circuit(work_dir)
+        job = _experiment(work_dir, circuit, count=3, status="running")
+        state_no_sim.all_jobs[job.job_id] = job
+
+        first = _assert_jobs_schema(
+            await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
+        )
+        job.cases[0].status = "produced"
+        job.completeness.recount(job.cases)
+        middle = _assert_jobs_schema(
+            await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
+        )
+        for case in job.cases[1:]:
+            case.status = "produced"
+        job.completeness.recount(job.cases)
+        job.status = "completed"
+        final = _assert_jobs_schema(
+            await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
+        )
+
+        terminals = [item["progress"]["terminal"] for item in (first, middle, final)]
+        assert terminals == sorted(terminals) == [0, 1, 3]
+        assert middle["progress"]["terminal"] < middle["progress"]["expanded"]
+        assert final["progress"]["terminal"] == final["progress"]["expanded"]
+        assert "cases_failed" not in middle["progress"]
+        assert "jobs(action='wait'" in middle["hint"]
+        assert "Progress: 1/3 terminal; 2 remaining." in middle["hint"]
+
+    async def test_foreign_status_uses_the_persisted_completeness_snapshot(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        circuit = _circuit(work_dir)
+        persisted = _experiment(work_dir, circuit, count=3, status="running")
+        persisted.owner_pid = _FOREIGN_PID
+        persisted.cases[0].status = "produced"
+        persisted.completeness.recount(persisted.cases)
+        experiment_store.save_job(persisted)
+
+        stale = _experiment(work_dir, circuit, count=3, status="running")
+        stale.owner_pid = _FOREIGN_PID
+        state_no_sim.all_jobs[stale.job_id] = stale
+        monkeypatch.setattr(experiment_store, "owner_alive", lambda *_args, **_kwargs: True)
+
+        data = _assert_jobs_schema(
+            await handle_jobs(_args("status", job_id=stale.job_id), state_no_sim)
+        )
+
+        assert data["completeness"] == asdict(persisted.completeness)
+        assert data["progress"] == progress_from_completeness(persisted.completeness)
+        assert data["progress"]["terminal"] == 1
+        assert data["progress"]["remaining"] == 2
+        assert all(isinstance(value, int) for value in data["progress"].values())
+
+    @pytest.mark.parametrize(
+        ("status", "expected_failed", "expected_cancelled"),
+        [
+            ("failed", 3, 0),
+            ("cancelled", 1, 2),
+            ("interrupted", 3, 0),
+        ],
+    )
+    async def test_terminal_batch_remainder_reconciles_through_the_shared_projection(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        status: str,
+        expected_failed: int,
+        expected_cancelled: int,
+    ):
+        circuit = _circuit(work_dir)
+        raw = work_dir / f"{status}.raw"
+        log = work_dir / f"{status}.log"
+        raw.write_bytes(b"Title: mock")
+        log.write_text("ok")
+        job = make_batch_job(
+            f"legacy_batch_{status}",
+            status=status,
+            netlist=circuit,
+            total_runs=4,
+            completed_runs=2,
+            failed_runs=1,
+            run_results={
+                0: {"raw_file": str(raw), "log_file": str(log), "params": {}},
+                1: {"raw_file": "", "log_file": str(log), "params": {}},
+            },
+        )
+        state_no_sim.all_jobs[job.job_id] = job
+
+        data = _assert_jobs_schema(
+            await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
+        )
+
+        assert data["completeness"]["submitted"] == 2
+        assert data["completeness"]["produced"] == 1
+        assert data["completeness"]["failed"] == expected_failed
+        assert data["completeness"]["cancelled"] == expected_cancelled
+        assert data["progress"] == progress_from_completeness(data["completeness"])
+        assert data["progress"]["terminal"] == 4
+        assert data["progress"]["remaining"] == 0
+
+    @pytest.mark.parametrize(
+        ("status", "raw_name", "terminal", "remaining"),
+        [
+            ("queued", None, 0, 1),
+            ("completed", "single.raw", 1, 0),
+        ],
+    )
+    async def test_single_run_progress_uses_the_same_helper_queued_through_terminal(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        status: str,
+        raw_name: str | None,
+        terminal: int,
+        remaining: int,
+    ):
+        circuit = _circuit(work_dir)
+        raw = work_dir / raw_name if raw_name is not None else None
+        if raw is not None:
+            raw.write_bytes(b"Title: mock")
+        job = make_sim_job(
+            f"legacy_single_{status}",
+            status=status,
+            netlist=circuit,
+            raw_file=raw,
+        )
+        state_no_sim.all_jobs[job.job_id] = job
+
+        data = _assert_jobs_schema(
+            await handle_jobs(_args("status", job_id=job.job_id), state_no_sim)
+        )
+
+        assert data["progress"] == progress_from_completeness(data["completeness"])
+        assert data["progress"]["expanded"] == 1
+        assert data["progress"]["terminal"] == terminal
+        assert data["progress"]["remaining"] == remaining
 
 
 @pytest.mark.asyncio
