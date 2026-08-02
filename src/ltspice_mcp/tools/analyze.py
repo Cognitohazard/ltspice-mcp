@@ -3643,6 +3643,47 @@ async def evaluate_analysis_results(
     return await _evaluate_analysis_drive(args, state, continuation=continuation)
 
 
+def complete_analysis_evaluations(drives: list[AnalysisEvaluation]) -> dict[str, Any]:
+    """Render complete Python-door data from bounded neutral evaluator drives."""
+    if not drives:
+        raise ValueError("At least one analysis evaluation drive is required")
+
+    first = drives[0]
+    last = drives[-1]
+    processed = [unit for drive in drives for unit in drive.processed]
+    skipped = [failure for drive in drives for failure in drive.skipped]
+    signals: dict[str, list[str]] | None = None
+    if any(drive.signals is not None for drive in drives):
+        signals = {}
+        for drive in drives:
+            if drive.signals is not None:
+                signals.update(drive.signals)
+    combined = replace(
+        first,
+        processed=processed,
+        skipped=skipped,
+        natural_position=last.natural_position,
+        natural_intra=last.natural_intra,
+        deferred=any(drive.deferred for drive in drives),
+        signals=signals,
+    )
+    max_rows = max([len(combined.missing), *(len(unit["records"]) for unit in processed), 1])
+    limits = _Limits(
+        per_run=max_rows if combined.include.per_run is not None else None,
+        rows=max_rows,
+        fail_cases=max_rows,
+        groups=None,
+    )
+    data, _text = _assemble(combined, None, limits)
+    data["failures"] = list(combined.failure_inventory)
+    data["observations"] = [
+        observation
+        for observation in data["observations"]
+        if observation.get("code") != "failures_truncated"
+    ]
+    return data
+
+
 async def capture_attached_analysis(
     args: AnalyzeResultsInput, state: SessionState
 ) -> dict[str, Any]:

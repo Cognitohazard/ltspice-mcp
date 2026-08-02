@@ -1360,6 +1360,11 @@ def _finalize_receipt(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def finalize_receipt(data: dict[str, Any]) -> dict[str, Any]:
+    """Public completion seam for an already-rendered receipt snapshot."""
+    return _finalize_receipt(data)
+
+
 @dataclass(frozen=True)
 class ReceiptSnapshot:
     """One loop-atomic copy of every job-derived receipt fact.
@@ -2375,6 +2380,11 @@ def _jobs_unpaged(items: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def unpaged_jobs_items(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return the established jobs page shape with every item included."""
+    return _jobs_unpaged(items)
+
+
 # One jobs response, rendered at some page limit: the payload and its text line.
 _JobsBuilt = _ReceiptBuilt
 _JobsBuild = _ReceiptBuild
@@ -2726,6 +2736,22 @@ def _render_jobs_receipt_snapshot(
     elif not data.get("hint"):
         data["hint"] = f"Job {snapshot.job_id} is {snapshot.status}."
     return _finalize_receipt(data)
+
+
+def render_jobs_receipt_snapshot(
+    action: Literal["status", "wait"],
+    snapshot: ReceiptSnapshot,
+    *,
+    timed_out: bool | None = None,
+    runs_cap: int = _JOBS_PAGE_LIMIT,
+) -> dict[str, Any]:
+    """Render one complete jobs receipt from detached snapshot facts."""
+    return _render_jobs_receipt_snapshot(
+        action,
+        snapshot,
+        timed_out=timed_out,
+        runs_cap=runs_cap,
+    )
 
 
 def _runs_finished(job: Job, wait_for: Literal["all", "runs"]) -> bool:
