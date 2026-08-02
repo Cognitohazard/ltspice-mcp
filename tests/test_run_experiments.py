@@ -493,6 +493,53 @@ class TestLeanReceipt:
         (row,) = data["runs"]["items"]
         assert row["raw"] and row["log"]
 
+    @pytest.mark.parametrize(
+        ("request_id", "run_fields"),
+        [
+            ("snapshot-projected", ["case_id", "assignments"]),
+            ("snapshot-lean", None),
+        ],
+    )
+    async def test_handler_projection_matches_the_same_neutral_snapshot(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        request_id: str,
+        run_fields: list[str] | None,
+    ):
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / f"{request_id}.cir")
+        captured: list[experiments_mod.ReceiptSnapshot] = []
+        snapshot_receipt = experiments_mod.snapshot_receipt
+
+        def capture_snapshot(*args: Any, **kwargs: Any) -> experiments_mod.ReceiptSnapshot:
+            snapshot = snapshot_receipt(*args, **kwargs)
+            captured.append(snapshot)
+            return snapshot
+
+        monkeypatch.setattr(experiments_mod, "snapshot_receipt", capture_snapshot)
+        request = (
+            _args(deck, request_id, run_fields=run_fields)
+            if run_fields is not None
+            else _args(deck, request_id)
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                request,
+                state_with_sim,
+            )
+        )
+
+        (snapshot,) = captured
+        expected = experiments_mod.project_receipt_runs(
+            snapshot,
+            run_fields,
+            lean_default=True,
+        )
+        assert data["runs"] == expected
+
     async def test_non_completed_rows_keep_artifact_path_keys(
         self,
         state_with_sim: SessionState,
