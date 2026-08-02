@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import contextlib
+import contextvars
 import hashlib
 import json
 import logging
@@ -10,7 +11,7 @@ import math
 import re
 import types as _stdlib_types
 import typing
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from functools import cache, wraps
 from pathlib import Path
@@ -1085,6 +1086,27 @@ class ResponseBudget(NamedTuple):
     max_rung: int = response_budget.RUNG_SHRINK
 
 
+_AUTOMATIC_DOOR: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "automatic_door", default=False
+)
+
+
+@contextlib.contextmanager
+def automatic_door() -> Iterator[None]:
+    """Mark the handler calls inside as arriving through the API's automatic door.
+
+    Entered from inside the coroutine the engine loop runs, so the flag lives in
+    that one task's context: a co-resident MCP server sharing the process (and
+    the same :class:`ServerConfig`) cannot see it, which a config field or a
+    session attribute could not promise.
+    """
+    token = _AUTOMATIC_DOOR.set(True)
+    try:
+        yield
+    finally:
+        _AUTOMATIC_DOOR.reset(token)
+
+
 def resolve_response_budget(explicit: int | None, state: SessionState) -> ResponseBudget:
     """Resolve one call's budget: the caller's, else the server's default.
 
@@ -1098,9 +1120,16 @@ def resolve_response_budget(explicit: int | None, state: SessionState) -> Respon
     Only the four consolidated tools that advertise ``budget`` consult this, so
     the default reaches exactly the surface it was ruled for; ``0`` disables it
     and restores the fully undegraded default response.
+
+    The API's automatic door gets no default at all. That door promises complete
+    results and refuses ``budget`` outright, so a presentation ladder there would
+    both contradict the promise and leave the caller no way to lift it — the
+    ladder's own route text would send them at the field the door rejects.
     """
     if explicit is not None:
         return ResponseBudget(explicit)
+    if _AUTOMATIC_DOOR.get():
+        return ResponseBudget(None)
     default = state.config.default_budget
     if default <= 0:
         return ResponseBudget(None)

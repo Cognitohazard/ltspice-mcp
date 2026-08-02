@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import dataclasses
+import itertools
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 from unittest.mock import AsyncMock
@@ -160,6 +162,10 @@ def _args(
     }
     payload.update(overrides)
     return RunExperimentsInput.model_validate(payload)
+
+
+def _observation_code(data: dict, code: str) -> dict | None:
+    return next((item for item in data["observations"] if item["code"] == code), None)
 
 
 def _assert_schema(result) -> dict:
@@ -1228,6 +1234,37 @@ def _failing_simulator(monkeypatch: pytest.MonkeyPatch, log_text: str) -> None:
     monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
 
 
+def _per_case_failing_simulator(
+    monkeypatch: pytest.MonkeyPatch, log_for: Callable[[int], str]
+) -> None:
+    """Every case aborts with its OWN log, the way a real Monte Carlo aborts.
+
+    Each case runs a different deck, so each writes a different abort time and a
+    different node-voltage dump. A stub that hands every case one fixed string
+    can only exercise the byte-identical path.
+    """
+    counter = itertools.count()
+
+    def submit(self, _netlist: Path, run_filename: str, callback):
+        log = self.output_folder / f"{Path(run_filename).stem}.fail"
+        log.write_text(log_for(next(counter)))
+        self.loop.call_soon_threadsafe(callback, collect_run_outcome(".", str(log)))
+        return object()
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+
+
+def _convergence_abort_log(index: int) -> str:
+    """One LTspice convergence abort, carrying this case's own numeric state."""
+    return (
+        "Time step too small; "
+        f"time = {1.7e-5 + index * 3.1e-7:.6e}, timestep = {1.2e-19 / (index + 1):.4e}\n"
+        "Last Node Voltages:\n"
+        f"V(out) = {0.51 + index * 0.017:.6f}\n"
+        f"V(n001) = {1.83 - index * 0.023:.6f}\n"
+    )
+
+
 @pytest.mark.asyncio
 class TestFailureChannel:
     """What a caller learns from a batch that failed the same way N times."""
@@ -1266,6 +1303,70 @@ class TestFailureChannel:
         assert len(row["case_ids"]) == 10
         assert row["case_id"] == row["case_ids"][0]
         assert json.dumps(data["failures"]).count("Time step too small") == 1
+
+    async def test_one_cause_collapses_even_though_every_case_logged_its_own_numbers(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The scenario the bound exists for: a Monte Carlo that will not converge.
+
+        Every case has different component values, so every case aborts at a
+        different instant with a different node-voltage dump — the excerpts are
+        never byte-identical, and a verbatim key groups nothing. One cause has
+        to arrive as one row whatever the numbers in it say.
+        """
+        _per_case_failing_simulator(monkeypatch, _convergence_abort_log)
+        deck = _deck(work_dir / "diverging.cir")
+        args = _args(
+            deck,
+            "varying-convergence-failures",
+            variations=[{"kind": "assign", "assign": {"R1": [f"{n}k" for n in range(1, 13)]}}],
+        )
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        assert data["completeness"]["failed"] == 12
+        assert len(data["failures"]) == 1
+        row = data["failures"][0]
+        assert row["count"] == 12
+        assert len(row["case_ids"]) == 10
+        # One excerpt on the wire, and it is a real one rather than a rewritten
+        # summary — the numbers a caller sees belong to the case named first.
+        assert json.dumps(data["failures"]).count("Last Node Voltages") == 1
+        assert _convergence_abort_log(0).splitlines()[0] in row["message"]
+
+    async def test_two_causes_stay_two_rows_under_the_same_normalization(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Folding the numbers must not fold the diagnosis with them."""
+
+        def log_for(index: int) -> str:
+            if index % 2:
+                return _convergence_abort_log(index)
+            return (
+                f"Error on line {index + 2} : q1 c b e mystery "
+                'Unable to find definition of model "mystery"\n'
+            )
+
+        _per_case_failing_simulator(monkeypatch, log_for)
+        deck = _deck(work_dir / "mixed-causes.cir")
+        args = _args(
+            deck,
+            "mixed-cause-failures",
+            variations=[{"kind": "assign", "assign": {"R1": [f"{n}k" for n in range(1, 9)]}}],
+        )
+
+        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+
+        by_code = {row["code"]: row for row in data["failures"]}
+        assert set(by_code) == {"missing_model", "convergence_failed"}
+        assert by_code["missing_model"]["count"] == 4
+        assert by_code["convergence_failed"]["count"] == 4
 
     async def test_a_classified_failure_carries_its_code_and_recovery_route(
         self,
@@ -2243,6 +2344,58 @@ class TestReceiptWeight:
         assert not any(str(inside) == e["path"] for e in entries), (
             "the ordinary staged include is bulk, not a disclosure"
         )
+
+    async def test_the_server_default_budget_keeps_a_requested_provenance_echo(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Asking for provenance is what makes a receipt big enough to trip the
+        budget — a default that answers by deleting it revokes an opt-in nobody
+        chose to trade away."""
+        fake_simulator(monkeypatch)
+        state_with_sim.config.default_budget = 100
+        deck = _deck(work_dir / "provenance-budget.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "provenance-under-default", provenance=True), state_with_sim
+            )
+        )
+
+        assert _observation_code(data, "budget_truncated"), "the default must have engaged"
+        assert data["source"][0]["sha256"] == sha256_file(deck)
+
+    async def test_the_server_default_budget_keeps_a_staging_disclosure(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The non-provenance half of the same key: a live include is a fact.
+
+        Nobody opted out of it, so a server-side presentation default deleting it
+        turns the disclosure into exactly the silence the lean receipt refuses.
+        """
+        fake_simulator(monkeypatch)
+        state_with_sim.config.default_budget = 100
+        outside = work_dir.parent / "outside_budget.inc"
+        outside.write_text("R9 in 0 1k\n")
+        deck = _deck(
+            work_dir / "live-budget.cir",
+            f".include {outside}\nV1 in 0 1\n.op\n.end\n",
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "live-under-default", allow_live_includes=True), state_with_sim
+            )
+        )
+
+        assert _observation_code(data, "budget_truncated"), "the default must have engaged"
+        entries = [e for src in data["source"] for e in src.get("manifest", [])]
+        assert [e for e in entries if e["live"]], "the live include must still be disclosed"
 
     def test_the_fingerprint_covers_exactly_the_execution_arguments(self):
         """A new presentation field must not silently invalidate stored receipts.

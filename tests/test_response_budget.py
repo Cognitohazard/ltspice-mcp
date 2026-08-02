@@ -7,6 +7,8 @@ and a page shrunk to fit a budget still pages to every row.
 
 from __future__ import annotations
 
+import asyncio
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -33,7 +35,7 @@ from ltspice_mcp.tools.experiments import (
     handle_jobs,
 )
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-from tests.conftest import make_batch_job, stage_recorded_fixture
+from tests.conftest import SyncApi, make_batch_job, stage_recorded_fixture
 
 # Every rung-0 allowlist the three budget-aware tools declare, paired with the
 # schema node whose keys it names. Listed rather than derived: the coverage test
@@ -44,9 +46,7 @@ _TRIM_ALLOWLISTS: list[tuple[Any, str, dict[str, Any]]] = [
     (analyze_mod, "_TRIM_REMOVE_ENVELOPE", OUTPUT_SCHEMA),
     (analyze_mod, "_TRIM_EMPTY_ENVELOPE", OUTPUT_SCHEMA),
     (exp_mod, "_TRIM_REMOVE_RECEIPT", exp_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA),
-    (exp_mod, "_TRIM_EMPTY_RECEIPT", exp_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA),
     (exp_mod, "_TRIM_REMOVE_RECEIPT", exp_mod._jobs_receipt_schema("status")),
-    (exp_mod, "_TRIM_EMPTY_RECEIPT", exp_mod._jobs_receipt_schema("status")),
     (insp, "_TRIM_REMOVE_EXHAUSTED", insp._OUTPUT_SCHEMA["properties"]["results"]["items"]),
 ]
 
@@ -871,6 +871,53 @@ async def _inspect(state: SessionState, queries: list[dict[str, Any]], **extra: 
     )
     assert result.structuredContent is not None
     return result.structuredContent
+
+
+def test_the_api_automatic_door_gets_no_server_default(state_no_sim: SessionState, work_dir: Path):
+    """The door that promises complete results runs no presentation ladder.
+
+    It refuses ``budget`` outright, so a response degraded there would route the
+    caller at the one field that door rejects — and its promise of complete
+    results would be false while the server quietly trimmed the presentation.
+
+    Sync rather than async because the door's own bridge runs the call to
+    completion on its own loop, which is the thing under test.
+    """
+    path = _many_component_netlist(work_dir, 90)
+    query = {"kind": "components", "path": str(path), "detail": "full"}
+    api = SyncApi(state_no_sim)
+
+    state_no_sim.config.default_budget = 500
+    defaulted = api.inspect(queries=[copy.deepcopy(query)])
+    state_no_sim.config.default_budget = 0
+    disabled = api.inspect(queries=[copy.deepcopy(query)])
+
+    assert _stable(defaulted) == _stable(disabled), "the default trimmed the automatic door"
+
+    # Same session, same query, the wire door: there the default does engage, so
+    # it is the door and not the configuration that decides.
+    state_no_sim.config.default_budget = 500
+    wire = asyncio.run(_inspect(state_no_sim, [copy.deepcopy(query)]))
+    assert _observation(wire, "budget_truncated") is not None
+
+
+def test_the_api_automatic_door_carries_no_budget_route(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """The note's route is "ask again with a larger 'budget'" — a field this
+    door refuses. Checked on jobs(list), the collected surface that keeps the
+    observations its pages carried."""
+    for index in range(6):
+        job = _batch_with_runs(work_dir, 20)
+        job.job_id = f"b_budget_{index}"
+        state_no_sim.all_jobs[job.job_id] = job
+    state_no_sim.config.default_budget = 100
+
+    door = SyncApi(state_no_sim).jobs(action="list")
+    wire = asyncio.run(_jobs(state_no_sim, action="list"))
+
+    assert _observation(wire, "budget_truncated") is not None
+    assert _observation(door, "budget_truncated") is None
 
 
 @pytest.mark.asyncio
