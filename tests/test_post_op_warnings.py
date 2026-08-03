@@ -167,10 +167,16 @@ class TestApplySchematicOpsValidation:
         assert (100, 52) in floating_coords
         assert (100, 244) in floating_coords
 
-    async def test_duplicate_wire_detected(self, asc_state: SessionState, work_dir: Path) -> None:
+    async def test_repeating_a_wire_op_draws_nothing_and_says_so(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        """Wiring the same pair twice must leave one segment, not two.
+
+        A duplicate connects nothing and cannot be told from a real second
+        wire, so "remove the duplicate" and "remove the connection" become the
+        same request — which is how one measured session disconnected a cap
+        while tidying up. Not creating it is what makes that impossible."""
         await handle_create_schematic(CreateSchematicInput(name="dupwire"), asc_state)
-        # Place R1 and R2, then wire_pins each pair the same way twice.
-        # The second wire_pins will duplicate the first wire.
         result = await handle_apply_schematic_ops(
             ApplySchematicOpsInput(
                 path="dupwire.asc",
@@ -207,8 +213,40 @@ class TestApplySchematicOpsValidation:
         )
         data = result.structuredContent
         assert data is not None
-        warnings = data.get("validation_warnings", [])
-        kinds = {w["kind"] for w in warnings}
+        kinds = {w["kind"] for w in data.get("validation_warnings", [])}
+        assert "duplicate_wire" not in kinds
+
+        first, second = data["results"][2], data["results"][3]
+        assert first["wire_count"] >= 1
+        assert "already_present" not in first
+        assert second["wire_count"] == 0
+        assert second["already_present"], "the repeat must say the segments were already there"
+
+        sheet = (work_dir / "dupwire.asc").read_text().splitlines()
+        wires = [line for line in sheet if line.startswith("WIRE ")]
+        assert len(wires) == len(set(wires)), f"a duplicate segment reached the sheet: {wires}"
+
+    async def test_duplicate_wire_still_detected_on_a_sheet_that_has_one(
+        self, asc_state: SessionState, work_dir: Path
+    ) -> None:
+        """Our own tools no longer make one; a hand-written sheet still can, so
+        the detector has to keep reporting it."""
+        await handle_create_schematic(CreateSchematicInput(name="handdup"), asc_state)
+        path = work_dir / "handdup.asc"
+        path.write_text(path.read_text() + "WIRE 100 100 200 100\nWIRE 200 100 100 100\n")
+
+        result = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="handdup.asc",
+                ops=[
+                    {"op": "add_directive", "instruction": ".op"},  # type: ignore[list-item]
+                ],
+            ),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        kinds = {w["kind"] for w in data.get("validation_warnings", [])}
         assert "duplicate_wire" in kinds
 
     async def test_dangling_label_detected(self, asc_state: SessionState, work_dir: Path) -> None:
