@@ -55,12 +55,13 @@ import base64
 import contextlib
 import hashlib
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from mcp import types
-from pydantic import Field
+from pydantic import BeforeValidator, Field
 
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib.encoding import read_spice_text
@@ -626,6 +627,39 @@ class RenderPolicy(StrictModel):
     )
 
 
+#: What ``render`` accepts, spelled out once for the schema and for the refusal.
+_RENDER_SPELLINGS = (
+    "render takes true (draw with the default policy), false or omitted (do not "
+    "draw), or an object: mode 'with_checks'|'only', delivery "
+    "'artifact'|'inline'|'both', format 'png'|'svg', scale, max_pixels"
+)
+
+
+def _coerce_render_policy(value: Any) -> Any:
+    """Accept the bare-boolean spellings of "just draw it" / "do not draw".
+
+    ``render=True`` is what a caller reaches for first, and rejecting it used to
+    name ``RenderPolicy`` — a type the message gave no way to reach — instead of
+    the keys and values that actually work. The boolean is coerced here so the
+    policy object stays the single source of truth for the defaults, and the
+    refusal for anything else enumerates the accepted spellings inline.
+    """
+    if value is True:
+        return {}
+    if value is False:
+        return None
+    if value is None or isinstance(value, (Mapping, RenderPolicy)):
+        return value
+    raise ValueError(_RENDER_SPELLINGS)
+
+
+RenderArgument = Annotated[
+    RenderPolicy | None,
+    BeforeValidator(_coerce_render_policy, json_schema_input_type=RenderPolicy | bool | None),
+]
+"""``RenderPolicy | None`` that also takes ``True``/``False`` on either door."""
+
+
 class VerifyCircuitInput(ToolInput):
     path: str = Field(description="Circuit to check: .asc, .cir, .net or .sp.")
     checks: list[Literal["syntax", "symbols", "export", "layout", "quality", "compare"]] | None = (
@@ -667,9 +701,12 @@ class VerifyCircuitInput(ToolInput):
         default=1e-6,
         description="Relative tolerance when comparing numeric values and parameters (equivalence).",
     )
-    render: RenderPolicy | None = Field(
+    render: RenderArgument = Field(
         default=None,
-        description="Draw the .asc alongside (or instead of) the checks. Omit to skip rendering.",
+        description=(
+            "Draw the .asc alongside (or instead of) the checks. true takes the "
+            "defaults below; omitted or false draws nothing."
+        ),
     )
     export_to: Literal["managed", "sidecar"] = Field(
         default="managed",

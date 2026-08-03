@@ -807,7 +807,7 @@ requires-dist = [
     { name = "mcp", extras = ["cli"], specifier = ">=1.27.0,<2.0" },
     { name = "numpy", specifier = ">=1.26,<3.0" },
     { name = "psutil", specifier = ">=5.9,<8.0" },
-    { name = "pydantic", specifier = ">=2.7,<3.0" },
+    { name = "pydantic", specifier = ">=2.9,<3.0" },
     { name = "rapidfuzz", specifier = ">=3.0,<4.0" },
     { name = "scipy", specifier = ">=1.12,<2.0" },
     { name = "spicelib", specifier = ">=1.4.9,<1.6" },
