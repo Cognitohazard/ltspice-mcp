@@ -33,6 +33,9 @@ from ltspice_mcp.state import SessionState
 class _StubState:
     def __init__(self) -> None:
         self.shutdown_started = threading.Event()
+        # Every marshalled call anchors relative paths on the session's working
+        # directory, so the double has to carry one.
+        self.config = SimpleNamespace(working_dir=Path.cwd())
 
     async def shutdown(self) -> None:
         self.shutdown_started.set()

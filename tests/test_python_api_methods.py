@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
+import typing
 import warnings
 from collections.abc import Iterator, Mapping
 from pathlib import Path
@@ -22,6 +24,7 @@ from ltspice_mcp.api import (
 )
 from ltspice_mcp.api import _methods as methods_module
 from ltspice_mcp.api._methods import _unwrap
+from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edit, verify
@@ -896,3 +899,94 @@ def test_dict_shaped_inspect_queries_serialize_without_warning(
         )
 
     assert [str(item.message) for item in caught] == []
+
+
+# ---------------------------------------------------------------------------
+# Relative path arguments are taken from the session's working directory
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def elsewhere(tmp_path_factory, monkeypatch) -> Path:
+    """Run with a cwd that is not the session's working directory.
+
+    The contract's documented idiom is ``Api(working_dir=D)`` plus a bare
+    filename; while cwd happened to be D the two were indistinguishable.
+    """
+    away = tmp_path_factory.mktemp("elsewhere")
+    monkeypatch.chdir(away)
+    return away
+
+
+@pytest.fixture
+def state_relative_sandbox(work_dir: Path, elsewhere: Path) -> SessionState:
+    """A session configured the way the generated TOML configures one.
+
+    ``[security] allowed_paths = ["."]`` is what the server writes on first
+    run, so the sandbox root is itself relative — and left anchored on the
+    process cwd it sent every bare filename to the wrong directory.
+    """
+    config = ServerConfig(
+        working_dir=work_dir,
+        allowed_paths=[Path(".")],
+        log_level="DEBUG",
+    )
+    return SessionState.create(config, available={"fake": _FakeSim})
+
+
+class _FakeSim:
+    """Stub simulator class; nothing in these tests reaches an executable."""
+
+    spice_exe: typing.ClassVar[list[str]] = ["/fake/sim"]
+
+
+def _relative_deck(work_dir: Path) -> str:
+    (work_dir / "deck.cir").write_text("* d\nV1 in 0 5\nR1 in 0 1k\n.op\n.end\n")
+    return "deck.cir"
+
+
+def test_verify_circuit_takes_a_relative_path_from_the_working_dir(
+    state_relative_sandbox: SessionState,
+    work_dir: Path,
+) -> None:
+    api = SyncApi(state_relative_sandbox)
+    data = api.verify_circuit(path=_relative_deck(work_dir), checks=["syntax"])
+    assert data["path"] == str(work_dir / "deck.cir")
+
+
+def test_inspect_takes_a_relative_path_from_the_working_dir(
+    state_relative_sandbox: SessionState,
+    work_dir: Path,
+) -> None:
+    api = SyncApi(state_relative_sandbox)
+    data = api.inspect(queries=[{"kind": "components", "path": _relative_deck(work_dir)}])
+    entry = data["results"][0]
+    assert entry["ok"] is True, entry
+    # Only the working directory holds this deck, so reading it at all is the
+    # proof that the relative name was taken from there.
+    assert {row["reference"] for row in entry["data"]["components"]} == {"V1", "R1"}
+
+
+def test_run_experiments_takes_a_relative_circuit_path_from_the_working_dir(
+    state_relative_sandbox: SessionState,
+    work_dir: Path,
+    elsewhere: Path,
+) -> None:
+    """Pinned on the path the failure names: a deck that is absent under the
+    working directory must be reported there, not under the caller's cwd."""
+    api = SyncApi(state_relative_sandbox)
+    receipt = api.run_experiments(circuits=[{"path": "absent.cir"}], wait=False)
+    reported = json.dumps(receipt)
+    assert str(work_dir / "absent.cir") in reported
+    assert str(elsewhere / "absent.cir") not in reported
+
+
+def test_the_mcp_door_still_resolves_against_the_process_cwd(
+    state_relative_sandbox: SessionState,
+    elsewhere: Path,
+) -> None:
+    """The base is the in-process door's opt-in. A server request carries none,
+    so the same relative sandbox resolves exactly where it always did."""
+    from ltspice_mcp.tools._base import safe_path
+
+    assert safe_path("deck.cir", state_relative_sandbox) == elsewhere / "deck.cir"
