@@ -30,7 +30,10 @@ dependencies = [
     # Direct use (scoped simulator kill, job owner-pid liveness); also a
     # spicelib transitive, so this adds no new install weight.
     "psutil>=5.9,<8.0",
-    "pydantic>=2.7,<3.0",
+    # 2.9 is the floor for BeforeValidator(json_schema_input_type=...), which is
+    # what lets a coerced argument (verify_circuit's boolean `render`) advertise
+    # the spelling it accepts instead of only accepting it.
+    "pydantic>=2.9,<3.0",
     "rapidfuzz>=3.0,<4.0",
     "scipy>=1.12,<2.0",
     # Capped below 1.6 (tested range). spicelib 1.6 refactored the editor model:
