@@ -296,7 +296,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # level_deg beside level_db and documents that it scans unwrapped phase.
     # "Where does phase cross -45 degrees" previously had no findable spelling
     # and callers fell back to pulling arrays and unwrapping by hand.
-    "analyze_results": 21437,
+    # RAISED 21437 -> 21487: the plot recipe's 'title' property is advertised
+    # again. The title-annotation stripper filtered the key at every level, so
+    # it also deleted the entry for the property of that name — an argument the
+    # server accepts and the handler reads was in no published schema.
+    "analyze_results": 21487,
     # expected_sha256 now names where a caller gets one (an inspect
     # components/net query). No read tool reported the digest before, so a
     # first edit on an existing sheet had no in-product route to its token.
