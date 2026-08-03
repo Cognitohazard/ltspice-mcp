@@ -2065,6 +2065,130 @@ class TestRemoveWireAndNetLabelOps:
             lbl["x"] == in_label["x"] and lbl["y"] == in_label["y"] for lbl in rsc2["labels"]
         )
 
+    async def _wired_pair(self, asc_state: SessionState, name: str) -> dict:
+        """R1.2 wired to C1.1 — one connection, drawn once."""
+        from ltspice_mcp.tools.circuit import (
+            CreateSchematicInput,
+            handle_create_schematic,
+        )
+
+        await handle_create_schematic(CreateSchematicInput(name=name), asc_state)
+        await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path=f"{name}.asc",
+                ops=[  # type: ignore[arg-type]
+                    {
+                        "op": "add_component",
+                        "reference": "R1",
+                        "symbol": "res",
+                        "x": 128,
+                        "y": 128,
+                    },
+                    {
+                        "op": "add_component",
+                        "reference": "C1",
+                        "symbol": "cap",
+                        "x": 128,
+                        "y": 320,
+                    },
+                    {"op": "wire_pins", "from_pin": "R1.2", "to_pin": "C1.1"},
+                ],
+            ),
+            asc_state,
+        )
+        read = await handle_read_circuit(CircuitReadInput(path=f"{name}.asc"), asc_state)
+        assert read.structuredContent is not None
+        return read.structuredContent["wires"][0]
+
+    async def test_removing_a_duplicated_connection_is_refused_by_the_pin_it_would_float(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        """ "Delete the duplicate" and "delete the connection" are the same
+        request when a segment is drawn twice, and one measured session lost a
+        cap to it. Refuse, and name the pin that would be left hanging."""
+        wire = await self._wired_pair(asc_state, "dup_load_bearing")
+        path = work_dir / "dup_load_bearing.asc"
+        path.write_text(
+            path.read_text() + f"WIRE {wire['x1']} {wire['y1']} {wire['x2']} {wire['y2']}\n"
+        )
+
+        res = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="dup_load_bearing.asc",
+                ops=[
+                    {  # type: ignore[list-item]
+                        "op": "remove_wire",
+                        "x1": wire["x1"],
+                        "y1": wire["y1"],
+                        "x2": wire["x2"],
+                        "y2": wire["y2"],
+                    }
+                ],
+            ),
+            asc_state,
+        )
+        data = res.structuredContent
+        assert data is not None
+        assert data["saved"] is False
+        error = data["results"][0]["error"]
+        assert "2 copies" in error
+        assert "floating" in error
+        assert "R1.2" in error or "C1.1" in error
+
+        after = await handle_read_circuit(CircuitReadInput(path="dup_load_bearing.asc"), asc_state)
+        assert after.structuredContent is not None
+        assert after.structuredContent["wire_count"] == 2, "the refusal must leave the sheet alone"
+
+    async def test_removing_a_redundant_duplicated_segment_takes_every_copy(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        """Nothing floats when the segment carried nothing, so both copies go."""
+        await self._wired_pair(asc_state, "dup_redundant")
+        path = work_dir / "dup_redundant.asc"
+        path.write_text(path.read_text() + "WIRE 900 900 964 900\nWIRE 964 900 900 900\n")
+
+        res = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="dup_redundant.asc",
+                ops=[
+                    {"op": "remove_wire", "x1": 900, "y1": 900, "x2": 964, "y2": 900}  # type: ignore[list-item]
+                ],
+            ),
+            asc_state,
+        )
+        data = res.structuredContent
+        assert data is not None
+        assert data["saved"] is True
+        assert data["results"][0]["removed"] == 2
+
+    async def test_the_wire_then_duplicate_then_remove_sequence_keeps_the_pin_connected(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        """The measured sequence, end to end: route, route again, then act on
+        what the response says. The repeat reports the segments as already
+        present instead of warning about a duplicate, so there is nothing to
+        clean up and the connection survives."""
+        wire = await self._wired_pair(asc_state, "dup_sequence")
+
+        repeat = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="dup_sequence.asc",
+                ops=[{"op": "wire_pins", "from_pin": "R1.2", "to_pin": "C1.1"}],  # type: ignore[arg-type]
+            ),
+            asc_state,
+        )
+        data = repeat.structuredContent
+        assert data is not None
+        assert data["results"][0]["wire_count"] == 0
+        assert data["results"][0]["already_present"]
+        kinds = {w["kind"] for w in data.get("validation_warnings", [])}
+        assert "duplicate_wire" not in kinds
+
+        after = await handle_read_circuit(CircuitReadInput(path="dup_sequence.asc"), asc_state)
+        assert after.structuredContent is not None
+        assert after.structuredContent["wire_count"] == 1
+        assert after.structuredContent["wires"][0] == wire
+
     async def test_remove_wire_no_match_raises(self, asc_state: SessionState, work_dir: Path):
         from ltspice_mcp.tools.circuit import (
             CreateSchematicInput,

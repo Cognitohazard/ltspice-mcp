@@ -748,6 +748,77 @@ def _named_labels(labels: frozenset[str]) -> set[str]:
     return {lbl for lbl in labels if lbl != "0"}
 
 
+#: Wire segments a routing call planned but did not draw, because the sheet
+#: already carried them. Reported so "connected" never means "and I added
+#: nothing", without inventing a second copy to make the count come out.
+_SEGMENT_LIST_SCHEMA: dict[str, object] = {
+    "type": "array",
+    "description": (
+        "Planned segments the sheet already carried, so they were not drawn again. "
+        "The connection they make is in place; nothing was added for them."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "from": {
+                "type": "object",
+                "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+            },
+            "to": {
+                "type": "object",
+                "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+            },
+        },
+    },
+}
+
+
+def _segment_key(
+    a: tuple[int, int], b: tuple[int, int]
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """One segment's identity, orientation-independent."""
+    return (a, b) if a <= b else (b, a)
+
+
+def _wire_segment_keys(editor: AscEditor) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    return [
+        _segment_key((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) for w in editor.wires
+    ]
+
+
+def _append_wire_segments(
+    editor: AscEditor,
+    segments: Sequence[tuple[int, int, int, int]],
+) -> list[tuple[int, int, int, int]]:
+    """Draw the planned segments, skipping any the sheet already carries.
+
+    Returns the ones that were already there. A second copy of a segment draws
+    nothing and connects nothing, but a caller cannot tell it from a real second
+    wire — and asking to delete "the duplicate" deletes every copy, so the
+    request that meant "tidy up" cut the connection instead. Not creating the
+    duplicate is what makes that sequence impossible; the alternative, warning
+    about it afterwards, is what led the caller into it.
+    """
+    present = set(_wire_segment_keys(editor))
+    already: list[tuple[int, int, int, int]] = []
+    for sx1, sy1, sx2, sy2 in segments:
+        key = _segment_key((sx1, sy1), (sx2, sy2))
+        if key in present:
+            already.append((sx1, sy1, sx2, sy2))
+            continue
+        present.add(key)
+        editor.wires.append(Line(Point(sx1, sy1), Point(sx2, sy2)))
+    return already
+
+
+def _floating_pins(editor: AscEditor) -> set[tuple[str, str, int, int]]:
+    return {
+        (str(w["ref"]), str(w["pin"]), int(w["x"]), int(w["y"]))
+        for w in _post_op_warnings(editor)
+        if w.get("kind") == "floating_pin"
+    }
+
+
 def _post_op_warnings(editor: AscEditor) -> list[dict]:
     """Schematic-state advisories surfaced after a mutating op succeeds.
 
@@ -3360,6 +3431,7 @@ class _ConnectPlan(NamedTuple):
                 },
             },
             "wire_count": {"type": "integer"},
+            "already_present": _SEGMENT_LIST_SCHEMA,
             "points": {
                 "type": "array",
                 "items": {
@@ -3383,8 +3455,7 @@ async def handle_wire_pins(args: WirePinsInput, state: SessionState) -> types.Ca
         # just changed (the guard's reload is what makes them current). A
         # planning failure raises before any mutation, so nothing is saved.
         plan = _plan_connect_route(ed, args.from_pin, args.to_pin, args.waypoints)
-        for sx1, sy1, sx2, sy2 in plan.segments:
-            ed.wires.append(Line(Point(sx1, sy1), Point(sx2, sy2)))
+        already_present = _append_wire_segments(ed, plan.segments)
         # Scope floating-pin advisories to the components this wire_pins call
         # touched; the shorts / junction-overlap warnings wire_pins can create
         # still pass through. rsplit matches _resolve_pin's ref/pin split convention.
@@ -3406,7 +3477,8 @@ async def handle_wire_pins(args: WirePinsInput, state: SessionState) -> types.Ca
     result_lines = [f"Connected {args.from_pin} to {args.to_pin}"]
     result_lines.append(f"  From: ({x1},{y1})  To: ({x2},{y2})")
     for sx1, sy1, sx2, sy2 in segments:
-        result_lines.append(f"  Wire: ({sx1},{sy1})->({sx2},{sy2})")
+        drawn = "" if (sx1, sy1, sx2, sy2) not in already_present else "  (already present)"
+        result_lines.append(f"  Wire: ({sx1},{sy1})->({sx2},{sy2}){drawn}")
 
     if warnings:
         result_lines.append("")
@@ -3417,9 +3489,14 @@ async def handle_wire_pins(args: WirePinsInput, state: SessionState) -> types.Ca
     data: dict = {
         "from": {"ref": args.from_pin, "x": x1, "y": y1},
         "to": {"ref": args.to_pin, "x": x2, "y": y2},
-        "wire_count": len(segments),
+        "wire_count": len(segments) - len(already_present),
         "points": [{"x": p[0], "y": p[1]} for p in points],
     }
+    if already_present:
+        data["already_present"] = [
+            {"from": {"x": sx1, "y": sy1}, "to": {"x": sx2, "y": sy2}}
+            for sx1, sy1, sx2, sy2 in already_present
+        ]
     if warnings:
         data["warnings"] = warnings
     if validation_warnings:
@@ -5492,11 +5569,37 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
             # Exact-segment form: drop the matching segment in either direction.
             seg = ((op.x1, op.y1), (op.x2, op.y2))
             rev = ((op.x2, op.y2), (op.x1, op.y1))
-            editor.wires = [
+            kept = [
                 w
                 for w in editor.wires
                 if ((int(w.V1.X), int(w.V1.Y)), (int(w.V2.X), int(w.V2.Y))) not in (seg, rev)
             ]
+            copies = len(editor.wires) - len(kept)
+            if copies > 1:
+                # A duplicated segment is one connection drawn twice, so "remove
+                # the duplicate" and "remove the connection" are the same
+                # request at this interface. Removing every copy is right only
+                # when the connection was redundant; when it was not, the caller
+                # who asked to tidy up would get a disconnected sheet back with
+                # a warning, which is what happened.
+                was_floating = _floating_pins(editor)
+                original, editor.wires = editor.wires, kept
+                appearing = _floating_pins(editor) - was_floating
+                if appearing:
+                    editor.wires = original
+                    named = ", ".join(
+                        f"{ref}.{pin} at ({x},{y})" if pin else f"{ref} at ({x},{y})"
+                        for ref, pin, x, y in sorted(appearing)
+                    )
+                    raise NetlistError(
+                        f"Refusing to remove the {copies} copies of "
+                        f"({op.x1},{op.y1})->({op.x2},{op.y2}): they are one connection "
+                        f"drawn {copies} times, and removing it would leave {named} "
+                        "floating. Remove the pin's other segments first if the "
+                        "disconnection is what you want."
+                    )
+            else:
+                editor.wires = kept
         elif op.pin is not None or (op.x is not None and op.y is not None):
             # Incident-point form: drop every segment touching the coordinate.
             _drop_wires_at(editor, {_resolve_op_xy(op, editor)})
@@ -5512,14 +5615,19 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
 
     if isinstance(op, _OpWirePins):
         plan = _plan_connect_route(editor, op.from_pin, op.to_pin, op.waypoints)
-        for sx1, sy1, sx2, sy2 in plan.segments:
-            editor.wires.append(Line(Point(sx1, sy1), Point(sx2, sy2)))
-        return {
+        already = _append_wire_segments(editor, plan.segments)
+        result = {
             "op": op.op,
             "from_pin": op.from_pin,
             "to_pin": op.to_pin,
-            "wire_count": len(plan.segments),
+            "wire_count": len(plan.segments) - len(already),
         }
+        if already:
+            result["already_present"] = [
+                {"from": {"x": sx1, "y": sy1}, "to": {"x": sx2, "y": sy2}}
+                for sx1, sy1, sx2, sy2 in already
+            ]
+        return result
 
     if isinstance(op, _OpAddDirective):
         # Inline the minimal directive-validation that edit_directive does.
@@ -5693,6 +5801,7 @@ def _run_op_batch(
                         "from_pin": {"type": "string"},
                         "to_pin": {"type": "string"},
                         "wire_count": {"type": "integer"},
+                        "already_present": _SEGMENT_LIST_SCHEMA,
                         "instruction": {"type": "string"},
                     },
                     "required": ["index", "op", "ok"],
