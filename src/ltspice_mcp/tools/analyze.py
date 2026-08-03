@@ -511,6 +511,13 @@ def _at_segments(row: dict[str, Any], segments: list[str]) -> Any:
     return node
 
 
+#: Nested value blocks the lean row keeps anyway. The rule is narrow on
+#: purpose: a block belongs here only when the caller cannot get it back from
+#: anything else in the response. An artifact handle names a file already
+#: written to disk — drop it and the file is unreachable.
+_LEAN_KEPT_BLOCKS: frozenset[str] = frozenset({"artifact"})
+
+
 def _lean_row(row: dict[str, Any], *, keep_value_whole: bool = False) -> dict[str, Any]:
     """Default row rendering — the answer channel.
 
@@ -523,6 +530,12 @@ def _lean_row(row: dict[str, Any], *, keep_value_whole: bool = False) -> dict[st
     returns the full block. If flattening would empty the value (an
     all-nested metric such as measurements), the full dict stays — lean
     never trades data for absence.
+
+    An ``artifact`` handle survives the flattening. It is a dict, so the
+    scalar-leaves rule dropped it — and it is the only thing a caller cannot
+    recompute from the response, because it names a file this call has already
+    written. A plot recipe rendered that way came back as a series count and
+    nothing else, which is not a lean answer to "plot this", it is no answer.
     """
     out: dict[str, Any] = {}
     for key, item in row.items():
@@ -533,7 +546,11 @@ def _lean_row(row: dict[str, Any], *, keep_value_whole: bool = False) -> dict[st
         out[key] = item
     value = row.get("value")
     if isinstance(value, dict) and not keep_value_whole:
-        flat = {k: v for k, v in value.items() if not isinstance(v, (dict, list))}
+        flat = {
+            key: item
+            for key, item in value.items()
+            if key in _LEAN_KEPT_BLOCKS or not isinstance(item, (dict, list))
+        }
         out["value"] = flat if flat else value
     else:
         out["value"] = value

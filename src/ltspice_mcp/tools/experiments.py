@@ -1616,7 +1616,12 @@ def _render_failures(
     The key runs through :func:`diagnostic_collapse_key` because the excerpt
     ends in the case's own numeric state, so cases that failed for one reason
     are byte-identical only when they are also numerically identical — which in
-    a Monte Carlo they never are. The emitted row is the first member verbatim.
+    a Monte Carlo they never are. The emitted row is one member verbatim.
+
+    Which member is decided by case id, not by which case happened to finish
+    first: cases run in parallel, so completion order varies between runs, and
+    a receipt whose excerpt and named cases change when nothing else did is not
+    one two runs can be compared with.
 
     No fact is dropped: ``count`` is the true number of cases, so a capped
     ``case_ids`` list reports its own shortfall rather than rounding it away.
@@ -1627,7 +1632,8 @@ def _render_failures(
         grouped.setdefault(key, []).append(row)
 
     collapsed: list[dict[str, Any]] = []
-    for (code, _message), group in grouped.items():
+    for (code, _message), members in grouped.items():
+        group = sorted(members, key=lambda item: str(item.get("case_id", "")))
         rendered = dict(group[0])
         if len(group) > 1:
             rendered["case_ids"] = [

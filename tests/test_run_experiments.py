@@ -7,6 +7,7 @@ import copy
 import dataclasses
 import itertools
 import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
@@ -112,6 +113,19 @@ def test_variation_schema_keeps_discriminated_union_through_defs():
 def _deck(path: Path, body: str | None = None) -> Path:
     path.write_text(body or "V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
     return path
+
+
+def _assert_attached_artifact(data: dict[str, Any], key: str) -> dict[str, Any]:
+    """The attached analysis handed back a handle, and it names a real file."""
+    block = data["analysis"]["result"]["results"][key]
+    rows = block.get("values") or block.get("per_run", {}).get("items") or []
+    assert rows, f"the attached {key} recipe returned no rows: {block}"
+    artifact = rows[0]["value"].get("artifact")
+    assert isinstance(artifact, dict), (
+        f"the attached {key} recipe returned no artifact handle: {rows[0]['value']}"
+    )
+    assert Path(artifact["path"]).is_file(), f"{key} handle names no file: {artifact}"
+    return artifact
 
 
 def _schematic(path: Path, resistance: str) -> Path:
@@ -598,6 +612,32 @@ class TestLeanReceipt:
             )
         )
         assert loud["analysis"]["request"] is not None
+
+    async def test_attached_plot_hands_back_the_file_it_wrote(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A plot recipe attached to a run answered with a series count and no
+        reachable handle, so the chart it had just written was unreachable and
+        the caller had to build one by hand."""
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached_plot.cir")
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "attached-plot",
+                    analyze={"recipes": [{"key": "p", "metric": "plot", "signals": ["V(out)"]}]},
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert data["analysis"]["status"] == "completed"
+        _assert_attached_artifact(data, "p")
 
 
 @pytest.mark.asyncio
@@ -1242,12 +1282,19 @@ def _per_case_failing_simulator(
     Each case runs a different deck, so each writes a different abort time and a
     different node-voltage dump. A stub that hands every case one fixed string
     can only exercise the byte-identical path.
+
+    The log is chosen by the case's own run index, read off the run token, not
+    by a submission counter: cases are submitted in parallel, so a counter hands
+    case N whichever log the race decides and no assertion about a particular
+    case's numbers can hold.
     """
     counter = itertools.count()
 
     def submit(self, _netlist: Path, run_filename: str, callback):
-        log = self.output_folder / f"{Path(run_filename).stem}.fail"
-        log.write_text(log_for(next(counter)))
+        stem = Path(run_filename).stem
+        match = re.search(r"_case_(\d+)", stem)
+        log = self.output_folder / f"{stem}.fail"
+        log.write_text(log_for(int(match.group(1)) if match else next(counter)))
         self.loop.call_soon_threadsafe(callback, collect_run_outcome(".", str(log)))
         return object()
 

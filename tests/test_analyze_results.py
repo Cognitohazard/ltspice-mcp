@@ -2134,6 +2134,68 @@ async def test_measurements_recipe_bins_the_distribution_on_request(
 
 
 # ---------------------------------------------------------------------------
+# artifact handles reach the caller
+# ---------------------------------------------------------------------------
+
+
+def _artifact_of(data: dict[str, Any], key: str) -> dict[str, Any]:
+    """The one artifact handle a recipe's single row carries, and its file."""
+    block = data["results"][key]
+    rows = block.get("values") or block.get("per_run", {}).get("items") or []
+    assert rows, f"{key} returned no rows: {block}"
+    artifact = rows[0]["value"].get("artifact")
+    assert isinstance(artifact, dict), (
+        f"{key} row carries no artifact handle — the file it wrote is unreachable: "
+        f"{rows[0]['value']}"
+    )
+    assert Path(artifact["path"]).is_file(), f"{key} handle names no file: {artifact}"
+    return artifact
+
+
+class TestArtifactHandleSurvivesTheDefaultRow:
+    """A handle names a file this call already wrote; drop it and the file is
+    unreachable. The lean row flattened value to its scalar leaves, so the plot
+    recipe answered "plot this" with a series count and nothing else."""
+
+    @pytest.mark.asyncio
+    async def test_plot_returns_its_artifact_on_the_default_row(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        data = await _analyze(
+            state_no_sim,
+            raw,
+            [{"key": "p", "metric": "plot", "signals": ["V(out)"], "title": "RC step"}],
+        )
+        assert _artifact_of(data, "p")["content_type"] == "text/html"
+
+    @pytest.mark.asyncio
+    async def test_waveform_csv_returns_its_artifact_too(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        data = await _analyze(
+            state_no_sim,
+            raw,
+            [{"key": "w", "metric": "waveform", "signals": ["V(out)"], "format": "csv"}],
+        )
+        assert _artifact_of(data, "w")["content_type"] == "text/csv"
+
+    @pytest.mark.asyncio
+    async def test_a_projected_row_can_still_ask_for_the_handle_by_name(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        data = await _analyze(
+            state_no_sim,
+            raw,
+            [{"key": "p", "metric": "plot", "signals": ["V(out)"]}],
+            include={"fields": ["value.artifact"]},
+        )
+        assert _artifact_of(data, "p")["content_type"] == "text/html"
+
+
+# ---------------------------------------------------------------------------
 # include spellings
 # ---------------------------------------------------------------------------
 
