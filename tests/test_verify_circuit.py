@@ -26,8 +26,10 @@ from typing import Any
 
 import jsonschema
 import pytest
+from pydantic import ValidationError
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.lib import raster
 from ltspice_mcp.lib.schematic_scene import LayoutIssue, Scene
 from ltspice_mcp.state import SessionState
@@ -682,3 +684,62 @@ async def test_sidecar_export_writes_in_place_with_diff(
     diff = data["export"]["diff_vs_prior"]
     assert diff is not None
     assert "R2" in diff["components_added"]
+
+
+# ---------------------------------------------------------------------------
+# render argument spellings
+# ---------------------------------------------------------------------------
+
+
+def test_render_true_is_the_default_policy():
+    args = VerifyCircuitInput.model_validate({"path": "x.asc", "render": True})
+    assert args.render is not None
+    assert args.render.mode == "with_checks"
+    assert args.render.format == "png"
+    assert args.render.delivery == "artifact"
+
+
+def test_render_false_and_none_skip_the_drawing():
+    assert VerifyCircuitInput.model_validate({"path": "x.asc", "render": False}).render is None
+    assert VerifyCircuitInput.model_validate({"path": "x.asc", "render": None}).render is None
+    assert VerifyCircuitInput.model_validate({"path": "x.asc"}).render is None
+
+
+def test_render_object_still_validates_and_overrides():
+    args = VerifyCircuitInput.model_validate(
+        {"path": "x.asc", "render": {"mode": "only", "format": "svg"}}
+    )
+    assert args.render is not None
+    assert args.render.mode == "only"
+    assert args.render.format == "svg"
+
+
+def test_render_bad_mode_error_enumerates_the_modes():
+    with pytest.raises(ValidationError) as excinfo:
+        VerifyCircuitInput.model_validate({"path": "x.asc", "render": {"mode": "always"}})
+    detail = compact_validation_error(excinfo.value)
+    assert "with_checks" in detail
+    assert "only" in detail
+
+
+def test_render_scalar_refusal_names_the_accepted_spellings():
+    with pytest.raises(ValidationError) as excinfo:
+        VerifyCircuitInput.model_validate({"path": "x.asc", "render": "png"})
+    detail = compact_validation_error(excinfo.value)
+    assert "with_checks" in detail
+    assert "only" in detail
+    assert "true" in detail
+
+
+def test_render_boolean_is_advertised_in_the_json_schema():
+    schema = VerifyCircuitInput.model_json_schema()
+    advertised = repr(schema["properties"]["render"]) + repr(schema.get("$defs", {}))
+    assert "boolean" in advertised
+
+
+def test_api_types_exports_the_models_errors_name():
+    from ltspice_mcp.api import types as api_types
+
+    assert api_types.RenderPolicy is vc.RenderPolicy
+    for name in api_types.__all__:
+        assert getattr(api_types, name, None) is not None, name

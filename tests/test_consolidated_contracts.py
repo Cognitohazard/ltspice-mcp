@@ -313,7 +313,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # The prefix/BSIM prose they lost duplicated tools/advanced.py and now lives
     # in spice://guide, which is read once rather than shipped every session.
     "run_experiments": 14081,
-    "verify_circuit": 5079,
+    # RAISED 5079 -> 5137: 'render' now advertises the boolean shorthand next to
+    # the policy object. The bytes buy the spelling every first contact reaches
+    # for — render=true used to be a rejection naming a type the caller could
+    # not import, which cost three calls to recover from.
+    "verify_circuit": 5137,
 }
 
 # The pins are only a ratchet while they stay on top of the real number. A pin
