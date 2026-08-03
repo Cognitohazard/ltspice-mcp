@@ -9,10 +9,11 @@ import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Literal, Self
+from typing import Annotated, Any, ClassVar, Literal, Self
 
 from mcp import types
 from pydantic import (
+    BeforeValidator,
     Field,
     ValidationError,
     ValidatorFunctionWrapHandler,
@@ -96,7 +97,11 @@ from ltspice_mcp.tools._base import (
     resolve_runnable_netlist,
     safe_path,
 )
-from ltspice_mcp.tools.analyze import MAX_PAGE_SIZE
+from ltspice_mcp.tools.analyze import (
+    MAX_PAGE_SIZE,
+    coerce_per_run_default,
+    include_flag_coercer,
+)
 
 _RUN_PAGE_LIMIT = 50
 SUBMISSION_DWELL_CAP_S = 120.0
@@ -219,11 +224,18 @@ class AnalysisPerRun(StrictModel):
 
 
 class AnalysisInclude(StrictModel):
-    per_run: AnalysisPerRun | None = Field(
+    per_run: Annotated[
+        AnalysisPerRun | None,
+        BeforeValidator(
+            coerce_per_run_default,
+            json_schema_input_type=AnalysisPerRun | bool | None,
+        ),
+    ] = Field(
         default=None,
         description=(
-            "Return the individual attributed rows, paginated. Omitted, a recipe "
-            "with 'reduce' returns only its reductions."
+            "Return the individual attributed rows, paginated; true takes the "
+            "default page. Omitted, a recipe with 'reduce' returns only its "
+            "reductions."
         ),
     )
     outliers: bool = Field(
@@ -248,6 +260,9 @@ class AnalysisInclude(StrictModel):
     )
 
 
+coerce_attached_include_flags = include_flag_coercer(AnalysisInclude)
+
+
 class AttachedAnalysis(StrictModel):
     recipes: list[dict[str, Any]] = Field(
         description=(
@@ -263,9 +278,18 @@ class AttachedAnalysis(StrictModel):
             "parameter name, 'circuit', or a .step axis name."
         ),
     )
-    include: AnalysisInclude | None = Field(
+    include: Annotated[
+        AnalysisInclude | None,
+        BeforeValidator(
+            coerce_attached_include_flags,
+            json_schema_input_type=AnalysisInclude | list[str] | None,
+        ),
+    ] = Field(
         default=None,
-        description="Optional per-run, outlier, signal-listing, and row-view controls.",
+        description=(
+            "Optional per-run, outlier, signal-listing, and row-view controls; "
+            "a bare list of flag names switches them on."
+        ),
     )
 
 

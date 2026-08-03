@@ -9,15 +9,16 @@ import math
 import os
 import statistics
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import numpy as np
 from mcp import types
-from pydantic import Field, SkipValidation, model_validator
+from pydantic import BeforeValidator, Field, SkipValidation, model_validator
 
 from ltspice_mcp.errors import LTSpiceMCPError, ResultError
 from ltspice_mcp.lib import (
@@ -194,6 +195,20 @@ _ATTRIBUTION_KEYS: tuple[str, ...] = _IDENTITY_KEYS[:5]
 _ROW_KEYS: tuple[str, ...] = ("source", *_IDENTITY_KEYS, "value")
 
 
+def coerce_per_run_default(value: Any) -> Any:
+    """Accept ``per_run=True`` for the default page, ``False`` for none.
+
+    A list of flag names turns each one on with ``True``; ``per_run`` is the one
+    include that is an object rather than a boolean, and a spelling that works
+    for three of the four flags is worse than one that works for none.
+    """
+    if value is True:
+        return {}
+    if value is False:
+        return None
+    return value
+
+
 class PerRunInclude(StrictModel):
     limit: int = Field(default=50, ge=1, le=MAX_PAGE_SIZE)
     cursor: str | None = Field(
@@ -210,12 +225,19 @@ class AnalyzeInclude(StrictModel):
     and spec verdicts; per-run rows, outlier records and signal listings are
     opt-in because each one grows the payload."""
 
-    per_run: PerRunInclude | None = Field(
+    per_run: Annotated[
+        PerRunInclude | None,
+        BeforeValidator(
+            coerce_per_run_default,
+            json_schema_input_type=PerRunInclude | bool | None,
+        ),
+    ] = Field(
         default=None,
         description=(
-            "Return the individual attributed rows, paginated. Omitted, a recipe "
-            "with 'reduce' returns only its reductions and a recipe without one "
-            "inlines up to 100 unpaged rows. Pair with 'fields' on a wide sweep."
+            "Return the individual attributed rows, paginated; true takes the "
+            "default page. Omitted, a recipe with 'reduce' returns only its "
+            "reductions and a recipe without one inlines up to 100 unpaged rows. "
+            "Pair with 'fields' on a wide sweep."
         ),
     )
     outliers: bool = Field(
@@ -280,6 +302,41 @@ class AnalyzeInclude(StrictModel):
         return self
 
 
+def include_flag_coercer(model: type[StrictModel]) -> Callable[[Any], Any]:
+    """Build the ``include=['outliers', 'per_run']`` -> ``{name: True}`` reader.
+
+    The list is what a caller writes first; the dict is the shape the engine
+    wants, and rejecting the list bought nothing. The accepted names are read
+    off the model, so a flag added later is spellable both ways without a
+    second list to keep in step — minus ``fields``, which takes row paths
+    rather than a boolean and cannot mean anything inside a list. An unknown
+    name still fails, enumerating the flags, rather than being switched on
+    under a typo or silently dropped.
+    """
+    flags = frozenset(model.model_fields) - {"fields"}
+    enumerated = ", ".join(sorted(flags))
+
+    def coerce(value: Any) -> Any:
+        if isinstance(value, (str, bytes, Mapping)) or not isinstance(
+            value, (Sequence, AbstractSet)
+        ):
+            return value
+        names = [str(item) for item in value]
+        unknown = sorted({name for name in names if name not in flags})
+        if unknown:
+            raise ValueError(
+                f"unknown include flag(s) {', '.join(unknown)}; a list of flags takes "
+                f"{enumerated}. 'fields' takes row paths, so pass it as an object: "
+                "include={'fields': ['value.phase_margin_deg']}"
+            )
+        return dict.fromkeys(names, True)
+
+    return coerce
+
+
+coerce_include_flags = include_flag_coercer(AnalyzeInclude)
+
+
 class ContinueInput(StrictModel):
     result_set_id: str = Field(
         description="From the 'next' block of the partial response being resumed.",
@@ -323,13 +380,20 @@ class AnalyzeResultsInput(ToolInput):
             "Empty gives one reduction over every row."
         ),
     )
-    include: AnalyzeInclude = Field(
+    include: Annotated[
+        AnalyzeInclude,
+        BeforeValidator(
+            coerce_include_flags,
+            json_schema_input_type=AnalyzeInclude | list[str],
+        ),
+    ] = Field(
         default_factory=AnalyzeInclude,
         description=(
             "Named opt-in response blocks — per_run rows, outliers, "
             "signals_available, provenance, and the 'fields' row projection. "
-            "The default response carries reductions, groups and spec verdicts; "
-            "each opt-in grows the payload, so ask only for what you will read."
+            "A bare list of flag names switches them on. The default response "
+            "carries reductions, groups and spec verdicts; each opt-in grows "
+            "the payload, so ask only for what you will read."
         ),
     )
     budget: int | None = Field(

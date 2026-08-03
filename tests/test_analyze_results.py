@@ -14,7 +14,7 @@ from typing import Any, NamedTuple
 import pytest
 from pydantic import ValidationError
 
-from ltspice_mcp.errors import ResultError
+from ltspice_mcp.errors import ResultError, compact_validation_error
 from ltspice_mcp.lib import atomic_write, cursor_codec, experiment_store, now, result_store
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
@@ -25,6 +25,7 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
+from ltspice_mcp.tools import experiments
 from ltspice_mcp.tools.analyze import (
     AnalyzeResultsInput,
     evaluate_analysis_results,
@@ -2107,3 +2108,77 @@ async def test_measurements_recipe_bins_the_distribution_on_request(
     assert sum(item["count"] for item in entry["histogram"]) == entry["valid_count"] == 3
     plain = unbinned["results"]["m"]["per_run"]["items"][0]["value"]["stats"]["vfinal"]
     assert plain["histogram"] == []
+
+
+# ---------------------------------------------------------------------------
+# include spellings
+# ---------------------------------------------------------------------------
+
+
+class TestIncludeFlagList:
+    """A bare list of flag names is the spelling callers write first."""
+
+    @staticmethod
+    def _include(value: Any):
+        return AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"raw_path": "r.raw", "label": "dut"}],
+                "recipes": [{"key": "s", "metric": "summary"}],
+                "include": value,
+            }
+        ).include
+
+    def test_flag_list_switches_the_named_blocks_on(self):
+        include = self._include(["outliers", "signals_available"])
+        assert include.outliers is True
+        assert include.signals_available is True
+        assert include.provenance is False
+        assert include.per_run is None
+
+    def test_flag_list_reaches_per_run_with_its_default_page(self):
+        include = self._include(["per_run"])
+        assert include.per_run is not None
+        assert include.per_run.limit == 50
+        assert include.per_run.cursor is None
+
+    def test_object_spelling_is_unchanged(self):
+        include = self._include({"per_run": {"limit": 3}, "outliers": True})
+        assert include.per_run is not None
+        assert include.per_run.limit == 3
+        assert include.outliers is True
+
+    def test_per_run_true_is_the_default_page(self):
+        include = self._include({"per_run": True})
+        assert include.per_run is not None
+        assert include.per_run.limit == 50
+        assert self._include({"per_run": False}).per_run is None
+
+    def test_unknown_flag_name_is_rejected_and_enumerates(self):
+        with pytest.raises(ValidationError) as excinfo:
+            self._include(["signals", "outliers"])
+        detail = compact_validation_error(excinfo.value)
+        assert "signals" in detail
+        assert "signals_available" in detail
+        assert "provenance" in detail
+
+    def test_fields_is_named_as_the_one_that_needs_values(self):
+        with pytest.raises(ValidationError) as excinfo:
+            self._include(["fields"])
+        detail = compact_validation_error(excinfo.value)
+        assert "'fields' takes row paths" in detail
+
+    def test_attached_analysis_takes_the_same_spellings(self):
+        args = experiments.RunExperimentsInput.model_validate(
+            {
+                "circuits": [{"path": "deck.cir"}],
+                "analyze": {
+                    "recipes": [{"key": "s", "metric": "summary"}],
+                    "include": ["per_run", "outliers"],
+                },
+            }
+        )
+        assert args.analyze is not None
+        assert args.analyze.include is not None
+        assert args.analyze.include.outliers is True
+        assert args.analyze.include.per_run is not None
+        assert args.analyze.include.per_run.limit == 50

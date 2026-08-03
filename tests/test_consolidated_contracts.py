@@ -287,7 +287,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # +150-char description on the operating_point recipe's `device` — the one
     # knob that turns a 45 KB unscoped bias point into a 5 KB answer, and which
     # no caller could discover from the schema.
-    "analyze_results": 21024,
+    # RAISED 21024 -> 21171: 'include' now advertises the bare list of flag
+    # names, and 'include.per_run' the boolean shorthand for its default page.
+    # The list is the spelling callers reach for and the dict is what the engine
+    # wanted; advertising both is what makes the natural one findable rather
+    # than merely tolerated.
+    "analyze_results": 21171,
     # expected_sha256 now names where a caller gets one (an inspect
     # components/net query). No read tool reported the digest before, so a
     # first edit on an existing sheet had no in-product route to its token.
@@ -312,7 +317,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # to the two facts a result cannot recover — the units and the inversion.
     # The prefix/BSIM prose they lost duplicated tools/advanced.py and now lives
     # in spice://guide, which is read once rather than shipped every session.
-    "run_experiments": 14081,
+    # RAISED 14081 -> 14216: the attached analysis takes the same include
+    # spellings as analyze_results (a bare flag list, per_run=true). A spelling
+    # that works on one of the two places a caller writes `include` is a trap,
+    # so the two surfaces move together.
+    "run_experiments": 14216,
     # RAISED 5079 -> 5137: 'render' now advertises the boolean shorthand next to
     # the policy object. The bytes buy the spelling every first contact reaches
     # for — render=true used to be a rejection naming a type the caller could
