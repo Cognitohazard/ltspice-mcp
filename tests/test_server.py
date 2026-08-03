@@ -1,5 +1,6 @@
 """Tests for server.py — error hints, asc editor configuration, and dispatch."""
 
+import io
 from pathlib import Path
 from unittest.mock import patch
 
@@ -394,6 +395,38 @@ class TestClientLogLevelFilter:
         from ltspice_mcp.server import server
 
         assert mcp_types.SetLevelRequest in server.request_handlers
+
+
+class TestStderrIsQuietByDefault:
+    """The server's stderr is the caller's stderr on the in-process and
+    per-script doors. A startup banner there gets answered with a blanket
+    2>/dev/null, which then hides the tracebacks that mattered — measured, that
+    cost two turns in one session. So INFO is opt-in, not the default."""
+
+    @staticmethod
+    def _emit(level: str | None) -> str:
+        import logging as stdlib_logging
+
+        from ltspice_mcp.server import _configure_server_logging
+
+        config = ServerConfig() if level is None else ServerConfig(log_level=level)
+        stream = io.StringIO()
+        _configure_server_logging(config)
+        for handler in stdlib_logging.getLogger().handlers:
+            if isinstance(handler, stdlib_logging.StreamHandler):
+                handler.setStream(stream)  # type: ignore[attr-defined]
+        stdlib_logging.getLogger("ltspice_mcp.server").info("=== LTSpice MCP Server Starting ===")
+        stdlib_logging.getLogger("ltspice_mcp.server").warning("a real problem")
+        return stream.getvalue()
+
+    def test_the_default_config_keeps_info_off_stderr(self):
+        emitted = self._emit(None)
+        assert "Server Starting" not in emitted
+        assert "a real problem" in emitted
+
+    def test_an_explicit_info_level_brings_the_banner_back(self):
+        emitted = self._emit("INFO")
+        assert "Server Starting" in emitted
 
 
 class TestConfigureToolAnnotationHonesty:

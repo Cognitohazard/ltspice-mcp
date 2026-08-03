@@ -188,8 +188,17 @@ class ServerConfig:
     or revoke a detail the caller explicitly asked for. Set 0 to leave every default
     response undegraded. ``[analysis] default_budget``."""
 
-    log_level: str = "INFO"
-    """Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)."""
+    log_level: str = "WARNING"
+    """Stderr logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+
+    WARNING by default because the server's stderr is not always a log file. A
+    caller driving the engine in-process, or spawning a server per script, gets
+    it interleaved with their own output — and a ~34-line INFO startup banner
+    there is answered with a blanket ``2>/dev/null``, which then hides the
+    tracebacks that mattered. Startup detail is still one setting away
+    (``[logging] level`` or ``LTSPICE_MCP_LOG_LEVEL``) and ``server_status``
+    reports the same facts on demand; MCP protocol log notifications are a
+    separate channel and are unaffected."""
 
     symbol_paths: list[Path] = field(default_factory=list)
     """Custom paths to LTspice symbol (.asy) files for .asc schematic support.
@@ -635,8 +644,9 @@ def generate_default_config(path: Path) -> None:
 
     # Logging section
     logging_tbl = table()
-    logging_tbl.add(comment("Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL"))
-    logging_tbl.add("level", "INFO")
+    logging_tbl.add(comment("Stderr logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL."))
+    logging_tbl.add(comment('Set "INFO" for the startup banner and per-run detail.'))
+    logging_tbl.add("level", "WARNING")
     doc.add("logging", logging_tbl)
     doc.add(nl())
 

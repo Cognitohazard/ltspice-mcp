@@ -604,8 +604,10 @@ class TestConfigTomlValidation:
         assert cfg.max_parallel_sims == ServerConfig().max_parallel_sims
 
     def test_invalid_log_level_rejected(self, tmp_path, monkeypatch):
+        from ltspice_mcp.config import ServerConfig
+
         cfg = self._load(tmp_path, '[logging]\nlevel = "SUPERDEBUG"\n', monkeypatch)
-        assert cfg.log_level == "INFO"
+        assert cfg.log_level == ServerConfig().log_level
 
     def test_lowercase_log_level_normalized(self, tmp_path, monkeypatch):
         cfg = self._load(tmp_path, '[logging]\nlevel = "debug"\n', monkeypatch)
