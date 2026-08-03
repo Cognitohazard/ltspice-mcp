@@ -21,6 +21,12 @@ Migration = Callable[[dict[str, Any]], dict[str, Any]]
 JOB_SCHEMA = "ltspice-mcp/job"
 EXPERIMENT_JOB_SCHEMA = "ltspice-mcp/experiment-job"
 
+#: Every schema that legitimately cohabits ``.ltspice-mcp/jobs/``. A store
+#: walking that directory treats the OTHER members as silent neighbours; adding
+#: a third store to the shared directory means adding its schema here, at the
+#: definition site, not remembering to update each store's exemption list.
+SHARED_JOB_DIR_SCHEMAS: frozenset[str] = frozenset({JOB_SCHEMA, EXPERIMENT_JOB_SCHEMA})
+
 
 def pid_of(data: Mapping[str, Any]) -> int | None:
     """Owning-server pid from a stored record, or None if absent or invalid."""
@@ -93,22 +99,21 @@ def accept_schema(
     supported_versions: frozenset[int],
     migrations: Mapping[int, Migration],
     logger: logging.Logger,
-    siblings: frozenset[str] = frozenset(),
 ) -> bool:
     """Validate and, when supported, migrate a versioned JSON envelope.
 
-    ``siblings`` names the schemas this store expects to meet in its own
-    directory because another store writes them there. Meeting one is a fact
-    about the layout, not a corruption signal, so it is skipped in silence: in
-    the consolidated profile every record in ``.ltspice-mcp/jobs/`` belongs to
-    the experiment store, and warning per record turned a successful listing
-    into pages of "Skipping job file" on the caller's own stderr. Every other
-    unrecognized schema still warns — that is the case where something really
-    is wrong with the file.
+    A record carrying another schema from ``SHARED_JOB_DIR_SCHEMAS`` is a fact
+    about the layout, not a corruption signal — both stores write into the same
+    ``.ltspice-mcp/jobs/`` directory — so it is skipped in silence: warning per
+    record turned a successful listing into pages of "Skipping job file" on the
+    caller's own stderr. The exemption is derived here from that one shared-dir
+    declaration rather than passed in per store, so a store cannot forget (or
+    half-declare) its side of the relation; every schema outside the shared set
+    still warns — that is the case where something really is wrong.
     """
     found_schema = data.get("schema")
     if found_schema != schema:
-        if not isinstance(found_schema, str) or found_schema not in siblings:
+        if not isinstance(found_schema, str) or found_schema not in SHARED_JOB_DIR_SCHEMAS:
             logger.warning(
                 "Skipping job file %s: unexpected schema %r (expected %s)",
                 source,

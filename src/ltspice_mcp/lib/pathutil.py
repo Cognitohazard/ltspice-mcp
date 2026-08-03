@@ -77,7 +77,7 @@ def resolve_safe_path(user_path: str, allowed_dirs: list[Path]) -> Path:
     # used as-is.
     base = _relative_base.get()
     if not path.is_absolute():
-        path = _anchor(allowed_dirs[0] if base is None else base, base) / path
+        path = (allowed_dirs[0] if base is None else base) / path
 
     # Resolve symlinks and normalize (strict=False allows non-existent files).
     # ValueError covers an embedded NUL byte ("embedded null byte"), which

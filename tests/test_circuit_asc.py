@@ -2132,12 +2132,54 @@ class TestRemoveWireAndNetLabelOps:
         assert data["saved"] is False
         error = data["results"][0]["error"]
         assert "2 copies" in error
-        assert "floating" in error
+        assert "split the net" in error
         assert "R1.2" in error or "C1.1" in error
 
         after = await handle_read_circuit(CircuitReadInput(path="dup_load_bearing.asc"), asc_state)
         assert after.structuredContent is not None
         assert after.structuredContent["wire_count"] == 2, "the refusal must leave the sheet alone"
+
+    async def test_removing_a_duplicated_bridge_between_wired_stubs_is_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        """The cut that hurts can leave every pin still touching a wire: two
+        stubs, each attached to its pin, joined only by a duplicated bridge.
+        A floating-pin scan blesses that removal; the net partition must not."""
+        wire = await self._wired_pair(asc_state, "dup_bridge")
+        x = int(wire["x1"])
+        lo, hi = sorted((int(wire["y1"]), int(wire["y2"])))
+        m1, m2 = lo + 32, lo + 64
+        path = work_dir / "dup_bridge.asc"
+        original_line = f"WIRE {wire['x1']} {wire['y1']} {wire['x2']} {wire['y2']}"
+        rebuilt = path.read_text().replace(
+            original_line,
+            f"WIRE {x} {lo} {x} {m1}\n"
+            f"WIRE {x} {m1} {x} {m2}\n"
+            f"WIRE {x} {m1} {x} {m2}\n"
+            f"WIRE {x} {m2} {x} {hi}",
+        )
+        assert rebuilt != path.read_text(), "helper wire line not found to rewrite"
+        path.write_text(rebuilt)
+
+        res = await handle_apply_schematic_ops(
+            ApplySchematicOpsInput(
+                path="dup_bridge.asc",
+                ops=[
+                    {"op": "remove_wire", "x1": x, "y1": m1, "x2": x, "y2": m2}  # type: ignore[list-item]
+                ],
+            ),
+            asc_state,
+        )
+        data = res.structuredContent
+        assert data is not None
+        assert data["saved"] is False
+        error = data["results"][0]["error"]
+        assert "split the net" in error
+        assert "R1.2" in error or "C1.1" in error
+
+        after = await handle_read_circuit(CircuitReadInput(path="dup_bridge.asc"), asc_state)
+        assert after.structuredContent is not None
+        assert after.structuredContent["wire_count"] == 4, "the refusal must leave the sheet alone"
 
     async def test_removing_a_redundant_duplicated_segment_takes_every_copy(
         self, asc_state: SessionState, work_dir: Path

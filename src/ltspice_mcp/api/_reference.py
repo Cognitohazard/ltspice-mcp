@@ -21,6 +21,7 @@ demand, and the six methods' ``__doc__``, set at class-definition time, so
 
 from __future__ import annotations
 
+import functools
 import textwrap
 import types as pytypes
 from collections.abc import Sequence
@@ -447,6 +448,7 @@ def _render_union(
 # ---------------------------------------------------------------------------
 
 
+@functools.cache
 def _operations() -> tuple[_Operation, ...]:
     # Imported here rather than at module import: this module is also what sets
     # the methods' docstrings, and the tool modules import back into the api
@@ -544,6 +546,7 @@ def index() -> str:
     return "\n".join(lines)
 
 
+@functools.cache
 def op_reference(name: str) -> str:
     """One operation's resolved argument tree and a worked example."""
     operation = _find(name)
@@ -562,6 +565,7 @@ def reference(op: str | None = None) -> str:
     return op_reference(op)
 
 
+@functools.cache
 def method_doc(name: str) -> str:
     """The ``__doc__`` one operation's method carries: summary, tree, example."""
     operation = _find(name)

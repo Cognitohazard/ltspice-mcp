@@ -31,7 +31,6 @@ from ltspice_mcp.lib.job_types import (
     SweepDimension,
 )
 from ltspice_mcp.lib.store_common import (
-    EXPERIMENT_JOB_SCHEMA,
     JOB_SCHEMA,
     accept_schema,
     atomic_write_json,
@@ -47,7 +46,6 @@ SCHEMA = JOB_SCHEMA
 # The experiment coordinator writes its own records into this same directory,
 # so every scan here meets them. Declared a sibling: skipped without a warning,
 # because their presence is the layout working as designed.
-SIBLING_SCHEMAS: frozenset[str] = frozenset({EXPERIMENT_JOB_SCHEMA})
 # v2 (2026-05-30): SweepDimension gained an optional ``values`` list and nullable
 # ``start``/``stop`` for explicit discrete-value sweeps. The shape change is why
 # the version bumped — so a v1-only reader rejects v2 records via _accept_schema
@@ -202,7 +200,6 @@ def _accept_schema(data: dict, source: Path) -> bool:
         supported_versions=SUPPORTED_VERSIONS,
         migrations=_MIGRATIONS,
         logger=logger,
-        siblings=SIBLING_SCHEMAS,
     )
 
 
