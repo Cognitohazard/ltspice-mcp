@@ -7,6 +7,7 @@ import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
+from pathlib import Path
 from typing import Any, TypeVar
 
 from mcp import types
@@ -21,6 +22,7 @@ from ltspice_mcp.api._exceptions import (
 from ltspice_mcp.api._primitives import RawResult, load_measurement_results, load_raw_result
 from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.lib import services
+from ltspice_mcp.lib.pathutil import relative_paths_from
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edit, verify
 from ltspice_mcp.tools._base import automatic_door
@@ -121,6 +123,17 @@ def _enforce_auto_door(arguments: Mapping[str, Any]) -> None:
     raise ApiValidationError(
         "Wire-only control(s) are not accepted in automatic mode. " + "; ".join(parts)
     )
+
+
+async def _anchored_on(base: Path, coroutine: Coroutine[Any, Any, _T]) -> _T:
+    """Run one call with its relative path arguments taken from ``base``.
+
+    Applied inside the coroutine for the same reason the automatic-door flag is:
+    the path chokepoint reads the base from the engine loop's task context, and
+    a set on the calling thread would never reach it.
+    """
+    with relative_paths_from(base):
+        return await coroutine
 
 
 async def _through_auto_door(coroutine: Coroutine[Any, Any, _T]) -> _T:
@@ -514,6 +527,29 @@ class ApiMethodsMixin(ABC):
     ) -> _T:
         """Marshal one coroutine onto the private loop."""
 
+    def _marshal(
+        self,
+        coroutine: Coroutine[Any, Any, _T],
+        *,
+        cancelable: bool = False,
+        cancel_on_interrupt: bool = False,
+        preserve_interrupt: bool = False,
+    ) -> _T:
+        """Marshal one call with relative paths anchored on the working dir.
+
+        This door lets the caller name a working directory that is not their
+        cwd, so ``Api(working_dir=D)`` plus a bare ``"opamp2.asc"`` — the idiom
+        the contract documents — has to look in ``D``. Anchoring here rather
+        than per path field means every op, and every path field a future op
+        adds, inherits it: they all pass through this one call.
+        """
+        return self._call(
+            _anchored_on(self._state.config.working_dir, coroutine),
+            cancelable=cancelable,
+            cancel_on_interrupt=cancel_on_interrupt,
+            preserve_interrupt=preserve_interrupt,
+        )
+
     def _dispatch(
         self,
         name: str,
@@ -540,7 +576,7 @@ class ApiMethodsMixin(ABC):
             if raw_page
             else _through_auto_door(collector(request, self._state))
         )
-        return self._call(
+        return self._marshal(
             coroutine,
             cancelable=_resolve_cancel(cancelable, request),
             cancel_on_interrupt=_resolve_cancel(cancel_on_interrupt, request),
@@ -561,7 +597,7 @@ class ApiMethodsMixin(ABC):
             request = _validate(
                 "run_experiments", experiments.RunExperimentsInput, arguments, self._state
             )
-            return self._call(
+            return self._marshal(
                 _handler_page(experiments.handle_run_experiments, request, self._state)
             )
 
@@ -578,7 +614,7 @@ class ApiMethodsMixin(ABC):
             submitted_arguments,
             self._state,
         )
-        receipt = self._call(
+        receipt = self._marshal(
             _through_auto_door(
                 _handler_page(experiments.handle_run_experiments, request, self._state)
             ),
@@ -596,7 +632,7 @@ class ApiMethodsMixin(ABC):
         try:
             if waited_job is not None:
                 self.wait(waited_job)
-            complete = self._call(
+            complete = self._marshal(
                 _through_auto_door(_complete_run_receipt(receipt, request, self._state))
             )
             return complete if wait else _note_process_owned_job(complete)
@@ -748,7 +784,7 @@ class ApiMethodsMixin(ABC):
             raise TypeError("Pass exactly one of raw_path or job_id")
         if raw_path is not None and (run_index != 0 or case_id is not None):
             raise TypeError("run_index and case_id are only valid with job_id")
-        return self._call(
+        return self._marshal(
             load_raw_result(
                 state=self._state,
                 raw_path=None if raw_path is None else os.fspath(raw_path),
@@ -769,7 +805,7 @@ class ApiMethodsMixin(ABC):
     ) -> dict[str, Any]:
         """Return parsed ``.meas`` data for one legacy run or experiment case."""
         self._check_process_and_thread()
-        return self._call(
+        return self._marshal(
             load_measurement_results(
                 state=self._state,
                 job_id=job_id,
