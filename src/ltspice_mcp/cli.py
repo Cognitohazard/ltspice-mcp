@@ -520,6 +520,26 @@ def build_parser(argv: Sequence[str] | None = None) -> _Parser:
     )
     _add_timeout_option(run_command)
 
+    reference_command = sub.add_parser(
+        "reference",
+        help="Print the argument catalogue for the six commands (no engine startup).",
+        description=(
+            "Every argument of every command, with types, defaults, enum members\n"
+            "and union branches written out, nested shapes flattened onto dotted\n"
+            "paths, and one worked example. Generated from the models the call is\n"
+            "validated against. With no OP, prints the six-command index."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    reference_command.exemplar = "spice-mcp reference edit-schematic"
+    reference_command.json_requested = json_requested
+    reference_command.add_argument(
+        "op",
+        metavar="OP",
+        nargs="?",
+        help="One command's name, hyphenated or underscored. Omit for the index.",
+    )
+
     for name, spec in _SUBCOMMANDS.items():
         alias = name.replace("-", "_")
         command = sub.add_parser(
@@ -550,6 +570,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if namespace.command is None:
         parser.error("a COMMAND is required")
     namespace.command = namespace.command.replace("_", "-")
+    if namespace.command == "reference" and namespace.op is not None:
+        # The CLI spells commands with hyphens and the API with underscores;
+        # accept either so a caller does not have to know which door they are
+        # standing at to read the catalogue.
+        namespace.op = namespace.op.replace("-", "_")
     if namespace.as_json and namespace.as_table:
         parser.exemplar = _exemplar_for(namespace.command)
         parser.error("--json and --table cannot be used together")
@@ -1515,6 +1540,18 @@ def emit_error(namespace: argparse.Namespace, code: str, message: str, exit_code
 
 async def execute(namespace: argparse.Namespace) -> int:
     """Run one parsed invocation and return its exit code."""
+    if namespace.command == "reference":
+        # The catalogue is rendered from the argument models alone: no config,
+        # no simulator detection, no engine session. Printing it must not cost
+        # a startup, and must work in a directory the engine would refuse.
+        from ltspice_mcp.api import _reference
+
+        try:
+            print(_reference.reference(namespace.op))
+        except ValueError as exc:
+            return emit_error(namespace, "usage", str(exc), EXIT_REFUSED)
+        return 0
+
     try:
         payload = build_payload(namespace)
     except _Refused as exc:
