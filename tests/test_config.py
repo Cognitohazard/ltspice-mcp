@@ -20,7 +20,10 @@ class TestServerConfig:
         assert config.default_timeout == 300.0
         assert config.analysis_budget_s == 60.0
         assert config.result_set_ttl_hours == 24.0
-        assert config.log_level == "INFO"
+        # WARNING, not INFO: the server's stderr is the caller's stderr on the
+        # in-process and per-script doors, and a startup banner there gets
+        # answered with a blanket 2>/dev/null that also hides real tracebacks.
+        assert config.log_level == "WARNING"
 
     def test_max_parallel_defaults_to_capped_core_count(self, monkeypatch: pytest.MonkeyPatch):
         # Core-aware default: use the host's cores, but cap so a many-core box
