@@ -28,6 +28,8 @@ from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_lifecycle import reconcile_experiment_restart, runs_terminal
 from ltspice_mcp.lib.raw_parser import has_valid_raw_header
 from ltspice_mcp.lib.store_common import (
+    EXPERIMENT_JOB_SCHEMA,
+    JOB_SCHEMA,
     accept_schema,
     atomic_write_json,
     owner_alive,
@@ -37,9 +39,12 @@ from ltspice_mcp.lib.store_common import (
 
 logger = logging.getLogger(__name__)
 
-SCHEMA = "ltspice-mcp/experiment-job"
+SCHEMA = EXPERIMENT_JOB_SCHEMA
 SCHEMA_VERSION = 2
 SUPPORTED_VERSIONS: frozenset[int] = frozenset({1, 2})
+# The legacy job store writes into this same directory; its records are the
+# expected other half of the layout, not a corrupted file.
+SIBLING_SCHEMAS: frozenset[str] = frozenset({JOB_SCHEMA})
 
 
 def _migrate_v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
@@ -618,6 +623,7 @@ def load_job_from_path(
         supported_versions=SUPPORTED_VERSIONS,
         migrations=_MIGRATIONS,
         logger=logger,
+        siblings=SIBLING_SCHEMAS,
     ):
         return None
     if data.get("kind") != "experiment":

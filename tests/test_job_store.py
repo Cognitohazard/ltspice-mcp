@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from ltspice_mcp.lib import job_store, now
+from ltspice_mcp.lib import experiment_store, job_store, now
 from ltspice_mcp.state import (
     BatchJob,
     MonteCarloConfig,
@@ -508,6 +509,68 @@ class TestSchemaVersion:
         summary = job_store.summarize_circuit(circuit)
         assert summary["total_jobs"] == 1
         assert summary["status_counts"] == {"completed": 1}
+
+
+class TestSiblingSchemasAreSilent:
+    """Both stores write into ``.ltspice-mcp/jobs/``; meeting the other's
+    records is the layout, not corruption, so a scan must not warn about it —
+    while a genuinely unknown schema still must."""
+
+    @staticmethod
+    def _record(circuit: Path, schema: str, job_id: str) -> dict[str, Any]:
+        return {
+            "schema": schema,
+            "schema_version": 2,
+            "job_id": job_id,
+            "kind": "experiment",
+            "netlist": str(circuit),
+            "status": "completed",
+        }
+
+    def test_experiment_records_scan_without_warnings(self, tmp_path: Path, caplog) -> None:
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        job_store.save_job(_sim_job(circuit, status="completed", job_id="sim_good"))
+        sidecar = job_store.sidecar_dir(circuit)
+        for index in range(3):
+            record = self._record(circuit, experiment_store.SCHEMA, f"exp_{index}")
+            (sidecar / f"exp_{index}.json").write_text(json.dumps(record))
+
+        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.lib.store_common"):
+            summary = job_store.summarize_circuit(circuit)
+            sim_jobs, _ = job_store.load_jobs_for_circuit(circuit)
+
+        assert summary["total_jobs"] == 1
+        assert [job.job_id for job in sim_jobs] == ["sim_good"]
+        assert caplog.records == []
+
+    def test_alien_schema_still_warns(self, tmp_path: Path, caplog) -> None:
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        sidecar = job_store.sidecar_dir(circuit)
+        sidecar.mkdir(parents=True)
+        record = self._record(circuit, "different-project/job", "sim_alien")
+        (sidecar / "sim_alien.json").write_text(json.dumps(record))
+
+        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.lib.store_common"):
+            summary = job_store.summarize_circuit(circuit)
+
+        assert summary["total_jobs"] == 0
+        assert any("unexpected schema" in record.message for record in caplog.records)
+
+    def test_experiment_store_is_silent_about_legacy_job_records(
+        self, tmp_path: Path, caplog
+    ) -> None:
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        job_store.save_job(_sim_job(circuit, status="completed", job_id="sim_good"))
+        legacy = job_store.sidecar_dir(circuit) / "sim_good.json"
+
+        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.lib.store_common"):
+            loaded = experiment_store.load_job_from_path(legacy, tmp_path)
+
+        assert loaded is None
+        assert caplog.records == []
 
 
 class TestSchemaMigration:
