@@ -176,25 +176,24 @@ not one shared scale followed by both values. Parse repeated scale/value groups,
 and remember that `wrdata` writes only the text table; add an explicit `write`
 too if later server analysis needs a rawfile.
 
-## Routing: which vehicle runs what
+## Routing: one door per session
 
-- A quick one-off ngspice run: shell out and run it yourself — it is the
-  cheapest path. Keep the rawfile.
-- Reading numbers out of any rawfile (yours or the server's): the server's
-  analysis tools — `analyze_results` accepts a bare `raw_path` for runs it
-  never executed, and returns parsed values, reductions, and spec verdicts.
-- LTspice execution, declared sweep/corner/Monte-Carlo matrices, or a run
-  long enough to outlive one call: `run_experiments` — durable idempotent
-  submission, then `jobs` to wait or cancel.
-- Schematic (`.asc`) work: the schematic tools, never hand-written files —
-  they carry orthogonal routing and pin-collision/junction checks.
-- Open-ended interrogation — loops over results, compute-decide-compute,
-  arbitrary math on traces: if `ltspice_mcp` is importable, write Python
-  against `ltspice_mcp.api` (`Api`, `load_raw`, the metric functions);
-  intermediates stay in your interpreter.
-- Result belongs on disk, not your reply, or no server connected:
-  `spice-mcp <op> @plan.json --json` — same ops; exit codes are verdicts.
-- Route on the ANSWER's size too: a table past a handful of rows costs its full
-  width in your context through a tool call and nothing through the API, where
-  the object stays in your interpreter. Run it through Python and print the
-  summary — the crossing, the worst corner — not the table.
+Pick the primary door once, from what this session can do — then stay on it.
+
+- **You can run code** (shell + Python): all circuit work goes through
+  `from ltspice_mcp.api import Api`. Pull vocabulary instead of guessing:
+  `api.reference()` indexes the six ops, `api.reference("<op>")` is the full
+  argument tree with enums and one example; `help(api.<op>)` says the same.
+  Within the door: `run_experiments` for any LTspice run, declared
+  sweep/corner/Monte-Carlo matrices, or anything durable (`jobs` waits or
+  cancels); `edit_schematic`/`verify_circuit` for `.asc` work, never
+  hand-written files — they carry orthogonal routing and collision checks;
+  `analyze_results` reads any rawfile, even one you ran yourself
+  (`raw_path=`). Intermediates stay in your interpreter — print the
+  crossing or the worst corner, never the full table.
+- **You cannot run code**: the same six operations are the MCP tools already
+  in front of you; route nothing elsewhere.
+- Escape hatches, named out loud when taken: `spice-mcp <op> @plan.json
+  --json` when a result belongs on disk inside a shell pipeline; a hand-run
+  ngspice one-off only when you immediately hand its raw back to
+  `analyze_results(raw_path=...)`.
