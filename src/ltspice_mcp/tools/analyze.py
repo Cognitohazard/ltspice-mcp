@@ -1462,8 +1462,8 @@ async def _adapter_value(
             )
         )
     if isinstance(recipe, BodeCrossingRecipe):
-        quantity = "phase_deg" if recipe.phase_deg is not None else "magnitude_db"
-        level = recipe.phase_deg if recipe.phase_deg is not None else recipe.level_db
+        quantity = "phase_deg" if recipe.level_deg is not None else "magnitude_db"
+        level = recipe.level_deg if recipe.level_deg is not None else recipe.level_db
         return structured(
             await an.handle_bode_metrics(
                 an.BodeMetricsInput(

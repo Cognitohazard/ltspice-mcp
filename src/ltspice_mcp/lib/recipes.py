@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal, TypeAlias, get_args
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -304,13 +305,28 @@ class BodePointRecipe(_ScalarRecipe):
 class BodeCrossingRecipe(_VariableRecipe):
     metric: Literal["bode_crossing"]
     signal: str
-    level_db: float | None = None
-    phase_deg: float | None = None
+    level_db: float | None = Field(
+        default=None,
+        description="Magnitude level to cross, in dB. Exactly one of level_db/level_deg.",
+    )
+    # Named for its axis the way level_db is, and reachable under the older
+    # 'phase_deg' spelling. The pair reads as one choice of level on one of two
+    # axes, which is what it is; 'phase_deg' alone gave no hint that the
+    # magnitude axis was the other member of the same either-or.
+    level_deg: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices("level_deg", "phase_deg"),
+        description=(
+            "Phase level to cross, in degrees, scanned on the UNWRAPPED phase so "
+            "a crossing past ±180° is found once rather than at every wrap. "
+            "Exactly one of level_db/level_deg."
+        ),
+    )
 
     @model_validator(mode="after")
     def _one_crossing_level(self) -> BodeCrossingRecipe:
-        if (self.level_db is None) == (self.phase_deg is None):
-            raise ValueError("provide exactly one of 'level_db' or 'phase_deg'")
+        if (self.level_db is None) == (self.level_deg is None):
+            raise ValueError("provide exactly one of 'level_db' or 'level_deg'")
         return self
 
 
