@@ -209,3 +209,14 @@ class TestOpsUnionErrorEnumerates:
         detail = compact_validation_error(excinfo.value)
         assert "symbol" in detail
         assert "from_pin" not in detail, "a sibling branch's fields leaked into the error"
+
+
+class TestCatalogueMatchesTheRegistry:
+    """_operations() names the six ops by hand next to the registry that
+    already maps them; this pin is what turns a drift into a failure."""
+
+    def test_operation_names_equal_the_consolidated_profile(self):
+        from ltspice_mcp.tools import get_tools_for_profile
+
+        tool_defs, _dispatch = get_tools_for_profile("consolidated")
+        assert set(_reference.op_names()) == {tool.name for tool in tool_defs}

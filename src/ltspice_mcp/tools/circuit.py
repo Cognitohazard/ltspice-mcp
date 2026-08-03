@@ -811,14 +811,6 @@ def _append_wire_segments(
     return already
 
 
-def _floating_pins(editor: AscEditor) -> set[tuple[str, str, int, int]]:
-    return {
-        (str(w["ref"]), str(w["pin"]), int(w["x"]), int(w["y"]))
-        for w in _post_op_warnings(editor)
-        if w.get("kind") == "floating_pin"
-    }
-
-
 def _post_op_warnings(editor: AscEditor) -> list[dict]:
     """Schematic-state advisories surfaced after a mutating op succeeds.
 
@@ -5579,24 +5571,41 @@ def _apply_op_inplace(editor: AscEditor, op: SchematicOp, asc_path: Path) -> dic
                 # A duplicated segment is one connection drawn twice, so "remove
                 # the duplicate" and "remove the connection" are the same
                 # request at this interface. Removing every copy is right only
-                # when the connection was redundant; when it was not, the caller
-                # who asked to tidy up would get a disconnected sheet back with
-                # a warning, which is what happened.
-                was_floating = _floating_pins(editor)
+                # when the connection was redundant — and redundancy is a NET
+                # fact, not a pin fact: cutting a duplicated bridge between two
+                # wired stubs splits the net while every pin still touches some
+                # wire, so a floating-pin scan blesses exactly the cut this
+                # guard exists to refuse. The oracle is the net partition.
+                part_before = _net_partition(editor)
+                nets_before: dict[tuple[int, int], list[tuple[int, int]]] = {}
+                for coord in part_before.pin_owners:
+                    nets_before.setdefault(part_before.root(coord), []).append(coord)
                 original, editor.wires = editor.wires, kept
-                appearing = _floating_pins(editor) - was_floating
-                if appearing:
+                part_after = _net_partition(editor)
+                for coords in nets_before.values():
+                    sides: dict[tuple[int, int], list[tuple[int, int]]] = {}
+                    for coord in coords:
+                        sides.setdefault(part_after.root(coord), []).append(coord)
+                    if len(sides) < 2:
+                        continue
                     editor.wires = original
-                    named = ", ".join(
-                        f"{ref}.{pin} at ({x},{y})" if pin else f"{ref} at ({x},{y})"
-                        for ref, pin, x, y in sorted(appearing)
-                    )
+
+                    def _side_names(side: list[tuple[int, int]]) -> str:
+                        names = [
+                            f"{ref}.{pin}" if pin else ref
+                            for c in sorted(side)
+                            for ref, pin in part_before.pin_owners[c]
+                        ]
+                        return ", ".join(names[:3]) + (", ..." if len(names) > 3 else "")
+
+                    first, second, *_ = sorted(sides.values(), key=len, reverse=True)
                     raise NetlistError(
                         f"Refusing to remove the {copies} copies of "
                         f"({op.x1},{op.y1})->({op.x2},{op.y2}): they are one connection "
-                        f"drawn {copies} times, and removing it would leave {named} "
-                        "floating. Remove the pin's other segments first if the "
-                        "disconnection is what you want."
+                        f"drawn {copies} times, and removing it would split the net, "
+                        f"leaving {_side_names(second)} disconnected from "
+                        f"{_side_names(first)}. Remove the pin's other segments first "
+                        "if the disconnection is what you want."
                     )
             else:
                 editor.wires = kept
