@@ -292,7 +292,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # The list is the spelling callers reach for and the dict is what the engine
     # wanted; advertising both is what makes the natural one findable rather
     # than merely tolerated.
-    "analyze_results": 21171,
+    # RAISED 21171 -> 21437: the crossing recipe's phase axis is now named
+    # level_deg beside level_db and documents that it scans unwrapped phase.
+    # "Where does phase cross -45 degrees" previously had no findable spelling
+    # and callers fell back to pulling arrays and unwrapping by hand.
+    "analyze_results": 21437,
     # expected_sha256 now names where a caller gets one (an inspect
     # components/net query). No read tool reported the digest before, so a
     # first edit on an existing sheet had no in-product route to its token.
