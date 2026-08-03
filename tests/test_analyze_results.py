@@ -1947,6 +1947,29 @@ class TestHeadlineLeafPromotion:
         assert point_row["magnitude_db"] == point_row["points"][0]["magnitude_db"]
 
     @pytest.mark.asyncio
+    async def test_phase_crossing_answers_on_the_degree_axis(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """ "Where does phase cross -45 degrees" is a recipe, not a numpy detour.
+
+        On a single-pole RC the -45 deg phase crossing IS the -3 dB corner, so
+        the two axes have to agree on the same raw.
+        """
+        raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+        data = await _analyze(
+            state_no_sim,
+            raw,
+            [
+                {"key": "ph", "metric": "bode_crossing", "signal": "V(out)", "level_deg": -45.0},
+                {"key": "mag", "metric": "bode_crossing", "signal": "V(out)", "level_db": -3.0},
+            ],
+            include={"per_run": {"limit": 5}, "fields": ["value.first_crossing_hz"]},
+        )
+        phase_hz = data["results"]["ph"]["per_run"]["items"][0]["value"]["first_crossing_hz"]
+        mag_hz = data["results"]["mag"]["per_run"]["items"][0]["value"]["first_crossing_hz"]
+        assert phase_hz == pytest.approx(mag_hz, rel=0.02)
+
+    @pytest.mark.asyncio
     async def test_headline_is_projectable_to_a_lean_row(
         self, state_no_sim: SessionState, work_dir: Path
     ):

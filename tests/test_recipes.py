@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from ltspice_mcp.lib.recipes import (
     DISCRIMINANTS,
     RECIPE_MODELS,
+    BodeCrossingRecipe,
     ValueRecipe,
     _KeyedRecipe,
     _MultiRecipe,
@@ -164,3 +165,40 @@ def test_value_at_is_optional_at_schema_boundary():
     recipe = validate_recipe({"key": "bias", "metric": "value", "expr": "V(out)"})
     assert isinstance(recipe, ValueRecipe)
     assert recipe.at is None
+
+
+class TestBodeCrossingLevel:
+    """One level, on one of two axes, named the same way on both."""
+
+    @staticmethod
+    def _crossing(**extra: object) -> BodeCrossingRecipe:
+        recipe = validate_recipe(
+            {"key": "x", "metric": "bode_crossing", "signal": "V(out)", **extra}
+        )
+        assert isinstance(recipe, BodeCrossingRecipe)
+        return recipe
+
+    def test_level_deg_is_accepted(self):
+        assert self._crossing(level_deg=-45.0).level_deg == -45.0
+
+    def test_level_db_is_accepted(self):
+        recipe = self._crossing(level_db=-3.0)
+        assert recipe.level_db == -3.0
+        assert recipe.level_deg is None
+
+    def test_phase_deg_still_reaches_the_same_field(self):
+        assert self._crossing(phase_deg=-45.0).level_deg == -45.0
+
+    def test_neither_level_is_refused_naming_both(self):
+        with pytest.raises(ValidationError) as excinfo:
+            self._crossing()
+        message = str(excinfo.value)
+        assert "level_db" in message
+        assert "level_deg" in message
+
+    def test_both_levels_are_refused_naming_both(self):
+        with pytest.raises(ValidationError) as excinfo:
+            self._crossing(level_db=-3.0, level_deg=-45.0)
+        message = str(excinfo.value)
+        assert "level_db" in message
+        assert "level_deg" in message
