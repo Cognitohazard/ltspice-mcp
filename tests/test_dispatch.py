@@ -3,11 +3,12 @@
 import json
 import typing
 
+import pytest
 from mcp import types
 from pydantic import ValidationError
 
 from ltspice_mcp.config import VALID_PROFILES
-from ltspice_mcp.tools import get_tools_for_profile
+from ltspice_mcp.tools import _base, get_tools_for_profile
 from ltspice_mcp.tools.circuit import SchematicOp
 from tests.conftest import resolve_local_ref
 
@@ -461,6 +462,30 @@ def _assert_no_key_at_depth(node, key: str, tool_name: str, path: str) -> None:
             _assert_no_key_at_depth(item, key, tool_name, f"{path}[{i}]")
 
 
+def _assert_no_title_annotation(node, tool_name: str, path: str, *, in_name_map=False) -> None:
+    """Assert no 'title' SCHEMA KEYWORD survives, at any depth.
+
+    A key named 'title' inside a properties/$defs map is an argument name and
+    is left alone — that distinction is the whole point of the walk.
+    """
+    if isinstance(node, dict):
+        if in_name_map:
+            for name, value in node.items():
+                _assert_no_title_annotation(value, tool_name, f"{path}.{name}")
+            return
+        assert "title" not in node, f"{tool_name}: title annotation at {path}"
+        for key, value in node.items():
+            _assert_no_title_annotation(
+                value,
+                tool_name,
+                f"{path}.{key}",
+                in_name_map=key in _base._SCHEMA_NAME_MAPS,
+            )
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            _assert_no_title_annotation(item, tool_name, f"{path}[{index}]")
+
+
 class TestSchemaPostProcessing:
     """Verify that Pydantic-generated schemas are cleaned for MCP compatibility."""
 
@@ -547,11 +572,33 @@ class TestSchemaPostProcessing:
 
             walk(tool_def.inputSchema, "root")
 
-    def test_no_title_at_any_depth(self):
-        """No 'title' key should exist at any depth in any tool schema."""
-        defs, _ = get_tools_for_profile("full")
-        for tool_def in defs:
-            _assert_no_key_at_depth(tool_def.inputSchema, "title", tool_def.name, "root")
+    def test_no_title_annotation_survives_in_any_profile(self):
+        """Pydantic's 'title' metadata is stripped wherever it is a keyword.
+
+        Structural, not by key name: inside a properties/$defs map the keys are
+        argument names, and one of them really is called 'title'."""
+        for tool_def in _all_profile_defs():
+            _assert_no_title_annotation(tool_def.inputSchema, tool_def.name, "root")
+
+    def test_a_property_actually_named_title_is_advertised(self):
+        """The plot recipe takes a 'title'; the handler reads it. Stripping the
+        title keyword at every level deleted the property entry too, so an
+        accepted argument was in no published schema and no client could find
+        it."""
+        from ltspice_mcp.lib.recipes import PlotRecipe
+
+        assert "title" in PlotRecipe.model_fields
+        for tool_def in _all_profile_defs():
+            if tool_def.name != "analyze_results":
+                continue
+            advertised = json.dumps(tool_def.inputSchema)
+            assert '"title"' in advertised, (
+                "analyze_results advertises no 'title' property — the plot "
+                "recipe's title argument is undiscoverable again"
+            )
+            break
+        else:  # pragma: no cover - the consolidated profile always registers it
+            pytest.fail("analyze_results is not registered in any profile")
 
     def test_wire_tool_list_omits_output_schema(self):
         """The advertised list carries no outputSchema (followups item 30 —

@@ -488,11 +488,31 @@ class RegisteredTool:
     aliases: frozenset[str] = frozenset()
 
 
-def _strip_titles(node: Any) -> Any:
-    """Recursively remove Pydantic title metadata from a JSON schema node."""
+# JSON Schema keywords whose value is a map from caller-visible NAMES to
+# schemas. Inside one of these the keys are the argument's own vocabulary, so
+# nothing in it may be filtered as a schema keyword.
+_SCHEMA_NAME_MAPS = frozenset(
+    {"properties", "$defs", "definitions", "patternProperties", "dependentSchemas"}
+)
+
+
+def _strip_titles(node: Any, *, in_name_map: bool = False) -> Any:
+    """Remove pydantic's ``title`` annotations, keeping a field named ``title``.
+
+    Filtering the key at every level also deleted the entry for a *property*
+    called ``title`` — which the plot recipe has and the handler reads — so a
+    real, accepted argument was absent from every published schema and no client
+    could discover it. Descend structurally instead: inside a ``properties`` or
+    ``$defs`` map the keys are argument names, not schema keywords.
+    """
     if isinstance(node, dict):
-        node = {k: _strip_titles(v) for k, v in node.items() if k != "title"}
-        return node
+        if in_name_map:
+            return {key: _strip_titles(value) for key, value in node.items()}
+        return {
+            key: _strip_titles(value, in_name_map=key in _SCHEMA_NAME_MAPS)
+            for key, value in node.items()
+            if key != "title"
+        }
     if isinstance(node, list):
         return [_strip_titles(item) for item in node]
     return node
