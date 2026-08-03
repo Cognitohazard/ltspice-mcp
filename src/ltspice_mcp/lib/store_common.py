@@ -15,6 +15,12 @@ from ltspice_mcp.lib import atomic_write_json as _atomic_write_json
 
 Migration = Callable[[dict[str, Any]], dict[str, Any]]
 
+#: The two record schemas that share ``.ltspice-mcp/jobs/`` by design. Defined
+#: here rather than in either store so each one can name the other without an
+#: import cycle, and so the pair is written down in exactly one place.
+JOB_SCHEMA = "ltspice-mcp/job"
+EXPERIMENT_JOB_SCHEMA = "ltspice-mcp/experiment-job"
+
 
 def pid_of(data: Mapping[str, Any]) -> int | None:
     """Owning-server pid from a stored record, or None if absent or invalid."""
@@ -87,16 +93,28 @@ def accept_schema(
     supported_versions: frozenset[int],
     migrations: Mapping[int, Migration],
     logger: logging.Logger,
+    siblings: frozenset[str] = frozenset(),
 ) -> bool:
-    """Validate and, when supported, migrate a versioned JSON envelope."""
+    """Validate and, when supported, migrate a versioned JSON envelope.
+
+    ``siblings`` names the schemas this store expects to meet in its own
+    directory because another store writes them there. Meeting one is a fact
+    about the layout, not a corruption signal, so it is skipped in silence: in
+    the consolidated profile every record in ``.ltspice-mcp/jobs/`` belongs to
+    the experiment store, and warning per record turned a successful listing
+    into pages of "Skipping job file" on the caller's own stderr. Every other
+    unrecognized schema still warns — that is the case where something really
+    is wrong with the file.
+    """
     found_schema = data.get("schema")
     if found_schema != schema:
-        logger.warning(
-            "Skipping job file %s: unexpected schema %r (expected %s)",
-            source,
-            found_schema,
-            schema,
-        )
+        if not isinstance(found_schema, str) or found_schema not in siblings:
+            logger.warning(
+                "Skipping job file %s: unexpected schema %r (expected %s)",
+                source,
+                found_schema,
+                schema,
+            )
         return False
 
     raw_version = data.get("schema_version")
