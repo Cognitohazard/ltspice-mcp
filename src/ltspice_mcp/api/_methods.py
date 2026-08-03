@@ -13,6 +13,7 @@ from typing import Any, TypeVar
 from mcp import types
 from pydantic import BaseModel, ValidationError
 
+from ltspice_mcp.api import _reference
 from ltspice_mcp.api._exceptions import (
     ApiCallError,
     ApiInternalError,
@@ -512,6 +513,22 @@ class ApiMethodsMixin(ABC):
 
     _state: SessionState
 
+    @staticmethod
+    def reference(op: str | None = None) -> str:
+        """Print the argument catalogue: the six-op index, or one op's tree.
+
+        ``reference()`` lists the operations; ``reference('edit_schematic')``
+        gives that operation's whole argument tree — every field with its type,
+        default, enum members and union branches written out, nested models
+        flattened onto dotted paths, and a worked example. Generated from the
+        models the call validates against, so it says what will be accepted.
+
+        A static method deliberately: reading the catalogue must not require an
+        engine session, so ``Api.reference('inspect')`` works before anything is
+        opened and without taking this process's single session lease.
+        """
+        return _reference.reference(op)
+
     @abstractmethod
     def _check_process_and_thread(self) -> None:
         """Reject calls from an inherited process or the private loop thread."""
@@ -815,3 +832,10 @@ class ApiMethodsMixin(ABC):
             cancelable=True,
             cancel_on_interrupt=True,
         )
+
+
+# The six methods carry their operation's catalogue entry as their docstring,
+# installed at class-definition time so help() and inspect.getdoc answer the
+# reflex a Python caller already has — and from the same renderer api.reference
+# uses, so the two can never disagree.
+_reference.install_method_docs(ApiMethodsMixin)

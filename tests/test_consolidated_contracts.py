@@ -304,7 +304,13 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # its cursor. An ack-shaped edit returned all 46 pins of the sheet; the
     # default now returns the pins of what the batch touched, which is ~2,300
     # response chars saved on every edit for 201 chars of schema.
-    "edit_schematic": 12987,
+    # RAISED 12987 -> 13541: the ops union is discriminated on 'op', the way the
+    # recipe union is on 'metric'. Undiscriminated, one mistyped op produced an
+    # error per branch — 30-odd of them, cut off at "… and 23 more" — so the
+    # caller learned neither which kinds exist nor what their payload lacked,
+    # and the measured recovery was reflecting over private classes. The bytes
+    # are the discriminator mapping; what they buy is every op error.
+    "edit_schematic": 13541,
     # LOWERED 8628 -> 8008: budget prose, as above.
     "inspect": 8008,
     # LOWERED 3955 -> 3378: budget prose, as above.

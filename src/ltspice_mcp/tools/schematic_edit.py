@@ -33,7 +33,7 @@ import stat
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Literal, NamedTuple, cast
+from typing import Annotated, Any, Literal, NamedTuple, cast
 
 from mcp import types
 from pydantic import Field
@@ -113,7 +113,14 @@ class _OpWirePinsStrict(_OpWirePins):
 
 
 # The op union for this surface: the shipped models, with the wire op narrowed.
-ConsolidatedOp = (
+#
+# Discriminated on ``op``. Without the discriminator pydantic tries every branch
+# and reports each one's complaint, so a single mistyped op produced 30-odd
+# errors that the compact renderer cut off at "… and 23 more" — the caller
+# learned neither which kinds exist nor what their own payload was missing. With
+# it, an unknown op is one error naming every accepted kind, and a known op with
+# a bad field reports against that kind alone.
+ConsolidatedOp = Annotated[
     _OpAddComponent
     | _OpSetComponentValue
     | _OpSetComponentAttribute
@@ -124,8 +131,9 @@ ConsolidatedOp = (
     | _OpRemoveWire
     | _OpWirePinsStrict
     | _OpAddDirective
-    | _OpRemoveDirective
-)
+    | _OpRemoveDirective,
+    Field(discriminator="op"),
+]
 
 
 class _ViewCursors(StrictModel):
