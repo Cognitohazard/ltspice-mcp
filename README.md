@@ -1,6 +1,8 @@
 # ltspice-mcp
 
-> **Work in progress.** Core functionality is usable but expect rough edges and breaking changes.
+**Rewrite in progress to improve token usage efficiency while maintaining the speed advantage this mcp offers compared to no-mcp capable coding agent.**
+
+> **WIP:** Core functionality is usable but expect rough edges and breaking changes.
 
 An MCP server that connects LLM assistants (Claude, and any other MCP client) to real circuit simulation: LTspice and ngspice, plus direct editing of LTspice `.asc` schematics. Simulation results come back as structured numbers — cutoff frequencies, overshoot, phase margin, rise times, and per-device small-signal operating-point parameters (gm, gds, vth, …) read back **by name** — so the assistant can design, verify, and iterate on circuits in the same files you open in LTspice, without ever hand-parsing a rawfile. Built on [spicelib](https://github.com/nunobrum/spicelib).
 
