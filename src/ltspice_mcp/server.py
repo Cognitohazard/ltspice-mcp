@@ -426,9 +426,9 @@ def build_instructions(
             active = f"Active simulators: {', '.join(parts)}."
         if "ltspice" not in available:
             active += (
-                " (LTspice not detected; .asc schematic editing needs LTspice "
-                "symbol files and may be unavailable — simulation and analysis "
-                "run on the active engine and are unaffected.)"
+                " (LTspice not detected; .asc editing needs its symbol files "
+                "and may be unavailable — simulation and analysis run on the "
+                "active engine, unaffected.)"
             )
     return f"{active}\n\n{guidance.instructions}"
 
