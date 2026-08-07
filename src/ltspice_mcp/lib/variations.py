@@ -65,6 +65,11 @@ ScalarValue: TypeAlias = StrictInt | StrictFloat | str
 Distribution: TypeAlias = Literal["normal", "gaussian", "uniform"]
 Scale: TypeAlias = Literal["relative", "absolute"]
 
+_APPLIES_TO_DESCRIPTION = (
+    "Circuit ids this variation expands over (default: every circuit). NOT a "
+    "device filter — devices are selected by each rule's own targeting."
+)
+
 _CIRCUIT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
@@ -106,7 +111,7 @@ class AssignVariation(VariationModel):
         ),
     )
     combine: Literal["grid", "zip"] = "grid"
-    applies_to: list[str] | None = None
+    applies_to: list[str] | None = Field(default=None, description=_APPLIES_TO_DESCRIPTION)
     assign: dict[str, list[ScalarValue]] = Field(
         description=(
             "Target → value list. Explicit target forms are recognized before "
@@ -195,7 +200,9 @@ class MismatchRule(VariationModel):
         default="M",
         description=(
             "Device prefix (case-insensitive), matched on leading characters — "
-            "'M1' also claims M10. 'X' reaches subckt-wrapped FETs."
+            "'M1' also claims M10. 'X' reaches subckt-wrapped FETs. Scope a "
+            "pair with one rule per device ('M1' plus 'M2'); bare 'M' perturbs "
+            "every MOSFET."
         ),
     )
     AVT: float = Field(
@@ -247,7 +254,7 @@ class RandomVariation(VariationModel):
     )
     runs: int = Field(ge=1)
     seed: int | None = None
-    applies_to: list[str] | None = None
+    applies_to: list[str] | None = Field(default=None, description=_APPLIES_TO_DESCRIPTION)
     rules: list[RandomRule]
 
     @field_validator("rules")
