@@ -335,7 +335,14 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # spellings as analyze_results (a bare flag list, per_run=true). A spelling
     # that works on one of the two places a caller writes `include` is a trap,
     # so the two surfaces move together.
-    "run_experiments": 14216,
+    # RAISED 14216 -> 14462: applies_to (both variation kinds) now states its
+    # contract — circuit ids, NOT a device filter. Sealed schema probes showed
+    # agents reading the bare field as the device selector (5/5 without other
+    # prose), and the mismatch prefix description gains the one-rule-per-device
+    # pair idiom: probe agents asked for input-pair mismatch wrote prefix 'M'
+    # and silently perturbed every MOSFET — a run that completes clean and
+    # answers a different question than asked.
+    "run_experiments": 14462,
     # RAISED 5079 -> 5137: 'render' now advertises the boolean shorthand next to
     # the policy object. The bytes buy the spelling every first contact reaches
     # for — render=true used to be a rejection naming a type the caller could
