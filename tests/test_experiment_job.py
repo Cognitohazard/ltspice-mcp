@@ -1081,6 +1081,35 @@ class TestRequestBarrier:
         with pytest.raises(IdempotencyConflictError, match="inconsistent coordinator"):
             ExperimentRunner._durable_barrier(request, candidate)
 
+    def test_unknown_drift_code_still_refuses_the_replay(
+        self,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A drift code the reason table does not know must refuse, not crash.
+
+        The replay guard renders each drift observation through a fixed
+        code→reason table. Today staging emits exactly the two codes the table
+        knows, so the lookup cannot miss — but a third observation code added
+        in deck_staging would turn a clean refusal into a KeyError on the
+        replay path. The guard must fail closed: refuse the replay and name
+        the unknown code verbatim.
+        """
+        from ltspice_mcp.lib import experiment_runner
+
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        job = _job(work_dir, circuit)
+        monkeypatch.setattr(
+            experiment_runner,
+            "verify_staged_manifest",
+            lambda manifest: [
+                {"code": "source_relocated_after_staging", "evidence": {"path": str(circuit)}}
+            ],
+        )
+        with pytest.raises(IdempotencyConflictError, match="source_relocated_after_staging"):
+            experiment_runner.verify_replay_sources(job, "request-1")
+
 
 @pytest.mark.asyncio
 class TestLegacyCompatibility:

@@ -139,7 +139,9 @@ def verify_replay_sources(job: ExperimentJob, request_id: str) -> None:
                 "under a new request_id to run it again."
             )
         drift = [
-            f"{item['evidence']['path']} ({_DRIFT_REASONS[item['code']]})"
+            # Fail closed on a code the table does not know: an unnamed drift
+            # kind still blocks the replay, worded by its code verbatim.
+            f"{item['evidence']['path']} ({_DRIFT_REASONS.get(item['code'], item['code'])})"
             for item in verify_staged_manifest(source.manifest)
         ]
         if drift:

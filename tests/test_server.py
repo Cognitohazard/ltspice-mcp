@@ -91,7 +91,7 @@ class TestBuildInstructions:
         assert "LTspice not detected" in text
         # Accurate: .asc editing depends on LTspice symbol files, not the
         # executable — don't over-claim a flat "unavailable".
-        assert ".asc schematic editing needs LTspice symbol files" in text
+        assert ".asc editing needs its symbol files" in text
         assert "(default)" not in text  # no default marker for a single engine
 
     def test_ltspice_only(self):
@@ -118,6 +118,15 @@ class TestBuildInstructions:
                 build_instructions(
                     {"ltspice": _LT, "ngspice": _NG, "qspice": _LT, "xyce": _NG},
                     _LT,
+                    profile=profile,
+                ),
+                # Multiple simulators WITHOUT LTspice: the longest active-line
+                # list PLUS the LTspice-not-detected note stack on the same
+                # edition — the one combination the three cases above never
+                # form, and the branch that shipped truncated in v0.5.0.
+                build_instructions(
+                    {"ngspice": _NG, "qspice": _LT, "xyce": _NG},
+                    _NG,
                     profile=profile,
                 ),
             ]
