@@ -234,6 +234,69 @@ class TestSubmitPrimitive:
         assert calls[0]["callback_on_error"] is True
         assert calls[0]["exe_log"] is True
 
+    async def test_submitted_runner_outlives_a_caller_that_discards_it(
+        self,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """spicelib's SimRunner.__del__ calls wait_completion().
+
+        So a caller that drops the returned runner has its thread pinned in
+        the destructor for the whole simulation — the coroutine that submitted
+        never resumes, never reaches the code watching for a cancellation, and
+        the run cannot be stopped. Submission has to survive being called for
+        its side effect, which is how the experiment coordinator calls it.
+        """
+        base = RunnerBase(asyncio.get_running_loop(), MockSimulator, work_dir, max_parallel=1)
+        netlist = work_dir / "discarded.cir"
+        netlist.write_text(".op\n.end\n")
+        raw, log = work_dir / "discarded.raw", work_dir / "discarded.log"
+        raw.write_bytes(b"Title: mock result")
+        log.write_text("ok")
+        simulating = threading.Event()
+        finish = threading.Event()
+        destroyed = threading.Event()
+        threads: list[threading.Thread] = []
+
+        class FakeSimRunner:
+            def __init__(self) -> None:
+                self.active_tasks: list[threading.Thread] = []
+
+            def run(self, _netlist: str, **kwargs):
+                callback = kwargs["callback"]
+
+                # A closure, not a bound method: spicelib's RunTask does not
+                # reference the SimRunner that started it, so a fake that does
+                # would keep itself alive and pass on its own.
+                def simulate() -> None:
+                    simulating.set()
+                    finish.wait(5)
+                    callback(raw, log)
+
+                task = threading.Thread(target=simulate)
+                self.active_tasks.append(task)
+                threads.append(task)
+                task.start()
+
+            def __del__(self) -> None:
+                destroyed.set()
+
+        monkeypatch.setattr(base, "_build_sim_runner", FakeSimRunner)
+
+        def submit_and_discard(token: str) -> None:
+            base.submit_netlist(netlist, token, lambda _outcome: None)
+
+        await asyncio.to_thread(submit_and_discard, "kept.cir")
+        await _wait_for(simulating.is_set)
+        assert not destroyed.is_set()
+
+        # Released once its thread is done, so a long session does not hoard
+        # one runner per run.
+        finish.set()
+        await _wait_for(lambda: not threads[0].is_alive())
+        await asyncio.to_thread(submit_and_discard, "next.cir")
+        assert destroyed.is_set()
+
 
 def _capturing_submit(
     monkeypatch: pytest.MonkeyPatch,
