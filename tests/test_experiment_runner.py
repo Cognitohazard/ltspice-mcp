@@ -133,6 +133,70 @@ def _success(work_dir: Path, token: str) -> RunOutcome:
     return RunOutcome(str(raw), str(log), raw.stat().st_size, None)
 
 
+async def _cancel_during_launch(
+    state: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Any, list[str], str]:
+    """Cancel a case while its worker thread is inside the simulator launch.
+
+    This is the window the coordinator has to get right: the case is handed to
+    a thread, the event loop is free, and the cancel arrives before the loop
+    resumes. Blocking the fake submit reproduces that interleaving exactly
+    rather than racing for it. A cancel landing here must still see a case that
+    launched -- otherwise it reports a run that never started, skips the
+    token-scoped kill, and the simulator finishes into an unclaimed artifact.
+    """
+    runner = ExperimentRunner(
+        asyncio.get_running_loop(),
+        MockSimulator,
+        work_dir,
+        max_parallel=1,
+    )
+    launching = threading.Event()
+    release = threading.Event()
+    callbacks: dict[str, Any] = {}
+    submissions: list[str] = []
+
+    def submit(_netlist: Path, run_filename: str, callback):
+        token = Path(run_filename).stem
+        launching.set()
+        release.wait(5)
+        submissions.append(token)
+        callbacks[token] = callback
+        return object()
+
+    monkeypatch.setattr(runner, "submit_netlist", submit)
+    killed: list[str] = []
+
+    async def record_kill(token: str) -> None:
+        killed.append(token)
+
+    monkeypatch.setattr(runner, "_kill_case", record_kill)
+    receipt = await asyncio.shield(
+        runner.submit(_request(state, work_dir, request_id="cancel-mid-launch", kill_grace_s=0.2))
+    )
+    await _wait_for(launching.is_set)
+    cancel_task = asyncio.create_task(
+        runner.cancel(receipt.job, control_token=receipt.control_token)
+    )
+    # Ordering has to be exact, so wait on the stop flag itself rather than on
+    # a public symptom of it: the point of the test is what the coordinator
+    # does with a cancel that arrives DURING the launch.
+    execution = runner._executions[receipt.job.job_id]
+    await _wait_for(execution.cancel_event.is_set)
+    release.set()
+    await _wait_for(lambda: bool(submissions))
+    await _wait_for(lambda: bool(killed) or cancel_task.done())
+    token = submissions[0]
+    # The launched process reports exit either way; a coordinator that disowned
+    # it simply has nowhere to put the news.
+    callbacks[token](RunOutcome("", str(work_dir / f"{token}.fail"), 0, "killed"))
+    await asyncio.wait_for(cancel_task, 2)
+    assert await runner.wait(receipt.job, 2)
+    return receipt.job, killed, token
+
+
 @pytest.mark.asyncio
 class TestSubmitPrimitive:
     async def test_job_agnostic_submit_bridges_outcome_to_event_loop(
@@ -771,6 +835,27 @@ class TestCancellationAndAnalysis:
             "case_0000",
             "case_0001",
         }
+
+    async def test_cancel_mid_launch_counts_the_case_as_submitted(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        job, _killed, _token = await _cancel_during_launch(state_no_sim, work_dir, monkeypatch)
+        case = job.cases[0]
+        assert case.submitted_at is not None
+        assert job.completeness.submitted == 1
+        assert "before submission" not in (case.error or "")
+
+    async def test_cancel_mid_launch_kills_the_simulator_it_started(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _job, killed, token = await _cancel_during_launch(state_no_sim, work_dir, monkeypatch)
+        assert killed == [token]
 
     async def test_wrong_control_token_cannot_cancel_foreign_owned_job(
         self,

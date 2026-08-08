@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import secrets
+import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -195,6 +196,9 @@ class _Execution:
     semaphore: asyncio.Semaphore
     capacity: int
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
+    # Orders a worker thread's launch against a stop requested on the loop.
+    # Held for two attribute writes at a time, never across a launch.
+    launch_lock: threading.Lock = field(default_factory=threading.Lock)
     stop_reason: Literal["cancelled", "job_deadline"] | None = None
     slots_held: set[str] = field(default_factory=set)
     retained_slots: set[str] = field(default_factory=set)
@@ -614,13 +618,30 @@ class ExperimentRunner(RunnerBase):
         case: ExperimentCase,
         suffix: str,
     ) -> bool:
-        """Submit only if no cross-process cancellation marker won the gate."""
+        """Submit only if no cancellation won the gate, recording the launch first.
+
+        The submitted stamp goes on here, in the worker thread and before the
+        launch, so "a simulator may now exist under this run token" and "the
+        record says so" cannot be observed out of order. Stamping afterwards --
+        or back on the event loop once this thread returns -- leaves a window
+        where a cancel reads the case as never submitted: it then reports a run
+        that did start as pre-submission, counts it out of ``submitted``, and
+        skips the token-scoped kill, so the simulator runs to completion into an
+        artifact no record claims. The lock is what makes the gate and the stamp
+        one decision against a stop requested on the loop; it is released before
+        the launch so the loop never waits on a simulator.
+        """
         working_dir = execution.request.state.working_dir
         with file_lock(
             experiment_store.cancellation_lock_target(execution.job.job_id, working_dir)
         ):
             if experiment_store.cancellation_requested(execution.job.job_id, working_dir):
                 return False
+        with execution.launch_lock:
+            if execution.cancel_event.is_set():
+                return False
+            case.status = "submitted"
+            case.submitted_at = now()
         # On LTspice .op cases, hand the simulator a sibling copy carrying
         # '.options logopinfo' — without it the log has no per-device
         # small-signal block and analysis reads back no gm/vth/vdsat. Injecting
@@ -678,8 +699,8 @@ class ExperimentRunner(RunnerBase):
                     )
                     self._release_slot(execution, case.case_id)
                     return
-                case.status = "submitted"
-                case.submitted_at = now()
+                # Stamped in the worker thread next to the launch; persist that
+                # transition now that we are back on the loop.
                 self._checkpoint_case_transition(execution)
                 case.status = "running"
                 self._checkpoint_case_transition(execution)
@@ -935,10 +956,14 @@ class ExperimentRunner(RunnerBase):
     ) -> None:
         if execution.stop_reason is None:
             execution.stop_reason = reason
-        execution.cancel_event.set()
-        for case in execution.job.cases:
-            if case.status != "queued":
-                continue
+        # A case mid-launch either stamped itself submitted before this point --
+        # and is stopped through the kill path, which can actually reach its
+        # simulator -- or sees the flag and never launches. Reading the statuses
+        # under the same lock is what leaves no third answer.
+        with execution.launch_lock:
+            execution.cancel_event.set()
+            unstarted = [case for case in execution.job.cases if case.status == "queued"]
+        for case in unstarted:
             self._terminalize_stopped_case(execution, case)
             task = execution.case_tasks.get(case.case_id)
             if task is not None and case.case_id != exclude_case_id:
@@ -949,13 +974,22 @@ class ExperimentRunner(RunnerBase):
         execution: _Execution,
         case: ExperimentCase,
     ) -> None:
+        # Reachable for a launched case only through end-of-job reconciliation,
+        # which is guarded on "not terminal" alone. Say which one happened
+        # rather than assume the case never started: an accounting message that
+        # can be false is how a completed run gets read as one that never ran.
+        launched = case.submitted_at is not None
         if execution.stop_reason == "job_deadline":
             self._mark_case(
                 execution,
                 case,
                 "failed",
                 code="job_deadline",
-                error="The experiment deadline elapsed before this case was submitted",
+                error=(
+                    "The experiment deadline elapsed while this case was running"
+                    if launched
+                    else "The experiment deadline elapsed before this case was submitted"
+                ),
             )
         else:
             self._mark_case(
@@ -963,7 +997,11 @@ class ExperimentRunner(RunnerBase):
                 case,
                 "cancelled",
                 code="cancelled",
-                error="Cancelled before submission",
+                error=(
+                    "Cancelled after the simulator was launched"
+                    if launched
+                    else "Cancelled before submission"
+                ),
             )
 
     def _reconcile_unfinished_cases(self, execution: _Execution) -> None:
