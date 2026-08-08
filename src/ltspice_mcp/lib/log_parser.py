@@ -127,6 +127,10 @@ _ERROR_KEYWORDS = [
     # phrases and no "error" prefix.
     "file not found",
     "already defined",
+    # LTspice's two unsolvable-topology wordings, neither of which contains
+    # "singular matrix" (see _RE_UNSOLVABLE_MATRIX).
+    "matrix is singular",
+    "over-defined circuit matrix",
 ]
 
 # --- Structured log diagnostic extraction ---
@@ -208,6 +212,15 @@ _BARE_ERROR_PHRASES = [
     "no convergence",
     "questionable use of curly braces",
 ]
+# LTspice names an unsolvable matrix two ways that the bare phrase above
+# cannot reach: a source/inductor loop reports "…matrix is singular" and
+# paralleled ideal sources report an "over-defined circuit matrix", both
+# mid-sentence after the offending component names. Unlike "singular matrix",
+# neither wording can appear in a success narration, so neither needs the
+# start-of-line anchor. Same physical cause, so they classify alike.
+_RE_UNSOLVABLE_MATRIX = re.compile(
+    r"matrix is singular|over-defined circuit matrix", re.IGNORECASE
+)
 # ngspice-specific diagnostic patterns (not matched by the LTspice rules above).
 _RE_NGSPICE_MEAS_BLOCKED = re.compile(r"No \.measure possible in batch mode", re.IGNORECASE)
 _RE_NGSPICE_UNIMPLEMENTED = re.compile(r"unimplemented dot command '([^']+)'", re.IGNORECASE)
@@ -581,7 +594,7 @@ def classify_failure_code(errors: list[str]) -> tuple[str, dict[str, list[str]] 
     if refs:
         return "missing_model", {"missing_refs": refs}
     lowered = blob.lower()
-    if "singular matrix" in lowered:
+    if "singular matrix" in lowered or _RE_UNSOLVABLE_MATRIX.search(blob):
         return "singular_matrix", None
     if any(phrase in lowered for phrase in _CONVERGENCE_CODE_PHRASES):
         return "convergence_failed", None
@@ -750,6 +763,10 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
         # avoid false positives on lines that merely contain the phrase as a
         # substring (e.g., "the singular matrix decomposition succeeded").
         if any(stripped_lower.startswith(phrase) for phrase in _BARE_ERROR_PHRASES):
+            errors.append(stripped)
+            i += 1
+            continue
+        if _RE_UNSOLVABLE_MATRIX.search(stripped):
             errors.append(stripped)
             i += 1
             continue

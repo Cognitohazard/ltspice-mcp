@@ -7,6 +7,7 @@ import pytest
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.log_parser import (
     _FAMILY_EXAMPLE_CAP,
+    classify_failure_code,
     count_op_iterations,
     extract_error_context,
     extract_log_diagnostics,
@@ -270,6 +271,37 @@ class TestExtractLogDiagnostics:
         log.write_text("Time step too small\nsingular matrix\n")
         result = extract_log_diagnostics(log)
         assert len(result["errors"]) == 2
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            # Both are LTspice verbatim, and neither carries the "singular
+            # matrix" word order or starts with the phrase, so the anchored
+            # bare-phrase rule cannot reach either one.
+            "Voltage source and/or inductor loop found, matrix is singular.",
+            "Voltage source VP2 and voltage source VP1 are paralleled making "
+            "an over-defined circuit matrix. You will need to correct the "
+            "circuit or add some series resistance.",
+        ],
+    )
+    def test_unsolvable_topology_wordings_are_errors(self, tmp_path: Path, line: str):
+        log = tmp_path / "topology.log"
+        log.write_text(f"Circuit: * test\n{line}\n")
+        result = extract_log_diagnostics(log)
+        assert result["errors"] == [line]
+        assert classify_failure_code(result["errors"])[0] == "singular_matrix"
+
+    def test_singular_matrix_narration_still_classifies_generically(self, tmp_path: Path):
+        """The anchor's whole point: a success sentence is not a solver failure.
+
+        Through the extractor, which is where classification gets its
+        anchoring from — the phrase alone is not the failure.
+        """
+        log = tmp_path / "narration.log"
+        log.write_text("the singular matrix decomposition succeeded\n")
+        errors = extract_log_diagnostics(log)["errors"]
+        assert errors == []
+        assert classify_failure_code(errors)[0] == "execution_failed"
 
     def test_meas_error_with_vdb_suggestion(self, tmp_path: Path):
         """vdb() in .MEAS should produce a structured meas_error with a
