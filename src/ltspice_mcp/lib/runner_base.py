@@ -454,6 +454,9 @@ class RunnerBase:
         self.simulator_class = simulator_class
         self.output_folder = output_folder
         self.max_parallel = max_parallel
+        # Submitted SimRunners, held until their simulation thread is done.
+        # See _retire_finished_runners for why letting one go early is a trap.
+        self._inflight_runners: dict[str, SimRunner] = {}
 
     def _build_sim_runner(self) -> SimRunner:
         """Construct a spicelib SimRunner with this runner's settings."""
@@ -498,6 +501,14 @@ class RunnerBase:
 
         Call from a worker thread. The requirements snapshot and completion
         artifact reads intentionally happen on spicelib's worker threads.
+
+        The SimRunner is returned AND retained here. spicelib's
+        ``SimRunner.__del__`` calls ``wait_completion()``, so a caller that
+        discards the return value has its thread pinned inside the destructor
+        for the entire simulation — the calling coroutine never resumes, so it
+        never reaches the code that watches for a cancellation, and the run
+        becomes unstoppable. Retaining at this choke point means no caller can
+        re-arm that by forgetting to keep it.
         """
         requirements = deck_requests_raw(netlist)
 
@@ -517,6 +528,7 @@ class RunnerBase:
                 )
             self._bridge(callback, outcome, context=f"run {run_filename}")
 
+        self._retire_finished_runners()
         runner = self._build_sim_runner()
         runner.run(
             str(netlist),
@@ -525,7 +537,23 @@ class RunnerBase:
             callback_on_error=True,
             exe_log=True,
         )
+        self._inflight_runners[run_filename] = runner
         return runner
+
+    def _retire_finished_runners(self) -> None:
+        """Release SimRunners whose simulation threads have all exited.
+
+        Pruned on the way into the next submission rather than from a
+        completion callback: dropping the last reference runs
+        ``SimRunner.__del__`` -> ``wait_completion()``, which waits on
+        ``active_tasks`` — from inside a task's own callback that would be the
+        task waiting for itself. Liveness is read off the RunTask threads
+        instead of spicelib's bookkeeping, which only updates when something
+        calls into it.
+        """
+        for key, runner in list(self._inflight_runners.items()):
+            if not any(task.is_alive() for task in runner.active_tasks):
+                self._inflight_runners.pop(key, None)
 
     def _bridge(self, handler: Callable[..., Any], *args: Any, context: str = "") -> bool:
         """Schedule ``handler`` on the event loop from a worker thread.
