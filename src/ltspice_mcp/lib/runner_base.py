@@ -72,7 +72,7 @@ class RunOutcome(NamedTuple):
     error: str | None
     observations: tuple[dict, ...] = ()
     failure_code: str | None = None
-    failure_evidence: dict[str, list[str]] | None = None
+    failure_evidence: dict[str, Any] | None = None
 
 
 _RAW_PRODUCING_ANALYSES: frozenset[str] = frozenset(f".{kind}" for kind in ANALYSIS_KINDS)
@@ -188,8 +188,14 @@ def collect_run_outcome(
     raw_file: str,
     log_file: str,
     requirements: tuple[list[str], bool] | None = None,
+    exit_code: int | None = None,
 ) -> RunOutcome:
-    """Collect and classify completion artifacts on a worker thread."""
+    """Collect and classify completion artifacts on a worker thread.
+
+    ``exit_code`` is the simulator process's own exit status, relayed as a
+    fact when the run failed — the one signal that separates a process killed
+    from outside from a deck the simulator declined.
+    """
     log_path = Path(log_file)
     sim_failed = raw_file in ("", ".") or log_path.suffix == ".fail"
     raw_size = 0
@@ -213,7 +219,10 @@ def collect_run_outcome(
     except OSError:
         log_exists = False
     errors = extract_log_diagnostics(log_path)["errors"] if log_exists else []
-    if not sim_failed and log_exists:
+    # The clean-exit branch below asserts "exited cleanly" from log-error
+    # ABSENCE, so a killed process with a quiet log would be reported as a
+    # clean exit — gate it on the one direct fact about exit status.
+    if exit_code in (None, 0) and not sim_failed and log_exists:
         non_rung = [error for error in errors if not is_op_stepping_failure(error)]
         if not non_rung and not op_ladder_exhausted(errors):
             analyses, has_save = requirements if requirements is not None else ([], False)
@@ -229,6 +238,11 @@ def collect_run_outcome(
     # The diagnostics above already name the cause; classifying here is what
     # turns it into a code a caller can branch on instead of prose it must read.
     code, evidence = classify_failure_code(errors)
+    if exit_code not in (None, 0):
+        error += f"\nSimulator exit code: {exit_code}"
+        # Copy rather than mutate: classify_failure_code's return is typed
+        # narrower than the relayed shape, and this is the cold path.
+        evidence = {**(evidence or {}), "exit_code": exit_code}
     return RunOutcome(
         "" if sim_failed else raw_file,
         log_file,
@@ -513,11 +527,19 @@ class RunnerBase:
         requirements = deck_requests_raw(netlist)
 
         def completion_callback(raw_file: Path | None, log_file: Path | None) -> None:
+            # This runner is fresh per submission, so active_tasks holds
+            # exactly this run's task — appended before its thread starts,
+            # so it is present whenever the callback can fire.
             try:
                 outcome = collect_run_outcome(
                     str(raw_file) if raw_file else "",
                     str(log_file) if log_file else "",
                     requirements,
+                    # spicelib invokes the callback from the RunTask's own
+                    # thread, and the task IS a Thread subclass carrying its
+                    # retcode — so the current thread is the exact task,
+                    # race-free. Any other calling thread reads None.
+                    exit_code=getattr(threading.current_thread(), "retcode", None),
                 )
             except Exception as exc:
                 outcome = RunOutcome(
