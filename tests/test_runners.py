@@ -439,6 +439,52 @@ class TestFailureClassification:
     embedded in the message.
     """
 
+    def test_a_failed_runs_exit_code_is_relayed_as_evidence(self, work_dir: Path):
+        """A killed process and a rejected deck used to be indistinguishable.
+
+        The simulator's exit status is the one fact that separates them, and
+        spicelib captures it — we just dropped it on the floor. The cost is
+        field-observed: an agent whose run was killed externally saw only
+        'Simulation failed (no output generated)' plus geometry warnings, and
+        built a confident, wrong story about an LTspice point-count ceiling.
+        Relay the code; never interpret it.
+        """
+        log = work_dir / "killed.fail"
+        log.write_text("Start Time: Fri Aug  7 22:33:44 2026\nsolver = Normal\n")
+
+        outcome = collect_run_outcome(".", str(log), exit_code=1)
+
+        assert "exit code: 1" in (outcome.error or "")
+        assert (outcome.failure_evidence or {}).get("exit_code") == 1
+
+    def test_a_zero_exit_adds_no_exit_code_noise_to_a_failure(self, work_dir: Path):
+        """Exit 0 on a failed run says nothing; relaying it would imply it does."""
+        log = work_dir / "declined.fail"
+        log.write_text("Start Time: Fri Aug  7 22:33:44 2026\n")
+
+        outcome = collect_run_outcome(".", str(log), exit_code=0)
+
+        assert "exit code" not in (outcome.error or "")
+        assert (outcome.failure_evidence or {}).get("exit_code") is None
+
+    def test_a_killed_run_with_a_quiet_log_is_not_called_a_clean_exit(self, work_dir: Path):
+        """The clean-exit branch infers from log-error ABSENCE.
+
+        A process killed from outside often leaves exactly that shape — raw
+        missing, log quiet — and used to be reported as 'exited cleanly but
+        produced no .raw'. The exit status is the direct fact; it must gate
+        the inference.
+        """
+        raw = work_dir / "killed.raw"
+        raw.write_bytes(b"")
+        log = work_dir / "killed.log"
+        log.write_text("Start Time: Fri Aug  7 22:33:44 2026\nsolver = Normal\n")
+
+        outcome = collect_run_outcome(str(raw), str(log), (["tran"], False), exit_code=137)
+
+        assert "exited cleanly" not in (outcome.error or "")
+        assert "exit code: 137" in (outcome.error or "")
+
     def test_convergence_abort_is_classified(self, work_dir: Path):
         log = work_dir / "conv.fail"
         log.write_text(
