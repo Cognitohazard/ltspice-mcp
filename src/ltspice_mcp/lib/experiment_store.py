@@ -507,7 +507,17 @@ def _reconcile_restart(job: ExperimentJob, *, owner_alive: bool) -> None:
             case,
             status="failed",
             failure_code="server_restarted",
-            error="Server restarted before this case reached terminality",
+            # Name the mechanism the caller can act on — the owning process
+            # exited — never "the server": the store cannot see which door
+            # owned the job, and for the in-process API the owner is the
+            # caller's own script (a wait=False submission from a process
+            # that exits leaves exactly this shape).
+            error=(
+                "The owning process exited before this case reached "
+                "terminality, leaving the run unsupervised; keep the "
+                "submitting process (or a long-lived server) alive until "
+                "the job finishes"
+            ),
             completed_at=now(),
         )
         abandoned.append(failed)

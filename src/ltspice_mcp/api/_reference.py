@@ -46,6 +46,10 @@ class _Operation:
     summary: str
     model: type[BaseModel]
     example: str
+    # Rendered after the example on both catalogue surfaces. For contract
+    # facts a caller must know BEFORE submitting — the receipt's own
+    # observations arrive only after.
+    note: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +470,14 @@ def _operations() -> tuple[_Operation, ...]:
                 '    variations=[{"kind": "assign", "assign": {"Cc": ["2p", "4p", "8p"]}}],\n'
                 ")"
             ),
+            note=(
+                "wait=True (the default) blocks until the complete receipt. "
+                "wait=False returns the submission receipt immediately, but the "
+                "job is owned by THIS process and is cancelled when it exits — "
+                "Api.close(), the end of a 'with' block, or the interpreter "
+                "exiting. Keep the process alive until the job finishes, or run "
+                "work that must outlive it through a long-lived server."
+            ),
         ),
         _Operation(
             name="jobs",
@@ -553,7 +565,20 @@ def op_reference(name: str) -> str:
     lines = [f"{operation.name} — {operation.summary}", "", "arguments"]
     lines.extend(_render_model(operation.model))
     lines.extend(["", "example", *(f"{_INDENT}{line}" for line in operation.example.splitlines())])
+    lines.extend(_note_lines(operation))
     return "\n".join(lines)
+
+
+def _note_lines(operation: _Operation) -> list[str]:
+    if not operation.note:
+        return []
+    return [
+        "",
+        "note",
+        *textwrap.wrap(
+            operation.note, width=_WRAP, initial_indent=_INDENT, subsequent_indent=_INDENT
+        ),
+    ]
 
 
 def reference(op: str | None = None) -> str:
@@ -582,6 +607,7 @@ def method_doc(name: str) -> str:
             "",
             "example",
             *(f"{_INDENT}{line}" for line in operation.example.splitlines()),
+            *_note_lines(operation),
         ]
     )
 

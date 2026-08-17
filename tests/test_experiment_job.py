@@ -523,6 +523,8 @@ class TestExperimentLifecycle:
         assert loaded.cases[0].status == "failed"
         assert loaded.cases[0].failure_code == "server_restarted"
         assert [row["code"] for row in loaded.failures] == ["server_restarted"]
+        # The message names the mechanism the caller can act on, not a door.
+        assert "owning process exited" in (loaded.cases[0].error or "")
 
     def test_restart_recovers_completed_analysis_write_gap(self, work_dir: Path):
         circuit = work_dir / "deck.cir"
