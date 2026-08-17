@@ -367,6 +367,35 @@ class TestShutdownCancelIsolation:
         ], "the persistence flush never ran"
 
 
+class TestPersistDuringInterpreterTeardown:
+    """Once the interpreter's default executor is gone, ``asyncio.to_thread``
+    raises ``RuntimeError: cannot schedule new futures after shutdown`` — and
+    the async persist's task exception was never retrieved, so the caller saw
+    an irrelevant traceback while the status change it carried was LOST.
+    Observed live three times: a ``wait=False`` script exiting while its job
+    settled. The persist must fall back to the synchronous write (blocking is
+    fine during teardown) so the record lands instead of the noise.
+    """
+
+    def test_persist_completes_synchronously_when_the_executor_is_gone(
+        self, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
+        job = make_sim_job("sim_teardown", status="running", netlist=work_dir / "deck.cir")
+
+        async def executor_gone(fn, *args, **kwargs):
+            raise RuntimeError("cannot schedule new futures after shutdown")
+
+        monkeypatch.setattr(asyncio, "to_thread", executor_gone)
+
+        async def go():
+            registry.persist_job(job)
+            await registry.drain_pending()
+
+        asyncio.run(go())
+        assert (work_dir / ".ltspice-mcp" / "jobs" / "sim_teardown.json").exists()
+
+
 class TestPerTypeEvictionCap:
     def test_each_job_type_capped_at_200_finished(self):
         """The registry keeps at most 200 finished jobs PER TYPE in the union

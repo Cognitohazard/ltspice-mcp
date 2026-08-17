@@ -38,6 +38,27 @@ def _op_kinds() -> set[str]:
     return {value for model in union for value in get_args(model.model_fields["op"].annotation)}
 
 
+class TestOwnerLifecycleDocumentation:
+    """``wait=False`` dies with its process, and the catalogue is where a
+    caller looks BEFORE submitting — the receipt's ``process_owned_job``
+    observation arrives only after. Measured live: agents that met the
+    rule undocumented burned minutes reverse-engineering it from a bare
+    executor-shutdown traceback, three sessions in a row.
+    """
+
+    def test_run_experiments_reference_names_the_owner_lifecycle(self):
+        # Whitespace-normalised: the note is wrapped, so a line break may
+        # fall anywhere inside the asserted phrase.
+        text = " ".join(_reference.reference("run_experiments").split())
+        assert "wait=False" in text
+        assert "cancelled when" in text and "process" in text
+
+    def test_method_doc_carries_the_same_note(self):
+        # The ``help(api.run_experiments)`` surface must not say less than
+        # the catalogue — both render from the same operation entry.
+        assert "wait=False" in _reference.method_doc("run_experiments")
+
+
 class TestIndex:
     def test_index_names_all_six_operations(self):
         text = _reference.reference()
