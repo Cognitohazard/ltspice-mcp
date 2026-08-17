@@ -18,7 +18,7 @@ import asyncio
 import contextlib
 import logging
 import os
-from collections.abc import Awaitable, Iterator, MutableMapping
+from collections.abc import Awaitable, Callable, Iterator, MutableMapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TypeVar
@@ -384,7 +384,24 @@ class JobRegistry:
         if lock is None:
             lock = self._persist_locks.setdefault(job.job_id, asyncio.Lock())
         async with lock:
-            await asyncio.to_thread(self._persist_sync, job)
+            await self._offload_persistence(self._persist_sync, job)
+
+    async def _offload_persistence(self, fn: Callable[[Job], None], job: Job) -> None:
+        """Run one blocking persistence step off-loop, surviving teardown.
+
+        During interpreter teardown the default executor is gone and
+        ``asyncio.to_thread`` raises "cannot schedule new futures after
+        shutdown" — as an unretrieved task exception it printed a scary
+        irrelevant traceback while the write it carried was silently lost
+        (observed live: a ``wait=False`` script exiting while its job
+        settled). Blocking is fine during teardown; run synchronously.
+        Shared by the write and delete halves — a lost delete resurrects a
+        stale sidecar as a job on the next preload.
+        """
+        try:
+            await asyncio.to_thread(fn, job)
+        except RuntimeError:
+            fn(job)
 
     def _persist_sync(self, job: Job) -> None:
         try:
@@ -436,7 +453,7 @@ class JobRegistry:
             lock = self._persist_locks.setdefault(job.job_id, asyncio.Lock())
         try:
             async with lock:
-                await asyncio.to_thread(self._delete_persisted_sync, job)
+                await self._offload_persistence(self._delete_persisted_sync, job)
         finally:
             self._persist_locks.pop(job.job_id, None)
 
