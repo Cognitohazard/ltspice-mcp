@@ -4,7 +4,8 @@ Takes numpy arrays in, returns dicts of Python floats / None. No I/O, no
 spicelib dependencies. Raises ``ValueError`` with user-facing messages on
 domain errors — the tool layer re-raises these as ``ResultError``.
 
-Depends on numpy + scipy.signal.find_peaks; no other third-party code.
+Depends on numpy, plus scipy.signal.find_peaks imported at the call sites
+(scipy costs ~0.5 s to import; a session that never detects peaks never pays).
 
 These primitives operate on real-valued transient data only. The tool layer
 rejects AC analysis before calling in.
@@ -16,7 +17,6 @@ from collections.abc import Mapping, Sequence
 from typing import Literal, NotRequired, TypedDict
 
 import numpy as np
-from scipy.signal import find_peaks
 
 _LEVEL_EPSILON = 1e-12
 
@@ -579,6 +579,8 @@ def _largest_positive_peak(signal: np.ndarray) -> int | None:
     gate — it excludes window endpoints, so a still-rising signal cut
     mid-transition doesn't count as overshoot.
     """
+    from scipy.signal import find_peaks  # deferred: scipy costs ~0.5 s at import
+
     peaks, _ = find_peaks(signal)
     positive = [int(p) for p in peaks if signal[p] > 0]
     if not positive:

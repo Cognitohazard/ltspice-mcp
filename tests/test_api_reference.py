@@ -141,6 +141,17 @@ class TestPerOperationTree:
 
 
 class TestMethodDocstrings:
+    """Docstrings install lazily with the catalogue (the boot never pays for
+    them), so the contract under test is: AFTER any public catalogue read,
+    help() on a method shows the full argument tree."""
+
+    @pytest.fixture(autouse=True)
+    def _catalogue_read(self):
+        # The public trigger — a bare cold process shows only signatures
+        # until reference() (or any operation call) pays the tool-model
+        # import that rendering needs.
+        ApiMethodsMixin.reference()
+
     @pytest.mark.parametrize("name", OPS)
     def test_method_doc_is_non_empty_and_names_its_fields(self, name: str):
         method = getattr(ApiMethodsMixin, name)
@@ -227,19 +238,30 @@ class TestCliDelivery:
         assert "RC 0" in proc.stdout
         assert list(tmp_path.iterdir()) == []
 
-    def test_package_import_is_lazy(self, tmp_path):
-        """``import ltspice_mcp.api`` alone must load neither scipy nor the
-        MCP SDK (PEP 562 lazy __init__): the ~1.2 s eager import was the
-        whole cost of a catalogue lookup. A cold subprocess is the only
-        honest measurement — an in-process check would see whatever the
-        suite already imported. (The catalogue CALL still derives from the
-        live tool models and pays their imports; cutting those is the
-        toll-and-boot unit's lazy-import work, not this pin.)"""
+    def test_import_and_engine_boot_load_no_heavy_modules(self, tmp_path):
+        """Neither ``import ltspice_mcp.api`` nor ``Api()`` itself may load
+        the forbidden modules: the lazy package __init__ (PEP 562), the
+        lazily built tool surface on SessionState, and the deferred tool
+        imports in _methods together keep the engine boot at config +
+        detection + registry preload. A cold subprocess is the only honest
+        measurement — an in-process check would see whatever the suite
+        already imported. (A catalogue CALL still derives from the live tool
+        models and pays the mcp import then; that is the call's cost, not
+        the boot's.)"""
+        # Modules an Api() must not pay for: scipy arrives only when a
+        # peak-detecting analysis actually runs; mcp only when a handler
+        # builds a wire result.
+        forbidden = ("scipy", "mcp")
         probe = (
             "import sys\n"
-            "import ltspice_mcp.api\n"
-            "heavy = sorted({m.split('.')[0] for m in sys.modules} & {'scipy', 'mcp'})\n"
-            "print('HEAVY', heavy)\n"
+            f"FORBIDDEN = {forbidden!r}\n"
+            "def heavy():\n"
+            "    return sorted({m.split('.')[0] for m in sys.modules} & set(FORBIDDEN))\n"
+            "import ltspice_mcp.api as api\n"
+            "print('AFTER-IMPORT', heavy())\n"
+            "inst = api.Api(working_dir='.')\n"
+            "print('AFTER-BOOT', heavy())\n"
+            "inst.close()\n"
         )
         proc = subprocess.run(
             [sys.executable, "-c", probe],
@@ -248,7 +270,53 @@ class TestCliDelivery:
             timeout=120,
             cwd=tmp_path,
         )
-        assert "HEAVY []" in proc.stdout, proc.stdout + proc.stderr
+        assert "AFTER-IMPORT []" in proc.stdout, proc.stdout + proc.stderr
+        assert "AFTER-BOOT []" in proc.stdout, proc.stdout + proc.stderr
+
+    def test_docstrings_install_on_first_deferred_tool_resolution(self, tmp_path):
+        """The catalogue read is one docstring trigger; the OTHER is resolving
+        a deferred tool module (what any operation call does first). Only a
+        cold subprocess can see it — in-process the suite installed the docs
+        long ago, so deleting the proxy-side trigger would stay green here."""
+        probe = (
+            "import inspect\n"
+            "from ltspice_mcp.api import _methods\n"
+            "cold = inspect.getdoc(_methods.ApiMethodsMixin.run_experiments)\n"
+            "print('COLD-BARE', not cold or 'wait=False' not in cold)\n"
+            "_methods.experiments.JobsInput\n"
+            "doc = inspect.getdoc(_methods.ApiMethodsMixin.run_experiments)\n"
+            "print('WARM-FULL', bool(doc) and 'wait=False' in doc)\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=tmp_path,
+        )
+        assert "COLD-BARE True" in proc.stdout, proc.stdout + proc.stderr
+        assert "WARM-FULL True" in proc.stdout, proc.stdout + proc.stderr
+
+    def test_analysis_modules_keep_scipy_out_of_their_import(self, tmp_path):
+        """The find_peaks imports are call-site-local so importing the three
+        analysis modules stays cheap. The boot pin alone cannot notice a
+        reintroduced top-level scipy import — the boot never imports these
+        modules — so this pins the deferral at its actual fan-in."""
+        probe = (
+            "import sys\n"
+            "import ltspice_mcp.lib.ac_analysis\n"
+            "import ltspice_mcp.lib.ac_structure\n"
+            "import ltspice_mcp.lib.signal_analysis\n"
+            "print('SCIPY-LOADED', 'scipy' in {m.split('.')[0] for m in sys.modules})\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=tmp_path,
+        )
+        assert "SCIPY-LOADED False" in proc.stdout, proc.stdout + proc.stderr
 
     def test_lazy_surface_covers_the_pinned_all_exactly(self):
         """Every pinned __all__ name resolves through the lazy table and the
