@@ -15,6 +15,7 @@ from ltspice_mcp.tools.circuit import (
     CreateSchematicInput,
     DiffCircuitInput,
     EditDirectiveInput,
+    ListComponentsInput,
     MoveComponentInput,
     NetLabelInput,
     RemoveComponentInput,
@@ -138,7 +139,9 @@ class TestReadAscCircuit:
         assert "hint" not in (result.structuredContent or {})
 
     async def test_list_components_asc(self, asc_state: SessionState, asc_file: Path):
-        result = await handle_list_components({"path": asc_file.name}, asc_state)
+        result = await handle_list_components(
+            ListComponentsInput.model_validate({"path": asc_file.name}), asc_state
+        )
         text = _result_text(result)
         assert "C1" in text
         assert "R1" in text
@@ -1094,7 +1097,9 @@ class TestAscValueExcludesValue2:
             asc_state,
         )
 
-        result = await handle_list_components({"path": "value2.asc"}, asc_state)
+        result = await handle_list_components(
+            ListComponentsInput.model_validate({"path": "value2.asc"}), asc_state
+        )
         comps = result.structuredContent["components"]  # type: ignore[index]
         m1 = next(c for c in comps if c["reference"] == "M1")
         # Value field is the Value SYMATTR alone, not "NMOS_VTH04 tag1".
@@ -1125,7 +1130,8 @@ class TestAscValueExcludesValue2:
         )
 
         result = await handle_list_components(
-            {"path": "value2_single.asc", "reference": "M1"}, asc_state
+            ListComponentsInput.model_validate({"path": "value2_single.asc", "reference": "M1"}),
+            asc_state,
         )
         assert result.structuredContent["value"] == "NMOS_VTH04"  # type: ignore[index]
 
@@ -1453,7 +1459,9 @@ class TestEditingAscRollback:
         assert asc_file.read_bytes() == original  # noqa: ASYNC240
         # Cache eviction means a fresh read doesn't see R_uncommitted.
         monkeypatch.undo()
-        result = await handle_list_components({"path": asc_file.name}, asc_state)
+        result = await handle_list_components(
+            ListComponentsInput.model_validate({"path": asc_file.name}), asc_state
+        )
         assert "R_uncommitted" not in _result_text(result)
 
 
@@ -1538,7 +1546,9 @@ class TestAtomicAscSave:
 
         # The component must NOT be visible — cache was evicted, fresh
         # read from disk shows the pre-failure state.
-        result = await handle_list_components({"path": asc_file.name}, asc_state)
+        result = await handle_list_components(
+            ListComponentsInput.model_validate({"path": asc_file.name}), asc_state
+        )
         assert "R_uncommitted" not in _result_text(result)
 
 

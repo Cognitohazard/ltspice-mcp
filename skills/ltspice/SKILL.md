@@ -252,13 +252,13 @@ C1 out 0 {C}
 
 **Design and iterate over `.cir` netlists** — plain text, no placement overhead, fast to edit and simulate. Only build `.asc` schematics after the circuit design is finalized or when the user needs a visual schematic for review. The `.asc` tools are for presentation, not design iteration.
 
-**Device operating points (gm/gds/vth/…) work on both simulators for `.op`.** On LTspice, `run_simulation` auto-adds `.options logopinfo` and `operating_point` reads the log's *Semiconductor Device Operating Points* block (LTspice writes it only under that option, and only for `.op`). On ngspice, `.save @m1[gm] @m1[gds]` (one parameter per bracket) puts them in the raw; `operating_point` reads either uniformly via the `m1.gm` shorthand. A **swept** gm (the gm/ID sizing table via `.dc` + `.save @m1[gm]`) still needs ngspice — LTspice's `logopinfo` is `.op`-only, so on LTspice differentiate the drain current (`d(Id(M1))`) instead. See the ngspice skill / the `spice://guide` resource.
+**Device operating points (gm/gds/vth/…) work on both simulators for `.op`.** On LTspice, author `.options logopinfo` in the deck alongside `.op` — nothing is auto-injected — and the `operating_point` recipe reads the log's *Semiconductor Device Operating Points* block (LTspice writes it only under that option, and only for `.op`). On ngspice, `.save @m1[gm] @m1[gds]` (one parameter per bracket) puts them in the raw; `operating_point` reads either uniformly via the `m1.gm` shorthand. A **swept** gm (the gm/ID sizing table via `.dc` + `.save @m1[gm]`) still needs ngspice — LTspice's `logopinfo` is `.op`-only, so on LTspice differentiate the drain current (`d(Id(M1))`) instead. See the ngspice skill / the `spice://guide` resource.
 
 ### .asc Schematics
 
-`.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use the server's schematic tools (`create_schematic`, `apply_schematic_ops`, `wire_pins`, ...) or LTspice's GUI. These are available in both the full and agentic profiles — geometry-aware editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match. Place components with the `apply_schematic_ops` `add_component` op, which returns placed pins, bounding box, and overlap warnings. Other mutations (move/remove a component, set an attribute, add or remove a net label, remove a wire) are also `apply_schematic_ops` ops, so batch them in one transaction.
+`.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use `edit_schematic` (or LTspice's GUI). It gives geometry-aware editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match. Start a sheet from the blank base, place components with the `add_component` op, which returns placed pins, bounding box, and overlap warnings. The other mutations (move/remove a component, set an attribute, add or remove a net label, remove a wire) are ops on the same call, so batch them in one transaction.
 
-**Delegate the build when you can.** Placement and wiring is meticulous, mechanical work that competes with design attention — done inline it tends to degrade into net-label soup instead of routed wires. If subagents are available, hand the schematic build to one whose entire brief is the layout playbook (`spice://guide`): give it the final netlist, require the schematic tools (never hand-written `.asc`), and have it verify before returning — `export_netlist` matching the source netlist, `trace_net` showing no multi-label shorts.
+**Delegate the build when you can.** Placement and wiring is meticulous, mechanical work that competes with design attention — done inline it tends to degrade into net-label soup instead of routed wires. If subagents are available, hand the schematic build to one whose entire brief is the layout playbook (`spice://guide`): give it the final netlist, require `edit_schematic` (never hand-written `.asc`), and have it verify before returning — `verify_circuit` against the source netlist, `inspect(kind="net")` showing no multi-label shorts.
 
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2.
 - Export to netlist for direct text editing when needed.
@@ -275,7 +275,7 @@ C1 out 0 {C}
 | res | A:(16,16) B:(16,96) | 32x80 |
 | cap | A:(16,0) B:(16,64) | 32x64 |
 
-Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M180→(x,-y). Use `symbol_info` for exact positions.
+Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M0→(-x,y), M180→(x,-y). Use `inspect(kind="symbol")` for exact positions.
 
 #### MOSFET orientation conventions
 
@@ -291,28 +291,28 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 - Example: if M3's gate connects to M5 on the right → use M0 (gate right), not R0 (gate left).
 - For diff pairs: M1 at R0 (gate left, toward Vinp), M2 at M0 (gate right, toward Vinn).
 - For PMOS current mirrors: M4a at R180 (gate right, toward center), M4b at M180 (gate left, toward center) — gates face each other.
-- Use `symbol_info` with the intended rotation to verify pin directions before placing.
+- Use `inspect(kind="symbol")` with the intended rotation to verify pin directions before placing.
 
 #### Schematic layout best practices
 
 **Component placement:**
 - **Tier alignment**: Matched/mirrored transistors (diff pairs, current mirrors, bias mirrors) MUST share the same y-coordinate. Plan horizontal tiers: VDD rail → PMOS loads → diff pair → tail/bias → VSS.
 - **Drain/source alignment on each branch**: Within a vertical branch (e.g., PMOS load stacked above NMOS input), position components so the drain pin of the upper device is on the same x-column as the drain pin of the lower device. This eliminates horizontal jogs between stacked transistors.
-- **Pin-to-rail alignment**: Place voltage/current sources so their pins land directly on the rail they connect to — no wire through the source body. For a VDD source, position it so the `+` pin y-coordinate equals the VDD rail y-coordinate. Use `symbol_info` to compute the exact placement origin from the desired pin position (e.g., for voltage `+` at y=128, place origin at y=128-16=112).
+- **Pin-to-rail alignment**: Place voltage/current sources so their pins land directly on the rail they connect to — no wire through the source body. For a VDD source, position it so the `+` pin y-coordinate equals the VDD rail y-coordinate. Use `inspect(kind="symbol")` to compute the exact placement origin from the desired pin position (e.g., for voltage `+` at y=128, place origin at y=128-16=112).
 - **Minimum 128 units vertical spacing between pin levels** of adjacent tiers (e.g., between PMOS drain y and NMOS drain y). This leaves room for horizontal buses and net labels between tiers. With MOSFET bbox height of 96, plan tier origins ~192 units apart.
 - **Bias circuit alignment**: Bias devices (e.g., M5/Ibias) should share the y-level of their functional counterpart (e.g., M3 tail current source).
-- **Plan the full layout before placing**: Decide VDD rail y, tier y-coordinates, and bus y-coordinates first. Verify that buses fit between bounding boxes of adjacent tiers. Use `symbol_info` to check bbox extents at the intended rotation.
+- **Plan the full layout before placing**: Decide VDD rail y, tier y-coordinates, and bus y-coordinates first. Verify that buses fit between bounding boxes of adjacent tiers. Use `inspect(kind="symbol")` to check bbox extents at the intended rotation.
 
 **Wiring:**
 - **All wires must be orthogonal** — strictly horizontal or vertical. Never route diagonal wires. Use waypoints in `wire_pins` for L-shaped or multi-segment routes.
-- **Horizontal buses must route OUTSIDE all component bounding boxes.** Use `symbol_info` to check bbox extents. For PMOS M180 with bbox top at y=160, a gate bus at y=176 is INSIDE the bbox — route at y=144 (between VDD rail and bbox top) instead. Plan bus y-coordinates BEFORE placing components.
+- **Horizontal buses must route OUTSIDE all component bounding boxes.** Use `inspect(kind="symbol")` to check bbox extents. For PMOS M180 with bbox top at y=160, a gate bus at y=176 is INSIDE the bbox — route at y=144 (between VDD rail and bbox top) instead. Plan bus y-coordinates BEFORE placing components.
 - **Vertical wires must not pass through component bodies to reach a bus.** When connecting a drain to a horizontal bus, jog the wire horizontally outside the bbox first, then route vertically to the bus. Example for PMOS M180 diode connection: route drain (400,256) → right to (448,256) → up to (448,144) → along bus to label, NOT straight up through the body at x=400.
 - **Leave room for buses between tiers.** The minimum 128-unit tier spacing must account for bounding box height plus bus clearance. For PMOS M180 (bbox height 96), if VDD rail is at y=128 and PMOS origins at y=288: bbox occupies y=192–288, bus fits at y=144–160 (between rail and bbox top).
 - **Heed `wire_pins` warnings and errors**: the tool refuses diagonal wires, pin collisions, and wire junction overlaps. Non-blocking warnings (long runs, bbox crossings) should still be addressed.
-- **Read the `wiring` profile `apply_schematic_ops` returns** (`pins_wired`/`pins_label_only` out of `pins_total`). `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires — which reads as a wiring list, not a routed schematic (whether it nets up as intended then rides on the label names, which the profile does not check). Draw wires with `wire_pins` for local nets; reserve net-labels for ground, power rails, and genuinely distant nets. Also heed the `label_over_component` warning (a net-label anchored inside a symbol's bounding box).
+- **Read the `wiring` profile `edit_schematic` returns** (`pins_wired`/`pins_label_only` out of `pins_total`). `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires — which reads as a wiring list, not a routed schematic (whether it nets up as intended then rides on the label names, which the profile does not check). Draw wires with `wire_pins` for local nets; reserve net-labels for ground, power rails, and genuinely distant nets. Also heed the `label_over_component` warning (a net-label anchored inside a symbol's bounding box).
 
 **Ground and net labels:**
-- **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `apply_schematic_ops` `add_net_label` op. Never route wires to a distant ground flag.
+- **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `edit_schematic` `add_net_label` op. Never route wires to a distant ground flag.
 - **One ground per pin**: Each component's ground connection gets its own `add_net_label` op at the pin's coordinates — do not share ground flags between components.
 - **Do not use `wire_pins` with `net:0`** when multiple ground labels exist — the tool errors on ambiguous net references. Place ground flags directly at pin coordinates with an `add_net_label` op (`net="0", pin="M3.S"`) — no wire needed when the flag is on the pin.
 - **Named nets (VDD, outp, etc.)**: Repeating the same net label at distant pins is the idiomatic way to tie them — the netlister merges same-name labels into one net (correct, not a short), no routing needed. Wire nearby pins with `wire_pins`. Caveat: once a name carries duplicate labels, `wire_pins` with `net:NAME` is ambiguous — target a component pin (`Ref.Pin`) instead.

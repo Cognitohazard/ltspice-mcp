@@ -58,31 +58,15 @@ class TestSessionStateCreate:
         state = SessionState.create(config, {})
         assert isinstance(state.runners, RunnerManager)
 
-    def test_create_populates_tool_defs_full(self, config: ServerConfig):
+    def test_create_populates_tool_defs(self, config: ServerConfig):
         state = SessionState.create(config, {})
         assert len(state.tool_defs) > 0
-        assert len(state.tool_dispatch) > 0
-        # Full profile — every advertised tool dispatches; the dispatch map may
-        # also carry deprecated aliases absent from tool_defs (RegisteredTool.aliases).
+        # Every advertised tool dispatches, and nothing else does.
         def_names = {t.name for t in state.tool_defs}
-        assert def_names <= set(state.tool_dispatch)
-        alias_only = set(state.tool_dispatch) - def_names
-        assert all(name in state.tool_dispatch[name].aliases for name in alias_only)
-
-    def test_create_populates_tool_defs_agentic(self, work_dir: Path):
-        config = ServerConfig(
-            working_dir=work_dir,
-            allowed_paths=[work_dir],
-            tool_profile="agentic",
-        )
-        state = SessionState.create(config, {})
-        agentic_defs, _ = get_tools_for_profile("agentic")
-        agentic_names = {tool_def.name for tool_def in agentic_defs}
-        assert len(state.tool_defs) == len(agentic_names)
-        # tool_dispatch = advertised names plus any deprecated aliases.
-        assert agentic_names <= set(state.tool_dispatch)
-        alias_only = set(state.tool_dispatch) - agentic_names
-        assert all(name in state.tool_dispatch[name].aliases for name in alias_only)
+        assert def_names == set(state.tool_dispatch)
+        # The consolidated profile is the only one; state mirrors it exactly.
+        consolidated_defs, _ = get_tools_for_profile("consolidated")
+        assert def_names == {tool_def.name for tool_def in consolidated_defs}
 
 
 class TestSessionStateShutdown:

@@ -105,7 +105,7 @@ PWL(t1 v1 t2 v2 ...)
 **Gotchas:**
 - RISE/FALL/CROSS numbering starts at **1**, not 0.
 - If TRIG event never occurs, measurement silently fails.
-- `.meas` is refused when batch mode (`-b`) is combined with `-r rawfile` — the invocation `run_simulation` uses. ngspice prints `No .measure possible in batch mode (-b) with -r rawfile set!` and computes nothing. Recovery: move the measurement into a `.control ... run ... .endc` block written as the DOT-LESS `meas` command — e.g. `meas tran vmax MAX V(out)` (a dotted `.meas` inside `.control` is not a valid command and silently does nothing). The result prints to the run's log.
+- `.meas` is refused when batch mode (`-b`) is combined with `-r rawfile` — the invocation `run_experiments` uses. ngspice prints `No .measure possible in batch mode (-b) with -r rawfile set!` and computes nothing. Recovery: move the measurement into a `.control ... run ... .endc` block written as the DOT-LESS `meas` command — e.g. `meas tran vmax MAX V(out)` (a dotted `.meas` inside `.control` is not a valid command and silently does nothing). The result prints to the run's log.
 - `param` and `par` are not available inside `.control` blocks — use `let` instead.
 
 ### General Pitfalls
@@ -113,7 +113,7 @@ PWL(t1 v1 t2 v2 ...)
 - **Node "0" is ground**. Using `GND` without `.global GND` or tying it to 0 creates a floating node — no error, wrong results.
 - **MOSFET requires 4 terminals**: `M1 d g s b` — ngspice does NOT auto-connect bulk to source (LTspice does).
 - **Impedance ratios**: Beyond ~1e16 cause numerical issues (64-bit doubles).
-- **Parameter sweep**: ngspice has **no native `.step`** (that is LTspice syntax). The MCP runs parametric sweeps through `configure_sweep` + `run_sweep`, which generate and simulate one netlist per value. For a hand-written deck outside the MCP, use a `.control` block with an `alter`/loop. A `.step` line in a deck handed to `run_simulation` is rejected with a pointer to `configure_sweep`.
+- **Parameter sweep**: ngspice has **no native `.step`** (that is LTspice syntax). The MCP runs parametric sweeps through `run_experiments` `variations` (an `assign` grid or a `random` rule), which stage and simulate one deck per case. For a hand-written deck outside the MCP, use a `.control` block with an `alter`/loop. A `.step` line in a deck handed to `run_experiments` is rejected with a pointer to `variations`.
 
 ---
 
@@ -213,7 +213,7 @@ X1 input output myfilter rval=1k cval=1n
 - Parameters on `.subckt` line do NOT need `params:` keyword — just `name=value` after nodes.
 - `.lib` behavior is compatibility-mode dependent, and no single `.lib` form works in every mode — so for unconditional whole-file inclusion use `.include <file>`, which resolves in every ngspice mode (verified on ngspice-42). If you use `.lib`:
   - **ngspice-native modes** (`hsa`, plain default): `.lib <file> <section>` loads the named `.lib section … .endl` block; a bare `.lib <file>` with no section does NOT load the file's models.
-  - **This server's default `kiltpsa`** (a PSPICE-family mode) inverts this: a bare `.lib <file>` loads an unsectioned file, but a sectioned `.lib <file> <section>` (the PDK corner-select idiom) is mis-split by the `lt`/`ps` tokens into two plain includes that drop the section, surfacing as a missing include (`could not find include file`). Set `[simulator] ngbehavior = "hsa"` in `ltspice-mcp.toml` (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart the server to parse the section; `run_simulation` emits this hint when a failed run matches the pattern.
+  - **This server's default `kiltpsa`** (a PSPICE-family mode) inverts this: a bare `.lib <file>` loads an unsectioned file, but a sectioned `.lib <file> <section>` (the PDK corner-select idiom) is mis-split by the `lt`/`ps` tokens into two plain includes that drop the section, surfacing as a missing include (`could not find include file`). Set `[simulator] ngbehavior = "hsa"` in `ltspice-mcp.toml` (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart the server to parse the section; `run_experiments` emits this hint when a failed run matches the pattern.
 - `.param` inside subcircuits is local scope (masks globals). Nesting up to 10 levels.
 - Subcircuit and model names are global — must be unique across the entire netlist.
 
@@ -230,8 +230,9 @@ X1 input output myfilter rval=1k cval=1n
 - To keep defaults plus extras: `.save all @m2[vdsat]`
 - `.save @r1[i]` for resistor current (not available via `I()` syntax).
 - **Read internals back as named numbers** (no rawfile parsing, no `.control`):
-  on a `.dc`/`.tran` sweep, `export_waveform(signals=['m1.gm','m1.id'])` gives the
-  gm/ID table in one CSV; `query_value(signal='m1.gm', at=...)` reads one point;
+  on a `.dc`/`.tran` sweep, an `analyze_results` `waveform` recipe over
+  `['m1.gm','m1.id']` gives the gm/ID table in one call; a `value` recipe
+  (`expr='m1.gm', at=...`) reads one point;
   `operating_point(device='M1')` gives the bias snapshot of one device. Address
   an internal by the `m1.gm` shorthand or the literal `@m1[gm]` (the tools resolve
   the `v()`/`i()` wrapping and subcircuit paths). This `.dc` + `.save` + read flow
@@ -256,10 +257,10 @@ wrdata output.txt V(out)          $ save as CSV-like text
 **No `write`/`wrdata` in your script?** A `.control` block replaces ngspice's
 default raw output — the script runs instead of the plain `-r rawfile` write,
 so a script with no `write`/`wrdata` produces no rawfile for the analysis
-tools to read, even though the run completes cleanly. `run_simulation`
+tools to read, even though the run completes cleanly. `run_experiments`
 auto-injects a `write <rawpath>` just before `.endc` when it detects this
 (exactly one `.control` block, no existing `write`/`wrdata` anywhere in the
-deck), so results still reach `get_waveform`/`signal_stats`/etc. without you
+deck), so results still reach the `waveform`/`signal_stats` recipes without you
 doing anything. That injected write is a bare `write` — it captures only the
 *current/last* plot, so a script that runs multiple analyses, or writes
 per-iteration inside a Monte Carlo loop (see below), still needs its own

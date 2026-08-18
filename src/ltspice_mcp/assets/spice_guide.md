@@ -31,8 +31,8 @@ same response), follow a receipt with `jobs`, measure a finished job with
 | create or mutate an `.asc` | `edit_schematic(target=…, ops=[…])` |
 | check a sheet against its netlist, or render it | `verify_circuit(path=…)` |
 
-Later sections show their examples with the tool names of this server's other
-profiles, which are not exposed here. Read them through this map: for
+Later sections show some examples with the tool names of this server's older
+releases, which are not exposed here. Read them through this map: for
 `run_simulation` use `run_experiments`; for `measurement_stats`, `bode_metrics`,
 `signal_stats`, `edge_metrics`, `transient_response`, `thd`, `operating_point`,
 `query_value`, `get_waveform`, `export_waveform`, `plot_waveform` and the other
@@ -716,10 +716,6 @@ C1 out 0 {C}
 
 ### .asc Schematics
 
-<!-- profile: full agentic -->
-`.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use the server's schematic tools (`create_schematic`, `apply_schematic_ops`, `wire_pins`, ...) or LTspice's GUI. These are available in both the full and agentic profiles — geometry-aware editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match. Place components with the `apply_schematic_ops` `add_component` op, which returns placed pins, bounding box, and overlap warnings. Other mutations (move/remove a component, set an attribute, add or remove a net label, remove a wire) are also `apply_schematic_ops` ops, so batch them in one transaction.
-
-<!-- /profile -->
 <!-- profile: consolidated -->
 `.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use `edit_schematic` or LTspice's GUI. It gives geometry-aware editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match. `edit_schematic(target=..., base="blank")` starts a new sheet; every mutation below is an entry in its `ops` list, applied as one guarded transaction, so batch a whole build into one call. Place components with the `add_component` op, which returns placed pins, bounding box, and overlap warnings — `inspect(kind="symbol")` previews the same geometry before you place anything.
 

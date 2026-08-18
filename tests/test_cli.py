@@ -585,9 +585,17 @@ class TestOutcomeMapping:
 
         # The dispatch map, not the advertised list: the list drops
         # outputSchema, and the declared enums are what this has to read.
+        # Only the envelope six declare an outcome (conftest names the seam;
+        # plot_waveform predates the envelope).
+        from tests.conftest import CONSOLIDATED_TOOLS
+
         _, dispatch = get_tools_for_profile("consolidated")
-        schemas = {r.definition.name: r.definition.outputSchema for r in dispatch.values()}
-        assert len(schemas) == 6
+        schemas = {
+            r.definition.name: r.definition.outputSchema
+            for r in dispatch.values()
+            if r.definition.name in CONSOLIDATED_TOOLS
+        }
+        assert set(schemas) == set(CONSOLIDATED_TOOLS)
         for schema in schemas.values():
             walk(schema)
         assert declared

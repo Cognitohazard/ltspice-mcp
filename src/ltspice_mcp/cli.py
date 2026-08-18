@@ -845,7 +845,7 @@ async def invoke(
     except PathSecurityError as exc:
         raise _Refused(f"{exc}\n\n{_path_reject_guidance(state)}") from None
     except LTSpiceMCPError as exc:
-        hint = _get_error_hint(type(exc), state.config.tool_profile) if exc.show_hint else None
+        hint = _get_error_hint(type(exc)) if exc.show_hint else None
         message = f"{exc}\n\n{hint}" if hint else str(exc)
         raise (_Refused(message) if isinstance(exc, refusals) else _Failed(message)) from None
 

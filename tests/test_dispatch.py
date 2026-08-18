@@ -16,9 +16,9 @@ from tests.conftest import resolve_local_ref
 def _all_profile_defs() -> list[types.Tool]:
     """Union of tool definitions across every valid profile, deduped by name.
 
-    The reversal/reversibility guards must see tools that only a non-"full"
-    profile exposes (the six consolidated tools), so a one-way mutating tool
-    there can't ship without a reviewed _TOOL_REVERSAL entry (R1-F19)."""
+    The reversal/reversibility guards must see every registered tool, whichever
+    profile exposes it, so a one-way mutating tool can't ship without a reviewed
+    _TOOL_REVERSAL entry (R1-F19)."""
     seen: dict[str, types.Tool] = {}
     for profile in VALID_PROFILES:
         defs, _ = get_tools_for_profile(profile)
@@ -45,31 +45,27 @@ def _all_profile_declared_defs() -> list[types.Tool]:
 class TestDispatchTable:
     def test_all_tools_wired(self):
         """Every registered tool definition should have a matching dispatch entry."""
-        defs, handlers = get_tools_for_profile("full")
+        defs, handlers = get_tools_for_profile("consolidated")
         expected = {tool_def.name for tool_def in defs}
         dispatched = set(handlers.keys())
         missing = expected - dispatched
         assert not missing, f"Tools defined but not dispatched: {missing}"
 
     def test_no_extra_handlers(self):
-        """Every dispatch entry either matches a tool definition, or is a
-        deprecated alias declared on the tool it dispatches to (see
-        RegisteredTool.aliases — e.g. 'connect' dispatching to 'wire_pins').
-        Anything else is a stray handler with no definition or alias."""
-        defs, handlers = get_tools_for_profile("full")
+        """Every dispatch entry matches a tool definition — a stray handler
+        with no advertised definition would be callable but undiscoverable."""
+        defs, handlers = get_tools_for_profile("consolidated")
         defined = {tool_def.name for tool_def in defs}
-        extra = set(handlers.keys()) - defined
-        unexplained = {name for name in extra if name not in handlers[name].aliases}
-        assert not unexplained, f"Dispatched but no definition or alias: {unexplained}"
+        assert set(handlers.keys()) == defined
 
     def test_all_handlers_callable(self):
-        _, handlers = get_tools_for_profile("full")
+        _, handlers = get_tools_for_profile("consolidated")
         for name, registered in handlers.items():
             assert callable(registered.handler), f"{name} handler is not callable"
 
     def test_required_inputs_reject_empty_args(self):
         """Tools with required fields should reject an empty argument object."""
-        _, handlers = get_tools_for_profile("full")
+        _, handlers = get_tools_for_profile("consolidated")
         for name, registered in handlers.items():
             if registered.input_model is None:
                 continue
@@ -83,31 +79,9 @@ class TestDispatchTable:
             raise AssertionError(f"{name} accepted empty args despite required fields {required}")
 
 
-class TestToolAliases:
-    """Deprecated former tool names (e.g. 'connect' -> 'wire_pins') stay
-    callable but are not advertised — they dispatch through tool_dispatch
-    without a matching entry in tool_defs (RegisteredTool.aliases)."""
-
-    def test_connect_dispatches_to_wire_pins_handler(self):
-        defs, handlers = get_tools_for_profile("full")
-        def_names = {tool_def.name for tool_def in defs}
-        assert "wire_pins" in def_names
-        assert "connect" not in def_names, "alias must not be advertised in tool_defs"
-        assert "connect" in handlers, "alias must still resolve via tool_dispatch"
-        assert handlers["connect"] is handlers["wire_pins"], (
-            "the 'connect' alias must dispatch to the exact same registration "
-            "(same handler) as 'wire_pins'"
-        )
-
-    def test_connect_alias_present_in_agentic_profile_too(self):
-        _, handlers = get_tools_for_profile("agentic")
-        assert "connect" in handlers
-        assert handlers["connect"] is handlers["wire_pins"]
-
-
 class TestToolSchemas:
     def test_all_schemas_valid(self):
-        defs, _ = get_tools_for_profile("full")
+        defs, _ = get_tools_for_profile("consolidated")
         for tool_def in defs:
             schema = tool_def.inputSchema
             assert schema, f"{tool_def.name}: no inputSchema"
@@ -115,7 +89,7 @@ class TestToolSchemas:
             assert "properties" in schema, f"{tool_def.name}: no properties"
 
     def test_required_fields_in_properties(self):
-        defs, _ = get_tools_for_profile("full")
+        defs, _ = get_tools_for_profile("consolidated")
         for tool_def in defs:
             schema = tool_def.inputSchema
             required = schema.get("required", [])
@@ -129,8 +103,8 @@ class TestConsolidatedInputDocumentation:
     how to call a tool — it has no README and no source. A top-level argument
     with no ``description`` is therefore an argument the caller has to guess,
     and the guess is silent: it validates or it does not, with no way to learn
-    what the field meant. The six consolidated tools carry the whole surface,
-    so every one of their top-level fields must say what it is for."""
+    what the field meant. The consolidated tools carry the whole surface, so
+    every one of their top-level fields must say what it is for."""
 
     def test_every_consolidated_top_level_field_is_documented(self):
         defs, _ = get_tools_for_profile("consolidated")
@@ -148,106 +122,45 @@ class TestConsolidatedInputDocumentation:
 
 
 class TestToolProfiles:
-    def test_full_profile_returns_all_dispatch_entries(self):
-        """Every tool definition has a dispatch entry; the dispatch map may
-        also carry deprecated aliases that are intentionally absent from the
-        definition list (see RegisteredTool.aliases)."""
-        defs, handlers = get_tools_for_profile("full")
-        def_names = {tool_def.name for tool_def in defs}
-        assert def_names <= set(handlers.keys())
-        alias_only = set(handlers.keys()) - def_names
-        assert all(name in handlers[name].aliases for name in alias_only)
+    def test_profile_returns_all_dispatch_entries(self):
+        """Every tool definition has a dispatch entry, and vice versa."""
+        defs, handlers = get_tools_for_profile("consolidated")
+        assert {tool_def.name for tool_def in defs} == set(handlers.keys())
 
-    def test_agentic_profile_returns_subset(self):
-        defs, handlers = get_tools_for_profile("agentic")
-        agentic_names = {tool_def.name for tool_def in defs}
-        assert agentic_names <= set(handlers.keys())
-        alias_only = set(handlers.keys()) - agentic_names
-        assert all(name in handlers[name].aliases for name in alias_only)
+    def test_unknown_profile_falls_back_to_consolidated(self):
+        """'consolidated' is the only surface since 0.6.0, and an unrecognized
+        profile name (a stale config naming 'full'/'agentic', a typo) must land
+        on it rather than resolving to nothing — the fallback is what keeps an
+        outdated config connected to a working server."""
+        expected = {tool_def.name for tool_def in get_tools_for_profile("consolidated")[0]}
+        for unknown in ("full", "agentic", "nonexistent"):
+            assert {tool_def.name for tool_def in get_tools_for_profile(unknown)[0]} == expected
 
-    def test_agentic_is_strict_subset_of_full(self):
-        full_defs, _ = get_tools_for_profile("full")
-        agentic_defs, _ = get_tools_for_profile("agentic")
-        full_names = {tool_def.name for tool_def in full_defs}
-        agentic_names = {tool_def.name for tool_def in agentic_defs}
-        assert full_names > agentic_names, "agentic tools should be a strict subset of full"
-
-    def test_unknown_profile_treated_as_full(self):
-        """Unrecognized profile name should behave like 'full'."""
-        full_defs, _ = get_tools_for_profile("full")
-        other_defs, _ = get_tools_for_profile("nonexistent")
-        assert {tool_def.name for tool_def in full_defs} == {
-            tool_def.name for tool_def in other_defs
-        }
-
-    def test_filtered_tools_not_in_agentic(self):
-        """Verify specific tools that should NOT be in agentic profile."""
-        filtered_out = {
-            "create_netlist",
-            "read_circuit",
-            "set_component_value",
-            "parameter",
-            "edit_directive",
-            "load_library",
-            "unload_library",
-            "list_libraries",
-        }
-        _, handlers = get_tools_for_profile("agentic")
-        present = filtered_out & set(handlers.keys())
-        assert not present, f"Tools that should be filtered out are present: {present}"
-
-    def test_sweep_montecarlo_reachable_in_agentic(self):
-        """Sweep and Monte Carlo must be runnable end to end in the agentic
-        profile. run_sweep/run_montecarlo consume a config_id that ONLY
-        configure_sweep/configure_montecarlo produce, so the config builders
-        have to ship in the same profile as the runners — otherwise every
-        config_id is rejected and the runners are structurally dead. Monte
-        Carlo perturbation + N-run aggregation and the batch-sweep route are
-        not something an agent reproduces with native file edits (unlike a
-        plain LTspice .step), so they belong in the agent-facing profile."""
-        _, handlers = get_tools_for_profile("agentic")
-        names = set(handlers.keys())
-        required = {
-            "configure_sweep",
-            "run_sweep",
-            "configure_montecarlo",
-            "run_montecarlo",
-            "batch_results",
-        }
-        missing = required - names
-        assert not missing, f"Sweep/MC chain broken in agentic, missing: {missing}"
-
-    def test_schematic_construction_writes_in_agentic(self):
-        """The schematic-construction writes stay in agentic: geometry-aware
-        .asc editing (orthogonal routing, pin-collision/junction checks) is
-        something an agent can't replicate by hand-writing the file, so it must
-        not be dropped from the agent-facing profile."""
-        construction = {
-            "create_schematic",
-            "apply_schematic_ops",
-        }
-        _, handlers = get_tools_for_profile("agentic")
-        missing = construction - set(handlers.keys())
-        assert not missing, f"Construction writes missing from agentic: {missing}"
+    def test_a_profile_resolving_to_zero_tools_is_a_hard_error(self):
+        """An empty surface still completes the MCP handshake, so a client reads
+        it as 'this server has no capabilities' rather than 'misconfigured'.
+        Registration breakage must fail loudly instead of serving nothing."""
+        empty = _base.ToolRegistry()
+        with pytest.raises(RuntimeError, match="zero tools"):
+            empty.get_for_profile("consolidated")
 
 
 class TestDestructiveAnnotations:
     """A tool's destructiveHint is what an MCP client gates write-risk on. A
     batch writer that can delete or overwrite must not advertise itself as
-    non-destructive — especially now that the schematic writes are in the
-    agent-facing profile."""
+    non-destructive."""
 
-    def test_component_removing_tools_are_destructive(self):
-        defs, _ = get_tools_for_profile("full")
+    def test_the_schematic_writer_is_destructive(self):
+        defs, _ = get_tools_for_profile("consolidated")
         by_name = {d.name: d for d in defs}
-        for name in ("create_schematic", "apply_schematic_ops"):
-            tool = by_name[name]
-            assert tool.annotations is not None
-            assert tool.annotations.destructiveHint is True, f"{name} not marked destructive"
-        # apply_schematic_ops earns the hint because its batch can run the
-        # remove_component op (and persist a partial subset); keep the two tied
-        # so the hint can't silently rot if that op is ever dropped.
-        assert "remove_component" in (by_name["apply_schematic_ops"].description or "")
+        tool = by_name["edit_schematic"]
+        assert tool.annotations is not None
+        assert tool.annotations.destructiveHint is True, "edit_schematic not marked destructive"
+        # edit_schematic earns the hint because its batch can run the
+        # remove_component op (and commit a whole-file rewrite); keep the two
+        # tied so the hint can't silently rot if that op is ever dropped.
+        ops_field = tool.inputSchema["properties"]["ops"]
+        assert "remove_component" in (ops_field.get("description") or "")
 
 
 # A self-inverse op reverts itself: re-applying it with the prior arguments
@@ -387,38 +300,13 @@ class TestOpInverseClosure:
 # outside the SchematicOp union. Each entry names how the mutation is undone, or
 # why a one-way mutation is accepted (see docs/TESTING.md).
 _TOOL_REVERSAL: dict[str, str] = {
-    # Schematic op batch — per-op closure guarded by TestOpInverseClosure.
-    "apply_schematic_ops": "per-op inverse (see TestOpInverseClosure)",
-    # Schematic standalone write whose inverse is an apply_schematic_ops op.
-    "wire_pins": "remove_wire op",
-    # Self-inverse standalone edits (re-invoke with the prior value/state).
-    "set_component_value": "re-set to prior value",
-    "parameter": "re-set to prior value, or delete=true to undo an added param",
-    "edit_directive": "action=add <-> action=remove",
-    # Recovery hatch — reset_schematic IS the inverse mechanism for .asc edits.
-    "reset_schematic": "reverts to the pre-edit snapshot (it is the undo)",
-    # Accepted one-way mutations (documented in docs/TESTING.md).
-    "create_netlist": "creates a file; deletion is a native filesystem op",
-    "create_schematic": "creates a file; deletion is a native filesystem op",
-    "configure_sweep": "overwrite-in-place config; a stale config is inert",
-    "configure_montecarlo": "overwrite-in-place config; a stale config is inert",
-    # Job lifecycle — not a file mutation; cancel / re-launch via the registry.
-    "run_simulation": "cancel_job; re-launch",
-    "run_sweep": "cancel_job; re-launch",
-    "run_montecarlo": "cancel_job; re-launch",
-    "cancel_job": "re-launch the run",
-    # Library session — paired load/unload.
-    "load_library": "unload_library",
-    "unload_library": "load_library",
-    # Export / render — emit a derived artifact (netlist, CSV, plot) from
-    # existing data; the source circuit/raw is untouched, so no edit-inverse
-    # applies. Not read-only because writing the artifact is an environment
-    # side effect, but the output is regenerable and deletable natively.
-    "export_netlist": "derived export; source .asc untouched, output regenerable",
-    "export_waveform": "derived export; source raw untouched, output regenerable",
+    # Render — emits a derived artifact from existing data; the source raw is
+    # untouched, so no edit-inverse applies. Not read-only because writing the
+    # artifact is an environment side effect, but the output is regenerable
+    # and deletable natively.
     "plot_waveform": "derived render; source raw untouched, output regenerable",
-    # Consolidated profile (EXPERIMENTAL) — the six-tool surface. inspect is
-    # read-only and needs no entry; the other five are not read-only.
+    # The consolidated surface. inspect is read-only and needs no entry; the
+    # others are not read-only.
     "run_experiments": "cancel via jobs; re-launch (idempotent by request_id)",
     "jobs": "cancel action; re-launch the run to reverse a cancel",
     "analyze_results": "derived artifacts; sources untouched, output regenerable",
@@ -441,8 +329,8 @@ class TestMutatingToolsAreReversible:
         assert not undeclared, (
             f"Mutating tools with no declared reversal: {sorted(undeclared)}. "
             "Add each to _TOOL_REVERSAL naming how the mutation is undone, or — if "
-            "it is a deliberately-accepted one-way mutation — note why (see the "
-            "accepted-one-way entries and docs/TESTING.md)."
+            "it is a deliberately-accepted one-way mutation — note why (see "
+            "docs/TESTING.md)."
         )
 
     def test_no_stale_reversal_entries(self):
@@ -662,11 +550,31 @@ class TestSchemaPostProcessing:
         """Nested submodels are $refs into the schema's own $defs (followups
         item 30) — the composition contract is that they resolve to full
         object schemas a local-ref-following client can read."""
-        defs, _ = get_tools_for_profile("full")
-        sweep_tools = [d for d in defs if d.name == "configure_sweep"]
-        assert sweep_tools, "configure_sweep not found"
-        schema = sweep_tools[0].inputSchema
-        params_prop = schema["properties"]["parameters"]
-        assert "items" in params_prop, "parameters should have items schema"
-        resolved = resolve_local_ref(schema, params_prop["items"])
+        defs, _ = get_tools_for_profile("consolidated")
+        experiment_tools = [d for d in defs if d.name == "run_experiments"]
+        assert experiment_tools, "run_experiments not found"
+        schema = experiment_tools[0].inputSchema
+        circuits_prop = schema["properties"]["circuits"]
+        assert "items" in circuits_prop, "circuits should have items schema"
+        resolved = resolve_local_ref(schema, circuits_prop["items"])
         assert "properties" in resolved, "nested items must resolve to an object schema"
+
+
+class TestAdvertisedOrderIsStable:
+    def test_tool_list_order_is_pinned(self):
+        """Servers should return tools/list in a deterministic order — clients
+        cache the list and LLM prompt caching keys on the exact bytes. Ours is
+        registration order, fixed by the sorted module imports in
+        tools/__init__; this pin turns an accidental reorder (a set, a dict
+        rebuild, an import shuffle) into a failure instead of a silent
+        cache-buster for every connected client."""
+        names = [t.name for t in get_tools_for_profile("consolidated")[0]]
+        assert names == [
+            "plot_waveform",
+            "analyze_results",
+            "run_experiments",
+            "jobs",
+            "inspect",
+            "edit_schematic",
+            "verify_circuit",
+        ]

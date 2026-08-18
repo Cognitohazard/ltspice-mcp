@@ -19,6 +19,8 @@ sweep in one `run_experiments` call, read the numbers with `analyze_results`.
 Those N cases run as one coordinated batch, safe alongside parallel sessions.
 Numbers arrive parsed with SI units,
 and `completeness` surfaces any shortfall as fact with `outcome:"partial"`.
+Charts: `plot_waveform` renders an interactive widget where clients show
+one; the `plot` recipe is the static fallback.
 Pass a `request_id`: same id + args replays the receipt (decks are
 content-addressed — a later edit can't change what ran), so a crashed client
 resubmits safely; changed args give `idempotency_conflict`.

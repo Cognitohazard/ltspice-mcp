@@ -33,18 +33,21 @@ scripts directly. MCP applies in specific contexts:
 - **Works without code execution.** Claude Desktop, ChatGPT, web chat
   clients have no shell or Python. MCP tools are the only way to give
   them simulation capabilities. This is the primary audience.
-- **Reliability.** `run_simulation(netlist="foo.cir")` is a tested code
-  path. LLM-generated spicelib code makes import mistakes, calls wrong
-  method names, forgets `save_netlist()`, etc.
+- **Reliability.** `run_experiments(circuits=[{"path": "foo.cir"}])` is a
+  tested code path. LLM-generated spicelib code makes import mistakes,
+  calls wrong method names, forgets `save_netlist()`, etc.
 - **Context efficiency.** A tool call is ~50 tokens; equivalent Python is
   20-40 lines. Over an iterative design session this compounds.
-- **Structured analysis as the default.** The analysis tools return the
-  numbers an agent reasons over — `bode_metrics` for -3 dB points,
-  slopes, and crossings; `signal_stats` / `edge_metrics` /
-  `transient_response(mode="step"|"disturbance")` for transient shape — as schema-typed results, so the
+- **Structured analysis as the default.** The `analyze_results` recipes
+  return the numbers an agent reasons over — `bode_filter` for -3 dB
+  points, `bode_slope` / `bode_point` / `bode_crossing` for slopes, gains,
+  and crossings; `signal_stats` / `edges` /
+  `transient_response` (`mode="step"|"disturbance"`) for transient
+  shape — as schema-typed results, so the
   common questions are answered without reading anything off an image.
-  Decimated raw-waveform egress ships as `get_waveform` (a min/max
-  stat-envelope for seeing shape); rendered plots remain roadmapped. Both
+  Decimated raw-waveform egress is the `waveform` recipe (a min/max
+  stat-envelope for seeing shape); rendered plots ship as the `plot`
+  recipe and the `plot_waveform` tool. Both
   complement the structured numbers for the shape-recognition cases a
   scalar can't cover (see *Waveforms: scalars first, egress and plots for
   shape*), rather than replacing them.
@@ -66,35 +69,34 @@ Python, and there's an extra process to maintain.
 |SPICEAssistant (arxiv 2507.10639)|none|N/A|measurement extractors|N/A — research only|
 |LTspice GUI|interactive|interactive|GUI-driven|N/A|
 
-Geometry-aware editing tools — `wire_pins` and `apply_schematic_ops`
-(whose ops include `add_component`, `move_component`,
-`add_net_label` with `pin="M3.S"`, `remove_net_label`, and
-`remove_wire`) — work against pin coordinates, bounding
-boxes, and named-net topology: `wire_pins` refuses diagonal wires,
+Geometry-aware editing is `edit_schematic`, one transactional op batch
+(`add_component`, `move_component`, `remove_component`,
+`set_component_value`, `set_component_attribute`, `wire_pins`,
+`add_net_label` with `pin="M3.S"`, `remove_net_label`, `remove_wire`,
+`add_directive`, `remove_directive`). The ops work against pin
+coordinates, bounding boxes, and named-net topology: the `wire_pins` op
+refuses diagonal wires,
 pin collisions, wire-junction overlaps, and named-net shorts before
-touching the file, and every standalone tool returns geometry the agent
-can use in its next call. `symbol_info` and `component_info` are the
+touching the file, and the batch returns geometry the agent
+can use in its next call. `inspect(kind="symbol")` is the
 read-only planning half of that workflow — pin positions and bounding
 boxes looked up before an edit, not validators of one.
 
-### Standalone tool vs. apply_schematic_ops op
+### One authoring tool, many ops
 
-A schematic mutation earns a standalone MCP tool only when its result
-returns information the model acts on and cannot already be obtained through
-the batch surface (`wire_pins`'s routing result). Component placement belongs to
-`apply_schematic_ops`: its `add_component` op returns the placed pins, bounding
-box, and overlap warnings, while `symbol_info` provides the non-destructive
-preview. An ack-only mutation — one that just confirms "done" —
-lives only as an `apply_schematic_ops` op: a standalone tool's schema
-costs the model context whether or not it is ever called, and that cost
-is only earned by a useful return. The MCP guidance is fewer, more
-capable tools (tool-selection accuracy degrades past roughly 15 tools),
-so `move_component`, `remove_component`, `set_component_attribute`,
-`add_net_label`, `remove_net_label`, and `remove_wire` are ops on
-`apply_schematic_ops` rather than standalone tools. `create_schematic`
-and `reset_schematic` are the lifecycle exception — they stay standalone
-regardless of return shape because they have no batch home; reads stay
-standalone too.
+Schematic mutation is a single tool with a discriminated op union rather
+than one tool per mutation. A tool's schema costs the model context
+whether or not it is ever called, and that cost is only earned by a
+result the model acts on; MCP guidance is fewer, more capable tools
+(tool-selection accuracy degrades past roughly 15 tools). So the ops that
+return geometry (`add_component` gives placed pins, bounding box, and
+overlap warnings; `wire_pins` gives the routing result) and the ops that
+only acknowledge (`move_component`, `remove_component`,
+`set_component_attribute`, `add_net_label`, `remove_net_label`,
+`remove_wire`) all ride the same call, and a caller batches them into one
+transaction. Creating a sheet is the same tool with the blank base;
+reading — `inspect` — stays separate, because a read must not sit behind
+a mutating tool's schema.
 
 ## Design principles
 
@@ -102,8 +104,8 @@ standalone too.
 
 Mutating tools validate before writing and refuse states they can
 prove invalid.
-`wire_pins` is the model: a refusal raises an error whose itemized text
-names the specific segments, pins, or labels that blocked the write so
+The `wire_pins` op is the model: a refusal names the specific segments,
+pins, or labels that blocked the write so
 the agent can pick a new waypoint instead of guessing.
 
 Agents are bad at undoing mistakes. Tools that refuse invalid states save
@@ -122,16 +124,20 @@ decision.
 There is no `dry_run` / preview parameter. Safe mutation rests on three
 shipped mechanisms instead:
 
-- **Validate-before-write refusals** — `wire_pins` refuses invalid
+- **Validate-before-write refusals** — the `wire_pins` op refuses invalid
   geometry before the file is touched, with itemized error text naming
-  the conflicting segments, pins, or labels; the `apply_schematic_ops`
-  `add_component` op places the part and returns its pin positions plus
+  the conflicting segments, pins, or labels; the `add_component` op
+  places the part and returns its pin positions plus
   non-blocking overlap warnings.
-- **`reset_schematic`** — reverts an `.asc` to the byte snapshot taken
-  before its first in-session mutation; the recovery hatch when an
-  edit sequence went wrong.
-- **`export_netlist` diffing** — each export reports the diff against
-  the previous export, so unintended drift is visible immediately.
+- **All-or-nothing commits** — an `edit_schematic` batch applies against
+  one in-memory editor and lands by atomic rename, and `expected_sha256`
+  pins the revision it edited against: a peer that committed first turns
+  the call into a `revision_conflict` with nothing written. A failed
+  batch leaves the sheet as it was, so recovery is re-reading the file
+  rather than undoing a partial write.
+- **`verify_circuit` comparison** — a committed sheet is exported on a
+  copy and compared against a reference netlist (equivalence or
+  structural diff), so unintended drift is visible immediately.
 
 ### Post-op validation pass
 
@@ -187,7 +193,8 @@ The axis that matters is **consumer × format**, not scalar-vs-waveform:
 So the surface is layered: scalar detectors for "what is X", specialized
 shape-detectors for known signatures, decimated egress for "let me look",
 and plots as a shape-recognition backup for both LLM and human. Decimated
-egress ships as `get_waveform`; rendered plots remain roadmap. The
+egress is the `waveform` recipe; rendered plots are the `plot` recipe and
+the `plot_waveform` tool. The
 principle is recorded so scalar-first reads as a scoped default, not the
 end state.
 
@@ -199,8 +206,8 @@ from *navigation*, not from one lossy encoding. The overview is a
 **stat-envelope**: per bucket, `[min, max, rms, mean]` — min/max
 guarantees a narrow spike's amplitude survives bucketing, rms/mean
 localize energy and drift. From the surfaced per-bucket facts the consumer
-picks a sub-window and re-requests it finer — the same `get_waveform`
-call with a narrower `[t_start, t_end]` — and recurses. Full-resolution
+picks a sub-window and re-requests it finer — the same `waveform` recipe
+with a narrower `window` — and recurses. Full-resolution
 data stays on disk; detail enters context only when a measured quantity
 earned the zoom. This is the engineer's own look-then-zoom loop, and it
 reuses windowed egress plus the detectors (an envelope+carrier or
@@ -236,7 +243,7 @@ though one library choice is still open.
 
 | Consumer | Needs | Channel |
 |-|-|-|
-| The agent (computes) | the numbers, full fidelity | `export_waveform` → CSV on disk |
+| The agent (computes) | the numbers, full fidelity | the `waveform` recipe in `format: "csv"` → CSV on disk |
 | A vision model (one frame) | shape-at-a-glance | static PNG (`ImageContent`) attached to a result |
 | A human (explores) | an interactive plot | `plot_waveform`, rendered to the richest surface the client supports |
 
@@ -249,17 +256,18 @@ MCP "apps" widget surface (`ui://` HTML in a sandboxed iframe) is
 **interactivity benefits the human, not the LLM** — a model consumes a single
 rendered frame, so zoom / pan / hover buys it nothing.
 
-- **`export_waveform` (CSV) — full-fidelity egress to disk.** Returns a path,
-  not data (full resolution in a response would blow context — the reason
-  `get_waveform` decimates). Works on every analysis type. `.step` /
+- **The `waveform` recipe in `format: "csv"` — full-fidelity egress to disk.**
+  Returns a path, not data (full resolution in a response would blow context —
+  the reason the inline form decimates). Works on every analysis type. `.step` /
   Monte-Carlo runs are written **tidy / long** (`step_index, step_value, x,
   <signals…>`), which is forced rather than chosen: transient `.step` runs
   have a *different time vector per step*, so a wide shared-`x` layout is
-  wrong. Complex AC traces default to **magnitude(dB) + phase(deg)** columns
-  (lossless polar form, plot-ready, and the form the AC structural-analysis
-  methods read), with `re/im` and `both` as a `complex_format` option. This
-  is the *only* path that emits the full complex `H(f)` array — `get_waveform`
-  rejects AC and `bode_metrics` returns scalars — so it is also the substrate
+  wrong. Complex AC traces are written as **magnitude(dB) + phase(deg)**
+  columns (lossless polar form, plot-ready, and the form the AC
+  structural-analysis methods read). This
+  is the *only* path that emits every sample of the complex `H(f)` array —
+  the inline form decimates and the Bode recipes return scalars — so it is
+  also the substrate
   the AC structural-analysis layer stands on. It stays a clean egress: **no**
   derived slope / group-delay / residual columns (those belong to the
   detector layer, not the substrate). Bounded by *windowing* (the
@@ -270,7 +278,8 @@ rendered frame, so zoom / pan / hover buys it nothing.
   all four). Phase is the **wrapped** `np.angle` (the lossless primitive — a
   consumer runs `np.unwrap` themselves). Non-finite samples are **kept** and
   counted (not dropped), so columns stay row-aligned. The CSV lands under
-  `<circuit_dir>/.ltspice-mcp/waveforms/` (Linux-side, never beside a
+  `<working_dir>/.ltspice-mcp/results/artifacts/<result_set_id>/` (Linux-side,
+  never beside a
   Windows-temp raw); a descending/non-monotonic axis is refused when windowed
   (searchsorted would corrupt it). Hardening from review: rows stream straight
   into the atomic temp file (no whole-CSV copy held in memory) under a generous
@@ -328,10 +337,12 @@ rendered frame, so zoom / pan / hover buys it nothing.
   Default off (a base64 PNG on every result is expensive, useless to
   non-vision clients, and barely works in Codex). Gated on the optional
   `[plot]` extra (matplotlib); absent → skip and note, don't error. Scoped to
-  the tools where a plot adds gestalt first (`get_waveform`, `bode_metrics`).
+  the recipes where a plot adds gestalt first (`waveform` and the Bode
+  recipes). Not built — the interactive channel covered the need first.
 
-**Fidelity by consumer.** `get_waveform` decimates (the LLM's context is the
-limit), `export_waveform` is lossless (disk has no such limit), and
+**Fidelity by consumer.** The inline `waveform` recipe decimates (the LLM's
+context is the limit), its `format: "csv"` form is lossless (disk has no such
+limit), and
 `plot_waveform` defaults to full fidelity (a browser is not context-bound),
 capping only at the byte tail.
 
@@ -375,45 +386,33 @@ Key `lib/` modules:
 |`spice_lex.py`, `spice_lex_ops.py`, `spice_lex_views.py`|shared SPICE lexer pipeline — see [docs/spice_lex.md](spice_lex.md)|
 |`pathutil.py`|path security (`safe_path()`, `resolve_safe_path()`)|
 
-### Tool profiles
+### The tool surface
 
-`config.tool_profile` controls which tools are exposed.
+`config.tool_profile` controls which tools are exposed. Since 0.6.0 there
+is one profile.
 
 |profile|tool count|use case|
 |-|-|-|
-|`full` (default)|49|Claude Desktop, ChatGPT, web chat clients, non-agent LLMs, automation|
-|`agentic`|41|Claude Code, Cursor, Windsurf, and other agents with native `Read`/`Edit`/`Write`|
-|`consolidated` (experimental)|6|File-access agents driving a three-plane surface: `run_experiments`/`jobs` (execute), `analyze_results`/`inspect` (understand), `edit_schematic`/`verify_circuit` (author)|
+|`consolidated` (the only profile)|7 tools|Any MCP client: `run_experiments`/`jobs` (execute), `analyze_results`/`inspect` (understand), `edit_schematic`/`verify_circuit` (author), plus the `plot_waveform` widget|
 
-The `agentic` profile drops 8 tools: the five netlist-editing wrappers
-(`create_netlist`, `read_circuit`, `set_component_value`, `parameter`,
-`edit_directive`) — things a capable agent does natively via filesystem
-access — and the three library session tools (`load_library`,
-`unload_library`, `list_libraries`). It keeps the `configure_sweep` /
-`configure_montecarlo` config builders: they are the only producers of the
-`config_id` that `run_sweep` / `run_montecarlo` consume, and Monte Carlo
-perturbation with N-run aggregation (and the batch-sweep route) is not
-something an agent reproduces with native file edits the way it can a plain
-LTspice `.step`. It keeps simulation lifecycle,
-binary `.raw` parsing and analysis, batch run/results, library search
-(`find_model`), and the schematic toolset an agent cannot replicate
-by editing text — geometry-aware editing with orthogonal routing and
-pin-collision/junction checks: `create_schematic`, `apply_schematic_ops`,
-`wire_pins`, `export_netlist`,
-`reset_schematic`, `symbol_info`, `component_info`, `trace_net`. The
-`add_component` placement and the ack-only mutations (`move_component`, `remove_component`,
-`set_component_attribute`, `add_net_label`, `remove_net_label`,
-`remove_wire`) are `apply_schematic_ops` ops, not standalone tools.
+Each of the six planes tools takes a declarative payload rather than a
+fixed argument list, so the capability count did not shrink with the tool
+count: sweeps, corners and Monte Carlo are `run_experiments` `variations`;
+every former analysis tool is an `analyze_results` recipe; every former
+schematic mutation is an `edit_schematic` op; the former read tools are
+`inspect` kinds. Netlist text editing has no tool at all — an agent with
+file access does it natively, and that was the one category where a wrapper
+bought nothing.
 
-The `consolidated` profile (**experimental**) is a clean-break six-tool
-surface for file-access agents, exposing none of the `full`/`agentic` tools:
-`run_experiments` and `jobs` (execute), `analyze_results` and `inspect`
-(understand), `edit_schematic` and `verify_circuit` (author). `full` stays the
-default and loses nothing; the default flip is deferred.
-
-Set via `[tools] profile` in `ltspice-mcp.toml` or the
-`LTSPICE_MCP_TOOL_PROFILE` env var. Error hints adapt to the active
-profile so they never point at unavailable tools.
+**What 0.6.0 removed.** The `full` (49-tool) and `agentic` (41-tool)
+profiles, and with them one tool per operation. Their names are still
+accepted in `[tools] profile` and `LTSPICE_MCP_TOOL_PROFILE` for one
+release — each logs a warning and serves the consolidated surface — because
+a config that names a removed profile should degrade to a working server,
+not a startup failure. A deployment that needs the old tools pins
+`ltspice-mcp==0.5.*`. The handlers behind those tools were not deleted:
+they are internal adapters the recipes and ops dispatch to, which is why
+the consolidated surface reaches the same code paths the 0.5 tools did.
 
 ## Backend: spicelib
 
@@ -422,7 +421,7 @@ automation, by Nuno Brum. PyLTSpice is a thin re-export wrapper over
 spicelib that adds nothing — we depend on `spicelib` directly. The
 ceiling is deliberate: spicelib 1.6 retypes `.PARAM` values (`float_unit`)
 and refactored the component model, which breaks the parameter and
-`diff_circuit` paths. See the pin comment in `pyproject.toml`; lift only
+structural-comparison paths. See the pin comment in `pyproject.toml`; lift only
 on a forcing function, not for features.
 
 All four simulators share the same base `Simulator` ABC:
@@ -451,7 +450,8 @@ same `SimRunner`-based execution path as everything else.
 
 Per-simulator notes:
 
-- **LTspice** supports `.asc` → `.net` conversion via `create_netlist()`.
+- **LTspice** supports `.asc` → `.net` conversion via spicelib's
+  `LTspice.create_netlist()`.
   macOS LTspice has no CLI switch support. Default switches: `-Run -b`.
 - **NGspice** has a compatibility mode (`kiltpsa` default for
   KiCad/LTspice/PSPICE), overridable via `[simulator] ngbehavior` (or the
@@ -493,7 +493,7 @@ auto-detect across the WSL boundary.
 `log_parser.py:extract_log_diagnostics()` extracts structured warnings
 and errors from simulator log files — parse errors with caret pointers,
 fatal errors, convergence messages, `.MEAS` parse failures — and
-`run_simulation`, `check_job`, and `simulation_summary` attach them to
+`run_experiments`, `jobs`, and the `summary` recipe attach them to
 their responses as `warnings` / `errors` lists. An agent driving raw
 `ngspice -b` gets a 200-line log dump and has to grep; here the same
 failure arrives inside the tool response.
@@ -528,8 +528,9 @@ These are intentional gaps, not pending features. Adopt accordingly.
   Rds(on)"). Requires parsing every `.model` card, normalizing units
   across vendors, building a queryable parameter index — a separate
   parameter-database effort.
-- **Thin wrappers around file-edit operations.** The `agentic` profile
-  already drops these for clients with native `Read`/`Edit`.
+- **Thin wrappers around file-edit operations.** Netlist text editing has
+  no tool: a client with native `Read`/`Edit` does it better, and one
+  without it can still hand the server a deck it wrote.
 - **Per-simulator parity for geometry.** LTspice and ngspice are
   co-equal for simulation, result parsing, diagnostics, and analysis.
   The geometry layer (`.asc`, `.asy`, symbol coordinates) stays
@@ -560,17 +561,11 @@ validated + geometry-aware + LTspice-specific overlap.
 - **Cross-run analysis**: `compare_corners`, `find_worst_case`,
   `sensitivity_ranking` — tools that aggregate measurements across a
   set of runs and return structured deltas.
-- **Waveform egress & plotting**: the surface is now specified (see *Decided
-  egress & plot surface* above) — `export_waveform` (full-fidelity CSV, all
-  analysis types) first, then the adaptive `plot_waveform` (terminal
-  local-open before the GUI-host `ui://` widget), then the opt-in static-PNG
-  attach for the vision tier. What remains is implementation (uPlot for the
-  interactive tier). Resolves the remaining half of the scalar-only rigidity
-  noted under *Waveforms* above.
+- **Waveform egress & plotting**: shipped (see *Decided egress & plot
+  surface* above) — the `waveform` recipe's CSV form and both `plot_waveform`
+  delivery tiers. What remains open is the opt-in static-PNG attach for the
+  vision tier.
 - **Pin-compatible alternate suggestions** for unknown parts.
-- **`schematic` profile** (geometry tools only, no simulation) for
-  layout-focused agents — pending a real user request, since each
-  profile is a test-matrix axis.
 
 ## Configuration
 
@@ -587,11 +582,13 @@ End-to-end smoke test for a fresh install:
 
 1. Create RC lowpass netlist (R=1k, C=100n → fc ~1.59kHz)
 2. Add `.ac dec 100 1 1Meg` directive
-3. Run AC simulation
-4. `bode_metrics(mode="filter")` — verify the -3dB point near 1.59kHz
+3. Run it with `run_experiments`
+4. Read it back with a `bode_filter` recipe — verify the -3dB point near
+   1.59kHz
 5. Change R to 10k (fc → ~159Hz)
-6. Re-simulate, re-run `bode_metrics` — verify the bandwidth shifted
-7. Load a custom library, use a component from it in a new circuit
+6. Re-run and re-measure — verify the bandwidth shifted
+7. Pull a custom library in with a `.lib` / `.include` directive and use one
+   of its models in a new circuit
 
 If any step fails, the doctor tool (see Roadmap) is the eventual answer;
 until it ships, check `simulator.path` in TOML and confirm

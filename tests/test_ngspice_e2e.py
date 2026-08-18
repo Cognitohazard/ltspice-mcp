@@ -10,44 +10,28 @@ cannot reach, where the six live-found defects (and the phantom-measurement bug)
 lived. Run shape assertions on REAL ngspice output, not hand-built fixtures.
 """
 
-import asyncio
-import re
 import shutil
 from pathlib import Path
 
 import pytest
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.simulator import detect_simulators
-from ltspice_mcp.state import TERMINAL_STATUSES, SessionState
-from ltspice_mcp.tools.advanced import (
-    ConfigureMonteCarloInput,
-    ConfigureSweepInput,
-    GetBatchResultsInput,
-    MonteCarloTolerance,
-    RunBatchInput,
-    SweepParameter,
-    handle_batch_results,
-    handle_configure_montecarlo,
-    handle_configure_sweep,
-    handle_run_montecarlo,
-    handle_run_sweep,
-)
+from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import (
-    MeasurementStatsInput,
     OperatingPointInput,
     QueryValueInput,
-    handle_measurement_stats,
     handle_operating_point,
     handle_query_value,
 )
+from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from ltspice_mcp.tools.simulation import (
     CheckJobInput,
     RunSimulationInput,
     handle_check_job,
     handle_run_simulation,
 )
+from tests.conftest import terminal_experiment
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -78,27 +62,12 @@ def _write(work_dir: Path, name: str, content: str) -> str:
     return name
 
 
-def _extract_id(pattern: str, result) -> str:
-    """Pull a Config/Job ID out of a text_response — the real client contract."""
-    text = result.content[0].text
-    match = re.search(pattern, text)
-    assert match is not None, f"{pattern!r} not found in response:\n{text}"
-    return match.group(1)
-
-
-async def _poll_batch_done(state: SessionState, job_id: str, timeout_s: float = 90.0) -> dict:
-    """Poll batch_results (the real monitoring path) until the job is terminal."""
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_s
-    while True:
-        res = await handle_batch_results(GetBatchResultsInput(job_id=job_id), state)
-        sc = res.structuredContent
-        assert sc is not None
-        if sc["status"] in TERMINAL_STATUSES:
-            return sc
-        if loop.time() > deadline:
-            pytest.fail(f"batch job {job_id} not terminal after {timeout_s}s: {sc}")
-        await asyncio.sleep(0.1)
+def _analysis(receipt: dict) -> dict:
+    """The attached analysis payload from a terminal receipt."""
+    stage = receipt["analysis"]
+    assert stage["error"] is None, stage["error"]
+    assert stage["result"] is not None, stage
+    return stage["result"]
 
 
 async def test_op_divider_full_stack(ngspice_state: SessionState, work_dir: Path):
@@ -410,139 +379,173 @@ async def test_tran_meas_skipped_in_batch_mode_is_surfaced(
 
 
 async def test_sweep_full_stack_analytic_values(ngspice_state: SessionState, work_dir: Path):
-    # Real parameter sweep through configure_sweep -> run_sweep -> batch_results:
-    # three ngspice .dc runs of a divider with R2 = 1k/2k/3k. Every assertion is
-    # a known analytic value (V(out) at V1=10 is 10*R2/(R1+R2)), read back via
-    # the real batch extraction path: per-run ngspice-dialect raws aggregated by
-    # compute_batch_stats. This is the only CI coverage where the batch seam
-    # (per-run files, params labeling, dialect, convergence log walk) sees real
-    # simulator artifacts.
+    # Real parameter sweep through run_experiments -> attached analysis: three
+    # ngspice .dc runs of a divider with R2 = 1k/2k/3k. Every assertion is a
+    # known analytic value (V(out) at V1=10 is 10*R2/(R1+R2)), read back over
+    # the fan-out seam (per-case files, assignment labelling, ngspice dialect)
+    # with real simulator artifacts — what hermetic tests cannot reach.
     net = _write(
         work_dir,
         "sweepdiv.cir",
         "* dc divider\nV1 in 0 0\nR1 in out 1k\nR2 out 0 1k\n.dc V1 0 10 5\n.end\n",
     )
-    cfg = await handle_configure_sweep(
-        ConfigureSweepInput(
-            netlist=net,
-            parameters=[SweepParameter(name="R2", type="component", values=[1000, 2000, 3000])],
-        ),
-        ngspice_state,
-    )
-    assert "Total simulations: 3" in cfg.content[0].text
-    config_id = _extract_id(r"Config ID: (\S+)", cfg)
-
-    run = await handle_run_sweep(RunBatchInput(config_id=config_id), ngspice_state)
-    job_id = _extract_id(r"Job ID: (\S+)", run)
-
-    status = await _poll_batch_done(ngspice_state, job_id)
-    assert status["status"] == "completed"
-    assert status["total_runs"] == 3
-    assert status["completed_runs"] == 3
-    assert status["failed_runs"] == 0
-    assert status["successful"] == 3
-    # Clean job: error is omitted, not emitted as null (null broke
-    # schema-validating clients on the check_job batch branch).
-    assert "error" not in status
-
-    # Convergence contract: the per-run log walk ran over the real ngspice logs
-    # and found nothing — get_batch_status omits the key entirely for a clean
-    # job, and the scan caches an empty list (not None) on the job afterwards.
-    assert "convergence_warnings" not in status
-    assert ngspice_state.batch_jobs[job_id].convergence_warnings == []
 
     def vout(r2: float) -> float:
         return 10.0 * r2 / (1000.0 + r2)
 
-    # Aggregate path: compute_batch_stats over the three real raws, sliced to
-    # the V1=10 endpoint of each run's .dc axis.
-    agg = await handle_batch_results(
-        GetBatchResultsInput(job_id=job_id, signal="v(out)", at="10"), ngspice_state
+    receipt = await terminal_experiment(
+        ngspice_state,
+        {
+            "request_id": "ng-sweep-divider",
+            "circuits": [{"path": net, "id": "div"}],
+            "variations": [{"kind": "assign", "assign": {"R2": ["1k", "2k", "3k"]}}],
+            "execution": {"wait_s": 90, "simulator": "ngspice"},
+            "analyze": {
+                "recipes": [
+                    {
+                        "key": "vout",
+                        "metric": "value",
+                        "expr": "v(out)",
+                        "at": "10",
+                        "reduce": ["min", "max", "mean", "p50"],
+                    }
+                ],
+                "include": {"per_run": {"limit": 10}},
+            },
+        },
     )
-    asc = agg.structuredContent
-    assert asc is not None
-    assert asc["mode"] == "aggregate"
-    assert asc["run_count"] == 3
-    stats = asc["stats"]
-    assert stats["max_across_runs"] == pytest.approx(vout(3000), rel=1e-6)  # 7.5
-    assert stats["min_across_runs"] == pytest.approx(vout(1000), rel=1e-6)  # 5.0
-    assert stats["median_across_runs"] == pytest.approx(vout(2000), rel=1e-6)  # 6.667
-    assert stats["mean_across_runs"] == pytest.approx(
+
+    assert receipt["status"] == "completed"
+    counts = receipt["completeness"]
+    assert counts["expanded"] == counts["produced"] == 3
+    assert counts["failed"] == counts["cancelled"] == counts["skipped"] == 0
+    assert receipt["failures"] == []
+
+    # Reductions across the three real runs, attributed to the case that owns
+    # each extreme — the aggregate view of the fan-out.
+    entry = _analysis(receipt)["results"]["vout"]
+    reduced = {item["stat"]: item for item in entry["reduced"]}
+    assert reduced["min"]["value"] == pytest.approx(vout(1000), rel=1e-6)  # 5.0
+    assert reduced["max"]["value"] == pytest.approx(vout(3000), rel=1e-6)  # 7.5
+    assert reduced["p50"]["value"] == pytest.approx(vout(2000), rel=1e-6)  # 6.667
+    assert reduced["mean"]["value"] == pytest.approx(
         (vout(1000) + vout(2000) + vout(3000)) / 3, rel=1e-6
     )
+    # The extremes name their own case, not just a number.
+    assert reduced["max"]["assignments"]["R2"] == "3k"
+    assert reduced["min"]["assignments"]["R2"] == "1k"
 
-    # Raw mode: each run's value must match the analytic answer for the R2 the
-    # sweep recorded in that run's params (order-independent check).
-    rawres = await handle_batch_results(
-        GetBatchResultsInput(job_id=job_id, signal="v(out)", at="10", raw=True), ngspice_state
-    )
-    rsc = rawres.structuredContent
-    assert rsc is not None
-    assert len(rsc["runs"]) == 3
-    seen_r2 = set()
-    for entry in rsc["runs"]:
-        r2 = entry["params"]["R2"]
-        seen_r2.add(r2)
-        assert entry["value"] == pytest.approx(vout(r2), rel=1e-6)
-    assert seen_r2 == {1000.0, 2000.0, 3000.0}
+    # Per-run rows: each run's value matches the analytic answer for the R2 the
+    # expansion recorded on that case (order-independent).
+    rows = entry["per_run"]["items"]
+    assert len(rows) == 3
+    seen = set()
+    for row in rows:
+        r2 = row["assignments"]["R2"]
+        seen.add(r2)
+        assert row["value"]["value"] == pytest.approx(vout(float(r2.rstrip("k")) * 1000), rel=1e-6)
+    assert seen == {"1k", "2k", "3k"}
 
-    # The max-case run reported by the aggregate must be the R2=3k run.
-    by_index = {e["run_index"]: e for e in rsc["runs"]}
-    assert by_index[asc["max_case_run"]]["params"]["R2"] == 3000.0
-    assert by_index[asc["min_case_run"]]["params"]["R2"] == 1000.0
-
-    # query_value on a single run of the job must agree with the batch view.
-    r2_3k_index = next(e["run_index"] for e in rsc["runs"] if e["params"]["R2"] == 3000.0)
-    qres = await handle_query_value(
-        QueryValueInput(job_id=job_id, run_index=r2_3k_index, signal="v(out)", at="10"),
-        ngspice_state,
-    )
-    qsc = qres.structuredContent
-    assert qsc is not None
-    assert qsc["actual_x"] == pytest.approx(10.0)
-    assert qsc["value"] == pytest.approx(vout(3000), rel=1e-6)
-
-
-async def test_montecarlo_without_meas_aggregates_signal_not_measurements(
-    ngspice_state: SessionState, work_dir: Path
-):
-    # A 3-run Monte Carlo on a measurement-less .op deck. ngspice batch mode
-    # never evaluates .meas, so the per-job measurement aggregation must raise
-    # the explanatory no-results error (not crash, not fabricate entries from
-    # the title echo), while signal aggregation over the same runs still works
-    # and stays inside the analytic tolerance band.
-    net = _write(
-        work_dir, "mcdiv.cir", "* op divider\nV1 in 0 10\nR1 in out 1k\nR2 out 0 1k\n.op\n.end\n"
-    )
-    cfg = await handle_configure_montecarlo(
-        ConfigureMonteCarloInput(
-            netlist=net,
-            tolerances=[MonteCarloTolerance(ref="R2", tolerance=0.05)],
-            num_runs=3,
-            seed=42,
+    # Addressing ONE case of the job agrees with the fan-out view: the receipt
+    # names the case, and a case-scoped re-analysis reads the same number back.
+    r2_3k = next(run for run in receipt["runs"]["items"] if run["assignments"]["R2"] == "3k")
+    single = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {
+                "sources": [
+                    {
+                        "job_id": receipt["job_id"],
+                        "runs": {"case_ids": [r2_3k["case_id"]]},
+                        "label": "r2_3k",
+                    }
+                ],
+                "recipes": [{"key": "vout", "metric": "value", "expr": "v(out)", "at": "10"}],
+            }
         ),
         ngspice_state,
     )
-    config_id = _extract_id(r"Config ID: (\S+)", cfg)
-    run = await handle_run_montecarlo(RunBatchInput(config_id=config_id), ngspice_state)
-    job_id = _extract_id(r"Job ID: (\S+)", run)
+    ssc = single.structuredContent
+    assert ssc is not None
+    assert ssc["coverage"]["runs_analyzed"] == 1
+    only = ssc["results"]["vout"]["values"][0]["value"]
+    assert only["actual_x"] == pytest.approx(10.0)
+    assert only["value"] == pytest.approx(vout(3000), rel=1e-6)
 
-    status = await _poll_batch_done(ngspice_state, job_id)
-    assert status["status"] == "completed"
-    assert status["completed_runs"] == status["total_runs"] == 3
-    assert status["failed_runs"] == 0
 
-    with pytest.raises(ResultError, match=r"No \.MEAS results found across the runs"):
-        await handle_measurement_stats(MeasurementStatsInput(job_id=job_id), ngspice_state)
+async def test_montecarlo_without_meas_reports_no_measurements(
+    ngspice_state: SessionState, work_dir: Path
+):
+    # A 3-run Monte Carlo on a measurement-less .op deck. ngspice batch mode
+    # never evaluates .meas, so the measurements recipe must come back empty
+    # with an explanation (not crash, not fabricate entries from the title
+    # echo), while signal extraction over the same runs still works and stays
+    # inside the analytic tolerance band.
+    net = _write(
+        work_dir, "mcdiv.cir", "* op divider\nV1 in 0 10\nR1 in out 1k\nR2 out 0 1k\n.op\n.end\n"
+    )
+    receipt = await terminal_experiment(
+        ngspice_state,
+        {
+            "request_id": "ng-mc-divider",
+            "circuits": [{"path": net, "id": "div"}],
+            "variations": [
+                {
+                    "kind": "random",
+                    "runs": 3,
+                    "seed": 42,
+                    "rules": [
+                        {
+                            "rule": "component",
+                            "target": "R2",
+                            "tolerance": 0.05,
+                            "distribution": "uniform",
+                        }
+                    ],
+                }
+            ],
+            "execution": {"wait_s": 90, "simulator": "ngspice"},
+        },
+    )
+    assert receipt["status"] == "completed"
+    assert receipt["completeness"]["produced"] == receipt["completeness"]["expanded"] == 3
+    assert receipt["completeness"]["failed"] == 0
 
-    # Signal aggregation still works on the same runs. R2 is uniform ±5%, so
-    # every run's .op point obeys 10*R2'/(1k+R2') for R2' in [950, 1050].
+    # R2 is uniform +/-5%, so every run's .op point obeys 10*R2'/(1k+R2') for
+    # R2' in [950, 1050]. Asking for both metrics in one call also pins that a
+    # metric with nothing to report does not take the other one down with it.
     lo = 10.0 * 950.0 / (1000.0 + 950.0)
     hi = 10.0 * 1050.0 / (1000.0 + 1050.0)
-    agg = await handle_batch_results(
-        GetBatchResultsInput(job_id=job_id, signal="v(out)"), ngspice_state
+    result = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {
+                "sources": [{"job_id": receipt["job_id"], "runs": "all", "label": "mc"}],
+                "recipes": [
+                    {"key": "measured", "metric": "measurements"},
+                    {
+                        "key": "vout",
+                        "metric": "value",
+                        "expr": "v(out)",
+                        "reduce": ["min", "max"],
+                    },
+                ],
+            }
+        ),
+        ngspice_state,
     )
-    asc = agg.structuredContent
-    assert asc is not None
-    assert asc["run_count"] == 3
-    assert lo <= asc["stats"]["min_across_runs"] <= asc["stats"]["max_across_runs"] <= hi
+    data = result.structuredContent
+    assert data is not None
+    assert data["coverage"]["runs_analyzed"] == 3
+
+    reduced = {item["stat"]: item["value"] for item in data["results"]["vout"]["reduced"]}
+    assert lo <= reduced["min"] <= reduced["max"] <= hi
+
+    # Every run's perturbed R2 landed inside the requested +/-5% band.
+    for item in data["results"]["vout"]["reduced"]:
+        assert 950.0 <= item["assignments"]["random:component:R2"] <= 1050.0
+
+    # Nothing was fabricated for the .meas a batch-mode ngspice never evaluated:
+    # no 'measured' result at all, and one explanatory failure per case.
+    assert "measured" not in data["results"]
+    meas_failures = [f for f in data["failures"] if "No .MEAS results" in f["message"]]
+    assert len(meas_failures) == 3, data["failures"]
+    assert all(f["code"] == "recipe_failed" for f in meas_failures)

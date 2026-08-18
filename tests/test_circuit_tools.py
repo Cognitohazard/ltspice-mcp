@@ -9,7 +9,17 @@ from ltspice_mcp.errors import NetlistError, PathSecurityError
 from ltspice_mcp.lib.component_value import apply_value_to_instance
 from ltspice_mcp.lib.spice_lex import emit, lex
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools._base import result_text
 from ltspice_mcp.tools.circuit import (
+    CircuitReadInput,
+    CreateNetlistInput,
+    CreateSchematicInput,
+    DiffCircuitInput,
+    EditDirectiveInput,
+    ListComponentsInput,
+    ParameterInput,
+    SetComponentValueInput,
+    ValidateNetlistInput,
     handle_create_netlist,
     handle_create_schematic,
     handle_diff_circuit,
@@ -26,7 +36,9 @@ from ltspice_mcp.tools.circuit import (
 class TestCreateNetlist:
     async def test_creates_file(self, state_no_sim: SessionState, work_dir: Path):
         result = await handle_create_netlist(
-            {"name": "test", "content": "* test\nR1 1 0 1k\nV1 1 0 1\n"},
+            CreateNetlistInput.model_validate(
+                {"name": "test", "content": "* test\nR1 1 0 1k\nV1 1 0 1\n"}
+            ),
             state_no_sim,
         )
         created = work_dir / "test.cir"
@@ -34,11 +46,11 @@ class TestCreateNetlist:
         content = created.read_text()
         assert content.startswith("* test")
         assert "R1 1 0 1k" in content
-        assert "test.cir" in result.content[0].text
+        assert "test.cir" in result_text(result)
 
     async def test_appends_end_directive(self, state_no_sim: SessionState, work_dir: Path):
         await handle_create_netlist(
-            {"name": "noend", "content": "* test\nR1 1 0 1k\n"},
+            CreateNetlistInput.model_validate({"name": "noend", "content": "* test\nR1 1 0 1k\n"}),
             state_no_sim,
         )
         content = (work_dir / "noend.cir").read_text()
@@ -46,19 +58,23 @@ class TestCreateNetlist:
 
     async def test_rejects_duplicate(self, state_no_sim: SessionState, work_dir: Path):
         await handle_create_netlist(
-            {"name": "dup", "content": "* test\nR1 1 0 1k\n"},
+            CreateNetlistInput.model_validate({"name": "dup", "content": "* test\nR1 1 0 1k\n"}),
             state_no_sim,
         )
         with pytest.raises(NetlistError, match="already exists"):
             await handle_create_netlist(
-                {"name": "dup", "content": "* test\nR1 1 0 1k\n"},
+                CreateNetlistInput.model_validate(
+                    {"name": "dup", "content": "* test\nR1 1 0 1k\n"}
+                ),
                 state_no_sim,
             )
 
     async def test_rejects_path_escape(self, state_no_sim: SessionState):
         with pytest.raises(PathSecurityError):
             await handle_create_netlist(
-                {"name": "../../etc/evil", "content": "* test\n"},
+                CreateNetlistInput.model_validate(
+                    {"name": "../../etc/evil", "content": "* test\n"}
+                ),
                 state_no_sim,
             )
 
@@ -67,24 +83,31 @@ class TestCreateNetlist:
         # cryptic 'Expected pattern "^\\*" not found'. Reject it up front with a
         # clear message and leave no file behind.
         with pytest.raises(NetlistError, match="empty"):
-            await handle_create_netlist({"name": "empty", "content": ""}, state_no_sim)
+            await handle_create_netlist(
+                CreateNetlistInput.model_validate({"name": "empty", "content": ""}), state_no_sim
+            )
         assert not (work_dir / "empty.cir").exists()
 
     async def test_rejects_whitespace_only_content(
         self, state_no_sim: SessionState, work_dir: Path
     ):
         with pytest.raises(NetlistError, match="empty"):
-            await handle_create_netlist({"name": "ws", "content": "  \n\t\n"}, state_no_sim)
+            await handle_create_netlist(
+                CreateNetlistInput.model_validate({"name": "ws", "content": "  \n\t\n"}),
+                state_no_sim,
+            )
 
     async def test_overwrite_replaces_existing(self, state_no_sim: SessionState, work_dir: Path):
         """``overwrite=True`` skips the FileExistsError path so iterating on
         a design doesn't force read+edit roundtrips."""
         await handle_create_netlist(
-            {"name": "ow", "content": "* v1\nR1 1 0 1k\n"},
+            CreateNetlistInput.model_validate({"name": "ow", "content": "* v1\nR1 1 0 1k\n"}),
             state_no_sim,
         )
         await handle_create_netlist(
-            {"name": "ow", "content": "* v2\nR1 1 0 5k\n", "overwrite": True},
+            CreateNetlistInput.model_validate(
+                {"name": "ow", "content": "* v2\nR1 1 0 5k\n", "overwrite": True}
+            ),
             state_no_sim,
         )
         path = work_dir / "ow.cir"
@@ -97,7 +120,9 @@ class TestReadCircuit:
     async def test_reads_content_and_components(
         self, state_no_sim: SessionState, sample_netlist: Path
     ):
-        result = await handle_read_circuit({"path": sample_netlist.name}, state_no_sim)
+        result = await handle_read_circuit(
+            CircuitReadInput.model_validate({"path": sample_netlist.name}), state_no_sim
+        )
         text = result.content[0].text
         assert "R1" in text
         assert "C1" in text
@@ -108,11 +133,15 @@ class TestReadCircuit:
 
     async def test_file_not_found(self, state_no_sim: SessionState):
         with pytest.raises(NetlistError, match="not found"):
-            await handle_read_circuit({"path": "nonexistent.cir"}, state_no_sim)
+            await handle_read_circuit(
+                CircuitReadInput.model_validate({"path": "nonexistent.cir"}), state_no_sim
+            )
 
     async def test_path_escape_blocked(self, state_no_sim: SessionState):
         with pytest.raises(PathSecurityError):
-            await handle_read_circuit({"path": "/etc/passwd"}, state_no_sim)
+            await handle_read_circuit(
+                CircuitReadInput.model_validate({"path": "/etc/passwd"}), state_no_sim
+            )
 
     async def test_netlist_lexer_warnings_surfaced(
         self, state_no_sim: SessionState, work_dir: Path
@@ -123,12 +152,22 @@ class TestReadCircuit:
         cir = work_dir / "unclosed_subckt.cir"
         cir.write_text("* unclosed subckt\n.SUBCKT amp in out\nR1 in out 1k\n")
 
-        struct = await handle_read_circuit({"path": cir.name, "format": "json"}, state_no_sim)
+        struct = await handle_read_circuit(
+            CircuitReadInput.model_validate({"path": cir.name, "format": "json"}), state_no_sim
+        )
         warnings = struct.structuredContent["warnings"]
         assert warnings
         assert any(".SUBCKT" in w for w in warnings)
 
-        text = (await handle_read_circuit({"path": cir.name}, state_no_sim)).content[0].text
+        text = (
+            (
+                await handle_read_circuit(
+                    CircuitReadInput.model_validate({"path": cir.name}), state_no_sim
+                )
+            )
+            .content[0]
+            .text
+        )
         assert "Warnings" in text
         assert ".SUBCKT" in text
 
@@ -136,7 +175,9 @@ class TestReadCircuit:
 @pytest.mark.asyncio
 class TestListComponents:
     async def test_lists_all(self, state_no_sim: SessionState, sample_netlist: Path):
-        result = await handle_list_components({"path": sample_netlist.name}, state_no_sim)
+        result = await handle_list_components(
+            ListComponentsInput.model_validate({"path": sample_netlist.name}), state_no_sim
+        )
         text = result.content[0].text
         assert "R1" in text
         assert "C1" in text
@@ -144,7 +185,8 @@ class TestListComponents:
 
     async def test_prefix_filter(self, state_no_sim: SessionState, sample_netlist: Path):
         result = await handle_list_components(
-            {"path": sample_netlist.name, "prefix": "R"}, state_no_sim
+            ListComponentsInput.model_validate({"path": sample_netlist.name, "prefix": "R"}),
+            state_no_sim,
         )
         text = result.content[0].text
         assert "R1" in text
@@ -152,14 +194,16 @@ class TestListComponents:
 
     async def test_no_match_prefix(self, state_no_sim: SessionState, sample_netlist: Path):
         result = await handle_list_components(
-            {"path": sample_netlist.name, "prefix": "Q"}, state_no_sim
+            ListComponentsInput.model_validate({"path": sample_netlist.name, "prefix": "Q"}),
+            state_no_sim,
         )
         assert "No components" in result.content[0].text
 
     async def test_single_reference(self, state_no_sim: SessionState, sample_netlist: Path):
         """Single-component lookup via 'reference' parameter."""
         result = await handle_list_components(
-            {"path": sample_netlist.name, "reference": "R1"}, state_no_sim
+            ListComponentsInput.model_validate({"path": sample_netlist.name, "reference": "R1"}),
+            state_no_sim,
         )
         assert "1k" in result.content[0].text
 
@@ -167,7 +211,8 @@ class TestListComponents:
         self, state_no_sim: SessionState, sample_netlist: Path
     ):
         result = await handle_list_components(
-            {"path": sample_netlist.name, "reference": "r1"}, state_no_sim
+            ListComponentsInput.model_validate({"path": sample_netlist.name, "reference": "r1"}),
+            state_no_sim,
         )
         assert "1k" in result.content[0].text
 
@@ -178,7 +223,9 @@ class TestListComponents:
         structuredContent (not a components list). The autouse conformance
         hook also checks this shape against the declared output_schema."""
         result = await handle_list_components(
-            {"path": sample_netlist.name, "reference": "R1", "format": "json"},
+            ListComponentsInput.model_validate(
+                {"path": sample_netlist.name, "reference": "R1", "format": "json"}
+            ),
             state_no_sim,
         )
         data = result.structuredContent
@@ -190,7 +237,9 @@ class TestListComponents:
     async def test_nonexistent_reference(self, state_no_sim: SessionState, sample_netlist: Path):
         with pytest.raises(NetlistError, match="not found"):
             await handle_list_components(
-                {"path": sample_netlist.name, "reference": "R99"},
+                ListComponentsInput.model_validate(
+                    {"path": sample_netlist.name, "reference": "R99"}
+                ),
                 state_no_sim,
             )
 
@@ -208,7 +257,9 @@ class TestListComponents:
             ".tran 0 1m\n"
             ".end\n"
         )
-        result = await handle_list_components({"path": cir.name}, state_no_sim)
+        result = await handle_list_components(
+            ListComponentsInput.model_validate({"path": cir.name}), state_no_sim
+        )
         text = result.content[0].text
         # All three components should appear; the B-source's value is
         # parsed as a full KEY=VALUE function call rather than truncated.
@@ -234,7 +285,9 @@ class TestListComponents:
             ".op\n"
             ".end\n"
         )
-        result = await handle_list_components({"path": cir.name, "reference": "B1"}, state_no_sim)
+        result = await handle_list_components(
+            ListComponentsInput.model_validate({"path": cir.name, "reference": "B1"}), state_no_sim
+        )
         text = result.content[0].text
         assert "V=V(in)*2" in text
         assert "<unparseable>" not in text
@@ -255,7 +308,9 @@ class TestReadCircuitDegrades:
             ".tran 0 1m\n"
             ".end\n"
         )
-        result = await handle_read_circuit({"path": cir.name, "format": "json"}, state_no_sim)
+        result = await handle_read_circuit(
+            CircuitReadInput.model_validate({"path": cir.name, "format": "json"}), state_no_sim
+        )
         data = result.structuredContent
         assert data is not None
         refs = {c["reference"] for c in data["components"]}
@@ -269,7 +324,9 @@ class TestReadCircuitDegrades:
         # parenthesised args with the function name dropped.
         cir = work_dir / "pulse.cir"
         cir.write_text("* p\nV1 in 0 PULSE(0 5 0 1n 1n 1m 2m)\nR1 in 0 1k\n.END\n")
-        result = await handle_read_circuit({"path": cir.name, "format": "json"}, state_no_sim)
+        result = await handle_read_circuit(
+            CircuitReadInput.model_validate({"path": cir.name, "format": "json"}), state_no_sim
+        )
         comps = {c["reference"]: c["value"] for c in result.structuredContent["components"]}
         assert comps["V1"] == "PULSE(0 5 0 1n 1n 1m 2m)"
 
@@ -277,7 +334,9 @@ class TestReadCircuitDegrades:
 @pytest.mark.asyncio
 class TestParameter:
     async def test_get_params(self, state_no_sim: SessionState, sample_netlist: Path):
-        result = await handle_parameter({"path": sample_netlist.name}, state_no_sim)
+        result = await handle_parameter(
+            ParameterInput.model_validate({"path": sample_netlist.name}), state_no_sim
+        )
         text = result.content[0].text
         assert "RVAL" in text or "Rval" in text
 
@@ -287,7 +346,9 @@ class TestParameter:
         # Regression: spicelib's get_all_parameter_names() uppercases
         # ('Rval'->'RVAL'), but the read-all projection should echo the verbatim
         # on-disk casing recovered from the file text.
-        result = await handle_parameter({"path": sample_netlist.name}, state_no_sim)
+        result = await handle_parameter(
+            ParameterInput.model_validate({"path": sample_netlist.name}), state_no_sim
+        )
         text = result.content[0].text
         assert "Rval" in text
         assert "RVAL" not in text
@@ -296,18 +357,24 @@ class TestParameter:
     async def test_no_params(self, state_no_sim: SessionState, work_dir: Path):
         p = work_dir / "noparam.cir"
         p.write_text("* test\nR1 1 0 1k\n.END\n")
-        result = await handle_parameter({"path": "noparam.cir"}, state_no_sim)
+        result = await handle_parameter(
+            ParameterInput.model_validate({"path": "noparam.cir"}), state_no_sim
+        )
         assert "No .PARAM" in result.content[0].text
 
     async def test_set_param(self, state_no_sim: SessionState, sample_netlist: Path):
         result = await handle_parameter(
-            {"path": sample_netlist.name, "name": "Rval", "value": "2k"},
+            ParameterInput.model_validate(
+                {"path": sample_netlist.name, "name": "Rval", "value": "2k"}
+            ),
             state_no_sim,
         )
         assert "Rval" in result.content[0].text
 
         # Verify value was actually written
-        params = await handle_parameter({"path": sample_netlist.name}, state_no_sim)
+        params = await handle_parameter(
+            ParameterInput.model_validate({"path": sample_netlist.name}), state_no_sim
+        )
         assert "2k" in params.content[0].text
 
     async def test_set_param_does_not_leave_batch_instruction_comment(
@@ -318,7 +385,10 @@ class TestParameter:
         # while keeping the directive and its value intact.
         cir = work_dir / "freshparam.cir"
         cir.write_text("* fresh\nR1 in 0 1k\n.END\n")
-        await handle_parameter({"path": cir.name, "name": "Gain", "value": "3"}, state_no_sim)
+        await handle_parameter(
+            ParameterInput.model_validate({"path": cir.name, "name": "Gain", "value": "3"}),
+            state_no_sim,
+        )
         text = cir.read_text()
         assert "Batch instruction" not in text
         assert ".param" in text.lower()
@@ -333,7 +403,10 @@ class TestParameter:
         # param-set untouched.
         cir = work_dir / "withnote.cir"
         cir.write_text("* note test\nR1 n1 0 1k ; my note\n.END\n")
-        await handle_parameter({"path": cir.name, "name": "Gain", "value": "3"}, state_no_sim)
+        await handle_parameter(
+            ParameterInput.model_validate({"path": cir.name, "name": "Gain", "value": "3"}),
+            state_no_sim,
+        )
         text = cir.read_text()
         assert "; my note" in text
         assert "Batch instruction" not in text
@@ -345,11 +418,15 @@ class TestParameter:
         # even though spicelib reformatted the line on write.
         cir = work_dir / "delparam.cir"
         cir.write_text("* del\nR1 in 0 1k\n.END\n")
-        await handle_parameter({"path": cir.name, "name": "Gain", "value": "3"}, state_no_sim)
+        await handle_parameter(
+            ParameterInput.model_validate({"path": cir.name, "name": "Gain", "value": "3"}),
+            state_no_sim,
+        )
         assert "gain" in cir.read_text().lower()
 
         result = await handle_parameter(
-            {"path": cir.name, "name": "Gain", "delete": True}, state_no_sim
+            ParameterInput.model_validate({"path": cir.name, "name": "Gain", "delete": True}),
+            state_no_sim,
         )
         assert "Deleted" in result.content[0].text
         assert "gain" not in cir.read_text().lower()
@@ -363,22 +440,32 @@ class TestParameter:
         cir.write_text("* m\nR1 in 0 1k\n.param A=1 B=2 C=3\n.END\n")
 
         # Delete the FIRST parameter on the line.
-        await handle_parameter({"path": cir.name, "name": "A", "delete": True}, state_no_sim)
+        await handle_parameter(
+            ParameterInput.model_validate({"path": cir.name, "name": "A", "delete": True}),
+            state_no_sim,
+        )
         keys = {
             k.lower()
-            for k in (await handle_parameter({"path": cir.name}, state_no_sim)).structuredContent[
-                "parameters"
-            ]
+            for k in (
+                await handle_parameter(
+                    ParameterInput.model_validate({"path": cir.name}), state_no_sim
+                )
+            ).structuredContent["parameters"]
         }
         assert keys == {"b", "c"}, keys
 
         # Delete a NON-first parameter (the whole-line approach reported 'not found').
-        await handle_parameter({"path": cir.name, "name": "C", "delete": True}, state_no_sim)
+        await handle_parameter(
+            ParameterInput.model_validate({"path": cir.name, "name": "C", "delete": True}),
+            state_no_sim,
+        )
         keys2 = {
             k.lower()
-            for k in (await handle_parameter({"path": cir.name}, state_no_sim)).structuredContent[
-                "parameters"
-            ]
+            for k in (
+                await handle_parameter(
+                    ParameterInput.model_validate({"path": cir.name}), state_no_sim
+                )
+            ).structuredContent["parameters"]
         }
         assert keys2 == {"b"}, keys2
 
@@ -387,12 +474,17 @@ class TestParameter:
     ):
         asc = work_dir / "multi.asc"
         asc.write_text("Version 4\nSHEET 1 880 680\nTEXT 0 0 Left 2 !.param A=1 B=2\n")
-        await handle_parameter({"path": asc.name, "name": "A", "delete": True}, state_no_sim)
+        await handle_parameter(
+            ParameterInput.model_validate({"path": asc.name, "name": "A", "delete": True}),
+            state_no_sim,
+        )
         keys = {
             k.lower()
-            for k in (await handle_parameter({"path": asc.name}, state_no_sim)).structuredContent[
-                "parameters"
-            ]
+            for k in (
+                await handle_parameter(
+                    ParameterInput.model_validate({"path": asc.name}), state_no_sim
+                )
+            ).structuredContent["parameters"]
         }
         assert keys == {"b"}, keys
 
@@ -401,7 +493,8 @@ class TestParameter:
         cir.write_text("* x\nR1 in 0 1k\n.END\n")
         with pytest.raises(NetlistError, match="not found"):
             await handle_parameter(
-                {"path": cir.name, "name": "Nope", "delete": True}, state_no_sim
+                ParameterInput.model_validate({"path": cir.name, "name": "Nope", "delete": True}),
+                state_no_sim,
             )
 
     async def test_delete_requires_name_and_excludes_value(
@@ -410,10 +503,14 @@ class TestParameter:
         cir = work_dir / "guard.cir"
         cir.write_text("* x\nR1 in 0 1k\n.PARAM Gain=3\n.END\n")
         with pytest.raises(NetlistError, match="'delete' requires 'name'"):
-            await handle_parameter({"path": cir.name, "delete": True}, state_no_sim)
+            await handle_parameter(
+                ParameterInput.model_validate({"path": cir.name, "delete": True}), state_no_sim
+            )
         with pytest.raises(NetlistError, match="not both"):
             await handle_parameter(
-                {"path": cir.name, "name": "Gain", "value": "5", "delete": True},
+                ParameterInput.model_validate(
+                    {"path": cir.name, "name": "Gain", "value": "5", "delete": True}
+                ),
                 state_no_sim,
             )
 
@@ -422,47 +519,56 @@ class TestParameter:
 class TestSetComponentValue:
     async def test_set_single(self, state_no_sim: SessionState, sample_netlist: Path):
         result = await handle_set_component_value(
-            {"path": sample_netlist.name, "reference": "R1", "value": "4.7k"},
+            SetComponentValueInput.model_validate(
+                {"path": sample_netlist.name, "reference": "R1", "value": "4.7k"}
+            ),
             state_no_sim,
         )
-        assert "4.7k" in result.content[0].text
+        assert "4.7k" in result_text(result)
 
         # Verify persisted
         result2 = await handle_list_components(
-            {"path": sample_netlist.name, "reference": "R1"}, state_no_sim
+            ListComponentsInput.model_validate({"path": sample_netlist.name, "reference": "R1"}),
+            state_no_sim,
         )
         assert "4.7k" in result2.content[0].text
 
     async def test_batch_set(self, state_no_sim: SessionState, sample_netlist: Path):
         result = await handle_set_component_value(
-            {
-                "path": sample_netlist.name,
-                "values": {"R1": "10k", "C1": "47n"},
-            },
+            SetComponentValueInput.model_validate(
+                {
+                    "path": sample_netlist.name,
+                    "values": {"R1": "10k", "C1": "47n"},
+                }
+            ),
             state_no_sim,
         )
-        assert "2 component" in result.content[0].text
+        assert "2 component" in result_text(result)
 
         r1 = await handle_list_components(
-            {"path": sample_netlist.name, "reference": "R1"}, state_no_sim
+            ListComponentsInput.model_validate({"path": sample_netlist.name, "reference": "R1"}),
+            state_no_sim,
         )
         assert "10k" in r1.content[0].text
         c1 = await handle_list_components(
-            {"path": sample_netlist.name, "reference": "C1"}, state_no_sim
+            ListComponentsInput.model_validate({"path": sample_netlist.name, "reference": "C1"}),
+            state_no_sim,
         )
         assert "47n" in c1.content[0].text
 
     async def test_invalid_values_type(self, state_no_sim: SessionState, sample_netlist: Path):
         with pytest.raises(ValidationError):
             await handle_set_component_value(
-                {"path": sample_netlist.name, "values": "not a dict"},
+                SetComponentValueInput.model_validate(
+                    {"path": sample_netlist.name, "values": "not a dict"}
+                ),
                 state_no_sim,
             )
 
     async def test_missing_args(self, state_no_sim: SessionState, sample_netlist: Path):
         with pytest.raises(NetlistError, match="Provide either"):
             await handle_set_component_value(
-                {"path": sample_netlist.name},
+                SetComponentValueInput.model_validate({"path": sample_netlist.name}),
                 state_no_sim,
             )
 
@@ -475,10 +581,12 @@ class TestSetComponentValue:
         before = sample_netlist.read_bytes()  # noqa: ASYNC240
         with pytest.raises(NetlistError, match="not found"):
             await handle_set_component_value(
-                {
-                    "path": sample_netlist.name,
-                    "values": {"R1": "20k", "C1": "47n", "RX": "1k"},
-                },
+                SetComponentValueInput.model_validate(
+                    {
+                        "path": sample_netlist.name,
+                        "values": {"R1": "20k", "C1": "47n", "RX": "1k"},
+                    }
+                ),
                 state_no_sim,
             )
         # Nothing should have been written.
@@ -493,7 +601,9 @@ class TestSetComponentValue:
         without manual editing."""
         with pytest.raises(NetlistError, match="whitespace"):
             await handle_set_component_value(
-                {"path": sample_netlist.name, "reference": "R1", "value": "hello world"},
+                SetComponentValueInput.model_validate(
+                    {"path": sample_netlist.name, "reference": "R1", "value": "hello world"}
+                ),
                 state_no_sim,
             )
 
@@ -502,11 +612,13 @@ class TestSetComponentValue:
     ):
         """SPICE expressions in braces include spaces and must NOT be rejected."""
         await handle_set_component_value(
-            {
-                "path": sample_netlist.name,
-                "reference": "R1",
-                "value": "{ 1k * 2 }",
-            },
+            SetComponentValueInput.model_validate(
+                {
+                    "path": sample_netlist.name,
+                    "reference": "R1",
+                    "value": "{ 1k * 2 }",
+                }
+            ),
             state_no_sim,
         )
 
@@ -530,7 +642,9 @@ class TestSetComponentValue:
             ".END\n"
         )
         await handle_set_component_value(
-            {"path": cir.name, "reference": "M1", "value": "NMOS2 W=10u L=2u"},
+            SetComponentValueInput.model_validate(
+                {"path": cir.name, "reference": "M1", "value": "NMOS2 W=10u L=2u"}
+            ),
             state_no_sim,
         )
         text = cir.read_text()
@@ -549,17 +663,21 @@ class TestSetComponentValue:
 class TestEditDirective:
     async def test_add_directive(self, state_no_sim: SessionState, sample_netlist: Path):
         result = await handle_edit_directive(
-            {"path": sample_netlist.name, "action": "add", "instruction": ".tran 0 10m 0 1u"},
+            EditDirectiveInput.model_validate(
+                {"path": sample_netlist.name, "action": "add", "instruction": ".tran 0 10m 0 1u"}
+            ),
             state_no_sim,
         )
-        assert ".tran" in result.content[0].text
+        assert ".tran" in result_text(result)
 
     async def test_rejects_non_dot_directive(
         self, state_no_sim: SessionState, sample_netlist: Path
     ):
         with pytest.raises(NetlistError, match=r"must start with '\.'"):
             await handle_edit_directive(
-                {"path": sample_netlist.name, "action": "add", "instruction": "tran 0 10m"},
+                EditDirectiveInput.model_validate(
+                    {"path": sample_netlist.name, "action": "add", "instruction": "tran 0 10m"}
+                ),
                 state_no_sim,
             )
 
@@ -569,32 +687,31 @@ class TestEditDirective:
         # message pointing to the 'parameter' tool. Reproduces on .cir too.
         with pytest.raises(NetlistError, match="parameter"):
             await handle_edit_directive(
-                {"path": sample_netlist.name, "action": "add", "instruction": ".param foo=1"},
+                EditDirectiveInput.model_validate(
+                    {"path": sample_netlist.name, "action": "add", "instruction": ".param foo=1"}
+                ),
                 state_no_sim,
             )
         with pytest.raises(NetlistError, match="parameter"):
             await handle_edit_directive(
-                {"path": sample_netlist.name, "action": "add", "instruction": ".PARAM bar=2"},
+                EditDirectiveInput.model_validate(
+                    {"path": sample_netlist.name, "action": "add", "instruction": ".PARAM bar=2"}
+                ),
                 state_no_sim,
             )
 
-    async def test_edit_directive_description_mentions_param_refusal(
-        self, state_no_sim: SessionState
-    ):
-        # The registered tool description must steer callers away from adding a
-        # '.param' here and point them at the 'parameter' tool, since spicelib's
-        # add_instruction refuses .param with an opaque error.
-        edit_def = next(td for td in state_no_sim.tool_defs if td.name == "edit_directive")
-        desc = edit_def.description or ""
-        assert "param" in desc.lower()
-        assert "parameter" in desc
-
     async def test_remove_directive(self, state_no_sim: SessionState, sample_netlist: Path):
         result = await handle_edit_directive(
-            {"path": sample_netlist.name, "action": "remove", "instruction": ".ac dec 100 1 1Meg"},
+            EditDirectiveInput.model_validate(
+                {
+                    "path": sample_netlist.name,
+                    "action": "remove",
+                    "instruction": ".ac dec 100 1 1Meg",
+                }
+            ),
             state_no_sim,
         )
-        assert "Removed" in result.content[0].text
+        assert "Removed" in result_text(result)
 
     async def test_remove_literal_with_parens(self, state_no_sim: SessionState, work_dir: Path):
         """directives containing ``(``/``)`` (every .meas/.four
@@ -609,11 +726,15 @@ class TestEditDirective:
             ".four 1k V(in)\n.end\n"
         )
         await handle_edit_directive(
-            {"path": cir.name, "action": "remove", "instruction": ".meas tran v_avg AVG V(in)"},
+            EditDirectiveInput.model_validate(
+                {"path": cir.name, "action": "remove", "instruction": ".meas tran v_avg AVG V(in)"}
+            ),
             state_no_sim,
         )
         await handle_edit_directive(
-            {"path": cir.name, "action": "remove", "instruction": ".four 1k V(in)"},
+            EditDirectiveInput.model_validate(
+                {"path": cir.name, "action": "remove", "instruction": ".four 1k V(in)"}
+            ),
             state_no_sim,
         )
         body = cir.read_text()
@@ -628,7 +749,9 @@ class TestEditDirective:
         cir.write_text("* test\nV1 a 0 5\n.tran 1m\n.end\n")
         with pytest.raises(NetlistError, match="No directive or comment matched"):
             await handle_edit_directive(
-                {"path": cir.name, "action": "remove", "instruction": ".does_not_exist"},
+                EditDirectiveInput.model_validate(
+                    {"path": cir.name, "action": "remove", "instruction": ".does_not_exist"}
+                ),
                 state_no_sim,
             )
 
@@ -637,7 +760,9 @@ class TestEditDirective:
         cir = work_dir / "regex.cir"
         cir.write_text("* regex test\nV1 a 0 5\n.tran 1m\n.meas tran v_a MAX V(a)\n.end\n")
         await handle_edit_directive(
-            {"path": cir.name, "action": "remove", "instruction": "regex:^\\.meas .*"},
+            EditDirectiveInput.model_validate(
+                {"path": cir.name, "action": "remove", "instruction": "regex:^\\.meas .*"}
+            ),
             state_no_sim,
         )
         body = cir.read_text()
@@ -647,7 +772,9 @@ class TestEditDirective:
 @pytest.mark.asyncio
 class TestCreateSchematic:
     async def test_seeds_empty_asc(self, state_no_sim: SessionState, work_dir: Path):
-        result = await handle_create_schematic({"name": "seed"}, state_no_sim)
+        result = await handle_create_schematic(
+            CreateSchematicInput.model_validate({"name": "seed"}), state_no_sim
+        )
         out = work_dir / "seed.asc"
         assert out.exists()
         body = out.read_text()
@@ -656,14 +783,21 @@ class TestCreateSchematic:
         assert "seed.asc" in result.content[0].text
 
     async def test_custom_dimensions(self, state_no_sim: SessionState, work_dir: Path):
-        await handle_create_schematic({"name": "small", "width": 320, "height": 240}, state_no_sim)
+        await handle_create_schematic(
+            CreateSchematicInput.model_validate({"name": "small", "width": 320, "height": 240}),
+            state_no_sim,
+        )
         body = (work_dir / "small.asc").read_text()
         assert "SHEET 1 320 240" in body
 
     async def test_rejects_duplicate(self, state_no_sim: SessionState, work_dir: Path):
-        await handle_create_schematic({"name": "dup"}, state_no_sim)
+        await handle_create_schematic(
+            CreateSchematicInput.model_validate({"name": "dup"}), state_no_sim
+        )
         with pytest.raises(NetlistError, match="already exists"):
-            await handle_create_schematic({"name": "dup"}, state_no_sim)
+            await handle_create_schematic(
+                CreateSchematicInput.model_validate({"name": "dup"}), state_no_sim
+            )
 
 
 @pytest.mark.asyncio
@@ -671,7 +805,9 @@ class TestValidateNetlist:
     async def _validate(self, state: SessionState, work_dir: Path, name: str, content: str):
         """Write ``content`` to ``name``, validate it, return the data dict."""
         (work_dir / name).write_text(content)
-        result = await handle_validate_netlist({"path": name}, state)
+        result = await handle_validate_netlist(
+            ValidateNetlistInput.model_validate({"path": name}), state
+        )
         data = result.structuredContent
         assert data is not None
         return data
@@ -679,7 +815,9 @@ class TestValidateNetlist:
     async def test_clean_netlist(self, state_no_sim: SessionState, work_dir: Path):
         cir = work_dir / "clean.cir"
         cir.write_text("* clean\nVin in 0 1\nR1 in 0 1k\n.tran 0 1m\n.end\n")
-        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        result = await handle_validate_netlist(
+            ValidateNetlistInput.model_validate({"path": cir.name}), state_no_sim
+        )
         data = result.structuredContent
         assert data is not None
         assert data["issue_count"] == 0
@@ -704,8 +842,12 @@ class TestValidateNetlist:
     ):
         # The .asc branch validates the schematic's directive lines only —
         # a schematic with no SPICE directives is not an empty netlist.
-        await handle_create_schematic({"name": "blank"}, state_no_sim)
-        result = await handle_validate_netlist({"path": "blank.asc"}, state_no_sim)
+        await handle_create_schematic(
+            CreateSchematicInput.model_validate({"name": "blank"}), state_no_sim
+        )
+        result = await handle_validate_netlist(
+            ValidateNetlistInput.model_validate({"path": "blank.asc"}), state_no_sim
+        )
         data = result.structuredContent
         assert data is not None
         assert data["issue_count"] == 0, data["issues"]
@@ -792,12 +934,19 @@ class TestValidateNetlist:
         (work_dir / "tz.cir").write_text(
             "* tstep zero\nVin in 0 1\nR1 in 0 1k\n.tran 0 1m\n.end\n"
         )
-        d_lt = (await handle_validate_netlist({"path": "tz.cir"}, state_no_sim)).structuredContent
+        d_lt = (
+            await handle_validate_netlist(
+                ValidateNetlistInput.model_validate({"path": "tz.cir"}), state_no_sim
+            )
+        ).structuredContent
         assert d_lt is not None
         assert d_lt["issue_count"] == 0, d_lt["issues"]
         d_ng = (
             await handle_validate_netlist(
-                {"path": "tz.cir", "target_simulator": "ngspice"}, state_no_sim
+                ValidateNetlistInput.model_validate(
+                    {"path": "tz.cir", "target_simulator": "ngspice"}
+                ),
+                state_no_sim,
             )
         ).structuredContent
         assert d_ng is not None
@@ -812,12 +961,17 @@ class TestValidateNetlist:
             "* multi\nVin in 0 AC 1\nR1 in 0 1k\n.ac dec 10 1 1Meg\n.tran 1u 1m\n.end\n"
         )
         d_lt = (
-            await handle_validate_netlist({"path": "multi.cir"}, state_no_sim)
+            await handle_validate_netlist(
+                ValidateNetlistInput.model_validate({"path": "multi.cir"}), state_no_sim
+            )
         ).structuredContent
         assert any("analysis" in iss["message"].lower() for iss in d_lt["issues"]), d_lt["issues"]
         d_ng = (
             await handle_validate_netlist(
-                {"path": "multi.cir", "target_simulator": "ngspice"}, state_no_sim
+                ValidateNetlistInput.model_validate(
+                    {"path": "multi.cir", "target_simulator": "ngspice"}
+                ),
+                state_no_sim,
             )
         ).structuredContent
         assert not any(
@@ -835,11 +989,18 @@ class TestValidateNetlist:
             "* meas mismatch\nVin in 0 1\nR1 in out 1k\nC1 out 0 1n\n"
             ".tran 1u 1m\n.meas ac gain FIND V(out) AT 1k\n.end\n"
         )
-        d_lt = (await handle_validate_netlist({"path": "mm.cir"}, state_no_sim)).structuredContent
+        d_lt = (
+            await handle_validate_netlist(
+                ValidateNetlistInput.model_validate({"path": "mm.cir"}), state_no_sim
+            )
+        ).structuredContent
         assert any(".meas ac" in iss["message"] for iss in d_lt["issues"]), d_lt["issues"]
         d_ng = (
             await handle_validate_netlist(
-                {"path": "mm.cir", "target_simulator": "ngspice"}, state_no_sim
+                ValidateNetlistInput.model_validate(
+                    {"path": "mm.cir", "target_simulator": "ngspice"}
+                ),
+                state_no_sim,
             )
         ).structuredContent
         assert not any(".meas ac" in iss["message"] for iss in d_ng["issues"]), d_ng["issues"]
@@ -851,11 +1012,18 @@ class TestValidateNetlist:
         (work_dir / "cl.cir").write_text(
             "* cl keyed\nV1 a 0 1\nC1 a b C=10n\nL1 b 0 L=1u\n.tran 1u 1m\n.end\n"
         )
-        d_lt = (await handle_validate_netlist({"path": "cl.cir"}, state_no_sim)).structuredContent
+        d_lt = (
+            await handle_validate_netlist(
+                ValidateNetlistInput.model_validate({"path": "cl.cir"}), state_no_sim
+            )
+        ).structuredContent
         assert any("does not accept" in iss["message"] for iss in d_lt["issues"]), d_lt["issues"]
         d_ng = (
             await handle_validate_netlist(
-                {"path": "cl.cir", "target_simulator": "ngspice"}, state_no_sim
+                ValidateNetlistInput.model_validate(
+                    {"path": "cl.cir", "target_simulator": "ngspice"}
+                ),
+                state_no_sim,
             )
         ).structuredContent
         assert not any("does not accept" in iss["message"] for iss in d_ng["issues"]), d_ng[
@@ -884,7 +1052,9 @@ class TestValidateNetlist:
             "* bad meas\nVin in 0 AC 1\nR1 in 0 1k\n.ac dec 100 1 1Meg\n"
             ".meas ac fc WHEN vdb(out)=-3\n.end\n"
         )
-        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        result = await handle_validate_netlist(
+            ValidateNetlistInput.model_validate({"path": cir.name}), state_no_sim
+        )
         data = result.structuredContent
         assert data is not None
         assert data["issue_count"] >= 1
@@ -899,7 +1069,9 @@ class TestValidateNetlist:
             "R1 amp 0 1k\n"
             ".tran 0 1m\n.end\n"
         )
-        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        result = await handle_validate_netlist(
+            ValidateNetlistInput.model_validate({"path": cir.name}), state_no_sim
+        )
         data = result.structuredContent
         assert data is not None
         assert data["issue_count"] == 0
@@ -917,7 +1089,9 @@ class TestValidateNetlist:
             ".meas op v_op_a FIND V(a)\n"
             ".end\n"
         )
-        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        result = await handle_validate_netlist(
+            ValidateNetlistInput.model_validate({"path": cir.name}), state_no_sim
+        )
         data = result.structuredContent
         assert data is not None
         meas_op_issues = [iss for iss in data["issues"] if ".meas op" in iss["message"]]
@@ -928,7 +1102,9 @@ class TestValidateNetlist:
         """Inverse of the previous test: .meas op + .op is valid."""
         cir = work_dir / "meas_op_ok.cir"
         cir.write_text("V1 vdd 0 5\nR1 vdd a 1k\n.op\n.meas op v_op_a FIND V(a)\n.end\n")
-        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        result = await handle_validate_netlist(
+            ValidateNetlistInput.model_validate({"path": cir.name}), state_no_sim
+        )
         data = result.structuredContent
         assert data is not None
         assert not any(".meas op" in iss["message"] for iss in data["issues"])
@@ -943,7 +1119,9 @@ class TestValidateNetlist:
             ".ac dec 100 1 1Meg\n"
             ".meas tran v_max MAX V(out)\n.end\n"
         )
-        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        result = await handle_validate_netlist(
+            ValidateNetlistInput.model_validate({"path": cir.name}), state_no_sim
+        )
         data = result.structuredContent
         assert data is not None
         assert any(".meas tran" in iss["message"] for iss in data["issues"])
@@ -953,7 +1131,9 @@ class TestValidateNetlist:
         "More than one analysis specified." Catch it in the static gate."""
         cir = work_dir / "dup.cir"
         cir.write_text("* dup\nV1 a 0 5\nR1 a 0 1k\n.tran 1m\n.tran 2m\n.end\n")
-        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        result = await handle_validate_netlist(
+            ValidateNetlistInput.model_validate({"path": cir.name}), state_no_sim
+        )
         data = result.structuredContent
         assert data is not None
         assert any(
@@ -968,7 +1148,9 @@ class TestValidateNetlist:
         of failure for LTspice — flag it too."""
         cir = work_dir / "two_kinds.cir"
         cir.write_text("V1 a 0 AC 1\nR1 a 0 1k\n.tran 1m\n.ac dec 10 1 1k\n.end\n")
-        result = await handle_validate_netlist({"path": cir.name}, state_no_sim)
+        result = await handle_validate_netlist(
+            ValidateNetlistInput.model_validate({"path": cir.name}), state_no_sim
+        )
         data = result.structuredContent
         assert data is not None
         assert any("Multiple distinct" in iss["message"] for iss in data["issues"])
@@ -982,7 +1164,9 @@ class TestValidateNetlist:
             "* op+tran\nV1 a 0 PULSE(0 1 0 1u 1u 1m 2m)\nR1 a 0 1k\n.op\n.tran 1u 1m\n.end\n"
         )
         d1 = (
-            await handle_validate_netlist({"path": op_tran.name}, state_no_sim)
+            await handle_validate_netlist(
+                ValidateNetlistInput.model_validate({"path": op_tran.name}), state_no_sim
+            )
         ).structuredContent
         assert d1 is not None
         assert not any(
@@ -993,7 +1177,11 @@ class TestValidateNetlist:
         op_ac.write_text(
             "* op+ac\nV1 a 0 AC 1\nR1 a 0 1k\nC1 a 0 1u\n.op\n.ac dec 10 1 1k\n.end\n"
         )
-        d2 = (await handle_validate_netlist({"path": op_ac.name}, state_no_sim)).structuredContent
+        d2 = (
+            await handle_validate_netlist(
+                ValidateNetlistInput.model_validate({"path": op_ac.name}), state_no_sim
+            )
+        ).structuredContent
         assert d2 is not None
         assert not any(
             "Multiple distinct" in iss["message"] or "Duplicate analysis" in iss["message"]
@@ -1008,7 +1196,9 @@ class TestDiffCircuit:
         b = work_dir / "b.cir"
         a.write_text("* a\nR1 in out 1k\nC1 out 0 100n\n.end\n")
         b.write_text("* b\nR1 in out 4.7k\nC1 out 0 100n\n.end\n")
-        result = await handle_diff_circuit({"path_a": a.name, "path_b": b.name}, state_no_sim)
+        result = await handle_diff_circuit(
+            DiffCircuitInput.model_validate({"path_a": a.name, "path_b": b.name}), state_no_sim
+        )
         data = result.structuredContent
         assert data is not None
         changed = data["components_changed"]
@@ -1019,7 +1209,9 @@ class TestDiffCircuit:
         b = work_dir / "b.cir"
         a.write_text("* a\nR1 in out 1k\n.end\n")
         b.write_text("* b\nR1 in out 1k\nC1 out 0 100n\n.end\n")
-        result = await handle_diff_circuit({"path_a": a.name, "path_b": b.name}, state_no_sim)
+        result = await handle_diff_circuit(
+            DiffCircuitInput.model_validate({"path_a": a.name, "path_b": b.name}), state_no_sim
+        )
         data = result.structuredContent
         assert data is not None
         assert "C1" in [r.upper() for r in data["components_added"]]
@@ -1029,7 +1221,9 @@ class TestDiffCircuit:
         b = work_dir / "b.cir"
         a.write_text("* a\nR1 in out 1k\n.tran 0 1m\n.end\n")
         b.write_text("* b\nR1 in out 1k\n.ac dec 100 1 1Meg\n.end\n")
-        result = await handle_diff_circuit({"path_a": a.name, "path_b": b.name}, state_no_sim)
+        result = await handle_diff_circuit(
+            DiffCircuitInput.model_validate({"path_a": a.name, "path_b": b.name}), state_no_sim
+        )
         data = result.structuredContent
         assert data is not None
         assert any(".ac" in d for d in data["directives_added"])
@@ -1045,14 +1239,18 @@ class TestDiffCircuit:
         b = work_dir / "b.cir"
         a.write_text("* a\nR1 in out 1k\nC1 out 0 1u\n.end\n")
         b.write_text("* b\nR1 in out 1k\nC1 out 0 1µ\n.end\n")
-        result = await handle_diff_circuit({"path_a": a.name, "path_b": b.name}, state_no_sim)
+        result = await handle_diff_circuit(
+            DiffCircuitInput.model_validate({"path_a": a.name, "path_b": b.name}), state_no_sim
+        )
         data = result.structuredContent
         assert data is not None
         assert data["components_changed"] == [], data["components_changed"]
 
         # Guard: a genuine magnitude change is still reported.
         b.write_text("* b\nR1 in out 1k\nC1 out 0 2u\n.end\n")
-        result2 = await handle_diff_circuit({"path_a": a.name, "path_b": b.name}, state_no_sim)
+        result2 = await handle_diff_circuit(
+            DiffCircuitInput.model_validate({"path_a": a.name, "path_b": b.name}), state_no_sim
+        )
         data2 = result2.structuredContent
         assert data2 is not None
         assert any(c["reference"].upper() == "C1" for c in data2["components_changed"]), data2[
@@ -1069,7 +1267,9 @@ class TestDiffCircuit:
         b = work_dir / "b.cir"
         a.write_text("* a\nR1 in out 1k\n.op\n.end\n")
         b.write_text("* b\nR1 in out 1k\n.op\n")  # no .END terminator
-        result = await handle_diff_circuit({"path_a": a.name, "path_b": b.name}, state_no_sim)
+        result = await handle_diff_circuit(
+            DiffCircuitInput.model_validate({"path_a": a.name, "path_b": b.name}), state_no_sim
+        )
         data = result.structuredContent
         assert data is not None
         assert not any(d.strip().lower() == ".end" for d in data["directives_removed"])
@@ -1090,7 +1290,8 @@ class TestDiffCircuit:
         broken = work_dir / "broken.asc"
         broken.write_text("this is not a schematic file at all\n")
         result = await handle_diff_circuit(
-            {"path_a": good.name, "path_b": broken.name}, state_no_sim
+            DiffCircuitInput.model_validate({"path_a": good.name, "path_b": broken.name}),
+            state_no_sim,
         )
         data = result.structuredContent
         assert data is not None
@@ -1272,7 +1473,9 @@ class TestSetComponentNodes:
         cir = work_dir / "rewire.cir"
         cir.write_text("* rewire\nR1 in outt 1k\nC1 outt 0 1n\n.END\n")
         await handle_set_component_value(
-            {"path": cir.name, "reference": "R1", "nodes": ["in", "out"]},
+            SetComponentValueInput.model_validate(
+                {"path": cir.name, "reference": "R1", "nodes": ["in", "out"]}
+            ),
             state_no_sim,
         )
         text = cir.read_text()
@@ -1286,14 +1489,16 @@ class TestSetComponentNodes:
         cir = work_dir / "src.cir"
         cir.write_text("* src\nV1 a 0 PULSE(0 5 0 1n 1n 1m 2m)\nR1 a 0 1k\n.END\n")
         result = await handle_set_component_value(
-            {"path": cir.name, "reference": "V1", "nodes": ["in", "0"]},
+            SetComponentValueInput.model_validate(
+                {"path": cir.name, "reference": "V1", "nodes": ["in", "0"]}
+            ),
             state_no_sim,
         )
         text = cir.read_text()
         assert "V1 in 0 PULSE(0 5 0 1n 1n 1m 2m)" in text
         # The before/after message reports the real terminals only — the source
         # function token (PULSE) must not show up as a pseudo-node.
-        msg = result.content[0].text
+        msg = result_text(result)
         assert "PULSE" not in msg
         assert "[a 0] -> [in 0]" in msg
 
@@ -1302,7 +1507,9 @@ class TestSetComponentNodes:
         cir.write_text("* few\nR1 in 0 1k\n.END\n")
         with pytest.raises(NetlistError, match="2 node"):
             await handle_set_component_value(
-                {"path": cir.name, "reference": "R1", "nodes": ["in"]},
+                SetComponentValueInput.model_validate(
+                    {"path": cir.name, "reference": "R1", "nodes": ["in"]}
+                ),
                 state_no_sim,
             )
 
@@ -1315,7 +1522,9 @@ class TestSetComponentNodes:
         cir.write_text("* bjt\nQ1 c b e NPNMOD\nVCC c 0 5\n.op\n.END\n")
         with pytest.raises(NetlistError, match="edit the card directly"):
             await handle_set_component_value(
-                {"path": cir.name, "reference": "Q1", "nodes": ["x", "y", "z"]},
+                SetComponentValueInput.model_validate(
+                    {"path": cir.name, "reference": "Q1", "nodes": ["x", "y", "z"]}
+                ),
                 state_no_sim,
             )
 
@@ -1326,7 +1535,9 @@ class TestSetComponentNodes:
         asc.write_text("Version 4\nSHEET 1 880 680\nSYMBOL res 100 100 R0\nSYMATTR InstName R1\n")
         with pytest.raises(NetlistError, match="wire_pins"):
             await handle_set_component_value(
-                {"path": asc.name, "reference": "R1", "nodes": ["in", "out"]},
+                SetComponentValueInput.model_validate(
+                    {"path": asc.name, "reference": "R1", "nodes": ["in", "out"]}
+                ),
                 state_no_sim,
             )
 
@@ -1335,7 +1546,9 @@ class TestSetComponentNodes:
         cir.write_text("* both\nR1 in 0 1k\n.END\n")
         with pytest.raises(NetlistError, match="separate call"):
             await handle_set_component_value(
-                {"path": cir.name, "reference": "R1", "value": "2k", "nodes": ["a", "b"]},
+                SetComponentValueInput.model_validate(
+                    {"path": cir.name, "reference": "R1", "value": "2k", "nodes": ["a", "b"]}
+                ),
                 state_no_sim,
             )
 
@@ -1347,10 +1560,12 @@ class TestSetComponentValueNoOp:
         cir = work_dir / "noop.cir"
         cir.write_text("* noop\nC1 in 0 159n\n.END\n")
         result = await handle_set_component_value(
-            {"path": cir.name, "reference": "C1", "value": "159n"},
+            SetComponentValueInput.model_validate(
+                {"path": cir.name, "reference": "C1", "value": "159n"}
+            ),
             state_no_sim,
         )
-        assert "unchanged" in result.content[0].text
+        assert "unchanged" in result_text(result)
 
 
 @pytest.mark.asyncio
@@ -1358,7 +1573,9 @@ class TestCreateNetlistSubpath:
     async def test_relative_subpath_creates_dirs(self, state_no_sim: SessionState, work_dir: Path):
         # The name field accepts a relative subpath; parent dirs are created.
         await handle_create_netlist(
-            {"name": "sub/dir/rc", "content": "* x\nR1 in 0 1k\n.END\n"},
+            CreateNetlistInput.model_validate(
+                {"name": "sub/dir/rc", "content": "* x\nR1 in 0 1k\n.END\n"}
+            ),
             state_no_sim,
         )
         assert (work_dir / "sub" / "dir" / "rc.cir").exists()

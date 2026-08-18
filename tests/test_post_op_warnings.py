@@ -19,6 +19,7 @@ from ltspice_mcp.tools.circuit import (
     AddComponentInput,
     ApplySchematicOpsInput,
     CreateSchematicInput,
+    ListComponentsInput,
     MoveComponentInput,
     RemoveComponentInput,
     WaypointInput,
@@ -532,7 +533,9 @@ class TestApplySchematicOpsRollback:
         monkeypatch.undo()
         from ltspice_mcp.tools.circuit import handle_list_components
 
-        result = await handle_list_components({"path": "rollback.asc"}, asc_state)
+        result = await handle_list_components(
+            ListComponentsInput.model_validate({"path": "rollback.asc"}), asc_state
+        )
         text = result.content[0].text  # type: ignore[union-attr]
         assert "R1" not in text
         assert "R2" not in text
