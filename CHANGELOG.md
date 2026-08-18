@@ -213,6 +213,13 @@ the module from v0.5.x or git history first.
 
 ### Changed
 
+- Three `analyze_results` recipes that no recorded workload has ever called —
+  `noise_integral`, `periodic`, `return_loss` — now advertise only their
+  `metric` and a one-line pointer on the wire (~700 chars off the schema every
+  session loads). They remain fully callable with every field they had; the
+  full argument trees live in `api.reference('analyze_results')` and the
+  `spice://guide` resource, and sealed schema probes confirmed intent-phrased
+  tasks still route to all three directly.
 - `import ltspice_mcp.api` and `Api()` boot lazily: the package `__init__` is
   a PEP 562 lazy table, `SessionState` builds its tool surface on first
   access, the API method layer resolves tool modules through deferred
