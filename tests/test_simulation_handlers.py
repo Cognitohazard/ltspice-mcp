@@ -429,29 +429,20 @@ class TestSimResultSchemaDeclarations:
     disappear from the tool's introspectable contract."""
 
     def test_check_job_declares_suggestions_and_job_type(self):
-        from ltspice_mcp.tools import get_tools_for_profile
-
-        _, dispatch = get_tools_for_profile("full")
-        schema = dispatch["check_job"].definition.outputSchema
+        schema = getattr(handle_check_job, "__output_schema__", None)
         assert schema is not None
         props = schema["properties"]
         assert "suggestions" in props
         assert "job_type" in props["jobs"]["items"]["properties"]
 
     def test_run_simulation_declares_suggestions(self):
-        from ltspice_mcp.tools import get_tools_for_profile
-
-        _, dispatch = get_tools_for_profile("full")
-        schema = dispatch["run_simulation"].definition.outputSchema
+        schema = getattr(handle_run_simulation, "__output_schema__", None)
         assert schema is not None
         assert "suggestions" in schema["properties"]
 
     def test_run_simulation_and_check_job_declare_output_alias_fields(self):
-        from ltspice_mcp.tools import get_tools_for_profile
-
-        _, dispatch = get_tools_for_profile("full")
-        for tool_name in ("run_simulation", "check_job"):
-            schema = dispatch[tool_name].definition.outputSchema
+        for handler in (handle_run_simulation, handle_check_job):
+            schema = getattr(handler, "__output_schema__", None)
             assert schema is not None
             assert "output_alias_raw" in schema["properties"]
             assert "output_alias_log" in schema["properties"]
@@ -698,7 +689,7 @@ class TestCancelJobBatch:
         # through the real get_batch_runner_for, not most-recent-of-kind.
         state_with_sim.runners._runners[("sweep", MagicMock, Path("/tmp"))] = fake_runner
         result = await handle_cancel_job(CancelJobInput(job_id="sweep_live"), state_with_sim)
-        assert "cancelled" in result.content[0].text.lower()
+        assert "cancelled" in _text_of(result).lower()
         fake_runner.cancel.assert_awaited_once()
         # The batch job itself (resolved from batch_jobs) was handed to the runner.
         assert fake_runner.cancel.await_args.args[0] is bj
@@ -719,7 +710,7 @@ class TestCancelJobBatch:
         fake_runner.cancel = AsyncMock()
         state_with_sim.runners._runners[("mc", MagicMock, Path("/tmp"))] = fake_runner
         result = await handle_cancel_job(CancelJobInput(job_id="mc_live"), state_with_sim)
-        assert "cancelled" in result.content[0].text.lower()
+        assert "cancelled" in _text_of(result).lower()
         fake_runner.cancel.assert_awaited_once()
 
     async def test_cancel_batch_runner_gone_raises(self, state_with_sim: SessionState):
@@ -1075,7 +1066,7 @@ class TestRunSimulationStubbed:
                 RunSimulationInput(netlist=sample_netlist.name, timeout=5, wait=False),
                 state_with_sim,
             )
-        assert "cancelled" in result.content[0].text.lower()
+        assert "cancelled" in _text_of(result).lower()
 
     async def test_fast_run_returns_inline_despite_long_timeout(
         self, state_with_sim: SessionState, sample_netlist: Path, work_dir: Path

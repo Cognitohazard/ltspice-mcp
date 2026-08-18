@@ -15,7 +15,7 @@ from ltspice_mcp.errors import (
     PathSecurityError,
 )
 from ltspice_mcp.server import (
-    SERVER_INSTRUCTIONS,
+    CONSOLIDATED_INSTRUCTIONS,
     _get_error_hint,
     build_instructions,
     call_tool,
@@ -29,39 +29,36 @@ from tests.conftest import _FakeServer
 
 
 class TestGetErrorHint:
-    def test_known_full(self):
-        hint = _get_error_hint(NetlistError, "full")
+    def test_known_types_have_hints(self):
+        hint = _get_error_hint(NetlistError)
         assert hint is not None
-        assert "read_circuit" in hint
-
-    def test_known_agentic(self):
-        hint = _get_error_hint(LibraryError, "agentic")
-        assert hint is not None
+        assert "verify_circuit" in hint
+        assert _get_error_hint(LibraryError) is not None
 
     def test_unknown_returns_none(self):
         class FakeErr(LTSpiceMCPError):
             pass
 
-        assert _get_error_hint(FakeErr, "full") is None
+        assert _get_error_hint(FakeErr) is None
 
 
 class TestServerInstructions:
     def test_instructions_forwarded_to_init_options(self):
         # The block must reach the client at the MCP initialize handshake.
         opts = server.create_initialization_options()
-        assert opts.instructions == SERVER_INSTRUCTIONS
+        assert opts.instructions == CONSOLIDATED_INSTRUCTIONS
         assert opts.instructions  # non-empty
 
     def test_instructions_cover_key_workflow_guidance(self):
-        text = SERVER_INSTRUCTIONS
-        # netlist-first default + the asc-build doctrine
-        assert "netlist" in text.lower()
-        assert "apply_schematic_ops" in text
-        # analysis-tool/run-type pairing + the result-trust guardrail
-        assert "operating_point" in text and "bode_metrics" in text
-        assert "completed" in text
-        # must name only tools present in BOTH profiles (create_netlist is full-only)
-        assert "create_netlist" not in text
+        text = CONSOLIDATED_INSTRUCTIONS
+        # deck-authoring default + the three planes + the result-trust tail
+        assert "deck" in text.lower()
+        assert "run_experiments" in text and "analyze_results" in text
+        assert "edit_schematic" in text
+        assert "completed is not correct" in text
+        # must name no tool the surface does not expose
+        for dead in ("run_simulation", "check_job", "bode_metrics", "create_netlist"):
+            assert dead not in text
 
 
 class _LT:
@@ -76,7 +73,7 @@ class TestBuildInstructions:
     """The runtime-prepended line must name the actually-detected simulators."""
 
     def test_includes_static_body(self):
-        assert SERVER_INSTRUCTIONS in build_instructions({"ngspice": _NG}, _NG)
+        assert CONSOLIDATED_INSTRUCTIONS in build_instructions({"ngspice": _NG}, _NG)
 
     def test_none_detected(self):
         text = build_instructions({}, None)
@@ -150,17 +147,31 @@ class TestProfileGuidanceIsTotal:
 
         assert set(_PROFILE_GUIDANCE) == VALID_PROFILES
 
-    def test_error_hint_fields_are_the_profiles(self):
-        from ltspice_mcp.server import _ErrorHint
+    def test_every_hint_names_only_exposed_tools(self):
+        from ltspice_mcp.server import _ERROR_HINTS
+        from ltspice_mcp.tools import get_tools_for_profile
 
-        assert set(_ErrorHint._fields) == VALID_PROFILES
-
-    @pytest.mark.parametrize("profile", sorted(VALID_PROFILES))
-    def test_every_profile_gets_its_own_hint(self, profile: str):
-        from ltspice_mcp.server import _ERROR_HINTS, _get_error_hint
-
+        exposed = {t.name for t in get_tools_for_profile("consolidated")[0]}
+        # Hints may reference an exposed tool by name; they must never
+        # reference a removed one (the shape of the stale-hint bug).
+        removed = {
+            "check_job",
+            "server_status",
+            "list_libraries",
+            "load_library",
+            "read_circuit",
+            "list_components",
+            "simulation_summary",
+            "find_model",
+        }
         for err_type, hint in _ERROR_HINTS.items():
-            assert _get_error_hint(err_type, profile) == getattr(hint, profile)
+            assert isinstance(hint, str) and hint
+            assert not (set(hint.replace("(", " ").replace('"', " ").split()) & removed), (
+                f"{err_type.__name__} hint names a removed tool: {hint}"
+            )
+            assert any(tool in hint for tool in exposed), (
+                f"{err_type.__name__} hint names no exposed tool: {hint}"
+            )
 
 
 class TestConfigureAscEditor:
@@ -264,35 +275,29 @@ class TestServerDispatch:
         ):
             await call_tool("ltspice_nonexistent", {})
 
-    async def test_call_profile_filtered_tool(self, config: ServerConfig):
-        """A real tool hidden by the active profile must name the profile knob,
-        not just say 'Unknown tool' — otherwise the agent has no recovery path.
-        """
-        config.tool_profile = "agentic"  # hides the netlist-editing wrappers
-        state = SessionState.create(config, available={})
-        assert "create_netlist" not in state.tool_dispatch  # precondition
+    async def test_call_removed_tool_is_unknown(self, state_no_sim: SessionState):
+        """A 0.5-era tool name is gone from the registry entirely — the wire
+        answers 'Unknown tool', the same as any other unknown name (migration
+        guidance lives in the config warning and the docs)."""
         with (
-            patch("ltspice_mcp.server.server", _FakeServer(state)),
-            pytest.raises(ValueError, match="hidden by the active tool profile") as excinfo,
+            patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)),
+            pytest.raises(ValueError, match="Unknown tool"),
         ):
-            await call_tool("create_netlist", {})
-        msg = str(excinfo.value)
-        assert "hidden by the active tool profile" in msg
-        assert "LTSPICE_MCP_TOOL_PROFILE" in msg
+            await call_tool("run_simulation", {"netlist": "x.cir"})
 
     async def test_call_validation_error(self, state_no_sim: SessionState):
         with (
             patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)),
             pytest.raises(ValueError, match="Invalid arguments"),
         ):
-            await call_tool("create_netlist", {"missing": "field"})
+            await call_tool("run_experiments", {"missing": "field"})
 
     async def test_call_path_security_error(self, state_no_sim: SessionState):
         with (
             patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)),
             pytest.raises(PathSecurityError) as excinfo,
         ):
-            await call_tool("read_circuit", {"path": "/etc/passwd"})
+            await call_tool("plot_waveform", {"raw_file": "/etc/passwd"})
         msg = str(excinfo.value)
         assert "Allowed paths" in msg
         # The agent can't self-widen the sandbox, so the message must name the
@@ -301,13 +306,16 @@ class TestServerDispatch:
         assert "ask the user" in msg
 
     async def test_call_ltspice_error_with_hint(self, state_no_sim: SessionState):
+        from ltspice_mcp.errors import ResultError
+
         with (
             patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)),
-            pytest.raises(NetlistError) as excinfo,
+            pytest.raises(ResultError) as excinfo,
         ):
-            await call_tool("read_circuit", {"path": "missing.cir"})
+            await call_tool("plot_waveform", {"raw_file": "missing.raw"})
         msg = str(excinfo.value)
-        assert "read_circuit" in msg or "list_components" in msg
+        # The appended recovery hint names only exposed tools.
+        assert "jobs" in msg or "analyze_results" in msg
 
     async def test_list_resources(self, state_no_sim: SessionState):
         with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)):
@@ -354,8 +362,8 @@ class TestServerDispatch:
     ):
         """LibraryError with suggestions should surface as isError=True + structuredContent.
 
-        ``model_info`` was folded into ``find_model``, so this exercises the
-        same fuzzy-match suggestion path through ``find_model`` instead.
+        The fuzzy-match suggestion path now lives behind inspect's model
+        search query.
         """
         from mcp import types as mcp_types
 
@@ -364,14 +372,18 @@ class TestServerDispatch:
         state_no_sim.libraries.load_library(lib)
 
         with patch("ltspice_mcp.server.server", _FakeServer(state_no_sim)):
-            result = await call_tool("find_model", {"name": "2N2223"})
+            result = await call_tool(
+                "inspect",
+                {"queries": [{"kind": "model", "mode": "search", "query": "2N2223"}]},
+            )
         assert isinstance(result, mcp_types.CallToolResult)
-        # find_model returns success with fuzzy matches rather than an error
-        # — assert the candidate is still surfaced.
+        # The model search returns success with fuzzy matches rather than an
+        # error — assert the near-miss candidate is still surfaced.
         assert result.isError is False
         assert result.structuredContent is not None
-        names = [r["name"] for r in result.structuredContent["results"]]
-        assert "2N2222" in names
+        item = result.structuredContent["results"][0]
+        assert item["ok"] is True
+        assert "2N2222" in str(item["data"])
 
 
 class TestClientLogLevelFilter:
@@ -438,15 +450,26 @@ class TestStderrIsQuietByDefault:
         assert "Server Starting" in emitted
 
 
-class TestConfigureToolAnnotationHonesty:
-    def test_configure_tools_not_marked_idempotent(self):
-        # Every call mints a fresh config_id (MC additionally draws fresh
-        # entropy with seed=None), so an auto-retrying client must not treat
-        # these as idempotent.
+class TestToolAnnotationHonesty:
+    def test_mutating_tools_not_marked_idempotent(self):
+        # edit_schematic mutates a sheet (revision-guarded, but each call
+        # advances it) and plot_waveform mints a fresh artifact — an
+        # auto-retrying client must not treat either as idempotent. The
+        # request_id-keyed and read-only tools ARE idempotent and say so.
         from ltspice_mcp.tools._base import registry
 
-        for tool_name in ("configure_sweep", "configure_montecarlo"):
-            reg = registry.get_for_profile("full")[1][tool_name]
-            annotations = reg.definition.annotations
+        dispatch = registry.get_for_profile("consolidated")[1]
+        expected = {
+            "edit_schematic": False,
+            "plot_waveform": False,
+            "run_experiments": True,
+            "jobs": True,
+            "analyze_results": True,
+            "verify_circuit": True,
+            "inspect": True,
+        }
+        assert set(expected) == set(dispatch)
+        for tool_name, idempotent in expected.items():
+            annotations = dispatch[tool_name].definition.annotations
             assert annotations is not None
-            assert annotations.idempotentHint is False, tool_name
+            assert annotations.idempotentHint is idempotent, tool_name

@@ -80,6 +80,22 @@ class TestLoadLibrary:
         assert info is not None
         assert info["type"] == ".SUBCKT"
 
+    def test_directory_scan_discovers_stock_component_decks(
+        self, empty_manager: LibraryManager, tmp_path: Path
+    ):
+        # LTspice ships its stock component models as ``.bjt`` / ``.mos`` /
+        # ``.dio`` / ``.jft`` decks under lib/cmp. Regression: the directory
+        # scan globbed only ``*.lib``/``*.mod``, so pointing it at cmp/ found
+        # nothing and raised "No library files found".
+        d = tmp_path / "cmp"
+        d.mkdir()
+        (d / "standard.bjt").write_text(".MODEL QSTD NPN(BF=100)\n")
+        (d / "standard.mos").write_text(".MODEL MSTD NMOS(KP=2e-5)\n")
+        summary = empty_manager.load_library(d)
+        assert summary["files_loaded"] == 2
+        assert summary["models"] == 2
+        assert empty_manager.get_model_info("QSTD", include_builtin=False) is not None
+
     def test_load_encrypted_only_dir_reports_encrypted_not_error(
         self, empty_manager: LibraryManager, tmp_path: Path
     ):
@@ -218,6 +234,28 @@ class TestFindSimilarModels:
         empty_manager.load_library(fuzzy_lib)
         results = empty_manager.find_similar_models("lm741")
         assert any(r["name"] == "LM741" for r in results)
+
+    def test_exact_returns_the_one_name_at_full_score(
+        self, empty_manager: LibraryManager, fuzzy_lib: Path
+    ):
+        empty_manager.load_library(fuzzy_lib)
+        results = empty_manager.find_similar_models("2N3904", exact=True)
+        assert len(results) == 1
+        assert results[0]["name"] == "2N3904"
+        assert results[0]["score"] == 1.0
+
+    def test_exact_is_case_insensitive(self, empty_manager: LibraryManager, fuzzy_lib: Path):
+        empty_manager.load_library(fuzzy_lib)
+        results = empty_manager.find_similar_models("2n3904", exact=True)
+        assert [r["name"] for r in results] == ["2N3904"]
+
+    def test_exact_does_not_fall_back_to_fuzzy(
+        self, empty_manager: LibraryManager, fuzzy_lib: Path
+    ):
+        # A near miss is exactly what exact=True exists to reject — 2N3905
+        # fuzzy-matches two stocked parts, and must still return nothing.
+        empty_manager.load_library(fuzzy_lib)
+        assert empty_manager.find_similar_models("2N3905", exact=True) == []
 
     def test_cutoff_filters(self, empty_manager: LibraryManager, fuzzy_lib: Path):
         empty_manager.load_library(fuzzy_lib)

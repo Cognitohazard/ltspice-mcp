@@ -482,10 +482,6 @@ class RegisteredTool:
     handler: Callable
     input_model: type[ToolInput] | None
     profiles: frozenset[str]
-    # Deprecated former names that still dispatch to this tool but are NOT
-    # advertised in the tool list (keeps a rename back-compatible without
-    # growing the tool surface).
-    aliases: frozenset[str] = frozenset()
 
 
 # JSON Schema keywords whose value is a map from caller-visible NAMES to
@@ -893,36 +889,49 @@ def schema_from_typeddict(td: type) -> dict[str, Any]:
     return schema
 
 
+def _declare_warnings_key(schema: dict[str, Any]) -> dict[str, Any]:
+    """Declare the ``warnings`` key any payload can grow.
+
+    ``sanitize_payload`` injects a top-level ``warnings`` list into ANY
+    tool's payload the moment a float in it is non-finite — reachable
+    through raw waveform samples on a diverged run. A schema that closes
+    itself with ``additionalProperties: false`` and does not declare the key
+    therefore rejects its own response exactly when a run went wrong, and a
+    strict client rejects the whole ``tools/list`` over one such schema,
+    disabling every tool on the server.
+
+    Declared here because this is the schema choke point, mirroring the
+    response choke point that adds the key: per-tool declarations put the
+    two in different places and let each new tool omit it silently. Both
+    schema doors pass through it: ``@registry.tool`` and
+    ``declare_output_schema``.
+
+    Edits the schema in place and returns it, so a module's exported
+    ``*_OUTPUT_SCHEMA`` constant IS the schema clients are served — a copy
+    would leave the two able to disagree, which is the drift this exists to
+    remove. A schema that already declares ``warnings`` is left alone.
+    """
+    properties = schema.setdefault("properties", {})
+    properties.setdefault("warnings", WARNINGS_SCHEMA)
+    return schema
+
+
+def _stamp_output_schema(fn: Callable, schema: dict[str, Any]) -> None:
+    """Stamp a handler's structuredContent contract onto the handler itself.
+
+    The single choke point for the "contract belongs to the handler" doctrine:
+    both ``@registry.tool`` and ``declare_output_schema`` stamp through here.
+    Written via ``__dict__`` because a plain attribute assignment on a function
+    is a pyright error, and ruff auto-rewrites ``setattr()`` back into one.
+    """
+    fn.__dict__["__output_schema__"] = schema
+
+
 class ToolRegistry:
     """Registry for tool definitions and handlers."""
 
     def __init__(self) -> None:
         self._registered: list[RegisteredTool] = []
-
-    @staticmethod
-    def _declare_warnings_key(schema: dict[str, Any]) -> dict[str, Any]:
-        """Declare the ``warnings`` key any payload can grow.
-
-        ``sanitize_payload`` injects a top-level ``warnings`` list into ANY
-        tool's payload the moment a float in it is non-finite — reachable
-        through raw waveform samples on a diverged run. A schema that closes
-        itself with ``additionalProperties: false`` and does not declare the key
-        therefore rejects its own response exactly when a run went wrong, and a
-        strict client rejects the whole ``tools/list`` over one such schema,
-        disabling every tool on the server.
-
-        Declared here because this is the schema choke point, mirroring the
-        response choke point that adds the key: per-tool declarations put the
-        two in different places and let each new tool omit it silently.
-
-        Edits the schema in place and returns it, so a module's exported
-        ``*_OUTPUT_SCHEMA`` constant IS the schema clients are served — a copy
-        would leave the two able to disagree, which is the drift this exists to
-        remove. A schema that already declares ``warnings`` is left alone.
-        """
-        properties = schema.setdefault("properties", {})
-        properties.setdefault("warnings", WARNINGS_SCHEMA)
-        return schema
 
     def tool(
         self,
@@ -935,7 +944,6 @@ class ToolRegistry:
         output_schema: dict[str, Any] | None = None,
         output_model: type | None = None,
         meta: dict[str, Any] | None = None,
-        aliases: tuple[str, ...] = (),
     ) -> Callable[[Callable], Callable]:
         """Register a tool and derive its schema from the input model.
 
@@ -973,16 +981,27 @@ class ToolRegistry:
                 "annotations": annotations,
             }
             if output_model is not None:
-                definition_kwargs["outputSchema"] = self._declare_warnings_key(
+                definition_kwargs["outputSchema"] = _declare_warnings_key(
                     schema_from_typeddict(output_model)
                 )
             elif output_schema is not None:
-                definition_kwargs["outputSchema"] = self._declare_warnings_key(output_schema)
+                definition_kwargs["outputSchema"] = _declare_warnings_key(output_schema)
 
             definition = types.Tool(**definition_kwargs)
             if meta is not None:
                 # ``meta`` is the field name; serializes by alias to ``_meta``.
                 definition.meta = meta
+
+            # The structuredContent contract belongs to the handler, not to
+            # its registration: stamp it on both the original handler (whose
+            # code object is the emitting stack frame) and the returned
+            # wrapper (the module-visible name), so the test suite's
+            # conformance hook attributes emissions uniformly for registered
+            # tools and unregistered adapters alike (see
+            # declare_output_schema).
+            if definition.outputSchema is not None:
+                _stamp_output_schema(handler, definition.outputSchema)
+                _stamp_output_schema(wrapped, definition.outputSchema)
 
             self._registered.append(
                 RegisteredTool(
@@ -990,26 +1009,15 @@ class ToolRegistry:
                     handler=wrapped,
                     input_model=input_model,
                     profiles=frozenset(profiles),
-                    aliases=frozenset(aliases),
                 )
             )
             return wrapped
 
         return decorator
 
-    def known_names(self) -> set[str]:
-        """All registered tool names, across every profile (for diagnostics).
-
-        Lets the dispatcher tell a profile-filtered tool (exists, hidden by the
-        active profile) apart from a genuinely unknown name.
-        """
-        return {rt.definition.name for rt in self._registered} | {
-            a for rt in self._registered for a in rt.aliases
-        }
-
     def field_owners_for_profile(self, profile: str) -> dict[str, tuple[str, ...]]:
         """Map advertised top-level wire fields to tools in one profile."""
-        effective_profile = profile if profile in VALID_PROFILES else "full"
+        effective_profile = profile if profile in VALID_PROFILES else "consolidated"
         owners: dict[str, list[str]] = {}
         for registered in self._registered:
             if effective_profile not in registered.profiles:
@@ -1021,7 +1029,7 @@ class ToolRegistry:
 
     def get_for_profile(self, profile: str) -> tuple[list[types.Tool], dict[str, RegisteredTool]]:
         """Return the tool list and dispatch map for a profile."""
-        effective_profile = profile if profile in VALID_PROFILES else "full"
+        effective_profile = profile if profile in VALID_PROFILES else "consolidated"
         tool_defs: list[types.Tool] = []
         tool_dispatch: dict[str, RegisteredTool] = {}
         for registered in self._registered:
@@ -1038,22 +1046,49 @@ class ToolRegistry:
                     definition = definition.model_copy(update={"outputSchema": None})
                 tool_defs.append(definition)
                 tool_dispatch[registered.definition.name] = registered
-        # Second pass: deprecated aliases dispatch to their tool but are not
-        # listed in tool_defs. Done AFTER all definition names so a real tool
-        # name always wins; a collision with a real name or another tool's
-        # alias is a registration bug we surface loudly, never silently drop.
-        for registered in self._registered:
-            if effective_profile not in registered.profiles:
-                continue
-            for alias in registered.aliases:
-                existing = tool_dispatch.get(alias)
-                if existing is not None and existing is not registered:
-                    raise ValueError(
-                        f"Alias {alias!r} of tool {registered.definition.name!r} collides "
-                        f"with an existing tool name or alias ({existing.definition.name!r})"
-                    )
-                tool_dispatch[alias] = registered
+        if not tool_defs:
+            # A resolved profile with zero tools would complete the MCP
+            # handshake while advertising nothing — a working connection to an
+            # empty server, which every client reads as "no capabilities"
+            # rather than "misconfigured". Fail loudly instead.
+            raise RuntimeError(
+                f"Tool profile {effective_profile!r} resolved to zero tools — "
+                "registration is broken or the profile name no longer exists"
+            )
         return tool_defs, tool_dispatch
+
+
+def declare_output_schema(
+    output_schema: dict[str, Any] | None = None,
+    *,
+    output_model: type | None = None,
+) -> Callable[[Callable], Callable]:
+    """Declare the structuredContent contract of an unregistered handler.
+
+    ``@registry.tool`` stamps ``__output_schema__`` on the handler it
+    registers; this decorator stamps the same attribute on an internal
+    adapter — a de-registered tool handler that a consolidated tool delegates
+    to. The test suite's conformance hook validates every structuredContent
+    emission at the first stack frame carrying the attribute, so a delegated
+    emission is checked against the ADAPTER's contract instead of falling
+    through to the delegating tool's envelope. Re-exposing an adapter as an
+    MCP tool is a decorator swap back to ``@registry.tool(...)``.
+
+    Accepts either a hand-written schema dict or a TypedDict ``output_model``
+    (mutually exclusive), resolved exactly as ``registry.tool`` resolves them,
+    including the shared ``warnings``-key declaration.
+    """
+    if (output_schema is None) == (output_model is None):
+        raise ValueError("supply exactly one of output_schema or output_model")
+    schema = schema_from_typeddict(output_model) if output_model is not None else output_schema
+    assert schema is not None
+    resolved = _declare_warnings_key(schema)
+
+    def decorator(handler: Callable) -> Callable:
+        _stamp_output_schema(handler, resolved)
+        return handler
+
+    return decorator
 
 
 registry = ToolRegistry()

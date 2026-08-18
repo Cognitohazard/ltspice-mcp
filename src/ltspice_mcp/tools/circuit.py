@@ -76,18 +76,17 @@ from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
     PAGINATION_SCHEMA,
     PIN_SCHEMA,
-    RO_ANNOTATIONS,
     VALIDATION_WARNINGS_SCHEMA,
     WARNINGS_SCHEMA,
     StrictModel,
     ToolInput,
     asc_export_lock,
     circuit_file_lock,
+    declare_output_schema,
     format_response,
     paginate,
     pagination_metadata,
     path_lock,
-    registry,
     safe_path,
     text_response,
 )
@@ -1453,21 +1452,6 @@ async def _editing_asc(path: Path, state: SessionState) -> AsyncIterator[AscEdit
 # ---------------------------------------------------------------------------
 
 
-@registry.tool(
-    name="create_netlist",
-    description=(
-        "Create a new SPICE netlist file from content string. Automatically "
-        "appends .END if missing (append_end=false for include fragments)."
-    ),
-    input_model=CreateNetlistInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=True,
-        idempotentHint=False,
-        openWorldHint=False,
-    ),
-    profiles=("full",),
-)
 async def handle_create_netlist(
     args: CreateNetlistInput, state: SessionState
 ) -> types.CallToolResult:
@@ -1535,21 +1519,8 @@ async def handle_create_netlist(
     return text_response(f"Created netlist: {target_path}\nComponents: {comp_count}")
 
 
-@registry.tool(
-    name="read_circuit",
-    description=(
-        "Read and parse a circuit file (.cir/.net or .asc). For netlists: returns content "
-        "and component values. For schematics: returns layout and directives."
-    ),
-    input_model=CircuitReadInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-    ),
-    profiles=("full",),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "file": {"type": "string"},
@@ -1604,7 +1575,7 @@ async def handle_create_netlist(
             # Wiring norm, .asc branch only (see SCHEMATIC_WIRING_NORM).
             "hint": {"type": "string"},
         },
-    },
+    }
 )
 async def handle_read_circuit(args: CircuitReadInput, state: SessionState):
     """Read and parse a circuit file. For .asc schematics, returns component
@@ -1669,21 +1640,8 @@ def _format_circuit_text(file_path: Path, data: dict) -> str:
     return text
 
 
-@registry.tool(
-    name="list_components",
-    description=(
-        "List components in a circuit file, optionally filtered by type prefix, or "
-        "return a single component value by reference."
-    ),
-    input_model=ListComponentsInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "components": {
@@ -1711,7 +1669,7 @@ def _format_circuit_text(file_path: Path, data: dict) -> str:
             "value": {"type": "string"},
             "prefix": {"type": "string"},
         },
-    },
+    }
 )
 async def handle_list_components(args: ListComponentsInput, state: SessionState):
     """List all components, optionally filtered by prefix. If a single
@@ -1912,22 +1870,6 @@ async def _list_components_netlist(
     return format_response(body, data, fmt)
 
 
-@registry.tool(
-    name="set_component_value",
-    description=(
-        "Set component value(s) in a circuit file (single or batch mode), or "
-        "rewrite one component's node connectivity ('nodes', single mode, "
-        ".cir/.net only). A no-op value write is reported as unchanged."
-    ),
-    input_model=SetComponentValueInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-    ),
-    profiles=("full",),
-)
 async def handle_set_component_value(
     args: SetComponentValueInput, state: SessionState
 ) -> types.CallToolResult:
@@ -2129,22 +2071,8 @@ async def _set_component_value_asc(
     return text_response(text)
 
 
-@registry.tool(
-    name="parameter",
-    description=(
-        "Read, write, or delete .PARAM directive values in a circuit file. "
-        "Pass ``delete=true`` with ``name`` to remove a parameter (the inverse "
-        "of setting one)."
-    ),
-    input_model=ParameterInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-    ),
-    profiles=("full",),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "parameters": {
@@ -2152,7 +2080,7 @@ async def _set_component_value_asc(
                 "additionalProperties": {"type": "string"},
             },
         },
-    },
+    }
 )
 async def handle_parameter(args: ParameterInput, state: SessionState):
     """Get or set .PARAM directive values.
@@ -2300,25 +2228,6 @@ def _append_asc_text(
     )
 
 
-@registry.tool(
-    name="edit_directive",
-    description=(
-        "Add or remove a SPICE directive or .asc free-text comment. Set "
-        "``kind=comment`` for annotation text; default is a SPICE directive. "
-        "Works on .cir/.net and .asc; ``kind=comment`` is .asc-only. "
-        "``remove`` matches against directives AND comments, so callers can "
-        "delete either kind without knowing which it is. Adding a ``.param`` "
-        "is not supported here — use the 'parameter' tool to set .PARAM values."
-    ),
-    input_model=EditDirectiveInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=False,
-    ),
-    profiles=("full",),
-)
 async def handle_edit_directive(
     args: EditDirectiveInput, state: SessionState
 ) -> types.CallToolResult:
@@ -2917,21 +2826,6 @@ def _record_export(asc_path: Path, lines: list[str]) -> None:
     _previous_exports[asc_path] = lines
 
 
-@registry.tool(
-    name="export_netlist",
-    description="Export an .asc schematic to a SPICE netlist (.net) using LTspice.",
-    input_model=ExportNetlistInput,
-    # Writes (and overwrites) the sibling .net file — not read-only, and
-    # destructive toward a hand-edited netlist at that path, matching the
-    # annotation convention of the other overwrite-capable file writers.
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=True,
-        idempotentHint=True,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-)
 async def handle_export_netlist(
     args: ExportNetlistInput, state: SessionState
 ) -> types.CallToolResult:
@@ -3011,39 +2905,15 @@ async def handle_export_netlist(
     return text_response(result)
 
 
-@registry.tool(
-    name="reset_schematic",
-    description=(
-        "Revert an .asc schematic to the state it had BEFORE the first edit this "
-        "session — a recovery escape hatch for when a sequence of edits went wrong. "
-        "The server snapshots each .asc file's bytes just before its first in-session "
-        "mutation (component placement through apply_schematic_ops, "
-        "set_component_value, move_component, wire_pins, "
-        "apply_schematic_ops, etc.); this restores that snapshot exactly and drops it "
-        "(so a later edit establishes a fresh restore point). Because component placement is a "
-        "trigger, the first placement on a freshly created schematic snapshots the "
-        "empty file — so reset can revert all the way back to the empty post-create "
-        "state, dropping every component added this session. Returns reverted=false (not an error) "
-        "when the file has no recorded in-session edits. Note: the snapshot lives only "
-        "for the current server session — it does not persist across restarts, and it "
-        "is not a substitute for version control."
-    ),
-    input_model=ResetSchematicInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=True,
-        idempotentHint=True,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "path": {"type": "string"},
             "reverted": {"type": "boolean"},
             "bytes": {"type": ["integer", "null"]},
         },
-    },
+    }
 )
 async def handle_reset_schematic(
     args: ResetSchematicInput, state: SessionState
@@ -3073,16 +2943,8 @@ async def handle_reset_schematic(
     )
 
 
-@registry.tool(
-    name="symbol_info",
-    description=(
-        "Get symbol pin positions, bounding box, and description. "
-        "Optionally compute absolute positions for a given placement and rotation."
-    ),
-    input_model=SymbolInfoInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             # Keys mirror SymbolInfo.to_dict(): symbol name, description,
@@ -3102,7 +2964,7 @@ async def handle_reset_schematic(
             "absolute_pins": {"type": "array", "items": PIN_SCHEMA},
             "absolute_bounding_box": BBOX_SCHEMA,
         },
-    },
+    }
 )
 async def handle_symbol_info(args: SymbolInfoInput, state: SessionState) -> types.CallToolResult:
     """Get symbol geometry info for schematic layout planning."""
@@ -3137,16 +2999,8 @@ async def handle_symbol_info(args: SymbolInfoInput, state: SessionState) -> type
     return format_response("\n".join(lines), data, args.format)
 
 
-@registry.tool(
-    name="component_info",
-    description=(
-        "Get a placed component's pin positions, bounding box, value, and attributes "
-        "from an .asc schematic."
-    ),
-    input_model=ComponentInfoInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "reference": {"type": "string"},
@@ -3164,7 +3018,7 @@ async def handle_symbol_info(args: SymbolInfoInput, state: SessionState) -> type
                 "additionalProperties": {"type": "string"},
             },
         },
-    },
+    }
 )
 async def handle_component_info(
     args: ComponentInfoInput, state: SessionState
@@ -3385,25 +3239,8 @@ class _ConnectPlan(NamedTuple):
     warnings: list[str]
 
 
-@registry.tool(
-    name="wire_pins",
-    aliases=("connect",),
-    description=(
-        "Draw a wire between two component pins (by reference), auto-routing an orthogonal "
-        "path and resolving pin positions automatically. This is a schematic wiring op, not a "
-        "network/server connection. Waypoints route the wire through intermediate points; for a "
-        "straight horizontal or vertical run, omit them. (Formerly named 'connect', still "
-        "accepted as a deprecated alias.)"
-    ),
-    input_model=WirePinsInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "from": {
@@ -3434,7 +3271,7 @@ class _ConnectPlan(NamedTuple):
             "warnings": WARNINGS_SCHEMA,
             "validation_warnings": VALIDATION_WARNINGS_SCHEMA,
         },
-    },
+    }
 )
 async def handle_wire_pins(args: WirePinsInput, state: SessionState) -> types.CallToolResult:
     """Connect two pins with auto-routed or waypoint-guided wires."""
@@ -3932,32 +3769,8 @@ def blank_sheet(width: int = 880, height: int = 680) -> str:
     return f"Version 4\nSHEET 1 {width} {height}\n"
 
 
-@registry.tool(
-    name="create_schematic",
-    description=(
-        "Create an empty .asc schematic ready for incremental editing via "
-        "apply_schematic_ops add_component ops, the wire_pins tool, and "
-        "apply_schematic_ops add_net_label ops for ground/net flags. "
-        "Tip: prefer ``create_netlist`` + .cir for design iteration; "
-        "use this only when a visual schematic is the deliverable."
-        " Prefer apply_schematic_ops for multi-step builds (one transaction); "
-        "wire signal nets with wire_pins; label grounds — and any net a "
-        ".meas/B-source references by name — via apply_schematic_ops add_net_label "
-        "ops at pins; "
-        "repeating a same-name label ties distant nets (the netlist merges them "
-        "into one net — then target pins as Ref.Pin in wire_pins, since net:NAME "
-        "is ambiguous with duplicates). "
-        "Don't hand-edit the .asc. Full layout guidance: the spice://guide resource."
-    ),
-    input_model=CreateSchematicInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=True,
-        idempotentHint=False,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "Absolute path of the created .asc"},
@@ -3969,7 +3782,7 @@ def blank_sheet(width: int = 880, height: int = 680) -> str:
             },
         },
         "required": ["path", "width", "height"],
-    },
+    }
 )
 async def handle_create_schematic(
     args: CreateSchematicInput, state: SessionState
@@ -4039,22 +3852,8 @@ class TraceNetInput(ToolInput):
     )
 
 
-@registry.tool(
-    name="trace_net",
-    description=(
-        "Report everything electrically connected to a net: starting from a pin "
-        "('Ref.Pin'), a net label ('net:NAME'), or an (x,y) coordinate, return the "
-        "net's labels and every component pin, FLAG, and wire vertex on it. "
-        "Follows both wires (segment-aware — catches labels placed mid-wire) and "
-        "same-name FLAGs (LTspice's name-based nets). Use it to answer 'what's on "
-        "net X', to confirm "
-        "a wire_pins call landed, or to spot an accidental short (a net carrying two "
-        "different non-ground labels)."
-    ),
-    input_model=TraceNetInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "start": {
@@ -4084,7 +3883,7 @@ class TraceNetInput(ToolInput):
             "is_shorted": {"type": "boolean"},
             "warnings": WARNINGS_SCHEMA,
         },
-    },
+    }
 )
 async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.CallToolResult:
     """Trace every pin/label/wire vertex on the net at a pin, label, or (x,y)."""
@@ -4403,35 +4202,8 @@ class ValidateNetlistInput(ToolInput):
     )
 
 
-@registry.tool(
-    name="validate_netlist",
-    description=(
-        "Lint a netlist or schematic before simulation — the static circuit "
-        "check gate. Catches: empty/whitespace-only netlist files, element "
-        "arity (too few nodes, missing "
-        "E/G/F/H/B value), dangling nodes in .cir/.net netlists (a node "
-        "touching only one element "
-        "terminal — warning, since deliberate fragments are legal), "
-        "bias-topology degeneracies in .cir/.net netlists (a net with no DC "
-        "path to ground — floating MOSFET gate, capacitive island, "
-        "current-source-only node, or isolated domain — warning, since the "
-        "operating point may still be defined by other means), "
-        "duplicate/multiple analysis directives ('More than "
-        "one analysis specified'), .MEAS whose analysis kind isn't present, "
-        "known-bad .MEAS patterns (vdb()/phase()/group_delay()), "
-        "and directives the LTspice runner is known to reject (set "
-        "target_simulator='ngspice' to instead flag ngspice-only "
-        "incompatibilities, e.g. a zero '.tran' step time). On .asc, "
-        "also surfaces named-net shorts, "
-        "floating pins, and dangling labels. Returns a structured issue list; "
-        "an empty list means the file passes the static gate. Note: value "
-        "tokens (e.g. a typo'd '1kk') and undefined model references are NOT "
-        "checked — LTspice coerces or resolves those at run time."
-    ),
-    input_model=ValidateNetlistInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "file": {"type": "string"},
@@ -4450,7 +4222,7 @@ class ValidateNetlistInput(ToolInput):
                 },
             },
         },
-    },
+    }
 )
 async def handle_validate_netlist(
     args: ValidateNetlistInput, state: SessionState
@@ -4741,20 +4513,8 @@ def parse_failure_warnings(pairs: Sequence[tuple[str, str | None]]) -> list[str]
     ]
 
 
-@registry.tool(
-    name="diff_circuit",
-    description=(
-        "Structural diff between two circuit files: reports added/removed "
-        "components, components whose value or attributes "
-        "(Value2/SpiceLine/SpiceModel) changed, and added/removed "
-        ".PARAM/.MEAS/.MODEL directives. Use after ``set_component_value`` / "
-        "``edit_directive``, or the ``set_component_attribute`` op of "
-        "``apply_schematic_ops``, to confirm that the intended change actually landed."
-    ),
-    input_model=DiffCircuitInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "path_a": {"type": "string"},
@@ -4774,7 +4534,7 @@ def parse_failure_warnings(pairs: Sequence[tuple[str, str | None]]) -> list[str]
             "directives_removed",
             "warnings",
         ],
-    },
+    }
 )
 async def handle_diff_circuit(args: DiffCircuitInput, state: SessionState) -> types.CallToolResult:
     """Structural diff between two circuit files."""
@@ -5730,43 +5490,8 @@ def _run_op_batch(
     return results, abort_reason
 
 
-@registry.tool(
-    name="apply_schematic_ops",
-    description=(
-        "Apply many .asc edits in one transaction. Loads the schematic once, "
-        "runs each op against the in-memory editor in order, and saves once at "
-        "the end. Component-placement results include pins, bounding boxes, "
-        "and overlap warnings for use by later routing ops. Cuts the typical "
-        "25+ tool calls to build a real circuit "
-        "(add_component × N + wire_pins × N + add_net_label × N + edit_directive "
-        "× N) down to a single round-trip. This is also the home for the "
-        "ack-only schematic mutations that have no standalone tool, so they do "
-        "not each cost a separate tool slot.\n\n"
-        "Supported ops (each tagged via the ``op`` field): ``add_component``, "
-        "``set_component_value``, ``set_component_attribute``, "
-        "``remove_component``, ``move_component``, ``add_net_label``, "
-        "``remove_net_label``, ``remove_wire``, ``wire_pins`` (alias "
-        "``connect``), ``add_directive``, "
-        "``remove_directive``.\n\n"
-        "By default, the first op that raises aborts the whole transaction "
-        "and nothing is written to disk. Set ``stop_on_error=false`` to run "
-        "every op and persist whatever subset succeeded — useful when each op "
-        "is independent and partial progress is acceptable. Errors are "
-        "recorded under each op's ``error`` field; successes carry the "
-        "per-op result keys (e.g. ``wire_count``)."
-    ),
-    input_model=ApplySchematicOpsInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        # Destructive: the batch can include remove_component (and, with
-        # stop_on_error=false, persist a partial subset), so it carries the same
-        # hint as the standalone remove_component a client would gate on.
-        destructiveHint=True,
-        idempotentHint=False,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "path": {"type": "string"},
@@ -5835,7 +5560,7 @@ def _run_op_batch(
             },
         },
         "required": ["path", "applied_count", "failed_count", "saved", "results"],
-    },
+    }
 )
 async def handle_apply_schematic_ops(
     args: ApplySchematicOpsInput, state: SessionState

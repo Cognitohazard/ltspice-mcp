@@ -6,12 +6,10 @@ task, with the circuit path (and optional node/signal) filled in. They are a
 human-facing discovery surface, complementary to the tool descriptions and the
 server instructions — those remain the agent's primary orientation channel.
 
-Every prompt is written once per tool profile, and both listing and content are
-profile-scoped: a starter that walks the caller through tools the connected
-client cannot see is a dead end. ``full`` and ``agentic`` share one edition (the
-agentic profile drops only the netlist-editing and library wrappers, none of
-which these prompts use); ``consolidated`` teaches the same workflows through its
-six tools. Same rule as the profile-aware error hints in ``server.py``.
+Every prompt is written once per tool profile edition, and both listing and
+content are profile-scoped: a starter that walks the caller through tools the
+connected client cannot see is a dead end. The consolidated profile (the only
+one since 0.6.0) teaches each workflow through its six tools.
 """
 
 from collections.abc import Callable, Mapping
@@ -21,16 +19,13 @@ from mcp import types
 
 PromptBuilder = Callable[[Mapping[str, str]], types.GetPromptResult]
 
-# The two prompt editions. A profile reads exactly one of them.
-CLASSIC = "classic"
+# The prompt editions. A profile reads exactly one of them.
 CONSOLIDATED = "consolidated"
 
 # Total over the valid profiles, not a default with one exception: a profile
 # added to the config without a line here fails loudly instead of silently
 # inheriting an edition that names tools it cannot see. Pinned by test_prompts.
 EDITIONS: dict[str, str] = {
-    "full": CLASSIC,
-    "agentic": CLASSIC,
     "consolidated": CONSOLIDATED,
 }
 
@@ -59,23 +54,6 @@ def _require(arguments: Mapping[str, str], name: str) -> str:
     return value
 
 
-def _characterize_filter(arguments: Mapping[str, str]) -> types.GetPromptResult:
-    path = _require(arguments, "path")
-    node = (arguments.get("node") or "").strip()
-    target = f" at node {node}" if node else ""
-    text = (
-        f"Characterize the frequency response of the filter in `{path}`.\n"
-        "1. Make sure it has an AC sweep covering the band of interest "
-        "(e.g. `.ac dec 201 1 1Meg`); add the directive if missing.\n"
-        "2. validate_netlist, then run_simulation.\n"
-        f"3. Call bode_metrics (mode='filter'){target} for the -3 dB cutoff(s), "
-        "passband gain, Q, and roll-off slope.\n"
-        "4. plot_waveform to render the Bode plot.\n"
-        "Report the filter type, cutoff(s), peak gain, and roll-off (dB/dec)."
-    )
-    return _text_result("Characterize a filter's AC response", text)
-
-
 def _characterize_filter_consolidated(arguments: Mapping[str, str]) -> types.GetPromptResult:
     path = _require(arguments, "path")
     signal = f"V({(arguments.get('node') or 'out').strip()})"
@@ -96,22 +74,6 @@ def _characterize_filter_consolidated(arguments: Mapping[str, str]) -> types.Get
     return _text_result("Characterize a filter's AC response", text)
 
 
-def _run_and_plot(arguments: Mapping[str, str]) -> types.GetPromptResult:
-    path = _require(arguments, "path")
-    signal = (arguments.get("signal") or "").strip()
-    target = f" for {signal}" if signal else ""
-    text = (
-        f"Run a transient simulation of `{path}` and plot the result.\n"
-        "1. Ensure a `.tran` directive long enough to show the behavior of interest "
-        "(add it if missing).\n"
-        "2. validate_netlist, then run_simulation.\n"
-        f"3. plot_waveform{target} to visualize; use get_waveform or signal_stats for "
-        "numeric detail.\n"
-        "Report the key observations (final value, overshoot, settling, anomalies)."
-    )
-    return _text_result("Run a transient and plot a signal", text)
-
-
 def _run_and_plot_consolidated(arguments: Mapping[str, str]) -> types.GetPromptResult:
     path = _require(arguments, "path")
     signal = (arguments.get("signal") or "V(out)").strip()
@@ -130,23 +92,6 @@ def _run_and_plot_consolidated(arguments: Mapping[str, str]) -> types.GetPromptR
         "Report the key observations (final value, overshoot, settling, anomalies)."
     )
     return _text_result("Run a transient and plot a signal", text)
-
-
-def _step_response(arguments: Mapping[str, str]) -> types.GetPromptResult:
-    path = _require(arguments, "path")
-    node = (arguments.get("node") or "").strip()
-    target = f" at node {node}" if node else ""
-    text = (
-        f"Measure the step response of `{path}`.\n"
-        "1. Drive the input with a step (a PULSE/PWL source) and set a `.tran` run long "
-        "enough for the output to settle.\n"
-        "2. validate_netlist, then run_simulation.\n"
-        f"3. Use edge_metrics on the output{target} for rise time and "
-        "transient_response(mode='step') for overshoot and settling time; "
-        "plot_waveform to visualize.\n"
-        "Report rise time, overshoot %, and settling time."
-    )
-    return _text_result("Measure a step response", text)
 
 
 def _step_response_consolidated(arguments: Mapping[str, str]) -> types.GetPromptResult:
@@ -198,7 +143,6 @@ _PROMPTS = [
             ],
         ),
         builders={
-            CLASSIC: _characterize_filter,
             CONSOLIDATED: _characterize_filter_consolidated,
         },
     ),
@@ -216,7 +160,6 @@ _PROMPTS = [
             ],
         ),
         builders={
-            CLASSIC: _run_and_plot,
             CONSOLIDATED: _run_and_plot_consolidated,
         },
     ),
@@ -234,7 +177,6 @@ _PROMPTS = [
             ],
         ),
         builders={
-            CLASSIC: _step_response,
             CONSOLIDATED: _step_response_consolidated,
         },
     ),

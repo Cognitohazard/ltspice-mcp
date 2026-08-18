@@ -72,7 +72,7 @@ Other requests that work the same way:
 - *"Run a 200-run Monte Carlo with 5% resistors and tell me the output spread."* — perturbs components per run, simulates the batch, and reports mean, sigma, and worst-case values per measurement.
 - *"Sweep the load from 100 Ω to 10 kΩ and find where efficiency drops."* — parameter sweep with per-run results.
 - *"Characterize this NMOS: gm and gm/ID vs VGS."* — writes a `.dc Vgs` deck with `.save @m1[gm] @m1[id]`, runs it on ngspice, and returns the gm/ID table as one CSV (no `.control` block, no rawfile parsing).
-- *"Find an N-channel power MOSFET for a low-side switch and measure the on-state drop."* — searches the loaded libraries for a part (`find_model`), drops it into a pulsed-gate transient, and reads Vds(on) and load current back from the `.meas` results.
+- *"Find an N-channel power MOSFET for a low-side switch and measure the on-state drop."* — searches the libraries the deck pulls in for a part (`inspect(kind="model")`), drops it into a pulsed-gate transient, and reads Vds(on) and load current back from the `.meas` results.
 - *"Build this differential pair as a schematic I can open in LTspice."* — places and wires the components into a real `.asc`, with orthogonal routing and pin-collision checks.
 - *"Is this loop stable?"* — AC analysis of the loop gain; reports phase and gain margin at every crossover, not just the first.
 - *"What's the resonant frequency and Q of this series RLC?"* — runs an AC sweep and reports each peak's center frequency, Q, and −3 dB bandwidth.
@@ -129,7 +129,7 @@ simulator processes. Exit codes distinguish "refused before anything ran",
 
 ## What it does
 
-**Simulation and measurement.** Runs LTspice or ngspice and parses the binary output directly. Measurements are computed server-side and returned as numbers: time-domain (rise/fall, overshoot, settling, delay, period/duty/jitter, RMS, THD), frequency-domain (filter cutoffs and roll-off, gain and phase at any frequency, stability margins, resonance peaks with Q, integrated noise), DC operating points, and `.MEAS` directive results including the ones that failed. Per-device small-signal operating-point parameters (`gm`, `gds`, `vth`, …) come back by name on **both** simulators — LTspice via an auto-added `.options logopinfo` block in the log, ngspice via `.save @dev[param]` traces. Read the set across a `.dc` sweep as a gm/ID table with `export_waveform`, or a single bias point with `operating_point` (address them as `m1.gm` / `@m1[gm]`, no rawfile parsing).
+**Simulation and measurement.** Runs LTspice or ngspice and parses the binary output directly. Measurements are computed server-side and returned as numbers: time-domain (rise/fall, overshoot, settling, delay, period/duty/jitter, RMS, THD), frequency-domain (filter cutoffs and roll-off, gain and phase at any frequency, stability margins, resonance peaks with Q, integrated noise), DC operating points, and `.MEAS` directive results including the ones that failed. Per-device small-signal operating-point parameters (`gm`, `gds`, `vth`, …) come back by name on **both** simulators — LTspice via an auto-added `.options logopinfo` block in the log, ngspice via `.save @dev[param]` traces. Read the set across a `.dc` sweep as a gm/ID table with the `waveform` recipe in `format: "csv"`, or a single bias point with the `operating_point` recipe (address them as `m1.gm` / `@m1[gm]`, no rawfile parsing).
 
 **Schematic and netlist editing.** Creates and edits real LTspice `.asc` files — place components, wire pins, label nets — with validation before anything is written: wiring that would collide with a pin, overlap a junction, or run diagonally is refused, and every edit returns warnings about floating pins or dangling labels. A session's edits can be reverted. Plain netlists (`.cir`/`.net`) get the same operations at text level, plus a static validation pass that catches malformed cards before a simulation is spent.
 
@@ -163,7 +163,7 @@ allowed_paths = ["."]    # sandbox: only these directories are accessible
 timeout = 300.0          # seconds
 
 [tools]
-profile = "full"         # or "agentic", or "consolidated" (experimental)
+profile = "consolidated" # the only profile since 0.6.0
 
 [state]
 persist_jobs = true
@@ -187,17 +187,25 @@ Simulation output is automatically redirected to a Windows temp directory: LTspi
 
 </details>
 
-### Tool profiles
+### The tool surface
 
-| Profile | Tools | Use case |
+The server exposes **7 tools**, six of them arranged over three planes, plus the waveform widget:
+
+| Plane | Tool | What it does |
 |-|-|-|
-| `full` (default) | 49 | Any MCP client, automation, non-agent LLMs |
-| `agentic` | 41 | LLM agents with native file access (Read/Edit/Write) |
-| `consolidated` (experimental) | 6 | Agents with native file access, driving a small three-plane surface |
+| Execute | `run_experiments` | Run one deck or a whole matrix — sweeps, corners, Monte Carlo — in one declarative call, optionally returning the measurements with the receipt |
+| Execute | `jobs` | Follow, wait on, cancel, list, or page the runs of a submitted job |
+| Understand | `analyze_results` | Measure a finished job (or a bare `.raw` this server never ran) through named recipes |
+| Understand | `inspect` | Read decks, schematics, symbols, nets, models, and server capabilities — never results |
+| Author | `edit_schematic` | Create and mutate `.asc` transactionally: place, move, wire, label, set attributes |
+| Author | `verify_circuit` | Syntax, symbol, layout, and quality checks, schematic-vs-netlist equivalence, and rendering |
+| — | `plot_waveform` | Interactive chart of a run's waveforms, in-chat where the client renders widgets, otherwise opened on your desktop |
 
-The `agentic` profile drops netlist-editing wrappers and library session management — work a capable agent does through direct file edits — and keeps simulation lifecycle, binary `.raw` parsing, batch orchestration, and the `.asc` geometry tools. The `skills/` directory (`skills/ltspice/SKILL.md`, `skills/ngspice/SKILL.md`) contains the domain knowledge that pairs with it: copy the relevant skill into your client's persistent-instructions location.
+Netlists are authored and edited with the agent's own file tools — the server no longer wraps text edits. The same six ops are importable in-process as `ltspice_mcp.api` (`Api(working_dir=...)`), so a Python script drives the identical engine without an MCP client.
 
-The `consolidated` profile (**experimental**) collapses the surface to six tools over three planes — `run_experiments` and `jobs` (execute), `analyze_results` and `inspect` (understand), `edit_schematic` and `verify_circuit` (author) — for agents that author and edit netlists with their own file tools. It is a superset workflow layered on the same engine; `full` remains the default and nothing is removed from it.
+The `skills/` directory carries the domain knowledge that pairs with the surface: `skills/spice-experiments/SKILL.md` (the experiment workflow), `skills/ltspice/SKILL.md` and `skills/ngspice/SKILL.md` (SPICE syntax per engine), `skills/spice-bench-craft/SKILL.md` (bench archetypes). Copy the relevant skill into your client's persistent-instructions location.
+
+**Migration from 0.5.** The `full` (49-tool) and `agentic` (41-tool) profiles were removed in 0.6.0; the consolidated surface above replaces them. `[tools] profile` still accepts `"full"` and `"agentic"`, but each logs a warning and serves the consolidated surface. Pin `ltspice-mcp==0.5.*` if you need the old per-operation tools.
 
 **Where it runs.** The server shells out to a local LTspice/ngspice and reads circuit files from disk, so it must run where the simulator and the files are. Two setups work: a local MCP host (Claude Desktop, Claude Code, Cursor, Gemini CLI, Codex, …) on your own machine, or a browser-based cloud agent whose sandbox can install ngspice and register the server (verified with Claude). LTspice is local-only (a Windows app); ngspice is open-source and works in either place. Consumer web chat with no sandbox has no simulator and no file access, so it can't run this server directly; bridge it to a machine you control (e.g. [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy)) if you want that UI.
 
@@ -214,19 +222,19 @@ C1 out 0 159.155n
 .end
 ```
 
-then drives three tools:
+then drives two tools:
 
 ```
-validate_netlist(path="rc.cir")
-  → OK: directives valid, element arities check out — safe to simulate
+verify_circuit(path="rc.cir", checks=["syntax"])
+  → outcome "pass": directives valid, element arities check out — safe to simulate
 
-run_simulation(netlist="rc.cir")
-  → {"job_id": "sim_a3f1", "status": "completed", "raw_file": ".../rc.raw", ...}
-
-bode_metrics(raw_file=".../rc.raw", signal="V(out)", mode="filter")
+run_experiments(
+  circuits=[{"path": "rc.cir"}],
+  analyze={"recipes": [{"key": "lp", "metric": "bode_filter", "signal": "V(out)"}]},
+)
 ```
 
-and gets back scalars, not a plot:
+and gets back scalars, not a plot — the `lp` recipe's result:
 
 ```json
 {
@@ -245,64 +253,22 @@ and gets back scalars, not a plot:
 
 (abridged — the full response also includes passband bounds and transition bandwidth)
 
-Off-target → `set_component_value`, re-run, re-measure. Long simulations return a job ID instead of blocking; `check_job`/`cancel_job` manage them. Job metadata persists in per-circuit sidecars (`{dir}/.ltspice-mcp/jobs/` — add `.ltspice-mcp/` to your `.gitignore`), and MCP resources (`spice://results/...`, `spice://netlists/...`, `spice://config`) expose jobs, signals, measurements, and config for browsing.
+Off-target → edit the netlist, re-run, re-measure. Long simulations return a job ID instead of blocking; `jobs` (`action="status"|"wait"|"cancel"`) manages them. Job metadata persists in per-circuit sidecars (`{dir}/.ltspice-mcp/jobs/` — add `.ltspice-mcp/` to your `.gitignore`), and MCP resources (`spice://results/...`, `spice://netlists/...`, `spice://config`) expose jobs, signals, measurements, and config for browsing.
 
 <details>
-<summary><strong>All 49 tools</strong></summary>
+<summary><strong>The capability vocabulary</strong></summary>
 
-Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`); data-returning tools declare an `outputSchema` for `structuredContent` introspection.
+Every tool declares MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) and an `outputSchema` for `structuredContent` introspection. The capabilities live one level down, as the named values each tool accepts:
 
-| Tool | Description |
+| Surface | Values |
 |-|-|
-| `create_netlist` | Create a new netlist from a content string |
-| `create_schematic` | Create an empty `.asc` ready for incremental editing |
-| `read_circuit` | Read a circuit file (netlist text for `.cir`, schematic layout for `.asc`) |
-| `list_components` | List components (optional prefix filter) or look up one by reference |
-| `set_component_value` | Set one component value, or batch-set many via a `values` dict |
-| `parameter` | Read all `.PARAM` values or set one |
-| `edit_directive` | Add or remove SPICE directives (`.tran`, `.ac`, `.lib`, ...) |
-| `wire_pins` | Wire two pins by reference with waypoint routing; validates pin collisions, junctions, diagonals (formerly `connect`, kept as a deprecated alias) |
-| `symbol_info` | Symbol pin positions, directions, bounding box, description |
-| `component_info` | Placed component pin positions, bounding box, attributes |
-| `export_netlist` | Export `.asc` to `.net` via LTspice (with diff against previous export) |
-| `validate_netlist` | Static pre-flight checks on a netlist or schematic before simulation |
-| `trace_net` | Every pin/label/wire on a net at a pin / `net:NAME` / `(x,y)`; flags accidental shorts |
-| `reset_schematic` | Revert an `.asc` to its pre-edit snapshot from this session |
-| `diff_circuit` | Structural diff between two circuit files |
-| `apply_schematic_ops` | Apply many `.asc` edits in one transaction; its `add_component` op returns placed pins, bounding box, and overlap warnings, while other mutation ops are acknowledgement-only |
-| `run_simulation` | Run a simulation — sync for short runs, async (job ID) for long ones; sets batch flags, handles the ngspice headerless-raw dialect, routes raw/log artifacts, surfaces convergence/timeout errors (no hand-parsing a rawfile) |
-| `check_job` | Check a job's status by ID, or list all jobs |
-| `cancel_job` | Cancel a running simulation or batch; kills the simulator process(es) |
-| `signal_stats` | Min, max, mean, RMS, peak-to-peak (dB/phase for AC) |
-| `get_waveform` | Decimated min/max stat-envelope of a signal over a window — see the shape, then re-request a narrower window to zoom |
-| `export_waveform` | Full-fidelity CSV egress of one or more signals to disk (all analysis types; tidy/long for `.step`); accepts device operating-point params (`m1.gm`/`@m1[gm]`) — across a `.dc` sweep this is the gm/ID-table read; returns the path to compute on yourself |
-| `plot_waveform` | Interactive HTML chart (transient / DC / Bode dual-panel with `ac_structure` corner + non-minimum-phase markers / noise / `.step` overlay) written next to the circuit and opened in your browser; for seeing shape, not measuring |
-| `query_value` | Signal value at a specific time/frequency (or a device operating-point param, `m1.gm`/`@m1[gm]`); `step_axis`+`step_value` picks a `.step` run |
-| `operating_point` | DC operating point: all node voltages, branch currents, and per-device operating-point params (gm/gds/vth/…) on LTspice (auto `.options logopinfo`) and ngspice, addressable as `m1.gm`/`@m1[gm]`; `device=` scopes to one device |
-| `simulation_summary` | Full summary: simulation type, signals, measurements, warnings |
-| `edge_metrics` | Rise/fall time and slew rate for one transient edge |
-| `transient_response` | Transient response by `mode`: step overshoot/undershoot/settling, or disturbance droop/overshoot/recovery |
-| `timing_between` | Propagation delay between two transient signals |
-| `periodic_metrics` | Period, frequency, duty cycle, jitter of an oscillating signal |
-| `thd` | Total harmonic distortion (THD/THD+N) of a periodic transient via FFT; coherent sampling for an exact result; surfaces every condition |
-| `measurement_stats` | Aggregate `.MEAS` scalars across a sweep or Monte Carlo run |
-| `bode_metrics` | AC/Bode analysis by `mode`: `filter`, `slope`, `point`, `crossing`; `all_steps=true` for per-step results |
-| `stability_metrics` | Loop-gain stability: all unity-gain / -180° crossings with per-crossing margins |
-| `resonance` | AC peaks with Q factor and -3 dB bandwidth per peak |
-| `return_loss` | Reflection coefficient Γ, return loss (dB), and VSWR from an impedance trace vs a reference `z0` (worst-match scan or a single frequency) |
-| `ac_structure` | Pole/zero structure of an AC response: net order, corner ranges + Q, non-minimum-phase / RHP-zero, transport delay (facts for human review) |
-| `noise_integral` | Integrate a `.noise` spectral density to total RMS over a band (`sqrt(∫ density² df)`); reports the band and sample count |
-| `configure_sweep` | Configure a multi-parameter sweep (linear or log) |
-| `run_sweep` | Execute a configured sweep (async, returns job ID) |
-| `configure_montecarlo` | Configure Monte Carlo: tolerances, `.MODEL` variation, Pelgrom mismatch |
-| `run_montecarlo` | Execute a configured Monte Carlo analysis (async, returns job ID) |
-| `batch_results` | Sweep/MC job progress, per-signal statistics, or per-run data |
-| `find_model` | Find model candidates by name (fuzzy by default, `exact=true` for exact) |
-| `load_library` | Load a `.lib`/`.mod` file or a directory of libraries |
-| `unload_library` | Unload a previously loaded library |
-| `list_libraries` | List loaded libraries, optionally with model names |
-| `server_status` | Detected simulators, config, sandbox paths, runtime state |
-| `recent` | Recently-used circuits and jobs from the persistent index |
+| `analyze_results` recipes | `summary`, `measurements`, `value`, `signal_stats`, `edges`, `timing`, `periodic`, `transient_response`, `thd`, `bode_filter`, `bode_point`, `bode_slope`, `bode_crossing`, `stability`, `ac_structure`, `resonance`, `return_loss`, `noise_integral`, `operating_point`, `waveform` (inline envelope or full-fidelity CSV), `plot` |
+| `inspect` kinds | `capabilities`, `components`, `symbol`, `symbols`, `net`, `model` |
+| `edit_schematic` ops | `add_component`, `set_component_value`, `set_component_attribute`, `move_component`, `remove_component`, `wire_pins`, `add_net_label`, `remove_net_label`, `remove_wire`, `add_directive`, `remove_directive` |
+| `jobs` actions | `status`, `wait`, `cancel`, `list`, `runs` |
+| `verify_circuit` checks | `syntax`, `symbols`, `export`, `layout`, `quality`, `compare` |
+
+Sweeps, corners, and Monte Carlo are not separate tools: they are `run_experiments` `variations`, so one call declares the whole matrix.
 
 </details>
 

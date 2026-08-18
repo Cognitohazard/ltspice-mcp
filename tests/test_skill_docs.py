@@ -33,8 +33,11 @@ BENCH_NOTES_PATH = BENCH_SKILL_PATH.parent / "references" / "BENCH_NOTES.md"
 # characters through a tool call against ~150 through a script that prints its
 # summary. The body loads only when the skill fires, so this pin guards
 # readability, not per-session context rent.
+# spice-experiments raised 3700 → 3820 when the registered surface grew to
+# seven tools: the doc must name plot_waveform (the doc-drift gate derives
+# coverage from the registry), and the old pin had 36 characters of headroom.
 SKILL_BUDGETS = (
-    pytest.param(SKILL_PATH, 3700, id="spice-experiments"),
+    pytest.param(SKILL_PATH, 3820, id="spice-experiments"),
     pytest.param(BENCH_SKILL_PATH, 8300, id="spice-bench-craft"),
 )
 

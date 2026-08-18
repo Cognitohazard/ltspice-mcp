@@ -39,12 +39,12 @@ from ltspice_mcp.tools._base import (
     SUGGESTIONS_SCHEMA,
     WARNINGS_SCHEMA,
     ToolInput,
+    declare_output_schema,
     format_meas_errors,
     format_observations,
     format_response,
     inject_logopinfo,
     inject_ngspice_control_write,
-    registry,
     require_simulator,
     resolve_netlist_path,
     resolve_output_folder,
@@ -328,27 +328,8 @@ async def _get_or_create_runner(
     )
 
 
-@registry.tool(
-    name="run_simulation",
-    description=(
-        "Run a SPICE simulation on a netlist file. Sets the right batch flags, "
-        "handles the ngspice headerless-raw dialect, routes the raw/log "
-        "artifacts, and parses the results — so you never hand-parse a rawfile. "
-        "Fast runs return their parsed results inline (short grace wait); "
-        "longer runs return a job ID for check_job tracking. Use wait=true to "
-        "force synchronous execution up to the hard 600s ceiling. Pass "
-        "simulator= to run on a non-default engine (e.g. cross-check a deck "
-        "on ngspice)."
-    ),
-    input_model=RunSimulationInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "job_id": {"type": "string"},
@@ -999,22 +980,8 @@ def _format_success_response(job: SimulationJob, summary: dict, fmt: str | None 
     return format_response(text, data, fmt)
 
 
-@registry.tool(
-    name="check_job",
-    description=(
-        "Check status of a simulation job by ID, or list all jobs. "
-        "Without job_id: lists active jobs (filter with status param). "
-        "With job_id: returns detailed status or completion results."
-    ),
-    input_model=CheckJobInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=True,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "job_id": {"type": "string"},
@@ -1363,18 +1330,6 @@ def _list_jobs(arguments: CheckJobInput, state: SessionState, fmt: str | None = 
     return format_response("\n".join(lines), {"jobs": jobs_data, "count": len(jobs_data)}, fmt)
 
 
-@registry.tool(
-    name="cancel_job",
-    description="Cancel a running simulation job (single run, or a sweep/Monte-Carlo batch). Kills the simulator process(es) and marks the job as cancelled.",
-    input_model=CancelJobInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=True,
-        idempotentHint=True,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-)
 async def handle_cancel_job(args: CancelJobInput, state: SessionState) -> types.CallToolResult:
     """Cancel a running simulation job.
 

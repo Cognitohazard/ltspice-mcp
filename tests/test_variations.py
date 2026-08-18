@@ -20,7 +20,6 @@ from ltspice_mcp.lib.variations import (
     materialize_variants,
     normalize_circuit_decks,
 )
-from ltspice_mcp.tools.advanced import MonteCarloMismatchRule
 from tests._mismatch_fixtures import MINI_FET, instance_params
 
 
@@ -297,13 +296,13 @@ class TestRandomExpansion:
         assert "_random_id" in random_doc
         assert "NOT" in assign_doc and "assignments" in assign_doc
 
-    def test_mismatch_model_fields_match_shipped_tool_model(self):
-        assert set(MismatchRule.model_fields) - {"rule"} == set(
-            MonteCarloMismatchRule.model_fields
-        )
-        assert MismatchRule(rule="mismatch").model_dump(exclude={"rule"}) == (
-            MonteCarloMismatchRule().model_dump()
-        )
+    def test_mismatch_min_wl_um2_must_be_positive(self):
+        # min_wl_um2 is the √(W·L) denominator floor; <= 0 would divide by zero
+        # (or take sqrt of a negative) in the sampler. Reject it at the boundary.
+        for bad in (0.0, -1e-3):
+            with pytest.raises(ValidationError):
+                MismatchRule(rule="mismatch", min_wl_um2=bad)
+        assert MismatchRule(rule="mismatch", min_wl_um2=1e-2).min_wl_um2 == 1e-2
 
 
 _CORE = ".subckt core in out\nR1 in out 1k\n.ends\n"

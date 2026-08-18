@@ -1,5 +1,6 @@
 """Unit tests for configuration loading."""
 
+import logging
 import os
 from pathlib import Path
 
@@ -161,38 +162,78 @@ class TestServerConfig:
 class TestToolProfile:
     """Tests for tool_profile configuration."""
 
-    def test_default_profile_is_full(self):
+    def test_default_profile_is_consolidated(self):
         config = ServerConfig()
-        assert config.tool_profile == "full"
+        assert config.tool_profile == "consolidated"
 
     def test_profile_from_toml(self, work_dir: Path):
         toml_path = work_dir / "ltspice-mcp.toml"
-        toml_path.write_text('[tools]\nprofile = "agentic"\n')
+        toml_path.write_text('[tools]\nprofile = "consolidated"\n')
         config = ServerConfig.load(toml_path)
-        assert config.tool_profile == "agentic"
+        assert config.tool_profile == "consolidated"
 
     def test_invalid_profile_in_toml_falls_back(self, work_dir: Path):
         toml_path = work_dir / "ltspice-mcp.toml"
         toml_path.write_text('[tools]\nprofile = "bogus"\n')
         config = ServerConfig.load(toml_path)
-        assert config.tool_profile == "full"
-
-    def test_env_var_override(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "agentic")
-        config = ServerConfig.load(work_dir / "nonexistent.toml")
-        assert config.tool_profile == "agentic"
-
-    def test_env_var_overrides_toml(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
-        toml_path = work_dir / "ltspice-mcp.toml"
-        toml_path.write_text('[tools]\nprofile = "full"\n')
-        monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "agentic")
-        config = ServerConfig.load(toml_path)
-        assert config.tool_profile == "agentic"
+        assert config.tool_profile == "consolidated"
 
     def test_invalid_env_var_falls_back(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "bogus")
         config = ServerConfig.load(work_dir / "nonexistent.toml")
-        assert config.tool_profile == "full"
+        assert config.tool_profile == "consolidated"
+
+    def test_env_var_does_not_clobber_a_valid_toml_profile(
+        self, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A rejected env value leaves the configured profile standing rather
+        than resetting it — the env override only applies what it validated."""
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text('[tools]\nprofile = "consolidated"\n')
+        monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "bogus")
+        assert ServerConfig.load(toml_path).tool_profile == "consolidated"
+
+    @pytest.mark.parametrize("removed", ["full", "agentic"])
+    def test_removed_profile_in_toml_warns_with_the_version_pin(
+        self, work_dir: Path, caplog: pytest.LogCaptureFixture, removed: str
+    ):
+        """The migration contract: a config naming a profile removed in 0.6.0
+        gets the consolidated surface AND a warning carrying the pin that
+        restores the old one. Auto-updating install channels (PyPI, uvx, plugin,
+        MCPB) change the surface under a config nobody edited, so the removal
+        has to be loud and the escape hatch has to be in the message."""
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text(f'[tools]\nprofile = "{removed}"\n')
+        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.config"):
+            config = ServerConfig.load(toml_path)
+        assert config.tool_profile == "consolidated"
+        message = "\n".join(record.getMessage() for record in caplog.records)
+        assert removed in message
+        assert "0.5" in message, f"warning does not name the version pin: {message!r}"
+
+    def test_removed_profile_in_env_warns_with_the_version_pin(
+        self, work_dir: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("LTSPICE_MCP_TOOL_PROFILE", "agentic")
+        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.config"):
+            config = ServerConfig.load(work_dir / "nonexistent.toml")
+        assert config.tool_profile == "consolidated"
+        message = "\n".join(record.getMessage() for record in caplog.records)
+        assert "LTSPICE_MCP_TOOL_PROFILE" in message
+        assert "0.5" in message, f"warning does not name the version pin: {message!r}"
+
+    def test_a_typo_is_not_told_to_pin_an_old_release(
+        self, work_dir: Path, caplog: pytest.LogCaptureFixture
+    ):
+        """Only a genuinely removed name earns the downgrade instruction; a
+        misspelling should be corrected, not answered with a version pin."""
+        toml_path = work_dir / "ltspice-mcp.toml"
+        toml_path.write_text('[tools]\nprofile = "consolidatd"\n')
+        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.config"):
+            ServerConfig.load(toml_path)
+        message = "\n".join(record.getMessage() for record in caplog.records)
+        assert "consolidatd" in message
+        assert "0.5" not in message
 
     def test_generated_config_includes_tools_section(self, work_dir: Path):
         path = work_dir / "generated.toml"

@@ -209,6 +209,57 @@ class TestCliDelivery:
         assert "render.mode" in proc.stdout
         assert list(tmp_path.iterdir()) == []
 
+    def test_module_entry_point_prints_the_catalogue(self, tmp_path):
+        """`python -m ltspice_mcp.api reference [OP]` prints the catalogue and
+        exits 0, and an unknown op exits 2 naming the real operations."""
+        probe = (
+            "from ltspice_mcp.api.__main__ import main\n"
+            "print('RC', main(['reference', 'verify_circuit']))\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=tmp_path,
+        )
+        assert "render.mode" in proc.stdout
+        assert "RC 0" in proc.stdout
+        assert list(tmp_path.iterdir()) == []
+
+    def test_package_import_is_lazy(self, tmp_path):
+        """``import ltspice_mcp.api`` alone must load neither scipy nor the
+        MCP SDK (PEP 562 lazy __init__): the ~1.2 s eager import was the
+        whole cost of a catalogue lookup. A cold subprocess is the only
+        honest measurement — an in-process check would see whatever the
+        suite already imported. (The catalogue CALL still derives from the
+        live tool models and pays their imports; cutting those is the
+        toll-and-boot unit's lazy-import work, not this pin.)"""
+        probe = (
+            "import sys\n"
+            "import ltspice_mcp.api\n"
+            "heavy = sorted({m.split('.')[0] for m in sys.modules} & {'scipy', 'mcp'})\n"
+            "print('HEAVY', heavy)\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=tmp_path,
+        )
+        assert "HEAVY []" in proc.stdout, proc.stdout + proc.stderr
+
+    def test_lazy_surface_covers_the_pinned_all_exactly(self):
+        """Every pinned __all__ name resolves through the lazy table and the
+        table advertises nothing beyond the pin — a name added to one side
+        without the other fails here instead of at a user's import."""
+        import ltspice_mcp.api as api
+
+        assert set(api.__all__) == set(api._SOURCES)
+        for name in api.__all__:
+            assert getattr(api, name) is not None
+
 
 class TestOpsUnionErrorEnumerates:
     """A mistyped op used to produce an error per branch, truncated at
@@ -238,6 +289,12 @@ class TestCatalogueMatchesTheRegistry:
 
     def test_operation_names_equal_the_consolidated_profile(self):
         from ltspice_mcp.tools import get_tools_for_profile
+        from tests.conftest import CONSOLIDATED_TOOLS
 
         tool_defs, _dispatch = get_tools_for_profile("consolidated")
-        assert set(_reference.op_names()) == {tool.name for tool in tool_defs}
+        # The API exposes exactly the envelope six. plot_waveform is MCP-only
+        # by design: it renders an interactive client-side widget (an iframe
+        # resource), which has no meaning in-process — the Python door's
+        # plotting path is load_raw + the caller's own tooling.
+        assert set(_reference.op_names()) == set(CONSOLIDATED_TOOLS)
+        assert {tool.name for tool in tool_defs} - set(_reference.op_names()) == {"plot_waveform"}

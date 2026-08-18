@@ -15,8 +15,14 @@ from ltspice_mcp.lib import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
-ToolProfile = Literal["full", "agentic", "consolidated"]
-VALID_PROFILES: frozenset[str] = frozenset({"full", "agentic", "consolidated"})
+ToolProfile = Literal["consolidated"]
+VALID_PROFILES: frozenset[str] = frozenset({"consolidated"})
+
+# Profiles removed in 0.6.0. The [tools] profile key stays RECOGNIZED for one
+# release so the removal is loud through auto-updating install channels (PyPI,
+# uvx, plugin, MCPB): a config naming a removed profile gets a warning with the
+# pin that restores it, never a silent surface change. Delete in 0.7.0.
+_REMOVED_PROFILES: frozenset[str] = frozenset({"full", "agentic"})
 VALID_LOG_LEVELS: frozenset[str] = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
 
@@ -84,7 +90,16 @@ def _validated_profile(value: str, source: str) -> str | None:
     """Return value if it's a valid profile, else warn and return None."""
     if value in VALID_PROFILES:
         return value
-    logger.warning("Unknown tool profile %r in %s, using 'full'", value, source)
+    if value in _REMOVED_PROFILES:
+        logger.warning(
+            "Tool profile %r in %s was removed in ltspice-mcp 0.6.0; serving the "
+            "consolidated tool surface instead. To keep the old surface, pin "
+            "ltspice-mcp==0.5.*",
+            value,
+            source,
+        )
+        return None
+    logger.warning("Unknown tool profile %r in %s, using 'consolidated'", value, source)
     return None
 
 
@@ -204,11 +219,11 @@ class ServerConfig:
     """Custom paths to LTspice symbol (.asy) files for .asc schematic support.
     On Windows and WSL these are auto-detected; set this to override."""
 
-    tool_profile: ToolProfile = "full"
-    """Tool profile: "full" exposes all tools, "agentic" exposes a subset
-    for LLM agents with native file access (Read/Edit/Write), and
-    "consolidated" (EXPERIMENTAL) exposes the six-tool surface for agents
-    with native file access on the server's filesystem."""
+    tool_profile: ToolProfile = "consolidated"
+    """Tool profile. "consolidated" (the only profile since 0.6.0) exposes
+    the six-tool surface plus the plot widget. The former "full" and
+    "agentic" profiles were removed; their names are still recognized in
+    config so the removal warns instead of silently changing the surface."""
 
     persist_jobs: bool = True
     """Persist simulation/batch job metadata to ``.ltspice-mcp/jobs/`` next
@@ -621,14 +636,9 @@ def generate_default_config(path: Path) -> None:
 
     # Tools section
     tools_tbl = table()
-    tools_tbl.add(comment('Tool profile: "full" (all tools), "agentic" (subset for LLM agents),'))
-    tools_tbl.add(
-        comment('or "consolidated" (EXPERIMENTAL six-tool surface for file-access agents)')
-    )
-    tools_tbl.add(
-        comment('"agentic" removes netlist-editing tools that capable agents handle natively')
-    )
-    tools_tbl.add("profile", "full")
+    tools_tbl.add(comment('Tool profile: "consolidated" is the only profile since 0.6.0.'))
+    tools_tbl.add(comment('The former "full"/"agentic" profiles need a ltspice-mcp==0.5.* pin.'))
+    tools_tbl.add("profile", "consolidated")
     doc.add("tools", tools_tbl)
     doc.add(nl())
 

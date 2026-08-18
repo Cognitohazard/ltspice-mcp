@@ -41,10 +41,136 @@ LTSPICE_TRAN_RC_VFINAL = 0.999876166042
 LTSPICE_SWEEP_RUN_LOGS = [FIXTURES_DIR / f"ltspice_sweep_meas_run{i}.log" for i in range(3)]
 
 
+# ---------------------------------------------------------------------------
+# The registered tool surface, shared by every test that names it
+# ---------------------------------------------------------------------------
+
+# The six ops that share the ratified response envelope.
+CONSOLIDATED_TOOLS = (
+    "run_experiments",
+    "jobs",
+    "analyze_results",
+    "edit_schematic",
+    "verify_circuit",
+    "inspect",
+)
+
+# The advertised surface: the six plus the plot widget, which is registered by
+# ruling but predates the envelope — it joins surface-wide checks (size pins,
+# completeness) and stays out of the envelope contract matrix. Membership is
+# pinned BY NAME, never derived from schema shape: a tool that lost its
+# envelope marker must fail a contract test, not silently reclassify.
+REGISTERED_TOOLS = (*CONSOLIDATED_TOOLS, "plot_waveform")
+
+# Every tool name removed in 0.6.0 when the consolidated profile became the
+# product (frozen history; test_doc_drift composes its dead-name gate from it).
+TOOLS_REMOVED_IN_0_6: tuple[str, ...] = (
+    "create_netlist",
+    "read_circuit",
+    "list_components",
+    "set_component_value",
+    "parameter",
+    "edit_directive",
+    "export_netlist",
+    "reset_schematic",
+    "symbol_info",
+    "component_info",
+    "wire_pins",
+    "create_schematic",
+    "trace_net",
+    "validate_netlist",
+    "diff_circuit",
+    "apply_schematic_ops",
+    "signal_stats",
+    "get_waveform",
+    "export_waveform",
+    "query_value",
+    "operating_point",
+    "simulation_summary",
+    "edge_metrics",
+    "transient_response",
+    "timing_between",
+    "periodic_metrics",
+    "thd",
+    "noise_integral",
+    "measurement_stats",
+    "stability_metrics",
+    "bode_metrics",
+    "resonance",
+    "return_loss",
+    "ac_structure",
+    "run_simulation",
+    "check_job",
+    "cancel_job",
+    "configure_sweep",
+    "run_sweep",
+    "configure_montecarlo",
+    "run_montecarlo",
+    "batch_results",
+    "find_model",
+    "load_library",
+    "unload_library",
+    "list_libraries",
+    "server_status",
+    "recent",
+)
+
+# Delegated handlers that legitimately declare NO structuredContent contract:
+# name -> (reason, emits_intermediate_structured_content). The second field
+# derives the conformance hook's walk-stop set — an adapter that emits
+# intermediate structuredContent needs the frame walk stopped at it, while a
+# text-only one must NOT stop the walk (that would subtract coverage for
+# anything emitting beneath its frame). test_conformance_hook_armed.py's
+# closure test pins the exemptions fail-closed (a name that gains a contract,
+# or stops being delegated to, fails the suite).
+NO_CONTRACT_DELEGATES: dict[str, tuple[str, bool]] = {
+    "handle_pulse_response": ("transient adapter; its former dispatcher had no schema", True),
+    "handle_disturbance_response": (
+        "transient adapter; its former dispatcher had no schema",
+        True,
+    ),
+    "handle_cancel_job": ("text-only confirmation; emits no structuredContent of its own", False),
+}
+
+INTERMEDIATE_NO_SCHEMA_ADAPTERS = tuple(
+    name for name, (_, emits_intermediate) in NO_CONTRACT_DELEGATES.items() if emits_intermediate
+)
+
+
 class FakeSim:
     """Stub simulator class for tests that need a default simulator."""
 
     spice_exe: typing.ClassVar[list[str]] = ["/fake/path/sim.exe"]
+
+
+async def terminal_experiment(state, payload: dict, *, wait_timeout_s: int = 120) -> dict:
+    """Submit an experiment and return its TERMINAL receipt.
+
+    A receipt whose dwell expired is followed through the real ``jobs(wait)``
+    control plane — the route a client has — rather than by polling the store.
+    Shared by the live ngspice/LTspice end-to-end files.
+    """
+    from ltspice_mcp.tools.experiments import (
+        JobsInput,
+        RunExperimentsInput,
+        handle_jobs,
+        handle_run_experiments,
+    )
+
+    result = await handle_run_experiments(RunExperimentsInput.model_validate(payload), state)
+    data = result.structuredContent
+    assert data is not None, result.content[0].text
+    if data["outcome"] == "in_progress":
+        waited = await handle_jobs(
+            JobsInput.model_validate(
+                {"action": "wait", "job_id": data["job_id"], "timeout_s": wait_timeout_s}
+            ),
+            state,
+        )
+        data = waited.structuredContent
+        assert data is not None
+    assert not data.get("timed_out"), f"job {data.get('job_id')} never went terminal: {data}"
+    return data
 
 
 def stage_recorded_fixture(work_dir: Path, name: str) -> Path:
@@ -414,49 +540,53 @@ def _enforce_output_schema_conformance():
     """
     import sys
 
+    # The contract belongs to the handler, not to its registration: both
+    # @registry.tool and @declare_output_schema stamp __output_schema__ on the
+    # module-visible handler, so ONE scan over the tool modules finds every
+    # contract — registered tool or internal adapter alike — and a delegated
+    # emission validates against the ADAPTER's contract instead of falling
+    # through to the delegating tool's outer envelope. Keyed by code object
+    # (the frame that emits; __wrapped__ unwraps the registry's validation
+    # wrapper), so two same-named handlers in different modules cannot share
+    # a validator.
+    from types import ModuleType
+
     import jsonschema
 
     import ltspice_mcp.tools as tools_pkg
-    from ltspice_mcp.config import VALID_PROFILES
     from ltspice_mcp.tools import _base as base_mod
-    from ltspice_mcp.tools import get_tools_for_profile
 
-    # Merge every profile's dispatch so tools exposed only by a non-"full"
-    # profile (the six consolidated tools) can't evade the conformance hook.
-    # A tool registered in several profiles resolves to the same RegisteredTool.
-    dispatch: dict = {}
-    for _profile in VALID_PROFILES:
-        _, _prof_dispatch = get_tools_for_profile(_profile)
-        dispatch.update(_prof_dispatch)
-    code_to_tool: dict = {}
-    validators: dict = {}
-    for name, reg in dispatch.items():
-        if reg.definition.outputSchema is None:
-            continue
-        # reg.handler is the registry's validation wrapper — a closure whose
-        # code object is SHARED by every tool, so it can't identify the
-        # emitter. @wraps preserves the original under __wrapped__; its code
-        # object is unique per handler and is the frame that actually calls
-        # format_response.
-        target = getattr(reg.handler, "__wrapped__", reg.handler)
-        code_to_tool[target.__code__] = name
-        validators[name] = jsonschema.Draft202012Validator(reg.definition.outputSchema)
+    tool_modules = {
+        mod
+        for mod in vars(tools_pkg).values()
+        if isinstance(mod, ModuleType) and mod.__name__.startswith("ltspice_mcp.tools.")
+    }
+    contracts: dict = {}  # code object -> (handler name, compiled validator)
+    for mod in tool_modules:
+        for obj in vars(mod).values():
+            schema = getattr(obj, "__output_schema__", None)
+            if schema is None or not callable(obj):
+                continue
+            code = getattr(obj, "__wrapped__", obj).__code__
+            if code not in contracts:
+                contracts[code] = (obj.__name__, jsonschema.Draft202012Validator(schema))
 
     # Intermediate-emitter frames whose structuredContent must NOT be validated
     # against the calling tool's schema. analyze_results delegates to compute
-    # handlers to read a value out of each one's CallToolResult; that emission is
-    # not analyze_results' returned envelope. When the delegate is a REGISTERED
-    # tool (signal_stats, bode_metrics, …) its own frame catches the emission and
-    # validates it against its own (matching) schema — correct. The two transient
-    # adapters are UNREGISTERED and analyze_results calls them directly, so the
-    # walk would otherwise fall through to analyze_results' schema; their normal
-    # dispatcher (transient_response) has no schema, so nothing validated them
-    # before. Stop the walk at exactly those two.
-    from ltspice_mcp.tools.analysis import handle_disturbance_response, handle_pulse_response
+    # handlers to read a value out of each one's CallToolResult; that emission
+    # is not analyze_results' returned envelope. A delegate that declares a
+    # contract (via @registry.tool or @declare_output_schema) is caught by its
+    # own frame above. The two transient adapters declare NONE — their former
+    # dispatcher (transient_response) had no schema, so nothing ever validated
+    # them — and the walk would otherwise fall through to analyze_results'
+    # schema. Stop the walk at exactly those; the closure test in
+    # test_conformance_hook_armed.py pins the full schema-less delegate set
+    # fail-closed.
+    from ltspice_mcp.tools import analysis as _analysis_mod
 
     _skip_codes: set = {
         getattr(fn, "__wrapped__", fn).__code__
-        for fn in (handle_pulse_response, handle_disturbance_response)
+        for fn in (getattr(_analysis_mod, name) for name in INTERMEDIATE_NO_SCHEMA_ADAPTERS)
     }
 
     def _validate(result) -> None:
@@ -472,12 +602,13 @@ def _enforce_output_schema_conformance():
                 # An unregistered compute adapter's intermediate emission — the
                 # delegating tool reads a value from it but does not return it.
                 return
-            tool = code_to_tool.get(frame.f_code)
-            if tool is not None:
-                errors = list(validators[tool].iter_errors(sc))
+            contract = contracts.get(frame.f_code)
+            if contract is not None:
+                name, validator = contract
+                errors = list(validator.iter_errors(sc))
                 if errors:
                     raise AssertionError(
-                        f"{tool}: structuredContent violates its declared output_schema: "
+                        f"{name}: structuredContent violates its declared output_schema: "
                         + "; ".join(e.message for e in errors[:3])
                     )
                 return
@@ -501,10 +632,12 @@ def _enforce_output_schema_conformance():
         return result
 
     # Handlers bind these helpers at import time (``from _base import
-    # format_response``), so patch the binding in every tool module, not
-    # just the defining module. The module set is derived from the
-    # registered handlers themselves so a new tool module can't silently
-    # escape conformance checking.
+    # format_response``), so patch the binding in every tool module, not just
+    # the defining module. The module set is the same package-derived set the
+    # contract scan used — deriving it from REGISTERED handlers would silently
+    # drop modules whose tools became unregistered adapters (circuit.py and
+    # simulation.py carry contracts but no registrations), leaving their
+    # emissions unvalidated.
     #
     # Known limitation: only bindings literally named format_response /
     # json_response are patched — an aliased import (``from _base import
@@ -512,14 +645,8 @@ def _enforce_output_schema_conformance():
     # check. tests/test_conformance_hook_armed.py proves the patch chain is
     # live for the canonical binding; it cannot prove no alias exists. Keep
     # the canonical names when adding tool modules.
-    import sys as _sys
-
     saved = []
-    handler_modules = {
-        _sys.modules[getattr(reg.handler, "__wrapped__", reg.handler).__module__]
-        for reg in dispatch.values()
-    }
-    for mod in handler_modules | {base_mod, tools_pkg}:
+    for mod in tool_modules | {base_mod, tools_pkg}:
         for attr, checked, orig in (
             ("format_response", checked_format_response, original_format),
             ("json_response", checked_json_response, original_json),

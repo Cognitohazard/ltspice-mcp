@@ -36,7 +36,12 @@ from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executa
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import circuit_lock_target
-from ltspice_mcp.tools.circuit import handle_set_component_value
+from ltspice_mcp.tools.circuit import (
+    ListComponentsInput,
+    SetComponentValueInput,
+    handle_list_components,
+    handle_set_component_value,
+)
 from tests.conftest import make_batch_job, make_sim_job
 
 
@@ -91,7 +96,10 @@ class TestCircuitFileLock:
         t = _hold_lock_then_write(cir, peer_version, hold_s=0.4)
 
         await handle_set_component_value(
-            {"path": cir.name, "reference": "R1", "value": "2k"}, state_no_sim
+            SetComponentValueInput.model_validate(
+                {"path": cir.name, "reference": "R1", "value": "2k"}
+            ),
+            state_no_sim,
         )
         t.join(5)
         text = cir.read_text()
@@ -104,14 +112,18 @@ class TestCircuitFileLock:
         # Same scenario through the cached-AscEditor path: the editor fetch
         # stats the file INSIDE the guard, so the peer's completed write
         # forces a reload instead of saving a stale in-memory editor.
-        from ltspice_mcp.tools.circuit import handle_list_components
 
-        await handle_list_components({"path": asc_file.name}, asc_state)  # warm the cache
+        await handle_list_components(
+            ListComponentsInput.model_validate({"path": asc_file.name}), asc_state
+        )  # warm the cache
         peer_version = asc_file.read_bytes() + b"TEXT -48 320 Left 2 ;external marker\n"  # noqa: ASYNC240
         t = _hold_lock_then_write(asc_file, peer_version, hold_s=0.4)
 
         await handle_set_component_value(
-            {"path": asc_file.name, "reference": "R1", "value": "2k2"}, asc_state
+            SetComponentValueInput.model_validate(
+                {"path": asc_file.name, "reference": "R1", "value": "2k2"}
+            ),
+            asc_state,
         )
         t.join(5)
         data = asc_file.read_bytes()  # noqa: ASYNC240
@@ -132,7 +144,10 @@ class TestCircuitFileLock:
         try:
             with pytest.raises(NetlistError, match="locked by another ltspice-mcp process"):
                 await handle_set_component_value(
-                    {"path": cir.name, "reference": "R1", "value": "2k"}, state_no_sim
+                    SetComponentValueInput.model_validate(
+                        {"path": cir.name, "reference": "R1", "value": "2k"}
+                    ),
+                    state_no_sim,
                 )
         finally:
             release.set()
@@ -150,10 +165,11 @@ class TestCircuitFileLock:
             _get_asc_editor,
             _resolve_pin,
             handle_add_net_label,
-            handle_list_components,
         )
 
-        await handle_list_components({"path": asc_file.name}, asc_state)  # warm the cache
+        await handle_list_components(
+            ListComponentsInput.model_validate({"path": asc_file.name}), asc_state
+        )  # warm the cache
         original = asc_file.read_bytes()  # noqa: ASYNC240
         moved = original.replace(b"SYMBOL res 128 112 R90", b"SYMBOL res 128 240 R90")
         assert moved != original, "fixture layout changed — update the SYMBOL line above"
@@ -192,7 +208,10 @@ class TestCircuitFileLock:
         cir = work_dir / "tidy.cir"
         cir.write_text("* tidy\nR1 in 0 1k\n.END\n")
         await handle_set_component_value(
-            {"path": cir.name, "reference": "R1", "value": "2k"}, state_no_sim
+            SetComponentValueInput.model_validate(
+                {"path": cir.name, "reference": "R1", "value": "2k"}
+            ),
+            state_no_sim,
         )
         assert (work_dir / ".ltspice-mcp" / "locks" / "tidy.cir.lock").exists()
         assert not (work_dir / "tidy.cir.lock").exists()

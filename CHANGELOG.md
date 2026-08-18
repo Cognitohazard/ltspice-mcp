@@ -8,6 +8,35 @@ tool-surface changes.
 
 ## [Unreleased]
 
+### Removed — the tool surface is now the consolidated profile
+
+The `full` (49-tool) and `agentic` (41-tool) MCP tool profiles are removed.
+The server now exposes ONE surface: `run_experiments`, `jobs`,
+`analyze_results`, `inspect`, `edit_schematic`, `verify_circuit`, plus the
+`plot_waveform` widget — the same six operations the Python API
+(`ltspice_mcp.api`) exposes in-process. Everything the old tools did is
+reachable through this surface (sweeps and Monte Carlo are `run_experiments`
+variations; the per-metric analysis tools are `analyze_results` recipes;
+schematic reads are `inspect` kinds; schematic mutations are `edit_schematic`
+ops; netlist export/lint/diff is `verify_circuit`), except session library
+mounting (`load_library`/`unload_library`/`list_libraries`) and standalone
+CSV waveform export, which are removed without replacement — use deck
+`.lib`/`.include` directives and `analyze_results` waveform recipes instead.
+
+**Migration.** `[tools] profile` remains a recognized config key for this
+release: the values `"full"` and `"agentic"` log a warning naming this
+removal and the pin that restores the old surface — `ltspice-mcp==0.5.*` —
+and the consolidated surface is served. The key is deleted in 0.7.0.
+
+**Rollback has two distinct shapes.** Tools whose handlers survive as
+internal adapters in `tools/circuit.py` / `tools/analysis.py` /
+`tools/simulation.py` (the netlist, schematic, simulation-lifecycle, and
+analysis tools) are one `@registry.tool(...)` decorator away from
+re-registration. The library, sweep/Monte-Carlo configuration, and status
+tools are NOT: their modules (`tools/library.py`, `tools/advanced.py`,
+`tools/status.py`) were deleted outright, so recovering them means restoring
+the module from v0.5.x or git history first.
+
 ### Added
 
 - `run_simulation(simulator=)` — per-run simulator selection by detected name

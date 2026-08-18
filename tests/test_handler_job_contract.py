@@ -33,7 +33,7 @@ import pytest
 from mcp import types
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.errors import BatchJobError, ResultError
+from ltspice_mcp.errors import ResultError
 from ltspice_mcp.state import (
     NON_TERMINAL_LIVE_STATUSES,
     TERMINAL_STATUSES,
@@ -41,7 +41,6 @@ from ltspice_mcp.state import (
     SessionState,
     SimulationJob,
 )
-from ltspice_mcp.tools.advanced import GetBatchResultsInput, handle_batch_results
 from ltspice_mcp.tools.analysis import MeasurementStatsInput, handle_measurement_stats
 from ltspice_mcp.tools.circuit import (
     CircuitReadInput,
@@ -51,6 +50,7 @@ from ltspice_mcp.tools.circuit import (
     handle_read_circuit,
     handle_set_component_value,
 )
+from ltspice_mcp.tools.experiments import JobsInput, handle_jobs
 from ltspice_mcp.tools.simulation import (
     CancelJobInput,
     CheckJobInput,
@@ -110,20 +110,24 @@ def _make_sim(
 
 
 class TestBatchStatusCompleteness:
-    """batch_results must format EVERY terminal batch status without raising
-    'unexpected status'. Regression class: the interrupted-status formatter
-    bug — a hardcoded status allowlist omitted a real terminal status."""
+    """The jobs status reader must format EVERY terminal batch status without
+    raising 'unexpected status'. Regression class: the interrupted-status
+    formatter bug — a hardcoded status allowlist omitted a real terminal
+    status."""
 
     @pytest.mark.parametrize("status", BATCH_TERMINAL_STATUSES)
-    async def test_batch_results_handles_terminal_status(
+    async def test_jobs_status_handles_terminal_batch_status(
         self, status: str, state_no_sim: SessionState
     ):
         _make_batch(state_no_sim, status=status)
-        result = await handle_batch_results(GetBatchResultsInput(job_id="b1"), state_no_sim)
-        text = _text(result).lower()
-        assert "unexpected status" not in text
+        result = await handle_jobs(
+            JobsInput.model_validate({"action": "status", "job_id": "b1"}), state_no_sim
+        )
+        data = result.structuredContent
+        assert data is not None
+        assert "unexpected status" not in _text(result).lower()
         # the status is surfaced to the caller (not swallowed)
-        assert status in text
+        assert data["status"] == status
 
 
 class TestSingleSimStatusCompleteness:
@@ -203,19 +207,25 @@ class TestJobHandlerDualStore:
             await handle_measurement_stats(MeasurementStatsInput(job_id="j1"), state_no_sim)
 
 
-class TestCrossTypeRedirects:
-    """A job id of the OTHER run type must get an honest redirect naming the
-    right tool — never "not found" for a job that exists in the store."""
+class TestCrossTypeResolution:
+    """The consolidated jobs reader is type-agnostic: an id from EITHER store
+    (single-sim or batch) must resolve through the same status action — never
+    "not found" for a job that exists, never a wrong-type rejection. This is
+    the dual-store invariant that replaced the old per-type tools' redirect
+    contract when those tools merged into one."""
 
-    async def test_batch_results_single_sim_id_redirects(self, state_no_sim: SessionState):
+    async def test_jobs_status_resolves_both_stores(self, state_no_sim: SessionState):
         _make_sim(state_no_sim, status="completed", log_file=LTSPICE_TRAN_RC_LOG)
-        with pytest.raises(BatchJobError) as exc:
-            await handle_batch_results(GetBatchResultsInput(job_id="j1"), state_no_sim)
-        msg = str(exc.value)
-        assert "single simulation job" in msg
-        # Redirect names only job-id-accepting tools, never simulation_summary.
-        assert "check_job" in msg
-        assert "simulation_summary" not in msg
+        _make_batch(state_no_sim, status="completed")
+        for job_id in ("j1", "b1"):
+            result = await handle_jobs(
+                JobsInput.model_validate({"action": "status", "job_id": job_id}),
+                state_no_sim,
+            )
+            data = result.structuredContent
+            assert data is not None
+            assert data["job_id"] == job_id
+            assert data["status"] == "completed"
 
 
 class TestCancelJobRoutingFork:
@@ -356,14 +366,11 @@ class TestCheckJobOutputSchemaContract:
         # every plain validate() call otherwise.
         import jsonschema
 
-        from ltspice_mcp.tools import get_tools_for_profile
-
         cached = getattr(cls, "_cached_validator", None)
         if cached is None:
-            # The wire list drops outputSchema; the declared shape lives on
-            # the dispatch-side definition.
-            _, dispatch = get_tools_for_profile("full")
-            schema = dispatch["check_job"].definition.outputSchema
+            # check_job is an internal adapter now; its declared shape lives
+            # on the handler itself (declare_output_schema).
+            schema = getattr(handle_check_job, "__output_schema__", None)
             assert schema is not None
             cached = jsonschema.Draft202012Validator(schema)
             cls._cached_validator = cached

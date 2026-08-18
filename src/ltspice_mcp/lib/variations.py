@@ -182,17 +182,16 @@ class ModelRule(RandomRuleBase):
 
 
 class MismatchRule(VariationModel):
-    """Pelgrom mismatch rule kept field-for-field with the shipped tool model.
+    """Pelgrom mismatch rule.
 
     σ(ΔVTH) = AVT/√(W·L) and σ(ΔK)/K = AK/√(W·L), sampled INDEPENDENTLY per
     instance per run.
 
     The field descriptions carry the two facts a caller cannot recover from a
     result — the coefficients' UNITS and the inversion from a target sigma — and
-    nothing else. Everything the sibling model in ``tools/advanced.py`` says
-    about prefixes and BSIM parameter names lives in ``spice://guide``: this
-    schema is on the wire in every session, and prose that only restates a
-    field's own name is rent with no reader.
+    nothing else. Prefix conventions and BSIM parameter names live in
+    ``spice://guide``: this schema is on the wire in every session, and prose
+    that only restates a field's own name is rent with no reader.
     """
 
     rule: Literal["mismatch"]

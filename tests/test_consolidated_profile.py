@@ -1,9 +1,8 @@
-"""Profile wiring for the EXPERIMENTAL consolidated six-tool surface.
+"""Profile wiring for the consolidated tool surface — the only one since 0.6.0.
 
-Locks the exposure counts (full 49 / agentic 41 / consolidated 6), the design
-annotations table (mcp_v1_design.md section 3, normative), env-var profile
-selection, and profile-aware error hints that never name a tool the
-consolidated profile hides.
+Locks the exposed set, the design annotations table (mcp_v1_design.md section 3,
+normative), env-var profile selection, and error hints that never name a tool
+the surface no longer carries.
 """
 
 from __future__ import annotations
@@ -16,6 +15,11 @@ import pytest
 from ltspice_mcp.config import VALID_PROFILES, ServerConfig
 from ltspice_mcp.server import _ERROR_HINTS, _get_error_hint
 from ltspice_mcp.tools import get_tools_for_profile
+from tests.conftest import TOOLS_REMOVED_IN_0_6 as _TOOLS_REMOVED_TUPLE
+
+# Single-homed in conftest; frozen view under the name this file always used.
+TOOLS_REMOVED_IN_0_6 = frozenset(_TOOLS_REMOVED_TUPLE)
+
 
 CONSOLIDATED_TOOLS = frozenset(
     {
@@ -25,8 +29,17 @@ CONSOLIDATED_TOOLS = frozenset(
         "edit_schematic",
         "verify_circuit",
         "inspect",
+        "plot_waveform",
     }
 )
+
+# The 0.5 tool surface, deleted with the "full"/"agentic" profiles in 0.6.0.
+# Kept as data because it is what the text guards scan for: an error hint or a
+# prompt that still names one of these sends the caller at a tool no client can
+# call any more, and the name alone reads as if it were live. Also imported by
+# test_prompts. Two entries ("parameter", "recent") are ordinary English words,
+# so prose that happens to use them trips the scan — the fix is to reword the
+# hint or prompt, not to drop the name from this set.
 
 # mcp_v1_design.md section 3 — the normative annotations table.
 # (readOnlyHint, destructiveHint, idempotentHint, openWorldHint)
@@ -37,6 +50,9 @@ ANNOTATIONS_TABLE: dict[str, tuple[bool, bool, bool, bool]] = {
     "edit_schematic": (False, True, False, False),
     "verify_circuit": (False, True, True, False),
     "inspect": (True, False, True, False),
+    # The render tool that survived the profile removal: it writes an HTML file
+    # and hands it to the local desktop, so it is neither read-only nor closed.
+    "plot_waveform": (False, False, False, True),
 }
 
 
@@ -46,28 +62,22 @@ def _names(profile: str) -> set[str]:
 
 
 class TestExposureCounts:
-    """Exact counts — a tool added to the wrong profile trips one of these."""
+    """Exact membership — a tool registered by accident trips one of these."""
 
-    def test_full_exposes_exactly_49(self):
-        assert len(_names("full")) == 49
-
-    def test_agentic_exposes_exactly_41(self):
-        assert len(_names("agentic")) == 41
-
-    def test_consolidated_exposes_exactly_the_six(self):
+    def test_consolidated_exposes_exactly_the_declared_surface(self):
         assert _names("consolidated") == set(CONSOLIDATED_TOOLS)
 
-    def test_consolidated_count_is_six(self):
-        assert len(_names("consolidated")) == 6
+    def test_consolidated_is_the_only_profile(self):
+        assert set(VALID_PROFILES) == {"consolidated"}
 
-    def test_consolidated_tools_live_only_in_consolidated(self):
-        # Clean break: the six are exposed by no other profile.
-        assert not (set(CONSOLIDATED_TOOLS) & _names("full"))
-        assert not (set(CONSOLIDATED_TOOLS) & _names("agentic"))
+    def test_the_removed_surface_is_really_gone(self):
+        # If a 0.5 tool is ever re-registered, the text guards below (and the
+        # prompt guard) would start rejecting a name that is legitimate again.
+        assert TOOLS_REMOVED_IN_0_6.isdisjoint(_names("consolidated"))
 
 
 class TestAnnotationsTable:
-    """Each of the six against its design-table row."""
+    """Each exposed tool against its design-table row."""
 
     @pytest.mark.parametrize("name", sorted(CONSOLIDATED_TOOLS))
     def test_annotations_match_design_table(self, name: str):
@@ -92,14 +102,17 @@ class TestAnnotationsTable:
         }
         assert read_only == {"inspect"}
 
-    def test_run_experiments_is_the_only_open_world_tool(self):
+    def test_only_the_tools_that_leave_the_process_are_open_world(self):
+        """run_experiments launches a simulator; plot_waveform opens a browser.
+        Nothing else reaches outside, and a tool that claims to is telling the
+        client to gate a call that never leaves the box."""
         defs, _ = get_tools_for_profile("consolidated")
         open_world = {
             tool_def.name
             for tool_def in defs
             if tool_def.annotations and tool_def.annotations.openWorldHint
         }
-        assert open_world == {"run_experiments"}
+        assert open_world == {"run_experiments", "plot_waveform"}
 
 
 class TestEnvVarProfileSelection:
@@ -118,33 +131,25 @@ class TestEnvVarProfileSelection:
         assert config.tool_profile == "consolidated"
 
 
-class TestProfileAwareHints:
-    """Consolidated hints resolve and never name a tool the profile hides."""
+class TestErrorHints:
+    """Hints are recovery instructions, so they must name callable tools."""
 
-    def test_every_hint_resolves_for_consolidated(self):
+    def test_every_hint_resolves(self):
         for err_type in _ERROR_HINTS:
-            hint = _get_error_hint(err_type, "consolidated")
+            hint = _get_error_hint(err_type)
             assert isinstance(hint, str) and hint
 
-    def test_consolidated_hints_name_no_hidden_tool(self):
-        hidden = _names("full") - set(CONSOLIDATED_TOOLS)
+    def test_no_hint_names_a_removed_tool(self):
         for err_type, hint in _ERROR_HINTS.items():
-            text = hint.consolidated
-            for tool in hidden:
-                assert not re.search(rf"\b{re.escape(tool)}\b", text), (
-                    f"{err_type.__name__} consolidated hint names hidden tool {tool!r}: {text!r}"
+            for tool in TOOLS_REMOVED_IN_0_6:
+                assert not re.search(rf"\b{re.escape(tool)}\b", hint), (
+                    f"{err_type.__name__} hint names removed tool {tool!r}: {hint!r}"
                 )
 
-    def test_unknown_profile_falls_back_to_full(self):
-        for err_type in _ERROR_HINTS:
-            assert _get_error_hint(err_type, "bogus") == _get_error_hint(err_type, "full")
-
-    def test_consolidated_hint_differs_from_full_where_full_names_a_hidden_tool(self):
-        # Sanity: at least some hints were genuinely rewritten for the profile,
-        # not copied from a `full` text that points at hidden tools.
-        rewritten = [
-            err_type.__name__
-            for err_type, hint in _ERROR_HINTS.items()
-            if hint.consolidated != hint.full
-        ]
-        assert rewritten
+    def test_every_hint_names_a_tool_the_caller_can_actually_call(self):
+        """A hint that names no tool is a dead end: the caller just failed, and
+        the recovery step has to be something it can invoke."""
+        live = _names("consolidated")
+        for err_type, hint in _ERROR_HINTS.items():
+            named = {tool for tool in live if re.search(rf"\b{re.escape(tool)}\b", hint)}
+            assert named, f"{err_type.__name__} hint names no callable tool: {hint!r}"
