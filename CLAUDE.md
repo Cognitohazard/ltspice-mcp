@@ -100,14 +100,14 @@ Key `lib/` modules:
 - `runner_manager.py` — centralized runner lifecycle (see Key Patterns)
 - `simulator.py` — simulator detection, WSL/Wine selection
 - `ltspice_wsl.py`, `wsl.py` — WSL path conversion and interop
-- `ac_analysis.py`, `signal_analysis.py`, `ac_structure.py` — pure-function analysis primitives for frequency-domain (.AC) and transient (.tran) `.raw` data; back the structured analysis tools (`bode_metrics`, `signal_stats`, etc.)
+- `ac_analysis.py`, `signal_analysis.py`, `ac_structure.py` — pure-function analysis primitives for frequency-domain (.AC) and transient (.tran) `.raw` data; back the `analyze_results` recipes through the internal metric adapters in `tools/analysis.py`
 - `raw_parser.py`, `log_parser.py` — simulation `.raw` / `.log` result parsing
 - `library_manager.py`, `library_parser.py`, `encoding.py` — component library handling + library/netlist encoding detection
 - `batch_results.py` — sweep/MC batch result extraction
 - `component_value.py` — element-class-typed dispatcher behind `set_component_value`
 - `cache.py` — `FileCache` for editor and result instances
 - `pathutil.py` — path security (`safe_path()`, `resolve_safe_path()`); `filelock.py` — cross-process advisory file locks
-- `recent.py` — global recently-touched-circuit index (`recent.json`); backs the `recent` tool + job preload
+- `recent.py` — global recently-touched-circuit index (`recent.json`); backs the startup job preload
 - `symbol_geometry.py`, `geometry.py` — .asy symbol parsing (pin positions, rotation transforms, bounding boxes) + shared 2D / bbox helpers
 - `mcp_logging.py`, `observability.py` — MCP protocol log notifications + structured job-lifecycle events
 
@@ -116,16 +116,16 @@ Self-describing helpers not listed above (`format.py`, `sweep_utils.py`, `deskto
 
 ### Tool Module Convention
 
-Tool modules (circuit, simulation, analysis, advanced, library, status) use a decorator-based registry. Each tool is registered via `@registry.tool()` in its module:
+Registered tools use a decorator-based registry via `@registry.tool()`:
 
 ```python
 @registry.tool(
     name="foo",
     description="...",
-    input_model=FooInput,          # subclass of ToolInput (Pydantic)
-    annotations=RO_ANNOTATIONS,    # or custom ToolAnnotations
-    profiles=("full", "agentic"),  # which profiles expose this tool
-    output_schema={...},           # optional: JSON Schema for structuredContent
+    input_model=FooInput,           # subclass of ToolInput (Pydantic)
+    annotations=RO_ANNOTATIONS,     # or custom ToolAnnotations
+    profiles=("consolidated",),     # the only profile since 0.6.0
+    output_schema={...},            # optional: JSON Schema for structuredContent
 )
 async def handle_foo(args: FooInput, state: SessionState) -> types.CallToolResult:
     ...
@@ -133,7 +133,7 @@ async def handle_foo(args: FooInput, state: SessionState) -> types.CallToolResul
 
 `tools/__init__.py` simply imports all tool modules to trigger registration, then exposes `get_tools_for_profile()` which delegates to `registry.get_for_profile()`. `SessionState.create()` calls this during lifespan init.
 
-To add a new tool: define it with `@registry.tool()` in the appropriate module and ensure the module is imported in `tools/__init__.py`. Set `profiles=("full", "agentic")` if it should appear in both profiles, or `profiles=("full",)` for full-only.
+**Registered tools vs. internal adapters.** Only the seven consolidated tools carry `@registry.tool`. The former full/agentic tools' handlers survive in `circuit.py` / `analysis.py` / `simulation.py` as **internal adapters** the consolidated tools delegate to; each adapter that emits `structuredContent` declares its contract with `@declare_output_schema(...)` (same schema argument forms as `registry.tool`). The contract belongs to the handler, not to its registration: both decorators stamp `__output_schema__`, and the test suite's conformance hook validates every emission at the first stack frame carrying a contract — so a delegated emission is checked against the ADAPTER's schema, never the delegating tool's envelope. A new delegation without a declaration fails `test_conformance_hook_armed.py`'s closure test. Re-exposing an adapter as an MCP tool is a decorator swap back to `@registry.tool(...)`; the `advanced`/`library`/`status` tool modules were deleted outright and come back only from git history.
 
 **Shared helpers in `_base.py`**: `text_response()`, `json_response()`, `format_response()` for building `CallToolResult`; `StrictModel` as the Pydantic base for strict validation config; `ToolInput(StrictModel)` as the base for top-level tool input models; `RO_ANNOTATIONS` for read-only tools; `paginate()` + `pagination_metadata()` for list endpoints; `PAGINATION_SCHEMA`, `PIN_SCHEMA`, `BBOX_SCHEMA` for reusable output schema fragments.
 
@@ -143,32 +143,15 @@ To add a new tool: define it with `@registry.tool()` in the appropriate module a
 
 ### Schematic Editing (.asc)
 
-Direct editing of LTspice `.asc` schematics is a first-class feature. All circuit tools live in **`tools/circuit.py`** — extension-based dispatch picks `AscEditor` or `SpiceEditor` automatically:
+Direct editing of LTspice `.asc` schematics is a first-class feature. The MCP surface for it is `edit_schematic` (typed op batch), `inspect` (symbol/net/components reads), and `verify_circuit` (lint/export/compare/render). The shared implementation lives in **`tools/circuit.py`** — extension-based dispatch picks `AscEditor` or `SpiceEditor` automatically. Two survival modes for its handlers: a few are genuinely delegated to (`handle_trace_net` behind `inspect(kind:"net")`, `handle_wire_pins` as an `edit_schematic` op via `_apply_op_inplace`), while the rest (`handle_read_circuit`, `handle_list_components`, `handle_symbol_info`, …) are retained adapters with no live caller — the consolidated tools reach the same shared internals (`_do_components`, the symbol resolver, `_net_partition`) directly, and the adapters are kept as the ratified decorator-swap rollback seam (see the CHANGELOG's rollback note), pinned by their direct tests:
 
-- **`read_circuit`** works on both `.cir` and `.asc` — returns raw netlist for `.cir`, or schematic layout (positions, labels, wires) for `.asc`.
-- **`list_components`** lists components (with optional `prefix` filter) or looks up a single component's value via `reference` param.
-- **`set_component_value`** handles both single (`reference`+`value`) and batch (`values` dict) modes.
-- **`parameter`** reads all .PARAM values (no args) or sets one (`name`+`value`).
-- **`edit_directive`** adds or removes SPICE directives via `action: "add"|"remove"`.
-- **Schematic-only tools** (`export_netlist`, `wire_pins`, `symbol_info`, `component_info`, `reset_schematic`) validate `.asc` extension and use `_get_asc_editor()`.
-- **`reset_schematic`** reverts an `.asc` to the byte snapshot taken before its first in-session mutation (recovery hatch). `_snapshot_asc()` captures it at the `_editing` choke point and in `apply_schematic_ops`; the snapshot lives on `state.asc_snapshots` (per-session only).
-- **`wire_pins`** (formerly `connect`, kept registered as a deprecated alias) wires two pins by reference (e.g., `M1.D` → `M4a.D`) with waypoint routing. Validates before writing: refuses diagonal wires, pin collisions, and wire junction overlaps. Warns on long runs and bbox crossings.
-- **The `apply_schematic_ops` `add_component` op** returns pin positions (with direction), bounding box, and overlap warnings; `symbol_info` provides the same geometry non-destructively for pre-placement planning.
-- **`symbol_info`** / **`component_info`** provide pin geometry for layout planning.
-- **`trace_net`** reports every pin/label/wire vertex on the net at a pin/`net:NAME`/`(x,y)`, flagging multi-label shorts. Built on the shared `_net_partition` union-find (also backs `_trace_nets`).
-
-#### Standalone tool vs. apply_schematic_ops op
-
-A schematic mutation is exposed as a **standalone MCP tool only when its result returns information the model acts on and the batch surface does not already cover the workflow** (structured `format_response`/`output_schema`). An ack-only mutation — one that just confirms "done" — lives **only as an `apply_schematic_ops` op**: a standalone tool's schema costs the model context whether or not it's ever called, and that cost is only earned by a useful return. MCP best practice is fewer, more capable tools (Anthropic's "writing tools for agents"; tool-selection accuracy degrades past roughly 15 tools), and this server is over budget. The rule:
-
-- **Standalone (structured return the model uses):** `wire_pins` (orthogonal routing result, collision/junction checks).
-- **Ops-only:** `add_component` returns its placed pins, bounding box, and overlap warnings from `apply_schematic_ops`; `symbol_info` is the non-destructive geometry preview, so a separate placement tool would duplicate both halves of that workflow. The ack-only mutations are `move_component`, `remove_component`, `set_component_attribute`, `add_net_label`, `remove_net_label`, and `remove_wire`. Their `handle_*` functions stay as unregistered internal handlers where direct tests still use them; the `apply_schematic_ops` op path (`_apply_op_inplace`) is what the MCP surface reaches.
-- **Lifecycle / entry exception:** `create_schematic` and `reset_schematic` stay standalone regardless of return shape — they have no batch home.
-- **Reads** (`read_circuit`, `list_components`, `symbol_info`, `component_info`, `trace_net`) stay standalone.
-
-**Consolidated analysis tools (clean break — no aliases):** `bode_metrics(mode="filter"|"slope"|"point"|"crossing")` is the single public AC tool; it dispatches to the now-unregistered internal compute adapters `handle_filter_metrics`/`handle_roll_off`/`handle_gain_at`/`handle_find_crossing` (still in `tools/analysis.py`, still unit-tested directly). `transient_response(mode="step"|"disturbance")` similarly dispatches to the internal `handle_pulse_response`/`handle_disturbance_response` adapters. `query_value(step_axis=, step_value=)` absorbs the former `step_get` (the `handle_step_get` adapter stays internal in `tools/circuit.py`; `query_value` imports it lazily). To re-expose any adapter, re-add its `@registry.tool(...)`. `bode_metrics(all_steps=true)` runs the chosen mode for every step of a `.step` sweep (per-step dispatch via the shared `_bode_dispatch`), returning a `steps` list.
-- **`export_netlist`** shows diff against previous export.
-- All tools use `"path"` as the file parameter name.
+- `handle_wire_pins` wires two pins by reference (e.g., `M1.D` → `M4a.D`) with waypoint routing. Validates before writing: refuses diagonal wires, pin collisions, and wire junction overlaps. Warns on long runs and bbox crossings. Reached as an `edit_schematic` op.
+- The `add_component` op returns pin positions (with direction), bounding box, and overlap warnings; `inspect(kind:"symbol")` provides the same geometry non-destructively for pre-placement planning.
+- `handle_trace_net` (behind `inspect(kind:"net")`) reports every pin/label/wire vertex on the net at a pin/`net:NAME`/`(x,y)`, flagging multi-label shorts. Built on the shared `_net_partition` union-find (also backs `_trace_nets`).
+- `handle_reset_schematic` reverts an `.asc` to the byte snapshot taken before its first in-session mutation (recovery hatch). `_snapshot_asc()` captures it at the `_editing` choke point; the snapshot lives on `state.asc_snapshots` (per-session only).
+- The ack-only mutations (`move_component`, `remove_component`, `set_component_attribute`, `add_net_label`, `remove_net_label`, `remove_wire`) are ops in `edit_schematic`'s batch; their `handle_*` functions stay as internal handlers where direct tests still use them (`_apply_op_inplace` is the op path).
+- The AC/transient metric adapters in `tools/analysis.py` (`handle_bode_metrics` with its mode dispatch, `handle_transient_response`, `handle_query_value` step addressing, and the rest) back `analyze_results` recipes the same way; `handle_step_get` stays internal in `tools/circuit.py`.
+- All path-taking surfaces use `"path"` as the file parameter name.
 
 AscEditor requires `.asy` symbol library files. Platform handling in `server.py:_configure_asc_editor()`:
 
@@ -220,27 +203,24 @@ TOML sections: `[simulator]`, `[security]`, `[simulation]`, `[analysis]`, `[logg
 
 **ngspice compatibility-mode gotcha:** spicelib runs ngspice in `kiltpsa` mode by default, whose `lt`/`ps` tokens make it read a sectioned `.lib <file> <section>` (the PDK corner-select idiom) as two plain includes and drop the section → "could not find include file". `[simulator] ngbehavior` (or `LTSPICE_MCP_NGBEHAVIOR`) overrides it (e.g. `"hsa"`), applied at startup by `lib/simulator.py:_apply_ngbehavior`; `services.ngbehavior_lib_hint` surfaces the fix on that failure. Runtime default unchanged (spicelib's).
 
-### Tool Profiles
+### Tool Profile
 
-`config.tool_profile` controls which tools are exposed. Set via `[tools] profile` in TOML or `LTSPICE_MCP_TOOL_PROFILE` env var.
+Since 0.6.0 the server has ONE profile, `consolidated` — 7 registered tools: six ops over
+three planes — EXECUTE (`run_experiments`, `jobs`), UNDERSTAND (`analyze_results`,
+`inspect`), AUTHOR (`edit_schematic`, `verify_circuit`) — all sharing one response envelope,
+plus `plot_waveform` (the interactive MCP-Apps waveform widget, kept by ruling; it predates
+the envelope and stays outside its contract). The six's handlers live in their own `tools/`
+modules (`experiments.py`, `analyze.py`, `schematic_edit.py`, `verify.py`,
+`inspect_tools.py`). The envelope contract, the per-tool argument shapes, and the rationale
+are in `.claude/plans/mcp_v1_design.md` — read it before changing any of the six; it is the
+ratified spec and this file deliberately does not duplicate it.
 
-| Profile | Tools | Use case |
-|-|-|-|
-| `full` (default) | All 49 | Any MCP client, automation, non-agent LLMs |
-| `agentic` | 41 | LLM agents with native file access (Read/Edit/Write) |
-| `consolidated` | 6 | Experimental — see below |
-
-The "agentic" profile removes 8 tools: the netlist-editing wrappers (`create_netlist`, `read_circuit`, `set_component_value`, `parameter`, `edit_directive`) and library session management (`load_library`, `unload_library`, `list_libraries`) — things capable agents do natively. It deliberately **keeps** `configure_sweep`/`configure_montecarlo`: the only producers of the `config_id` that `run_sweep`/`run_montecarlo` consume, and Monte Carlo perturbation + N-run aggregation (and the batch-sweep route) are not something an agent reproduces with native file edits the way it can a plain LTspice `.step`. It keeps simulation lifecycle, binary `.raw` parsing, batch run/results, `find_model` search, and the schematic-construction + wiring + inspection set (`create_schematic`, `apply_schematic_ops`, `wire_pins`, `export_netlist`, `reset_schematic`, `symbol_info`, `component_info`, `trace_net`) — geometry-aware .asc editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match. Component placement and the ack-only mutations (`move_component`, `remove_component`, `set_component_attribute`, `add_net_label`, `remove_net_label`, `remove_wire`) are reached through `apply_schematic_ops` (see the standalone-vs-op rule above).
-
-The **"consolidated" profile is experimental**: six tools over three planes — EXECUTE
-(`run_experiments`, `jobs`), UNDERSTAND (`analyze_results`, `inspect`), AUTHOR
-(`edit_schematic`, `verify_circuit`) — all sharing one response envelope. It shares no tools
-with the other two profiles, so it is additive: `full` and `agentic` are unaffected, and its
-handlers live in their own `tools/` modules (`experiments.py`, `analyze.py`,
-`schematic_edit.py`, `verify.py`, `inspect_tools.py`). The envelope contract, the per-tool
-argument shapes, and the rationale are in `.claude/plans/mcp_v1_design.md` — read it before
-changing any of the six; it is the ratified spec and this file deliberately does not
-duplicate it.
+The former `full` (49-tool) and `agentic` (41-tool) profiles were removed in 0.6.0. For one
+release, `[tools] profile` stays a *recognized* key: the values `"full"`/`"agentic"` produce
+a warning naming the removal and the `ltspice-mcp==0.5.*` pin, then the consolidated surface
+is served (the key is deleted in 0.7.0). `get_for_profile` raises if a profile resolves to
+zero tools — a working handshake advertising nothing is the failure mode that guard exists
+for.
 
 ### Public Python API (`ltspice_mcp.api`)
 
@@ -248,9 +228,11 @@ The same six ops are importable: `Api(working_dir=...)` boots the engine in-proc
 (`engine.bootstrap_library_engine` — the same bootstrap `server_lifespan` enters via
 `bootstrap_server_engine`) and exposes them as synchronous methods with **complete** results
 where the wire pages or caps, plus `load_raw`/`measurements` (numpy access, detached copies)
-and the AC/transient metric functions under their existing names. One evaluator, three doors
-(MCP / CLI / Python) — the handlers and the API consume the same evaluate/render seams, so
-anything that would fork semantics between doors is a defect. Things that will bite you if
+and the AC/transient metric functions under their existing names. One evaluator, two doors
+(MCP / Python) — the handlers and the API consume the same evaluate/render seams, so
+anything that would fork semantics between doors is a defect. (The `spice-mcp` CLI wrapper
+still exists in-tree but is slated for deletion at the 0.6.0 release; nothing new may depend
+on it.) Things that will bite you if
 unknown: one live engine session per PID (an atomic lease shared with the server lifespan —
 an `Api` inside a server process raises); the `Api` owns a private persistent event loop
 (per-call loops would invalidate the runner cache); `close()` cancels jobs this process owns,

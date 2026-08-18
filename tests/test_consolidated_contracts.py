@@ -35,14 +35,12 @@ from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.schematic_edit import _validate_view_cursors, _ViewCursors
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 
-CONSOLIDATED_TOOLS = (
-    "run_experiments",
-    "jobs",
-    "analyze_results",
-    "edit_schematic",
-    "verify_circuit",
-    "inspect",
-)
+# CONSOLIDATED_TOOLS = the six envelope ops; REGISTERED_TOOLS adds the plot
+# widget, which is registered by ruling but predates the shared response
+# envelope — it joins the surface completeness and size pins (every client
+# pays its schema), not the envelope contract matrix. Shared in conftest so
+# every file naming the surface reads one constant.
+from tests.conftest import CONSOLIDATED_TOOLS, REGISTERED_TOOLS
 
 # The single ratified outcome vocabulary (design section 2). No per-tool dialect
 # is allowed: every outcome enum any of the six declares must be a subset.
@@ -110,7 +108,7 @@ def _as_type_set(node: dict[str, Any]) -> set[str]:
 
 def test_budget_owner_matrix_pins_the_complete_consolidated_surface():
     schemas = _input_schemas()
-    assert set(schemas) == set(CONSOLIDATED_TOOLS)
+    assert set(schemas) == set(REGISTERED_TOOLS)
     owners = {name for name, schema in schemas.items() if "budget" in schema.get("properties", {})}
     assert owners == {"run_experiments", "jobs", "analyze_results", "inspect"}
 
@@ -317,6 +315,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     "edit_schematic": 13541,
     # LOWERED 8628 -> 8008: budget prose, as above.
     "inspect": 8008,
+    # The widget tool, kept by ruling; its schema is surface toll like any
+    # other and enters the same diet regime. RAISED 3672 -> 3686: the sibling-
+    # egress paragraph now routes to analyze_results recipes instead of the
+    # removed per-metric tools — the bytes buy referrals that resolve.
+    "plot_waveform": 3686,
     # LOWERED 3955 -> 3378: budget prose, as above.
     "jobs": 3378,
     # Adds budget/attached-view inputs, a shared object/columnar receipt row,
@@ -365,9 +368,10 @@ def _wire_sizes() -> dict[str, int]:
 
 
 class TestAdvertisedSurfaceBudget:
-    """The six tools' request schemas are pinned by size, in both directions."""
+    """The advertised tools' request schemas are pinned by size, in both
+    directions."""
 
-    @pytest.mark.parametrize("name", CONSOLIDATED_TOOLS)
+    @pytest.mark.parametrize("name", REGISTERED_TOOLS)
     def test_tool_stays_within_its_pin(self, name: str):
         actual = _wire_sizes()[name]
         budget = _SURFACE_BUDGET_CHARS[name]
@@ -378,7 +382,7 @@ class TestAdvertisedSurfaceBudget:
             "deliberately."
         )
 
-    @pytest.mark.parametrize("name", CONSOLIDATED_TOOLS)
+    @pytest.mark.parametrize("name", REGISTERED_TOOLS)
     def test_pin_has_not_gone_slack(self, name: str):
         actual = _wire_sizes()[name]
         budget = _SURFACE_BUDGET_CHARS[name]

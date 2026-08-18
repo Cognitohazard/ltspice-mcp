@@ -123,10 +123,10 @@ from ltspice_mcp.tools._base import (
     MEAS_ERRORS_SCHEMA,
     MEASUREMENTS_SCHEMA,
     OBSERVATIONS_SCHEMA,
-    RO_ANNOTATIONS,
     SUGGESTIONS_SCHEMA,
     WARNINGS_SCHEMA,
     ToolInput,
+    declare_output_schema,
     format_meas_errors,
     format_observations,
     format_response,
@@ -638,40 +638,8 @@ class SimulationSummaryInput(ToolInput):
     )
 
 
-@registry.tool(
-    name="signal_stats",
-    description=(
-        "Scalar summary of one signal in a .raw result. Use this when you need "
-        "a single number per metric (average, RMS, peak, etc.) — not a waveform "
-        "or a trend.\n\n"
-        "Transient: time-weighted mean, RMS, std, abs-mean, and min/max/pk-pk "
-        "using trapezoidal integration (RMS = sqrt(∫ y² dt / T)). This is "
-        "correct on SPICE's adaptive timestep — simple np.mean(y) would "
-        "overweight densely sampled regions. Optionally restrict to "
-        "[t_start, t_end]; passing no window averages the whole waveform "
-        "including any startup transient, which is usually wrong for RMS/mean.\n\n"
-        "DC: returns min/max/pk-pk and the simple/abs mean over the swept "
-        "axis, plus ``sweep_start_used``/``sweep_end_used``/``sweep_span``. "
-        "RMS and std are deliberately omitted — they're meaningless on a "
-        "non-time axis. Use t_start/t_end to restrict the sweep range.\n\n"
-        "AC: returns magnitude (dB) min/max/mean and phase (deg) min/max. "
-        "t_start/t_end are rejected for AC — use query_value for a "
-        "point at a specific frequency.\n\n"
-        "Noise: returns min/max/pk-pk of the noise spectral density over the "
-        "frequency axis, plus ``freq_start_used``/``freq_end_used``. Mean, RMS, "
-        "std, and duration are omitted — a plain mean of spectral density is "
-        "dominated by sample clustering and the sweep span, not the circuit; "
-        "min/max is the useful worst-case reading. t_start/t_end are rejected "
-        "— pass them via query_value at specific frequencies instead.\n\n"
-        "Related tools: for rise/fall times use edge_metrics; for "
-        "overshoot/settling use transient_response(mode='step'); for period/duty use "
-        "periodic_metrics; to aggregate .MEAS values across a sweep "
-        "use measurement_stats."
-    ),
-    input_model=SignalStatsInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "signal": {"type": "string"},
@@ -708,7 +676,7 @@ class SimulationSummaryInput(ToolInput):
             "observations": OBSERVATIONS_SCHEMA,
             "warnings": WARNINGS_SCHEMA,
         },
-    },
+    }
 )
 async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
@@ -992,33 +960,8 @@ class GetWaveformInput(ToolInput):
     )
 
 
-@registry.tool(
-    name="get_waveform",
-    description=(
-        "Decimated numeric egress FOR THE MODEL: returns a min/max-preserving "
-        "stat-envelope of one real-valued signal as DATA in your context (numbers, "
-        "not a picture) over a time/sweep/frequency window — for when a scalar isn't "
-        "enough and you need the SHAPE (switching nodes, amplifier internal nodes, "
-        "startup transients).\n\n"
-        "Splits the window into equal-time buckets; each bucket reports the raw "
-        "sample min/max (a narrow spike or ringing peak is never averaged away), "
-        "time-weighted trapezoidal mean/rms (correct on SPICE's adaptive "
-        "timestep), pk_pk, and crest_factor (peak/rms — high = impulsive/spiky). "
-        "Scalar-guided zoom: read the envelope, then re-request a narrower "
-        "[t_start, t_end] to resolve a region at higher resolution (same call, "
-        "tighter window). The ``observations`` list surfaces FACTS, not verdicts "
-        "(decimation coverage, dropped non-finite samples, which bucket has the "
-        "largest pk-to-pk) — you decide what the shape means.\n\n"
-        "Works on transient (.tran), DC sweep (.dc), and noise (.noise) results. "
-        "Sibling egress, don't confuse: export_waveform writes EVERY sample to a "
-        "CSV FILE for your own code; plot_waveform renders an interactive PICTURE "
-        "for a human to look at. For complex AC data use bode_metrics; for a single "
-        "scalar use signal_stats; for one point value use query_value."
-    ),
-    input_model=GetWaveformInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "signal": {"type": "string"},
@@ -1049,7 +992,7 @@ class GetWaveformInput(ToolInput):
             },
             "observations": OBSERVATIONS_SCHEMA,
         },
-    },
+    }
 )
 async def handle_get_waveform(args: GetWaveformInput, state: SessionState):
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
@@ -1446,38 +1389,8 @@ class ExportWaveformInput(ToolInput):
     )
 
 
-@registry.tool(
-    name="export_waveform",
-    description=(
-        "Full-fidelity waveform egress: write every sample of one or more signals "
-        "to a CSV file on disk and return its path — for when you want to compute on "
-        "the raw data yourself (FFT, custom metrics, cross-correlation) rather than "
-        "read a scalar or a decimated envelope.\n\n"
-        "Lossless within the chosen window (no decimation — that is get_waveform's "
-        "job). Works on transient (.tran), DC sweep (.dc), AC (.ac), and noise "
-        "(.noise). Complex AC traces are written as magnitude(dB)+phase(deg) by "
-        "default (``complex_format`` selects re/im or both); phase is the wrapped "
-        "np.angle — run np.unwrap yourself for a continuous curve. A stepped "
-        "(.step / Monte-Carlo) run is written tidy/long: one row per (step, sample) "
-        "with leading step_index/step_value columns, because each transient step has "
-        "its own time vector. The ``observations`` list surfaces FACTS (rows written, "
-        "window coverage, non-finite samples KEPT, the complex format used) — not "
-        "verdicts.\n\n"
-        "Returns the CSV path plus row/column counts; read the file with your own "
-        "tools. Sibling egress, don't confuse: get_waveform returns a DECIMATED "
-        "envelope as numbers in your context (no file); plot_waveform renders an "
-        "interactive PICTURE for a human. For a single scalar use "
-        "signal_stats/query_value."
-    ),
-    input_model=ExportWaveformInput,
-    annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=False,
-    ),
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "path": {"type": "string"},
@@ -1491,7 +1404,7 @@ class ExportWaveformInput(ToolInput):
             "complex_format": {"type": ["string", "null"]},
             "observations": OBSERVATIONS_SCHEMA,
         },
-    },
+    }
 )
 async def handle_export_waveform(args: ExportWaveformInput, state: SessionState):
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
@@ -1689,29 +1602,8 @@ def _query_x_label(raw, sim_type: str) -> str:
     return "t"
 
 
-@registry.tool(
-    name="query_value",
-    description=(
-        "Look up the value of a signal at a specific time point (transient) or "
-        "frequency (AC). Returns the nearest data point without interpolation.\n\n"
-        "To pick a step of a .step/.DC sweep by its axis VALUE (rather than a "
-        "raw step index), pass ``step_axis`` + ``step_value`` (e.g. "
-        "step_axis='temp', step_value='27'); ``at`` then selects the inner-axis "
-        "point within that step (optional). AC samples also return "
-        "``magnitude_linear`` alongside ``magnitude_db``/``phase_deg``.\n\n"
-        "To query a run of a completed sweep/MC job, pass ``job_id`` + "
-        "``run_index`` instead of ``raw_file`` — the run is analyzed like any "
-        "standalone raw.\n\n"
-        "This is one signal at one point (``signal=``). For many signals, or a "
-        "whole waveform over a window, use export_waveform (``signals=``).\n\n"
-        "If the run hit a run-level solve failure (singular matrix / "
-        "non-convergence), that simulator line is relayed into ``warnings`` — the "
-        "value is still returned, but the whole solve is suspect, so read it."
-    ),
-    input_model=QueryValueInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "signal": {"type": "string"},
@@ -1733,7 +1625,7 @@ def _query_x_label(raw, sim_type: str) -> str:
             "actual_at": {"type": "number"},
             "warnings": WARNINGS_SCHEMA,
         },
-    },
+    }
 )
 async def handle_query_value(args: QueryValueInput, state: SessionState):
     """Query signal value at a specific time/frequency, or at a chosen sweep step."""
@@ -2159,24 +2051,7 @@ async def _finish_metric(
     return format_response("\n".join(lines + _warning_lines(data["warnings"])), data, fmt)
 
 
-@registry.tool(
-    name="operating_point",
-    description=(
-        "Read DC operating point data: all node voltages, branch currents, and each "
-        "semiconductor's small-signal params (gm/gds/vth/vdsat/caps) — from LTspice's "
-        "log (run_simulation auto-adds '.options logopinfo' on .op runs) or ngspice's "
-        "@dev[param] traces, surfaced uniformly by name. Each value carries its SI unit "
-        "where the simulator declared the type (see ``units``). Pass device='M1' to get "
-        "just one device's params + terminal currents in a single call.\n\n"
-        "A run-level solve failure (singular matrix / non-convergence) taints every "
-        "value here; that simulator line is relayed into ``warnings`` — read it "
-        "before trusting the bias point."
-    ),
-    input_model=OperatingPointInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=OperatingPointOutput,
-)
+@declare_output_schema(output_model=OperatingPointOutput)
 async def handle_operating_point(args: OperatingPointInput, state: SessionState):
     """Read DC operating point data (node voltages, branch currents, device operating point)."""
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
@@ -2371,20 +2246,8 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
     return format_response("\n".join(lines), op_data, fmt)
 
 
-@registry.tool(
-    name="simulation_summary",
-    description=(
-        "One-call triage of a finished run: simulation type, signal list, data "
-        "size, .MEAS results, Fourier analysis, AC bandwidth metrics, and the "
-        "run's errors/warnings/observations in a single read. Call it first on "
-        "a completed job — especially a failed or suspect one — before reaching "
-        "for per-signal analysis tools: it tells you whether the result is "
-        "trustworthy and which signals and measurements actually exist."
-    ),
-    input_model=SimulationSummaryInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "sim_type": {"type": "string"},
@@ -2424,7 +2287,7 @@ async def handle_operating_point(args: OperatingPointInput, state: SessionState)
             # omitted and one was auto-picked; absent when the caller passed one.
             "ac_signal_used": {"type": "string"},
         },
-    },
+    }
 )
 async def handle_simulation_summary(args: SimulationSummaryInput, state: SessionState):
     """Get comprehensive simulation summary."""
@@ -3040,32 +2903,7 @@ class MeasurementStatsResponse(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-@registry.tool(
-    name="edge_metrics",
-    description=(
-        "Use when you need to quantify HOW FAST one transition happened: rise "
-        "time, fall time, slew rate. Inputs a transient .raw plus a time "
-        "window around the edge of interest.\n\n"
-        "Returns: transition_time (10→90% by default, configurable via "
-        "low_pct/high_pct), slew_rate (V/s or A/s), detected low/high levels, "
-        "and the three crossing times.\n\n"
-        "Levels are auto-estimated from the first/last 10% of the window — "
-        "NOT global min/max — so overshoot/undershoot doesn't poison the "
-        "level estimate. Crossings are sub-sample-accurate via linear "
-        "interpolation. Rejects AC analysis.\n\n"
-        "PICK THE WINDOW. If the transient has startup glitches or multiple "
-        "edges, set t_start/t_end tightly around the edge you care about — "
-        "otherwise you get the first edge in the full waveform, which is "
-        "often the power-up artifact. Use edge_index only when multiple "
-        "edges in the window are intentional.\n\n"
-        "For settling/overshoot after the edge, use transient_response(mode='step'). "
-        "For delay between two signals' edges, use timing_between."
-    ),
-    input_model=EdgeMetricsInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=EdgeMetricsResponse,
-)
+@declare_output_schema(output_model=EdgeMetricsResponse)
 async def handle_edge_metrics(args: EdgeMetricsInput, state: SessionState):
     axis, wave, raw_path = await _load_real_signal(
         args.raw_file, args.signal, args.step, state, job_id=args.job_id, run_index=args.run_index
@@ -3196,28 +3034,6 @@ async def handle_disturbance_response(args: DisturbanceResponseInput, state: Ses
     return await _finish_metric(lines, data, raw_path, args.format)
 
 
-@registry.tool(
-    name="transient_response",
-    description=(
-        "Transient event-response analysis selected by `mode`. Use "
-        "mode='step' when the signal ends at a new steady level: returns "
-        "overshoot, undershoot, peak value/time, and settling time; "
-        "initial_value, final_value, and settling_tolerance_pct apply only to "
-        "this mode. Use mode='disturbance' when a regulated output deviates "
-        "from and returns to its pre-event level: returns baseline-relative "
-        "droop/overshoot and recovery time; baseline, settle_band, and "
-        "settle_band_pct apply only to this mode.\n\n"
-        "Choose a window around one event and include enough tail to observe "
-        "settling or recovery. For only rise/fall time and slew rate, use "
-        "edge_metrics. If the output returns to its starting level, use "
-        "mode='disturbance'; if it remains at a new level, use mode='step'. "
-        "Warnings and quality flags include any recovery guidance needed when "
-        "a metric is unavailable. Rejects non-transient analyses."
-    ),
-    input_model=TransientResponseInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-)
 async def handle_transient_response(
     args: TransientResponseInput, state: SessionState
 ) -> types.CallToolResult:
@@ -3257,33 +3073,7 @@ async def handle_transient_response(
     )
 
 
-@registry.tool(
-    name="timing_between",
-    description=(
-        "Use when you need propagation delay / skew between TWO signals — "
-        "e.g. input-to-output delay, clock-to-Q, dead-time between gate "
-        "drives. Inputs one transient .raw containing both signals on a "
-        "shared time axis.\n\n"
-        "Returns: signed delay = t_b - t_a where t_a and t_b are the selected "
-        "same-index threshold crossings of signal_a and signal_b in the window "
-        "(first by default; select another with nth) "
-        "(negative delay means signal_b leads signal_a), PLUS aggregates "
-        "over ALL sequential edge pairs — pair_count, delay_min/max/mean and "
-        "the times of the extremes — for dead-time / minimum-off audits "
-        "across a whole pulse train.\n\n"
-        "Thresholds default to 50% of EACH signal's own min-max range in the "
-        "window — intentional for asymmetric CMOS where V_in and V_out have "
-        "different rails. Override per-signal via threshold_a / threshold_b "
-        "if you need absolute thresholds (e.g. VIH/VIL at fixed voltages). "
-        "Set direction_a / direction_b independently (e.g. rising input → "
-        "falling output for an inverter, falling high-side → rising low-side "
-        "for dead-time). Rejects AC analysis."
-    ),
-    input_model=TimingBetweenInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=TimingBetweenResponse,
-)
+@declare_output_schema(output_model=TimingBetweenResponse)
 async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     raw = await services.load_raw(raw_path, state)
@@ -3349,33 +3139,7 @@ async def handle_timing_between(args: TimingBetweenInput, state: SessionState):
     return await _finish_metric(lines, data, raw_path, args.format)
 
 
-@registry.tool(
-    name="periodic_metrics",
-    description=(
-        "Use for an oscillating transient signal (clock, oscillator output, "
-        "switching waveform) when you need period, frequency, duty cycle, "
-        "pulse widths, and period-to-period jitter.\n\n"
-        "Returns: period (mean across measured periods), frequency (1/period), "
-        "jitter_rms (std-dev of period lengths — timing jitter, NOT signal "
-        "amplitude variance), duty_cycle_pct, mean high/low pulse widths, "
-        "edge counts. duty_cycle_pct / pulse_widths are null if no full "
-        "periods could be paired. A period is the span between consecutive "
-        "rising crossings, so num_periods_measured = num_rising_edges - 1 "
-        "(you need N+1 edges to measure N periods).\n\n"
-        "Uses threshold crossings; threshold defaults to the midpoint of "
-        "window min/max. For a signal with DC drift, set an explicit "
-        "threshold — the auto midpoint moves with the drift and the edge "
-        "detection gets unstable. min_periods guards against accidentally "
-        "running on 1-edge windows.\n\n"
-        "Skip the startup transient via t_start/t_end; the first cycle is "
-        "often wider than steady state. Rejects AC analysis. For a single "
-        "edge (not periodic), use edge_metrics."
-    ),
-    input_model=PeriodicMetricsInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=PeriodicMetricsResponse,
-)
+@declare_output_schema(output_model=PeriodicMetricsResponse)
 async def handle_periodic_metrics(args: PeriodicMetricsInput, state: SessionState):
     axis, wave, raw_path = await _load_real_signal(
         args.raw_file, args.signal, args.step, state, job_id=args.job_id, run_index=args.run_index
@@ -3455,25 +3219,7 @@ class ThdInput(ToolInput):
     format: FormatField = Field(default=None, description="'json' or 'text'")
 
 
-@registry.tool(
-    name="thd",
-    description=(
-        "Total harmonic distortion (THD and THD+N) of a periodic transient "
-        "signal via FFT — works on any .tran result without a ``.four`` "
-        "directive in the deck, and on any simulator. Defaults to COHERENT "
-        "sampling (record trimmed to whole fundamental cycles, rectangular "
-        "window) so harmonics land exactly on bins and THD is exact; "
-        "window='hann' is the approximate fallback. Surfaces every condition "
-        "the number depends on: the fundamental (given vs auto-detected), "
-        "window kind, cycles analyzed, FFT length, sample rate, and per-harmonic "
-        "levels. For LTspice's own ``.four`` result instead, see "
-        "simulation_summary's Fourier section."
-    ),
-    input_model=ThdInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=ThdOutput,
-)
+@declare_output_schema(output_model=ThdOutput)
 async def handle_thd(args: ThdInput, state: SessionState):
     axis, wave, raw_path = await _load_real_signal(
         args.raw_file, args.signal, args.step, state, job_id=args.job_id, run_index=args.run_index
@@ -3589,20 +3335,8 @@ def _noise_input_source_unit(netlist: Path | None) -> str | None:
     return None
 
 
-@registry.tool(
-    name="noise_integral",
-    description=(
-        "Integrate a .noise spectral density to a total RMS noise over a band. "
-        "SPICE stores amplitude density (V/√Hz or A/√Hz) for both LTspice and "
-        "ngspice, so total = sqrt(∫ density² df) — the same value LTspice shows "
-        "when you Ctrl-click a V(onoise) label. Reports the band actually "
-        "integrated and the sample count. Noise figure / SNR are left to you "
-        "(they need the source resistance and a reference level)."
-    ),
-    input_model=NoiseIntegralInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_schema={
+@declare_output_schema(
+    {
         "type": "object",
         "properties": {
             "signal": {"type": "string"},
@@ -3614,7 +3348,7 @@ def _noise_input_source_unit(netlist: Path | None) -> str | None:
             "n_points": {"type": "integer"},
             "warnings": WARNINGS_SCHEMA,
         },
-    },
+    }
 )
 async def handle_noise_integral(args: NoiseIntegralInput, state: SessionState):
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
@@ -3940,37 +3674,7 @@ def _aggregate_log_measurements(
     return flat_values, axis_map, steps_label, at_map
 
 
-@registry.tool(
-    name="measurement_stats",
-    description=(
-        "Use to AGGREGATE .MEAS scalar results across a .step sweep or Monte "
-        "Carlo run. Answers questions like 'across 100 MC trials, what's the "
-        "worst-case rise time?' or 'how does gain vary as R sweeps 1k..10k?'. "
-        "Inputs the .log file produced by the run.\n\n"
-        "Returns per-measurement: min, max, mean, median, std, p10, p90, "
-        "min_step_index (argmin) and max_step_index (argmax), failure "
-        "count, and an optional histogram (set histogram_bins=0 to skip).\n\n"
-        "Accepts any job id: a sweep/MC batch aggregates across its runs; a "
-        "single-simulation job aggregates its own log (one value per step "
-        "for a .step run). WHEN-style .MEAS (constant level, varying crossing) "
-        "is detected the same way on both paths and swaps to aggregating the "
-        "'at' (crossing) field; the aggregated_field output says which was "
-        "used. On a plain single run, stats collapse to n=1 (one value per "
-        "measurement): the headline stats are the value the simulator printed "
-        "— for a WHEN that's the trigger level — and any AT/crossing time is "
-        "returned separately in the entry's 'at' field, so a single-run WHEN/AT "
-        "read isn't lost. (simulation_summary also just reads the raw "
-        "scalars.)\n\n"
-        "Works with .MEAS from any analysis type (.tran/.ac/.dc/.op) — the "
-        "measurement directives themselves embed the analysis context. Pass "
-        "measurement=NAME to aggregate just one; otherwise returns all "
-        ".MEAS in the log."
-    ),
-    input_model=MeasurementStatsInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=MeasurementStatsResponse,
-)
+@declare_output_schema(output_model=MeasurementStatsResponse)
 async def handle_measurement_stats(args: MeasurementStatsInput, state: SessionState):
     if args.log_file is not None and args.job_id is not None:
         raise ResultError(
@@ -4603,42 +4307,7 @@ async def handle_filter_metrics(args: FilterMetricsInput, state: SessionState):
     return format_response("\n".join(lines), data, args.format)
 
 
-@registry.tool(
-    name="stability_metrics",
-    description=(
-        "Find EVERY unity-gain and -180° phase crossover in a loop-gain AC "
-        "sweep, report phase margin at each unity-gain crossing and gain "
-        "margin at each -180° crossing. Replaces the single-crossing "
-        "approximation in simulation_summary, which returns wrong "
-        "margins on conditionally-stable systems.\n\n"
-        "Run this on a LOOP-GAIN signal (typically a dedicated middlebrook "
-        "probe or .AC of the open loop). Running on a closed-loop output "
-        "gives meaningless margins — if the DC phase starts near ±180° (a "
-        "closed-loop / inverting output rather than a loop probe, which "
-        "starts near 0°), a warning says so in ``warnings``.\n\n"
-        "Returns: dc_gain_db, high_freq_gain_db, stability classification "
-        "(stable / unstable / conditional / unconditional / "
-        "always_below_unity), all crossings, per-crossing margins, and the "
-        "worst-case values.\n\n"
-        "Nuances:\n"
-        "  - Phase is UNWRAPPED first, so systems whose phase drops past "
-        "-360° are handled correctly (otherwise the raw wrap hides the "
-        "crossing).\n"
-        "  - If phase NEVER crosses -180°, gain margin is 'infinite' "
-        "(returned as null with stability='unconditional'). That's stable, "
-        "not an error.\n"
-        "  - If gain NEVER reaches unity, phase margin is undefined "
-        "(returned as null with stability='always_below_unity').\n"
-        "  - Multiple crossovers trigger stability='conditional' and a "
-        "warning — each one needs its own review.\n\n"
-        "For -3 dB filter cutoffs use bode_metrics(mode='filter'); for custom "
-        "crossings use bode_metrics(mode='crossing')."
-    ),
-    input_model=StabilityMetricsInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=StabilityMetricsResponse,
-)
+@declare_output_schema(output_model=StabilityMetricsResponse)
 async def handle_stability_metrics(args: StabilityMetricsInput, state: SessionState):
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     freqs, H = await _load_ac_signal(raw_path, args.signal, args.step, state)
@@ -4855,38 +4524,7 @@ class BodeMetricsInput(ToolInput):
     format: FormatField = Field(default=None)
 
 
-@registry.tool(
-    name="bode_metrics",
-    description=(
-        "AC / Bode-plot analysis in one tool, selected by `mode`. The response "
-        "shape depends on the mode:\n"
-        "  mode='filter'   — filter type, cutoffs (at `ref_db` below passband), "
-        "passband gain/ripple, stopband rejection, transition BW, pole-order, "
-        "and an auto-estimated asymptotic roll-off slope (dB/decade) — covers "
-        "cutoff AND slope in one call.\n"
-        "  mode='slope'    — magnitude slope (dB/decade + dB/octave) between "
-        "`f_low` and `f_high`; pick endpoints ≥1 decade past any knee. Use when "
-        "you need a custom window or dB/octave ('filter' already reports an "
-        "auto-estimated asymptotic dB/decade slope).\n"
-        "  mode='point'    — magnitude (dB + linear) and phase at each of "
-        "`frequencies` (log-axis interpolation; out-of-range clamps + warns).\n"
-        "  mode='crossing' — every frequency where `quantity` crosses `level` "
-        "(phase is UNWRAPPED first); the escape hatch for custom queries like "
-        "unity-gain (0 dB) or phase-margin (-180°) frequencies.\n\n"
-        "Pass `all_steps=true` to compute the chosen mode for every step of a "
-        ".step sweep in one call (returns a `steps` list instead of a single "
-        "result) — e.g. the -3 dB cutoff at every value of a stepped component.\n\n"
-        "To analyze a run of a completed sweep/MC job, pass `job_id` + "
-        "`run_index` instead of `raw_file` (combine with `all_steps` to also "
-        "sweep the .step axis within that run).\n\n"
-        "For loop-gain stability margins use stability_metrics; for resonant "
-        "peaks & Q use resonance."
-    ),
-    input_model=BodeMetricsInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_schema=_bode_output_schema(),
-)
+@declare_output_schema(_bode_output_schema())
 async def handle_bode_metrics(args: BodeMetricsInput, state: SessionState):
     """Dispatch to the per-mode AC compute adapters (one shared AC load each)."""
     _validate_bode_mode_args(args)
@@ -5085,32 +4723,7 @@ def _warning_coverage(step_indices: list[int], step_count: int) -> str:
     return "steps " + ",".join(str(i) for i in step_indices)
 
 
-@registry.tool(
-    name="resonance",
-    description=(
-        "Detect magnitude peaks in an AC sweep and estimate Q factor + "
-        "-3 dB bandwidth for each. Useful for RLC resonators, crystal "
-        "oscillators, peaking amps, or any response with distinct resonant "
-        "modes.\n\n"
-        "Q = f_peak / Δf(-3 dB from peak). Q is returned as null for peaks "
-        "without two flanking -3 dB crossings inside the swept range — "
-        "widen the sweep if you need Q for a boundary peak.\n\n"
-        "`min_prominence_db=3` rejects the gentle hump of a filter's "
-        "passband (which isn't a resonance). Tight resonances (Q > 30) "
-        "need dense sampling near f_peak — log sweeps with <50 pts/decade "
-        "will under-sample the peak and give inflated Q/bandwidth.\n\n"
-        "Magnitude in dB is relative to the trace's native unit: dBV for a "
-        "voltage probe, dBΩ under a 1 A impedance probe (so -10.56 dB = 0.30 Ω, "
-        "not a -10.56 dB dip). Use magnitude_linear to disambiguate; for input "
-        "impedance → Γ/return loss/VSWR see return_loss and spice://guide.\n\n"
-        "For overall filter characterization use bode_metrics(mode='filter'); "
-        "for stability margins use stability_metrics."
-    ),
-    input_model=ResonanceInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=ResonancesResponse,
-)
+@declare_output_schema(output_model=ResonancesResponse)
 async def handle_resonance(args: ResonanceInput, state: SessionState):
     if args.max_peaks < 1 or args.max_peaks > 1000:
         raise ResultError(f"max_peaks must be in [1, 1000], got {args.max_peaks}")
@@ -5180,33 +4793,7 @@ class ReturnLossResponse(ReturnLossOutput):
     z0_ohm: float
 
 
-@registry.tool(
-    name="return_loss",
-    description=(
-        "Reflection metrics for an input impedance from an AC sweep: reflection "
-        "coefficient Γ (magnitude + phase), return loss (dB), and VSWR against a "
-        "reference impedance z0 (default 50 Ω). Feed the impedance trace measured "
-        "under the documented 1 A AC probe, where V(node) = Zin — see "
-        "spice://guide.\n\n"
-        "Γ = (Zin - z0)/(Zin + z0);  RL_dB = -20*log10|Γ| (higher = better match); "
-        "VSWR = (1+|Γ|)/(1-|Γ|). With ``at`` set, reports that frequency "
-        "(log-interpolated); without it, reports the WORST match across the sweep "
-        "(the frequency of maximum |Γ|).\n\n"
-        "return_loss_db is null at a perfect match (|Γ|→0, RL→∞); vswr is null at "
-        "a total reflection (|Γ|≥1, open/short, VSWR→∞). A negative Zin real part "
-        "is flagged in warnings as a likely reversed probe.\n\n"
-        "The 50 Ω default only means something for a matched-RF port. For a "
-        "power/filter input, pass a z0 near the port's working impedance (its DC "
-        "input resistance, or √(L/C) of the input filter) — and read "
-        "zin_min/zin_max_mag_ohm (+ their frequencies, always reported) for the "
-        "port's impedance range across the sweep. Needs an .AC run; for "
-        "peak/notch frequencies of the impedance itself use resonance."
-    ),
-    input_model=ReturnLossInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=ReturnLossResponse,
-)
+@declare_output_schema(output_model=ReturnLossResponse)
 async def handle_return_loss(args: ReturnLossInput, state: SessionState):
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     freqs, H = await _load_ac_signal(raw_path, args.signal, args.step, state)
@@ -5278,41 +4865,7 @@ def _fmt_hz_range(f_lo: float, f_hi: float) -> str:
     return f"{f_lo:.3g} to {f_hi:.3g} Hz"
 
 
-@registry.tool(
-    name="ac_structure",
-    description=(
-        "Read the pole/zero STRUCTURE of an .AC response — net order, corner "
-        "frequencies (as ranges) with Q, out-of-phase zeros, and "
-        "transport delay — to support design reasoning (where the poles/zeros "
-        "roughly are, damping, out-of-phase zeros). It first tries a rational fit and "
-        "uses its poles/zeros when the fit is clean; otherwise it falls back to "
-        "asymptotic Bode reading (slope breakpoints + joint gain-phase + group "
-        "delay + a gain-phase consistency residual).\n\n"
-        "Returns FACTS, not a verdict — bring your own control/design knowledge. "
-        "The most design-critical fact is the non_minimum_phase flag: an "
-        "out-of-phase zero or a transport delay adds phase lag the magnitude plot "
-        "cannot show, and caps achievable loop bandwidth; do not close a loop on "
-        "magnitude alone when it is flagged.\n\n"
-        "``net_order`` is the net pole-zero order from the rational fit, or (on "
-        "the asymptotic-reading fallback) the net high-frequency magnitude-slope "
-        "order = round(-slope / 20 dB/decade). It is a real order — 0 for a flat "
-        "HF asymptote, negative for a net differentiator — never a sentinel; a "
-        "large |net_order| usually means the fallback fired on a high-order "
-        "response, so use resonance for driving-point impedance peaks.\n\n"
-        "IMPORTANT — these are read from a finite sweep, so HAVE A HUMAN REVIEW "
-        "them against the Bode plot (use plot_waveform on the same signal) and "
-        "the circuit before acting. Closely-spaced corners merge into one range "
-        "(``merged: true``) rather than being resolved individually, and exact "
-        "pole/zero COUNTS are not guaranteed — for exact poles/zeros run a .pz "
-        "analysis on ngspice. Requires a .AC run. Siblings: bode_metrics "
-        "(margins / cutoffs / point queries), resonance (peaks + Q), "
-        "stability_metrics (loop margins)."
-    ),
-    input_model=AcStructureInput,
-    annotations=RO_ANNOTATIONS,
-    profiles=("full", "agentic"),
-    output_model=AcStructureResponse,
-)
+@declare_output_schema(output_model=AcStructureResponse)
 async def handle_ac_structure(args: AcStructureInput, state: SessionState):
     raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
     freqs, H = await _load_ac_signal(raw_path, args.signal, args.step, state)
@@ -5845,9 +5398,10 @@ class PlotWaveformInput(ToolInput):
         "that supports MCP Apps the chart is "
         "also embedded as an interactive in-chat widget, otherwise it opens in your "
         "local browser.\n\n"
-        "Sibling egress, don't confuse: for numbers in your context use get_waveform "
-        "(decimated); for every sample on disk use export_waveform (CSV); for a "
-        "scalar use signal_stats/bode_metrics. This tool is for looking, not measuring."
+        "Sibling egress, don't confuse: for numbers use analyze_results — the "
+        "waveform recipe for a decimated table in context (or every sample as CSV "
+        "on disk), signal_stats / the bode_* recipes for scalars. This tool is for "
+        "looking, not measuring."
     ),
     input_model=PlotWaveformInput,
     annotations=types.ToolAnnotations(
@@ -5856,7 +5410,7 @@ class PlotWaveformInput(ToolInput):
         idempotentHint=False,
         openWorldHint=True,
     ),
-    profiles=("full", "agentic"),
+    profiles=("consolidated",),
     # MCP Apps (SEP-1865): declare the in-chat renderer so an apps-capable host
     # fetches it via resources/read and pipes the chart spec into it.
     meta={"ui": {"resourceUri": WIDGET_RESOURCE_URI}},

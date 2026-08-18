@@ -15,14 +15,14 @@ import pytest
 from mcp import types
 
 from ltspice_mcp.config import VALID_PROFILES, ServerConfig, ToolProfile
+from ltspice_mcp.lib.variations import MismatchRule
 from ltspice_mcp.resources import (
     _PROFILE_MARKER_RE,
     _select_profile_blocks,
     handle_read_resource,
 )
-from ltspice_mcp.server import SERVER_INSTRUCTIONS
+from ltspice_mcp.server import CONSOLIDATED_INSTRUCTIONS
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.advanced import MonteCarloMismatchRule
 from ltspice_mcp.tools.circuit import (
     CreateSchematicInput,
     handle_create_schematic,
@@ -32,12 +32,21 @@ _GUIDE_ASSET = files("ltspice_mcp") / "assets" / "spice_guide.md"
 
 
 class TestServerInstructionsFloor:
-    def test_mentions_key_schematic_guidance(self):
-        # Always-on floor: the schematic build doctrine survives even when no
-        # client-side skill is installed.
-        assert "apply_schematic_ops" in SERVER_INSTRUCTIONS
-        assert "spice://guide" in SERVER_INSTRUCTIONS
-        assert "do NOT net-label" in SERVER_INSTRUCTIONS
+    def test_names_the_planes_and_keeps_the_result_trust_tail(self):
+        # Always-on floor: even with no client-side skill installed, the
+        # handshake teaches the three planes and ends on the result-trust
+        # doctrine (the tail is what Claude Code's 2048-char truncation
+        # would eat first, so its presence is the budget test's partner).
+        for tool in (
+            "run_experiments",
+            "jobs",
+            "analyze_results",
+            "edit_schematic",
+            "verify_circuit",
+            "inspect",
+        ):
+            assert tool in CONSOLIDATED_INSTRUCTIONS
+        assert "completed is not correct" in CONSOLIDATED_INSTRUCTIONS
 
 
 class TestCreateSchematicChecklist:
@@ -106,7 +115,7 @@ class TestMismatchExemplarMatchesTheEngineUnit:
 
     def test_guide_and_engine_name_the_same_unit(self):
         guide = _GUIDE_ASSET.read_text("utf-8")
-        engine_description = MonteCarloMismatchRule.model_fields["AVT"].description or ""
+        engine_description = MismatchRule.model_fields["AVT"].description or ""
         assert "V·µm" in engine_description
         assert "V·µm" in guide, "the guide states the exemplar's unit nowhere"
 
@@ -150,13 +159,6 @@ class TestGuideIsProfileScoped:
         assert "<!-- profile" not in served
         assert "<!-- /profile" not in served
 
-    def test_full_and_agentic_keep_the_shipped_tool_text(self, work_dir: Path):
-        full = _guide_for("full", work_dir)
-        assert full == _guide_for("agentic", work_dir)
-        assert "use the server's schematic tools (`create_schematic`" in full
-        assert "`apply_schematic_ops` ops, so batch them in one transaction" in full
-        assert "## Tool surface on this profile" not in full
-
     def test_consolidated_maps_the_six_tools_and_replaces_the_asc_entry(self, work_dir: Path):
         guide = _guide_for("consolidated", work_dir)
         assert "## Tool surface on this profile" in guide
@@ -175,9 +177,9 @@ class TestGuideIsProfileScoped:
     def test_a_fence_naming_an_unknown_profile_is_rejected(self):
         """A misspelled fence matches nobody, so it would delete its block for
         every profile — a typo whose only symptom is guidance silently gone."""
-        text = "before\n<!-- profile: full agentc -->\nbody\n<!-- /profile -->\nafter\n"
-        with pytest.raises(ValueError, match="agentc"):
-            _select_profile_blocks(text, "full")
+        text = "before\n<!-- profile: consolidatd -->\nbody\n<!-- /profile -->\nafter\n"
+        with pytest.raises(ValueError, match="consolidatd"):
+            _select_profile_blocks(text, "consolidated")
 
     @pytest.mark.parametrize("profile", sorted(VALID_PROFILES))
     def test_the_shipped_guide_fences_only_real_profiles(self, profile: str, work_dir: Path):

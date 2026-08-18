@@ -253,27 +253,6 @@ class TestGetProgressSnapshotEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# _resolve_mc_ref preserved surrounding whitespace
-# ---------------------------------------------------------------------------
-
-
-class TestResolveMcRefWhitespace:
-    def test_surrounding_whitespace_stripped(self):
-        from ltspice_mcp.tools.advanced import _resolve_mc_ref
-
-        ref, is_type = _resolve_mc_ref("  R1  ")
-        assert ref == "R1"
-        assert is_type is False
-
-    def test_whitespace_around_type_name(self):
-        from ltspice_mcp.tools.advanced import _resolve_mc_ref
-
-        ref, is_type = _resolve_mc_ref("  resistors ")
-        assert ref == "R"
-        assert is_type is True
-
-
-# ---------------------------------------------------------------------------
 # Stability margin detection on phase wrap and 3-pole unstable loop
 # (Margins moved out of compute_ac_bandwidth_metrics — they live in
 # compute_stability_metrics, which is the right home for loop-gain analysis.)

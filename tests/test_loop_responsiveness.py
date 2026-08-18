@@ -22,7 +22,7 @@ from ltspice_mcp.lib import recent, services
 from ltspice_mcp.server import read_resource
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import SignalStatsInput, handle_signal_stats
-from ltspice_mcp.tools.status import ServerStatusInput, handle_server_status
+from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from tests.conftest import _FakeServer, make_sim_job, stage_recorded_fixture
 
 # Stands in for a multi-hundred-MB parse over /mnt/c. The only deliberate
@@ -37,10 +37,13 @@ def slow_rawread(*args, **kwargs):
 
 
 async def assert_light_request_served(heavy: asyncio.Task, state: SessionState) -> None:
-    """Serve ``server_status`` while ``heavy`` is in flight; assert it
-    returns promptly and before the heavy task completes."""
+    """Serve an ``inspect`` capabilities query (a registered consolidated
+    tool with no file I/O) while ``heavy`` is in flight; assert it returns
+    promptly and before the heavy task completes."""
     t0 = time.monotonic()
-    light = await handle_server_status(ServerStatusInput(), state)
+    light = await handle_inspect(
+        InspectInput.model_validate({"queries": [{"kind": "capabilities"}]}), state
+    )
     light_elapsed = time.monotonic() - t0
 
     assert not heavy.done(), (
@@ -63,7 +66,8 @@ async def test_light_tool_served_while_heavy_parse_in_flight(
 
     Drives ``signal_stats`` (heavy: parses a recorded LTspice AC raw through
     services.load_raw, with the parse patched to take SLOW_OP_SECONDS) and
-    ``server_status`` (light: no file I/O) concurrently on one event loop.
+    an ``inspect`` capabilities query (light: no file I/O) concurrently on
+    one event loop.
     """
     raw_path = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
     monkeypatch.setattr(services, "RawRead", slow_rawread)
@@ -132,7 +136,7 @@ async def test_resource_read_served_off_loop(
 
     Drives the real router seam — ``server.read_resource`` over the
     ``spice://results/{job}/signals`` route, with the parse patched to
-    take SLOW_OP_SECONDS — concurrently with ``server_status``.
+    take SLOW_OP_SECONDS — concurrently with a light ``inspect`` query.
     """
     raw_path = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
     job = make_sim_job("resjob", raw_file=raw_path)

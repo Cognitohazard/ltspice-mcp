@@ -7,7 +7,7 @@ import os
 import sys
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager, suppress
-from typing import Any, NamedTuple
+from typing import Any
 
 from mcp import types
 from mcp.server.lowlevel import Server
@@ -107,98 +107,35 @@ async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     task.add_done_callback(_recent_touch_tasks.discard)
 
 
-class _ErrorHint(NamedTuple):
-    """Profile-aware error hint. ``full`` references the full MCP tool set;
-    ``agentic`` gives direct file-edit guidance; ``consolidated`` references
-    only the six consolidated tools (never a tool that profile can't see).
-
-    The fields ARE the valid profiles, which is what makes the mapping total: a
-    new profile cannot silently inherit another's hint, because no ``_ErrorHint``
-    below would construct without a line for it. Pinned by tests/test_server.py.
-    """
-
-    full: str
-    agentic: str
-    consolidated: str
-
-
-# Error type → profile-aware hint appended to error messages.
+# Error type → hint appended to error messages. Hints name only tools the
+# consolidated surface exposes (the only profile since 0.6.0).
 # PathSecurityError is handled separately (needs dynamic allowed_paths).
-_ERROR_HINTS: dict[type[LTSpiceMCPError], _ErrorHint] = {
-    _err.SimulationError: _ErrorHint(
-        full="Use server_status to verify simulator availability.",
-        agentic="Use server_status to verify simulator availability.",
-        consolidated=("Use inspect with a capabilities query to verify simulator availability."),
+_ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
+    _err.SimulationError: (
+        "Use inspect with a capabilities query to verify simulator availability."
     ),
-    _err.NetlistError: _ErrorHint(
-        full=(
-            "Use read_circuit to inspect the file, or "
-            "list_components to verify component references."
-        ),
-        agentic=(
-            "Inspect the netlist file directly, or use "
-            "list_components to verify component references."
-        ),
-        consolidated=(
-            "Use verify_circuit to lint the file, or inspect its components — "
-            "or read the netlist directly."
-        ),
+    _err.NetlistError: (
+        "Use verify_circuit to lint the file, or inspect its components — "
+        "or read the netlist directly."
     ),
-    _err.JobNotFoundError: _ErrorHint(
-        full=(
-            "Use check_job with no job_id to list known jobs — the id may be "
-            "mistyped, evicted, or from a previous server session."
-        ),
-        agentic=(
-            "Use check_job with no job_id to list known jobs — the id may be "
-            "mistyped, evicted, or from a previous server session."
-        ),
-        consolidated=(
-            'Use jobs with action:"list" to see known jobs — the id may be '
-            "mistyped, evicted, or from a previous server session."
-        ),
+    _err.JobNotFoundError: (
+        'Use jobs with action:"list" to see known jobs — the id may be '
+        "mistyped, evicted, or from a previous server session."
     ),
-    _err.ResultError: _ErrorHint(
-        full=(
-            "Verify the simulation completed successfully with check_job, "
-            "and check signal names with simulation_summary."
-        ),
-        agentic=(
-            "Verify the simulation completed successfully with check_job, "
-            "and check signal names with simulation_summary."
-        ),
-        consolidated=(
-            'Verify the run reached a terminal state with jobs (action:"status"), '
-            "and read signals with analyze_results."
-        ),
+    _err.ResultError: (
+        'Verify the run reached a terminal state with jobs (action:"status"), '
+        "and read signals with analyze_results."
     ),
-    _err.LibraryError: _ErrorHint(
-        full=("Use list_libraries to see loaded libraries, or load_library to load a new one."),
-        agentic=(
-            "Use find_model to fuzzy-match against loaded libraries, "
-            "or add .lib directives to the netlist manually."
-        ),
-        consolidated=(
-            'Use inspect with a model query (mode:"enumerate") to see loaded '
-            "libraries, or add .lib/.include directives to the netlist directly."
-        ),
+    _err.LibraryError: (
+        'Use inspect with a model query (mode:"enumerate") to see loaded '
+        "libraries, or add .lib/.include directives to the netlist directly."
     ),
 }
 
 
-def _get_error_hint(err_type: type[LTSpiceMCPError], profile: str) -> str | None:
-    """Get the appropriate error hint for the active tool profile.
-
-    Each profile's hint names only tools that profile exposes: ``full`` the
-    full set, ``agentic`` direct file edits, ``consolidated`` only the six
-    consolidated tools. An unrecognized profile falls back to ``full``.
-    """
-    hint = _ERROR_HINTS.get(err_type)
-    if hint is None:
-        return None
-    # The hint's fields are the profile names, so selection is total over them;
-    # only a profile string from outside the config's own set falls back.
-    return getattr(hint, profile if profile in _ErrorHint._fields else "full")
+def _get_error_hint(err_type: type[LTSpiceMCPError]) -> str | None:
+    """Get the error hint appended to a failed call's message, if any."""
+    return _ERROR_HINTS.get(err_type)
 
 
 def _path_reject_guidance(state: SessionState) -> str:
@@ -212,7 +149,8 @@ def _path_reject_guidance(state: SessionState) -> str:
         "To work on this file, move or copy it into one of those directories, "
         "or ask the user to widen the sandbox: [security] allowed_paths in "
         f"{state.config.config_path} or LTSPICE_MCP_ALLOWED_PATHS (restart "
-        "required). server_status shows the full sandbox configuration."
+        "required). An inspect capabilities query shows the full sandbox "
+        "configuration."
     )
 
 
@@ -301,7 +239,9 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
         )
 
         if state.diagnostics:
-            logger.warning("Startup diagnostics (also surfaced via server_status):")
+            logger.warning(
+                "Startup diagnostics (also surfaced via an inspect capabilities query):"
+            )
             for diag in state.diagnostics:
                 logger.warning(f"  - {diag}")
 
@@ -328,29 +268,13 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 
 # Server-level guidance surfaced to the consuming LLM at the MCP initialize
 # handshake (forwarded by ``create_initialization_options`` ->
-# ``InitializationOptions.instructions``). Cross-cutting workflow guidance only —
-# per-tool detail stays in the individual tool descriptions, which remain the
-# contract (client injection of this string is not guaranteed). Claude Code
-# truncates instructions at 2048 chars, so this edition is budget-pinned
-# like the consolidated one, trigger and result-trust first. The
-# "completed can be degenerate" line warns the consuming LLM not to
-# equate a completed run with a correct result.
-SERVER_INSTRUCTIONS = """\
-LTspice-MCP: for ANY circuit or SPICE task — simulation, sweeps, Monte-Carlo, .asc schematic editing. Runs author-written SPICE decks on LTspice or ngspice and returns parsed numbers (node voltages, branch currents, per-device gm/gds/vth/…). Prefer it over shelling out: run_simulation sets the right batch flags, handles ngspice's raw dialect, and surfaces convergence/timeout errors — never hand-parse a rawfile or wrdata dump.
-
-A run can report "completed" yet be degenerate (coerced value, skipped .meas): read the returned warnings/errors and `observations` — facts to weigh, not a verdict; empty means nothing tripped a check, NOT verified-correct. simulation_summary is one-call triage. validate_netlist pre-flights topology faults (floating nodes, capacitive islands); it won't catch value typos or undefined models.
-
-Prefer the netlist path: author .cir/.net, validate_netlist, run_simulation, then the analysis tools. Match tool to run type: bode_metrics/resonance/stability_metrics need .AC; signal_stats/edge_metrics/timing_between/periodic_metrics/transient_response/thd need .tran; operating_point needs .op; noise_integral needs .noise. For any scalar, author .meas in the deck (robust, portable), read via measurement_stats — EXCEPT ngspice, which skips .meas in batch mode: use the analysis tools or a .control block (spice://guide). Sweep/MC results: batch_results or job_id+run_index. Waveforms: plot_waveform / get_waveform / export_waveform, not external plotting.
-
-Build or edit .asc ONLY with the schematic tools (create_schematic, apply_schematic_ops, wire_pins) — hand-writing forfeits orthogonal routing and collision/junction checks. Wire signal nets with wire_pins — do NOT net-label them; ground pins get an add_net_label op with net="0". Layout playbook, gm/ID idiom, device-param addressing: spice://guide.
-"""
-
-# Instructions for the EXPERIMENTAL consolidated profile — six tools over
-# three planes. Terse, like SERVER_INSTRUCTIONS: the client re-reads it each
-# turn. Names only the six tools that profile exposes.
-# Kept under _INSTRUCTIONS_BUDGET including the runtime simulator prefix:
-# Claude Code silently truncates server instructions at 2048 chars, and the
-# tail (the result-trust paragraph) is the part that must survive.
+# ``InitializationOptions.instructions``). Cross-cutting workflow guidance
+# only — per-tool detail stays in the individual tool descriptions, which
+# remain the contract (client injection of this string is not guaranteed).
+# Six tools over three planes; terse, because the client re-reads it each
+# turn. Kept under _INSTRUCTIONS_BUDGET including the runtime simulator
+# prefix: Claude Code silently truncates server instructions at 2048 chars,
+# and the tail (the result-trust paragraph) is the part that must survive.
 CONSOLIDATED_INSTRUCTIONS = """\
 For ANY circuit or SPICE task — amplifiers, filters, regulators, schematics. Author .cir/.net/.sp decks with your own file tools; this consolidated profile's six tools run, analyze, gate, and edit .asc geometry-aware. Routing: run quick one-off ngspice yourself and bring the .raw — analyze_results raw_path parses runs this server never executed (.MEAS, gm/gds/vth, Bode/transient metrics, spec verdicts). run_experiments earns its keep on LTspice (no native automation), sweep/corner/MC matrices, and jobs that outlive a call.
 
@@ -374,45 +298,29 @@ _INSTRUCTIONS_BUDGET = 2048
 _SIM_DISPLAY = {"ltspice": "LTspice", "ngspice": "ngspice", "qspice": "QSPICE", "xyce": "Xyce"}
 
 
-class _ProfileGuidance(NamedTuple):
-    """What a tool profile's handshake says: its instruction edition, and
-    whether the no-simulator line is the short form its tool budget affords."""
-
-    instructions: str
-    short_no_simulator: bool
-
-
-# Total over the valid profiles, not a default with one exception: a profile
-# added to the config without a line here fails loudly instead of silently
-# inheriting instructions that name tools it does not expose. Pinned by
-# tests/test_server.py.
-_PROFILE_GUIDANCE: dict[str, _ProfileGuidance] = {
-    "full": _ProfileGuidance(SERVER_INSTRUCTIONS, short_no_simulator=False),
-    "agentic": _ProfileGuidance(SERVER_INSTRUCTIONS, short_no_simulator=False),
-    "consolidated": _ProfileGuidance(CONSOLIDATED_INSTRUCTIONS, short_no_simulator=True),
+# Profile -> instruction edition. Total over the valid profiles, not a
+# default with one exception: a profile added to the config without a line
+# here fails loudly instead of silently inheriting instructions that name
+# tools it does not expose. Pinned by tests/test_server.py.
+_PROFILE_GUIDANCE: dict[str, str] = {
+    "consolidated": CONSOLIDATED_INSTRUCTIONS,
 }
 
 
 def build_instructions(
-    available: dict[str, type], default: type | None, profile: str = "full"
+    available: dict[str, type], default: type | None, profile: str = "consolidated"
 ) -> str:
     """Prepend a line naming the actually-detected simulators to the static guide.
 
     The server is named for LTspice, so a client that only has ngspice would
     otherwise read the LTspice-centric name and the "symbols disabled" log as
-    degradation. Stating the active engine up front removes that ambiguity. The
-    consolidated profile carries its own six-tool guide.
+    degradation. Stating the active engine up front removes that ambiguity.
     """
-    guidance = _PROFILE_GUIDANCE[profile]
+    instructions = _PROFILE_GUIDANCE[profile]
     if not available:
-        active = no_simulator_message(short=guidance.short_no_simulator)
-        if not guidance.short_no_simulator:
-            # The long setup message plus the workflow guide overflows the
-            # client's 2 KB instruction truncation — and a workflow for tools
-            # that cannot run yet is dead weight in exactly the state whose
-            # whole message is "configure a simulator first". Ship setup
-            # alone; the guide arrives with the post-configuration reconnect.
-            return active
+        # The short no-simulator form: the long one plus the guide would
+        # overflow the client's 2 KB instruction truncation.
+        active = no_simulator_message(short=True)
     else:
 
         def disp(name: str) -> str:
@@ -430,14 +338,14 @@ def build_instructions(
                 "and may be unavailable — simulation and analysis run on the "
                 "active engine, unaffected.)"
             )
-    return f"{active}\n\n{guidance.instructions}"
+    return f"{active}\n\n{instructions}"
 
 
 # The name is overridable so the thin alias packages (circuit-mcp, ngspice-mcp)
 # can self-identify in the handshake; it defaults to the canonical id. The env
 # var must be set before this module is imported. See packaging/aliases/.
 _SERVER_NAME = os.environ.get("LTSPICE_MCP_SERVER_NAME", "ltspice-mcp")
-server = Server(_SERVER_NAME, version=__version__, instructions=SERVER_INSTRUCTIONS)
+server = Server(_SERVER_NAME, version=__version__, instructions=CONSOLIDATED_INSTRUCTIONS)
 server.lifespan = server_lifespan
 
 
@@ -485,22 +393,8 @@ async def call_tool(name: str, arguments: dict | None):
             with suppress(OSError):
                 generate_default_config(cfg_path)
 
-    # Look up handler in profile-filtered dispatch table. A tool that exists in
-    # the registry but isn't in this profile's dispatch was hidden by the active
-    # profile — say so and name the knob, or the agent loops on "Unknown tool"
-    # with no recovery path. (Local import: the registry singleton, avoids a
-    # module-load cycle; this is a rare error path so the cost is irrelevant.)
     registered = state.tool_dispatch.get(name)
     if registered is None:
-        from ltspice_mcp.tools._base import registry
-
-        if name in registry.known_names():
-            raise ValueError(
-                f"Tool '{name}' exists but is hidden by the active tool profile "
-                f"'{state.config.tool_profile}'. Change it via [tools] profile in "
-                f"{state.config.config_path} or LTSPICE_MCP_TOOL_PROFILE (restart "
-                "required); server_status lists the tools this profile exposes."
-            )
         raise ValueError(f"Unknown tool: {name}")
 
     # Set up MCP protocol logging for this request.
@@ -539,7 +433,7 @@ async def call_tool(name: str, arguments: dict | None):
     except LTSpiceMCPError as e:
         # Errors that already carry precise guidance opt out of the generic
         # per-type hint (show_hint=False) so it doesn't misdirect.
-        hint = _get_error_hint(type(e), state.config.tool_profile) if e.show_hint else None
+        hint = _get_error_hint(type(e)) if e.show_hint else None
         text = f"{e}\n\n{hint}" if hint else str(e)
         # When the error carries structured suggestions (e.g. fuzzy model
         # matches), return them as structuredContent with isError=True so

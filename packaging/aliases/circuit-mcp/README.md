@@ -12,3 +12,10 @@ pip install circuit-mcp  # installs ltspice-mcp as a dependency
 
 `ltspice-mcp` is the canonical package. Documentation, configuration, issues,
 and source live there: https://github.com/cognitohazard/ltspice-mcp
+
+## Migration from 0.5
+
+Version 0.6.0 removed the `full` and `agentic` tool profiles; the server now
+serves one consolidated surface (7 tools). A `[tools] profile` config naming a
+removed profile warns and serves that surface. To keep the old 49-tool
+surface, pin the 0.5 series: `ltspice-mcp==0.5.*`.

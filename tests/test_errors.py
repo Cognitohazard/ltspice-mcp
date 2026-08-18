@@ -72,51 +72,26 @@ class TestErrorHierarchy:
 
 
 class TestErrorHints:
-    def test_full_hints_reference_tools(self):
-        """Full-profile hints should reference MCP tool names."""
+    def test_hints_reference_tools(self):
+        """A hint's job is to name the tool that recovers from the failure."""
         from ltspice_mcp.server import _get_error_hint
 
-        hint = _get_error_hint(NetlistError, "full")
+        hint = _get_error_hint(NetlistError)
         assert hint is not None
-        assert "read_circuit" in hint
+        assert "verify_circuit" in hint
 
-    def test_agentic_hints_no_filtered_tools(self):
-        """Agentic hints should not reference tools excluded from the profile."""
-        from ltspice_mcp.server import _get_error_hint
-        from ltspice_mcp.tools import get_tools_for_profile
-
-        filtered_tools = {
-            "edit_directive",
-            "read_circuit",
-            "load_library",
-            "unload_library",
-            "list_libraries",
-        }
-        agentic_defs, _ = get_tools_for_profile("agentic")
-        agentic_tools = {tool_def.name for tool_def in agentic_defs}
-        for err_type in (
-            SimulationError,
-            NetlistError,
-            LibraryError,
-            ResultError,
-        ):
-            hint = _get_error_hint(err_type, "agentic")
-            if hint is None:
-                continue
-            for tool_name in filtered_tools:
-                if tool_name not in agentic_tools:
-                    assert tool_name not in hint, (
-                        f"Agentic hint for {err_type.__name__} references "
-                        f"filtered tool {tool_name}"
-                    )
-
-    def test_all_error_types_have_all_profile_hints(self):
-        """Every _ERROR_HINTS entry carries a full, agentic, and consolidated variant."""
+    def test_every_error_type_carries_one_hint_string(self):
+        """One tool surface, one hint per error type — a hint that is not a
+        non-empty string reaches the caller as an empty recovery step."""
         from ltspice_mcp.server import _ERROR_HINTS
 
         for err_type, hint in _ERROR_HINTS.items():
-            assert isinstance(hint, tuple), f"{err_type.__name__}: hint is not a tuple"
-            assert len(hint) == 3, f"{err_type.__name__}: expected a 3-field hint"
-            assert hint.full, f"{err_type.__name__}: full hint is empty"
-            assert hint.agentic, f"{err_type.__name__}: agentic hint is empty"
-            assert hint.consolidated, f"{err_type.__name__}: consolidated hint is empty"
+            assert isinstance(hint, str), f"{err_type.__name__}: hint is not a string"
+            assert hint.strip(), f"{err_type.__name__}: hint is empty"
+
+    def test_unhinted_error_type_returns_none(self):
+        """PathSecurityError builds its hint dynamically from allowed_paths, so
+        the table must not answer for it with a stale generic string."""
+        from ltspice_mcp.server import _get_error_hint
+
+        assert _get_error_hint(PathSecurityError) is None

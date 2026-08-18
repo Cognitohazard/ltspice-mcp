@@ -13,7 +13,8 @@ import pytest
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import now, services
 from ltspice_mcp.state import SessionState, SimulationJob
-from ltspice_mcp.tools import get_tools_for_profile, simulation
+from ltspice_mcp.tools import simulation
+from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.simulation import (
     CheckJobInput,
     RunSimulationInput,
@@ -21,7 +22,6 @@ from ltspice_mcp.tools.simulation import (
     handle_check_job,
     handle_run_simulation,
 )
-from ltspice_mcp.tools.status import ServerStatusInput, handle_server_status
 
 
 class SlowSummaryParser:
@@ -216,8 +216,14 @@ async def test_light_request_stays_responsive_during_abandoned_summary_parse(
     try:
         await asyncio.wait_for(slow.entered.wait(), timeout=0.5)
 
+        # The cheap concurrent read is deliberately a registered consolidated
+        # tool (inspect capabilities), so this pins the surface a client
+        # actually polls while a heavy parse is wedged.
         light_started = time.monotonic()
-        light = await handle_server_status(ServerStatusInput(), state_with_sim)
+        light = await handle_inspect(
+            InspectInput.model_validate({"queries": [{"kind": "capabilities"}]}),
+            state_with_sim,
+        )
         light_elapsed = time.monotonic() - light_started
 
         assert light.content
@@ -238,9 +244,10 @@ async def test_light_request_stays_responsive_during_abandoned_summary_parse(
 
 
 def test_completion_tools_declare_summary_availability():
-    _, dispatch = get_tools_for_profile("full")
-    for tool_name in ("run_simulation", "check_job"):
-        schema = dispatch[tool_name].definition.outputSchema
+    # The adapters are no longer registered tools; their contract lives on the
+    # handler itself (declare_output_schema).
+    for handler in (handle_run_simulation, handle_check_job):
+        schema = getattr(handler, "__output_schema__", None)
         assert schema is not None
         assert schema["properties"]["summary_available"]["type"] == "boolean"
 

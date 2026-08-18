@@ -390,7 +390,7 @@ def _read_netlist_content(
     Decodes via ``read_spice_text`` — the same BOM-sniffing/UTF-16/cp1252
     path every tool-side netlist read uses (LTspice writes UTF-16 LE
     artifacts; a hard-coded utf-8 read returned NUL-riddled mojibake for
-    them, diverging from what read_circuit shows for the same file).
+    them, diverging from what the tool-side reads show for the same file).
     """
     filename = params["filename"]
     resolved = resolve_safe_path(filename, state.config.allowed_paths)
@@ -398,8 +398,8 @@ def _read_netlist_content(
         allowed = ", ".join(sorted(NETLIST_EXTENSIONS))
         raise ValueError(
             f"Not a netlist file: {filename!r}. This resource serves netlist "
-            f"text ({allowed}); simulation artifacts are read via their tools "
-            "(get_waveform / simulation_summary), not as text resources."
+            f"text ({allowed}); simulation artifacts are read via analyze_results "
+            "(waveform / summary recipes), not as text resources."
         )
     try:
         size = resolved.stat().st_size
@@ -516,7 +516,7 @@ def _read_recent(
         "circuits": circuits,
         "count": len(circuits),
         "note": (
-            "Use check_job(job_id) or batch_results(job_id) to inspect "
+            'Use jobs (action:"status" or "runs") with a job_id to inspect '
             "a specific job; interrupted jobs were running when the server last stopped."
         ),
     }
@@ -545,6 +545,9 @@ def _read_models(
 
     data = {
         "libraries": libraries,
-        "note": ("Use find_model(include_builtin=true) to find models in built-in libraries."),
+        "note": (
+            'Use inspect with a model query (kind:"model", mode:"search") to '
+            "fuzzy-match a part name against these libraries."
+        ),
     }
     return _make_result(uri_str, json.dumps(data, indent=2))
