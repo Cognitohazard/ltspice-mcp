@@ -88,6 +88,40 @@ class StrictModel(BaseModel):
     )
 
 
+# Appended to every dormant-branch summary so each stub names both discovery
+# channels; the helper owning it makes the pointer structural, not a
+# per-call-site convention.
+_DORMANT_POINTER = " Full arguments: api.reference('analyze_results') or spice://guide."
+
+
+def _dormant_wire_stub(summary: str) -> ConfigDict:
+    """Advertise a recipe branch as its discriminant plus a one-line pointer.
+
+    For branches no recorded workload has ever called: the advertised schema
+    shrinks to ``{"metric": <const>}`` and ``summary`` (which must name the
+    produced fields; the full-argument pointer is appended here), while the
+    model itself — validation, execution, and the ``api.reference`` catalogue,
+    which walks model fields rather than this schema — keeps every field. The
+    stub deliberately drops ``additionalProperties: false`` so a client
+    pre-validating a full call against the wire shape still sends it.
+    """
+    description = summary + _DORMANT_POINTER
+
+    def _stub(schema: dict[str, Any]) -> None:
+        metric = schema["properties"]["metric"]
+        schema.clear()
+        schema.update(
+            {
+                "type": "object",
+                "description": description,
+                "properties": {"metric": metric},
+                "required": ["metric"],
+            }
+        )
+
+    return ConfigDict(json_schema_extra=_stub)
+
+
 class Window(StrictModel):
     """Optional domain window, in seconds or hertz as appropriate."""
 
@@ -259,6 +293,10 @@ class PeriodicRecipe(_MultiRecipe):
     signal: str
     window: Window | None = None
 
+    model_config = _dormant_wire_stub(
+        "Period, frequency, and duty_cycle of a repetitive .tran signal."
+    )
+
 
 class TransientResponseRecipe(_MultiRecipe):
     metric: Literal["transient_response"]
@@ -357,12 +395,21 @@ class ReturnLossRecipe(_MultiRecipe):
     signal: str
     z0: float = Field(default=50.0, gt=0)
 
+    model_config = _dormant_wire_stub(
+        "return_loss_db, vswr, and reflection_coefficient vs frequency from an "
+        ".AC impedance trace (z0 default 50)."
+    )
+
 
 class NoiseIntegralRecipe(_ScalarRecipe):
     metric: Literal["noise_integral"]
     signal: str | None = None
     from_hz: float | str | None = None
     to_hz: float | str | None = None
+
+    model_config = _dormant_wire_stub(
+        "Integrated RMS noise from a .noise run, optionally windowed to [from_hz, to_hz]."
+    )
 
 
 class OperatingPointRecipe(_KeyedRecipe):
