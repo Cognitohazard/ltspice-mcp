@@ -31,6 +31,22 @@ same response), follow a receipt with `jobs`, measure a finished job with
 | create or mutate an `.asc` | `edit_schematic(target=…, ops=[…])` |
 | check a sheet against its netlist, or render it | `verify_circuit(path=…)` |
 
+Three recipes advertise only their name on the wire; their full arguments live
+here (every other recipe field — `key`, `sources`, `step`, `reduce`,
+`reduce_field`, `spec` — applies to them unchanged; as with any multi-field
+recipe, `reduce`/`spec` on `periodic` or `return_loss` needs `reduce_field`):
+
+- `periodic` — `{"metric": "periodic", "signal": …}` plus an optional
+  `window` `{start, end}`; returns `period`, `frequency`, `duty_cycle`
+  (reducible) from a settled repetitive `.tran` signal.
+- `noise_integral` — `{"metric": "noise_integral"}` with optional `signal`,
+  `from_hz`, `to_hz`; returns the integrated RMS noise of a `.noise` run over
+  that band.
+- `return_loss` — `{"metric": "return_loss", "signal": "V(in)/I(Rs)"}` with
+  optional `z0` (default 50); returns `return_loss_db`, `vswr`,
+  `reflection_coefficient` vs frequency (reducible) from an `.AC` impedance
+  trace.
+
 Later sections show some examples with the tool names of this server's older
 releases, which are not exposed here. Read them through this map: for
 `run_simulation` use `run_experiments`; for `measurement_stats`, `bode_metrics`,

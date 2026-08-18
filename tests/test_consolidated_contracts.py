@@ -298,7 +298,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # again. The title-annotation stripper filtered the key at every level, so
     # it also deleted the entry for the property of that name — an argument the
     # server accepts and the handler reads was in no published schema.
-    "analyze_results": 21487,
+    # LOWERED 21487 -> 20772: the three recipe branches no recorded workload
+    # ever called (noise_integral, periodic, return_loss — measured over 477
+    # campaign transcripts) advertise only their discriminant and a pointer to
+    # api.reference / spice://guide. They stay fully callable; only the wire
+    # shrank. TestDormantRecipeWireStubs pins both halves.
+    "analyze_results": 20772,
     # expected_sha256 now names where a caller gets one (an inspect
     # components/net query). No read tool reported the digest before, so a
     # first edit on an existing sheet had no in-product route to its token.
@@ -352,6 +357,105 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # not import, which cost three calls to recover from.
     "verify_circuit": 5137,
 }
+
+# Recipe branches no recorded workload has ever called (measured over 477
+# campaign transcripts, both doors — .claude/plans/u3_recipe_census.md). Their
+# advertised schema is a discriminant-plus-pointer stub; the branch itself
+# stays fully callable. A metric may join this tuple only with a fresh census
+# showing zero use; a metric the census showed used may never be stubbed.
+DORMANT_WIRE_STUBS: tuple[str, ...] = ("noise_integral", "periodic", "return_loss")
+
+
+def _recipe_def_name(metric: str) -> str:
+    """The $defs key for one recipe metric, read off the live union."""
+    from ltspice_mcp.lib.recipes import RECIPE_MODELS, _discriminant_of
+
+    return next(m for m in RECIPE_MODELS if _discriminant_of(m) == metric).__name__
+
+
+class TestDormantRecipeWireStubs:
+    """The dormant-branch diet: the wire shrinks, the capability does not."""
+
+    @staticmethod
+    def _analyze_defs() -> dict[str, Any]:
+        return _registered()["analyze_results"].inputSchema["$defs"]
+
+    @pytest.mark.parametrize("metric", DORMANT_WIRE_STUBS)
+    def test_stubbed_branch_advertises_only_discriminant_and_pointer(self, metric: str):
+        body = self._analyze_defs()[_recipe_def_name(metric)]
+        assert set(body["properties"]) == {"metric"}
+        assert body["properties"]["metric"]["const"] == metric
+        # Both discovery channels are named, and the stub must stay permissive
+        # so a client pre-validating a full call against the wire still sends it.
+        assert "api.reference('analyze_results')" in body["description"]
+        assert "spice://guide" in body["description"]
+        assert "additionalProperties" not in body
+
+    def test_no_branch_the_census_showed_used_is_stubbed(self):
+        from ltspice_mcp.lib.recipes import RECIPE_MODELS, _discriminant_of
+
+        defs = self._analyze_defs()
+        for model in RECIPE_MODELS:
+            metric = _discriminant_of(model)
+            if metric in DORMANT_WIRE_STUBS:
+                continue
+            body = defs[model.__name__]
+            assert set(body.get("properties", {})) != {"metric"}, (
+                f"{metric} is stubbed on the wire but is not in DORMANT_WIRE_STUBS — "
+                "stubbing a used branch needs a fresh census, not just the model config"
+            )
+
+    def test_stubbed_branches_still_validate_their_full_field_tree(self):
+        from ltspice_mcp.lib.recipes import RECIPE_ADAPTER
+
+        full_calls = [
+            {
+                "key": "n",
+                "metric": "noise_integral",
+                "signal": "V(onoise)",
+                "from_hz": 10.0,
+                "to_hz": "1Meg",
+            },
+            {
+                "key": "p",
+                "metric": "periodic",
+                "signal": "V(out)",
+                "window": {"start": 1e-3, "end": 2e-3},
+                "reduce": ["mean"],
+                "reduce_field": "frequency",
+            },
+            {"key": "r", "metric": "return_loss", "signal": "V(in)/I(Rin)", "z0": 75.0},
+        ]
+        for call in full_calls:
+            recipe = RECIPE_ADAPTER.validate_python(call)
+            assert recipe.key == call["key"]
+
+    @staticmethod
+    def _member_segment(text: str, metric: str) -> str:
+        """The catalogue lines belonging to one recipe-union member."""
+        marker = f"metric='{metric}'"
+        rest = text[text.index(marker) + len(marker) :]
+        nxt = rest.find("metric='")
+        return rest if nxt < 0 else rest[:nxt]
+
+    def test_reference_still_renders_the_stubbed_field_trees(self):
+        from ltspice_mcp.api import _reference
+        from ltspice_mcp.lib.recipes import _DORMANT_POINTER
+
+        text = _reference.reference("analyze_results")
+        # The catalogue renders from the live models; the wire stub appearing
+        # here would mean the renderer started reading the advertised schema —
+        # exactly the regression that would also erase the field trees.
+        assert _DORMANT_POINTER not in text
+        for metric, fields in {
+            "noise_integral": ("from_hz", "to_hz"),
+            "periodic": ("signal", "window"),
+            "return_loss": ("z0",),
+        }.items():
+            segment = self._member_segment(text, metric)
+            for field in fields:
+                assert field in segment, f"{metric} lost {field} in the catalogue"
+
 
 # The pins are only a ratchet while they stay on top of the real number. A pin
 # left far above what the surface actually costs has stopped catching anything,
