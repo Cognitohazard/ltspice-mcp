@@ -583,6 +583,11 @@ def _note_lines(operation: _Operation) -> list[str]:
 
 def reference(op: str | None = None) -> str:
     """The catalogue: the six-operation index, or one operation's argument tree."""
+    # A catalogue read pays the tool-model import; install the method
+    # docstrings on the same event (lazy — see _methods.ensure_method_docs).
+    from ltspice_mcp.api import _methods
+
+    _methods.ensure_method_docs()
     if op is None:
         return index()
     if not isinstance(op, str):

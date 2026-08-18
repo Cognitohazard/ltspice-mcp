@@ -39,7 +39,6 @@ from itertools import pairwise
 from typing import Literal, TypedDict
 
 import numpy as np
-from scipy.signal import find_peaks
 
 from ltspice_mcp.lib.ac_analysis import (
     _slope_db_per_decade,  # pyright: ignore[reportPrivateUsage]  # shared slope primitive
@@ -549,6 +548,8 @@ def _group_delay_peaks(
     prominence = _GD_PEAK_PROMINENCE_FRAC * max(
         scale, abs(baseline) * _GD_PEAK_PROMINENCE_FRAC, 1e-12
     )
+    from scipy.signal import find_peaks  # deferred: scipy costs ~0.5 s at import
+
     peak_idx, _ = find_peaks(tau_dyn, prominence=prominence)
 
     peaks: list[_GroupDelayPeak] = []

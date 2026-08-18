@@ -213,6 +213,13 @@ the module from v0.5.x or git history first.
 
 ### Changed
 
+- `import ltspice_mcp.api` and `Api()` boot lazily: the package `__init__` is
+  a PEP 562 lazy table, `SessionState` builds its tool surface on first
+  access, the API method layer resolves tool modules through deferred
+  imports, and scipy is imported at its call sites — a cold `Api()` drops
+  from ~1.5 s to ~0.4 s and no longer imports scipy or the MCP SDK at all.
+  Method docstrings install on the first catalogue read or operation call;
+  until then `help()` on a method shows only its signature.
 - Tool-guidance pass driven by observed agent usage: `configure_sweep` now says
   when a native `.step` in the deck is the better route (LTspice one-parameter
   sweeps) and when the sweep pipeline wins (no `.step` on the simulator,

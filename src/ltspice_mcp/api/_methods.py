@@ -7,10 +7,10 @@ import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
+from importlib import import_module
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
-from mcp import types
 from pydantic import BaseModel, ValidationError
 
 from ltspice_mcp.api import _reference
@@ -25,8 +25,36 @@ from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.lib import services
 from ltspice_mcp.lib.pathutil import relative_paths_from
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edit, verify
-from ltspice_mcp.tools._base import automatic_door
+
+if TYPE_CHECKING:
+    from mcp import types
+
+    from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edit, verify
+else:
+    # Deferred imports (PEP 562-style proxies): the tool modules pull the MCP
+    # SDK and the analysis chain — over a second of import an Api() that only
+    # reads raws never needs. Each proxy resolves its module on first
+    # attribute access; the TYPE_CHECKING branch above keeps pyright's view
+    # identical to eager imports. Pinned by the cold-subprocess test in
+    # tests/test_api_reference.py.
+    class _DeferredModule:
+        def __init__(self, dotted: str) -> None:
+            self._dotted = dotted
+
+        def __getattr__(self, name: str) -> Any:
+            # Resolved on EVERY access, never cached: a cached attribute
+            # would pin the value seen first and silently bypass a later
+            # monkeypatch on the real module. After the first import this
+            # is a sys.modules dict hit plus a getattr.
+            module = import_module(self._dotted)
+            ensure_method_docs()
+            return getattr(module, name)
+
+    analyze = _DeferredModule("ltspice_mcp.tools.analyze")
+    experiments = _DeferredModule("ltspice_mcp.tools.experiments")
+    inspect_tools = _DeferredModule("ltspice_mcp.tools.inspect_tools")
+    schematic_edit = _DeferredModule("ltspice_mcp.tools.schematic_edit")
+    verify = _DeferredModule("ltspice_mcp.tools.verify")
 
 _T = TypeVar("_T")
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
@@ -144,6 +172,8 @@ async def _through_auto_door(coroutine: Coroutine[Any, Any, _T]) -> _T:
     handlers read the flag from the engine loop's task context, and a set on the
     calling thread would never reach it.
     """
+    from ltspice_mcp.tools._base import automatic_door  # deferred with the tool modules
+
     with automatic_door():
         return await coroutine
 
@@ -154,8 +184,10 @@ def _message_for_error(payload: Mapping[str, Any], result: types.CallToolResult)
         message = error.get("message")
         if isinstance(message, str):
             return message
+    from mcp import types as mcp_types  # already loaded: a result exists to unwrap
+
     for content in result.content:
-        if isinstance(content, types.TextContent):
+        if isinstance(content, mcp_types.TextContent):
             return content.text
     return "The engine returned a call-level error"
 
@@ -834,8 +866,19 @@ class ApiMethodsMixin(ABC):
         )
 
 
-# The six methods carry their operation's catalogue entry as their docstring,
-# installed at class-definition time so help() and inspect.getdoc answer the
-# reflex a Python caller already has — and from the same renderer api.reference
-# uses, so the two can never disagree.
-_reference.install_method_docs(ApiMethodsMixin)
+# The six methods carry their operation's catalogue entry as their docstring —
+# from the same renderer api.reference uses, so the two can never disagree.
+# Installed LAZILY: rendering needs the live tool models, whose import is
+# exactly what the engine boot defers, so installation rides the first event
+# that pays that import anyway — the first deferred tool-module resolution
+# (any operation call) or the first catalogue read (reference()). Until one
+# of those happens, help() on a method shows only its signature.
+_method_docs_installed = False
+
+
+def ensure_method_docs() -> None:
+    """Install the catalogue docstrings once (idempotent, import-triggered)."""
+    global _method_docs_installed
+    if not _method_docs_installed:
+        _method_docs_installed = True
+        _reference.install_method_docs(ApiMethodsMixin)

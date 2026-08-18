@@ -5,7 +5,8 @@ returns dicts of Python floats. No I/O, no spicelib dependencies. Raises
 ``ValueError`` with user-facing messages on domain errors — the tool layer
 re-raises these as ``ResultError``.
 
-Depends on numpy and scipy.signal.find_peaks; no other third-party code.
+Depends on numpy, plus scipy.signal.find_peaks imported at the call sites
+(scipy costs ~0.5 s to import; a session that never detects peaks never pays).
 
 Convention: throughout this module
 
@@ -27,7 +28,6 @@ from collections.abc import Sequence
 from typing import Literal, NotRequired, TypedDict
 
 import numpy as np
-from scipy.signal import find_peaks
 
 # Re-exported as ``magnitude_db`` for readability in the AC domain; the
 # implementation lives in raw_parser so AC and transient tools share the
@@ -1430,6 +1430,8 @@ def compute_resonances(
 
     mag_db = magnitude_db(H)
     phase_deg = np.angle(H, deg=True)
+
+    from scipy.signal import find_peaks  # deferred: scipy costs ~0.5 s at import
 
     peak_indices, _props = find_peaks(mag_db, prominence=min_prominence_db)
 
