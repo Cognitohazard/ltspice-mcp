@@ -11,10 +11,9 @@ import asyncio
 import logging
 from collections.abc import MutableMapping
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-from mcp import types
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.cache import FileCache
@@ -35,6 +34,8 @@ from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.lib.simulator import simulator_dialect
 
 if TYPE_CHECKING:
+    from mcp import types
+
     from ltspice_mcp.tools._base import RegisteredTool
 
 logger = logging.getLogger(__name__)
@@ -93,9 +94,6 @@ class SessionState:
     runners: RunnerManager
     working_dir: Path
     job_registry: JobRegistry = field(default_factory=lambda: JobRegistry(persist_enabled=False))
-    tool_defs: list[types.Tool] = field(default_factory=list)
-    tool_dispatch: dict[str, "RegisteredTool"] = field(default_factory=dict)
-    field_owners: dict[str, tuple[str, ...]] = field(default_factory=dict)
     sweep_configs: dict[str, SweepConfig] = field(default_factory=dict)
     mc_configs: dict[str, MonteCarloConfig] = field(default_factory=dict)
     diagnostics: list[str] = field(default_factory=list)
@@ -131,6 +129,40 @@ class SessionState:
         """
         return simulator_dialect(self.default_simulator)
 
+    # ------------------------------------------------------------------
+    # Tool surface — built on FIRST ACCESS, not at session creation. The
+    # library door (Api) calls handlers directly and never reads these, so it
+    # never pays the tools-package import (mcp + the analysis chain); the MCP
+    # server touches tool_defs during its handshake and builds then. A
+    # property, not a flag: no caller can ever observe an empty surface.
+    # ------------------------------------------------------------------
+
+    @cached_property
+    def _surface(
+        self,
+    ) -> "tuple[list[types.Tool], dict[str, RegisteredTool], dict[str, tuple[str, ...]]]":
+        from ltspice_mcp.tools import get_tools_for_profile
+        from ltspice_mcp.tools._base import registry as tool_registry
+
+        defs, dispatch = get_tools_for_profile(self.config.tool_profile)
+        owners = tool_registry.field_owners_for_profile(self.config.tool_profile)
+        return (defs, dispatch, owners)
+
+    @property
+    def tool_defs(self) -> "list[types.Tool]":
+        """Profile-filtered advertised tool definitions."""
+        return self._surface[0]
+
+    @property
+    def tool_dispatch(self) -> "dict[str, RegisteredTool]":
+        """Tool name -> RegisteredTool dispatch map for the active profile."""
+        return self._surface[1]
+
+    @property
+    def field_owners(self) -> "dict[str, tuple[str, ...]]":
+        """Advertised top-level wire fields -> owning tool names."""
+        return self._surface[2]
+
     @classmethod
     def create(
         cls,
@@ -146,13 +178,9 @@ class SessionState:
         on the session for ``server_status`` to surface.
         """
         from ltspice_mcp.lib.simulator import select_default_simulator
-        from ltspice_mcp.tools import get_tools_for_profile
-        from ltspice_mcp.tools._base import registry as tool_registry
 
         diagnostics = diagnostics if diagnostics is not None else []
         default = select_default_simulator(available, config, diagnostics)
-        tool_defs, tool_dispatch = get_tools_for_profile(config.tool_profile)
-        field_owners = tool_registry.field_owners_for_profile(config.tool_profile)
         registry = JobRegistry(
             persist_enabled=config.persist_jobs,
             working_dir=config.working_dir,
@@ -172,9 +200,6 @@ class SessionState:
             runners=RunnerManager(),
             working_dir=config.working_dir,
             job_registry=registry,
-            tool_defs=tool_defs,
-            tool_dispatch=tool_dispatch,
-            field_owners=field_owners,
             diagnostics=diagnostics,
         )
 
