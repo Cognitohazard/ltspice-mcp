@@ -10,7 +10,13 @@ from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 from spicelib.simulators.qspice_simulator import Qspice
 from spicelib.simulators.xyce_simulator import XyceSimulator
 
-from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.config import (
+    SIM_ENABLED_KEY,
+    SIM_PATH_ENV,
+    SIM_PATH_KEY,
+    SIM_SECTION,
+    ServerConfig,
+)
 from ltspice_mcp.lib.wsl import is_wsl
 
 logger = logging.getLogger(__name__)
@@ -373,7 +379,8 @@ def install_hint() -> str:
     if is_wsl():
         return (
             "install ngspice in this WSL distro (`sudo apt-get install -y ngspice`), "
-            "or set LTSPICE_MCP_SIMULATOR_EXE to a Windows LTspice.exe path"
+            f"or set {SIM_PATH_ENV} ({SIM_SECTION}.{SIM_PATH_KEY} in ltspice-mcp.toml) "
+            "to a Windows LTspice.exe path"
         )
     system = platform.system()
     if system == "Darwin":
@@ -381,6 +388,78 @@ def install_hint() -> str:
     if system == "Windows":
         return "install LTspice (Analog Devices) or ngspice and add it to PATH"
     return "install ngspice (`sudo apt-get install -y ngspice`, or your distro's package manager)"
+
+
+def _platform_key() -> str:
+    if is_wsl():
+        return "wsl"
+    return {"Windows": "windows", "Darwin": "darwin"}.get(platform.system(), "linux")
+
+
+# Realistic executable locations per simulator and platform, shown as the
+# example value beside the config key that takes them. WSL reaches Windows
+# binaries through /mnt/c — the LTspice example is the path this project's
+# own development box uses.
+_SIMULATOR_EXE_EXAMPLES: dict[str, dict[str, str]] = {
+    "ltspice": {
+        "wsl": "/mnt/c/Program Files/ADI/LTspice/LTspice.exe",
+        "windows": "C:\\Program Files\\ADI\\LTspice\\LTspice.exe",
+        "darwin": "/Applications/LTspice.app/Contents/MacOS/LTspice",
+        "linux": "~/.wine/drive_c/Program Files/ADI/LTspice/LTspice.exe",
+    },
+    "ngspice": {
+        "wsl": "/usr/bin/ngspice",
+        "linux": "/usr/bin/ngspice",
+        "darwin": "/opt/homebrew/bin/ngspice",
+        "windows": "C:\\Spice64\\bin\\ngspice_con.exe",
+    },
+    "qspice": {
+        "wsl": "/mnt/c/Program Files/QSPICE/QSPICE64.exe",
+        "windows": "C:\\Program Files\\QSPICE\\QSPICE64.exe",
+    },
+    "xyce": {
+        "linux": "/usr/local/bin/Xyce",
+        "wsl": "/usr/local/bin/Xyce",
+        "darwin": "/usr/local/bin/Xyce",
+    },
+}
+
+
+def simulator_remediation(name: str, config: ServerConfig) -> dict[str, object]:
+    """How to make one undetected simulator available, as facts.
+
+    Composed from the SAME constants the config loader reads
+    (``SIM_SECTION``/``SIM_PATH_KEY``/``SIM_PATH_ENV`` — see config.py), so the
+    key this tells a caller to set is the key the loader honors. When a
+    non-empty allowlist is the reason the simulator is off, that is the first
+    fact — pointing at an install would send the caller past the actual cause.
+    """
+    enabled = _resolve_enabled_names(config)
+    excluded = name not in enabled
+    key = f"{SIM_SECTION}.{SIM_PATH_KEY}"
+    restart = "then restart this MCP server — detection runs at startup."
+    if excluded:
+        action = (
+            f"'{name}' is excluded by {SIM_SECTION}.{SIM_ENABLED_KEY} = "
+            f"{config.enabled_simulators} in {config.config_path}; add it there "
+            f"(or clear the list), {restart}"
+        )
+    else:
+        action = (
+            f"Install {name}, or set {key} in {config.config_path} "
+            f"(env {SIM_PATH_ENV}) to its executable; {restart}"
+        )
+    remediation: dict[str, object] = {
+        "config_file": str(config.config_path),
+        "config_key": key,
+        "env_var": SIM_PATH_ENV,
+        "excluded_by_allowlist": excluded,
+        "action": action,
+    }
+    example = _SIMULATOR_EXE_EXAMPLES.get(name, {}).get(_platform_key())
+    if example is not None:
+        remediation["example_value"] = example
+    return remediation
 
 
 def no_simulator_message(short: bool = False) -> str:
@@ -431,7 +510,7 @@ def _resolve_enabled_names(
                 names.append(name)
         else:
             msg = (
-                f"Unknown simulator '{raw}' in [simulator] enabled "
+                f"Unknown simulator '{raw}' in [{SIM_SECTION}] {SIM_ENABLED_KEY} "
                 f"(valid: {list(SIMULATORS)}); ignoring."
             )
             logger.warning(msg)

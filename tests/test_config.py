@@ -482,3 +482,57 @@ class TestEnabledSimulators:
         monkeypatch.setenv("LTSPICE_MCP_ENABLED_SIMULATORS", "ngspice,ltspice")
         cfg = ServerConfig.load(work_dir / "nonexistent.toml")
         assert cfg.enabled_simulators == ["ngspice", "ltspice"]
+
+
+class TestSimulatorRemediation:
+    """The capabilities remediation names the keys the loader actually reads,
+    and leads with the allowlist when the allowlist is the cause."""
+
+    def test_names_the_loader_keys(self):
+        from ltspice_mcp.config import SIM_PATH_ENV
+        from ltspice_mcp.lib.simulator import simulator_remediation
+
+        cfg = ServerConfig(working_dir=Path("/tmp"), allowed_paths=[Path("/tmp")])
+        remediation = simulator_remediation("ltspice", cfg)
+        assert remediation["config_key"] == "simulator.path"
+        assert remediation["env_var"] == SIM_PATH_ENV
+        assert remediation["config_file"] == str(cfg.config_path)
+        assert "restart" in str(remediation["action"])
+        # On this project's platforms an example executable exists for ltspice.
+        assert "LTspice" in str(remediation.get("example_value", "LTspice"))
+
+    def test_allowlist_exclusion_is_the_first_fact(self):
+        """A simulator turned off by [simulator] enabled must not be answered
+        with an install hint — the install is not the cause."""
+        from ltspice_mcp.lib.simulator import simulator_remediation
+
+        cfg = ServerConfig(working_dir=Path("/tmp"), allowed_paths=[Path("/tmp")])
+        cfg.enabled_simulators = ["ngspice"]
+        remediation = simulator_remediation("ltspice", cfg)
+        assert remediation["excluded_by_allowlist"] is True
+        action = str(remediation["action"])
+        assert "simulator.enabled" in action
+        assert "Install" not in action
+
+    def test_loader_and_remediation_share_one_key_spelling(self):
+        """The constant is used at the loader's read site: a config written
+        with the remediation's key names must actually load."""
+        import textwrap
+
+        from ltspice_mcp.lib.simulator import simulator_remediation
+
+        cfg = ServerConfig(working_dir=Path("/tmp"), allowed_paths=[Path("/tmp")])
+        remediation = simulator_remediation("ltspice", cfg)
+        section, key = str(remediation["config_key"]).split(".")
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            toml = Path(tmp) / "ltspice-mcp.toml"
+            toml.write_text(
+                textwrap.dedent(f"""
+                    [{section}]
+                    {key} = "/opt/fake/LTspice.exe"
+                """)
+            )
+            loaded = ServerConfig.load(toml)
+        assert loaded.simulator_exe == Path("/opt/fake/LTspice.exe")

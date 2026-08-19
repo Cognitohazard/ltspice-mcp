@@ -122,6 +122,18 @@ def _validated_string_list(
     return None
 
 
+# The exact simulator-resolution keys the loader reads, exported as constants
+# and used AT THE READ SITES below: the capabilities remediation and the
+# no-simulator error compose their guidance from these same names, so the key
+# a message tells the user to set is the key the loader honors — a
+# hand-written key name in guidance text drifts; a shared constant cannot.
+SIM_SECTION = "simulator"
+SIM_PATH_KEY = "path"
+SIM_ENABLED_KEY = "enabled"
+SIM_PATH_ENV = "LTSPICE_MCP_SIMULATOR_EXE"
+SIM_ENABLED_ENV = "LTSPICE_MCP_ENABLED_SIMULATORS"
+
+
 @dataclass
 class ServerConfig:
     """Configuration for the LTSpice MCP server.
@@ -272,19 +284,20 @@ class ServerConfig:
                 toml_data = tomllib.load(f)
 
             # Map TOML structure to config fields
-            if "simulator" in toml_data:
-                if "default" in toml_data["simulator"]:
-                    config_dict["simulator"] = toml_data["simulator"]["default"] or None
-                if "path" in toml_data["simulator"] and toml_data["simulator"]["path"]:
-                    config_dict["simulator_exe"] = Path(toml_data["simulator"]["path"])
-                if "enabled" in toml_data["simulator"]:
+            if SIM_SECTION in toml_data:
+                if "default" in toml_data[SIM_SECTION]:
+                    config_dict["simulator"] = toml_data[SIM_SECTION]["default"] or None
+                if SIM_PATH_KEY in toml_data[SIM_SECTION] and toml_data[SIM_SECTION][SIM_PATH_KEY]:
+                    config_dict["simulator_exe"] = Path(toml_data[SIM_SECTION][SIM_PATH_KEY])
+                if SIM_ENABLED_KEY in toml_data[SIM_SECTION]:
                     names = _validated_string_list(
-                        toml_data["simulator"]["enabled"], "simulator.enabled"
+                        toml_data[SIM_SECTION][SIM_ENABLED_KEY],
+                        f"{SIM_SECTION}.{SIM_ENABLED_KEY}",
                     )
                     if names is not None:
                         config_dict["enabled_simulators"] = [x.strip().lower() for x in names]
-                if "ngbehavior" in toml_data["simulator"]:
-                    raw = toml_data["simulator"]["ngbehavior"]
+                if "ngbehavior" in toml_data[SIM_SECTION]:
+                    raw = toml_data[SIM_SECTION]["ngbehavior"]
                     if isinstance(raw, str):
                         if raw.strip():
                             config_dict["ngbehavior"] = raw.strip()
@@ -431,14 +444,14 @@ class ServerConfig:
         if env_sim := os.getenv("LTSPICE_MCP_SIMULATOR"):
             config_dict["simulator"] = env_sim
 
-        if env_enabled := os.getenv("LTSPICE_MCP_ENABLED_SIMULATORS"):
+        if env_enabled := os.getenv(SIM_ENABLED_ENV):
             # Comma- or os.pathsep-separated list of simulator names.
             sep = "," if "," in env_enabled else os.pathsep
             config_dict["enabled_simulators"] = [
                 x.strip().lower() for x in env_enabled.split(sep) if x.strip()
             ]
 
-        if env_exe := os.getenv("LTSPICE_MCP_SIMULATOR_EXE"):
+        if env_exe := os.getenv(SIM_PATH_ENV):
             config_dict["simulator_exe"] = Path(env_exe)
 
         if (env_ngb := os.getenv("LTSPICE_MCP_NGBEHAVIOR")) and env_ngb.strip():
@@ -579,18 +592,18 @@ def generate_default_config(path: Path) -> None:
     sim.add(nl())
     sim.add(comment('Allowlist of simulators to expose, e.g. ["ltspice", "ngspice"].'))
     sim.add(comment("Empty = auto-detect every supported simulator."))
-    sim.add("enabled", [])
+    sim.add(SIM_ENABLED_KEY, [])
     sim.add(nl())
     sim.add(comment("Explicit path to simulator executable (overrides auto-detection)"))
     sim.add(comment("Leave empty for auto-detection"))
-    sim.add("path", "")
+    sim.add(SIM_PATH_KEY, "")
     sim.add(nl())
     sim.add(comment("ngspice compatibility mode (ngbehavior). Unset = spicelib's default"))
     sim.add(comment("'kiltpsa'; its lt (LTspice) and ps (PSPICE) tokens both break sectioned"))
     sim.add(comment("'.lib <file> <section>' PDK corner selection. Set a mode with neither,"))
     sim.add(comment('"hsa" or "kia", for standard-SPICE / PDK decks.'))
     sim.add(comment('ngbehavior = "hsa"'))
-    doc.add("simulator", sim)
+    doc.add(SIM_SECTION, sim)
     doc.add(nl())
 
     # Security section

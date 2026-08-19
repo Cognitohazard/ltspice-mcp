@@ -132,6 +132,14 @@ class TestBuildInstructions:
                     f"{profile} instructions {len(text)} chars > "
                     f"{_INSTRUCTIONS_BUDGET} client truncation budget"
                 )
+                # The Python-door discovery pointer must ride EVERY edition:
+                # the instructions are the one surface an agent sees without
+                # asking, and an agent that never learns the API exists can
+                # never choose it (the in-process door has no other billboard
+                # at handshake time).
+                assert "from ltspice_mcp.api import Api" in text, (
+                    f"{profile}: an instruction edition lost the Python API discovery line"
+                )
 
 
 class TestProfileGuidanceIsTotal:

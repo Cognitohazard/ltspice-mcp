@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,7 +64,12 @@ from ltspice_mcp.lib.library_manager import _part_aware_score, parse_library_fil
 from ltspice_mcp.lib.lint_rules import linter_version
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.schematic_scene import SymbolResolver, default_stock_paths
-from ltspice_mcp.lib.simulator import current_ngbehavior, dialect_for_simulator_name
+from ltspice_mcp.lib.simulator import (
+    SIMULATORS,
+    current_ngbehavior,
+    dialect_for_simulator_name,
+    simulator_remediation,
+)
 from ltspice_mcp.lib.spice_lex import SpiceLexError, lex
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, parse_asy_file
@@ -503,6 +509,35 @@ def _page_meta(page: dict[str, Any], primary: str, secondary: str | None = None)
 # ---------------------------------------------------------------------------
 
 
+def _python_runtime_facts() -> dict[str, Any]:
+    """The interpreter this engine runs in, and whether it will still exist.
+
+    An agent that wants the in-process door (``from ltspice_mcp.api import
+    Api``) must pick an interpreter that has the package — this one. The
+    install kind is the durability fact: a uvx cache environment is rebuilt
+    per invocation and may vanish, while pipx/venv/system interpreters are
+    stable paths worth writing into a script.
+    """
+    import ltspice_mcp
+
+    executable = sys.executable
+    normalized = executable.replace("\\", "/")
+    if "/pipx/venvs/" in normalized:
+        kind = "pipx"
+    elif "/.cache/uv/" in normalized or "/uv/cache/" in normalized or "/Caches/uv/" in normalized:
+        kind = "uvx-cache"
+    elif sys.prefix != sys.base_prefix:
+        kind = "venv"
+    else:
+        kind = "system"
+    return {
+        "executable": executable,
+        "install_kind": kind,
+        "ephemeral": kind == "uvx-cache",
+        "package_location": str(Path(ltspice_mcp.__file__).resolve().parent),
+    }
+
+
 def _do_capabilities(state: SessionState) -> dict[str, Any]:
     simulators: dict[str, Any] = {}
     for name, cls in state.available_simulators.items():
@@ -518,8 +553,20 @@ def _do_capabilities(state: SessionState) -> dict[str, Any]:
         if exe is not None:
             info["executable"] = str(exe[0] if isinstance(exe, list) else exe)
         simulators[name] = info
+    # Every known-but-undetected simulator appears with the exact keys that
+    # would turn it on — the config self-diagnosis surface. Detection runs at
+    # startup, so a fix always ends in a server restart; the remediation says
+    # so rather than leaving the agent to loop on the same absence.
+    for name in SIMULATORS:
+        if name not in simulators:
+            simulators[name] = {
+                "available": False,
+                "remediation": simulator_remediation(name, state.config),
+            }
 
     return {
+        "config_path": str(state.config.config_path),
+        "python": _python_runtime_facts(),
         "simulators": simulators,
         "default_simulator": (
             state.default_simulator.__name__ if state.default_simulator else None

@@ -278,13 +278,13 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 CONSOLIDATED_INSTRUCTIONS = """\
 For ANY circuit or SPICE task — amplifiers, filters, regulators, schematics. Author .cir/.net/.sp decks with your own file tools; this consolidated profile's six tools run, analyze, gate, and edit .asc geometry-aware. Routing: run quick one-off ngspice yourself and bring the .raw — analyze_results raw_path parses runs this server never executed (.MEAS, gm/gds/vth, Bode/transient metrics, spec verdicts). run_experiments earns its keep on LTspice (no native automation), sweep/corner/MC matrices, and jobs that outlive a call.
 
-Simulate, don't deliberate: runs are cheap — spot-check ideas and sizings instead of reasoning them out.
+Simulate, don't deliberate: runs are cheap — spot-check instead of reasoning it out.
 
-EXECUTE — run_experiments: staged decks across declared variations (strict assignments plus one random/MC); required request_id = durable, idempotent submission; quick jobs return inline, longer a receipt/job_id. jobs: status, wait (long-poll), cancel (owner/control_token), list, run pages; by job_id or request_id.
+EXECUTE — run_experiments: staged decks across declared variations (strict assignments plus one random/MC); required request_id = durable, idempotent submission; quick jobs return inline, longer a receipt/job_id. jobs: status, wait (long-poll), cancel (owner/control_token), list, run pages; by job_id or request_id. Code loops: from ltspice_mcp.api import Api — the same ops in-process.
 
 UNDERSTAND — analyze_results: typed recipes over completed runs/experiments; case/step-attributed values, reductions, spec verdicts; continuable via result_set_id + cursor. inspect: read-only — capabilities, symbols, net trace, components, models.
 
-AUTHOR — edit_schematic: typed op batch on one .asc sheet (base "blank" or "existing"); transactional, revision-guarded (expected_sha256 for existing targets); returns geometry facts. verify_circuit: lint, symbols, export, layout, quality, compare (equivalence/structural diff), optional render.
+AUTHOR — edit_schematic: typed op batch on one .asc sheet; transactional, revision-guarded (expected_sha256 for existing targets); returns geometry facts. verify_circuit: lint, symbols, export, layout, quality, compare, optional render.
 
 A terminal run can still be degenerate (coerced value, skipped .meas): read observations/warnings and per-item failures — completed is not correct. Match recipe to run type (.AC vs .tran) or analyze_results errors.
 """
