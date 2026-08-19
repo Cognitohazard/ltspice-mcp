@@ -126,11 +126,19 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "tool_profile",
         "limits",
         "linter_version",
+        "config_path",
+        "python",
     ):
         assert key in data, f"missing capabilities key {key!r}"
     assert "ltspice" in data["simulators"]
     assert data["simulators"]["ltspice"]["available"] is True
     assert data["exporter_available"] is True
+    # The in-process door's confirmation destination: the interpreter that
+    # has the package, and whether it is a durable path or a throwaway one.
+    python_facts = data["python"]
+    for key in ("executable", "install_kind", "ephemeral", "package_location"):
+        assert key in python_facts, f"missing python fact {key!r}"
+    assert isinstance(python_facts["ephemeral"], bool)
     for lim in (
         "max_experiment_cases",
         "analysis_budget_s",
@@ -140,6 +148,26 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "dwell",
     ):
         assert lim in data["limits"], f"missing limits key {lim!r}"
+
+
+async def test_capabilities_names_the_keys_that_turn_a_simulator_on(cap_state: SessionState):
+    """Every known-but-undetected simulator carries remediation naming the
+    SAME config keys the loader reads — the config self-diagnosis surface.
+    The fixture state detects only LTspice and ngspice, so the other two
+    engines are the specimens."""
+    from ltspice_mcp.config import SIM_PATH_ENV
+
+    (res,) = await _run(cap_state, [{"kind": "capabilities"}])
+    data = res["data"]
+    undetected = {name: info for name, info in data["simulators"].items() if not info["available"]}
+    assert undetected, "fixture unexpectedly detects every known simulator"
+    for name, info in undetected.items():
+        remediation = info["remediation"]
+        assert remediation["config_key"] == "simulator.path"
+        assert remediation["env_var"] == SIM_PATH_ENV
+        assert remediation["config_file"] == data["config_path"]
+        assert "restart" in remediation["action"], f"{name}: fix must end in a restart"
+        assert remediation["excluded_by_allowlist"] is False
 
 
 # ---------------------------------------------------------------------------

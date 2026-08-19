@@ -412,6 +412,79 @@ class TestReceiptThenDwell:
 
 
 @pytest.mark.asyncio
+class TestApiDoorPointer:
+    """A many-case terminal receipt points at the in-process door; a
+    spot-check receipt does not. The pointer is aimed at the loop shape,
+    where per-call wire overhead compounds — pointing every receipt at the
+    Python door would be noise on exactly the calls it cannot help."""
+
+    async def test_sweep_receipt_points_at_the_python_door(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "sweep-pointer.cir")
+        values = [f"{k}k" for k in range(1, 11)]
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "sweep-pointer",
+                    wait_s=30,
+                    variations=[{"kind": "assign", "assign": {"R1": values}}],
+                ),
+                state_with_sim,
+            )
+        )
+        assert data["completeness"]["expanded"] == 10
+        assert "from ltspice_mcp.api import Api" in data["hint"]
+
+    async def test_spot_check_receipt_does_not(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "spot-pointer.cir")
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "spot-pointer", wait_s=30), state_with_sim)
+        )
+        assert data["completeness"]["expanded"] == 1
+        assert "ltspice_mcp.api" not in data["hint"]
+
+    async def test_truncated_receipt_keeps_the_pointer(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A receipt big enough to truncate its inline run page is the biggest
+        loop of all — the truncation route must not displace the pointer
+        (found in review: the truncated branch returned early and every
+        50+-case receipt silently lost it)."""
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "trunc-pointer.cir")
+        values = [f"{k}k" for k in range(1, 56)]
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "trunc-pointer",
+                    wait_s=60,
+                    variations=[{"kind": "assign", "assign": {"R1": values}}],
+                ),
+                state_with_sim,
+            )
+        )
+        assert data["completeness"]["expanded"] == 55
+        assert data["runs"]["truncated"] is True
+        assert "jobs(runs)" in data["hint"]
+        assert "from ltspice_mcp.api import Api" in data["hint"]
+
+
 class TestIdempotency:
     async def test_matching_replay_returns_token_and_observation(
         self,

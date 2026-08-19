@@ -575,7 +575,17 @@ class TestInspectCapabilities:
             data = _data(result)
             assert data["ok_count"] == 1
             caps = data["results"][0]["data"]
-            assert caps["simulators"] == {}
+            # Degraded mode is no longer an empty map: every known simulator
+            # appears as unavailable WITH the remediation naming the exact
+            # config key that would turn it on — the self-diagnosis surface
+            # this state exists for.
+            assert caps["simulators"], "degraded state must still list known simulators"
+            for name, info in caps["simulators"].items():
+                assert info["available"] is False, name
+                assert info["remediation"]["config_key"] == "simulator.path"
+                assert "restart" in info["remediation"]["action"]
+            assert caps["config_path"].endswith("ltspice-mcp.toml")
+            assert caps["python"]["executable"]
             assert caps["default_simulator"] is None
             assert caps["tool_profile"] == "consolidated"
             assert caps["allowed_paths"] == [str(tmp_path)]
