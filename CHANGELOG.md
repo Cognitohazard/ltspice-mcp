@@ -213,6 +213,15 @@ the module from v0.5.x or git history first.
 
 ### Changed
 
+- The advertised tool definitions now serve semantics-only prose: a schema or
+  tool description survives on the wire only if it carries a unit, convention,
+  inversion, or depth-pointer sentence — the class measured as load-bearing.
+  Everything else (names, structure, enums, defaults) is untouched, and the
+  full text still backs `api.reference('...')` and the `spice://guide`
+  resource. The surface a client loads drops from ~69k to ~38k characters
+  (roughly 8k tokens per session). Licensed by a paired live benchmark: the
+  full and lean wires each passed all 11 requests of the same bench against
+  ground truth, with the lean wire 15% cheaper.
 - Three `analyze_results` recipes that no recorded workload has ever called —
   `noise_integral`, `periodic`, `return_loss` — now advertise only their
   `metric` and a one-line pointer on the wire (~700 chars off the schema every

@@ -52,6 +52,12 @@ def _registered() -> dict[str, Any]:
     return {tool_def.name: tool_def for tool_def in defs}
 
 
+def _source_definitions() -> dict[str, Any]:
+    """The dispatch-side definitions — full prose and outputSchema intact."""
+    _, dispatch = get_tools_for_profile("consolidated")
+    return {name: rt.definition for name, rt in dispatch.items()}
+
+
 def _output_schemas() -> dict[str, dict[str, Any]]:
     # The wire defs drop outputSchema; the declared shapes live on the
     # dispatch-side definitions (keyed here by wire names so deprecated
@@ -275,6 +281,15 @@ class TestOutputSchemaCoverage:
 # than left to drift. The pins sit exactly on the measured size: a field, an
 # option or a sentence that grows one fails here, and the number is then raised
 # deliberately, in the same change that earns it.
+#
+# ALL SEVEN LOWERED (the semantics-only wire): the advertised copy now drops
+# every description that carries no unit/convention/inversion/pointer marker
+# (_WIRE_PROSE_KEEP in tools/_base.py) — 68,878 -> 38,098 chars across the
+# surface. Licensed by a paired live bench: full wire vs lean wire, 11
+# requests each, both 11/11 against ground truth, lean 15% cheaper. The
+# historical comments below record how each FULL definition earned its prose;
+# that prose still exists — on the registered definition, api.reference(),
+# and spice://guide — the wire just stopped shipping the inert part of it.
 _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Carries view-bound cursor semantics and the columnar response row form.
     # histogram_bins on the measurements recipe: the legacy tool could bin a
@@ -303,7 +318,7 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # campaign transcripts) advertise only their discriminant and a pointer to
     # api.reference / spice://guide. They stay fully callable; only the wire
     # shrank. TestDormantRecipeWireStubs pins both halves.
-    "analyze_results": 20772,
+    "analyze_results": 16407,
     # expected_sha256 now names where a caller gets one (an inspect
     # components/net query). No read tool reported the digest before, so a
     # first edit on an existing sheet had no in-product route to its token.
@@ -317,16 +332,16 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # caller learned neither which kinds exist nor what their payload lacked,
     # and the measured recovery was reflecting over private classes. The bytes
     # are the discriminator mapping; what they buy is every op error.
-    "edit_schematic": 13541,
+    "edit_schematic": 6253,
     # LOWERED 8628 -> 8008: budget prose, as above.
-    "inspect": 8008,
+    "inspect": 4002,
     # The widget tool, kept by ruling; its schema is surface toll like any
     # other and enters the same diet regime. RAISED 3672 -> 3686: the sibling-
     # egress paragraph now routes to analyze_results recipes instead of the
     # removed per-metric tools — the bytes buy referrals that resolve.
-    "plot_waveform": 3686,
+    "plot_waveform": 2122,
     # LOWERED 3955 -> 3378: budget prose, as above.
-    "jobs": 3378,
+    "jobs": 1253,
     # Adds budget/attached-view inputs, a shared object/columnar receipt row,
     # and the assign-target grammar (REF@model / INSTANCE:delvto forms) — the
     # instance form went undiscovered by every agent while undocumented, so
@@ -350,12 +365,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # pair idiom: probe agents asked for input-pair mismatch wrote prefix 'M'
     # and silently perturbed every MOSFET — a run that completes clean and
     # answers a different question than asked.
-    "run_experiments": 14462,
+    "run_experiments": 6757,
     # RAISED 5079 -> 5137: 'render' now advertises the boolean shorthand next to
     # the policy object. The bytes buy the spelling every first contact reaches
     # for — render=true used to be a rejection naming a type the caller could
     # not import, which cost three calls to recover from.
-    "verify_circuit": 5137,
+    "verify_circuit": 1304,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477
@@ -455,6 +470,71 @@ class TestDormantRecipeWireStubs:
             segment = self._member_segment(text, metric)
             for field in fields:
                 assert field in segment, f"{metric} lost {field} in the catalogue"
+
+
+class TestSemanticsOnlyWire:
+    """The advertised wire serves only load-bearing prose; the depth stays at
+    the source. Pins both halves of that split so neither can silently rot:
+    a description reaching the wire without a marker means the strip stopped
+    running; a source definition losing its prose means the depth channels
+    (api.reference, spice://guide, the doc gates) went blind."""
+
+    @staticmethod
+    def _descriptions(node: Any) -> Iterator[str]:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "description" and isinstance(value, str):
+                    yield value
+                else:
+                    yield from TestSemanticsOnlyWire._descriptions(value)
+        elif isinstance(node, list):
+            for item in node:
+                yield from TestSemanticsOnlyWire._descriptions(item)
+
+    @pytest.mark.parametrize("name", REGISTERED_TOOLS)
+    def test_every_advertised_description_carries_a_keep_marker(self, name: str):
+        from ltspice_mcp.tools._base import _WIRE_PROSE_KEEP
+
+        tool_def = _registered()[name]
+        candidates = list(self._descriptions(tool_def.inputSchema))
+        if tool_def.description:
+            candidates.append(tool_def.description)
+        for text in candidates:
+            assert _WIRE_PROSE_KEEP.search(text), (
+                f"{name}: advertised description without a unit/convention/"
+                f"pointer marker reached the wire: {text[:120]!r}"
+            )
+
+    def test_the_source_definition_keeps_prose_the_wire_dropped(self):
+        source = _source_definitions()["edit_schematic"]
+        advertised = _registered()["edit_schematic"]
+        source_ops = source.inputSchema["properties"]["ops"].get("description") or ""
+        advertised_ops = advertised.inputSchema["properties"]["ops"].get("description")
+        assert "remove_component" in source_ops
+        assert advertised_ops is None, (
+            "the ops description carries no keep marker, so the wire copy "
+            "should have dropped it — the strip is not running"
+        )
+
+    @pytest.mark.parametrize("name", REGISTERED_TOOLS)
+    def test_structure_survives_the_strip(self, name: str):
+        """Names, enums, and defaults are untouchable — only prose moves."""
+        from ltspice_mcp.tools._base import _strip_wire_prose
+
+        source = _source_definitions()[name].inputSchema
+        advertised = _registered()[name].inputSchema
+
+        def skeleton(node: Any) -> Any:
+            if isinstance(node, dict):
+                return {k: skeleton(v) for k, v in node.items() if k != "description"}
+            if isinstance(node, list):
+                return [skeleton(v) for v in node]
+            return node
+
+        assert skeleton(advertised) == skeleton(source)
+        # And the advertised copy is exactly the strip of the source — no
+        # second transformation hiding in the pipeline.
+        assert advertised == _strip_wire_prose(source)
 
 
 # The pins are only a ratchet while they stay on top of the real number. A pin
