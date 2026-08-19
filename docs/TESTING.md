@@ -126,11 +126,14 @@ Closure under inversion is the rule for the schematic op surface. A few
 tool-level mutations are deliberately *not* paired, and are recorded here so they
 are not mistaken for the absence-class bug above:
 
-- `create_netlist` / `create_schematic` create a file; deleting a file is a
-  native filesystem operation, intentionally out of scope for a circuit editor.
-  `reset_schematic` reverts in-session edits but does not remove a created file.
-- `configure_sweep` / `configure_montecarlo` create a persisted config with no
-  delete-config tool. Low value (a stale config is inert); accepted.
+- File creation (`edit_schematic` with `base: "blank"`; formerly the
+  `create_netlist` / `create_schematic` tools) has no delete pair; removing a
+  file is a native filesystem operation, intentionally out of scope for a
+  circuit editor. `reset_schematic` semantics revert in-session edits but do
+  not remove a created file.
+- The pre-0.6.0 `configure_sweep` / `configure_montecarlo` tools created a
+  persisted config with no delete-config tool. Low value (a stale config is
+  inert); accepted then, moot now — sweeps are `run_experiments` variations.
 
 These are decisions, not oversights. If one stops being acceptable, it graduates
 into mechanism 1 or 2.

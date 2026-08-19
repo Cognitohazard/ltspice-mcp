@@ -1,12 +1,45 @@
 # ltspice-mcp
 
-**Rewrite in progress to improve token usage efficiency while maintaining the speed advantage this mcp offers compared to no-mcp capable coding agent.**
+> **0.6.0 (upcoming) is a breaking release:** the tool surface consolidates to
+> six operations plus a plot widget, and the same engine becomes importable as
+> a Python library. The 0.5 series keeps the old 49-tool surface
+> (`ltspice-mcp==0.5.*`).
 
-> **WIP:** Core functionality is usable but expect rough edges and breaking changes.
+Real circuit simulation for LLM assistants and Python code: LTspice and ngspice, plus direct editing of LTspice `.asc` schematics. Simulation results come back as structured numbers — cutoff frequencies, overshoot, phase margin, rise times, and per-device small-signal operating-point parameters (gm, gds, vth, …) read back **by name** — so an assistant (or your script) can design, verify, and iterate on circuits in the same files you open in LTspice, without ever hand-parsing a rawfile. Built on [spicelib](https://github.com/nunobrum/spicelib).
 
-An MCP server that connects LLM assistants (Claude, and any other MCP client) to real circuit simulation: LTspice and ngspice, plus direct editing of LTspice `.asc` schematics. Simulation results come back as structured numbers — cutoff frequencies, overshoot, phase margin, rise times, and per-device small-signal operating-point parameters (gm, gds, vth, …) read back **by name** — so the assistant can design, verify, and iterate on circuits in the same files you open in LTspice, without ever hand-parsing a rawfile. Built on [spicelib](https://github.com/nunobrum/spicelib).
+**One engine, two doors.** The same six operations are served over MCP to any
+client, and importable in-process as a Python API — pick per task, mix freely:
+an agent explores over MCP, then hands the 200-case sweep to a script.
 
-## Quick start
+## Quick start — Python library
+
+```bash
+pip install ltspice-mcp        # or: uv tool install / pipx install
+```
+
+```python
+from ltspice_mcp.api import Api
+
+with Api(working_dir="circuits") as api:
+    result = api.run_experiments(
+        circuits=[{"path": "rc.cir"}],
+        variations=[{"kind": "assign", "assign": {"R1": ["1k", "2k", "4k"]}}],
+        analyze={"recipes": [
+            {"key": "fc", "metric": "bode_filter", "signal": "V(out)",
+             "reduce_field": "cutoff_high_hz", "reduce": ["min", "max"]},
+        ]},
+    )
+    print(result["analysis"]["result"]["results"]["fc"]["reduced"])
+```
+
+One call declares a three-case sweep with an attached measurement and returns
+the per-case cutoff extremes, each attributed to the assignment that produced
+it. `api.reference()` lists the six operations and
+`api.reference("run_experiments")` prints that operation's full argument tree
+(`python -m ltspice_mcp.api reference [op]` from a shell); `api.load_raw()`
+hands back numpy arrays when you want the waveforms themselves.
+
+## Quick start — MCP server
 
 In Claude Code, install the plugin:
 
@@ -91,41 +124,28 @@ Everything operates on ordinary LTspice and SPICE files, so the work passes back
 
 An agent with a shell should run quick one-off ngspice simulations itself — ngspice is scriptable, local runs take under a second, and wrapping that in a protocol adds cost without adding capability. The server's lane is everything the shell doesn't give you: LTspice execution (which has no native automation on any platform), parsing binary rawfiles into named numbers, declared sweep/corner/Monte-Carlo matrices with durable idempotent submission, jobs that outlive a call, and geometry-checked `.asc` editing. The analysis tools accept artifacts from simulations this server never ran — `analyze_results` takes a bare `raw_path` — so "simulate in the shell, analyze here" is a first-class workflow, not a workaround.
 
-## The command line, same engine
+## The Python API, same engine
 
-`spice-mcp` drives the identical engine from a shell — for agents and scripts
-that live in a terminal rather than behind an MCP client.
+`Api` boots the identical engine in-process — same handlers, same semantics,
+no server. The differences are exactly what an in-process caller wants:
 
-```bash
-spice-mcp run deck.cir --measure all --json    # one deck, one run, measured values
-```
-
-`run` is the one-deck on-ramp: it builds the canonical run-experiments payload
-from the deck path and flags (`--simulator`, `--measure NAME|all`) and enters
-the same dispatch and wait path — a translation layer, not a second engine.
-Six further subcommands map one-to-one onto the experiment tools
-(`run-experiments`, `jobs`, `analyze-results`, `inspect`, `edit-schematic`,
-`verify-circuit`); sweeps, Monte Carlo and multi-circuit comparisons are
-`run-experiments`' job.
-
-`--json` — accepted before or after the subcommand — prints exactly the
-structured payload the MCP tool would return, one line, parse-stable, so a
-pipeline can switch between the two front ends without re-parsing anything.
-Without it, the human rendering prints the tool's text summary followed by the
-same structured payload pretty-printed (readable, not parse-stable).
-
-```bash
-spice-mcp run-experiments @experiment.json     # submits, then waits
-spice-mcp jobs --action list --json
-spice-mcp analyze-results @recipes.json --json | jq '.results[0]'
-```
-
-Anything that launches simulations blocks until the job finishes: a one-shot
-process can't supervise a job after it exits, so the CLI stays, owns the job,
-and cancels it cleanly on Ctrl-C or `--timeout` instead of orphaning
-simulator processes. Exit codes distinguish "refused before anything ran",
-"ran and failed", and "finished but incomplete" — details in
-`spice-mcp --help`.
+- **Complete results.** Where the wire pages or caps a response, the API
+  collects every page and returns the whole thing; wire-only controls
+  (response budgets, pagination cursors, wait dwells) are rejected rather
+  than silently rewritten, so a replayed call means the same thing at both
+  doors.
+- **Jobs live and die with your process.** `run_experiments(wait=False)`
+  returns a receipt immediately, but the job is owned by the process that
+  submitted it and is cancelled when it exits — `api.close()`, the end of a
+  `with` block, or the interpreter shutting down. Keep the process alive
+  until the job finishes, or run work that must outlive it through a
+  long-lived server.
+- **One live engine per process** (an `Api` inside a running server process
+  refuses), and a cold `Api()` boots in well under a second — the heavy
+  imports arrive with the first call that needs them.
+- `api.load_raw()` / `api.measurements()` return numpy-backed data for your
+  own post-processing, and `api.reference(op)` prints any operation's full
+  argument tree.
 
 ## What it does
 
