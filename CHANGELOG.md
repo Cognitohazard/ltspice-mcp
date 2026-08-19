@@ -230,6 +230,13 @@ the module from v0.5.x or git history first.
 
 ### Changed
 
+- The README leads with both doors — a runnable Python-API sweep example
+  (validated against a live simulator) beside the MCP quick start — and the
+  section describing the retired `spice-mcp` command line is replaced by the
+  Python API's contract (complete results, process-owned `wait=False` jobs,
+  one engine per process). PyPI metadata and the Desktop-extension card
+  description now name the library door and the one-call sweep/Monte Carlo
+  shape.
 - The advertised tool definitions now serve semantics-only prose: a schema or
   tool description survives on the wire only if it carries a unit, convention,
   inversion, or depth-pointer sentence — the class measured as load-bearing.
