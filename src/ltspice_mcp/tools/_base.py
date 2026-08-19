@@ -750,6 +750,60 @@ def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
     return _hoist_shared_fragments(_compact_type_keywords(schema))
 
 
+# What earns a description a place on the advertised wire: unit, convention,
+# inversion, and protocol-contract markers — the sentence class measured as
+# load-bearing (agents who lost it silently guessed field units wrong by
+# orders of magnitude), against routing/derivable prose measured as inert.
+# Substring semantics are deliberate and fail-open: a marker inside a longer
+# token (the 'hz' in 'from_hz', the 'db' in 'level_db') KEEPS the text — an
+# over-match ships a sentence it could have cut, never the reverse — and the
+# surface-size pins ratchet what over-matching may cost.
+# A live A/B over the full 11-request bench then licensed serving ONLY this
+# class: the lean wire lost nothing and cost 15% less. Names, structure,
+# enums, and defaults always stay; the full text remains on the registered
+# definition and the models, so api.reference() and spice://guide carry the
+# depth. The fleet harness's schema-prune tooling mirrors this pattern —
+# keep them in step if either changes.
+_WIRE_PROSE_KEEP = re.compile(
+    r"(dB|degrees?|unwrapp?ed|percent|fraction|volts?|seconds?|hertz|Hz|µm|"
+    r"V·µm|mV|sigma|√|sqrt|·|0 disables|echo it back|verbatim|clockwise|"
+    # A pointer to the depth channels is protocol-contract prose: dropping it
+    # would orphan the very branch stubs that rely on it (the dormant-recipe
+    # stubs advertise nothing BUT their pointer).
+    r"mirrors|api\.reference|spice://guide)",
+    re.I,
+)
+
+
+def _keep_wire_prose(description: str | None) -> str | None:
+    """The advertised copy of one description: itself, or nothing."""
+    if description is not None and _WIRE_PROSE_KEEP.search(description):
+        return description
+    return None
+
+
+def _strip_wire_prose(node: Any) -> Any:
+    """Advertised-schema copy with every non-load-bearing description dropped.
+
+    Unlike ``_strip_titles`` this walker needs no name-map awareness: it only
+    ever touches a ``description`` key whose VALUE is a string, so a property
+    that happens to be named ``description`` keeps its (dict) schema intact.
+    """
+    if isinstance(node, dict):
+        out = {}
+        for key, value in node.items():
+            if key == "description" and isinstance(value, str):
+                kept = _keep_wire_prose(value)
+                if kept is not None:
+                    out[key] = kept
+                continue
+            out[key] = _strip_wire_prose(value)
+        return out
+    if isinstance(node, list):
+        return [_strip_wire_prose(value) for value in node]
+    return node
+
+
 # ---------------------------------------------------------------------------
 # TypedDict → JSON Schema generator
 # ---------------------------------------------------------------------------
@@ -1034,16 +1088,24 @@ class ToolRegistry:
         tool_dispatch: dict[str, RegisteredTool] = {}
         for registered in self._registered:
             if effective_profile in registered.profiles:
-                definition = registered.definition
-                if definition.outputSchema is not None:
-                    # The advertised tool list drops outputSchema — it was the
-                    # single largest schema block (84% of `jobs`, -35% across
-                    # the consolidated surface; followups item 30). Return
-                    # shapes are learned from responses instead. The
-                    # dispatch-side definition keeps the schema: the test
-                    # suite's conformance hook validates every emission
-                    # against it, so the declared shape is still enforced.
-                    definition = definition.model_copy(update={"outputSchema": None})
+                # The ADVERTISED definition serves semantics-only prose (any
+                # description string carrying no load-bearing marker — see
+                # _WIRE_PROSE_KEEP — is dropped from the wire copy) and no
+                # outputSchema (it was the single largest schema block, 84% of
+                # `jobs`, -35% across the consolidated surface; return shapes
+                # are learned from responses instead). The registered
+                # definition — the dispatch side, what the doc gates scan and
+                # the conformance hook validates emissions against — keeps the
+                # full text and the schema, and so do the models behind
+                # api.reference() and spice://guide, which is where a caller
+                # reads the depth.
+                definition = registered.definition.model_copy(
+                    update={
+                        "description": _keep_wire_prose(registered.definition.description),
+                        "inputSchema": _strip_wire_prose(registered.definition.inputSchema),
+                        "outputSchema": None,
+                    }
+                )
                 tool_defs.append(definition)
                 tool_dispatch[registered.definition.name] = registered
         if not tool_defs:
