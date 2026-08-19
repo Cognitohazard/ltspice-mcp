@@ -99,23 +99,24 @@ class TestToolSchemas:
 
 
 class TestConsolidatedInputDocumentation:
-    """The published input schema is the ONLY documentation a model gets about
-    how to call a tool — it has no README and no source. A top-level argument
-    with no ``description`` is therefore an argument the caller has to guess,
-    and the guess is silent: it validates or it does not, with no way to learn
-    what the field meant. The consolidated tools carry the whole surface, so
-    every one of their top-level fields must say what it is for."""
+    """Every top-level argument must say what it is for AT THE SOURCE — the
+    registered definition, which is what api.reference() and spice://guide
+    render from. The ADVERTISED wire deliberately serves semantics-only prose
+    (only unit/convention/inversion/pointer sentences survive — see
+    _WIRE_PROSE_KEEP), so the wire copy is allowed to carry bare names; the
+    documentation obligation moved to the depth channels, not away."""
 
     def test_every_consolidated_top_level_field_is_documented(self):
-        defs, _ = get_tools_for_profile("consolidated")
-        assert defs, "consolidated profile exposes no tools"
+        _, dispatch = get_tools_for_profile("consolidated")
+        registered = [rt.definition for rt in dispatch.values()]
+        assert registered, "no tools registered"
         undocumented: list[str] = []
-        for tool_def in defs:
+        for tool_def in registered:
             for field, prop in (tool_def.inputSchema.get("properties") or {}).items():
                 if not (prop.get("description") or "").strip():
                     undocumented.append(f"{tool_def.name}.{field}")
         assert not undocumented, (
-            "Consolidated tools with undocumented top-level input fields "
+            "Tools with undocumented top-level input fields "
             f"({len(undocumented)}): {sorted(undocumented)}. Give each a "
             "Field(description=...) saying what the caller should put there."
         )
@@ -158,8 +159,11 @@ class TestDestructiveAnnotations:
         assert tool.annotations.destructiveHint is True, "edit_schematic not marked destructive"
         # edit_schematic earns the hint because its batch can run the
         # remove_component op (and commit a whole-file rewrite); keep the two
-        # tied so the hint can't silently rot if that op is ever dropped.
-        ops_field = tool.inputSchema["properties"]["ops"]
+        # tied so the hint can't silently rot if that op is ever dropped. The
+        # tie lives on the SOURCE definition — the advertised wire serves
+        # semantics-only prose and may drop this sentence.
+        _, dispatch = get_tools_for_profile("consolidated")
+        ops_field = dispatch["edit_schematic"].definition.inputSchema["properties"]["ops"]
         assert "remove_component" in (ops_field.get("description") or "")
 
 
