@@ -28,6 +28,12 @@ release: the values `"full"` and `"agentic"` log a warning naming this
 removal and the pin that restores the old surface — `ltspice-mcp==0.5.*` —
 and the consolidated surface is served. The key is deleted in 0.7.0.
 
+**Reading the entries below.** Everything in this release was developed
+across the 0.5→0.6 cycle, so older entries may describe a capability under
+the pre-consolidation tool name it shipped with at the time (e.g.
+`run_simulation`, `check_job`, `bode_metrics`). The capability is still
+here — the mapping above says which of the six operations carries it now.
+
 **Rollback has two distinct shapes.** Tools whose handlers survive as
 internal adapters in `tools/circuit.py` / `tools/analysis.py` /
 `tools/simulation.py` (the netlist, schematic, simulation-lifecycle, and
