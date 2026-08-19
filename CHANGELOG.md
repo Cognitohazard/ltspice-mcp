@@ -211,6 +211,23 @@ the module from v0.5.x or git history first.
   term needed; verified against a reference divider at 3.0103 dB). The engine-
   neutral `4kT·Rs` form remains as the fallback and the only route on ngspice.
 
+- The Python door is now discoverable from the MCP side: the server
+  instructions carry a one-line pointer (`from ltspice_mcp.api import Api`),
+  and a terminal `run_experiments` receipt with ten or more expanded cases
+  points at the in-process door in its `hint` — the loop shape is where
+  per-call wire overhead compounds. `inspect(kind:"capabilities")` gains a
+  `python` block (executable, install kind, whether the interpreter path is
+  ephemeral, package location) as the confirmation destination.
+- Config self-diagnosis: `inspect(kind:"capabilities")` now returns
+  `config_path` and lists every known-but-undetected simulator with a
+  remediation naming the exact config key (`simulator.path`), env var, config
+  file, a platform-appropriate example executable path, and the restart
+  requirement — composed from the same constants the config loader reads, so
+  the guidance cannot drift from the keys it names. When a non-empty
+  `simulator.enabled` allowlist is the reason an engine is off, the
+  remediation says that instead of pointing at an install. The WSL
+  no-simulator error now names `simulator.path` alongside the env var.
+
 ### Changed
 
 - The advertised tool definitions now serve semantics-only prose: a schema or

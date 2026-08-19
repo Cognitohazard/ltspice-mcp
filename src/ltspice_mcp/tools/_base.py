@@ -20,7 +20,18 @@ from typing import Any, Literal, NamedTuple, Union, get_args, get_origin, get_ty
 from mcp import types
 from pydantic import BaseModel, ConfigDict
 
-from ltspice_mcp.config import VALID_PROFILES
+from ltspice_mcp.config import (
+    SIM_PATH_ENV as _SIM_PATH_ENV,
+)
+from ltspice_mcp.config import (
+    SIM_PATH_KEY as _SIM_PATH_KEY,
+)
+from ltspice_mcp.config import (
+    SIM_SECTION as _SIM_SECTION,
+)
+from ltspice_mcp.config import (
+    VALID_PROFILES,
+)
 from ltspice_mcp.errors import NetlistError, PathSecurityError, SimulationError
 from ltspice_mcp.lib import atomic_write_bytes, response_budget
 from ltspice_mcp.lib.filelock import DEFAULT_TIMEOUT, file_lock
@@ -1457,8 +1468,8 @@ async def resolve_runnable_netlist(
             "convert to a netlist, and LTspice is not available "
             f"(simulators: {list(state.available_simulators.keys())}). Supply a "
             "hand-written .cir/.net to simulate with the current simulator, or "
-            "point the server at an LTspice executable ([simulator] path in the "
-            "config file or LTSPICE_MCP_SIMULATOR_EXE) and restart. (The .asc's "
+            f"point the server at an LTspice executable ({_SIM_SECTION}.{_SIM_PATH_KEY} "
+            f"in the config file or {_SIM_PATH_ENV}) and restart. (The .asc's "
             "embedded .model/.lib/analysis directives can be reused in a .cir.)",
             show_hint=False,
         )
