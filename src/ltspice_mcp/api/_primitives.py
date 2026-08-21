@@ -155,15 +155,11 @@ async def load_raw_result(
         assert job_id is not None
         job = await services.resolve_job_async(job_id, state)
         if isinstance(job, ExperimentJob):
-            context = services.resolve_experiment_run(
-                job_id,
-                state,
-                run_index=run_index,
-                case_id=case_id,
+            context = services.experiment_run_context(
+                job, state, run_index=run_index, case_id=case_id
             )
             resolved = context.raw
             dialect = context.dialect
-            state.raw_dialect_hints[resolved] = dialect
         else:
             if case_id is not None:
                 raise TypeError("case_id is only valid when job_id identifies an experiment job")
@@ -191,12 +187,7 @@ async def load_measurement_results(
     """Resolve and bounded-parse one legacy run or experiment-case log."""
     job = await services.resolve_job_async(job_id, state)
     if isinstance(job, ExperimentJob):
-        context = services.resolve_experiment_run(
-            job_id,
-            state,
-            run_index=run_index,
-            case_id=case_id,
-        )
+        context = services.experiment_run_context(job, state, run_index=run_index, case_id=case_id)
         if context.log is None:
             raise ResultError(f"Experiment case {context.identity['case_id']!r} has no log file")
         log_path = context.log

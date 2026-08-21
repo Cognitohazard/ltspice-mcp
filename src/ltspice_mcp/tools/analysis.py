@@ -117,7 +117,7 @@ from ltspice_mcp.lib.signal_analysis import (
     stat_envelope,
     window_and_clean,
 )
-from ltspice_mcp.state import BatchJob, SessionState
+from ltspice_mcp.state import BatchJob, ExperimentJob, SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
     MEAS_ERRORS_SCHEMA,
@@ -430,6 +430,30 @@ def _effective_raw_path(
     return source.raw
 
 
+async def _experiment_case(
+    raw_file: str | None,
+    job_id: str | None,
+    run_index: int,
+    case_id: str | None,
+    state: SessionState,
+) -> services.RunContext | None:
+    """The case a ``job_id`` names when it is a run_experiments job, else ``None``.
+
+    Experiment runs are addressed by case, never through ``resolve_run`` — the
+    same split ``Api.load_raw`` makes. ``case_id`` only means something here, so
+    it is refused beside a raw_file or a legacy job. raw_file together with
+    job_id is left to ``_effective_raw_path``'s exclusivity error.
+    """
+    job = await services.resolve_job_async(job_id, state) if job_id and not raw_file else None
+    if isinstance(job, ExperimentJob):
+        return services.experiment_run_context(job, state, run_index=run_index, case_id=case_id)
+    if case_id is not None:
+        raise ResultError(
+            "case_id selects a run_experiments case; pass it with that job's job_id."
+        )
+    return None
+
+
 def _run_meta(job_id: str | None, run_index: int, state: SessionState) -> dict | None:
     """Identify which job run an analysis addressed: ``{run_index, params}``.
 
@@ -453,6 +477,7 @@ async def _resolve_artifact_dest(
     filename: str,
     artifact: str,
     state: SessionState,
+    circuit_dir: Path | None = None,
 ) -> Path:
     """Resolve where a generated artifact (CSV / HTML) is written.
 
@@ -460,7 +485,9 @@ async def _resolve_artifact_dest(
     Linux-side ``.ltspice-mcp/<subdir>/`` sidecar next to the CIRCUIT for a
     job_id, or next to the raw for a raw_file — a job-run raw can live in a
     Windows temp under /mnt/c the client cannot Read, so the job path anchors on
-    the circuit. Server-artifact paths skip ``safe_path`` except the out_dir
+    the circuit. A caller that already resolved the circuit (an experiment case,
+    whose job has no single netlist) passes it as ``circuit_dir``.
+    Server-artifact paths skip ``safe_path`` except the out_dir
     override; the resolved path must stay under its anchor (a symlinked sidecar
     would otherwise redirect the write out).
     """
@@ -468,7 +495,9 @@ async def _resolve_artifact_dest(
         dest_anchor = safe_path(out_dir, state)
         out_path = (dest_anchor / filename).resolve()
     else:
-        if job_id:
+        if circuit_dir is not None:
+            dest_anchor = circuit_dir
+        elif job_id:
             job = await services.resolve_job_async(job_id, state)
             dest_anchor = services.legacy_job_netlist(
                 job,
@@ -5315,13 +5344,21 @@ class PlotWaveformInput(ToolInput):
     job_id: str | None = Field(
         default=None,
         description=(
-            "Plot a specific run of a completed sweep/MC (or single) job instead "
-            "of a raw_file path; pair with ``run_index``."
+            "Plot one run of a finished job — a run_experiments job or a legacy "
+            "single/sweep/MC job — instead of a raw_file path; pick the run with "
+            "``run_index`` (or ``case_id`` for an experiment)."
         ),
     )
     run_index: int = Field(
         default=0,
         description="0-based run to read when ``job_id`` is given (default 0).",
+    )
+    case_id: str | None = Field(
+        default=None,
+        description=(
+            "For a run_experiments job_id: the case to plot, as named in its receipt "
+            "and analysis identities (an alternative to ``run_index``)."
+        ),
     )
     signals: list[str] | Literal["all"] = Field(
         default="all",
@@ -5436,7 +5473,13 @@ class PlotWaveformInput(ToolInput):
     },
 )
 async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
-    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
+    case = await _experiment_case(args.raw_file, args.job_id, args.run_index, args.case_id, state)
+    if case is not None:
+        raw_path = case.raw
+        run_index = case.identity["run_index"]
+    else:
+        raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
+        run_index = args.run_index
     fmt = args.format
     if isinstance(args.signals, list) and not args.signals:
         raise ResultError("Pass at least one signal, or 'all'.")
@@ -5486,9 +5529,10 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         job_id=args.job_id,
         raw_file=args.raw_file,
         subdir=PLOTS_SUBDIR,
-        filename=_plot_filename(raw_path, analysis_type, args.job_id, args.run_index),
+        filename=_plot_filename(raw_path, analysis_type, args.job_id, run_index),
         artifact="plot",
         state=state,
+        circuit_dir=case.circuit_path.parent if case is not None else None,
     )
 
     title = f"{raw_path.stem} — {analysis_type}"
