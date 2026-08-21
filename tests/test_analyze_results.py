@@ -2014,6 +2014,43 @@ class TestHeadlineLeafPromotion:
         assert row["unity_gain_hz"] is None
         assert row["stability"] == "always_below_unity"
 
+    @pytest.mark.asyncio
+    async def test_stability_reduces_dc_gain_and_specs_the_crossover(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The per-case fields a caller reads must also be the ones it can
+        reduce and spec; a spec on a field the loop never reaches is
+        indeterminate, not a pass."""
+        raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+        data = await _analyze(
+            state_no_sim,
+            raw,
+            [
+                {
+                    "key": "gain",
+                    "metric": "stability",
+                    "signal": "V(out)",
+                    "reduce": ["max"],
+                    "reduce_field": "dc_gain_db",
+                },
+                {
+                    "key": "ugbw",
+                    "metric": "stability",
+                    "signal": "V(out)",
+                    "spec": {"field": "unity_gain_hz", "min": 1e3},
+                },
+                {"key": "row", "metric": "stability", "signal": "V(out)"},
+            ],
+        )
+        reduced = next(
+            entry for entry in data["results"]["gain"]["reduced"] if entry["stat"] == "max"
+        )
+        assert reduced["field"] == "dc_gain_db"
+        # The reduced number is the same leaf the unreduced row shows.
+        assert reduced["value"] == data["results"]["row"]["values"][0]["value"]["dc_gain_db"]
+        # This fixture's loop never reaches unity, so the spec has no sample.
+        assert data["results"]["ugbw"]["spec"]["verdict"] == "indeterminate"
+
     def test_stability_headline_is_the_first_crossover_in_sweep_order(self):
         """The recorded fixture has no crossover at all, so the end-to-end test
         cannot tell the extraction rule from a hardcoded null."""
