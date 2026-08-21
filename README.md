@@ -1,5 +1,7 @@
 # ltspice-mcp
 
+<!-- mcp-name: io.github.cognitohazard/ltspice-mcp -->
+
 > **0.6.0 (upcoming) is a breaking release:** the tool surface consolidates to
 > six operations plus a plot widget, and the same engine becomes importable as
 > a Python library. The 0.5 series keeps the old 49-tool surface
