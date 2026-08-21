@@ -373,6 +373,12 @@ tools.
 
 ### Fixed
 
+- `verify_circuit`'s `render.delivery` now says on the wire what an inline
+  image costs: about 3k tokens at the default scale, paid on every later turn
+  of the session. The bare enum gave no reason to prefer the default
+  (`artifact`, which writes the file and returns its path); in a benchmark
+  session an agent asked for `both` on every verify after an edit, and the
+  three images were 86% of everything that session read back from tools.
 - The `spice-experiments` and `ltspice` skills said that nothing adds
   `.options logopinfo` for you; in fact the server adds it to every LTspice
   `.op` run (the packaged guide already said so). Both skills now say the

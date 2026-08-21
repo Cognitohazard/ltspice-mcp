@@ -593,10 +593,11 @@ class RenderPolicy(StrictModel):
     delivery: Literal["artifact", "inline", "both"] = Field(
         default="artifact",
         description=(
-            "'artifact' writes the image to disk and returns only its handle; "
-            "'inline' also returns the image as image content in the response; "
-            "'both' does both. Inline delivery applies to PNG only — SVG is markup "
-            "clients do not render as a picture."
+            "'artifact' (default) writes the image to disk and returns its path; "
+            "'inline' and 'both' also return the PNG as image content. An inline "
+            "image costs about 3k tokens at the default scale and stays in context "
+            "for every later turn — use it only to look at the drawing, otherwise "
+            "open the path. PNG only: SVG is markup clients do not show as a picture."
         ),
     )
     format: Literal["png", "svg"] = Field(

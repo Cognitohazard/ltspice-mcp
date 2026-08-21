@@ -699,6 +699,23 @@ def test_render_true_is_the_default_policy():
     assert args.render.delivery == "artifact"
 
 
+def test_advertised_delivery_states_the_inline_cost():
+    """The wire copy of render.delivery must say what an inline image costs.
+
+    The choice is paid on every later turn (the image stays in context), and
+    the bare enum gave a caller no reason to prefer the default: a bench agent
+    asked for 'both' on every post-edit verify and the three images were 86%
+    of everything the session read back.
+    """
+    from ltspice_mcp.tools import registry
+
+    defs, _ = registry.get_for_profile("consolidated")
+    schema = next(d for d in defs if d.name == "verify_circuit").inputSchema
+    delivery = schema["$defs"]["RenderPolicy"]["properties"]["delivery"]
+    text = delivery.get("description") or ""
+    assert "tokens" in text and "artifact" in text, text
+
+
 def test_render_false_and_none_skip_the_drawing():
     assert VerifyCircuitInput.model_validate({"path": "x.asc", "render": False}).render is None
     assert VerifyCircuitInput.model_validate({"path": "x.asc", "render": None}).render is None

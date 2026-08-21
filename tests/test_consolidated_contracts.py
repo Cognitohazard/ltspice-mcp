@@ -339,7 +339,9 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # other and enters the same diet regime. RAISED 3672 -> 3686: the sibling-
     # egress paragraph now routes to analyze_results recipes instead of the
     # removed per-metric tools — the bytes buy referrals that resolve.
-    "plot_waveform": 2122,
+    # RAISED 2122 -> 2174: case_id, so a run_experiments job — the only job kind
+    # the consolidated surface produces — can be plotted by case.
+    "plot_waveform": 2174,
     # LOWERED 3955 -> 3378: budget prose, as above.
     "jobs": 1253,
     # Adds budget/attached-view inputs, a shared object/columnar receipt row,
@@ -370,7 +372,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # the policy object. The bytes buy the spelling every first contact reaches
     # for — render=true used to be a rejection naming a type the caller could
     # not import, which cost three calls to recover from.
-    "verify_circuit": 1304,
+    # RAISED 1304 -> 1668: render.delivery now states on the wire what an inline
+    # image costs (about 3k tokens, paid on every later turn). With the bare
+    # enum a bench agent chose 'both' on every post-edit verify; the three
+    # images were 86% of everything that session read back.
+    "verify_circuit": 1668,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477

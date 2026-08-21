@@ -781,7 +781,12 @@ _WIRE_PROSE_KEEP = re.compile(
     # A pointer to the depth channels is protocol-contract prose: dropping it
     # would orphan the very branch stubs that rely on it (the dormant-recipe
     # stubs advertise nothing BUT their pointer).
-    r"mirrors|api\.reference|spice://guide)",
+    r"mirrors|api\.reference|spice://guide|"
+    # Context cost is a unit statement too: an argument that makes every later
+    # turn more expensive (an inline image) names its price in tokens. Word-
+    # bounded, unlike the rest: the bare stem would also ship every sentence
+    # that mentions a control_token.
+    r"\btokens\b)",
     re.I,
 )
 
