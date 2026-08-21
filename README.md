@@ -9,9 +9,28 @@
 
 Real circuit simulation for LLM assistants and Python code: LTspice and ngspice, plus direct editing of LTspice `.asc` schematics. Simulation results come back as structured numbers — cutoff frequencies, overshoot, phase margin, rise times, and per-device small-signal operating-point parameters (gm, gds, vth, …) read back **by name** — so an assistant (or your script) can design, verify, and iterate on circuits in the same files you open in LTspice, without ever hand-parsing a rawfile. Built on [spicelib](https://github.com/nunobrum/spicelib).
 
-**One engine, two doors.** The same six operations are served over MCP to any
-client, and importable in-process as a Python API — pick per task, mix freely:
-an agent explores over MCP, then hands the 200-case sweep to a script.
+## Two ways to use it
+
+The same six operations are available as an **MCP server** for agent clients
+and as a **Python library** you import. They are one engine — the same
+handlers, the same semantics, the same files and job records on disk — reached
+from wherever the caller already is:
+
+| | MCP server | Python library |
+|-|-|-|
+| Caller | an assistant in Claude Code, Claude Desktop, Cursor, … | your script, notebook, or CI job |
+| A call | a tool call in the conversation; results are paged to fit a reply and continued by cursor | a method call; results come back complete, waveforms as numpy arrays |
+| Long runs | the server holds the job; follow it with `jobs` | the job belongs to your process and ends with it |
+| Suits | interactive design — explore, edit, spot-check, a few runs per turn | code — optimizers, custom post-processing, pipelines, whole result sets |
+
+Why both: an assistant works in a conversation, where every round trip is a
+turn; a declared sweep or Monte Carlo matrix is one call either way, but as
+soon as the next run depends on code you ran over the last one — an optimizer,
+a fit, a pass/fail gate in CI — that loop belongs in a program, and a program
+wants the whole result set rather than a page of it. The two share a working
+directory, so work crosses over: an assistant sets up a sweep over MCP and a
+script reads the finished job by its `job_id`; a script's completed runs are
+analyzed from the chat.
 
 ## Quick start — Python library
 
@@ -126,6 +145,14 @@ Everything operates on ordinary LTspice and SPICE files, so the work passes back
 
 An agent with a shell should run quick one-off ngspice simulations itself — ngspice is scriptable, local runs take under a second, and wrapping that in a protocol adds cost without adding capability. The server's lane is everything the shell doesn't give you: LTspice execution (which has no native automation on any platform), parsing binary rawfiles into named numbers, declared sweep/corner/Monte-Carlo matrices with durable idempotent submission, jobs that outlive a call, and geometry-checked `.asc` editing. The analysis tools accept artifacts from simulations this server never ran — `analyze_results` takes a bare `raw_path` — so "simulate in the shell, analyze here" is a first-class workflow, not a workaround.
 
+## Why it is shaped this way
+
+Three published results — none of them ours — measure the problems the main design choices answer:
+
+- **Numbers, not waveforms.** SPICEAssistant (Nau, Krummenauer, Zimmermann — [arXiv:2507.10639](https://arxiv.org/abs/2507.10639)) wraps LTspice in scalar extraction tools because the model could not read the value off the data: asked for a ripple value, GPT-4o got it right in 2 of 5 cases from the raw numeric vector and 1 of 5 from the plot image. With the tools, o3's solve rate on their 269-task power-supply benchmark rose from 25.4% to 84.9%; retrieval-augmented prompting alone added 18.7 points. That is why every measurement here comes back as a named number, and why `plot_waveform` exists for looking at a shape rather than reading a value from it (AnalogCoder-Pro, [arXiv:2508.02518](https://arxiv.org/abs/2508.02518), keeps the same split: images for diagnosis, scalars for measurement).
+- **Edits as checked transactions.** NetlistBench (Ma et al., [arXiv:2608.12197](https://arxiv.org/html/2608.12197)) measured LLMs editing SPICE netlists as text across 2,342 cases: parameter changes and device removal 96–100% correct, device addition 41–83%, and compound edits falling, for the strongest model tested, from 80% at 3 dependent steps to 26% at 15 — their verdict is that "LLMs currently cannot serve as unverified netlist editors." `edit_schematic` takes a batch of typed ops, validates each before anything is written, and returns the resulting geometry; `verify_circuit` checks the schematic against a netlist afterwards.
+- **Typed tools over a shell.** A benchmark of agents driving RTL-to-GDS flows ([arXiv:2607.17528](https://arxiv.org/html/2607.17528v3)) traced 31.7% of physical-design errors to tool-interface failures — valid commands that broke on tool state or version — and prescribes registered APIs, persistent sessions, normalized result structures instead of log parsing, and stateful validation. Those four are this server's structure: typed schemas, a session that keeps the simulator runners and job state, structured results, and a syntax and arity check before a simulation is spent.
+
 ## The Python API, same engine
 
 `Api` boots the identical engine in-process — same handlers, same semantics,
@@ -134,8 +161,8 @@ no server. The differences are exactly what an in-process caller wants:
 - **Complete results.** Where the wire pages or caps a response, the API
   collects every page and returns the whole thing; wire-only controls
   (response budgets, pagination cursors, wait dwells) are rejected rather
-  than silently rewritten, so a replayed call means the same thing at both
-  doors.
+  than silently rewritten, so a replayed call means the same thing over MCP
+  and in-process.
 - **Jobs live and die with your process.** `run_experiments(wait=False)`
   returns a receipt immediately, but the job is owned by the process that
   submitted it and is cancelled when it exits — `api.close()`, the end of a
