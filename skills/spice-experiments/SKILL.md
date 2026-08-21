@@ -1,13 +1,12 @@
 ---
 name: spice-experiments
 description: >
-  Use FIRST for any circuit or SPICE task — ngspice, LTspice, netlists,
+  Use for any circuit or SPICE task: ngspice, LTspice, netlists,
   schematics, amplifiers, filters, regulators, analog or power design.
-  Before shelling out to a simulator or hand-writing an analysis script,
-  read this: the sim server runs sweeps and corners in one call and
-  returns parsed numbers (.MEAS scalars, gm/gds/vth, Bode and transient
-  metrics, equivalence checks) — no rawfile parsing, no awk. SPICE
-  syntax itself is the ltspice skill.
+  Before running a simulator or writing an analysis script yourself, read
+  this: the sim server runs sweeps and corners in one call and returns
+  parsed numbers (.MEAS scalars, gm/gds/vth, Bode and transient metrics,
+  equivalence checks), no rawfile parsing. SPICE syntax: the ltspice skill.
 ---
 
 # Experiment workflow
@@ -16,14 +15,14 @@ Author a plain `.cir` deck.
 Validate (`verify_circuit {"path":"ldo.cir","checks":["syntax"]}`), run the
 sweep in one `run_experiments` call, read the numbers with `analyze_results`.
 
-Those N cases run as one coordinated batch, safe alongside parallel sessions.
-Numbers arrive parsed with SI units,
-and `completeness` surfaces any shortfall as fact with `outcome:"partial"`.
-Charts: `plot_waveform` renders an interactive widget where clients show
-one; the `plot` recipe is the static fallback.
-Pass a `request_id`: same id + args replays the receipt (decks are
-content-addressed — a later edit can't change what ran), so a crashed client
-resubmits safely; changed args give `idempotency_conflict`.
+The N cases run as one batch; other sessions can run at the same time.
+Values come back parsed, with SI units; if a case produced no result,
+`completeness` reports it and `outcome` is `"partial"`.
+Charts: `plot_waveform` (interactive, where the client supports it); the
+`plot` recipe is the static fallback.
+Pass a `request_id`: the same id and args returns the original receipt
+instead of re-running (decks are content-addressed, so a later edit does not
+change what ran); different args return `idempotency_conflict`.
 
 ## Idiom 1 — author `.MEAS` in the deck
 
@@ -37,14 +36,14 @@ resubmits safely; changed args give `idempotency_conflict`.
  "analyze":{"recipes":[{"key":"v","metric":"measurements","names":["vout_dc"]}],
   "group_by":["ILOAD"]}}
 ```
-The simulator computes the scalar robustly and the deck stays reproducible; the
-measurements recipe reads it back from the `.log`. `assign` targets must
-already exist in the deck. If you restrict saves, `.save` every signal a
-`.meas` touches — lint blocks a mismatch.
+The simulator computes the scalar and the `measurements` recipe reads it back
+from the `.log`. `assign` targets must exist in the deck. If you restrict
+saves, `.save` every signal a `.meas` uses; lint blocks a mismatch.
 
 ## Idiom 2 — gm/gds/vth/vdsat come from `.op` (LTspice)
 
-Author both lines — nothing is auto-injected here.
+Put `.op` in the deck; the server adds `.options logopinfo` to LTspice `.op`
+runs (writing it yourself is harmless).
 ```spice
 .op
 .options logopinfo
@@ -53,23 +52,23 @@ Author both lines — nothing is auto-injected here.
 {"sources":[{"label":"bias","job_id":"exp_..."}],
  "recipes":[{"key":"m1","metric":"operating_point","device":"m1"}]}
 ```
-They land in `device_op_points`, keyed literally `@m1[gm]` — no dotted
-shorthand resolves; narrow with `device`.
+Results are in `device_op_points`, keyed by the literal `@m1[gm]` (no `m1.gm`
+shorthand here); `device` limits the output to one device.
 
 ## Cap a reply with `budget`
 
-`run_experiments`, `analyze_results`, `inspect` and `jobs` take `budget`: a
-response cap in estimated tokens (compact JSON chars/4, minimum 500); omitted,
-nothing changes. Set one when a call fans wide (`per_run`, many recipes, long lists).
-Over the cap the server degrades presentation down a fixed ladder — echoes,
-detail opt-ins, rows as value arrays, smaller pages with valid cursors —
-never facts: `failures`, `observations`, `warnings`, `completeness` arrive
-whole, and a `budget_truncated` observation names the cut and the route back.
+`run_experiments`, `analyze_results`, `inspect` and `jobs` take `budget`, a
+response cap in estimated tokens (compact JSON chars/4, minimum 500);
+omitted, the response is unchanged. Set one when a call can return a lot
+(`per_run`, long lists). Over the cap the server drops
+presentation in a fixed order (echoes, detail opt-ins, rows as value arrays,
+smaller pages with valid cursors) and never facts: `failures`,
+`observations`, `warnings` and `completeness` arrive complete, and a
+`budget_truncated` observation says what was cut and how to get it back.
 
-## The rest
+## Other notes
 
-- For open-loop/DC-servo benches and reusable templates, read the
-  `spice-bench-craft` skill.
+- Open-loop/DC-servo benches and templates: the `spice-bench-craft` skill.
 - `analyze_results` defaults return the answer (`results`, `coverage`,
   `observations`, `failures`); name detail under `include` (`fields`,
   `per_run`, `outliers`, `signals_available`). `group_by` is top-level, never
@@ -82,5 +81,5 @@ whole, and a `budget_truncated` observation names the cut and the route back.
 - `inspect` reads decks, schematics and libraries, never results:
   `{"queries":[{"kind":"components","path":"ldo.cir","detail":"full"}]}`
 - `edit_schematic` edits `.asc` transactionally (`expected_sha256` when it
-  exists); `verify_circuit {"path":"amp.asc","reference":"golden.net"}` answers
-  schematic-vs-netlist equivalence.
+  exists); `verify_circuit {"path":"amp.asc","reference":"golden.net"}` checks
+  that a schematic matches a netlist.

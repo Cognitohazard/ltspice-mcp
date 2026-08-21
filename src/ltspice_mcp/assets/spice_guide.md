@@ -31,8 +31,8 @@ same response), follow a receipt with `jobs`, measure a finished job with
 | create or mutate an `.asc` | `edit_schematic(target=…, ops=[…])` |
 | check a sheet against its netlist, or render it | `verify_circuit(path=…)` |
 
-Three recipes advertise only their name on the wire; their full arguments live
-here (every other recipe field — `key`, `sources`, `step`, `reduce`,
+Three recipes appear in the tool schema by name only; their arguments are
+documented here (every other recipe field — `key`, `sources`, `step`, `reduce`,
 `reduce_field`, `spec` — applies to them unchanged; as with any multi-field
 recipe, `reduce`/`spec` on `periodic` or `return_loss` needs `reduce_field`):
 
@@ -62,11 +62,11 @@ for `symbol_info` / `component_info` use `inspect(kind="symbol")`, for
 ### The response budget
 
 `run_experiments`, `jobs`, `analyze_results` and `inspect` take a `budget` in
-estimated tokens (compact characters / 4, minimum 500). While the assembled
-response is over it, the server re-renders one rung further down a fixed
-ladder:
+estimated tokens (compact characters / 4, minimum 500). If the assembled
+response is over it, the server applies the rungs of a fixed reduction ladder
+in order until it fits:
 
-| rung | what it gives up |
+| rung | what is removed |
 |-|-|
 | 0 trim | empty presentation blocks and the identity echo (`source`, `source_hashes`) |
 | 1 answer | your detail opt-ins — `include.provenance`, `outliers`, `detail:"full"` |
@@ -79,10 +79,10 @@ for them returns them anyway and says so. The budget is presentation only — it
 is not part of a result's identity, so the same request at two budgets shares
 one result set and one set of cursors.
 
-Setting no `budget` is not "no budget": the server applies its own
-(`[analysis] default_budget`, 4000 tokens by default) at **rung 0 only**, so a
-large default response loses empty blocks and the identity echo and nothing
-else. Nothing you asked for is ever revoked unasked. Set `0` in the config to
+If you omit `budget`, the server applies its own default
+(`[analysis] default_budget`, 4000 tokens) at **rung 0 only**: a large
+response loses empty blocks and the identity echo, nothing else. Detail you
+asked for is never removed by the default. Set the config value to `0` to
 turn that off.
 
 <!-- /profile -->
@@ -126,7 +126,7 @@ V1 in 0 AC 1 PULSE(0 5 0 1n 1n 0.5m 1m)
 | T | tera | 1e12 |
 
 **`M` means MILLI, not mega. Use `MEG` for 1e6.**
-This is the #1 SPICE mistake. `1M` = 0.001, not 1000000.
+`1M` = 0.001, not 1000000.
 Unrecognized suffix letters are silently ignored — no error, just wrong value.
 
 ### Waveform Sources
@@ -178,14 +178,13 @@ PWL file=<filename>
 .meas TRAN energy INTEG V(out)*I(R1)
 ```
 
-**Prefer `.meas` for any scalar it can express.** A `.meas` is computed by the
-simulator (robust) and lives in the deck (reproducible, re-runnable in the
-LTspice GUI); its results come back through `measurement_stats`. The post-hoc
+**Prefer `.meas` for any scalar it can express.** The simulator computes it,
+and it stays in the deck, so it is reproducible and can be re-run in the
+LTspice GUI; results come back through `measurement_stats`. The post-hoc
 analysis tools (`bode_metrics`, `signal_stats`, `thd`, …) parse the `.raw`
-in-process — a fragility surface `.meas` avoids — so reach for them for derived
-metrics `.meas` can't express (FFT/THD, structural Bode, arbitrary windowed
-stats) or to skip a re-run, not as a default substitute for a scalar a `.meas`
-would compute. Exception: ngspice skips `.meas` under the server's `-b -r`
+in-process, which `.meas` avoids. Use them for derived metrics `.meas` cannot
+express (FFT/THD, structural Bode, arbitrary windowed stats) or to skip a
+re-run, not as the default for a scalar `.meas` could compute. Exception: ngspice skips `.meas` under the server's `-b -r`
 batch mode — on ngspice, read the trace with the analysis tools or use a
 dot-less `meas` inside a `.control` block (see the `.meas`-under-batch note in
 the ngspice section below; also the ngspice skill).
@@ -228,9 +227,10 @@ Or call `resonance` (AC) for peak frequency + Q + bandwidth in one step.
 ## Reading device operating points (gm/gds/vth, gm/ID characterization)
 
 The small-signal / model parameters of a MOSFET/BJT/diode (gm, gds, gmbs, vth,
-vdsat, gm/ID, the capacitances) come back from this server as **named numbers** —
-no rawfile parsing, no `.control`/`wrdata` block. Both simulators expose them;
-they just live in different files, so pick by what you need.
+vdsat, gm/ID, the capacitances) are returned by this server as **named
+numbers**; no rawfile parsing or `.control`/`wrdata` block is needed. Both
+simulators expose them, in different files; pick the method below by what you
+need.
 
 ### One device at a single bias → `operating_point` (works on LTspice)
 
@@ -258,8 +258,9 @@ under that option, and only for `.op`). On **ngspice**, `.save @m1[gm] @m1[gds]
 `export_waveform(signals=['m1.gm','m1.gds','m1.id'])` is the gm/ID table; one
 value at a chosen bias → `query_value(signal='m1.gm', at=...)`. This swept form
 needs **ngspice** (LTspice's `logopinfo` is `.op`-only; for a swept gm on LTspice
-you'd differentiate the drain current, `d(Id(M1))`, instead). Don't reach for
-`configure_sweep` — a native `.dc Vds Vgs` is one deck, not N separate runs.
+you'd differentiate the drain current, `d(Id(M1))`, instead). Don't use
+`configure_sweep` for this: a native `.dc Vds Vgs` is one deck, not N separate
+runs.
 
 Address an operating-point param by the `m1.gm` shorthand or its literal `@m1[gm]` name; the
 tools resolve the bare / `v()` / `i()` wrapping, and a subcircuit path like
@@ -274,16 +275,16 @@ tools resolve the bare / `v()` / `i()` wrapping, and a subcircuit path like
 An amplifier with 60-100 dB of DC gain multiplies any input offset by
 1,000-100,000. Driving both inputs from ideal DC sources at the same potential
 does NOT put the output at mid-rail: the amplifier's own input-referred offset
-(even tens of microvolts) slams the output into a supply rail, and every
-small-signal quantity you then measure — gain, bandwidth, phase — describes a
-saturated transistor stack, not the amplifier. Symptoms: DC gain tens of dB
+(even tens of microvolts) drives the output to a supply rail, and the gain,
+bandwidth and phase you then measure are those of a saturated transistor
+stack, not of the amplifier in its linear region. Symptoms: DC gain tens of dB
 lower than expected, an `.op` output voltage within ~100 mV of either rail,
 device operating regions showing triode/cutoff where saturation was intended.
 
 ALWAYS check `V(out)` in the `.op` result before trusting an AC sweep. If it is
 not near the intended quiescent level, the measurement is invalid.
 
-### The servo trick: DC feedback that vanishes at AC
+### DC servo for open-loop AC analysis
 
 The standard bench closes the loop at DC only, with elements too large to
 matter in the measured band:
@@ -298,27 +299,28 @@ VIP  inp  0    DC {CM} AC 0.5
 * the (vanishingly low) servo corner at 1/(2*pi*sqrt(LC)).
 ```
 
-The feedback forces the output to the level that zeroes the input differential
-at DC — the amplifier chooses its own correct operating point — while above
-~microhertz the loop is open and `V(out)/V(inp,inn)` is the true open-loop
-transfer function.
+At DC the feedback forces the output to the level that zeroes the input
+differential, so the amplifier settles at its own correct operating point.
+Above a few microhertz the loop is open and `V(out)/V(inp,inn)` is the true
+open-loop transfer function.
 
 ### Reading and checking the result
 
 - Gain: magnitude at the lowest swept frequency; sweep from well below the
   dominant pole.
-- Unity crossing: use the FIRST 0 dB crossing; verify there is only one, or
-  evaluate phase at every crossing — a later crossing can hide an unstable
-  mode a first-crossing readout misses.
-- Phase: unwrap before computing margin; modulo-360 artifacts fake healthy
-  margins.
+- Unity crossing: use the first 0 dB crossing; verify there is only one, or
+  evaluate phase at every crossing, because a later crossing can carry an
+  unstable mode that a first-crossing readout misses.
+- Phase: unwrap before computing margin; wrapped (modulo-360) phase can show
+  a margin that is not there.
 - Supply current: measure the supply SOURCE current at the `.op` point, not a
   sum of device currents.
 - Check `.op` first and AC second: is the output within the linear region?
 - Compare measured DC gain with `gm*ro` expectations. A roughly 25 dB shortfall
-  is a broken bench, not automatically a bad amplifier.
-- Re-run one point at twice the sweep density. If gain or phase margin moves,
-  the sweep or interpolation, not the circuit, is speaking.
+  usually means the bench is wrong, not the amplifier.
+- Re-run one point at twice the sweep density. If gain or phase margin
+  changes, the difference comes from the sweep density or interpolation, not
+  from the circuit.
 
 ### Render benches from one parameter dictionary
 
@@ -618,8 +620,8 @@ Two distinct request shapes, both under `run_experiments` `variations`:
 **Statistical (Pelgrom) Monte Carlo** — one `random` entry with a mismatch
 rule; the engine draws per-instance `delvto`/`mulu0` from device area as
 `σ(ΔVTH) = AVT/√(W·L)` with W·L in µm². `AVT` is therefore in **V·µm**
-(`3.2e-3` = 3.2 mV·µm) and `AK` in fraction·µm — a coefficient written in
-V·m is 10⁶ too small and draws a spread of nothing while reporting success:
+(`3.2e-3` = 3.2 mV·µm) and `AK` in fraction·µm; a coefficient written in
+V·m is 10⁶ too small, so the run succeeds but the spread is effectively zero:
 
 ```json
 {"kind": "random", "id": "mc", "runs": 100,
@@ -641,11 +643,11 @@ and the mismatch lands on the model card's `VTO`/`KP`:
 ```
 
 Scope it to one pair by naming the rule per device (`prefix` matches leading
-characters, so `"M1"` also claims M10/M11 — use the full reference when the
+characters, so `"M1"` also matches M10/M11 — use the full reference when the
 pair must be exact). On BSIM model cards set `vth_param:"VTH0"` and
 `k_param:"U0"`; the `VTO`/`KP` defaults are Level-1 names. Other letter
 prefixes (`"Q"` for BJTs) are accepted, but the Pelgrom law and those
-parameter defaults are MOSFET-shaped.
+parameter defaults are for MOSFETs.
 
 A `prefix` that matches subckt instances (e.g. sky130 `X`-wrapped FETs)
 descends into the wrapper; that descent supports ngspice-compatible BSIM3/4
@@ -684,9 +686,9 @@ is the Pelgrom rule above.
 - Be suspicious of circuits needing `cshunt` — may indicate unrealistic models.
 
 **Bistable/multi-root circuits (bandgaps, current mirrors, latches):** the DC
-solver converges to *a* root, not necessarily the intended one — a bandgap
-happily "solves" at the degenerate 0 V state, a mirror at a spurious
-high-current root, with no convergence warning. `.nodeset` alone often fails
+solver converges to one root, not necessarily the intended one: a bandgap
+can settle at the degenerate 0 V state, a mirror at a spurious high-current
+root, with no convergence warning. `.nodeset` alone often fails
 to steer it (it's only an initial guess, released before the final solve).
 What works: a startup circuit in the deck (as in real silicon); ramping the
 supply with `.tran` + `V1 ... PWL(0 0 1m VDD)` and reading the settled state;
@@ -773,11 +775,10 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 
 #### Schematic layout best practices
 
-**Delegate the build when you can.** Placement and wiring is meticulous,
-mechanical work that competes with design attention — an agent doing both in
-one pass tends to cut corners (net-label soup instead of routed wires). If
-your environment supports subagents, hand the schematic build to one whose
-entire brief is this playbook: give it the final netlist and this guide
+**Delegate the build when you can.** Placement and wiring is detailed,
+mechanical work. An agent doing design and layout in one pass tends to tag
+pins with net labels instead of routing wires. If your environment supports
+subagents, hand the schematic build to one whose only brief is this section: give it the final netlist and this guide
 section, require it to build with `create_schematic` / `apply_schematic_ops` /
 `wire_pins` (never by hand-writing the `.asc`), and have it verify before
 returning — `export_netlist` must match the source netlist, and `trace_net`
@@ -797,7 +798,7 @@ must show no multi-label shorts. Review the result with `read_circuit`.
 - **Vertical wires must not pass through component bodies to reach a bus.** When connecting a drain to a horizontal bus, jog the wire horizontally outside the bbox first, then route vertically to the bus. Example for PMOS M180 diode connection: route drain (400,256) → right to (448,256) → up to (448,144) → along bus to label, NOT straight up through the body at x=400.
 - **Leave room for buses between tiers.** The minimum 128-unit tier spacing must account for bounding box height plus bus clearance. For PMOS M180 (bbox height 96), if VDD rail is at y=128 and PMOS origins at y=288: bbox occupies y=192–288, bus fits at y=144–160 (between rail and bbox top).
 - **Heed `wire_pins` warnings and errors**: the tool refuses diagonal wires, pin collisions, and wire junction overlaps. Non-blocking warnings (long runs, bbox crossings) should still be addressed.
-- **Read the `wiring` profile `apply_schematic_ops` returns.** It reports `pins_wired` and `pins_label_only` out of `pins_total`. `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires — which reads as a wiring list, not a routed schematic (whether it even nets up as intended then rests on the label *names*, which the profile does not check). Draw wires with `wire_pins` for local nets; reserve net-labels for ground, power rails, and genuinely distant nets. Also heed the `label_over_component` validation warning (a net-label whose anchor fell inside a symbol's bounding box).
+- **Read the `wiring` profile `apply_schematic_ops` returns.** It reports `pins_wired` and `pins_label_only` out of `pins_total`. `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires. That is a wiring list, not a routed schematic, and whether it connects as intended depends only on the label names, which the profile does not check. Draw wires with `wire_pins` for local nets; reserve net-labels for ground, power rails, and genuinely distant nets. Also heed the `label_over_component` validation warning (a net-label whose anchor fell inside a symbol's bounding box).
 
 **Ground and net labels:**
 - **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `apply_schematic_ops` `add_net_label` op. Never route wires to a distant ground flag.
@@ -1015,7 +1016,7 @@ wrdata output.txt V(out)          $ save as CSV-like text
 .endc
 ```
 
-**No `write`/`wrdata` in your script?** A `.control` block replaces ngspice's
+**Scripts without `write`/`wrdata`.** A `.control` block replaces ngspice's
 default raw output, so a script that never calls `write`/`wrdata` produces no
 rawfile even though the run completes cleanly. `run_simulation` auto-injects
 a `write <rawpath>` before `.endc` when it detects this (exactly one

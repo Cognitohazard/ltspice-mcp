@@ -51,8 +51,8 @@ V1 in 0 AC 1 PULSE(0 5 0 1n 1n 0.5m 1m)
 | T | tera | 1e12 |
 
 **`M` means MILLI, not mega. Use `MEG` for 1e6.**
-This is the #1 SPICE mistake. `1M` = 0.001, not 1000000.
-Unrecognized suffix letters are silently ignored — no error, just wrong value.
+`1M` = 0.001, not 1000000. Unrecognized suffix letters are silently ignored:
+no error, just a wrong value.
 
 ### Waveform Sources
 
@@ -248,17 +248,17 @@ C1 out 0 {C}
 - Model aliasing: `.model 3904 ako: 2N3904` — inherit and override parameters.
 - Model stepping: `.step param STM list 3904 2222` with `Q1: {STM}`.
 
-### Design workflow: .cir first, .asc last
+### Design workflow
 
-**Design and iterate over `.cir` netlists** — plain text, no placement overhead, fast to edit and simulate. Only build `.asc` schematics after the circuit design is finalized or when the user needs a visual schematic for review. The `.asc` tools are for presentation, not design iteration.
+**Design and iterate over `.cir` netlists**: plain text, no placement overhead, fast to edit and simulate. Build `.asc` schematics after the circuit design is final or when the user needs a schematic for review. Do not use the `.asc` tools for routine design iteration.
 
-**Device operating points (gm/gds/vth/…) work on both simulators for `.op`.** On LTspice, author `.options logopinfo` in the deck alongside `.op` — nothing is auto-injected — and the `operating_point` recipe reads the log's *Semiconductor Device Operating Points* block (LTspice writes it only under that option, and only for `.op`). On ngspice, `.save @m1[gm] @m1[gds]` (one parameter per bracket) puts them in the raw; `operating_point` reads either uniformly via the `m1.gm` shorthand. A **swept** gm (the gm/ID sizing table via `.dc` + `.save @m1[gm]`) still needs ngspice — LTspice's `logopinfo` is `.op`-only, so on LTspice differentiate the drain current (`d(Id(M1))`) instead. See the ngspice skill / the `spice://guide` resource.
+**Device operating points (gm/gds/vth/…) work on both simulators for `.op`.** On LTspice, put `.op` in the deck; the server adds `.options logopinfo` to LTspice `.op` runs (writing it yourself is harmless), and the `operating_point` recipe reads the log's *Semiconductor Device Operating Points* block, which LTspice writes only under that option and only for `.op`. On ngspice, `.save @m1[gm] @m1[gds]` (one parameter per bracket) puts them in the raw. `operating_point` reads both the same way via the `m1.gm` shorthand. A **swept** gm (the gm/ID sizing table from `.dc` + `.save @m1[gm]`) needs ngspice, because `logopinfo` is `.op`-only; on LTspice differentiate the drain current (`d(Id(M1))`) instead. See the ngspice skill and the `spice://guide` resource.
 
 ### .asc Schematics
 
-`.asc` files are structured text representing the schematic graphically. While technically readable, hand-editing is error-prone — use `edit_schematic` (or LTspice's GUI). It gives geometry-aware editing (orthogonal routing, pin-collision and junction checks) that hand-writing the file can't match. Start a sheet from the blank base, place components with the `add_component` op, which returns placed pins, bounding box, and overlap warnings. The other mutations (move/remove a component, set an attribute, add or remove a net label, remove a wire) are ops on the same call, so batch them in one transaction.
+`.asc` files are structured text. Do not edit them by hand; use `edit_schematic` (or LTspice's GUI). It routes wires orthogonally and checks for pin collisions and wire junction overlaps. Start a new sheet with `base="blank"`, place components with the `add_component` op, which returns placed pins, bounding box, and overlap warnings. The other mutations (move/remove a component, set an attribute, add or remove a net label, remove a wire) are ops on the same call, so batch them in one transaction.
 
-**Delegate the build when you can.** Placement and wiring is meticulous, mechanical work that competes with design attention — done inline it tends to degrade into net-label soup instead of routed wires. If subagents are available, hand the schematic build to one whose entire brief is the layout playbook (`spice://guide`): give it the final netlist, require `edit_schematic` (never hand-written `.asc`), and have it verify before returning — `verify_circuit` against the source netlist, `inspect(kind="net")` showing no multi-label shorts.
+**Delegate the build when you can.** Placement and wiring is detailed, mechanical work. Done inline alongside design work, it tends to end up as pins tagged with net labels instead of routed wires. If subagents are available, hand the schematic build to one whose only brief is the layout guidance in `spice://guide`: give it the final netlist, require `edit_schematic` (never a hand-written `.asc`), and have it verify before returning: `verify_circuit` against the source netlist, and `inspect(kind="net")` showing no multi-label shorts.
 
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2.
 - Export to netlist for direct text editing when needed.
@@ -309,7 +309,7 @@ Rotations transform pin (x,y) as: R90→(-y,x), R180→(-x,-y), R270→(y,-x), M
 - **Vertical wires must not pass through component bodies to reach a bus.** When connecting a drain to a horizontal bus, jog the wire horizontally outside the bbox first, then route vertically to the bus. Example for PMOS M180 diode connection: route drain (400,256) → right to (448,256) → up to (448,144) → along bus to label, NOT straight up through the body at x=400.
 - **Leave room for buses between tiers.** The minimum 128-unit tier spacing must account for bounding box height plus bus clearance. For PMOS M180 (bbox height 96), if VDD rail is at y=128 and PMOS origins at y=288: bbox occupies y=192–288, bus fits at y=144–160 (between rail and bbox top).
 - **Heed `wire_pins` warnings and errors**: the tool refuses diagonal wires, pin collisions, and wire junction overlaps. Non-blocking warnings (long runs, bbox crossings) should still be addressed.
-- **Read the `wiring` profile `edit_schematic` returns** (`pins_wired`/`pins_label_only` out of `pins_total`). `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires — which reads as a wiring list, not a routed schematic (whether it nets up as intended then rides on the label names, which the profile does not check). Draw wires with `wire_pins` for local nets; reserve net-labels for ground, power rails, and genuinely distant nets. Also heed the `label_over_component` warning (a net-label anchored inside a symbol's bounding box).
+- **Read the `wiring` profile `edit_schematic` returns** (`pins_wired`/`pins_label_only` out of `pins_total`). `pins_label_only` high with `wire_segments` near zero means you tagged pins with net-labels instead of drawing wires. That is a wiring list, not a routed schematic, and whether it connects as intended depends only on the label names, which the profile does not check. Draw wires with `wire_pins` for local nets; reserve net-labels for ground, power rails, and genuinely distant nets. Also heed the `label_over_component` warning (a net-label anchored inside a symbol's bounding box).
 
 **Ground and net labels:**
 - **Local ground flags**: Place a ground (`0`) label directly at each grounded pin via an `edit_schematic` `add_net_label` op. Never route wires to a distant ground flag.
