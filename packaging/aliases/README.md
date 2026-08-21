@@ -1,9 +1,10 @@
 # Alias packages
 
-Thin redirect packages so the server is discoverable and installable under more
-than one name. Each depends on the canonical `ltspice-mcp` and exposes a console
-script that runs the same server, so `uvx circuit-mcp` / `uvx ngspice-mcp` work
-as drop-in equivalents of `uvx ltspice-mcp`.
+`circuit-mcp` and `ngspice-mcp` are aliases for the canonical `ltspice-mcp`
+package, so the server is discoverable and installable under more than one
+name. Each depends on `ltspice-mcp` and provides a console script that runs
+the same server, so `uvx circuit-mcp` and `uvx ngspice-mcp` run the same
+server as `uvx ltspice-mcp`.
 
 Their version tracks the canonical release: each derives its version from the
 same git tag via `hatch-vcs`, so a `v0.3.0` tag ships `ltspice-mcp`,
@@ -14,9 +15,9 @@ same git tag via `hatch-vcs`, so a `v0.3.0` tag ships `ltspice-mcp`,
 Published by the **Publish aliases to PyPI** workflow
 (`.github/workflows/publish-aliases.yml`), which runs automatically on every
 `v*` release tag (alongside `publish.yml`) and publishes all aliases. It uses
-PyPI Trusted Publishing — the same OIDC mechanism and `pypi` environment as the
-canonical release, no tokens — and `skip-existing`, so re-runs (and an alias
-whose version is already on PyPI) are no-ops rather than errors.
+PyPI Trusted Publishing (the same OIDC mechanism and `pypi` environment as the
+canonical release; no tokens) and `skip-existing`, so re-runs, and an alias
+whose version is already on PyPI, are no-ops rather than errors.
 
 Each alias is a separate PyPI project, so each needs its own trusted publisher.
 Before the first run, add a **pending publisher** on PyPI for each project name
@@ -34,13 +35,15 @@ Before the first run, add a **pending publisher** on PyPI for each project name
 The "Environment name" must match the workflow's `environment:` (`pypi`); leaving
 it blank on PyPI (shown as *Any*) also works, since blank imposes no constraint.
 
-Manual dispatch (Actions tab → Run workflow) is for **catch-up**: if an alias's
-trusted publisher is registered only after a release, dispatch the workflow
-against that release's tag and set the `alias` input to the single package
-(default `all`). Run it against a tag ref, not a branch — `hatch-vcs` only
-produces a clean, PyPI-acceptable version on an exact tag (off-tag builds carry
-a `.devN+g<sha>` local segment that PyPI rejects).
+Use manual dispatch (Actions tab → Run workflow) if an alias's trusted
+publisher is registered only after a release: run the workflow against that
+release's tag and set the `alias` input to the single package (default
+`all`). Run it against a tag ref, not a branch. `hatch-vcs` produces a clean,
+PyPI-acceptable version only on an exact tag; off-tag builds carry a
+`.devN+g<sha>` local segment that PyPI rejects.
 
-The `ltspice-mcp` dependency is intentionally unpinned, so a fresh install of an
-alias always pulls the latest canonical release at runtime regardless of the
-alias's own version.
+In the repository, the `ltspice-mcp` dependency is a loose `>=` floor for
+local development only. At release, `publish-aliases.yml` rewrites it to an
+exact `ltspice-mcp==<tag>` pin and waits for that version to be installable
+from PyPI, so a published alias always installs the co-released canonical
+version and cannot resolve an older one.
