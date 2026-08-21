@@ -383,6 +383,13 @@ def runs_of(job: Job) -> list[RunRef]:
     ]
 
 
+#: Where a caller holding a run_experiments job id is read by case.
+_EXPERIMENT_RUNS_BY_CASE = (
+    "analyze_results, plot_waveform, and Api.load_raw read its runs by job_id "
+    "with run_index or case_id."
+)
+
+
 def resolve_run(job_id: str, state: SessionState, run_index: int = 0) -> RunRef:
     """Resolve one run of a COMPLETED job by id + run index (default 0).
 
@@ -396,8 +403,8 @@ def resolve_run(job_id: str, state: SessionState, run_index: int = 0) -> RunRef:
     job = resolve_job(job_id, state)
     if isinstance(job, ExperimentJob):
         raise ResultError(
-            f"Job {job_id!r} is an experiment job (status={job.status!r}); "
-            "resolve an experiment case through RunContext instead."
+            f"Job {job_id!r} is a run_experiments job (status={job.status!r}), which "
+            f"this path does not read; {_EXPERIMENT_RUNS_BY_CASE}"
         )
     if job.status != "completed":
         raise ResultError(f"Job {job_id!r} is not completed (status={job.status!r})")
@@ -455,6 +462,9 @@ class RunContext:
     raw: Path
     log: Path | None
     netlist: Path
+    #: The source schematic/deck the case was staged from — where per-circuit
+    #: sidecars (plots, pointers) belong. ``netlist`` is the staged copy.
+    circuit_path: Path
     dialect: str | None
     identity: dict[str, Any]
 
@@ -537,6 +547,23 @@ def resolve_experiment_run(
     job = resolve_job(job_id, state)
     if not isinstance(job, ExperimentJob):
         raise ResultError(f"Job {job_id!r} is not an experiment job")
+    return experiment_run_context(job, state, run_index=run_index, case_id=case_id)
+
+
+def experiment_run_context(
+    job: ExperimentJob,
+    state: SessionState,
+    *,
+    run_index: int | None = None,
+    case_id: str | None = None,
+) -> RunContext:
+    """``resolve_experiment_run`` for a caller already holding the job.
+
+    Records the case raw's dialect hint here, as the legacy resolvers do for
+    their runs: resolution always precedes the load, so every reader parses a
+    per-run simulator override with the right dialect without remembering to.
+    """
+    job_id = job.job_id
     # Per-case readiness is still gated case by case below.
     if not runs_terminal(job.status):
         raise ResultError(
@@ -568,11 +595,14 @@ def resolve_experiment_run(
         "step_index": case.step_index,
         "step_values": dict(case.step_values),
     }
+    dialect = dialect_for_job(job, state)
+    state.raw_dialect_hints[case.raw_file] = dialect
     return RunContext(
         raw=case.raw_file,
         log=case.log_file,
         netlist=case.staged_deck,
-        dialect=dialect_for_job(job, state),
+        circuit_path=case.circuit_path,
+        dialect=dialect,
         identity=identity,
     )
 
@@ -667,8 +697,8 @@ def legacy_job_netlist(job: Job, *, operation: str) -> Path:
     """Return a legacy job's netlist or reject experiments explicitly."""
     if isinstance(job, ExperimentJob):
         raise ResultError(
-            f"{operation} does not accept experiment job {job.job_id!r} "
-            f"(status={job.status!r}); use its case-addressed analysis path."
+            f"{operation} does not accept run_experiments job {job.job_id!r} "
+            f"(status={job.status!r}); {_EXPERIMENT_RUNS_BY_CASE}"
         )
     return job.netlist
 

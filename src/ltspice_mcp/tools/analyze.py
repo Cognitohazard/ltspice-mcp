@@ -839,13 +839,8 @@ async def _resolve_sources(
                         }
                     )
                     continue
-                ctx = services.resolve_experiment_run(
-                    job.job_id,
-                    state,
-                    case_id=case.case_id,
-                )
+                ctx = services.experiment_run_context(job, state, case_id=case.case_id)
                 resolved = services.resolve_analysis_source(None, state, injected=ctx)
-                state.raw_dialect_hints[resolved.raw] = resolved.dialect
                 runs.append(
                     _ResolvedRun(
                         f"{source_input.label}:{case.case_id}",

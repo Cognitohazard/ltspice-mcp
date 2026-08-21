@@ -244,18 +244,18 @@ def test_experiment_and_legacy_addressing_use_disjoint_resolvers(
     legacy_calls: list[str] = []
     experiment_calls: list[str] = []
     original_legacy = services.resolve_raw_file
-    original_experiment = services.resolve_experiment_run
+    original_experiment = services.experiment_run_context
 
     def track_legacy(job_id: str, state: SessionState, run_index: int = 0) -> Path:
         legacy_calls.append(job_id)
         return original_legacy(job_id, state, run_index)
 
     def track_experiment(*args: Any, **kwargs: Any):
-        experiment_calls.append(cast(str, args[0]))
+        experiment_calls.append(args[0].job_id)
         return original_experiment(*args, **kwargs)
 
     monkeypatch.setattr(services, "resolve_raw_file", track_legacy)
-    monkeypatch.setattr(services, "resolve_experiment_run", track_experiment)
+    monkeypatch.setattr(services, "experiment_run_context", track_experiment)
     api = SyncApi(state_no_sim)
 
     legacy_result = api.load_raw(job_id=legacy.job_id)
