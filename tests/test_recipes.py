@@ -119,6 +119,15 @@ def test_category_accept_reject_matrix(metric: str, category: str):
             validate_recipe({**base, "reduce_field": "value"})
 
 
+def test_stability_reduces_its_crossover_frequency_and_dc_gain():
+    """ "Keep UGBW above 2 MHz" is the most natural stability spec after phase
+    margin; the recipe reports unity_gain_hz per case, so refusing a spec or a
+    reduce on it made a caller pull the rows and judge by hand."""
+    base = {"key": "loop", "metric": "stability", "signal": "V(out)"}
+    validate_recipe({**base, "spec": {"field": "unity_gain_hz", "min": 2e6}})
+    validate_recipe({**base, "reduce": ["max"], "reduce_field": "dc_gain_db"})
+
+
 @pytest.mark.parametrize("metric", ["summary", "waveform", "plot"])
 def test_non_reducible_payload_recipes_reject_reduce_and_spec(metric: str):
     base = {"key": metric, "metric": metric, **VALID_RECIPES[metric]}

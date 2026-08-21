@@ -318,7 +318,9 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # campaign transcripts) advertise only their discriminant and a pointer to
     # api.reference / spice://guide. They stay fully callable; only the wire
     # shrank. TestDormantRecipeWireStubs pins both halves.
-    "analyze_results": 16407,
+    # RAISED 16407 -> 16413: the include.fields example names a leaf the
+    # stability row actually carries (phase_margin_worst_deg).
+    "analyze_results": 16413,
     # expected_sha256 now names where a caller gets one (an inspect
     # components/net query). No read tool reported the digest before, so a
     # first edit on an existing sheet had no in-product route to its token.
