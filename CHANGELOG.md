@@ -373,6 +373,15 @@ tools.
 
 ### Fixed
 
+- The `spice-experiments` and `ltspice` skills said that nothing adds
+  `.options logopinfo` for you; in fact the server adds it to every LTspice
+  `.op` run (the packaged guide already said so). Both skills now say the
+  server adds it and that writing it yourself is harmless.
+- The README, changelog, security policy, packaging text, developer docs,
+  skills, and packaged guide were rewritten in plain language after two
+  independent prose reviews: shorter sentences, no slogans or metaphors,
+  internal shorthand replaced with what it refers to. Facts, code, and
+  tested instructions are unchanged.
 - The LTspice skill no longer claims device operating points (gm/gds/vth/…)
   require ngspice: LTspice `.op` runs surface them via the auto-injected
   `.options logopinfo`, and `operating_point` reads both engines uniformly.

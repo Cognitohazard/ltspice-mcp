@@ -11,25 +11,26 @@ description: >
 # SPICE measurement bench craft
 
 Author the bench from one parameter dictionary, establish the operating point,
-then measure. The authoritative measurement-practice source is bundled at
-`references/BENCH_NOTES.md`; read it when exact source wording is useful.
+then measure. The measurement-practice notes these sections are taken from
+are in `references/BENCH_NOTES.md`; read that file if you need the original
+wording.
 
 ## The operating point comes first
 
 An amplifier with 60-100 dB of DC gain multiplies any input offset by
 1,000-100,000. Driving both inputs from ideal DC sources at the same
 potential does NOT put the output at mid-rail: the amplifier's own
-input-referred offset (even tens of microvolts) slams the output into a
-supply rail, and every small-signal quantity you then measure — gain,
-bandwidth, phase — describes a saturated transistor stack, not the
-amplifier. Symptoms: DC gain tens of dB lower than expected, an .op
+input-referred offset (even tens of microvolts) drives the output to a
+supply rail, and the gain, bandwidth and phase you then measure are those
+of a saturated transistor stack, not of the amplifier in its linear
+region. Symptoms: DC gain tens of dB lower than expected, an .op
 output voltage within ~100 mV of either rail, device operating regions
 showing triode/cutoff where saturation was intended.
 
 ALWAYS check v(out) in the .op result before trusting an AC sweep. If it
 is not near the intended quiescent level, the measurement is invalid.
 
-## The servo trick: DC feedback that vanishes at AC
+## DC servo for open-loop AC analysis
 
 The standard bench closes the loop at DC only, with elements too large
 to matter in the measured band:
@@ -42,31 +43,32 @@ to matter in the measured band:
     * single-ended and read v(out)/v(inp-inn) — both are open-loop above
     * the (vanishingly low) servo corner at 1/(2*pi*sqrt(LC)).
 
-The feedback forces the output to the level that zeroes the input
-differential at DC — the amplifier chooses its own correct operating
-point — while above ~microhertz the loop is open and v(out)/v(inp-inn)
-is the true open-loop transfer function.
+At DC the feedback forces the output to the level that zeroes the input
+differential, so the amplifier settles at its own correct operating point.
+Above a few microhertz the loop is open and v(out)/v(inp-inn) is the true
+open-loop transfer function.
 
 ## Reading the result
 
 - Gain: magnitude at the lowest swept frequency (sweep from well below
   the dominant pole).
-- Unity crossing: the FIRST 0 dB crossing; verify there is only one, or
-  evaluate phase at every crossing — a later crossing can hide an
-  unstable mode a first-crossing readout misses.
-- Phase: unwrap before computing margin; modulo-360 artifacts fake
-  healthy margins.
+- Unity crossing: use the first 0 dB crossing; verify there is only one,
+  or evaluate phase at every crossing, because a later crossing can carry
+  an unstable mode that a first-crossing readout misses.
+- Phase: unwrap before computing margin; wrapped (modulo-360) phase can
+  show a margin that is not there.
 - Supply current: measure the supply SOURCE current at the .op point,
   not a sum of device currents.
 
-## Cheap sanity checks that catch most wrong benches
+## Sanity checks for measurement benches
 
 1. .op first, AC second: output within the linear region?
 2. Does measured DC gain roughly match gm*ro expectations (within an
-   order of magnitude)? A 25 dB shortfall is a broken bench, not a bad
-   amplifier.
-3. Re-run one point at 2x sweep density: if gain/PM move, the sweep or
-   interpolation, not the circuit, is speaking.
+   order of magnitude)? A 25 dB shortfall usually means the bench is wrong,
+   not the amplifier.
+3. Re-run one point at 2x sweep density: if gain or PM change, the
+   difference comes from the sweep density or interpolation, not from the
+   circuit.
 
 ## Render benches from one parameter dictionary
 
@@ -75,12 +77,12 @@ decks. A useful dictionary has `DUT_INCLUDE`, `DUT_INSTANCE`, `VDD`, `VCM`,
 `CL`, `TEMP`, and analysis limits such as `FSTART`, `FSTOP`, or `TSTOP`.
 Render the `@NAME@` host placeholders below, preserve SPICE `{PARAM}` braces,
 and reject output containing an unresolved `@NAME@`. Keep the title first and
-`.end` last. Use absolute or deck-relative include paths deliberately.
+`.end` last. Choose include paths (absolute or deck-relative) explicitly.
 
 ### Operating-point and supply-current archetype
 
-Use the same servo as the AC bench so `.op` proves the exact bias that the AC
-run will linearize. Read `V(out)`, device regions, and `I(VDD)`; source-current
+Use the same servo as the AC bench so the `.op` result is the exact bias
+point the AC run will linearize around. Read `V(out)`, device regions, and `I(VDD)`; source-current
 sign follows the source orientation.
 
 ```spice
@@ -176,24 +178,22 @@ not one shared scale followed by both values. Parse repeated scale/value groups,
 and remember that `wrdata` writes only the text table; add an explicit `write`
 too if later server analysis needs a rawfile.
 
-## Routing: one door per session
+## Routing: pick one interface per session
 
-Pick the primary door once, from what this session can do — then stay on it.
+Pick the interface once, based on what this session can do, and stay with it.
 
-- **You can run code** (shell + Python): all circuit work goes through
-  `from ltspice_mcp.api import Api`. Pull vocabulary instead of guessing:
-  `api.reference()` indexes the six ops, `api.reference("<op>")` is the full
-  argument tree with enums and one example; `help(api.<op>)` says the same.
-  Within the door: `run_experiments` for any LTspice run, declared
-  sweep/corner/Monte-Carlo matrices, or anything durable (`jobs` waits or
-  cancels); `edit_schematic`/`verify_circuit` for `.asc` work, never
-  hand-written files — they carry orthogonal routing and collision checks;
-  `analyze_results` reads any rawfile, even one you ran yourself
-  (`raw_path=`). Intermediates stay in your interpreter — print the
-  crossing or the worst corner, never the full table.
-- **You cannot run code**: the same six operations are the MCP tools already
-  in front of you; route nothing elsewhere.
-- Escape hatches, named out loud when taken: `spice-mcp <op> @plan.json
-  --json` when a result belongs on disk inside a shell pipeline; a hand-run
-  ngspice one-off only when you immediately hand its raw back to
-  `analyze_results(raw_path=...)`.
+- **You can run code** (shell + Python): do all circuit work through
+  `from ltspice_mcp.api import Api`. Look up arguments instead of guessing:
+  `api.reference()` lists the six ops, `api.reference("<op>")` gives the full
+  argument tree with enums and one example; `help(api.<op>)` shows the same.
+  Use `run_experiments` for any LTspice run, for declared
+  sweep/corner/Monte-Carlo matrices, and for anything that must outlive the
+  call (`jobs` waits or cancels). Use `edit_schematic`/`verify_circuit` for
+  `.asc` work; they do orthogonal routing and collision checks, so never
+  hand-write `.asc` files. `analyze_results` reads any rawfile, including one
+  you ran yourself (`raw_path=`). Keep intermediate results in your
+  interpreter; print the crossing or the worst corner, not the full table.
+- **You cannot run code**: use the six MCP tools available to you and
+  nothing else.
+- One exception, and say so when you use it: a hand-run ngspice one-off is
+  fine only when you pass its raw straight to `analyze_results(raw_path=...)`.

@@ -19,11 +19,11 @@ project invests in:
   the file.
 - **Geometry-aware** — `.asc` schematic operations work in symbol
   coordinates, not just netlist tokens.
-- **LTspice-specific** — `.asc`/`.asy`/`.raw` quirks and Windows
-  interop are first-class. ngspice is also first-class for simulation,
-  result parsing, diagnostics, and analysis — it simply has no
-  schematic layer for the geometry tools to operate on. QSPICE and
-  Xyce are best-effort through spicelib's common interface.
+- **LTspice-specific** — `.asc`/`.asy`/`.raw` behavior and Windows
+  interop are handled directly. ngspice is fully supported for simulation,
+  result parsing, diagnostics, and analysis; it has no schematic format, so
+  the geometry tools do not apply to it. QSPICE and Xyce are best-effort
+  through spicelib's common interface.
 
 ### Why an MCP server vs. asking the LLM to use spicelib directly
 
@@ -37,20 +37,18 @@ scripts directly. MCP applies in specific contexts:
   tested code path. LLM-generated spicelib code makes import mistakes,
   calls wrong method names, forgets `save_netlist()`, etc.
 - **Context efficiency.** A tool call is ~50 tokens; equivalent Python is
-  20-40 lines. Over an iterative design session this compounds.
+  20-40 lines. The difference adds up over an iterative design session.
 - **Structured analysis as the default.** The `analyze_results` recipes
-  return the numbers an agent reasons over — `bode_filter` for -3 dB
-  points, `bode_slope` / `bode_point` / `bode_crossing` for slopes, gains,
-  and crossings; `signal_stats` / `edges` /
-  `transient_response` (`mode="step"|"disturbance"`) for transient
-  shape — as schema-typed results, so the
-  common questions are answered without reading anything off an image.
-  Decimated raw-waveform egress is the `waveform` recipe (a min/max
-  stat-envelope for seeing shape); rendered plots ship as the `plot`
-  recipe and the `plot_waveform` tool. Both
-  complement the structured numbers for the shape-recognition cases a
-  scalar can't cover (see *Waveforms: scalars first, egress and plots for
-  shape*), rather than replacing them.
+  return schema-typed numbers: `bode_filter` for -3 dB points;
+  `bode_slope` / `bode_point` / `bode_crossing` for slopes, gains, and
+  crossings; `signal_stats` / `edges` / `transient_response`
+  (`mode="step"|"disturbance"`) for transient shape. The common questions
+  are answered without reading anything off an image. Decimated
+  raw-waveform export is the `waveform` recipe (a min/max stat-envelope for
+  seeing shape); rendered plots are the `plot` recipe and the
+  `plot_waveform` tool. Both complement the structured numbers for the
+  shape-recognition cases a scalar can't cover (see *Waveforms: scalars
+  first, egress and plots for shape*); they do not replace them.
 - **No user setup.** Install the server once. No spicelib in the user's
   project venv, no Python knowledge required.
 
@@ -61,7 +59,7 @@ Python, and there's an extra process to maintain.
 
 |tool|schematic editing|geometry validation|cross-run analysis|WSL|
 |-|-|-|-|-|
-|`ltspice-mcp` (this)|`.asc` first-class|pin coords, bbox, diagonal-wire refusal, named-net-short detection|sweep + Monte Carlo + batch metrics|first-class|
+|`ltspice-mcp` (this)|direct `.asc` editing|pin coords, bbox, diagonal-wire refusal, named-net-short detection|sweep + Monte Carlo + batch metrics|supported|
 |spicelib `AscEditor`|text-level mutator|none|via SimStepper / Montecarlo (lower-level)|N/A|
 |PyLTSpice|spicelib re-export|none|same as spicelib|N/A|
 |`xuio/ltspice-mcp`|create/modify/lint|not documented|not documented|macOS-only|
@@ -78,25 +76,24 @@ coordinates, bounding boxes, and named-net topology: the `wire_pins` op
 refuses diagonal wires,
 pin collisions, wire-junction overlaps, and named-net shorts before
 touching the file, and the batch returns geometry the agent
-can use in its next call. `inspect(kind="symbol")` is the
-read-only planning half of that workflow — pin positions and bounding
-boxes looked up before an edit, not validators of one.
+can use in its next call. `inspect(kind="symbol")` is the read-only half
+of that workflow: it returns pin positions and bounding boxes so the caller
+can plan an edit. It does not validate one.
 
 ### One authoring tool, many ops
 
 Schematic mutation is a single tool with a discriminated op union rather
-than one tool per mutation. A tool's schema costs the model context
-whether or not it is ever called, and that cost is only earned by a
-result the model acts on; MCP guidance is fewer, more capable tools
-(tool-selection accuracy degrades past roughly 15 tools). So the ops that
-return geometry (`add_component` gives placed pins, bounding box, and
-overlap warnings; `wire_pins` gives the routing result) and the ops that
-only acknowledge (`move_component`, `remove_component`,
+than one tool per mutation. A tool's schema costs the model context whether
+or not the tool is ever called, and MCP guidance is to prefer fewer, more
+capable tools (tool-selection accuracy degrades past roughly 15 tools). So
+the ops that return geometry (`add_component` gives placed pins, bounding
+box, and overlap warnings; `wire_pins` gives the routing result) and the
+ops that only acknowledge (`move_component`, `remove_component`,
 `set_component_attribute`, `add_net_label`, `remove_net_label`,
-`remove_wire`) all ride the same call, and a caller batches them into one
-transaction. Creating a sheet is the same tool with the blank base;
-reading — `inspect` — stays separate, because a read must not sit behind
-a mutating tool's schema.
+`remove_wire`) all go through the same call, and a caller batches them into
+one transaction. Creating a sheet is the same tool with the blank base.
+Reading (`inspect`) is a separate tool, because a read-only operation
+should not be hidden behind a mutating tool's schema.
 
 ## Design principles
 
@@ -104,47 +101,46 @@ a mutating tool's schema.
 
 Mutating tools validate before writing and refuse states they can
 prove invalid.
-The `wire_pins` op is the model: a refusal names the specific segments,
+The `wire_pins` op is the reference example: a refusal names the specific segments,
 pins, or labels that blocked the write so
 the agent can pick a new waypoint instead of guessing.
 
 Agents are bad at undoing mistakes. Tools that refuse invalid states save
 entire conversation turns of recovery.
 
-### Refusal, not auto-routing
+### No auto-routing
 
-When a wire is refused, the server returns the **conflict set** — what
-blocked it and where — but does **not** try to auto-route around the
-obstacle. Routing is NP-hard; the conflict-set form is almost as useful
-at a fraction of the cost, and keeps the agent in control of the
-decision.
+When the server refuses a wire, it returns the **conflict set**: what
+blocked it and where. It does not calculate an alternate route. General
+routing is NP-hard and is outside the project's scope; the caller uses the
+conflict set to choose another route.
 
-### Recovery over preview
+### No preview mode
 
-There is no `dry_run` / preview parameter. Safe mutation rests on three
-shipped mechanisms instead:
+There is no `dry_run` / preview parameter. Three mechanisms cover safe
+mutation instead:
 
 - **Validate-before-write refusals** — the `wire_pins` op refuses invalid
   geometry before the file is touched, with itemized error text naming
   the conflicting segments, pins, or labels; the `add_component` op
   places the part and returns its pin positions plus
   non-blocking overlap warnings.
-- **All-or-nothing commits** — an `edit_schematic` batch applies against
-  one in-memory editor and lands by atomic rename, and `expected_sha256`
-  pins the revision it edited against: a peer that committed first turns
-  the call into a `revision_conflict` with nothing written. A failed
-  batch leaves the sheet as it was, so recovery is re-reading the file
-  rather than undoing a partial write.
+- **All-or-nothing commits.** An `edit_schematic` batch is applied to one
+  in-memory editor and written by atomic rename. `expected_sha256` names
+  the revision the batch was prepared against; if another writer committed
+  first, the call returns `revision_conflict` and writes nothing. A failed
+  batch leaves the sheet unchanged, so recovery is re-reading the file, not
+  undoing a partial write.
 - **`verify_circuit` comparison** — a committed sheet is exported on a
   copy and compared against a reference netlist (equivalence or
   structural diff), so unintended drift is visible immediately.
 
 ### Post-op validation pass
 
-Even when a single op succeeds, schematic-level warnings (floating pins,
-duplicate wire segments, dangling net labels) ride along in the
-response. Cheap to compute during the same editor session, and saves
-the agent a follow-up inspection turn.
+Even when every op succeeds, the response includes schematic-level
+warnings (floating pins, duplicate wire segments, dangling net labels).
+They are cheap to compute in the same editor session and save the agent a
+follow-up inspection call.
 
 ### Structured outputs
 
@@ -155,27 +151,26 @@ sandboxed code consumes.
 
 ### Waveforms: scalars first, egress and plots for shape
 
-Analysis tools return **scalars, not samples** by default — time-weighted
-RMS, rise time, phase margin, the salient number — because the consumer
-is an LLM reasoning over meaning, and a correct scalar beats a wall of
-points it must interpret. This is a **scoped default, not the end state**:
-it answers "what is X" for waveforms whose shape a single number
-captures. It does not serve cases where the *shape itself* is the
-signal — switching-converter nodes, amplifier internal nodes, startup
-transients.
+By default the analysis tools return scalars, not samples: time-weighted
+RMS, rise time, phase margin. The consumer is an LLM, and a correct scalar
+is easier to reason over than a large array of points. This default covers
+waveforms whose shape a single number captures; it answers "what is X". It
+does not cover cases where the shape itself is the result: switching-
+converter nodes, amplifier internal nodes, startup transients.
 
-Those split in two, and want different things:
+Those cases fall into two groups with different needs:
 
-- **Known shape-question** (subharmonic oscillation, CCM/DCM mode, slew
-  limiting, switch-node ringing) → a *specialized detector* (FFT, mode
-  detector, dV/dt), not raw data: it returns the precise number instead
-  of making the caller read it off a curve. Doctrine favors detectors.
+- **Known shape question** (subharmonic oscillation, CCM/DCM mode, slew
+  limiting, switch-node ringing) → a specialized detector (FFT, mode
+  detector, dV/dt), not raw data: it returns the number directly instead
+  of making the caller read it off a curve. Prefer a detector when one
+  exists.
 - **Exploratory "let me look"** (why won't this converter start?) → no
-  detector helps, because the metric isn't known yet; you look,
-  hypothesize, then measure. This is the irreducible case for waveform
-  egress.
+  detector helps, because the metric is not known yet; you look, form a
+  hypothesis, then measure. This is the case waveform egress exists for.
 
-The axis that matters is **consumer × format**, not scalar-vs-waveform:
+What matters is who consumes the output and in what format, not scalar
+versus waveform:
 
 - **LLM computing** → decimated numeric arrays, with **min/max envelope**
   decimation (each bucket carries its min and max), never stride — stride
@@ -183,63 +178,59 @@ The axis that matters is **consumer × format**, not scalar-vs-waveform:
   extremum, losing only sub-bucket timing. The LLM computes on the array
   (FFT, period, overshoot), which is more reliable than reading a picture.
 - **LLM recognizing shape** → a rendered plot, as a backup and complement
-  to the array. Vision catches gestalt — slewing, a settling envelope,
-  "this looks unstable" — at a glance that's tedious to derive from
-  numbers; plot-plus-array is more robust than either alone.
-- **Human** → the same egress as a hand-off (CSV to a viewer, PNG
-  inline). Recognition reliability is moot; the human's eyes are the
-  recognizer.
+  to the array. A vision model sees overall shape (slewing, a settling
+  envelope, "this looks unstable") at a glance, which is tedious to derive
+  from numbers; plot plus array is more robust than either alone.
+- **Human** → the same output handed off (CSV to a viewer, PNG inline).
+  Recognition reliability is not a concern here.
 
 So the surface is layered: scalar detectors for "what is X", specialized
 shape-detectors for known signatures, decimated egress for "let me look",
 and plots as a shape-recognition backup for both LLM and human. Decimated
 egress is the `waveform` recipe; rendered plots are the `plot` recipe and
-the `plot_waveform` tool. The
-principle is recorded so scalar-first reads as a scoped default, not the
-end state.
+the `plot_waveform` tool.
 
-**Scalar-guided zoom.** The waveforms this server sees — switching nodes,
-amplifier internal nodes — are multi-scale: a piecewise-smooth backbone
-plus sparse localized events (ringing spikes, coupling glitches,
-crossover kinks). No single fixed-resolution view fits, so fidelity comes
-from *navigation*, not from one lossy encoding. The overview is a
-**stat-envelope**: per bucket, `[min, max, rms, mean]` — min/max
-guarantees a narrow spike's amplitude survives bucketing, rms/mean
-localize energy and drift. From the surfaced per-bucket facts the consumer
-picks a sub-window and re-requests it finer — the same `waveform` recipe
-with a narrower `window` — and recurses. Full-resolution
-data stays on disk; detail enters context only when a measured quantity
-earned the zoom. This is the engineer's own look-then-zoom loop, and it
-reuses windowed egress plus the detectors (an envelope+carrier or
-edge-metric descriptor is just the zoom-time payload for a flagged
-window).
+**Scalar-guided zoom.** The waveforms this server handles (switching
+nodes, amplifier internal nodes) are multi-scale: a piecewise-smooth
+backbone plus sparse localized events (ringing spikes, coupling glitches,
+crossover kinks). No single fixed-resolution view fits, so the caller
+narrows in step by step instead of relying on one lossy encoding. The
+overview is a **stat-envelope**: per bucket, `[min, max, rms, mean]`.
+Min/max guarantee that a narrow spike's amplitude survives bucketing;
+rms/mean localize energy and drift. From the per-bucket values the consumer
+picks a sub-window and re-requests it at finer resolution (the same
+`waveform` recipe with a narrower `window`), and repeats. Full-resolution
+data stays on disk; detail enters context only when a measured value
+justifies it. This is the same look-then-zoom loop an engineer uses on a
+scope, and it reuses windowed egress plus the detectors (an
+envelope+carrier or edge-metric descriptor is the payload for a flagged
+window at zoom time).
 
 **Surface, don't judge — applied to navigation.** The stat-envelope and
-any ranking obey the same rule as the rest of the result layer: the tool
-surfaces *measured conditions* — crest factor, a bucket's spread relative
-to its neighbors, `mean` drift, alternating-peak spacing, spectral
-concentration — and may sort buckets by a named quantity, but it emits
+any ranking follow the same rule as the rest of the result layer: the tool
+reports measured conditions (crest factor, a bucket's spread relative to
+its neighbors, `mean` drift, alternating-peak spacing, spectral
+concentration) and may sort buckets by a named quantity, but it attaches
 **no phenomenon label and no trust verdict**. "Crest factor 8.1 here, 5.2×
-the median bucket" is a fact; "spike / unstable / unreliable" is the
-model's conclusion. Relative comparisons beat bare-magnitude thresholds
-(one constant, one meaning). The model decides what the shape *is* and
-where to look next; the server only makes the facts cheap to read.
+the median bucket" is a fact; "spike", "unstable", or "unreliable" is the
+model's conclusion. Relative comparisons are preferred to bare-magnitude
+thresholds. The model decides what the shape is and where to look next;
+the server reports the facts.
 
 **Optional always-attach plot.** A config default plus a per-call tool
-parameter make waveform / analysis responses carry a rendered plot (MCP
-`ImageContent`) of the queried window *alongside* the scalars and the
-stat-envelope datapoints — not instead of them. The plot is the gestalt
-layer for the vision branch above, and it is AI-zoomable by construction:
-because it renders the *queried window*, the same narrowing zoom loop
-re-renders it at finer scale. Off by default (token cost, non-vision
-clients); on for clients that want shape-at-a-glance riding with every
-result, with a per-call override either way.
+parameter make waveform / analysis responses include a rendered plot (MCP
+`ImageContent`) of the queried window in addition to the scalars and the
+stat-envelope data points, not instead of them. The plot is the
+shape-recognition layer for the vision case above. Because it renders the
+queried window, the same zoom loop re-renders it at finer scale. Off by
+default (token cost, non-vision clients); on for clients that want a plot
+with every result; a per-call override is available either way.
 
-### Decided egress & plot surface (2026-06-13)
+### Egress & plot surface (as of 2026-06-13)
 
-The layered surface above resolves into three delivery channels, keyed by
-*who consumes the output* — and the right channel for each is settled even
-though one library choice is still open.
+The layered surface above maps to three delivery channels, one per
+consumer. The channel for each is fixed even though one library choice is
+still open.
 
 | Consumer | Needs | Channel |
 |-|-|-|
@@ -247,112 +238,110 @@ though one library choice is still open.
 | A vision model (one frame) | shape-at-a-glance | static PNG (`ImageContent`) attached to a result |
 | A human (explores) | an interactive plot | `plot_waveform`, rendered to the richest surface the client supports |
 
-A verified constraint shapes the last two: **the terminal CLIs do not render
-images for the human.** Claude Code passes an `ImageContent` PNG to the
-*model* (vision works) but never shows it to the user; Codex handles
-tool-returned images unreliably (it tends to dump base64 into context). The
-MCP "apps" widget surface (`ui://` HTML in a sandboxed iframe) is
-**GUI-host-only** — Claude Desktop / claude.ai web, not the terminal. And
-**interactivity benefits the human, not the LLM** — a model consumes a single
-rendered frame, so zoom / pan / hover buys it nothing.
+One constraint affects the last two: the terminal CLIs do not render images
+for the human. Claude Code passes an `ImageContent` PNG to the model (vision
+works) but never shows it to the user; Codex handles tool-returned images
+unreliably (it tends to dump base64 into context). The MCP "apps" widget
+surface (`ui://` HTML in a sandboxed iframe) is available only on GUI hosts
+(Claude Desktop / claude.ai web), not in the terminal. And interactivity
+benefits the human, not the LLM: a model consumes a single rendered frame,
+so zoom / pan / hover does nothing for it.
 
-- **The `waveform` recipe in `format: "csv"` — full-fidelity egress to disk.**
-  Returns a path, not data (full resolution in a response would blow context —
-  the reason the inline form decimates). Works on every analysis type. `.step` /
-  Monte-Carlo runs are written **tidy / long** (`step_index, step_value, x,
-  <signals…>`), which is forced rather than chosen: transient `.step` runs
-  have a *different time vector per step*, so a wide shared-`x` layout is
-  wrong. Complex AC traces are written as **magnitude(dB) + phase(deg)**
-  columns (lossless polar form, plot-ready, and the form the AC
-  structural-analysis methods read). This
-  is the *only* path that emits every sample of the complex `H(f)` array —
-  the inline form decimates and the Bode recipes return scalars — so it is
-  also the substrate
-  the AC structural-analysis layer stands on. It stays a clean egress: **no**
-  derived slope / group-delay / residual columns (those belong to the
-  detector layer, not the substrate). Bounded by *windowing* (the
-  scalar-guided-zoom loop), not silent decimation. No new dependencies.
-  **Shipped.** Final column scheme: a unit-tagged x header (`time_s` /
-  `freq_Hz` / `sweep`); real traces as their canonical name (`V(out)`);
-  complex traces as `V(out)_mag_dB` + `V(out)_phase_deg` (or `_re`/`_im`, or
-  all four). Phase is the **wrapped** `np.angle` (the lossless primitive — a
-  consumer runs `np.unwrap` themselves). Non-finite samples are **kept** and
-  counted (not dropped), so columns stay row-aligned. The CSV lands under
-  `<working_dir>/.ltspice-mcp/results/artifacts/<result_set_id>/` (Linux-side,
-  never beside a
-  Windows-temp raw); a descending/non-monotonic axis is refused when windowed
-  (searchsorted would corrupt it). Hardening from review: rows stream straight
-  into the atomic temp file (no whole-CSV copy held in memory) under a generous
-  row-count backstop that raises rather than truncates; the resolved output is
-  rejected if a symlinked sidecar would redirect it outside the circuit
-  directory; and in a stepped run a step whose axis misses the window is skipped
-  with a surfaced fact rather than failing the whole export.
-- **`plot_waveform` — adaptive, progressive enhancement.** One interactive
-  chart core, two delivery wrappers chosen by the client detected at
-  `initialize`: an in-chat **`ui://` widget** for an apps-capable GUI host
-  (realistically Claude Desktop for a local stdio server), or render-to-HTML
-  **opened on the local desktop** (probe an available opener — on WSL
-  `explorer.exe` / `cmd.exe /c start` via a `wslpath -w` conversion, else
-  `xdg-open` / `open` / `start`) for a terminal client — and *always* a text
-  summary + the data path so the model
-  keeps reasoning. Because the server is local, "interactive for co-design"
-  needs no widget infrastructure: it just opens a window / browser the OS
-  renders, which works identically under any CLI. The interactive chart is
-  built on **uPlot** (~50 KB, zero-dependency, canvas-2D) inlined into one
-  self-contained HTML — it inlines cleanly into both the offline file and the
-  payload-capped widget and has the perf headroom to render full-fidelity
-  transients; chosen over Plotly (~1.5 MB, heavy to inline per widget) because
-  both inline size and tail perf favor it once the chart can receive full
-  data. It is **not** a Python plotting dependency. **Fidelity:** full by
-  default, a `max_points` parameter to override, and a min/max-preserving
-  downsample that engages only above a high cap and is surfaced in
-  `observations` (no silent truncation). **Shipped — both delivery tiers.**
-  uPlot is vendored as a bundled MIT asset under `src/ltspice_mcp/assets/uplot/`
-  (in the wheel, inlined at render — no pip dep, no CDN); a step whose axis misses
-  the window is skipped, transient `.step` overlays with differing per-step time
-  vectors are null-padded onto a union x, AC Bode phase is unwrapped, and
-  non-finite samples become JSON `null` gaps. A global per-panel **cell cap**
-  refuses (before allocating) a plot whose union-padded size would blow up.
-  Delivery is chosen by the client detected at `initialize`
+- **The `waveform` recipe in `format: "csv"` — full-fidelity export to disk.**
+  Returns a path, not data; full resolution in a response would exceed the
+  context budget, which is why the inline form decimates. Works on every
+  analysis type. `.step` / Monte-Carlo runs are written in long (tidy) form
+  (`step_index, step_value, x, <signals…>`) because transient `.step` runs
+  have a different time vector per step, so a wide shared-`x` layout would be
+  wrong. Complex AC traces are written as magnitude (dB) + phase (deg)
+  columns: lossless, plot-ready, and the form the AC structural-analysis
+  functions read. This is the only path that emits every sample of the
+  complex `H(f)` array (the inline form decimates and the Bode recipes return
+  scalars), so the AC structural-analysis layer is built on it. It exports
+  raw data only: no derived slope / group-delay / residual columns (those
+  belong to the detectors). Size is bounded by windowing (the zoom loop
+  above), not by decimation. No new dependencies. Column scheme: a
+  unit-tagged x header (`time_s` / `freq_Hz` / `sweep`); real traces under
+  their canonical name (`V(out)`); complex traces as `V(out)_mag_dB` +
+  `V(out)_phase_deg` (or `_re`/`_im`, or all four). Phase is the wrapped
+  `np.angle`; a consumer runs `np.unwrap` itself. Non-finite samples are kept
+  and counted, not dropped, so columns stay row-aligned. The CSV is written
+  under `<working_dir>/.ltspice-mcp/results/artifacts/<result_set_id>/`
+  (Linux-side, never beside a Windows-temp raw). A descending or
+  non-monotonic axis is refused when windowed (searchsorted would corrupt
+  it). Rows stream straight into the atomic temp file (no whole-CSV copy held
+  in memory) under a generous row-count limit that raises rather than
+  truncates; the resolved output path is rejected if a symlinked sidecar
+  would redirect it outside the circuit directory; and in a stepped run, a
+  step whose axis misses the window is skipped and reported rather than
+  failing the whole export.
+- **`plot_waveform` — one chart core, two delivery paths.** One interactive
+  chart, delivered one of two ways depending on the client detected at
+  `initialize`: an in-chat `ui://` widget for an apps-capable GUI host (in
+  practice Claude Desktop for a local stdio server), or a self-contained HTML
+  file opened on the local desktop for a terminal client (on WSL,
+  `explorer.exe` / `cmd.exe /c start` via a `wslpath -w` conversion;
+  otherwise `xdg-open` / `open` / `start`). Either way the tool also returns
+  a text summary and the data path so the model can continue. Because the
+  server is local, an interactive plot needs no widget infrastructure: it
+  opens a window or browser that the OS renders, which works the same under
+  any CLI. The chart is built on uPlot (~50 KB, zero-dependency, canvas-2D)
+  inlined into one self-contained HTML file. It inlines cleanly into both
+  the offline file and the payload-capped widget and can render
+  full-fidelity transients; Plotly (~1.5 MB, heavy to inline per widget) lost
+  on both inline size and rendering performance with full data. It is not a
+  Python plotting dependency. Fidelity: full by default, a `max_points`
+  parameter to override, and a min/max-preserving downsample that engages
+  only above a high cap and is reported in `observations` (no silent
+  truncation). Both delivery paths are implemented. uPlot is vendored as a
+  bundled MIT asset under `src/ltspice_mcp/assets/uplot/` (in the wheel,
+  inlined at render; no pip dependency, no CDN). A step whose axis misses the
+  window is skipped; transient `.step` overlays with differing per-step time
+  vectors are null-padded onto a union x; AC Bode phase is unwrapped;
+  non-finite samples become JSON `null` gaps. A global per-panel cell cap
+  refuses, before allocating, a plot whose union-padded size would be too
+  large. Delivery is chosen by the client detected at `initialize`
   (`capabilities.extensions["io.modelcontextprotocol/ui"]`):
-  - **MCP Apps host (SEP-1865, Final 2026-01-26)** → an in-chat **`ui://`
-    widget**. The canonical wiring, *not* inline embedding: the `plot_waveform`
-    tool declares `_meta.ui.resourceUri`; one stable, predeclared renderer
-    resource (`ui://ltspice-mcp/plot`, uPlot + the vendored Apache-2.0 ext-apps
-    `App` runtime inlined) is served via `resources/read`; the host renders it in
-    a sandboxed iframe and pipes a **compact** chart spec — decimated harder than
-    the file, carried in the result **`_meta`** (a *non-model-visible* channel, so
-    the plot still returns no numbers to the model) — which `app.ontoolresult`
-    draws. The full-fidelity HTML still lands on disk; an oversized spec (byte cap)
-    or a build failure falls back to local-open, surfaced as a fact.
-  - **Terminal client** → the self-contained HTML is **opened locally**
-    (`explorer.exe` via `wslpath -w`, else `xdg-open`/`open`/`startfile`, spawned
-    detached so it never blocks).
-  Both always return the file path + a text summary, so a host with neither
-  surface degrades gracefully (the spec'd MCP Apps fallback).
+  - **MCP Apps host (SEP-1865, Final 2026-01-26)** → an in-chat `ui://`
+    widget, wired the standard way rather than by inline embedding: the
+    `plot_waveform` tool declares `_meta.ui.resourceUri`; one stable,
+    predeclared renderer resource (`ui://ltspice-mcp/plot`, uPlot plus the
+    vendored Apache-2.0 ext-apps `App` runtime inlined) is served via
+    `resources/read`; the host renders it in a sandboxed iframe and passes it
+    a compact chart spec (decimated harder than the file, carried in the
+    result `_meta`, a channel the model does not see, so the plot still
+    returns no numbers to the model), which `app.ontoolresult` draws. The
+    full-fidelity HTML still lands on disk; an oversized spec (byte cap) or a
+    build failure falls back to local-open and is reported.
+  - **Terminal client** → the self-contained HTML is opened locally
+    (`explorer.exe` via `wslpath -w`, else `xdg-open`/`open`/`startfile`),
+    spawned detached so it never blocks.
+  Both always return the file path and a text summary, so a host with neither
+  surface still gets a usable result (the fallback the MCP Apps spec
+  describes).
 - **Static PNG (the vision tier) — opt-in.** A config default
-  `[analysis] attach_plot` (off) **plus** a per-call `attach_plot` tool
-  parameter that overrides it: an operator can make a plot ride with every
-  analysis result, while the model can opt in or out for a single call.
+  `[analysis] attach_plot` (off) plus a per-call `attach_plot` tool
+  parameter that overrides it: an operator can attach a plot to every
+  analysis result, and the model can opt in or out for a single call.
   Default off (a base64 PNG on every result is expensive, useless to
   non-vision clients, and barely works in Codex). Gated on the optional
-  `[plot]` extra (matplotlib); absent → skip and note, don't error. Scoped to
-  the recipes where a plot adds gestalt first (`waveform` and the Bode
-  recipes). Not built — the interactive channel covered the need first.
+  `[plot]` extra (matplotlib); if it is absent, skip and report rather than
+  error. Scoped first to the recipes where a plot helps most (`waveform` and
+  the Bode recipes). Not built; the interactive channel covered the need
+  first.
 
 **Fidelity by consumer.** The inline `waveform` recipe decimates (the LLM's
 context is the limit), its `format: "csv"` form is lossless (disk has no such
 limit), and
 `plot_waveform` defaults to full fidelity (a browser is not context-bound),
-capping only at the byte tail.
+capping only at very large sizes.
 
-**Dependency line.** The core install stays lean. The interactive channel
-adds **uPlot** (~50 KB, zero-dep, inlined) only (no Python plotting
-dependency); **matplotlib is confined to the static-PNG tier and ships as an
-optional `[plot]` extra.**
-**Renderer principle:** the plot layer takes plain arrays + labels and is
-ignorant of `job` / `RunRef` internals, so the three channels stay swappable
-behind one data contract.
+**Dependencies.** The core install adds no plotting dependency. The
+interactive channel adds only uPlot (~50 KB, zero-dep, inlined); matplotlib
+is confined to the static-PNG tier and ships as the optional `[plot]` extra.
+**Renderer principle:** the plot layer takes plain arrays plus labels and
+knows nothing about `job` / `RunRef` internals, so the three channels stay
+swappable behind one data contract.
 
 ## Architecture
 
@@ -395,24 +384,23 @@ is one profile.
 |-|-|-|
 |`consolidated` (the only profile)|7 tools|Any MCP client: `run_experiments`/`jobs` (execute), `analyze_results`/`inspect` (understand), `edit_schematic`/`verify_circuit` (author), plus the `plot_waveform` widget|
 
-Each of the six planes tools takes a declarative payload rather than a
-fixed argument list, so the capability count did not shrink with the tool
-count: sweeps, corners and Monte Carlo are `run_experiments` `variations`;
-every former analysis tool is an `analyze_results` recipe; every former
-schematic mutation is an `edit_schematic` op; the former read tools are
-`inspect` kinds. Netlist text editing has no tool at all — an agent with
-file access does it natively, and that was the one category where a wrapper
-bought nothing.
+Each of the six tools takes a declarative payload rather than a fixed
+argument list, so the number of capabilities did not shrink with the number
+of tools: sweeps, corners and Monte Carlo are `run_experiments`
+`variations`; every former analysis tool is an `analyze_results` recipe;
+every former schematic mutation is an `edit_schematic` op; the former read
+tools are `inspect` kinds. Netlist text editing has no tool at all: an
+agent with file access does it natively, and a wrapper added nothing.
 
 **What 0.6.0 removed.** The `full` (49-tool) and `agentic` (41-tool)
 profiles, and with them one tool per operation. Their names are still
 accepted in `[tools] profile` and `LTSPICE_MCP_TOOL_PROFILE` for one
-release — each logs a warning and serves the consolidated surface — because
-a config that names a removed profile should degrade to a working server,
-not a startup failure. A deployment that needs the old tools pins
+release; each logs a warning and serves the consolidated surface, so a
+config that names a removed profile still starts a working server instead
+of failing. A deployment that needs the old tools pins
 `ltspice-mcp==0.5.*`. The handlers behind those tools were not deleted:
-they are internal adapters the recipes and ops dispatch to, which is why
-the consolidated surface reaches the same code paths the 0.5 tools did.
+they are internal adapters that the recipes and ops dispatch to, so the
+consolidated surface runs the same code paths the 0.5 tools did.
 
 ## Backend: spicelib
 
@@ -421,8 +409,8 @@ automation, by Nuno Brum. PyLTSpice is a thin re-export wrapper over
 spicelib that adds nothing — we depend on `spicelib` directly. The
 ceiling is deliberate: spicelib 1.6 retypes `.PARAM` values (`float_unit`)
 and refactored the component model, which breaks the parameter and
-structural-comparison paths. See the pin comment in `pyproject.toml`; lift only
-on a forcing function, not for features.
+structural-comparison paths. See the pin comment in `pyproject.toml`. Raise
+the bound only when something forces it, not to pick up features.
 
 All four simulators share the same base `Simulator` ABC:
 
@@ -498,9 +486,9 @@ their responses as `warnings` / `errors` lists. An agent driving raw
 `ngspice -b` gets a 200-line log dump and has to grep; here the same
 failure arrives inside the tool response.
 
-Above the raw lists sits the observation surfacer
-(`lib/result_observations.py`), which lifts salient facts into a
-curated `observations` list on the run summary:
+Above the raw lists, the observation surfacer
+(`lib/result_observations.py`) adds an `observations` list to the run
+summary with the facts most likely to matter:
 
 |observation kind|what it surfaces|
 |-|-|
@@ -509,21 +497,20 @@ curated `observations` list on the run summary:
 |`value`|non-finite samples and extreme node values in the trace data|
 |`coverage`|checks that were skipped, so a thin result can't pass as a clean one|
 
-The surfacer deliberately renders no trust verdict — it surfaces facts
-for the model to judge. An empty `observations` list means nothing
-tripped a check, not that the result is verified correct.
+The surfacer does not rate the result; it reports facts for the model to
+judge. An empty `observations` list means nothing tripped a check, not that
+the result is verified correct.
 
-**Scope:** LTspice and ngspice both get this first-class — ngspice's
-stdout diagnostics are captured alongside its log file and folded into
-the same pipeline. qspice / xyce get best-effort convergence and
-fatal-error parsing.
+**Scope:** LTspice and ngspice both get the full pipeline; ngspice's stdout
+diagnostics are captured alongside its log file and fed through it. qspice
+/ xyce get best-effort convergence and fatal-error parsing.
 
 ## Non-goals
 
-These are intentional gaps, not pending features. Adopt accordingly.
+These are intentional gaps, not pending features.
 
 - **Auto-routing / auto-placement.** Conflict-set returns on refusal
-  are the substitute. Routing is a research project, not a tool.
+  are the substitute. General routing is out of scope.
 - **Semantic part search** ("find me a low-Vgs-th NMOS under 100mΩ
   Rds(on)"). Requires parsing every `.model` card, normalizing units
   across vendors, building a queryable parameter index — a separate
@@ -537,16 +524,16 @@ These are intentional gaps, not pending features. Adopt accordingly.
   LTspice-only by nature — ngspice has no schematic format to edit.
   QSPICE and Xyce get best-effort support through spicelib's common
   interface.
-- **Auth / multi-tenancy / remote-MCP plumbing.** Local-tool territory.
-  No OAuth flows, no per-tenant isolation.
+- **Auth / multi-tenancy / remote-MCP plumbing.** This is a local tool:
+  no OAuth flows, no per-tenant isolation.
 - **Generic cross-simulator EDA features** that PyLTSpice and ngspice's
   CLI already cover well.
 
 ## Roadmap
 
-Forward-looking and **not commitments**. Direction reflects the same
-spec at the top of this doc — investment compounds where structured +
-validated + geometry-aware + LTspice-specific overlap.
+Forward-looking and **not commitments**. Priorities follow the scope
+statement at the top of this doc: work that is structured, validated,
+geometry-aware, and LTspice-specific comes first.
 
 - **Layout primitives**: `route_bus`, `align`, `distribute` for the
   rows of caps/resistors agents constantly need to place.
@@ -590,12 +577,12 @@ End-to-end smoke test for a fresh install:
 7. Pull a custom library in with a `.lib` / `.include` directive and use one
    of its models in a new circuit
 
-If any step fails, the doctor tool (see Roadmap) is the eventual answer;
-until it ships, check `simulator.path` in TOML and confirm
+If a step fails, check `simulator.path` in TOML and confirm
 `ltspice-mcp.toml`'s `[security] allowed_paths` includes your working
-directory.
+directory. The planned doctor tool (see Roadmap) will automate these
+checks.
 
-For how the project tests — and the absence-class bugs its testing once
-missed, plus the mechanisms (inverse-op closure, the archetype build
-battery, task-down coverage, blind-artifact judging) added to catch them —
-see `docs/TESTING.md`.
+For how the project tests, see `docs/TESTING.md`. It also describes the
+absence-class bugs the tests once missed and the mechanisms added to catch
+them (inverse-op closure, the archetype build battery, task-down coverage,
+blind-artifact judging).
