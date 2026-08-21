@@ -1,7 +1,7 @@
 [project]
 name = "ltspice-mcp"
 dynamic = ["version"]
-description = "SPICE simulation for AI agents and Python: MCP server + in-process API over LTspice/ngspice — schematic editing, sweeps and Monte Carlo, structured measurements."
+description = "SPICE simulation through an MCP server and an in-process Python API for LTspice and ngspice. Supports schematic editing, sweeps, Monte Carlo analysis, and structured measurements."
 keywords = ["mcp", "ltspice", "spice", "ngspice", "qspice", "circuit-simulation", "eda", "claude", "anthropic", "model-context-protocol", "ai", "python-api", "analog", "monte-carlo"]
 readme = "README.md"
 license = "GPL-3.0-or-later"

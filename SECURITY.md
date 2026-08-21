@@ -28,16 +28,16 @@ publishing a release and advisory.
 
 ## Threat model
 
-`ltspice-mcp` is designed to run as a **local MCP server** spoken to by a
-trusted MCP client (Claude Desktop, Claude Code, etc.) **and as an importable
-Python library** (`ltspice_mcp.api`) inside a trusted local process. It is not
-hardened as a public, multi-tenant network service, and the library door runs
-with the importing process's own privileges — the same sandbox
-(`allowed_paths`) applies to both doors. Relevant considerations:
+`ltspice-mcp` is designed to run as a **local MCP server** used by a trusted
+MCP client (Claude Desktop, Claude Code, etc.) **and as an importable Python
+library** (`ltspice_mcp.api`) inside a trusted local process. It is not
+hardened as a public, multi-tenant network service. The library runs with the
+importing process's own privileges, and the same `allowed_paths` sandbox
+applies to both the server and the library. Relevant considerations:
 
 - **Filesystem access** — tool calls can read and write files under the
   configured `[security] allowed_paths`. Paths outside that sandbox are
-  rejected via `PathSecurityError`. The server only speaks stdio; exposing it
+  rejected via `PathSecurityError`. The server uses stdio only; exposing it
   over a network (for example, by wrapping that transport in a network proxy)
   without restricting `allowed_paths` is out of scope for the default threat
   model.
