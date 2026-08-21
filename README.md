@@ -30,6 +30,14 @@ working directory and job records. An assistant can start a sweep over MCP,
 and a script can read the completed job by its `job_id`. A script can also
 run a batch for an assistant to analyze later.
 
+We measured the difference on eleven op-amp design tasks, run once through
+each interface by the same assistant. Both sessions answered all eleven
+correctly. The Python-library session cost 42% less in tokens ($5.37 against
+$9.31), because one script replaces a series of tool calls and the results
+they return. The MCP session took fewer turns (52 against 74) and less time
+(14 against 21 minutes). If the work can be a script, the library is cheaper;
+if it is a conversation, MCP is shorter.
+
 ## Quick start — Python library
 
 ```bash
