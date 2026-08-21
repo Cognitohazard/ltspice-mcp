@@ -269,7 +269,7 @@ class AnalyzeInclude(StrictModel):
         min_length=1,
         max_length=32,
         description=(
-            "Keep only these dotted row paths (e.g. 'value.phase_margin_deg', "
+            "Keep only these dotted row paths (e.g. 'value.phase_margin_worst_deg', "
             "'step_values') on per_run/values rows. Paths root at one of "
             f"{', '.join(_ROW_KEYS)}; an unknown root is rejected rather than "
             "silently returning empty rows. A dot inside a key's own name is "
@@ -327,7 +327,7 @@ def include_flag_coercer(model: type[StrictModel]) -> Callable[[Any], Any]:
             raise ValueError(
                 f"unknown include flag(s) {', '.join(unknown)}; a list of flags takes "
                 f"{enumerated}. 'fields' takes row paths, so pass it as an object: "
-                "include={'fields': ['value.phase_margin_deg']}"
+                "include={'fields': ['value.phase_margin_worst_deg']}"
             )
         return dict.fromkeys(names, True)
 

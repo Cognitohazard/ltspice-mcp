@@ -49,7 +49,10 @@ REDUCIBLE_FIELDS: dict[str, tuple[str, ...]] = {
         "rolloff_slope_db_per_decade",
         "estimated_order",
     ),
-    "stability": ("phase_margin_deg", "gain_margin_db"),
+    # unity_gain_hz is the headline leaf analyze promotes from the crossover
+    # list at row-build time (tools/analyze.py _HEADLINE_LEAVES), so a reduce or
+    # spec reads the same number the row shows.
+    "stability": ("phase_margin_deg", "gain_margin_db", "unity_gain_hz", "dc_gain_db"),
     "return_loss": ("return_loss_db", "vswr", "reflection_coefficient"),
 }
 

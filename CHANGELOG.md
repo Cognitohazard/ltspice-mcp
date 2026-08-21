@@ -379,6 +379,12 @@ tools.
   only job kind the consolidated tools produce, with an error that named an
   internal type. The same error, where it can still occur on the other
   job-addressed paths, now names the tools that do accept an experiment job.
+- The `stability` recipe accepts `reduce_field` and `spec.field` on
+  `unity_gain_hz` and `dc_gain_db`, not only the two margins. "Keep the
+  unity-gain bandwidth above 2 MHz" is the most common stability spec after
+  phase margin, and the recipe already reported the number per case; a
+  benchmark agent that asked for it was refused and had to read the rows and
+  judge by hand. A spec on a field the loop never reaches is `indeterminate`.
 - `verify_circuit`'s `render.delivery` now says on the wire what an inline
   image costs: about 3k tokens at the default scale, paid on every later turn
   of the session. The bare enum gave no reason to prefer the default
