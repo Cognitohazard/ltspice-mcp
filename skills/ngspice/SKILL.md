@@ -51,8 +51,8 @@ V1 in 0 AC 1 PULSE(0 5 0 1n 1n 0.5m 1m)
 | T | tera | 1e12 |
 
 **`M` means MILLI, not mega. Use `MEG` for 1e6.**
-This is the #1 SPICE mistake. `1M` = 0.001, not 1000000.
-Unrecognized suffix letters are silently ignored — no error, just wrong value.
+`1M` = 0.001, not 1000000. Unrecognized suffix letters are silently ignored:
+no error, just a wrong value.
 
 ### Waveform Sources
 
@@ -105,7 +105,7 @@ PWL(t1 v1 t2 v2 ...)
 **Gotchas:**
 - RISE/FALL/CROSS numbering starts at **1**, not 0.
 - If TRIG event never occurs, measurement silently fails.
-- `.meas` is refused when batch mode (`-b`) is combined with `-r rawfile` — the invocation `run_experiments` uses. ngspice prints `No .measure possible in batch mode (-b) with -r rawfile set!` and computes nothing. Recovery: move the measurement into a `.control ... run ... .endc` block written as the DOT-LESS `meas` command — e.g. `meas tran vmax MAX V(out)` (a dotted `.meas` inside `.control` is not a valid command and silently does nothing). The result prints to the run's log.
+- `.meas` is refused when batch mode (`-b`) is combined with `-r rawfile`, which is how `run_experiments` invokes ngspice. ngspice prints `No .measure possible in batch mode (-b) with -r rawfile set!` and computes nothing. Recovery: move the measurement into a `.control ... run ... .endc` block as the dot-less `meas` command, e.g. `meas tran vmax MAX V(out)`. A dotted `.meas` inside `.control` is not a valid command and silently does nothing. The result prints to the run's log.
 - `param` and `par` are not available inside `.control` blocks — use `let` instead.
 
 ### General Pitfalls
@@ -211,9 +211,9 @@ X1 input output myfilter rval=1k cval=1n
 
 **Key differences from LTspice:**
 - Parameters on `.subckt` line do NOT need `params:` keyword — just `name=value` after nodes.
-- `.lib` behavior is compatibility-mode dependent, and no single `.lib` form works in every mode — so for unconditional whole-file inclusion use `.include <file>`, which resolves in every ngspice mode (verified on ngspice-42). If you use `.lib`:
+- `.lib` behavior depends on the compatibility mode, and no single `.lib` form works in every mode. For unconditional whole-file inclusion use `.include <file>`, which works in every ngspice mode (verified on ngspice-42). If you use `.lib`:
   - **ngspice-native modes** (`hsa`, plain default): `.lib <file> <section>` loads the named `.lib section … .endl` block; a bare `.lib <file>` with no section does NOT load the file's models.
-  - **This server's default `kiltpsa`** (a PSPICE-family mode) inverts this: a bare `.lib <file>` loads an unsectioned file, but a sectioned `.lib <file> <section>` (the PDK corner-select idiom) is mis-split by the `lt`/`ps` tokens into two plain includes that drop the section, surfacing as a missing include (`could not find include file`). Set `[simulator] ngbehavior = "hsa"` in `ltspice-mcp.toml` (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart the server to parse the section; `run_experiments` emits this hint when a failed run matches the pattern.
+  - **This server's default `kiltpsa`** (a PSPICE-family mode) is the reverse: a bare `.lib <file>` loads an unsectioned file, but a sectioned `.lib <file> <section>` (the PDK corner-select form) is split by the `lt`/`ps` tokens into two plain includes that drop the section, and the run fails with `could not find include file`. Set `[simulator] ngbehavior = "hsa"` in `ltspice-mcp.toml` (or `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart the server to parse the section; `run_experiments` emits this hint when a failed run matches the pattern.
 - `.param` inside subcircuits is local scope (masks globals). Nesting up to 10 levels.
 - Subcircuit and model names are global — must be unique across the entire netlist.
 
@@ -235,8 +235,9 @@ X1 input output myfilter rval=1k cval=1n
   (`expr='m1.gm', at=...`) reads one point;
   `operating_point(device='M1')` gives the bias snapshot of one device. Address
   an internal by the `m1.gm` shorthand or the literal `@m1[gm]` (the tools resolve
-  the `v()`/`i()` wrapping and subcircuit paths). This `.dc` + `.save` + read flow
-  is the gm/ID-characterization idiom — see the `spice://guide` resource.
+  the `v()`/`i()` wrapping and subcircuit paths). This `.dc` + `.save` + read
+  sequence is how to build a gm/ID characterization table; see the
+  `spice://guide` resource.
 
 ### .control / .endc Blocks
 
@@ -254,18 +255,17 @@ wrdata output.txt V(out)          $ save as CSV-like text
 .endc
 ```
 
-**No `write`/`wrdata` in your script?** A `.control` block replaces ngspice's
-default raw output — the script runs instead of the plain `-r rawfile` write,
-so a script with no `write`/`wrdata` produces no rawfile for the analysis
-tools to read, even though the run completes cleanly. `run_experiments`
-auto-injects a `write <rawpath>` just before `.endc` when it detects this
-(exactly one `.control` block, no existing `write`/`wrdata` anywhere in the
-deck), so results still reach the `waveform`/`signal_stats` recipes without you
-doing anything. That injected write is a bare `write` — it captures only the
-*current/last* plot, so a script that runs multiple analyses, or writes
-per-iteration inside a Monte Carlo loop (see below), still needs its own
-explicit `write`/`wrdata` calls to capture each one; the moment your script
-has any `write`/`wrdata` of its own, the auto-injection steps aside entirely.
+**Scripts without `write`/`wrdata`.** A `.control` block replaces ngspice's
+default raw output: the script runs instead of the `-r rawfile` write, so a
+script with no `write`/`wrdata` produces no rawfile for the analysis tools
+even though the run completes. When the deck has exactly one `.control` block
+and no `write`/`wrdata` anywhere, `run_experiments` inserts a `write <rawpath>`
+just before `.endc`, so results still reach the `waveform`/`signal_stats`
+recipes. That inserted line is a bare `write` and captures only the
+current/last plot. A script that runs several analyses, or writes per
+iteration inside a Monte Carlo loop (see below), needs its own `write`/`wrdata`
+for each. If the script already contains any `write`/`wrdata`, nothing is
+inserted.
 
 **Variables vs vectors — a critical distinction:**
 - `set` creates string/shell variables: `set myvar = "hello"` — access with `$myvar`
