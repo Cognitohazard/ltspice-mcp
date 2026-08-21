@@ -373,6 +373,12 @@ tools.
 
 ### Fixed
 
+- `plot_waveform` accepts a `run_experiments` job: pass its `job_id` with
+  `run_index` (default 0) or the new `case_id`, and the chart is written next
+  to the case's source circuit like any other job plot. It used to refuse the
+  only job kind the consolidated tools produce, with an error that named an
+  internal type. The same error, where it can still occur on the other
+  job-addressed paths, now names the tools that do accept an experiment job.
 - `verify_circuit`'s `render.delivery` now says on the wire what an inline
   image costs: about 3k tokens at the default scale, paid on every later turn
   of the session. The bare enum gave no reason to prefer the default
