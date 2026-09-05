@@ -303,6 +303,22 @@ class TestExtractLogDiagnostics:
         assert errors == []
         assert classify_failure_code(errors)[0] == "execution_failed"
 
+    def test_missing_include_classifies_ahead_of_the_models_it_hides(self, tmp_path: Path):
+        """An include the simulator never opened is why its models are missing.
+
+        Reporting the model would name the symptom: the deck is fine, the file
+        is not there. The include check therefore runs before the model check.
+        """
+        log = tmp_path / "include.log"
+        log.write_text(
+            "Error: Could not find include file corners.lib\n"
+            'Error on line 3 : m1 d g s b nch Unable to find definition of model "nch"\n'
+        )
+        errors = extract_log_diagnostics(log)["errors"]
+        code, evidence = classify_failure_code(errors)
+        assert code == "missing_include"
+        assert evidence == {"missing_includes": ["corners.lib"]}
+
     def test_meas_error_with_vdb_suggestion(self, tmp_path: Path):
         """vdb() in .MEAS should produce a structured meas_error with a
         suggestion pointing at mag()/filter_metrics."""

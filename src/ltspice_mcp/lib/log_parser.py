@@ -318,6 +318,26 @@ _RE_MISSING_SUBCKT_NGSPICE = re.compile(
     r"unable to find subcircuit named\s+['\"]?([A-Za-z0-9_.\-]+)['\"]?",
     re.IGNORECASE,
 )
+# An .include / .lib the simulator could not open, e.g.:
+#   Error: Could not find include file tt          (ngspice)
+#   Can't find .include file corners.lib           (LTspice)
+# The file it named is the rest of the line, so a caller sees which one.
+_RE_MISSING_INCLUDE = re.compile(
+    r"(?:could not|couldn'?t|cannot|can'?t)\s+(?:find|open)\s+(?:the\s+)?\.?include\s+file\s*:?\s*(\S+)",
+    re.IGNORECASE,
+)
+
+
+def missing_includes_from_text(text: str) -> list[str]:
+    """The include/library files a log says could not be opened, in order."""
+    seen: set[str] = set()
+    names: list[str] = []
+    for match in _RE_MISSING_INCLUDE.finditer(text):
+        name = match.group(1).strip("\"'")
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
 
 
 # Logs are normally KB to low-MB; even a huge stepped .op run stays well under
@@ -574,10 +594,10 @@ _CONVERGENCE_CODE_PHRASES = (
 def classify_failure_code(errors: list[str]) -> tuple[str, dict[str, list[str]] | None]:
     """Name the physics cause behind a failed run's log errors, with evidence.
 
-    Returns one of ``missing_model`` / ``singular_matrix`` /
-    ``convergence_failed`` / ``execution_failed`` (the fallback for a failure
-    whose log says nothing we recognize) plus any evidence the classification
-    itself produced. Every cause used to arrive as one code, so a caller could
+    Returns one of ``missing_include`` / ``missing_model`` /
+    ``singular_matrix`` / ``convergence_failed`` / ``execution_failed`` (the
+    fallback for a failure whose log says nothing we recognize) plus any
+    evidence the classification itself produced. Every cause used to arrive as one code, so a caller could
     not tell an unresolved model from a convergence abort without reading
     prose — and the phrase tables that CAN tell them apart were already being
     run on the failing log and discarded.
@@ -590,6 +610,12 @@ def classify_failure_code(errors: list[str]) -> tuple[str, dict[str, list[str]] 
     noise beneath it is downstream of the real failure.
     """
     blob = "\n".join(errors)
+    # Ahead of the model check: an include the simulator never opened is why
+    # the models inside it are missing, so reporting the models would name a
+    # symptom and hide the cause.
+    includes = missing_includes_from_text(blob)
+    if includes:
+        return "missing_include", {"missing_includes": includes}
     refs = missing_refs_from_text(blob)
     if refs:
         return "missing_model", {"missing_refs": refs}

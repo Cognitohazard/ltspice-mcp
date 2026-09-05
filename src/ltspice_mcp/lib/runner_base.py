@@ -32,6 +32,8 @@ from ltspice_mcp.lib.log_parser import (
     op_ladder_exhausted,
 )
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
+from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice
+from ltspice_mcp.lib.spice_lex import SpiceLexError, cards_from_path, tokenize_body
 from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
 
@@ -182,17 +184,69 @@ def _missing_required_raw_outcome(
     return RunOutcome("", log_file, 0, error, observations=(observation,))
 
 
+def _deck_has_sectioned_lib(netlist: Path) -> bool:
+    """True when the deck carries a ``.lib <file> <section>`` directive.
+
+    The section-selecting form — the standard PDK corner idiom — as opposed to
+    LTspice's section-less ``.lib <file>``. Lexed rather than string-matched so
+    an inline comment or a quoted path with spaces cannot inflate the token
+    count into a section that is not there.
+    """
+    try:
+        cards = cards_from_path(netlist).cards
+    except (OSError, ValueError, SpiceLexError):
+        return False
+    for card in cards:
+        if card.kind != "directive":
+            continue
+        try:
+            tokens = tokenize_body(card.body)
+        except SpiceLexError:
+            continue
+        if len(tokens) >= 3 and tokens[0].text.lower() == ".lib":
+            return True
+    return False
+
+
+def _is_ngspice_lib_section_failure(netlist: Path | None, simulator: type | None) -> str | None:
+    """The active ``ngbehavior`` when it is what broke a sectioned ``.lib``.
+
+    ngspice's LTspice/PSPICE compatibility modes read ``.lib <file> <section>``
+    as two plain includes and drop the section, so the corner select comes back
+    as a missing include file. Fires only when the run used ngspice, the mode
+    still contains ``lt`` or ``ps`` (a mode with neither parses the section
+    correctly), and the deck really does select a section. The deck read is
+    last, so the two cheap checks gate it.
+    """
+    if netlist is None or not is_ngspice(simulator):
+        return None
+    mode = (current_ngbehavior() or "").lower()
+    if "lt" not in mode and "ps" not in mode:
+        return None
+    if not _deck_has_sectioned_lib(netlist):
+        return None
+    return mode
+
+
 def collect_run_outcome(
     raw_file: str,
     log_file: str,
     requirements: tuple[list[str], bool] | None = None,
     exit_code: int | None = None,
+    *,
+    netlist: Path | None = None,
+    simulator: type | None = None,
 ) -> RunOutcome:
     """Collect and classify completion artifacts on a worker thread.
 
     ``exit_code`` is the simulator process's own exit status, relayed as a
     fact when the run failed — the one signal that separates a process killed
     from outside from a deck the simulator declined.
+
+    ``netlist`` and ``simulator`` are what the deck ran as, and are read only
+    to tell one missing include from another: ngspice in a compatibility mode
+    reports a sectioned ``.lib`` as a missing file, and that failure has a
+    configuration fix the generic one does not.
     """
     log_path = Path(log_file)
     sim_failed = raw_file in ("", ".") or log_path.suffix == ".fail"
@@ -236,6 +290,11 @@ def collect_run_outcome(
     # The diagnostics above already name the cause; classifying here is what
     # turns it into a code a caller can branch on instead of prose it must read.
     code, evidence = classify_failure_code(errors)
+    if code == "missing_include":
+        mode = _is_ngspice_lib_section_failure(netlist, simulator)
+        if mode is not None:
+            code = "ngspice_lib_section"
+            evidence = {**(evidence or {}), "ngbehavior": mode}
     if exit_code not in (None, 0):
         error += f"\nSimulator exit code: {exit_code}"
         # Copy rather than mutate: classify_failure_code's return is typed
@@ -578,6 +637,8 @@ class RunnerBase:
                     str(raw_file) if raw_file else "",
                     str(log_file) if log_file else "",
                     requirements,
+                    netlist=netlist,
+                    simulator=self.simulator_class,
                     # spicelib invokes the callback from the RunTask's own
                     # thread, and the task IS a Thread subclass carrying its
                     # retcode — so the current thread is the exact task,
