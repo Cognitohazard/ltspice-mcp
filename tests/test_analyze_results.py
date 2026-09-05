@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
 import shutil
 import time
@@ -301,11 +300,11 @@ class _NeutralWork(NamedTuple):
 
     key: str
     position: int
-    rows: tuple[dict[str, Any], ...]
+    rows: tuple[analyze_mod.Record, ...]
     reductions: tuple[dict[str, Any], ...]
     facts: dict[str, Any]
-    failures: tuple[dict[str, Any], ...]
-    observations: tuple[dict[str, Any], ...]
+    failures: tuple[analyze_mod.Failure, ...]
+    observations: tuple[analyze_mod.Observation, ...]
 
 
 def _neutral_work(evaluation: analyze_mod.AnalysisEvaluation) -> list[_NeutralWork]:
@@ -317,8 +316,8 @@ def _neutral_work(evaluation: analyze_mod.AnalysisEvaluation) -> list[_NeutralWo
     """
     work: list[_NeutralWork] = []
     for unit in evaluation.processed:
-        recipe = unit["recipe"]
-        rows = unit["records"]
+        recipe = unit.recipe
+        rows = unit.records
         relevant_missing = [
             case
             for case in evaluation.missing
@@ -327,7 +326,7 @@ def _neutral_work(evaluation: analyze_mod.AnalysisEvaluation) -> list[_NeutralWo
         spec = analyze_mod._spec(
             recipe,
             rows,
-            incomplete=bool(unit["item_failures"] or relevant_missing),
+            incomplete=bool(unit.failures or relevant_missing),
             include_outliers=True,
             fail_case_limit=max(1, len(rows)),
         )
@@ -339,8 +338,8 @@ def _neutral_work(evaluation: analyze_mod.AnalysisEvaluation) -> list[_NeutralWo
             spec["fail_cases"] = fail_cases
         work.append(
             _NeutralWork(
-                key=unit["key"],
-                position=unit["position"],
+                key=unit.key,
+                position=unit.position,
                 rows=tuple(rows),
                 reductions=tuple(analyze_mod._reduce(recipe, rows)),
                 facts={
@@ -349,8 +348,8 @@ def _neutral_work(evaluation: analyze_mod.AnalysisEvaluation) -> list[_NeutralWo
                     "groups": analyze_mod._group_values(recipe, rows, evaluation.group_by),
                     "spec": spec,
                 },
-                failures=tuple(unit["item_failures"]),
-                observations=tuple(unit["observations"]),
+                failures=tuple(unit.failures),
+                observations=tuple(unit.observations),
             )
         )
     return work
@@ -409,17 +408,17 @@ async def test_neutral_failures_are_uncapped_while_mcp_keeps_its_cap(
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     args = _args(raw, [{"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}])
     failures = [
-        {
-            "code": "recipe_failed",
-            "stage": "analyze",
-            "where": f"run-{index}",
-            "message": f"failure {index}",
-        }
+        analyze_mod.Failure(
+            code="recipe_failed",
+            stage="analyze",
+            where=f"run-{index}",
+            message=f"failure {index}",
+        )
         for index in range(analyze_mod._FAILURE_CAP + 7)
     ]
 
     async def fail_many(*_args, **_kwargs):
-        return [], copy.deepcopy(failures), []
+        return [], list(failures), []
 
     monkeypatch.setattr(analyze_mod, "_evaluate_item", fail_many)
     neutral = await evaluate_analysis_results(args, state_no_sim)
@@ -429,7 +428,9 @@ async def test_neutral_failures_are_uncapped_while_mcp_keeps_its_cap(
     mcp = await handle_analyze_results(args, state_no_sim)
     assert mcp.structuredContent is not None
     presented = mcp.structuredContent
-    assert presented["failures"] == failures[: analyze_mod._FAILURE_CAP]
+    assert presented["failures"] == [
+        failure.wire() for failure in failures[: analyze_mod._FAILURE_CAP]
+    ]
     note = next(
         observation
         for observation in presented["observations"]
@@ -459,7 +460,7 @@ async def test_neutral_rows_are_unprojected_before_mcp_paging_and_fields(
         include={"per_run": {"limit": 1}, "fields": ["step_index"]},
     )
     neutral = await evaluate_analysis_results(args, state_no_sim)
-    rows = list(_neutral_work(neutral)[0].rows)
+    rows = [record.wire() for record in _neutral_work(neutral)[0].rows]
     assert len(rows) == 3
     assert all("value" in row and "source" in row for row in rows)
 
@@ -1901,13 +1902,20 @@ async def test_identical_record_warnings_collapse_but_keep_their_reach(
     assert entry["warnings"][0].endswith(" (45 of 45 records)")
 
 
+def _record(value: dict[str, Any]) -> analyze_mod.Record:
+    """A minimal evaluated record carrying ``value``, for the row-level helpers."""
+    return analyze_mod.Record(
+        manifest_id="m", source="dut", identity=analyze_mod.RowIdentity(), value=value
+    )
+
+
 def test_differing_record_warnings_all_survive_in_first_seen_order():
     """Collapsing is by exact text: two different warnings are two facts, and
     the count is per record even when one record repeats itself."""
     records = [
-        {"value": {"warnings": ["clamped window", "clamped window", "ambiguous edge"]}},
-        {"value": {"warnings": ["clamped window"]}},
-        {"value": {"warnings": []}},
+        _record({"warnings": ["clamped window", "clamped window", "ambiguous edge"]}),
+        _record({"warnings": ["clamped window"]}),
+        _record({"warnings": []}),
     ]
     assert analyze_mod._record_warnings(records) == [
         "clamped window (2 of 3 records)",
@@ -1917,7 +1925,7 @@ def test_differing_record_warnings_all_survive_in_first_seen_order():
 
 def test_single_record_warnings_carry_no_count():
     """ "1 of 1" states nothing, so a single-run result reads exactly as before."""
-    assert analyze_mod._record_warnings([{"value": {"warnings": ["clamped window"]}}]) == [
+    assert analyze_mod._record_warnings([_record({"warnings": ["clamped window"]})]) == [
         "clamped window"
     ]
 
