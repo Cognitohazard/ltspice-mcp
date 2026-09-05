@@ -2813,13 +2813,6 @@ async def handle_noise_integral(args: NoiseIntegralInput, state: SessionState):
     return await _finish_metric(lines, data, raw_path, args.format)
 
 
-class _MeasSamples(TypedDict):
-    """Per-name accumulator used inside :func:`_aggregate_job_measurements`."""
-
-    values: list[float | None]
-    ats: list[float | None]
-
-
 # Most distinct per-run diagnostic lines relayed in the no-measurements
 # error before truncating to a "... and N more" summary line.
 _MAX_RELAYED_RUN_DIAGNOSTICS = 8
