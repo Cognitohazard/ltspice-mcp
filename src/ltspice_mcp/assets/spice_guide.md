@@ -69,9 +69,9 @@ cartesian with each other.
 runs two cases (1k/1.8 and 10k/3.3), not four.
 
 Three recipes appear in the tool schema by name only; their arguments are
-documented here (every other recipe field — `key`, `sources`, `step`, `reduce`,
-`reduce_field`, `spec` — applies to them unchanged; as with any multi-field
-recipe, `reduce`/`spec` on `periodic` or `return_loss` needs `reduce_field`):
+documented here (every other recipe field — `key`, `sources`, `reduce`,
+`field`, `spec` — applies to them unchanged; as with any multi-field recipe,
+`reduce`/`spec` on `periodic` or `return_loss` needs `field`):
 
 - `periodic` — `{"metric": "periodic", "signal": …}` plus an optional
   `window` `{start, end}`; returns `period`, `frequency`, `duty_cycle`
@@ -83,6 +83,16 @@ recipe, `reduce`/`spec` on `periodic` or `return_loss` needs `reduce_field`):
   optional `z0` (default 50); returns `return_loss_db`, `vswr`,
   `reflection_coefficient` vs frequency (reducible) from an `.AC` impedance
   trace.
+
+### Reading a deck that carries `.step`
+
+A `.step` directive puts several sweeps inside one `.raw`, and by default
+`analyze_results` reads the first of them. Two call-level arguments say
+otherwise, and both apply to every recipe in the call: `step`
+(`{"axis": "temp", "value": 27}`) reads the one iteration whose axis value you
+name, and `all_steps: true` evaluates every recipe at every iteration. They are
+mutually exclusive. `run_experiments`' attached `analyze` block takes the same
+two, so an attached measurement and a standalone one read the same steps.
 
 ### The response budget
 

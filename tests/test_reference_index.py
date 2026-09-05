@@ -133,10 +133,12 @@ class TestEntryShape:
         assert "signal" in by_name and by_name["signal"].required
         assert by_name["signal"].type == "string"
         # Inherited reduction fields are part of what the branch takes.
-        assert {"key", "reduce", "reduce_field", "spec.min", "spec.max"} <= set(by_name)
+        assert {"key", "reduce", "field", "spec.min", "spec.max"} <= set(by_name)
         assert by_name["reduce"].default == "empty"
-        assert by_name["all_steps"].default == "false"
         assert by_name["sources"].default == "null"
+        # .step selection is one choice for the whole call, so it is on
+        # analyze_results itself and not restated on every recipe branch.
+        assert {"step", "all_steps"}.isdisjoint(by_name)
         # The discriminator is not an argument the caller chooses twice.
         assert "metric" not in by_name
 

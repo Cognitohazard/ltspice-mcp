@@ -14,6 +14,7 @@ from ltspice_mcp.lib.recipes import (
     KeyedRecipe,
     MultiRecipe,
     ScalarRecipe,
+    SignalStatsRecipe,
     ValueRecipe,
     VariableRecipe,
     validate_recipe,
@@ -99,24 +100,55 @@ def test_category_accept_reject_matrix(metric: str, category: str):
     if category == "variable":
         for unsupported in (
             {"reduce": ["mean"]},
-            {"reduce_field": "value"},
+            {"field": "value"},
             {"spec": {"min": 0}},
         ):
             with pytest.raises(ValidationError):
                 validate_recipe({**base, **unsupported})
         return
 
-    spec: dict[str, object] = {"min": 0}
+    accepted: dict[str, object] = {**base, "reduce": ["mean"], "spec": {"min": 0}}
     if category == "keyed":
-        spec["field"] = "value"
-    accepted = {**base, "reduce": ["mean"], "spec": spec}
+        accepted["field"] = "value"
     if category == "multi":
-        accepted["reduce_field"] = MULTI_FIELDS[metric]
+        accepted["field"] = MULTI_FIELDS[metric]
     validate_recipe(accepted)
 
-    if category in {"scalar", "keyed"}:
+    if category == "scalar":
+        # One number, so there is nothing for 'field' to choose between.
         with pytest.raises(ValidationError):
-            validate_recipe({**base, "reduce_field": "value"})
+            validate_recipe({**base, "field": "value"})
+
+
+@pytest.mark.parametrize("metric", ["signal_stats", "measurements"])
+def test_a_spec_no_longer_carries_its_own_field(metric: str):
+    """One spelling: the recipe's 'field' names the number, never spec.field.
+
+    Two spellings could only ever agree — the validator demanded they match —
+    so the second one was a way to write the same call wrong."""
+    base = {"key": metric, "metric": metric, **VALID_RECIPES[metric]}
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        validate_recipe({**base, "spec": {"field": "mean", "min": 0}})
+
+
+def test_a_multi_field_recipe_names_its_field_once_for_reduce_and_spec():
+    """'field' drives both: one name, read by the reduction and by the spec."""
+    recipe = validate_recipe(
+        {
+            "key": "stats",
+            "metric": "signal_stats",
+            "signal": "V(out)",
+            "field": "mean",
+            "reduce": ["max"],
+            "spec": {"min": 0.0},
+        }
+    )
+    assert isinstance(recipe, SignalStatsRecipe)
+    assert recipe.field == "mean"
+    with pytest.raises(ValidationError, match="set 'field'"):
+        validate_recipe(
+            {"key": "s", "metric": "signal_stats", "signal": "V(out)", "reduce": ["max"]}
+        )
 
 
 def test_stability_reduces_its_crossover_frequency_and_dc_gain():
@@ -124,8 +156,8 @@ def test_stability_reduces_its_crossover_frequency_and_dc_gain():
     margin; the recipe reports unity_gain_hz per case, so refusing a spec or a
     reduce on it made a caller pull the rows and judge by hand."""
     base = {"key": "loop", "metric": "stability", "signal": "V(out)"}
-    validate_recipe({**base, "spec": {"field": "unity_gain_hz", "min": 2e6}})
-    validate_recipe({**base, "reduce": ["max"], "reduce_field": "dc_gain_db"})
+    validate_recipe({**base, "field": "unity_gain_hz", "spec": {"min": 2e6}})
+    validate_recipe({**base, "reduce": ["max"], "field": "dc_gain_db"})
 
 
 @pytest.mark.parametrize("metric", ["summary", "waveform", "plot"])
@@ -137,16 +169,16 @@ def test_non_reducible_payload_recipes_reject_reduce_and_spec(metric: str):
         validate_recipe({**base, "spec": {"max": 1}})
 
 
-def test_step_and_all_steps_are_exclusive():
-    with pytest.raises(ValidationError, match="mutually exclusive"):
+@pytest.mark.parametrize("spelling", ["step", "all_steps"])
+def test_step_selection_is_not_a_recipe_field(spelling: str):
+    """Which .step iteration to read is one choice for the whole call.
+
+    It lives on analyze_results (and on run_experiments' attached analysis),
+    not restated on each of the twenty-one recipes."""
+    value = {"axis": "R", "value": "1k"} if spelling == "step" else True
+    with pytest.raises(ValidationError, match="Extra inputs"):
         validate_recipe(
-            {
-                "key": "stats",
-                "metric": "signal_stats",
-                "signal": "V(out)",
-                "step": {"axis": "R", "value": "1k"},
-                "all_steps": True,
-            }
+            {"key": "stats", "metric": "signal_stats", "signal": "V(out)", spelling: value}
         )
 
 

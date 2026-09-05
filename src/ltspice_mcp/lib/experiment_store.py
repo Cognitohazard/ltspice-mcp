@@ -48,7 +48,7 @@ from ltspice_mcp.lib.store import (
 
 logger = logging.getLogger(__name__)
 
-CANONICALIZER_VERSION = 3
+CANONICALIZER_VERSION = 4
 # How a request's identity was computed — NOT a storage schema version. It says
 # which fields the canonical fingerprint covers, so a reused ``request_id``
 # whose record was hashed under an older definition raises the loud idempotency
@@ -58,6 +58,9 @@ CANONICALIZER_VERSION = 3
 #   3: the measurements recipe gained histogram_bins, which participates
 #      (asking for bins computes something new), so a request carrying that
 #      recipe hashes different bytes than it did before the field existed.
+#   4: .step selection moved off the recipes onto the attached analyze block,
+#      which now carries step/all_steps of its own — so every attached request
+#      hashes two more keys than it did before the move.
 
 _LIVE_STATUSES = frozenset({"queued", "running", "analyzing"})
 _TERMINAL_STATUSES = frozenset(

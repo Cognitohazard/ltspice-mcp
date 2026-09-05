@@ -455,9 +455,9 @@ async def test_neutral_rows_are_unprojected_before_mcp_paging_and_fields(
                 "metric": "value",
                 "expr": "V(out)",
                 "at": "900u",
-                "all_steps": True,
             }
         ],
+        all_steps=True,
         include={"per_run": {"limit": 1}, "fields": ["step_index"]},
     )
     neutral = await evaluate_analysis_results(args, state_no_sim)
@@ -584,9 +584,9 @@ async def test_per_run_page_cursor_replays_same_immutable_request(
                 "metric": "value",
                 "expr": "V(out)",
                 "at": "900u",
-                "all_steps": True,
             }
         ],
+        "all_steps": True,
         "include": {"per_run": {"limit": 1}},
     }
     first_args = AnalyzeResultsInput.model_validate(request)
@@ -620,9 +620,9 @@ async def test_per_run_cursor_rejects_an_explicitly_different_fields_view(
                 "metric": "value",
                 "expr": "V(out)",
                 "at": "900u",
-                "all_steps": True,
             }
         ],
+        "all_steps": True,
         "include": {"per_run": {"limit": 1}, "fields": ["step_index"]},
     }
     first = await handle_analyze_results(AnalyzeResultsInput.model_validate(request), state_no_sim)
@@ -672,9 +672,9 @@ async def test_viewless_legacy_cursor_falls_back_to_the_stored_fields_view(
                 "metric": "value",
                 "expr": "V(out)",
                 "at": "900u",
-                "all_steps": True,
             }
         ],
+        "all_steps": True,
         "include": {"per_run": {"limit": 1}, "fields": ["step_index"]},
     }
     validated = AnalyzeResultsInput.model_validate(request)
@@ -1384,9 +1384,9 @@ async def test_work_and_coverage_cursors_advance_independently(
                 "metric": "value",
                 "expr": "V(out)",
                 "at": "900u",
-                "all_steps": True,
             }
         ],
+        "all_steps": True,
         "include": {"per_run": {"limit": 1}},
     }
     first = await handle_analyze_results(AnalyzeResultsInput.model_validate(request), state_no_sim)
@@ -1440,10 +1440,10 @@ async def test_truncated_fail_cases_names_the_route_to_the_rest(
                 "metric": "value",
                 "expr": "V(out)",
                 "at": "900u",
-                "all_steps": True,
                 "spec": {"max": -1.0},
             }
         ],
+        all_steps=True,
     )
     entry = data["results"]["vout"]
     assert entry["spec"]["fail_cases"]["truncated"] is True
@@ -1462,7 +1462,6 @@ _LOOP_RECIPE: dict[str, Any] = {
     "key": "loop",
     "metric": "bode_filter",
     "signal": "V(out)",
-    "all_steps": True,
 }
 
 _FULL_ROW_KEYS = {
@@ -1483,6 +1482,7 @@ def _wide_args(raw: Path, **include: Any) -> AnalyzeResultsInput:
         {
             "sources": [_source(raw, f"corner{index:02d}") for index in range(_WIDE_SOURCES)],
             "recipes": [_LOOP_RECIPE],
+            "all_steps": True,
             "include": include,
         }
     )
@@ -1501,7 +1501,7 @@ async def test_include_fields_projects_both_row_surfaces(
     include: dict[str, Any] = {"fields": ["step_index", "value.passband_gain_db"]}
     if surface == "per_run":
         include["per_run"] = {"limit": 10}
-    data = await _analyze(state_no_sim, raw, [_LOOP_RECIPE], include=include)
+    data = await _analyze(state_no_sim, raw, [_LOOP_RECIPE], all_steps=True, include=include)
     entry = data["results"]["loop"]
     rows = entry["per_run"]["items"] if surface == "per_run" else entry["values"]
     assert rows
@@ -1525,7 +1525,7 @@ async def test_default_rows_are_lean_and_fields_restores_the_whole_value(
     block via fields=["value"]. Both row surfaces render identically."""
     raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
     include: dict[str, Any] = {"per_run": {"limit": 10}} if surface == "per_run" else {}
-    data = await _analyze(state_no_sim, raw, [_LOOP_RECIPE], include=include)
+    data = await _analyze(state_no_sim, raw, [_LOOP_RECIPE], all_steps=True, include=include)
     entry = data["results"]["loop"]
     rows = entry["per_run"]["items"] if surface == "per_run" else entry["values"]
     assert rows
@@ -1538,7 +1538,7 @@ async def test_default_rows_are_lean_and_fields_restores_the_whole_value(
 
     full_include = dict(include)
     full_include["fields"] = ["value"]
-    full = await _analyze(state_no_sim, raw, [_LOOP_RECIPE], include=full_include)
+    full = await _analyze(state_no_sim, raw, [_LOOP_RECIPE], all_steps=True, include=full_include)
     full_entry = full["results"]["loop"]
     full_rows = full_entry["per_run"]["items"] if surface == "per_run" else full_entry["values"]
     assert any(
@@ -1575,6 +1575,7 @@ async def test_absent_nested_path_names_the_keys_the_rows_do_carry(
         state_no_sim,
         raw,
         [_LOOP_RECIPE],
+        all_steps=True,
         include={"fields": ["value.phase_margin_deg"]},
     )
     entry = data["results"]["loop"]
@@ -2076,13 +2077,14 @@ class TestHeadlineLeafPromotion:
                     "metric": "stability",
                     "signal": "V(out)",
                     "reduce": ["max"],
-                    "reduce_field": "dc_gain_db",
+                    "field": "dc_gain_db",
                 },
                 {
                     "key": "ugbw",
                     "metric": "stability",
                     "signal": "V(out)",
-                    "spec": {"field": "unity_gain_hz", "min": 1e3},
+                    "field": "unity_gain_hz",
+                    "spec": {"min": 1e3},
                 },
                 {"key": "row", "metric": "stability", "signal": "V(out)"},
             ],
@@ -2128,6 +2130,137 @@ class TestHeadlineLeafPromotion:
         value = {"crossings": [{"frequency_hz": 42.0}, {"frequency_hz": 99.0}]}
         out = _promote_headlines("bode_crossing", value)
         assert out["first_crossing_hz"] == 42.0
+
+
+class TestCallLevelStepSelection:
+    """Which .step iteration to read is one choice for the whole call.
+
+    It used to be restated on all twenty-one recipes, so a two-recipe call had
+    to say it twice and could contradict itself; now it is one argument that
+    every recipe in the call reads.
+    """
+
+    @pytest.mark.asyncio
+    async def test_one_step_argument_reaches_every_recipe(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+        recipes = [
+            {"key": "at_900u", "metric": "value", "expr": "V(out)", "at": "900u"},
+            {"key": "stats", "metric": "signal_stats", "signal": "V(out)"},
+        ]
+        default = await _analyze(state_no_sim, raw, recipes, include={"fields": ["step_index"]})
+        assert [
+            [row["step_index"] for row in default["results"][key]["values"]]
+            for key in ("at_900u", "stats")
+        ] == [[0], [0]]
+
+        selected = await _analyze(
+            state_no_sim,
+            raw,
+            recipes,
+            step={"axis": "r", "value": 22},
+            include={"fields": ["step_index"]},
+        )
+        assert [
+            [row["step_index"] for row in selected["results"][key]["values"]]
+            for key in ("at_900u", "stats")
+        ] == [[1], [1]]
+
+    @pytest.mark.asyncio
+    async def test_all_steps_reaches_every_recipe_too(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+        data = await _analyze(
+            state_no_sim,
+            raw,
+            [
+                {"key": "at_900u", "metric": "value", "expr": "V(out)", "at": "900u"},
+                {"key": "stats", "metric": "signal_stats", "signal": "V(out)"},
+            ],
+            all_steps=True,
+            include={"fields": ["step_index"]},
+        )
+        for key in ("at_900u", "stats"):
+            assert [row["step_index"] for row in data["results"][key]["values"]] == [0, 1, 2]
+
+    @pytest.mark.asyncio
+    async def test_a_recipe_may_not_carry_its_own_step(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+        data = await _analyze(
+            state_no_sim,
+            raw,
+            [
+                {
+                    "key": "v",
+                    "metric": "value",
+                    "expr": "V(out)",
+                    "step": {"axis": "r", "value": 22},
+                }
+            ],
+        )
+        assert "v" not in data["results"]
+        assert any("step" in failure["message"] for failure in data["failures"])
+
+    def test_step_and_all_steps_are_exclusive_on_the_call(self, work_dir: Path):
+        with pytest.raises(ValidationError, match="mutually exclusive"):
+            _args(
+                work_dir / "unread.raw",
+                [{"key": "v", "metric": "value", "expr": "V(out)"}],
+                step={"axis": "r", "value": 22},
+                all_steps=True,
+            )
+
+
+@pytest.mark.asyncio
+async def test_one_field_drives_both_the_reduction_and_the_spec(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """A reduction and a spec on one recipe always read the same number, so
+    naming it twice could only ever agree or be refused. One 'field' does it."""
+    raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [
+            {
+                "key": "loop",
+                "metric": "stability",
+                "signal": "V(out)",
+                "field": "dc_gain_db",
+                "reduce": ["max"],
+                "spec": {"min": -1e9},
+            }
+        ],
+    )
+    entry = data["results"]["loop"]
+    assert {item["field"] for item in entry["reduced"]} == {"dc_gain_db"}
+    assert entry["spec"]["field"] == "dc_gain_db"
+    assert entry["spec"]["verdict"] == "pass"
+
+
+@pytest.mark.asyncio
+async def test_a_spec_no_longer_names_a_field_of_its_own(
+    state_no_sim: SessionState, work_dir: Path
+):
+    raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
+    data = await _analyze(
+        state_no_sim,
+        raw,
+        [
+            {
+                "key": "loop",
+                "metric": "stability",
+                "signal": "V(out)",
+                "spec": {"field": "dc_gain_db", "min": 0.0},
+            }
+        ],
+    )
+    assert "loop" not in data["results"]
+    assert any("field" in failure["message"] for failure in data["failures"])
 
 
 @pytest.mark.asyncio

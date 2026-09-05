@@ -67,7 +67,7 @@ with Api(working_dir="circuits") as api:
         variations=[{"kind": "assign", "assign": {"R1": ["1k", "2k", "4k"]}}],
         analyze={"recipes": [
             {"key": "fc", "metric": "bode_filter", "signal": "V(out)",
-             "reduce_field": "cutoff_high_hz", "reduce": ["min", "max"]},
+             "field": "cutoff_high_hz", "reduce": ["min", "max"]},
         ]},
     )
     print(result["analysis"]["result"]["results"]["fc"]["reduced"])

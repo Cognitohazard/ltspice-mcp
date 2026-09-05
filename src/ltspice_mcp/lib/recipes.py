@@ -2,7 +2,7 @@
 
 Each discriminant is a sealed Pydantic model.  Reduction fields live only on
 the category that can interpret them, so an unsupported ``reduce``, ``spec``,
-or ``reduce_field`` is rejected by schema validation instead of being ignored.
+or ``field`` is rejected by schema validation instead of being ignored.
 """
 
 from __future__ import annotations
@@ -140,9 +140,14 @@ class StepSelector(StrictModel):
 
 
 class SpecLimits(StrictModel):
-    """Caller-declared limits used to count a recipe's scalar samples."""
+    """Caller-declared limits used to count a recipe's scalar samples.
 
-    field: str | None = None
+    Which number the limits apply to is the recipe's own ``field``, not a
+    second copy here: a reduction and a spec on one recipe always read the
+    same number, and two spellings of that could only ever agree or be
+    refused.
+    """
+
     min: float | None = None
     max: float | None = None
     allow_incomplete: bool = False
@@ -157,15 +162,20 @@ class SpecLimits(StrictModel):
 
 
 class RecipeBase(StrictModel):
+    """Fields every recipe carries.
+
+    ``.step`` selection is deliberately absent: which step iteration a call
+    reads is one choice for the whole call, so it lives on
+    ``analyze_results``' own ``step``/``all_steps`` arguments (and on the
+    attached-analysis block) rather than being restated on each of the
+    twenty-one recipes.
+    """
+
     key: str = Field(min_length=1)
     sources: list[str] | None = None
-    step: StepSelector | None = None
-    all_steps: bool = False
 
     @model_validator(mode="after")
-    def _step_xor_all(self) -> RecipeBase:
-        if self.step is not None and self.all_steps:
-            raise ValueError("'step' and 'all_steps=true' are mutually exclusive")
+    def _unique_sources(self) -> RecipeBase:
         if self.sources is not None and (
             not self.sources or len(set(self.sources)) != len(self.sources)
         ):
@@ -180,33 +190,31 @@ class ScalarRecipe(RecipeBase):
 
 class MultiRecipe(RecipeBase):
     reduce: list[ReduceStat] = Field(default_factory=list)
-    reduce_field: str | None = None
+    field: str | None = Field(
+        default=None,
+        description=(
+            "Which of this recipe's numbers a 'reduce' or a 'spec' reads (e.g. "
+            "'phase_margin_deg'); required as soon as either is given."
+        ),
+    )
     spec: SpecLimits | None = None
 
     @model_validator(mode="after")
     def _field_for_cross_run_work(self) -> MultiRecipe:
         wants_reduction = bool(self.reduce) or self.spec is not None
-        field = self.reduce_field or (self.spec.field if self.spec else None)
-        if wants_reduction and field is None:
+        if wants_reduction and self.field is None:
             raise ValueError(
-                "this recipe returns multiple fields; set 'reduce_field' "
-                "(or spec.field) for reduction/spec evaluation"
+                "this recipe returns multiple fields; set 'field' to the one "
+                "the reduction or spec should read"
             )
-        if (
-            self.reduce_field is not None
-            and self.spec is not None
-            and self.spec.field is not None
-            and self.spec.field != self.reduce_field
-        ):
-            raise ValueError("spec.field must match reduce_field when both are present")
-        if field is not None:
+        if self.field is not None:
             # ``metric`` is the Literal discriminant every concrete subclass
             # sets; this abstract base doesn't declare it, so read it dynamically.
             metric: str = getattr(self, "metric")  # noqa: B009
             fields = REDUCIBLE_FIELDS.get(metric, ())
-            if field not in fields:
+            if self.field not in fields:
                 raise ValueError(
-                    f"{metric!r} does not produce reducible field {field!r}; "
+                    f"{metric!r} does not produce reducible field {self.field!r}; "
                     f"choose one of: {', '.join(fields)}"
                 )
         return self
@@ -214,19 +222,27 @@ class MultiRecipe(RecipeBase):
 
 class KeyedRecipe(RecipeBase):
     reduce: list[ReduceStat] = Field(default_factory=list)
+    field: str | None = Field(
+        default=None,
+        description=(
+            "Which key of this recipe's map a 'spec' applies to — a .meas name, "
+            "or a bias-point quantity. Required when 'spec' is given; 'reduce' "
+            "covers every key without it."
+        ),
+    )
     spec: SpecLimits | None = None
 
     @model_validator(mode="after")
     def _spec_names_key(self) -> KeyedRecipe:
-        if self.spec is not None and not self.spec.field:
-            raise ValueError("spec.field is required for a keyed recipe")
+        if self.spec is not None and not self.field:
+            raise ValueError("set 'field' to the key this recipe's spec applies to")
         return self
 
 
 class VariableRecipe(RecipeBase):
     """Base for recipes whose per-run value has no cross-run reduction.
 
-    These carry no ``reduce``/``spec``/``reduce_field`` — an unsupported one is
+    These carry no ``reduce``/``spec``/``field`` — an unsupported one is
     rejected as an extra field by ``extra="forbid"``. Marking them with a
     dedicated base makes every recipe inherit exactly one category base, so the
     reducer categorization (isinstance against these four bases) cannot be
@@ -314,11 +330,10 @@ class TransientResponseRecipe(MultiRecipe):
             raise ValueError("input is required when mode='disturbance'")
         if self.mode == "step" and self.input is not None:
             raise ValueError("input is accepted only when mode='disturbance'")
-        field = self.reduce_field or (self.spec.field if self.spec else None)
-        if field is not None and field not in TRANSIENT_FIELDS_BY_MODE[self.mode]:
+        if self.field is not None and self.field not in TRANSIENT_FIELDS_BY_MODE[self.mode]:
             choices = ", ".join(sorted(TRANSIENT_FIELDS_BY_MODE[self.mode]))
             raise ValueError(
-                f"transient_response mode={self.mode!r} cannot reduce {field!r}; "
+                f"transient_response mode={self.mode!r} cannot reduce {self.field!r}; "
                 f"choose one of: {choices}"
             )
         return self
