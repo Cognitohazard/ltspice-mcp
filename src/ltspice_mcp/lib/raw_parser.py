@@ -550,13 +550,15 @@ def compute_ac_bandwidth_metrics(raw: RawRead, trace_name: str, step: int = 0) -
     """Compute -3 dB bandwidth and unity-gain frequency for AC simulations.
 
     Returns a dict with ``bandwidth_3db`` and ``unity_gain_freq`` (each a
-    Python float or None), plus a ``warnings`` list naming any metric whose
-    computation raised — a None that means "this run has no such crossing"
-    and a None that means "the computation failed" are otherwise the same
-    value. The bandwidth is the first −3 dB crossing
+    Python float or None). The bandwidth is the first −3 dB crossing
     relative to DC gain (low cutoff for LPFs, low edge for BPFs). The
     unity-gain frequency is the worst-case 0 dB crossover from the full
     stability sweep — meaningful for amplifier-shaped responses.
+
+    A ``warnings`` list is added naming any metric whose computation raised:
+    a None meaning "this response has no such crossing" and a None meaning
+    "computing it failed" are otherwise the same value on the wire. It is
+    absent when nothing raised.
 
     Margins (phase, gain) are NOT reported here because they only have
     semantic meaning when the supplied signal is a loop gain, which this
@@ -714,7 +716,10 @@ def build_simulation_summary(
         axis = raw.get_axis(step=step)
         point_count = len(axis)
         has_axis = True
-    except RuntimeError:
+    except (RuntimeError, TypeError):
+        # TypeError is the same shape by another route: for a file that held no
+        # plots at all, spicelib's get_axis returns ``np.ndarray([])`` — an
+        # UNSIZED 0-d array — so ``len()`` raises instead of answering 0.
         axis = None  # type: ignore[assignment]
         point_count = step_count
         has_axis = False
