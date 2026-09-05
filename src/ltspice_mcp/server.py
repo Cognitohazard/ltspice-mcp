@@ -274,15 +274,15 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
 # prefix: Claude Code silently truncates server instructions at 2048 chars,
 # and the tail (the result-trust paragraph) is the part that must survive.
 CONSOLIDATED_INSTRUCTIONS = """\
-For any circuit or SPICE task: amplifiers, filters, regulators, schematics. Write .cir/.net/.sp decks with your own file tools; the six tools below run them, analyze results, check circuits, and edit .asc geometry; plot_waveform draws plots. Routing: run quick one-off ngspice jobs yourself and bring the .raw; analyze_results raw_path parses runs this server never executed (.MEAS, gm/gds/vth, Bode/transient metrics, spec verdicts). Use run_experiments for LTspice (no native automation), sweep/corner/MC matrices, and jobs that outlive a call.
+For any circuit or SPICE task: amplifiers, filters, regulators, schematics. Write .cir/.net/.sp decks with your own file tools; the six tools below run them, analyze results, check circuits, and edit .asc geometry; plot_waveform draws plots. Routing: run quick one-off ngspice jobs yourself and bring the .raw; analyze_results raw_path parses runs this server never executed. Use run_experiments for LTspice (no native automation), sweep/corner/MC matrices, and jobs that outlive a call.
 
 Runs are cheap. Simulate to check instead of reasoning it out.
 
-EXECUTE — run_experiments: staged decks across declared variations (strict assignments plus one random/MC); optional request_id: pass one for a durable, idempotent submission; quick jobs return inline, longer ones a receipt/job_id. jobs: status, wait (long-poll), cancel (owner/control_token), list, run pages; by job_id or request_id. Code loops: from ltspice_mcp.api import Api, the same ops in-process.
+EXECUTE — run_experiments: staged decks across declared variations (strict assignments plus one random/MC); optional request_id: pass one for a durable, idempotent submission; quick jobs return inline, longer ones a receipt/job_id. jobs: status, wait (long-poll), cancel, list, run pages; by job_id or request_id. Code loops: from ltspice_mcp.api import Api, the same ops in-process.
 
-UNDERSTAND — analyze_results: typed recipes over completed runs/experiments; case/step-attributed values, reductions, spec verdicts; continue with result_set_id + cursor. inspect: read-only; capabilities, symbols, net trace, components, models.
+UNDERSTAND — analyze_results: typed recipes over completed runs/experiments; case/step-attributed values, reductions, spec verdicts. inspect: read-only; capabilities, symbols, net trace, components, models; reference: find a recipe/op/check and its fields by plain words ('phase margin').
 
-AUTHOR — edit_schematic: typed op batch on one .asc sheet; transactional, revision-guarded (expected_sha256 for existing targets); returns geometry facts. verify_circuit: lint, symbols, export, layout, quality, compare, optional render.
+AUTHOR — edit_schematic: typed op batch on one .asc sheet; transactional, revision-guarded (expected_sha256); returns geometry facts. verify_circuit: lint, symbols, export, layout, quality, compare, optional render.
 
 A run can finish with status completed and still hold a degenerate result (a coerced value, a skipped .meas): read observations, warnings, and per-item failures. Match the recipe to the run type (.AC vs .tran) or analyze_results errors.
 """
