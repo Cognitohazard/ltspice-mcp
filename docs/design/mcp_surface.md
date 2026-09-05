@@ -233,11 +233,13 @@ the default entirely and may descend the full ladder.
 
 **Job model.** An experiment job is a coordinator spanning multiple circuits.
 Its persistence home is the server working directory's store
-(`{working_dir}/.ltspice-mcp/jobs/`), holding the coordinator record — request
-index, case records, counters, analysis state, source manifests. Each source
-circuit's sidecar directory gets a lightweight pointer so
-`jobs(list, circuit=...)` can find it. Owner-pid liveness and foreign-session
-read rules are unchanged from the simulation-job model.
+(`{working_dir}/.ltspice-mcp/experiments/`), holding the coordinator record —
+case records, counters, analysis state, source manifests — beside two indexes
+into it: `by-request/` for the idempotency lookup and `by-circuit/` so
+`jobs(list, circuit=...)` can find every job that ran a given circuit. Its run
+artifacts live in `runs/{job_id}/`, staged decks included. `lib/store.py` owns
+the whole layout and is where to read it. Owner-pid liveness and
+foreign-session read rules are unchanged from the simulation-job model.
 
 **Attached analysis is a job stage.** Job terminality means all runs terminal
 *and* analysis terminal; the status sequence is
