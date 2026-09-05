@@ -96,7 +96,7 @@ class TestOpSteppingFailureRawGate:
         raw = _make_raw_mock(
             ["v(out)"], np.array([0.0]), {"v(out)": np.array([1.0])}, plotname="Operating Point"
         )
-        raw.get_axis.side_effect = Exception("This RAW file does not have an axis.")
+        raw.get_axis.side_effect = RuntimeError("This RAW file does not have an axis.")
         s = build_simulation_summary(raw, log)
         assert any("gmin stepping failed" in e for e in s.get("errors", []))
         assert any("Stepped .op detected" in w for w in s.get("warnings", []))
@@ -117,7 +117,7 @@ class TestOpSteppingFailureRawGate:
         raw = _make_raw_mock(
             ["v(out)"], np.array([0.0]), {"v(out)": np.array([1.0])}, plotname="Operating Point"
         )
-        raw.get_axis.side_effect = Exception("This RAW file does not have an axis.")
+        raw.get_axis.side_effect = RuntimeError("This RAW file does not have an axis.")
         s = build_simulation_summary(raw, log)
         assert any("gmin stepping failed" in e for e in s.get("errors", []))
 
@@ -132,7 +132,7 @@ class TestOpSteppingFailureRawGate:
         raw = _make_raw_mock(
             ["i(v1)"], np.array([0.0]), {"i(v1)": np.array([0.0])}, plotname="Operating Point"
         )
-        raw.get_axis.side_effect = Exception("This RAW file does not have an axis.")
+        raw.get_axis.side_effect = RuntimeError("This RAW file does not have an axis.")
         s = build_simulation_summary(raw, log)
         assert any("gmin stepping failed" in e for e in s.get("errors", []))
 
@@ -146,7 +146,7 @@ class TestOpSteppingFailureRawGate:
         raw = _make_raw_mock(
             ["v(out)"], np.array([0.0]), {"v(out)": np.array([1.0])}, plotname="Operating Point"
         )
-        raw.get_axis.side_effect = Exception("This RAW file does not have an axis.")
+        raw.get_axis.side_effect = RuntimeError("This RAW file does not have an axis.")
         s = build_simulation_summary(raw, log)
         assert "errors" not in s
         assert any("gmin stepping failed" in w for w in s.get("warnings", []))
@@ -162,8 +162,11 @@ class TestDetectSimType:
         assert detect_sim_type(raw) == "AC Analysis"
 
     def test_fallback_on_error(self):
+        # ValueError is what spicelib raises for a property the raw doesn't
+        # carry. The fallback is for that shape, not for an arbitrary fault:
+        # anything else propagates rather than being reported as "Unknown".
         raw = MagicMock()
-        raw.get_raw_property.side_effect = Exception("no property")
+        raw.get_raw_property.side_effect = ValueError("no property")
         assert detect_sim_type(raw) == "Unknown"
 
 
@@ -204,8 +207,10 @@ class TestGetStepCount:
         assert get_step_count(raw) == 3
 
     def test_error_returns_1(self):
+        # A lookup miss inside the raw, not an arbitrary fault — see the note
+        # on detect_sim_type's fallback above.
         raw = MagicMock()
-        raw.get_steps.side_effect = Exception("no steps")
+        raw.get_steps.side_effect = IndexError("no steps")
         assert get_step_count(raw) == 1
 
 
