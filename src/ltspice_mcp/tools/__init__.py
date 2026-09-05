@@ -1,6 +1,9 @@
 """Tool registration entrypoint for ltspice-mcp."""
 
-from ltspice_mcp.tools._base import registry
+from mcp import types
+
+from ltspice_mcp.tools._base import RegisteredTool, registry
+from ltspice_mcp.tools._schema import strip_argument_descriptions
 
 # Importing these modules triggers @registry.tool registrations, and a tool is
 # advertised in the order it registered — so this list IS the advertised order,
@@ -21,6 +24,26 @@ from . import (  # noqa: F401
 # isort: on
 
 
-def get_tools():
-    """Return the advertised tool definitions and their dispatch metadata."""
-    return registry.get_tools()
+def get_tools(
+    listing: str = "full",
+) -> tuple[list[types.Tool], dict[str, RegisteredTool]]:
+    """Return the advertised tool definitions and their dispatch metadata.
+
+    ``listing`` selects how the same capabilities are put on the wire
+    (``[tools] listing`` in the config):
+
+    * ``full`` — the registered definitions, unchanged. The default, and the
+      only mode whose output is pinned byte for byte.
+    * ``compact`` — the same seven tools and the same schemas with every
+      per-argument description removed from the published copy. Dispatch is
+      untouched, so each tool still accepts exactly what it did.
+    """
+    tool_defs, tool_dispatch = registry.get_tools()
+    if listing == "compact":
+        tool_defs = [
+            definition.model_copy(
+                update={"inputSchema": strip_argument_descriptions(definition.inputSchema)}
+            )
+            for definition in tool_defs
+        ]
+    return tool_defs, tool_dispatch
