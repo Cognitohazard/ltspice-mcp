@@ -15,13 +15,13 @@ from pathlib import Path
 
 import pytest
 
-from ltspice_mcp.lib import experiment_store
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
     ExperimentCase,
     ExperimentJob,
     SourceRecord,
 )
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import TERMINAL_STATUSES, SessionState
 from ltspice_mcp.tools.experiments import JobsInput, handle_jobs
 
@@ -41,7 +41,7 @@ def _make_experiment(state: SessionState, *, status: str) -> ExperimentJob:
         fingerprint="f" * 64,
         canonicalizer_version=1,
         control_token="control-secret",
-        store_path=experiment_store.record_path("exp_status", Path(state.working_dir)),
+        store_path=Store(Path(state.working_dir)).job_record("exp_status"),
         cases=[
             ExperimentCase(
                 case_id="case_0000",

@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.lib import experiment_store
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
     ExperimentCase,
@@ -17,6 +16,7 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.observability import emit_job_event
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 
 
@@ -64,7 +64,7 @@ def _experiment(working_dir: Path, circuit: Path, *, job_id: str, status: str) -
         fingerprint="f" * 64,
         canonicalizer_version=1,
         control_token="control-secret",
-        store_path=experiment_store.record_path(job_id, working_dir),
+        store_path=Store(working_dir).job_record(job_id),
         cases=[case],
         sources=[
             SourceRecord(
