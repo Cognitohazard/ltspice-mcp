@@ -96,7 +96,6 @@ _WIDE_RECIPE: dict[str, Any] = {
     "key": "loop",
     "metric": "bode_filter",
     "signal": "V(out)",
-    "all_steps": True,
 }
 _WIDE_SOURCES = 15
 
@@ -109,6 +108,7 @@ def _wide_args(raw: Path, **extra: Any) -> AnalyzeResultsInput:
                 for index in range(_WIDE_SOURCES)
             ],
             "recipes": [_WIDE_RECIPE],
+            "all_steps": True,
             **extra,
         }
     )
@@ -128,7 +128,6 @@ _SPEC_RECIPE: dict[str, Any] = {
     "metric": "value",
     "expr": "V(out)",
     "at": "900u",
-    "all_steps": True,
     "spec": {"max": -1.0},
 }
 
@@ -142,6 +141,7 @@ async def _spec_analysis(state: SessionState, raw: Path, **extra: Any) -> dict[s
                     for index in range(_WIDE_SOURCES)
                 ],
                 "recipes": [_SPEC_RECIPE],
+                "all_steps": True,
                 **extra,
             }
         ),

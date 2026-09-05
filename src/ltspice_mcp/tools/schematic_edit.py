@@ -23,20 +23,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import functools
 import hashlib
 import io
 import os
 import shutil
 import stat
 import tempfile
-from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Annotated, Any, Literal, NamedTuple, Self, TypeAlias, cast
+from typing import Annotated, Any, Literal, NamedTuple, cast
 
 from mcp import types
-from pydantic import BeforeValidator, Field, model_validator
+from pydantic import Field
 from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError
@@ -77,27 +75,20 @@ from ltspice_mcp.lib.schematic_ops import (
     trace_nets,
     wiring_profile,
 )
-from ltspice_mcp.lib.schematic_scene import build_scene
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
-    FORMAT_DESCRIPTION,
     OUTCOME_SCHEMA,
     CompareSpec,
-    RenderPolicy,
     StrictModel,
     ToolInput,
-    coerce_render_policy,
     comparison_mismatch,
     format_response,
     make_include_resolver,
-    one_spelling,
     outcome_of,
     page_schema,
     registry,
-    render_scene_artifact,
     safe_path,
-    symbol_resolver_for,
 )
 
 # The blank-sheet template — identical to what ``create_schematic`` writes.
@@ -158,16 +149,6 @@ class EditViewCursors(StrictModel):
     )
 
 
-RenderArgument: TypeAlias = Annotated[
-    RenderPolicy | None,
-    BeforeValidator(
-        functools.partial(coerce_render_policy, policy=RenderPolicy),
-        json_schema_input_type=RenderPolicy | bool | None,
-    ),
-]
-"""``RenderPolicy | None`` that also takes ``True``/``False``."""
-
-
 class EditSchematicInput(ToolInput):
     target: str = Field(description="Path to the .asc schematic (created if absent).")
     base: Literal["existing", "blank"] = Field(
@@ -201,10 +182,6 @@ class EditSchematicInput(ToolInput):
             "commit, so a mismatch is reported but not undone."
         ),
     )
-    reference: str | None = Field(
-        default=None,
-        description=("Retained alias for compare.reference. Pass compare or this, not both."),
-    )
     dry_run: bool = Field(
         default=False,
         description=(
@@ -212,20 +189,12 @@ class EditSchematicInput(ToolInput):
             "is attempted, so all problems surface at once."
         ),
     )
-    write_failed_draft: bool = Field(
-        default=False,
-        description=(
-            "On a commit failure before the atomic rename, quarantine the would-be "
-            "content to <target>.draft-<build_id>.asc for inspection."
-        ),
-    )
-    return_views: list[Literal["touched", "pin_legend", "render"]] = Field(
+    return_views: list[Literal["touched", "pin_legend"]] = Field(
         default_factory=lambda: ["touched"],
         description=(
-            "Which geometry views to return: 'touched' (default) is the pin/net "
-            "table for the components this batch named, 'pin_legend' the whole "
-            "sheet, 'render' an SVG/PNG. Under dry_run a render reports "
-            "metadata only."
+            "Which pin/net table to return: 'touched' (default) covers the "
+            "components this batch named, 'pin_legend' the whole sheet. To "
+            "draw the sheet, call verify_circuit with a render policy."
         ),
     )
     view_cursors: EditViewCursors | None = Field(
@@ -239,80 +208,15 @@ class EditSchematicInput(ToolInput):
     view_limit: int = Field(
         default=_DEFAULT_VIEW_LIMIT,
         description=(
-            "Page size for both paginated views — views.pin_legend and wiring.label_only_pins."
+            "Page size for the paginated views — views.touched, views.pin_legend "
+            "and wiring.label_only_pins."
         ),
     )
-    render: RenderArgument = Field(
-        default=None,
-        description=(
-            "How to draw the sheet: true for the defaults, false to draw "
-            "nothing, or an object. Passing it also asks for the render view."
-        ),
-    )
-    render_format: Literal["png", "svg"] | None = Field(
-        default=None,
-        description="Retained alias for render.format. Pass render or this, not both.",
-    )
-    render_scale: float | None = Field(
-        default=None,
-        description="Retained alias for render.scale.",
-    )
-    format: Literal["json", "text"] | None = Field(default=None, description=FORMAT_DESCRIPTION)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _render_false_withdraws_the_view(cls, data: Any) -> Any:
-        """``render: false`` means draw nothing, even if return_views asked.
-
-        It is the more specific of the two spellings, so it wins — and it wins
-        by taking the view out of ``return_views``, where the effect is visible
-        on the validated arguments rather than hidden in a second flag.
-        """
-        if isinstance(data, Mapping) and data.get("render") is False and "return_views" in data:
-            views = data["return_views"]
-            if isinstance(views, list) and "render" in views:
-                return {**data, "return_views": [view for view in views if view != "render"]}
-        return data
-
-    @model_validator(mode="after")
-    def _one_render_and_compare_spelling(self) -> Self:
-        one_spelling(
-            self.render,
-            {"render_format": self.render_format, "render_scale": self.render_scale},
-            argument="render",
-        )
-        one_spelling(self.compare, {"reference": self.reference}, argument="compare")
-        return self
-
-    @property
-    def render_policy(self) -> RenderPolicy:
-        """How to draw, however it was spelled — the defaults when it was not.
-
-        Always a policy, because ``return_views`` can ask for the render without
-        naming one; ``wants_render`` is what decides whether it is used.
-        """
-        if self.render is not None:
-            return self.render
-        fields: dict[str, Any] = {}
-        if self.render_format is not None:
-            fields["format"] = self.render_format
-        if self.render_scale is not None:
-            fields["scale"] = self.render_scale
-        return RenderPolicy(**fields)
-
-    @property
-    def wants_render(self) -> bool:
-        """Whether to draw at all: naming the view, or passing a policy."""
-        return self.render is not None or "render" in self.return_views
 
     @property
     def compare_spec(self) -> CompareSpec | None:
-        """One comparison, however it was spelled; None when none was asked for."""
-        if self.compare is not None:
-            return self.compare
-        if self.reference is None:
-            return None
-        return CompareSpec(reference=self.reference)
+        """The comparison to run, or None when none was asked for."""
+        return self.compare
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +308,6 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
             "properties": {
                 "touched": _PAGE_SCHEMA,
                 "pin_legend": _PAGE_SCHEMA,
-                "render": {"type": "object"},
             },
         },
         "warnings": {"type": "array", "items": {"type": "string"}},
@@ -535,112 +438,38 @@ def _wiring_and_legend(
     return profile, legend, label_only
 
 
-def _render_view(
-    asc_path: Path,
-    fmt: Literal["png", "svg"],
-    scale: float,
-    artifacts_dir: Path,
-    *,
-    resolver_path: Path | None = None,
-) -> dict:
-    """Render ``asc_path`` to SVG (always) or PNG (when the raster extra is
-    present), writing a content-hashed artifact under ``artifacts_dir``."""
-    scene = build_scene(
-        asc_path,
-        resolver=symbol_resolver_for(resolver_path or asc_path),
-    )
-    image, out_path, _ = render_scene_artifact(scene, artifacts_dir, image_format=fmt, scale=scale)
-    view = dict(image.to_dict())
-    if scene.diagnostics:
-        view["diagnostics"] = list(scene.diagnostics)
-    view["path"] = str(out_path)
-    return view
-
-
-def _render_committed_text(
-    text: str,
-    encoding: str,
-    target: Path,
-    fmt: Literal["png", "svg"],
-    scale: float,
-    artifacts_dir: Path,
-) -> dict:
-    """Render the transaction's bytes, never a later revision of ``target``."""
-    tmp_dir = Path(tempfile.mkdtemp(prefix="ltspice-edit-view-"))
-    try:
-        source = tmp_dir / target.name
-        source.write_text(text, encoding=encoding)
-        return _render_view(
-            source,
-            fmt,
-            scale,
-            artifacts_dir,
-            resolver_path=target,
-        )
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-
 @dataclass(frozen=True)
 class EditSchematicViews:
-    """Complete requested views tied to the bytes produced by one transaction."""
+    """Complete pin/net views tied to the bytes produced by one transaction.
+
+    Drawing the sheet is not among them: ``verify_circuit`` owns rendering, and
+    its policy is the more capable one (a pixel cap, inline delivery, and
+    render-only mode), so an edit that also wants a picture is one call away
+    from it.
+    """
 
     sha256: str
     wiring_profile: dict[str, int]
     pin_legend: tuple[dict[str, Any], ...]
     label_only_pins: tuple[dict[str, Any], ...]
-    render: dict[str, Any] | None
-    failures: tuple[dict[str, Any], ...]
 
 
-async def _build_edit_views(
-    args: EditSchematicInput,
+def _build_edit_views(
     profile: dict[str, int],
     legend: list[dict],
     label_only: list[dict],
-    committed_text: str,
-    encoding: str,
-    target: Path,
-    state: SessionState,
     sheet_sha256: str,
 ) -> EditSchematicViews:
-    """Build every requested view from transaction-owned memory.
+    """Package the transaction's own views.
 
     ``sheet_sha256`` is the digest of the same bytes the commit protocol writes;
     the caller already has it, so the sheet is encoded and hashed once per edit.
     """
-    rendered: dict[str, Any] | None = None
-    failures: list[dict[str, Any]] = []
-    policy = args.render_policy
-    if args.wants_render:
-        if args.dry_run:
-            rendered = {
-                "status": "dry_run",
-                "note": (
-                    "render artifact is written only on commit; run without dry_run to persist it."
-                ),
-            }
-        else:
-            try:
-                artifacts_dir = state.store.renders_dir
-                rendered = await asyncio.to_thread(
-                    _render_committed_text,
-                    committed_text,
-                    encoding,
-                    target,
-                    policy.format,
-                    policy.scale,
-                    artifacts_dir,
-                )
-            except Exception as exc:  # broad by design — one view may fail independently
-                failures.append({"stage": "render", "error": str(exc)})
     return EditSchematicViews(
         sha256=sheet_sha256,
         wiring_profile=profile,
         pin_legend=tuple(legend),
         label_only_pins=tuple(label_only),
-        render=rendered,
-        failures=tuple(failures),
     )
 
 
@@ -686,19 +515,16 @@ def _present_edit_views(
 
     views: dict[str, Any] = {}
     for view in args.return_views:
-        if view in ("pin_legend", "touched"):
-            rows = list(neutral.pin_legend)
-            if view == "touched":
-                wanted = touched_refs(args.ops)
-                rows = [row for row in rows if str(row.get("ref", "")).casefold() in wanted]
-            views[view] = paginate_view(
-                rows,
-                view,
-                cursor=None if complete else getattr(cursors, view),
-                limit=limit if complete else args.view_limit,
-            )
-        elif view == "render" and neutral.render is not None:
-            views["render"] = neutral.render
+        rows = list(neutral.pin_legend)
+        if view == "touched":
+            wanted = touched_refs(args.ops)
+            rows = [row for row in rows if str(row.get("ref", "")).casefold() in wanted]
+        views[view] = paginate_view(
+            rows,
+            view,
+            cursor=None if complete else getattr(cursors, view),
+            limit=limit if complete else args.view_limit,
+        )
     return label_only_page, views
 
 
@@ -917,7 +743,6 @@ class EditSchematicEvaluation:
 
     data: dict[str, Any]
     text: str
-    format: Literal["json", "text"] | None
     views: EditSchematicViews | None = None
     mcp_result: types.CallToolResult | None = None
 
@@ -932,7 +757,7 @@ def _finish_edit_evaluation(
         return evaluation
     return replace(
         evaluation,
-        mcp_result=format_response(evaluation.text, evaluation.data, evaluation.format),
+        mcp_result=format_response(evaluation.text, evaluation.data),
     )
 
 
@@ -1025,7 +850,6 @@ async def _evaluate_edit_schematic(
                             f"expected_sha256; its current sha256 is {current}. "
                             "Nothing was written."
                         ),
-                        format=args.format,
                     )
                 )
             if current != expected:
@@ -1056,7 +880,6 @@ async def _evaluate_edit_schematic(
                             "changed since you read it. Re-read it and resubmit with the "
                             "current sha256."
                         ),
-                        format=args.format,
                     )
                 )
         _stage("revision_check")
@@ -1098,7 +921,6 @@ async def _evaluate_edit_schematic(
                             f"edit_schematic: transaction aborted — {abort_reason}. "
                             "No changes saved."
                         ),
-                        format=args.format,
                     )
                 )
             _stage("apply_ops")
@@ -1115,15 +937,10 @@ async def _evaluate_edit_schematic(
             # --- dry run: validate-only, nothing written, target dir untouched
             if args.dry_run:
                 state.editors.invalidate(target)
-                neutral_views = await _build_edit_views(
-                    args,
+                neutral_views = _build_edit_views(
                     profile,
                     legend,
                     label_only,
-                    committed_text,
-                    encoding,
-                    target,
-                    state,
                     hashlib.sha256(committed_text.encode(encoding)).hexdigest(),
                 )
                 wiring, presented_views = _paged_edit_views(
@@ -1144,14 +961,13 @@ async def _evaluate_edit_schematic(
                             wiring=wiring,
                             views=presented_views,
                             warnings=warnings,
-                            failures=failures + list(neutral_views.failures),
+                            failures=failures,
                             hint="Dry run — resubmit without dry_run to commit.",
                         ),
                         text=(
                             f"edit_schematic (dry run) on {target.name}: {len(results)} ops "
                             "validated; nothing saved."
                         ),
-                        format=args.format,
                         views=neutral_views,
                     )
                 )
@@ -1170,8 +986,6 @@ async def _evaluate_edit_schematic(
                     args,
                     target,
                     build_id,
-                    committed_text,
-                    encoding,
                     stages,
                     outcome.error or "",
                     present_mcp_views=present_mcp_views,
@@ -1184,8 +998,6 @@ async def _evaluate_edit_schematic(
                     args,
                     target,
                     build_id,
-                    committed_text,
-                    encoding,
                     stages,
                     outcome.error or "",
                     present_mcp_views=present_mcp_views,
@@ -1200,17 +1012,7 @@ async def _evaluate_edit_schematic(
             # Views report no stage entry of their own, so they open and close
             # their name by hand; a stage that calls _stage() only opens it.
             post_commit_stage = "views"
-            neutral_views = await _build_edit_views(
-                args,
-                profile,
-                legend,
-                label_only,
-                committed_text,
-                encoding,
-                target,
-                state,
-                committed_sha,
-            )
+            neutral_views = _build_edit_views(profile, legend, label_only, committed_sha)
             wiring, presented_views = _paged_edit_views(
                 args,
                 profile,
@@ -1218,8 +1020,6 @@ async def _evaluate_edit_schematic(
                 present_mcp_views=present_mcp_views,
             )
             post_commit_stage = "response"
-            artifact_views = {"render": neutral_views.render} if neutral_views.render else {}
-            artifacts = _artifacts_from_views(artifact_views)
 
             verification = None
             netlist = None
@@ -1250,12 +1050,9 @@ async def _evaluate_edit_schematic(
                         verification=verification,
                         netlist=netlist,
                         warnings=warnings,
-                        failures=list(neutral_views.failures),
-                        artifacts=artifacts,
                         hint=hint,
                     ),
                     text=f"edit_schematic committed {target.name} (build {build_id}).",
-                    format=args.format,
                     views=neutral_views,
                 )
             )
@@ -1326,8 +1123,9 @@ def complete_edit_schematic_data(
         "empty sheet; base='existing' applies deltas. Pass expected_sha256 of the "
         "file you edited against (required when the target exists) — a peer that "
         "committed first yields revision_conflict with nothing written. Returns "
-        "geometry facts (pin legend, wiring metric), an optional render, and an "
-        "optional post-commit netlist verification against a reference."
+        "geometry facts (pin/net table, wiring metric) and an optional "
+        "post-commit netlist verification against a reference. To draw the "
+        "sheet, call verify_circuit with a render policy."
     ),
     input_model=EditSchematicInput,
     annotations=types.ToolAnnotations(
@@ -1385,31 +1183,22 @@ def _wiring_dict(profile: dict[str, int], label_only_page: dict) -> dict:
     }
 
 
-def _artifacts_from_views(views: dict) -> list[dict]:
-    render = views.get("render")
-    if render and render.get("path"):
-        return [{"kind": "render", "path": render["path"], "format": render.get("image_format")}]
-    return []
-
-
 def _commit_failure_response(
     args: EditSchematicInput,
     target: Path,
     build_id: str,
-    committed_text: str,
-    encoding: str,
     stages: list[dict],
     error: str,
     *,
     present_mcp_views: bool,
 ) -> EditSchematicEvaluation:
-    """Envelope for a commit failure before the rename; optionally quarantine a draft."""
-    draft_path = None
-    if args.write_failed_draft:
-        draft_path = target.with_name(f"{target.stem}.draft-{build_id}.asc")
-        with contextlib.suppress(OSError):
-            draft_path.write_text(committed_text, encoding=encoding)
-    artifacts = [{"kind": "draft", "path": str(draft_path)}] if draft_path else []
+    """Envelope for a commit failure before the rename; the target is untouched.
+
+    Nothing is quarantined. The batch that failed is the caller's own ops plus
+    the sheet it named, both of which it still holds, and the response says
+    which stage failed and why — so a copy of the would-be bytes on disk beside
+    the target added a file to clean up rather than a fact to act on.
+    """
     return _finish_edit_evaluation(
         EditSchematicEvaluation(
             data=_envelope(
@@ -1426,14 +1215,9 @@ def _commit_failure_response(
                     "stage": stages[-1]["stage"] if stages else "commit",
                     "retryable": True,
                 },
-                artifacts=artifacts,
                 hint="The sheet was not modified; retry with the same expected_sha256.",
             ),
-            text=(
-                f"edit_schematic: commit failed before rename ({error}); target unchanged."
-                + (f" Draft written to {draft_path.name}." if draft_path else "")
-            ),
-            format=args.format,
+            text=f"edit_schematic: commit failed before rename ({error}); target unchanged.",
         ),
         present_mcp_views=present_mcp_views,
     )
@@ -1485,7 +1269,6 @@ def _post_commit_failure_response(
                 f"edit_schematic committed {target.name} (build {build_id}), then the "
                 f"post-commit {stage} stage failed: {error}. The sheet IS written."
             ),
-            format=args.format,
         ),
         present_mcp_views=present_mcp_views,
     )

@@ -690,15 +690,12 @@ def test_verify_and_edit_return_uncapped_neutral_data(
         },
         pin_legend=pin_rows,
         label_only_pins=(),
-        render=None,
-        failures=(),
     )
 
     async def evaluate_edit(_request: object, _state: SessionState):
         return schematic_edit.EditSchematicEvaluation(
             data={"outcome": "complete", "sha256": "a" * 64},
             text="complete",
-            format=None,
             views=views,
         )
 

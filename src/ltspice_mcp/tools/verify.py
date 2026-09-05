@@ -60,10 +60,10 @@ import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Literal, Self, TypeAlias
+from typing import Annotated, Any, Literal, TypeAlias
 
 from mcp import types
-from pydantic import BeforeValidator, Field, model_validator
+from pydantic import BeforeValidator, Field
 from spicelib import AscEditor
 
 from ltspice_mcp.errors import PathSecurityError
@@ -114,7 +114,6 @@ from ltspice_mcp.tools._base import (
     failures_schema,
     format_response,
     make_include_resolver,
-    one_spelling,
     outcome_of,
     outcome_schema,
     registry,
@@ -745,7 +744,7 @@ class VerifyCircuitInput(ToolInput):
             default=None,
             description=(
                 "Narrow the checks. Default is every check applicable to the "
-                "file type, plus compare whenever 'reference' is given. Use it "
+                "file type, plus compare whenever 'compare' is given. Use it "
                 "to skip something expensive — 'export' runs LTspice."
             ),
         )
@@ -758,26 +757,6 @@ class VerifyCircuitInput(ToolInput):
             "need no reference to run."
         ),
     )
-    reference: str | None = Field(
-        default=None,
-        description=(
-            "Retained alias for compare.reference: a netlist path or literal "
-            "netlist text (anything containing a newline is read as text). Pass "
-            "compare or the flat fields, not both."
-        ),
-    )
-    compare_mode: Literal["equivalence", "structural_diff"] | None = Field(
-        default=None,
-        description="Retained alias for compare.mode.",
-    )
-    anchors: list[str] | None = Field(
-        default=None,
-        description="Retained alias for compare.anchors.",
-    )
-    rtol: float | None = Field(
-        default=None,
-        description="Retained alias for compare.rtol.",
-    )
     render: RenderArgument = Field(
         default=None,
         description=(
@@ -786,20 +765,6 @@ class VerifyCircuitInput(ToolInput):
         ),
     )
 
-    @model_validator(mode="after")
-    def _one_compare_spelling(self) -> Self:
-        one_spelling(
-            self.compare,
-            {
-                "reference": self.reference,
-                "compare_mode": self.compare_mode,
-                "anchors": self.anchors,
-                "rtol": self.rtol,
-            },
-            argument="compare",
-        )
-        return self
-
     @property
     def render_policy(self) -> VerifyRenderPolicy | None:
         """The resolved render policy, or None when nothing is to be drawn."""
@@ -807,19 +772,8 @@ class VerifyCircuitInput(ToolInput):
 
     @property
     def compare_spec(self) -> VerifyCompareSpec | None:
-        """One comparison, however it was spelled; None when none was asked for."""
-        if self.compare is not None:
-            return self.compare
-        if self.reference is None:
-            return None
-        fields: dict[str, Any] = {"reference": self.reference}
-        if self.compare_mode is not None:
-            fields["mode"] = self.compare_mode
-        if self.anchors is not None:
-            fields["anchors"] = self.anchors
-        if self.rtol is not None:
-            fields["rtol"] = self.rtol
-        return VerifyCompareSpec(**fields)
+        """The comparison to run, or None when none was asked for."""
+        return self.compare
 
     export_to: Literal["managed", "sidecar"] = Field(
         default="managed",
@@ -843,7 +797,7 @@ VERIFY_DESCRIPTION = (
     "drops wires the file appears to contain), geometric layout facts (overlapping "
     "bodies, wires through a body, floating pins, dangling wire ends), and quality "
     "facts (net connected only by label stubs with no drawn wire; text anchored "
-    "inside a symbol). Supply 'reference' to graph-compare against a known-good "
+    "inside a symbol). Supply 'compare' to graph-compare against a known-good "
     "netlist (equivalence) or take an added/removed/changed delta (structural_diff). "
     "Every fixable finding carries its location and subject."
 )
