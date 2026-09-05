@@ -239,15 +239,18 @@ def fake_simulator(
     return recorded
 
 
-def recorded_fixture_simulator(monkeypatch: pytest.MonkeyPatch) -> None:
+def recorded_fixture_simulator(
+    monkeypatch: pytest.MonkeyPatch, fixture: str = "ltspice_tran_rc"
+) -> None:
     """Instant engine behind ``ExperimentRunner.submit_netlist`` that hands back
-    the recorded real-LTspice ``ltspice_tran_rc`` raw+log pair, so analysis
-    stages parse genuine simulator artifacts rather than a mock byte string."""
+    a recorded real-LTspice raw+log pair, so analysis stages parse genuine
+    simulator artifacts rather than a mock byte string. Name a different
+    *fixture* to run a job over stepped artifacts."""
 
     def submit(self, _netlist: Path, run_filename: str, callback):
         raw, log = fake_artifact_paths(self.output_folder, run_filename)
-        shutil.copy(FIXTURES_DIR / "ltspice_tran_rc.raw", raw)
-        shutil.copy(FIXTURES_DIR / "ltspice_tran_rc.log", log)
+        shutil.copy(FIXTURES_DIR / f"{fixture}.raw", raw)
+        shutil.copy(FIXTURES_DIR / f"{fixture}.log", log)
         outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
         self.loop.call_soon_threadsafe(callback, outcome)
         return object()
