@@ -1034,7 +1034,7 @@ async def handle_check_job(args: CheckJobInput, state: SessionState):
     # per-run view in batch_results.
     resolved = await services.resolve_job_async(job_id, state)
     if isinstance(resolved, ExperimentJob):
-        services.reject_experiment_job(resolved, "check_job", state)
+        services.reject_experiment_job(resolved, "status", state)
     if isinstance(resolved, BatchJob):
         return _check_batch_job(resolved, fmt)
     job = resolved
@@ -1344,7 +1344,7 @@ async def handle_cancel_job(args: CancelJobInput, state: SessionState) -> types.
 
     job = await services.resolve_job_async(job_id, state)
     if isinstance(job, ExperimentJob):
-        services.reject_experiment_job(job, "cancel_job", state)
+        services.reject_experiment_job(job, "cancel", state)
 
     # Check if job is running
     if job.status not in NON_TERMINAL_LIVE_STATUSES:

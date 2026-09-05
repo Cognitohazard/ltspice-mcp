@@ -2408,7 +2408,7 @@ class TestGetWaveform:
             axis=freqs,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        with pytest.raises(ResultError, match="bode_metrics"):
+        with pytest.raises(ResultError, match="waveform recipe"):
             await handle_get_waveform(
                 GetWaveformInput(raw_file=raw_file.name, signal="V(out)"),
                 state_no_sim,

@@ -76,9 +76,7 @@ class TestResolveJob:
         _make_batch(state_no_sim)
         with pytest.raises(SimulationError) as exc:
             services.resolve_simulation_job("b1", state_no_sim)
-        assert str(exc.value) == (
-            "Job 'b1' is a sweep batch job — use batch_results for its per-run results."
-        )
+        assert "sweep batch job" in str(exc.value) and "analyze_results" in str(exc.value)
 
     def test_resolve_batch_job_found(self, state_no_sim: SessionState):
         _make_batch(state_no_sim)
@@ -99,8 +97,8 @@ class TestResolveJob:
         assert "single simulation job" in msg
         # The redirect must name only tools that accept a job id, not
         # simulation_summary (which takes a raw_file).
-        assert "check_job" in msg
-        assert "query_value" in msg
+        assert "jobs(action='status')" in msg
+        assert "analyze_results" in msg
         assert "simulation_summary" not in msg
 
     def test_resolve_job_finds_sim(self, state_no_sim: SessionState):
@@ -378,8 +376,8 @@ class TestAttachSuggestionsToFailure:
         log = tmp_path / "err.log"
         log.write_text('Error on line 2 : s1 0 0 sw Unable to find definition of model "sw"\n')
         msg = services.attach_suggestions_to_failure("failed", {}, log, state_no_sim.libraries)
-        assert "find_model" in msg
-        assert "include_builtin=true" in msg
+        assert 'inspect(kind="model"' in msg
+        assert 'mode="search"' in msg
         assert "sw" in msg
 
     def test_no_hint_for_clean_log(self, state_no_sim: SessionState, tmp_path: Path):

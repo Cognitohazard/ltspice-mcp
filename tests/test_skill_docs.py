@@ -23,19 +23,16 @@ BENCH_NOTES_PATH = BENCH_SKILL_PATH.parent / "references" / "BENCH_NOTES.md"
 # Skill docs are size-budgeted on purpose: they are loaded before the work
 # starts, so growth has to be a deliberate edit to these rows rather than
 # something that happens one paragraph at a time.
-# Raised 3200 → 3600 when the doc was allowed to teach the caller-set
-# 'budget' response cap (the benchmark that froze that pitch is over).
-# Raised 3600 → 3700 when the trigger description was rewritten to fire on
-# the circuit domain itself rather than on already-using-the-tools — a
-# listing line that only matches agents already converted cannot convert one.
-# Raised 8000 → 8300 for the payload-size routing clause: the four-way rule
-# routed on capability alone, and the same result set costs ~5,200 transcript
-# characters through a tool call against ~150 through a script that prints its
-# summary. The body loads only when the skill fires, so this pin guards
-# readability, not per-session context rent.
-# spice-experiments raised 3700 → 3820 when the registered surface grew to
-# seven tools: the doc must name plot_waveform (the doc-drift gate derives
-# coverage from the registry), and the old pin had 36 characters of headroom.
+# Size caps on the shipped skill docs. Each sits just above what its doc needs
+# today, so text that grows has to earn the room. What the bytes buy:
+# spice-experiments must name every registered tool including plot_waveform
+# (the doc-drift gate derives coverage from the registry), teach the caller-set
+# 'budget' response cap, and describe its trigger in terms of the circuit domain
+# rather than of already using the tools. spice-bench-craft must carry the
+# payload-size routing clause, because the same result set costs roughly 5,200
+# characters through a tool call against roughly 150 through a script that
+# prints its own summary. Each body loads only when its skill fires, so these
+# pins guard readability, not per-session context cost.
 SKILL_BUDGETS = (
     pytest.param(SKILL_PATH, 3820, id="spice-experiments"),
     pytest.param(BENCH_SKILL_PATH, 8300, id="spice-bench-craft"),
