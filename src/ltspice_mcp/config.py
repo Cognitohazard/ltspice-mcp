@@ -21,11 +21,6 @@ VALID_PROFILES: frozenset[str] = frozenset({"consolidated"})
 ToolListing = Literal["full", "compact"]
 VALID_TOOL_LISTINGS: frozenset[str] = frozenset({"full", "compact"})
 
-# Profiles removed in 0.6.0. The [tools] profile key stays RECOGNIZED for one
-# release so the removal is loud through auto-updating install channels (PyPI,
-# uvx, plugin, MCPB): a config naming a removed profile gets a warning with the
-# pin that restores it, never a silent surface change. Delete in 0.7.0.
-_REMOVED_PROFILES: frozenset[str] = frozenset({"full", "agentic"})
 VALID_LOG_LEVELS: frozenset[str] = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
 
@@ -87,23 +82,6 @@ def _load_bounded_env(
         logger.warning("%s must be %s-%s, got %s; ignoring", env_var, low, max_val, val)
     else:
         config_dict[key] = val
-
-
-def _validated_profile(value: str, source: str) -> str | None:
-    """Return value if it's a valid profile, else warn and return None."""
-    if value in VALID_PROFILES:
-        return value
-    if value in _REMOVED_PROFILES:
-        logger.warning(
-            "Tool profile %r in %s was removed in ltspice-mcp 0.6.0; serving the "
-            "consolidated tool surface instead. To keep the old surface, pin "
-            "ltspice-mcp==0.5.*",
-            value,
-            source,
-        )
-        return None
-    logger.warning("Unknown tool profile %r in %s, using 'consolidated'", value, source)
-    return None
 
 
 def _validated_listing(value: object, source: str) -> str | None:
@@ -197,10 +175,6 @@ def _toml_log_level(value: Any) -> Any:
     return _SKIP
 
 
-def _toml_tool_profile(value: Any) -> Any:
-    return _validated_profile(value, "config") or _SKIP
-
-
 def _toml_tool_listing(value: Any) -> Any:
     return _validated_listing(value, "config") or _SKIP
 
@@ -249,10 +223,6 @@ def _env_log_level(value: str) -> Any:
         sorted(VALID_LOG_LEVELS),
     )
     return _SKIP
-
-
-def _env_tool_profile(value: str) -> Any:
-    return _validated_profile(value, "LTSPICE_MCP_TOOL_PROFILE") or _SKIP
 
 
 def _env_tool_listing(value: str) -> Any:
@@ -439,14 +409,6 @@ _SETTINGS: tuple[_Setting, ...] = (
         from_env=_env_path_list,
     ),
     _Setting(
-        field="tool_profile",
-        section="tools",
-        key="profile",
-        from_toml=_toml_tool_profile,
-        env="LTSPICE_MCP_TOOL_PROFILE",
-        from_env=_env_tool_profile,
-    ),
-    _Setting(
         field="tool_listing",
         section="tools",
         key="listing",
@@ -582,10 +544,9 @@ class ServerConfig:
     On Windows and WSL these are auto-detected; set this to override."""
 
     tool_profile: ToolProfile = "consolidated"
-    """Tool profile. "consolidated" (the only profile since 0.6.0) exposes
-    the six-tool surface plus the plot widget. The former "full" and
-    "agentic" profiles were removed; their names are still recognized in
-    config so the removal warns instead of silently changing the surface."""
+    """Tool profile: the six-tool surface plus the plot widget. There is one
+    profile and no setting for it — the guide and the prompts are written per
+    profile, so the name stays as the key they are selected by."""
 
     tool_listing: ToolListing = "full"
     """How much of each tool definition the tool list carries.
@@ -780,13 +741,6 @@ def generate_default_config(path: Path) -> None:
 
     # Tools section
     tools_tbl = table()
-    tools_tbl.add(comment('Tool profile: "consolidated" is the only profile since 0.6.0.'))
-    tools_tbl.add(comment('The former "full"/"agentic" profiles need a ltspice-mcp==0.5.* pin.'))
-    tools_tbl.add(
-        comment("The key itself is removed in 0.7.0; new configs need no [tools] section.")
-    )
-    tools_tbl.add("profile", "consolidated")
-    tools_tbl.add(nl())
     tools_tbl.add(comment('How much of each tool definition the tool list carries. "full"'))
     tools_tbl.add(comment('(the default) advertises the seven tools as registered; "compact"'))
     tools_tbl.add(comment("advertises the same seven with the per-argument descriptions"))
