@@ -142,6 +142,25 @@ class TestEntryShape:
         # The discriminator is not an argument the caller chooses twice.
         assert "metric" not in by_name
 
+    def test_a_field_entry_carries_the_whole_description(self):
+        """The lookup is the only channel this prose has on the compact
+        listing, so a first-sentence cut leaves the rest reaching nobody.
+
+        'applies_to' is the case that showed it: the sentence saying it is not
+        a device filter is the second one, and losing it is how a caller sends
+        device references to a circuit-id argument.
+        """
+        from ltspice_mcp.lib.model_fields import describe_field
+        from ltspice_mcp.lib.variations import AssignVariation
+
+        assign = _named("run_experiments", "assign")
+        indexed = {field.name: field.description for field in assign.fields}
+        for name, field in AssignVariation.model_fields.items():
+            declared = " ".join(describe_field(field).split())
+            if declared and name in indexed:
+                assert indexed[name] == declared, name
+        assert "not a device filter" in indexed["applies_to"].lower()
+
     def test_bounds_are_read_off_the_model(self):
         thd = _named("analyze_results", "thd")
         harmonics = next(field for field in thd.fields if field.name == "harmonics")
