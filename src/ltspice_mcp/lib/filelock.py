@@ -163,6 +163,37 @@ def circuit_lock_target(path: Path) -> Path:
 
 
 @contextlib.asynccontextmanager
+async def async_file_lock(
+    target: Path,
+    *,
+    acquire_timeout: float = DEFAULT_TIMEOUT,
+) -> AsyncIterator[None]:
+    """``file_lock`` for a coroutine that has to hold it across its own awaits.
+
+    Acquisition polls in a worker thread, per this module's contract, so a
+    contended lock parks that thread instead of the event loop; the flock
+    itself belongs to the process, so releasing it from another thread is
+    fine. ``TimeoutError`` surfaces to the caller, which decides what a
+    timeout means for its operation.
+
+    Acquire INSIDE the try so ``stack.close()`` always runs: a cancel landing
+    at the await boundary right after the worker thread took the flock would
+    otherwise leak it until process exit. (Residual: if the cancel lands while
+    the worker is still blocked acquiring, the thread can register the lock
+    after close() already ran — inherent to to_thread, not fixable without a
+    cancel-aware lock; the narrow window is cancel-only.)
+    """
+    stack = contextlib.ExitStack()
+    try:
+        await asyncio.to_thread(stack.enter_context, file_lock(target, timeout=acquire_timeout))
+        yield
+    finally:
+        # Release is two fast syscalls and must not await: a cancel arriving
+        # here would abandon the lock at the first suspension point.
+        stack.close()
+
+
+@contextlib.asynccontextmanager
 async def circuit_file_lock(path: Path) -> AsyncIterator[None]:
     """Cross-process lock for mutations/exports of one circuit file.
 

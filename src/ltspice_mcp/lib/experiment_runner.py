@@ -8,7 +8,6 @@ import hashlib
 import json
 import logging
 import secrets
-import shutil
 import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -27,7 +26,7 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
     failure_row,
 )
-from ltspice_mcp.lib.filelock import file_lock
+from ltspice_mcp.lib.filelock import async_file_lock, file_lock
 from ltspice_mcp.lib.job_lifecycle import transition
 from ltspice_mcp.lib.runner_base import (
     DEFAULT_MAX_PARALLEL,
@@ -50,32 +49,23 @@ DEFAULT_KILL_GRACE_S = 10.0
 
 AnalysisCallback = Callable[[ExperimentJob], Awaitable[dict[str, Any]]]
 
+#: Stages one submission's decks, inside the request gate. It returns the cases
+#: and sources the job is built from, so a submission that turns out to be a
+#: replay never runs it at all.
+StageDecks = Callable[[], Awaitable["StagedDecks"]]
+
+# How long a submission waits for the request gate. Longer than the file-lock
+# default because the gate is now held across staging: a duplicate carrying the
+# same request_id waits for the first submission's deck copies, and a large
+# matrix takes longer to stage than an index write.
+REQUEST_GATE_TIMEOUT_S = 300.0
+
 # How each staging-time drift observation reads when it blocks a replay
 # instead of annotating a fresh stage.
 _DRIFT_REASONS = {
     "source_modified_after_staging": "content changed",
     "source_unavailable_after_staging": "no longer readable",
 }
-
-
-def _discard_unadopted_run_dir(candidate: ExperimentJob) -> None:
-    """Remove the run directory of a candidate job that never became durable.
-
-    Only ever called for a job id this submission minted and no record names,
-    so nothing else can be reading the tree. The name check keeps a malformed
-    ``output_folder`` from turning this into a delete of the shared runs root;
-    failure is logged and swallowed, because leaving a directory behind must
-    not fail a submission that otherwise succeeded.
-    """
-    run_dir = candidate.output_folder
-    if run_dir is None or run_dir.name != candidate.job_id:
-        return
-    try:
-        shutil.rmtree(run_dir)
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        logger.warning("Could not discard unadopted run directory %s: %s", run_dir, exc)
 
 
 class IdempotencyConflictError(SimulationError):
@@ -194,14 +184,22 @@ def verify_replay_sources(job: ExperimentJob, request_id: str) -> None:
 
 @dataclass
 class ExperimentRunRequest:
-    """Prepared, fully staged input to the experiment coordinator."""
+    """One submission's input to the experiment coordinator.
+
+    ``cases`` and ``sources`` are the staged decks the job runs. A caller that
+    stages inside the request gate — which is every caller that copies files —
+    leaves them empty and passes ``stage`` instead; the coordinator fills them
+    in from what it returns, only once it knows this submission is not a replay
+    of one already recorded.
+    """
 
     state: SessionState
     request_id: str
     fingerprint: str
-    cases: list[ExperimentCase]
-    sources: list[SourceRecord]
     simulator: str
+    cases: list[ExperimentCase] = field(default_factory=list)
+    sources: list[SourceRecord] = field(default_factory=list)
+    stage: StageDecks | None = None
     job_id: str | None = None
     declared: int | None = None
     canonicalizer_version: int = CANONICALIZER_VERSION
@@ -223,9 +221,25 @@ class ExperimentReceipt:
 
 
 @dataclass(frozen=True)
+class StagedDecks:
+    """What a staging pass produced: the cases to run and the decks they ran."""
+
+    cases: list[ExperimentCase]
+    sources: list[SourceRecord]
+
+
+@dataclass(frozen=True)
 class _BarrierResult:
     job: ExperimentJob
     replayed: bool
+
+
+@dataclass(frozen=True)
+class _IndexLookup:
+    """What the request index said: the job to replay, or that it named none."""
+
+    existing: ExperimentJob | None
+    dangling: bool
 
 
 @dataclass
@@ -285,7 +299,8 @@ class ExperimentRunner(RunnerBase):
         task.add_done_callback(self._pipeline_tasks.discard)
         return receipt_ready
 
-    def _materialize_job(self, request: ExperimentRunRequest) -> ExperimentJob:
+    def _validate_request(self, request: ExperimentRunRequest) -> None:
+        """Check what can be checked before a single deck is copied."""
         if not request.request_id:
             raise SimulationError("request_id is required for durable experiment submission")
         if request.canonicalizer_version != CANONICALIZER_VERSION:
@@ -295,6 +310,8 @@ class ExperimentRunner(RunnerBase):
             )
         if self._case_capacity(request) < 1:
             raise SimulationError("max_parallel must be at least 1")
+
+    def _materialize_job(self, request: ExperimentRunRequest) -> ExperimentJob:
         job_id = request.job_id or generate_id("exp")
         validate_job_id(job_id)
         control_token = secrets.token_urlsafe(32)
@@ -361,8 +378,8 @@ class ExperimentRunner(RunnerBase):
                     "run_experiments requires durable job persistence; set "
                     "[state] persist_jobs = true and restart the server"
                 )
-            candidate = self._materialize_job(request)
-            barrier = await asyncio.to_thread(self._durable_barrier, request, candidate)
+            self._validate_request(request)
+            barrier = await self._durable_barrier(request)
 
             # Registration and execution-task creation intentionally have no
             # await between them. A replay racing the original barrier can
@@ -405,84 +422,34 @@ class ExperimentRunner(RunnerBase):
             if not receipt_ready.done():
                 receipt_ready.set_exception(exc)
 
-    @staticmethod
-    def _durable_barrier(
-        request: ExperimentRunRequest,
-        candidate: ExperimentJob,
-    ) -> _BarrierResult:
-        """Resolve the durable submission, discarding a candidate nobody adopts.
+    async def _durable_barrier(self, request: ExperimentRunRequest) -> _BarrierResult:
+        """Claim the request id first, then stage under it.
 
-        Decks are staged before the gate is taken, so two calls sharing a
-        ``request_id`` in one turn each stage a full deck set under their own
-        job id — but only one of them becomes a job. Whichever loses leaves a
-        ``runs/{job_id}/`` tree no record claims, in a runs root every session
-        on the box shares; provenance comes from a record, so an unclaimed tree
-        is exactly what misleads a later inventory of that folder. The gate is
-        the one place that knows which candidate was adopted, so it is where
-        the other one is cleaned up.
+        The gate is one file lock per ``request_id``, so holding it across
+        staging delays exactly one thing: another submission carrying the same
+        id. That is the submission that should wait — it finds the index on the
+        way in and replays the recorded job instead of copying a second deck
+        set no record would ever claim. Every blocking step inside runs off the
+        event loop; the staging pass is itself a coroutine that offloads its
+        own file work.
+
+        A crash while the gate is held releases the file lock with the process
+        and leaves no index entry behind, so the next submission carrying that
+        id stages afresh; whatever the dead process had copied under
+        ``runs/{job_id}/`` is a crash residual that no record names.
         """
-        try:
-            result = ExperimentRunner._resolve_durable_submission(request, candidate)
-        except Exception:
-            _discard_unadopted_run_dir(candidate)
-            raise
-        if result.job is not candidate:
-            _discard_unadopted_run_dir(candidate)
-        return result
-
-    @staticmethod
-    def _resolve_durable_submission(
-        request: ExperimentRunRequest,
-        candidate: ExperimentJob,
-    ) -> _BarrierResult:
-        """One blocking lock/lookup/write critical section for submission."""
         working_dir = request.state.working_dir
-        with file_lock(Store(working_dir).request_lock(request.request_id)):
-            index = experiment_store.load_request_index(request.request_id, working_dir)
-            dangling = False
-            if index is not None:
-                indexed_version = index.get("canonicalizer_version")
-                if indexed_version != request.canonicalizer_version:
-                    raise IdempotencyConflictError(
-                        f"request_id {request.request_id!r} was stored with canonicalizer "
-                        f"version {indexed_version!r}, not {request.canonicalizer_version}"
-                    )
-                if index.get("fingerprint") != request.fingerprint:
-                    raise IdempotencyConflictError(
-                        f"request_id {request.request_id!r} was already used for a "
-                        "different request payload"
-                    )
-                indexed_job_id = str(index.get("job_id", ""))
-                try:
-                    existing = experiment_store.load_job(
-                        indexed_job_id,
-                        working_dir,
-                        own_is_alive=True,
-                    )
-                except ValueError:
-                    existing = None
-                if existing is not None:
-                    if (
-                        existing.request_id != request.request_id
-                        or existing.fingerprint != request.fingerprint
-                        or existing.canonicalizer_version != request.canonicalizer_version
-                    ):
-                        raise IdempotencyConflictError(
-                            f"request_id {request.request_id!r} points to an "
-                            "inconsistent coordinator record"
-                        )
-                    # The cheap pre-staging replay check cannot see a record
-                    # written after it looked, so the same drift is re-checked
-                    # here, where this submission has already staged its decks.
-                    verify_replay_sources(existing, request.request_id)
-                    if any(
-                        item.get("code") == "server_restarted" for item in existing.observations
-                    ):
-                        experiment_store.save_job(existing)
-                    return _BarrierResult(existing, replayed=True)
-                dangling = True
-
-            if dangling:
+        gate = Store(working_dir).request_lock(request.request_id)
+        async with async_file_lock(gate, acquire_timeout=REQUEST_GATE_TIMEOUT_S):
+            lookup = await asyncio.to_thread(self._read_request_index, request)
+            if lookup.existing is not None:
+                return _BarrierResult(lookup.existing, replayed=True)
+            if request.stage is not None:
+                staged = await request.stage()
+                request.cases = staged.cases
+                request.sources = staged.sources
+            candidate = self._materialize_job(request)
+            if lookup.dangling:
                 candidate.observations.append(
                     {
                         "code": "dangling_request_index_replaced",
@@ -493,21 +460,82 @@ class ExperimentRunner(RunnerBase):
                         ),
                     }
                 )
-            # The request is the single source of the idempotency identity:
-            # stamping it here means no caller can persist a coordinator
-            # record whose identity disagrees with its own request index.
-            candidate.request_id = request.request_id
-            candidate.fingerprint = request.fingerprint
-            candidate.canonicalizer_version = request.canonicalizer_version
-            experiment_store.save_request_index(
-                request_id=request.request_id,
-                fingerprint=request.fingerprint,
-                canonicalizer_version=request.canonicalizer_version,
-                job_id=candidate.job_id,
-                working_dir=working_dir,
-            )
-            experiment_store.save_job(candidate)
+            await asyncio.to_thread(self._claim_request_id, request, candidate)
+        # Outside the gate: the per-circuit index is discovery, not identity,
+        # so a slow directory here holds up nothing but this submission.
+        await asyncio.to_thread(self._register_circuits, candidate, working_dir)
+        return _BarrierResult(candidate, replayed=False)
 
+    @staticmethod
+    def _read_request_index(request: ExperimentRunRequest) -> _IndexLookup:
+        """The gate's lookup half: a replay, a conflict, or nothing recorded yet."""
+        working_dir = request.state.working_dir
+        index = experiment_store.load_request_index(request.request_id, working_dir)
+        if index is None:
+            return _IndexLookup(existing=None, dangling=False)
+        indexed_version = index.get("canonicalizer_version")
+        if indexed_version != request.canonicalizer_version:
+            raise IdempotencyConflictError(
+                f"request_id {request.request_id!r} was stored with canonicalizer "
+                f"version {indexed_version!r}, not {request.canonicalizer_version}"
+            )
+        if index.get("fingerprint") != request.fingerprint:
+            raise IdempotencyConflictError(
+                f"request_id {request.request_id!r} was already used for a "
+                "different request payload"
+            )
+        indexed_job_id = str(index.get("job_id", ""))
+        try:
+            existing = experiment_store.load_job(
+                indexed_job_id,
+                working_dir,
+                own_is_alive=True,
+            )
+        except ValueError:
+            existing = None
+        if existing is None:
+            # The index names a record that is gone; this submission recreates it.
+            return _IndexLookup(existing=None, dangling=True)
+        if (
+            existing.request_id != request.request_id
+            or existing.fingerprint != request.fingerprint
+            or existing.canonicalizer_version != request.canonicalizer_version
+        ):
+            raise IdempotencyConflictError(
+                f"request_id {request.request_id!r} points to an inconsistent coordinator record"
+            )
+        # The cheap pre-staging replay check the caller may have run cannot see
+        # a record written after it looked, so the same drift is re-checked
+        # here, under the gate.
+        verify_replay_sources(existing, request.request_id)
+        if any(item.get("code") == "server_restarted" for item in existing.observations):
+            experiment_store.save_job(existing)
+        return _IndexLookup(existing=existing, dangling=False)
+
+    @staticmethod
+    def _claim_request_id(
+        request: ExperimentRunRequest,
+        candidate: ExperimentJob,
+    ) -> None:
+        """The gate's write half: the request index, then the coordinator record."""
+        # The request is the single source of the idempotency identity: stamping
+        # it here means no caller can persist a coordinator record whose identity
+        # disagrees with its own request index.
+        candidate.request_id = request.request_id
+        candidate.fingerprint = request.fingerprint
+        candidate.canonicalizer_version = request.canonicalizer_version
+        experiment_store.save_request_index(
+            request_id=request.request_id,
+            fingerprint=request.fingerprint,
+            canonicalizer_version=request.canonicalizer_version,
+            job_id=candidate.job_id,
+            working_dir=request.state.working_dir,
+        )
+        experiment_store.save_job(candidate)
+
+    @staticmethod
+    def _register_circuits(candidate: ExperimentJob, working_dir: Path) -> None:
+        """Index the job under every circuit it ran; a failure is durable-but-noted."""
         try:
             experiment_store.register_circuits(candidate, working_dir)
         except OSError as exc:
@@ -522,7 +550,6 @@ class ExperimentRunner(RunnerBase):
                 }
             )
             experiment_store.save_job(candidate)
-        return _BarrierResult(candidate, replayed=False)
 
     def _case_capacity(self, request: ExperimentRunRequest) -> int:
         """One job's share of the runner's cap.
