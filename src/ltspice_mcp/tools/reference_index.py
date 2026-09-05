@@ -558,7 +558,11 @@ def _field_entries(
                 type=f"{label} ({bounds})" if bounds else label,
                 required=default_label(field) == "REQUIRED",
                 default=_default_spelling(field),
-                description=first_sentence(describe_field(field), limit=240),
+                # The whole description, not its first sentence: on the compact
+                # listing this lookup is the only channel an argument's prose
+                # has, so a cut here leaves the rest reaching nobody. The
+                # dense per-branch listing the API renders still abbreviates.
+                description=" ".join(describe_field(field).split()),
             )
         )
         if depth + 1 >= _MAX_FIELD_DEPTH or len(entries) >= _MAX_FIELDS:
