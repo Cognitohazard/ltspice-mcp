@@ -88,9 +88,11 @@ from ltspice_mcp.tools._base import (
     StrictModel,
     ToolInput,
     coerce_render_policy,
+    comparison_mismatch,
     format_response,
     make_include_resolver,
     one_spelling,
+    outcome_of,
     page_schema,
     registry,
     render_scene_artifact,
@@ -861,12 +863,13 @@ def _mirror_commit_state(commit_state: str) -> Literal["not_started", "committed
 
 def _envelope(
     *,
-    outcome: str,
+    delivered: bool,
     commit_state: str,
     target: Path,
     build_id: str,
     base: str,
     stages: list[dict],
+    partial: bool = False,
     sha256: str | None = None,
     error: dict | None = None,
     wiring: dict | None = None,
@@ -879,8 +882,17 @@ def _envelope(
     artifacts: list[dict] | None = None,
     hint: str | None = None,
 ) -> dict[str, Any]:
+    """Build one response payload; the shared rule decides its outcome.
+
+    Every exit from this tool comes through here, so no call site names an
+    outcome. A call site states what happened — whether anything usable came
+    back (``delivered``) and whether the call fell short of what was asked for
+    (``partial``) — and the one rule in ``_base`` turns that into the verdict.
+    A failure lives in ``failures`` or in ``error`` depending on the path;
+    either one is the same signal here.
+    """
     data: dict[str, Any] = {
-        "outcome": outcome,
+        "outcome": outcome_of(failures or error, partial=partial, delivered=delivered),
         "commit_state": commit_state,
         "target": str(target),
         "build_id": build_id,
@@ -996,7 +1008,7 @@ async def _evaluate_edit_schematic(
                 return finish(
                     EditSchematicEvaluation(
                         data=_envelope(
-                            outcome="failed",
+                            delivered=False,
                             commit_state="not_committed",
                             target=target,
                             build_id=build_id,
@@ -1032,7 +1044,7 @@ async def _evaluate_edit_schematic(
                 return finish(
                     EditSchematicEvaluation(
                         data=_envelope(
-                            outcome="failed",
+                            delivered=False,
                             commit_state="not_committed",
                             target=target,
                             build_id=build_id,
@@ -1078,7 +1090,7 @@ async def _evaluate_edit_schematic(
                 return finish(
                     EditSchematicEvaluation(
                         data=_envelope(
-                            outcome="failed",
+                            delivered=False,
                             commit_state="not_committed",
                             target=target,
                             build_id=build_id,
@@ -1134,7 +1146,7 @@ async def _evaluate_edit_schematic(
                 return finish(
                     EditSchematicEvaluation(
                         data=_envelope(
-                            outcome="complete",
+                            delivered=True,
                             commit_state="not_committed",
                             target=target,
                             build_id=build_id,
@@ -1236,7 +1248,8 @@ async def _evaluate_edit_schematic(
             return finish(
                 EditSchematicEvaluation(
                     data=_envelope(
-                        outcome="complete",
+                        delivered=True,
+                        partial=comparison_mismatch(verification),
                         commit_state="committed",
                         target=target,
                         build_id=build_id,
@@ -1410,7 +1423,7 @@ def _commit_failure_response(
     return _finish_edit_evaluation(
         EditSchematicEvaluation(
             data=_envelope(
-                outcome="failed",
+                delivered=False,
                 commit_state="not_committed",
                 target=target,
                 build_id=build_id,
@@ -1459,7 +1472,7 @@ def _post_commit_failure_response(
     return _finish_edit_evaluation(
         EditSchematicEvaluation(
             data=_envelope(
-                outcome="partial",
+                delivered=True,
                 commit_state="committed",
                 target=target,
                 build_id=build_id,

@@ -76,6 +76,7 @@ from ltspice_mcp.tools._base import (
     StrictModel,
     ToolInput,
     format_response,
+    outcome_of,
     registry,
     resolve_response_budget,
     resolve_run_simulator,
@@ -1199,7 +1200,9 @@ async def _routing_failure_response(
     data.update(
         {
             "status": "failed",
-            "outcome": "partial",
+            # Every declared case failed to stage, but the lint pass and the
+            # completeness reconciliation did report.
+            "outcome": outcome_of(failures),
             "completeness": completeness,
             "lint": [{"circuit": circuit.circuit_id, "findings": []} for circuit in circuits],
             "failures": failures,
@@ -1288,7 +1291,7 @@ async def _post_submit_error_response(
         handles = {
             "job_id": snapshot.job_id,
             "status": snapshot.status,
-            "outcome": "in_progress",
+            "outcome": outcome_of([], in_progress=True),
             "control_token": receipt.control_token,
             "completeness": copy.deepcopy(snapshot.completeness),
         }
@@ -1301,7 +1304,7 @@ async def _post_submit_error_response(
         handles = {
             "job_id": job.job_id,
             "status": job.status,
-            "outcome": "in_progress",
+            "outcome": outcome_of([], in_progress=True),
             "control_token": receipt.control_token,
             "completeness": copy.deepcopy(job.completeness),
         }
@@ -1355,11 +1358,16 @@ async def _post_submit_error_response(
 
 
 def _empty_payload(request_id: str) -> dict[str, Any]:
+    """The skeleton for a call that produced no job.
+
+    Its outcome says so — something went wrong and nothing came back with it.
+    A caller that goes on to fill in a job overwrites it.
+    """
     return {
         "job_id": None,
         "request_id": request_id,
         "status": "failed",
-        "outcome": "failed",
+        "outcome": outcome_of(True, delivered=False),
         "source": [],
         "completeness": Completeness(),
         "lint": [],

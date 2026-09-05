@@ -65,6 +65,7 @@ from ltspice_mcp.tools._base import (
     StrictModel,
     ToolInput,
     format_response,
+    outcome_of,
     registry,
     resolve_response_budget,
     safe_path,
@@ -2546,12 +2547,13 @@ def _assemble(
             )
         )
     runs_requested = len(a.runs) + len(a.missing)
-    outcome = (
-        "failed"
-        if not results and failures and next_value is None
-        else "partial"
-        if failures or a.missing or next_value is not None
-        else "complete"
+    # A continuation handle is both a delivery (there is more to fetch, so the
+    # call did not come back empty-handed) and a shortfall (this page is not
+    # the whole answer).
+    outcome = outcome_of(
+        failures,
+        partial=bool(a.missing) or next_value is not None,
+        delivered=bool(results) or next_value is not None,
     )
     if missing_page["truncated"]:
         # Carries the live work position, not the end of the work list: this
@@ -2822,7 +2824,7 @@ def render_attached_analysis(
                     "result_set_id": data["result_set_id"],
                     "cursor": page["next_cursor"],
                 }
-                data["outcome"] = "partial"
+                data["outcome"] = outcome_of(data.get("failures") or [], partial=True)
                 response_budget.append_hint(
                     data,
                     "Analysis is partial because the response budget reduced the "
@@ -2914,12 +2916,10 @@ def render_attached_analysis(
         failures = data.get("failures")
         has_failures = isinstance(failures, list) and bool(failures)
         missing_total = int(missing_page.get("total", 0)) if isinstance(missing_page, dict) else 0
-        data["outcome"] = (
-            "failed"
-            if not rendered_results and has_failures and data["next"] is None
-            else "partial"
-            if has_failures or missing_total or data["next"] is not None
-            else "complete"
+        data["outcome"] = outcome_of(
+            has_failures,
+            partial=bool(missing_total) or data["next"] is not None,
+            delivered=bool(rendered_results) or data["next"] is not None,
         )
     return data
 
