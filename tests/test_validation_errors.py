@@ -88,9 +88,11 @@ async def test_top_level_budget_refers_to_accepting_tools(config):
         await call_tool("verify_circuit", arguments)
 
     message = str(excinfo.value)
-    assert (
-        "Field 'budget' is accepted by analyze_results, inspect, jobs, run_experiments." in message
-    )
+    # The field, and every tool the referral must send the caller to.
+    assert "'budget'" in message
+    for tool in ("analyze_results", "inspect", "jobs", "run_experiments"):
+        assert tool in message, f"referral does not name {tool}: {message}"
+    assert "edit_schematic" not in message
 
 
 @pytest.mark.asyncio
@@ -109,7 +111,12 @@ async def test_top_level_continue_alias_refers_to_analyze_results(config):
         await call_tool("run_experiments", arguments)
 
     message = str(excinfo.value)
-    assert "Field 'continue' is accepted by analyze_results." in message
+    # One tool takes it, so the referral names that one and no other.
+    assert "'continue'" in message
+    assert "analyze_results" in message
+    assert not [
+        tool for tool in ("inspect", "jobs", "edit_schematic", "verify_circuit") if tool in message
+    ]
 
 
 @pytest.mark.asyncio

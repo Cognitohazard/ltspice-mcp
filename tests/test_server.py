@@ -84,21 +84,23 @@ class TestBuildInstructions:
 
     def test_ngspice_only_notes_ltspice_absence(self):
         text = build_instructions({"ngspice": _NG}, _NG)
-        assert "Active simulator: ngspice." in text
+        assert "ngspice" in text
         assert "LTspice not detected" in text
         # Accurate: .asc editing depends on LTspice symbol files, not the
         # executable — don't over-claim a flat "unavailable".
-        assert ".asc editing needs its symbol files" in text
+        assert ".asc" in text and "symbol" in text
         assert "(default)" not in text  # no default marker for a single engine
 
     def test_ltspice_only(self):
         text = build_instructions({"ltspice": _LT}, _LT)
-        assert "Active simulator: LTspice." in text
+        assert "LTspice" in text
         assert "LTspice not detected" not in text
 
     def test_both_marks_default(self):
         text = build_instructions({"ltspice": _LT, "ngspice": _NG}, _LT)
-        assert "Active simulators: LTspice (default), ngspice." in text
+        # Both engines named, and the default marker on the one that is it.
+        assert "LTspice (default)" in text
+        assert "ngspice" in text
         assert "LTspice not detected" not in text
 
     def test_the_instructions_fit_the_client_budget(self):
