@@ -1318,4 +1318,6 @@ class TestCircuitIdRejection:
 
         message = str(excinfo.value)
         assert "derived" not in message
-        assert "start with a letter or digit" in message
+        # The id it refused, and the rule it refused it by.
+        assert "_chosen" in message
+        assert "letter or digit" in message

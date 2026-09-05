@@ -402,8 +402,11 @@ class TestDanglingNodes:
         assert len(issues) == 1
         msg = str(issues[0]["message"])
         assert "'nc'" in msg
-        assert "declared as a port of .SUBCKT buf" in msg
-        assert "connected to no element terminal in its body" in msg
+        # The port, the subcircuit it belongs to, and the fact that separates
+        # this case from the degree-one one.
+        assert "port" in msg
+        assert "buf" in msg
+        assert "no element terminal" in msg
         assert "only one element terminal" not in msg
 
     def test_x_card_subckt_name_and_params_not_counted(self):

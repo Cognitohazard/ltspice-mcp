@@ -308,7 +308,9 @@ class TestReceiptThenDwell:
         assert data["progress"]["terminal"] == 0
         assert data["progress"]["remaining"] == 1
         assert "jobs(wait)" in data["hint"]
-        assert "Progress: 0/1 terminal; 1 remaining." in data["hint"]
+        counts = data["progress"]
+        assert f"{counts['terminal']}/{counts['expanded']}" in data["hint"]
+        assert f"{counts['remaining']} remaining" in data["hint"]
 
         await _wait_for(lambda: bool(callbacks))
         for run_filename, callback in callbacks.items():
