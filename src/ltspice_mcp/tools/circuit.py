@@ -51,7 +51,7 @@ try:
 except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned range)
     _SchematicComponentClass = SchematicComponent
 
-from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.errors import NetlistError, SymbolResolutionError
 from ltspice_mcp.lib import atomic_write_bytes, atomic_write_text, services
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
@@ -1321,14 +1321,19 @@ def _make_editor(path: Path) -> Editor:
             return AscEditor(str(path))
         return SpiceEditor(str(path))
     except FileNotFoundError as e:
-        if ".asy" in str(e):
-            raise NetlistError(
-                f"Cannot open .asc schematic: {e}\n\n"
-                "LTspice symbol libraries (.asy files) are required. "
-                "Set [schematic] symbol_paths in ltspice-mcp.toml or "
-                "LTSPICE_MCP_SYMBOL_PATHS environment variable."
-            ) from e
-        raise NetlistError(f"File not found: {path}") from e
+        if not path.is_file():
+            raise NetlistError(f"File not found: {path}") from e
+        # The schematic itself opened, so what is missing is something it
+        # refers to: a symbol, a hierarchical sub-sheet, or a model library.
+        # Which one it is comes from the file that is there, not from whether
+        # the editor's message happened to spell ".asy".
+        raise SymbolResolutionError(
+            f"Cannot open .asc schematic: {e}\n\n"
+            "A file the schematic refers to was not found; for a symbol, "
+            "LTspice symbol libraries (.asy files) are required. "
+            "Set [schematic] symbol_paths in ltspice-mcp.toml or "
+            "LTSPICE_MCP_SYMBOL_PATHS environment variable."
+        ) from e
 
 
 def _get_editor(path: Path, state: SessionState) -> Editor:
