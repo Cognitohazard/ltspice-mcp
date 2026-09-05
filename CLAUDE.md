@@ -183,6 +183,14 @@ The former `full` (49-tool) and `agentic` (41-tool) profiles were removed in 0.6
 
 ### Public Python API (`ltspice_mcp.api`)
 
+The two interfaces are meant to run side by side: the MCP server is the
+long-lived process that owns jobs which outlive a call, serves resources, and
+renders the widget; the Python API is for loops and complete results in the
+same working directory, reading and writing the same job records. The hand-off
+of a script's job to a running server is not built yet (a job belongs to the
+process that submitted it) — see docs/design/python_api.md, "Coexistence with a
+server".
+
 The same six ops are importable: `Api(working_dir=...)` boots the engine in-process (`engine.bootstrap_library_engine` — the same bootstrap `server_lifespan` enters via `bootstrap_server_engine`) and exposes them as synchronous methods with **complete** results where the wire pages or caps, plus `load_raw`/`measurements` (numpy access, detached copies) and the AC/transient metric functions under their existing names. One evaluator, two interfaces (MCP and Python) — the handlers and the API consume the same evaluate/render seams, so anything that would fork semantics between them is a defect.
 
 Constraints worth knowing before you use it: one live engine session per PID (an atomic lease shared with the server lifespan — an `Api` inside a server process raises); the `Api` owns a private persistent event loop (per-call loops would invalidate the runner cache); `close()` cancels jobs this process owns, exactly like server shutdown; default mode *rejects* wire-only controls (budget, cursors, dwell) instead of rewriting them so API/MCP replays stay idempotent (`raw_page=True` returns one MCP-identical page). **The full contract is `docs/design/python_api.md`**; `__all__` is the stability boundary and is pinned.
