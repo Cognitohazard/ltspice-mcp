@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock
 import jsonschema
 import pytest
 from pydantic import ValidationError
+from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
 from ltspice_mcp.lib import experiment_store, response_budget, result_store, store, wsl
 from ltspice_mcp.lib.deck_staging import sha256_file
@@ -1441,13 +1442,20 @@ class TestPerCircuitFailuresAndAccounting:
         note.assert_awaited_once_with(deck.resolve())
 
 
-def _failing_simulator(monkeypatch: pytest.MonkeyPatch, log_text: str) -> None:
-    """Every case aborts the way the simulator aborts: non-zero exit, .fail log."""
+def _failing_simulator(
+    monkeypatch: pytest.MonkeyPatch, log_text: str, *, pass_deck: bool = False
+) -> None:
+    """Every case aborts the way the simulator aborts: non-zero exit, .fail log.
 
-    def submit(self, _netlist: Path, run_filename: str, callback):
+    ``pass_deck`` hands the outcome collector the deck and simulator the real
+    ``submit_netlist`` does, for the classifications that read them.
+    """
+
+    def submit(self, netlist: Path, run_filename: str, callback):
         log = fake_artifact_paths(self.output_folder, run_filename)[1].with_suffix(".fail")
         log.write_text(log_text)
-        self.loop.call_soon_threadsafe(callback, collect_run_outcome(".", str(log)))
+        extra = {"netlist": netlist, "simulator": self.simulator_class} if pass_deck else {}
+        self.loop.call_soon_threadsafe(callback, collect_run_outcome(".", str(log), **extra))
         return object()
 
     monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
@@ -1613,6 +1621,49 @@ class TestFailureChannel:
         row = data["failures"][0]
         assert row["code"] == "convergence_failed"
         assert "reltol" in row["hint"]
+
+    async def test_ngspice_include_failure_names_the_ngbehavior_fix(
+        self,
+        work_dir: Path,
+        config,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """ngspice reports a dropped .lib section as a missing include file.
+
+        Its compatibility modes read ``.lib <file> <section>`` as two plain
+        includes, so a PDK corner select fails with a message that says nothing
+        about the mode that caused it. The pre-flight lint catches this when it
+        can see the directive; this is the same fact after the run, for a deck
+        whose lint the caller turned off or whose sectioned .lib arrived through
+        an include.
+        """
+        # The spicelib default; set explicitly because it is process-wide state
+        # another test may have overridden.
+        monkeypatch.setattr(NGspiceSimulator, "_compatibility_mode", "kiltpsa")
+        state = SessionState.create(config, available={"ngspice": NGspiceSimulator})
+        _failing_simulator(
+            monkeypatch,
+            "Error: Could not find include file tt\n",
+            pass_deck=True,
+        )
+        (work_dir / "models.lib").write_text(".lib tt\n.model nmos nmos level=1\n.endl\n")
+        deck = _deck(
+            work_dir / "corner.cir",
+            "* pdk corner\n.lib models.lib tt\nV1 in 0 1\nR1 in 0 1k\n.op\n.end\n",
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "ngspice-lib-section", lint="off"),
+                state,
+            )
+        )
+
+        row = data["failures"][0]
+        assert row["code"] == "ngspice_lib_section"
+        assert row["evidence"]["ngbehavior"] == "kiltpsa"
+        assert "ngbehavior" in row["hint"]
+        assert "hsa" in row["hint"]
 
     async def test_missing_model_failure_names_the_unresolved_reference(
         self,

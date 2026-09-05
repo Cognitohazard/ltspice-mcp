@@ -134,6 +134,19 @@ _FAILURE_CODE_HINTS: dict[str, str] = {
         'Use inspect with a model query (mode:"search") to fuzzy-match against '
         "loaded libraries, or add a .lib/.include for it to the deck."
     ),
+    "missing_include": (
+        "The deck names an .include or .lib file the simulator could not open. "
+        "A relative path is resolved against the staged deck's directory, so "
+        "give an absolute path or put the file beside the circuit."
+    ),
+    "ngspice_lib_section": (
+        "ngspice is running in an LTspice/PSPICE-compatibility mode, which reads "
+        "a sectioned '.lib <file> <section>' as two plain includes and drops the "
+        "section — so the corner select came back as a missing file. Set "
+        '[simulator] ngbehavior = "hsa" in ltspice-mcp.toml (or '
+        "LTSPICE_MCP_NGBEHAVIOR=hsa) and restart the server, or add "
+        "'set ngbehavior=hsa' to a .spiceinit in the run directory."
+    ),
 }
 
 _ARTIFACT_SCHEMA: dict[str, Any] = {
