@@ -16,7 +16,7 @@ import pytest
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.ac_structure import analyze_ac_structure
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import schema_from_typeddict
+from ltspice_mcp.tools._schema import schema_from_typeddict
 from ltspice_mcp.tools.analysis import (
     AcStructureInput,
     AcStructureResponse,

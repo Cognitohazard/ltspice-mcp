@@ -188,7 +188,7 @@ class TestCircuitFileLock:
         # that .net holds ITS file lock, so the export guard must contend on
         # the .net lock too — not just the .asc.
         import ltspice_mcp.lib.filelock as lock_mod
-        from ltspice_mcp.tools._base import asc_export_lock
+        from ltspice_mcp.lib.deck_prep import asc_export_lock
 
         monkeypatch.setattr(lock_mod, "file_lock", lambda target: file_lock(target, timeout=0.2))
         t, release = _hold_lock_until_released(asc_file.with_suffix(".net"))
