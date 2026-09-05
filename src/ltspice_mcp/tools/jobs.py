@@ -3,8 +3,8 @@
 One tool over five actions, each with its own input model, so a caller
 addresses ``jobs`` and only that action's fields are accepted. The evaluation
 (``evaluate_jobs``) is separated from the presentation (``render_jobs_data``)
-because the two doors differ only by that presentation argument: the wire
-renders one page, the in-process door renders the complete result. Neither can
+because MCP and the Python API differ only by that presentation argument: the wire
+renders one page, the Python API renders the complete result. Neither can
 report a job the other did not read.
 
 The receipt this tool returns is the one ``run_experiments`` returns; its shape
@@ -84,7 +84,7 @@ _FOREIGN_WAIT_POLL_S = 2.0
 
 
 class JobsInput(ToolInput):
-    """The shared half of every jobs call, and the door the five actions enter by.
+    """The shared half of every jobs call, and the entry point for the five actions.
 
     ``JobsInput.model_validate({"action": ...})`` routes on ``action`` and
     returns that action's own model, so a caller may keep addressing this one
@@ -993,7 +993,7 @@ class JobsEvaluation:
 
     Every jobs response is rendered from one of these and nothing else. The MCP
     page and the Python API's complete dict are two presentations of the SAME
-    read, which is what keeps the two doors from disagreeing: reading the job
+    read, which is what keeps MCP and the Python API from disagreeing: reading the job
     again to render a second time would let a transition land between the reads
     and report two different jobs in one answer.
     """
@@ -1019,7 +1019,7 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
     """Execute one jobs action, reading the job exactly once.
 
     Returns facts only: no page, no hint, no budget. A failure is returned as
-    an evaluation carrying its error rather than raised, so both doors report
+    an evaluation carrying its error rather than raised, so MCP and the Python API report
     it through the same envelope.
     """
     try:
@@ -1101,9 +1101,9 @@ def render_jobs_data(
 ) -> _JobsBuilt:
     """Present one evaluation as a response payload and its text line.
 
-    ``limit`` is the presentation argument the two doors differ by: an integer
+    ``limit`` is the presentation argument MCP and the Python API differ by: an integer
     is one MCP page of that size (the budget ladder re-renders at smaller ones),
-    and ``None`` is the complete result the in-process door returns. Cancel
+    and ``None`` is the complete result the Python API returns. Cancel
     receipts are never paged either way — they are the acknowledgement itself,
     not a page over a larger set.
     """

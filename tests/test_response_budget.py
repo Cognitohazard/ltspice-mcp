@@ -831,10 +831,10 @@ def test_the_api_automatic_door_gets_no_server_default(state_no_sim: SessionStat
     """The door that promises complete results runs no presentation ladder.
 
     It refuses ``budget`` outright, so a response degraded there would route the
-    caller at the one field that door rejects — and its promise of complete
+    caller at the one field that interface rejects — and its promise of complete
     results would be false while the server quietly trimmed the presentation.
 
-    Sync rather than async because the door's own bridge runs the call to
+    Sync rather than async because the interface's own bridge runs the call to
     completion on its own loop, which is the thing under test.
     """
     path = _many_component_netlist(work_dir, 90)
@@ -846,10 +846,10 @@ def test_the_api_automatic_door_gets_no_server_default(state_no_sim: SessionStat
     state_no_sim.config.default_budget = 0
     disabled = api.inspect(queries=[copy.deepcopy(query)])
 
-    assert _stable(defaulted) == _stable(disabled), "the default trimmed the automatic door"
+    assert _stable(defaulted) == _stable(disabled), "the default trimmed the automatic mode"
 
-    # Same session, same query, the wire door: there the default does engage, so
-    # it is the door and not the configuration that decides.
+    # Same session, same query, MCP: there the default does engage, so
+    # it is the interface and not the configuration that decides.
     state_no_sim.config.default_budget = 500
     wire = asyncio.run(_inspect(state_no_sim, [copy.deepcopy(query)]))
     assert _observation(wire, "budget_truncated") is not None

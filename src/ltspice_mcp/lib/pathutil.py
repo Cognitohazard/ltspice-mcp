@@ -13,7 +13,7 @@ from ltspice_mcp.errors import PathSecurityError
 #: is resolved the way it always was: against the first allowed directory, and
 #: through ``Path.resolve()`` for anything relative in that list — which is the
 #: process working directory. The in-process ``Api`` sets it to its
-#: ``working_dir`` for the duration of each call, because that door lets the
+#: ``working_dir`` for the duration of each call, because that interface lets the
 #: caller name a working directory that is not their cwd; without this, the
 #: contract's own documented idiom (``Api(working_dir=D)`` plus a bare
 #: ``"opamp2.asc"``) looked in the wrong place and reported a path the caller

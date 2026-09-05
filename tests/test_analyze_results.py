@@ -1547,7 +1547,7 @@ async def test_default_rows_are_lean_and_fields_restores_the_whole_value(
 
 
 def test_unknown_projection_path_names_the_valid_row_keys(work_dir: Path):
-    """A path that cannot be rooted in a row is refused at the door, naming the
+    """A path that cannot be rooted in a row is refused at the interface, naming the
     keys that exist — an advertised lever that silently keeps nothing is worse
     than no lever."""
     with pytest.raises(ValidationError) as excinfo:
@@ -2190,7 +2190,7 @@ async def test_measurements_recipe_bins_the_distribution_on_request(
     """Binning is reachable from the consolidated door, not just the legacy tool.
 
     A Monte Carlo's spread is read off the histogram; hard-coding zero bins
-    here left one of the two doors unable to ask for it at all.
+    here left one of MCP and the Python API unable to ask for it at all.
     """
     raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
     shutil.copy(FIXTURES_DIR / "ltspice_step_when.log", raw.with_suffix(".log"))

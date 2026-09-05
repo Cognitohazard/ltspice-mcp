@@ -118,8 +118,8 @@ __all__ = [  # noqa: RUF022 - grouped in the contract's published order
     "compute_signal_stats",
     "compute_measurement_stats",
     "analyze_ac_structure",
-    # Variation values round-trip as SPICE literals ('5p'), so the code door
-    # needs the same reader the wire door parses them with.
+    # Variation values round-trip as SPICE literals ('5p'), so the Python API
+    # needs the same reader MCP parses them with.
     "parse_spice_value",
     "Quantity",
     "SearchDirection",

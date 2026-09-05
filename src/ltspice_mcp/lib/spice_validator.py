@@ -12,7 +12,7 @@ hit, not an exhaustive grammar. It grows as we find more.
 Implementation note: rules walk classified tokens (``MeasCard.function_calls``)
 rather than substring-matching regex. This keeps cases like
 ``.MEAS WHEN x=vdb_safe`` (a variable name that happens to start with
-``vdb``) from being false-flagged, and opens the door to checks the
+``vdb``) from being false-flagged, and opens the interface to checks the
 regex couldn't do — signal-reference resolution, analysis-kind
 mismatches, etc.
 """

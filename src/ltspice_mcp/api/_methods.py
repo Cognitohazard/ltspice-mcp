@@ -115,15 +115,15 @@ def _walk_fields(value: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[str, 
 #: somewhere worse than where it started.
 _DOOR_REMEDIES: dict[str, str] = {
     "budget": (
-        "budget is a wire-door presentation cap; this door returns complete "
+        "budget is an MCP presentation cap; the Python API returns complete "
         "results — remove the field"
     ),
     "dwell": (
-        "execution.wait_s is the wire door's response dwell; this door already "
+        "execution.wait_s is MCP's response dwell; the Python API already "
         "blocks — use wait=False for a fire-and-forget receipt, or api.wait(job_id)"
     ),
     "paging": (
-        "pagination controls belong to a single handler page; this door collects "
+        "pagination controls belong to a single handler page; the Python API collects "
         "every page — remove them, or pass raw_page=True to drive paging yourself"
     ),
 }
@@ -165,7 +165,7 @@ def _enforce_auto_door(arguments: Mapping[str, Any]) -> None:
 async def _anchored_on(base: Path, coroutine: Coroutine[Any, Any, _T]) -> _T:
     """Run one call with its relative path arguments taken from ``base``.
 
-    Applied inside the coroutine for the same reason the automatic-door flag is:
+    Applied inside the coroutine for the same reason the automatic-mode flag is:
     the path chokepoint reads the base from the engine loop's task context, and
     a set on the calling thread would never reach it.
     """
@@ -174,7 +174,7 @@ async def _anchored_on(base: Path, coroutine: Coroutine[Any, Any, _T]) -> _T:
 
 
 async def _through_auto_door(coroutine: Coroutine[Any, Any, _T]) -> _T:
-    """Run one automatic-mode coroutine with the door marked for the handlers.
+    """Run one automatic-mode coroutine with the interface marked for the handlers.
 
     Marked inside the coroutine, not around the ``_call`` that marshals it: the
     handlers read the flag from the engine loop's task context, and a set on the
@@ -391,7 +391,7 @@ async def _collect_inspect(
 ) -> dict[str, Any]:
     initial = await _handler_page(inspect_tools.handle_inspect, request, state)
     # ``queries`` is SkipValidation, so its items are whatever the caller
-    # passed — dicts on both doors, models when Python code builds them.
+    # passed — dicts on MCP and the Python API, models when Python code builds them.
     # Dumping the whole request makes pydantic serialize each dict against the
     # union member it was declared as, which warns to stderr on every
     # successful call; serialize the models and take the dicts as they are.
@@ -474,8 +474,8 @@ async def _collect_jobs(
 ) -> dict[str, Any]:
     """Collect one jobs action: the whole circuit list, or a complete receipt.
 
-    One evaluation, rendered complete. The wire door renders the same
-    evaluation as a page — the doors differ by that presentation argument and
+    One evaluation, rendered complete. The MCP renders the same
+    evaluation as a page — MCP and the Python API differ by that presentation argument and
     by nothing else, so neither can report a job the other did not read.
     """
     evaluation = await jobs.evaluate_jobs(request, state)
@@ -556,7 +556,7 @@ class ApiMethodsMixin(ABC):
     ) -> _T:
         """Marshal one call with relative paths anchored on the working dir.
 
-        This door lets the caller name a working directory that is not their
+        The Python API lets the caller name a working directory that is not their
         cwd, so ``Api(working_dir=D)`` plus a bare ``"opamp2.asc"`` — the idiom
         the contract documents — has to look in ``D``. Anchoring here rather
         than per path field means every op, and every path field a future op
@@ -584,7 +584,7 @@ class ApiMethodsMixin(ABC):
         """Validate one operation's arguments and marshal its chosen mode.
 
         ``raw_page`` selects a single handler page over the collected result and
-        is also what admits the wire-only controls the automatic door rejects.
+        is also what admits the wire-only controls the automatic mode rejects.
         """
         self._check_process_and_thread()
         if not raw_page:

@@ -445,7 +445,7 @@ def _reconcile_restart(job: ExperimentJob, *, liveness: OwnerLiveness) -> None:
             status="failed",
             failure_code="server_restarted",
             # Name the mechanism the caller can act on — the owning process
-            # exited — never "the server": the store cannot see which door
+            # exited — never "the server": the store cannot see which interface
             # owned the job, and for the in-process API the owner is the
             # caller's own script (a wait=False submission from a process
             # that exits leaves exactly this shape).

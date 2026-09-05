@@ -133,7 +133,7 @@ async def test_capabilities_keys_present(cap_state: SessionState):
     assert "ltspice" in data["simulators"]
     assert data["simulators"]["ltspice"]["available"] is True
     assert data["exporter_available"] is True
-    # The in-process door's confirmation destination: the interpreter that
+    # The Python API's confirmation destination: the interpreter that
     # has the package, and whether it is a durable path or a throwaway one.
     python_facts = data["python"]
     for key in ("executable", "install_kind", "ephemeral", "package_location"):
