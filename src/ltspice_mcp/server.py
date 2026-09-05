@@ -397,7 +397,16 @@ async def call_tool(
 
     registered = state.tool_dispatch.get(name)
     if registered is None:
-        return _tool_error(f"Unknown tool: {name}")
+        # A name this server does not serve is a lookup failure, not a tool
+        # failure: there is no tool to attribute an error-flagged result to,
+        # so it answers a JSON-RPC invalid-params error the way an unknown
+        # resource URI does. The message names what the caller asked for and
+        # the tools that do exist, which is the whole recovery.
+        available = ", ".join(state.tool_dispatch)
+        raise MCPError(
+            types.INVALID_PARAMS,
+            f"Unknown tool: {name}. Available tools: {available}.",
+        )
 
     # Set up MCP protocol logging for this request.
     # Handlers and services call mcp_log() which reads this ContextVar —
