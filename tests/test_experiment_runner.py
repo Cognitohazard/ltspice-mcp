@@ -325,7 +325,7 @@ class TestLogopinfoInjection:
     """An LTspice ``.op`` case must reach the simulator with ``.options
     logopinfo``, or its log carries no per-device operating-point block and
     gm/vth/vdsat read back empty. The experiments path is the consolidated
-    profile's only execution door, so the injection the single-run path already
+    profile's only execution path, so the injection the single-run path already
     does has to happen here too — at submit time, on a copy, because the staged
     deck and its recorded digest are what replay and provenance compare against.
     """

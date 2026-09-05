@@ -828,7 +828,7 @@ async def _inspect(state: SessionState, queries: list[dict[str, Any]], **extra: 
 
 
 def test_the_api_automatic_door_gets_no_server_default(state_no_sim: SessionState, work_dir: Path):
-    """The door that promises complete results runs no presentation ladder.
+    """The interface that promises complete results runs no presentation ladder.
 
     It refuses ``budget`` outright, so a response degraded there would route the
     caller at the one field that interface rejects — and its promise of complete
@@ -859,7 +859,7 @@ def test_the_api_automatic_door_carries_no_budget_route(
     state_no_sim: SessionState, work_dir: Path
 ):
     """The note's route is "ask again with a larger 'budget'" — a field this
-    door refuses. Checked on jobs(list), the collected surface that keeps the
+    API refuses. Checked on jobs(list), the collected surface that keeps the
     observations its pages carried."""
     for index in range(6):
         job = _batch_with_runs(state_no_sim, 20)
@@ -867,11 +867,11 @@ def test_the_api_automatic_door_carries_no_budget_route(
         state_no_sim.all_jobs[job.job_id] = job
     state_no_sim.config.default_budget = 100
 
-    door = SyncApi(state_no_sim).jobs(action="list")
+    complete = SyncApi(state_no_sim).jobs(action="list")
     wire = asyncio.run(_jobs(state_no_sim, action="list"))
 
     assert _observation(wire, "budget_truncated") is not None
-    assert _observation(door, "budget_truncated") is None
+    assert _observation(complete, "budget_truncated") is None
 
 
 @pytest.mark.asyncio
