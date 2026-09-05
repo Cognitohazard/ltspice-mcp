@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import logging
 import multiprocessing
@@ -31,6 +32,7 @@ from ltspice_mcp.lib.experiment_runner import (
     ExperimentRunner,
     ExperimentRunRequest,
     IdempotencyConflictError,
+    StagedDecks,
     canonical_fingerprint,
 )
 from ltspice_mcp.lib.experiment_types import (
@@ -1000,6 +1002,83 @@ class TestRequestBarrier:
 
         with pytest.raises(IdempotencyConflictError, match="inconsistent coordinator"):
             await _run_barrier(request)
+
+    async def test_a_claim_that_fails_after_staging_discards_the_run_tree(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Staged, then refused: the tree belongs to no job and no record names it.
+
+        Provenance comes from the record that claims an artifact, so a tree
+        left in the box-wide runs root is exactly what a later inventory of
+        that folder mistakes for its own work.
+        """
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        job_id = "exp_staged_then_failed"
+        run_dir = Store(work_dir).run_dir(job_id)
+
+        async def stage() -> StagedDecks:
+            staged = Store(work_dir).staged_deck_root(job_id, "dut")
+            staged.mkdir(parents=True, exist_ok=True)
+            (staged / "deck.cir").write_text(".op\n.end\n")
+            return StagedDecks(cases=[_case(circuit)], sources=[_source(circuit)])
+
+        def unwritable_index(*_args, **_kwargs):
+            raise OSError(errno.EROFS, "read-only file system")
+
+        monkeypatch.setattr(experiment_store, "save_request_index", unwritable_index)
+        request = ExperimentRunRequest(
+            state=state_no_sim,
+            request_id="staged-then-failed",
+            fingerprint="a" * 64,
+            stage=stage,
+            simulator="FakeSim",
+            job_id=job_id,
+        )
+
+        with pytest.raises(OSError, match="read-only file system"):
+            await _run_barrier(request)
+
+        assert not run_dir.exists(), sorted(path.name for path in run_dir.rglob("*"))
+
+    async def test_a_failed_claim_never_deletes_a_tree_a_record_claims(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The refusal, not the cleanup: a claimed tree is somebody's."""
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        job_id = "exp_already_recorded"
+        experiment_store.save_job(_job(work_dir, circuit, job_id=job_id))
+        run_dir = Store(work_dir).run_dir(job_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "case_0.raw").write_bytes(b"Title: mock")
+
+        async def stage() -> StagedDecks:
+            return StagedDecks(cases=[_case(circuit)], sources=[_source(circuit)])
+
+        def unwritable_index(*_args, **_kwargs):
+            raise OSError(errno.EROFS, "read-only file system")
+
+        monkeypatch.setattr(experiment_store, "save_request_index", unwritable_index)
+        request = ExperimentRunRequest(
+            state=state_no_sim,
+            request_id="a-different-request",
+            fingerprint="b" * 64,
+            stage=stage,
+            simulator="FakeSim",
+            job_id=job_id,
+        )
+
+        with pytest.raises(OSError, match="read-only file system"):
+            await _run_barrier(request)
+
+        assert (run_dir / "case_0.raw").is_file()
 
     def test_unknown_drift_code_still_refuses_the_replay(
         self,
