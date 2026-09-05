@@ -12,8 +12,11 @@ one.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
+import itertools
 import multiprocessing as mp
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -85,19 +88,30 @@ def _staged_deck_dirs(work_dir: Path) -> list[Path]:
     return sorted(p for p in runs.glob("*/staged") if p.is_dir())
 
 
-def _spy_on_staging(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+def _spy_on_staging(
+    monkeypatch: pytest.MonkeyPatch, entered: asyncio.Event | None = None
+) -> list[Path]:
     """Record the staging root of every deck set a submission actually stages.
 
     The list is the whole history, not the directories left at the end: a
     duplicate that stages and is then cleaned up still shows up here.
+
+    ``entered`` fires as the first deck set begins staging. Staging happens
+    inside the submission's request gate, so a caller that waits for it before
+    submitting is provably queued on that gate rather than arriving whenever
+    the scheduler ran it. The spy runs in a worker thread, hence the
+    loop-thread hand-off.
     """
     from ltspice_mcp.tools import experiments as experiments_module
 
     real = experiments_module.stage_deck
     staged: list[Path] = []
+    loop = asyncio.get_running_loop() if entered is not None else None
 
     def spy(source_path: Path, staging_root: Path, *args: Any, **kwargs: Any):
         staged.append(Path(staging_root))
+        if loop is not None and entered is not None:
+            loop.call_soon_threadsafe(entered.set)
         return real(source_path, staging_root, *args, **kwargs)
 
     monkeypatch.setattr(experiments_module, "stage_deck", spy)
@@ -177,29 +191,46 @@ async def test_identical_request_id_submits_one_job(
     The duplicate waits on the request gate and replays what it finds there, so
     only one submission ever stages: the deck set that exists is the one the
     surviving job claims, not the survivor of two that were staged.
+
+    The duplicate is released once the first submission is staging, so it is
+    provably inside the gate's queue while the first holds it. Which of the two
+    responses carries the replay note is deliberately not asserted: the note is
+    a durable fact on the shared job record, so every receipt rendered after the
+    duplicate arrives carries it — including the original submitter's, whose
+    dwell may still be running. What the record must not do is accumulate a
+    second copy of it, which is asserted below.
     """
     submissions: list[str] = []
     fake_simulator(monkeypatch, submissions)
-    staged = _spy_on_staging(monkeypatch)
+    staging_started = asyncio.Event()
+    staged = _spy_on_staging(monkeypatch, staging_started)
     deck = _deck(work_dir / "same-request.cir")
     payload = _run_payload(deck, "same-request")
 
+    async def duplicate() -> dict[str, Any]:
+        await staging_started.wait()
+        return await _call(state_with_sim, "run_experiments", dict(payload))
+
     first, second = await asyncio.gather(
         _call(state_with_sim, "run_experiments", dict(payload)),
-        _call(state_with_sim, "run_experiments", dict(payload)),
+        duplicate(),
     )
 
     assert first.get("error") is None, first.get("error")
     assert second.get("error") is None, second.get("error")
     assert first["job_id"] == second["job_id"]
     assert [p.stem for p in _job_records(work_dir)] == [first["job_id"]]
-    # The replay says so rather than looking like a second run.
+    # The replay says so rather than looking like a second run — and says it
+    # once, however many callers read the record after it was noted.
     replayed = [
         d
         for d in (first, second)
         if any(o["code"] == "idempotent_replay" for o in d["observations"])
     ]
-    assert len(replayed) == 1
+    assert replayed, "neither response reported the duplicate as a replay"
+    record = state_with_sim.experiment_jobs[first["job_id"]]
+    notes = [o for o in record.observations if o.get("code") == "idempotent_replay"]
+    assert len(notes) == 1, f"the replay was noted {len(notes)} times on one record"
     assert len(submissions) == 1, f"the loser also reached the simulator: {submissions}"
     assert len(staged) == 1, f"both submissions staged a deck set: {staged}"
     assert first["job_id"] in staged[0].parts
@@ -305,19 +336,54 @@ async def test_same_request_id_different_payload_conflicts(
 _EXPORT_LINES = ["V1 in 0 1\n", "R1 in 0 1k\n", ".op\n", ".end\n"]
 
 
-def _slow_exporter(state: SessionState) -> None:
+class _ExportHandoffs:
+    """The three hand-offs that sequence two exports of one schematic.
+
+    Between one export releasing the export lock and the next one reopening the
+    shared ``.net`` there is a window in which the file is empty. Left to the
+    scheduler that window is microseconds wide, so a test of what an export
+    reports about its own output passes or fails by luck. These events make the
+    ordering explicit instead.
+    """
+
+    def __init__(self) -> None:
+        # The first export has begun writing: the second caller may start, and
+        # will queue on the export lock the first one holds.
+        self.exporting = asyncio.Event()
+        # The second export has reopened the .net and truncated it, so the
+        # window is open right now.
+        self.truncated = asyncio.Event()
+        # The first caller has produced its response; the second export may
+        # stop holding the file empty and write its lines.
+        self.answered = threading.Event()
+
+
+def _slow_exporter(state: SessionState, handoffs: _ExportHandoffs) -> None:
     """An exporter that writes its netlist in pieces, like the real subprocess.
 
-    LTspice writes the ``.net`` over time. Two unserialised exports of one
-    schematic would interleave into a torn file; this stand-in makes that
-    visible instead of leaving it to timing luck with a fast write.
+    LTspice truncates ``<name>.net`` the moment it opens it and fills it over
+    the life of the subprocess. Two unserialised exports of one schematic would
+    interleave into a torn file, and an export that measures its own output
+    after releasing the export lock reads whatever the next one has written so
+    far. This stand-in reproduces both, and holds the second export at zero
+    bytes until the first caller has answered so that "measured after the lock"
+    yields an empty file rather than a partial one that may happen to be whole
+    again. It runs in a worker thread, hence the loop-thread hand-offs.
     """
+    loop = asyncio.get_running_loop()
+    exports = itertools.count()
 
     class _Exporter:
         @staticmethod
         def create_netlist(path: str, timeout: float | None = None) -> str:
+            index = next(exports)
             netlist = Path(path).with_suffix(".net")
             with netlist.open("w", encoding="utf-8") as handle:
+                if index == 0:
+                    loop.call_soon_threadsafe(handoffs.exporting.set)
+                else:
+                    loop.call_soon_threadsafe(handoffs.truncated.set)
+                    assert handoffs.answered.wait(30), "the first export never answered"
                 for line in _EXPORT_LINES:
                     handle.write(line)
                     handle.flush()
@@ -327,11 +393,48 @@ def _slow_exporter(state: SessionState) -> None:
     state.available_simulators["ltspice"] = _Exporter
 
 
+def _hold_first_export_open_past_its_lock(
+    monkeypatch: pytest.MonkeyPatch, handoffs: _ExportHandoffs
+) -> None:
+    """Keep the real export lock and park the first export just past its exit.
+
+    The first export continues only once a peer has actually truncated the
+    ``.net``. Anything it still has left to read about its own output is then
+    read inside that window every time, so where the export is measured stops
+    being a scheduling accident and becomes the thing the test decides.
+    """
+    from ltspice_mcp.tools import verify as verify_module
+
+    real = verify_module.asc_export_lock
+    locks = itertools.count()
+
+    @contextlib.asynccontextmanager
+    async def spy(asc_path: Path):
+        index = next(locks)
+        async with real(asc_path):
+            yield
+        if index == 0:
+            await asyncio.wait_for(handoffs.truncated.wait(), 30)
+
+    monkeypatch.setattr(verify_module, "asc_export_lock", spy)
+
+
 async def test_simultaneous_sidecar_exports_leave_one_complete_netlist(
-    asc_state: SessionState, asc_file: Path
+    asc_state: SessionState, asc_file: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """Both exports succeed and the .net is one whole export, never a torn one."""
-    _slow_exporter(asc_state)
+    """Both exports succeed and each reports the whole netlist it wrote.
+
+    The second call starts once the first is inside the exporter, so it is
+    provably queued on the export lock while the first holds it, and the first
+    call is held just past its lock release until the second has truncated the
+    file. Both orderings are therefore fixed, and the digest assertion becomes a
+    statement about where an export measures itself: read the file after the
+    lock is released and the digest describes the peer's truncation rather than
+    this export's own output, while ``ok`` still says the export succeeded.
+    """
+    handoffs = _ExportHandoffs()
+    _slow_exporter(asc_state, handoffs)
+    _hold_first_export_open_past_its_lock(monkeypatch, handoffs)
     net_path = asc_file.with_suffix(".net")
 
     payload = {
@@ -339,10 +442,18 @@ async def test_simultaneous_sidecar_exports_leave_one_complete_netlist(
         "checks": ["export"],
         "export_to": "sidecar",
     }
-    first, second = await asyncio.gather(
-        _call(asc_state, "verify_circuit", dict(payload)),
-        _call(asc_state, "verify_circuit", dict(payload)),
-    )
+
+    async def opener() -> dict[str, Any]:
+        try:
+            return await _call(asc_state, "verify_circuit", dict(payload))
+        finally:
+            handoffs.answered.set()
+
+    async def contender() -> dict[str, Any]:
+        await handoffs.exporting.wait()
+        return await _call(asc_state, "verify_circuit", dict(payload))
+
+    first, second = await asyncio.gather(opener(), contender())
 
     for data in (first, second):
         assert data["export"]["ok"] is True, data
