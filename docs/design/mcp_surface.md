@@ -549,7 +549,8 @@ rules and to `dropped_wire`; `dropped_wire` carries no truncation observation.
 ```
 {kind: "capabilities"}
     simulators and versions, exporter presence, dialects, persistence,
-    allowed roots, profile, limits, linter_version
+    allowed roots, profile, limits, linter_version, and the startup
+    diagnostics that say whether this server started degraded
 {kind: "symbols", path?, filter?, cursor?}
     legal symbol names and resolution order; `path` adds schematic-local
     directories to the reported precedence
