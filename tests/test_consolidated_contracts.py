@@ -603,29 +603,27 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
-    "jobs": 5253,
+    "jobs": 5030,
     # Twenty-odd recipe branches; the largest schema on the surface. The
     # description carries the recipe roster with plain synonyms, because a host
     # that matches a request against tool descriptions cannot otherwise route
     # "phase margin" or "distortion" to this tool at all.
-    "analyze_results": 20106,
+    "analyze_results": 18500,
     # Seven query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
-    "inspect": 7352,
-    # The typed op union — eleven ops, each its own branch — plus the render
-    # and compare views. It advertises BOTH spellings of those two: the
-    # objects, and the flat fields retained as aliases for 0.6. That
-    # compatibility window is a measurable part of this number, and it comes
-    # back when the aliases go.
-    "edit_schematic": 14071,
-    # Checks, the shared render policy and compare spec (each with the
-    # verify-only fields on a subclass), and the flat compare fields retained
-    # as aliases. The checks are named in the tool's own description because a
-    # caller cannot ask for what the description does not say it looks at.
-    "verify_circuit": 5500,
+    "inspect": 7000,
+    # The typed op union — eleven ops, each its own branch — plus the compare
+    # object, in its one spelling. Rendering lives on verify_circuit, whose
+    # policy is the more capable one, so no render argument is advertised here.
+    "edit_schematic": 11400,
+    # Checks, the render policy and the compare spec (each with the
+    # verify-only fields on a subclass), each in one spelling. The checks are
+    # named in the tool's own description because a caller cannot ask for what
+    # the description does not say it looks at.
+    "verify_circuit": 4850,
     # Job/case addressing, windowing, and delivery flags.
-    "plot_waveform": 3308,
+    "plot_waveform": 3200,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477

@@ -79,7 +79,17 @@ def _assert_schema(result) -> dict:
     return data
 
 
+#: Comparison controls this file writes as loose keywords, packed into the one
+#: ``compare`` object the tool takes. The spellings the tool accepts are the
+#: subject of tests/test_render_compare_spellings.py; here the comparison
+#: BEHAVIOUR is, so the call sites stay readable.
+_COMPARE_KEYS = {"reference": "reference", "compare_mode": "mode", "anchors": "anchors"}
+
+
 async def _run(state: SessionState, **kw) -> dict:
+    compare = {key: kw.pop(flat) for flat, key in _COMPARE_KEYS.items() if flat in kw}
+    if compare:
+        kw["compare"] = compare
     result = await handle_verify_circuit(VerifyCircuitInput.model_validate(kw), state)
     return _assert_schema(result)
 
@@ -843,30 +853,15 @@ def test_api_types_exports_the_models_errors_name():
     # matter which class had been re-exported there.
     assert api_types.VerifyRenderPolicy is _model_of(VerifyCircuitInput, "render")
     assert api_types.VerifyCompareSpec is _model_of(VerifyCircuitInput, "compare")
-    assert api_types.RenderPolicy is _model_of(EditSchematicInput, "render")
     assert api_types.CompareSpec is _model_of(EditSchematicInput, "compare")
+    # RenderPolicy is exported as the base VerifyRenderPolicy subclasses; only
+    # verify_circuit takes a render, so no tool field validates against it.
+    assert issubclass(api_types.VerifyRenderPolicy, api_types.RenderPolicy)
     for name in api_types.__all__:
         assert getattr(api_types, name, None) is not None, name
 
 
-@pytest.mark.parametrize(
-    ("tool", "render_model", "compare_model", "extra"),
-    [
-        ("VerifyCircuitInput", "VerifyRenderPolicy", "VerifyCompareSpec", {"path": "divider.asc"}),
-        (
-            "EditSchematicInput",
-            "RenderPolicy",
-            "CompareSpec",
-            {
-                "target": "divider.asc",
-                "ops": [{"op": "add_net_label", "net": "vout", "pin": "R1.2"}],
-            },
-        ),
-    ],
-)
-def test_the_exported_policy_models_are_accepted_by_their_tool(
-    tool: str, render_model: str, compare_model: str, extra: dict[str, Any]
-):
+def test_the_exported_policy_models_are_accepted_by_their_tool():
     """An exported argument model must validate on the field it is exported for.
 
     verify_circuit takes VerifyRenderPolicy, a SUBCLASS of the shared
@@ -877,10 +872,19 @@ def test_the_exported_policy_models_are_accepted_by_their_tool(
     """
     from ltspice_mcp.api import types as api_types
 
-    args = getattr(api_types, tool)(
-        **extra,
-        render=getattr(api_types, render_model)(format="svg"),
-        compare=getattr(api_types, compare_model)(reference="ref.cir"),
+    verify = api_types.VerifyCircuitInput(
+        path="divider.asc",
+        render=api_types.VerifyRenderPolicy(format="svg"),
+        compare=api_types.VerifyCompareSpec(reference="ref.cir"),
     )
-    assert args.render is not None and args.render.format == "svg"
-    assert args.compare is not None and args.compare.reference == "ref.cir"
+    assert verify.render is not None and verify.render.format == "svg"
+    assert verify.compare is not None and verify.compare.reference == "ref.cir"
+
+    edit = api_types.EditSchematicInput.model_validate(
+        {
+            "target": "divider.asc",
+            "ops": [{"op": "add_net_label", "net": "vout", "pin": "R1.2"}],
+            "compare": api_types.CompareSpec(reference="ref.cir"),
+        }
+    )
+    assert edit.compare is not None and edit.compare.reference == "ref.cir"

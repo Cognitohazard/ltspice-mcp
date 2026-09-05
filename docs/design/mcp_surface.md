@@ -28,15 +28,16 @@ Canonical loops:
 
 ```
 netlist loop:   write deck (natively) -> run_experiments -> analyze_results -> edit natively -> ...
-schematic new:  inspect(symbols) -> edit_schematic{base:"blank", ops, compare, render} -> revise ops -> done
+schematic new:  inspect(symbols) -> edit_schematic{base:"blank", ops, compare} -> revise ops -> done
 schematic edit: inspect existing .asc -> edit_schematic{ops, expected_sha256} -> verify_circuit
 debug loop:     verify_circuit(lint) -> fix natively -> run_experiments -> analyze_results -> inspect(net)
 long runs:      run_experiments (receipt) -> jobs(wait) -> analyze_results
 ```
 
 Happy-path call counts: characterization is 2-3 calls per design iteration; a
-new schematic is 2 calls (inspect symbols, then build with a reference netlist
-and a render); debugging is lint, fix natively, run, analyze.
+new schematic is 2 calls (inspect symbols, then build against a reference
+netlist), plus a third if you want to look at it (`verify_circuit` with a
+render); debugging is lint, fix natively, run, analyze.
 
 ---
 
@@ -179,7 +180,7 @@ defaults, `required` and `$defs` are untouched, so a client can still build a
 valid call, and the models are not filtered, so the server accepts exactly what
 it did. It is an explicit transform (`strip_argument_descriptions` in
 `tools/_schema.py`, applied in `get_tools()`), never a wording rule, and on the
-current surface it takes roughly 40% off what a session loads. Both modes are
+current surface it takes roughly 45% off what a session loads. Both modes are
 *static* listings: the same for every connection and unchanged by anything
 called on one, which is what the 2026-07-28 specification requires of
 `tools/list`. Nothing keys on the mode below the listing — dispatch,
@@ -554,36 +555,39 @@ expected_sha256     REQUIRED whenever target exists, under either base;
 ops                 list[Op] — Appendix A.4
 compare             {reference, anchors?, rtol} — post-commit netlist
                     compare, inside the transaction
-render              {format: "png"|"svg", scale?, max_pixels?}; `true` selects
-                    the default policy, `false` draws nothing even if
-                    return_views asked. Passing it also asks for the render
-                    view
 dry_run             resolve, validate and return geometry; no write
-write_failed_draft  quarantine a failed batch to
-                    <target>.draft-<build_id>.asc (build_id server-assigned
-                    and echoed)
-return_views        subset ["touched", "pin_legend", "render"],
-                    default ["touched"]
+return_views        subset ["touched", "pin_legend"], default ["touched"]
 view_cursors        {label_only_pins?, pin_legend?, touched?} — each a
                     next_cursor from a previous page of that view
-budget              int | null
-
-retained aliases (0.6; removed in 0.7)
-reference           = compare.reference
-render_format       = render.format
-render_scale        = render.scale
+view_limit          page size for the paginated views (default 100)
 ```
 
-`render` and `compare` are the same two models `verify_circuit` takes, so "draw
-this sheet" and "compare it against that netlist" are written the same way on
-both tools. The flat fields this tool shipped with stay accepted for 0.6 and map
-onto the objects; passing both spellings of the same thing is refused rather
-than resolved one way, because there is no defined precedence between them.
+`compare` is the same model `verify_circuit` takes, so "compare it against that
+netlist" is written the same way on both tools. It is the only spelling: the
+flat `reference` this tool shipped with said nothing the object did not, and a
+call carrying both was refused rather than resolved, so the second spelling
+could only ever be the same call written a longer way.
 
-`touched` is the pin/net table scoped to the references the op batch addressed.
-The whole-sheet `pin_legend` was about 2,700 characters of unrequested default
-per edit, so it stays available only by explicit request. An `occupancy` grid
-view was specified and then measured: both arms of the comparison produced zero
+**This tool does not draw.** `verify_circuit` owns rendering, and its policy is
+the more capable one — a pixel cap, an inline delivery channel, and a
+render-only mode that skips the checks. The `render` argument and render view
+here were a second, weaker spelling of the same thing, so an edit that also
+wants a picture is now one `verify_circuit` call away from the better one.
+
+There is no `write_failed_draft`. A failed batch writes nothing by design, and
+the response names the stage that failed and why; the would-be content is the
+caller's own ops applied to the sheet it named, both of which it still holds. A
+quarantined copy beside the target added a file to clean up rather than a fact
+to act on.
+
+`touched` is the pin/net table scoped to the references the op batch addressed,
+and it is what every recorded call asked for. The whole-sheet `pin_legend` was
+about 2,700 characters of unrequested default per edit, so it stays available
+only by explicit request — and it stays, because nothing else on the surface
+produces a pin-to-net table for a whole sheet: `inspect(kind: "components",
+detail: "full")` gives pin coordinates without net names, and
+`inspect(kind: "net")` answers one net at a time. An `occupancy` grid view was
+specified and then measured: both arms of the comparison produced zero
 placement defects — the transaction guards already prevent the defect class —
 and the grid arm was strictly less efficient, so the variant was removed from
 the enum rather than shipped.
@@ -650,7 +654,8 @@ symbol but cannot define a new block) and a whole-document validation pass.
 
 Output: `outcome, target, sha256, build_id, stages[], netlist?, verification?,
 wiring {pins_total, pins_wired, pins_label_only, label_only_pins: Page},
-views?, warnings, failures, observations, artifacts, hint`.
+views {touched?: Page, pin_legend?: Page}, warnings, failures, observations,
+artifacts, hint`.
 
 ### 3.5 `verify_circuit` — gate
 
@@ -665,22 +670,17 @@ render        {format: "png"|"svg", scale?, max_pixels?,
               `true` selects the default policy; `false` or omitted renders
               nothing
 export_to     "managed" (default) | "sidecar"
-budget        int | null
-
-retained aliases (0.6; removed in 0.7)
-reference     = compare.reference
-compare_mode  = compare.mode
-anchors       = compare.anchors
-rtol          = compare.rtol
 ```
 
-`compare` and `render` are shared with `edit_schematic`. The shared halves —
-`{reference, anchors, rtol}` and `{format, scale, max_pixels}` — mean the same
-thing on both tools; `compare.mode` and `render`'s `mode`/`delivery` are on a
-subclass here because only this tool has two comparisons to choose between,
-checks to skip, and an image channel to deliver into. A tool never advertises a
-field it cannot honour. The flat spellings stay accepted for 0.6 and map onto
-the objects; passing both is refused rather than resolved one way.
+`compare` is shared with `edit_schematic`. The shared half —
+`{reference, anchors, rtol}` — means the same thing on both tools;
+`compare.mode` is on a subclass here because only this tool has two comparisons
+to choose between, and `render`'s `mode`/`delivery` because only this tool has
+checks to skip and an image channel to deliver into. A tool never advertises a
+field it cannot honour, which is also why `render` is here and not on
+`edit_schematic`. There is one spelling of each: the flat
+`reference`/`compare_mode`/`anchors`/`rtol` this tool shipped with said nothing
+the object did not, and a call carrying both was refused rather than resolved.
 
 `managed` export is non-destructive: it exports into a staged scratch directory
 and leaves the caller's files untouched. `sidecar` overwrites the deck's `.net`
@@ -810,16 +810,17 @@ than merely have it tolerated:
 | tool | field | added spelling |
 |-|-|-|
 | `verify_circuit` | `render` | `true` = default policy; `false`/omitted = no render |
-| `edit_schematic` | `render` | the same, plus `false` withdrawing the render view |
 | `analyze_results` | `include` | a bare list of flag names becomes `{name: true}` |
 | `analyze_results` | `include.per_run` | `true` = the default page |
 | `run_experiments` | `analyze.include` | the same two spellings |
 
-The flat `render_format`/`render_scale`/`reference` on `edit_schematic` and
-`reference`/`compare_mode`/`anchors`/`rtol` on `verify_circuit` are **retained
-aliases**, advertised alongside the objects for 0.6 and removed in 0.7. Both
-spellings of one argument in a single call is refused, naming the object as the
-one to keep.
+These are shorthands for a value, not second names for an argument. There are
+no argument aliases on the surface: where one existed — the flat
+`render_format`/`render_scale`/`reference` on `edit_schematic`, the flat
+`reference`/`compare_mode`/`anchors`/`rtol` on `verify_circuit` — it said
+nothing the object form did not, and a call carrying both was refused rather
+than resolved, so it could only ever be the same call written a longer way. The
+object form is the only spelling.
 
 An unrecognized flag name still fails, enumerating the valid set and naming
 `fields` as the one that takes row paths rather than a boolean. A `render`
