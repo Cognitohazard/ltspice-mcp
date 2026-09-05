@@ -30,7 +30,7 @@ def _all_profile_defs() -> list[types.Tool]:
 def _all_profile_declared_defs() -> list[types.Tool]:
     """Union of DISPATCH-side definitions across every profile, deduped.
 
-    The wire tool list drops outputSchema (followups item 30); the declared
+    The tool list sent over the wire drops outputSchema; the declared
     output contract lives on the dispatch definitions, which is what the
     conformance hook validates emissions against. Contract pins on output
     shapes must read this side, not the advertised list."""
@@ -382,8 +382,8 @@ class TestSchemaPostProcessing:
     """Verify that Pydantic-generated schemas are cleaned for MCP compatibility."""
 
     def test_every_ref_resolves_within_its_own_schema(self):
-        """Input schemas keep $defs (followups item 30) — every $ref must be
-        internal and resolve against that same schema's $defs, in every
+        """Input schemas keep $defs instead of inlining them — every $ref must
+        be internal and resolve against that same schema's $defs, in every
         profile. A dangling or external ref is a schema a strict client
         cannot resolve, and at least one schema must actually use $defs so a
         silent return to inlining fails here instead of quietly re-bloating."""
@@ -493,8 +493,8 @@ class TestSchemaPostProcessing:
             pytest.fail("analyze_results is not registered in any profile")
 
     def test_wire_tool_list_omits_output_schema(self):
-        """The advertised list carries no outputSchema (followups item 30 —
-        it was 84% of `jobs`); the dispatch definition keeps the declared
+        """The advertised list carries no outputSchema (it was 84% of the
+        `jobs` entry); the dispatch definition keeps the declared
         shape so the conformance hook still enforces it. Both directions
         pinned, so neither side can silently regress."""
         declared = {t.name: t for t in _all_profile_declared_defs()}
@@ -551,9 +551,9 @@ class TestSchemaPostProcessing:
             )
 
     def test_nested_models_resolve_through_defs(self):
-        """Nested submodels are $refs into the schema's own $defs (followups
-        item 30) — the composition contract is that they resolve to full
-        object schemas a local-ref-following client can read."""
+        """Nested submodels are $refs into the schema's own $defs — the
+        composition contract is that they resolve to full object schemas a
+        local-ref-following client can read."""
         defs, _ = get_tools_for_profile("consolidated")
         experiment_tools = [d for d in defs if d.name == "run_experiments"]
         assert experiment_tools, "run_experiments not found"

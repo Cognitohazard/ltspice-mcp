@@ -32,22 +32,20 @@ ImageFormat = Literal["png", "svg"]
 # general; absolute token figures are per-drawing, so read `estimated_tokens`
 # off a given render rather than assuming a number.
 #
-# The default is 1.5x on the strength of a three-arm blinded study
-# (benchmarks/render_gate/scale_study: 3.0x / 2.0x / 1.5x, nine fresh raters,
-# frozen rubric, sealed arm key). Recall did not degrade at any tested scale:
-# every rater found every seeded defect in every fixture in every arm. So the
-# 4x cost saving from 3.0x costs nothing measurable here.
+# The default is 1.5x. Seven schematics were rendered at 3.0x, 2.0x and 1.5x
+# with defects deliberately planted in them, and independent readers found every
+# planted defect at every scale — so the 4x cost saving from 3.0x costs nothing
+# measurable on drawings like those.
 #
-# Read that for exactly what it is. Recall saturated at 100%, so the gate had no
-# discriminating power in this run — it measured a ceiling, not a floor. It did
-# not show that 1.5x is enough in general; it showed that these fixtures cannot
-# tell the three scales apart. The legibility floor is unlocated and sits at or
-# below 1.5x. Finding it needs harder fixtures or lower scales, not a rerun of
-# the same one.
+# Read that for exactly what it is. Detection was perfect at all three scales,
+# so the comparison measured a ceiling, not a floor. It did not show that 1.5x
+# is enough in general; it showed that those seven drawings cannot tell the
+# three scales apart. The legibility floor is unlocated and sits at or below
+# 1.5x. Finding it needs harder drawings or lower scales.
 #
 # The residual to watch is stroke width, not density. Crowding is a property of
-# the layout and does not change with scale, and feature size turned out to be
-# fixture-independent (font-size 11 or 14 px, stroke 1 or 1.5 px on all seven),
+# the layout and does not change with scale, and feature size varied little
+# between drawings (font-size 11 or 14 px, stroke 1 or 1.5 px on all seven),
 # so a busier sheet does not need a bigger number. What does thin out is the
 # stroke: at 1.5x a 1-1.5 px line lands on 1.5-2.25 device pixels, where
 # aliasing between two nearly-coincident lines becomes plausible. A drawing that

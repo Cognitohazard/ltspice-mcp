@@ -734,8 +734,8 @@ def _follow_include(
     path = resolve_reference(base_dir, target)
     if include_resolver is not None:
         # Gate the open BEFORE any read: a denied include contributes nothing and
-        # its bytes are never touched (the sandbox property U6/the tool layer
-        # relies on). The resolver may also redirect to a canonical safe path.
+        # its bytes are never touched — the sandbox property the tool layer
+        # relies on. The resolver may also redirect to a canonical safe path.
         approved = include_resolver(path)
         if approved is None:
             registry.missing.append(MissingInclude(target, "path denied by include resolver"))
