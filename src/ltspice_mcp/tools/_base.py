@@ -1048,7 +1048,7 @@ def resolve_response_budget(explicit: int | None, state: SessionState) -> Respon
     the default reaches exactly the surface it was designed for; ``0`` disables it
     and restores the fully undegraded default response.
 
-    The API's automatic mode gets no default at all. That door promises complete
+    The API's automatic mode gets no default at all. That mode promises complete
     results and refuses ``budget`` outright, so a presentation ladder there would
     both contradict the promise and leave the caller no way to lift it — the
     ladder's own route text would send them at the field the interface rejects.
