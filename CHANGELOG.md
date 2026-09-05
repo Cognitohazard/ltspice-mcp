@@ -49,7 +49,7 @@ CSV waveform export is the `waveform` recipe with `format: "csv"`, which writes
 every sample to a file and returns its path.
 
 
-### Removed
+### Removed — argument spellings on the schematic and analysis tools
 
 - `analyze_results` recipes no longer accept `step` or `all_steps`; pass them on
   the call (see Changed).
@@ -69,7 +69,7 @@ every sample to a file and returns its path.
 - `edit_schematic` no longer accepts `format`; structured-aware clients render
   only `structuredContent`, and the other six tools had already dropped it.
 
-### Removed
+### Removed — the MCP logging capability
 
 - The MCP logging capability. The 2026-07-28 revision deprecates it whole
   (SEP-2577): the `logging` server capability, the server-to-client
