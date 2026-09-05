@@ -116,6 +116,7 @@ TOOLS_REMOVED_IN_0_6: tuple[str, ...] = (
     "recent",
 )
 
+
 # Delegated handlers that legitimately declare NO structuredContent contract:
 # name -> (reason, emits_intermediate_structured_content). The second field
 # derives the conformance hook's walk-stop set — an adapter that emits
@@ -124,17 +125,6 @@ TOOLS_REMOVED_IN_0_6: tuple[str, ...] = (
 # anything emitting beneath its frame). test_conformance_hook_armed.py's
 # closure test pins the exemptions fail-closed (a name that gains a contract,
 # or stops being delegated to, fails the suite).
-# Currently empty: every handler a consolidated module still delegates to
-# declares its own contract, so nothing needs exempting. The table stays because
-# the closure test reads it fail-closed — an exemption listed here must still be
-# a real delegation, and a delegation missing here must still declare a schema.
-NO_CONTRACT_DELEGATES: dict[str, tuple[str, bool]] = {}
-
-INTERMEDIATE_NO_SCHEMA_ADAPTERS = tuple(
-    name for name, (_, emits_intermediate) in NO_CONTRACT_DELEGATES.items() if emits_intermediate
-)
-
-
 class FakeSim:
     """Stub simulator class for tests that need a default simulator."""
 
@@ -594,24 +584,6 @@ def _enforce_output_schema_conformance():
             if code not in contracts:
                 contracts[code] = (obj.__name__, jsonschema.Draft202012Validator(schema))
 
-    # Intermediate-emitter frames whose structuredContent must NOT be validated
-    # against the calling tool's schema. analyze_results delegates to compute
-    # handlers to read a value out of each one's CallToolResult; that emission
-    # is not analyze_results' returned envelope. A delegate that declares a
-    # contract (via @registry.tool or @declare_output_schema) is caught by its
-    # own frame above. The two transient adapters declare NONE — their former
-    # dispatcher (transient_response) had no schema, so nothing ever validated
-    # them — and the walk would otherwise fall through to analyze_results'
-    # schema. Stop the walk at exactly those; the closure test in
-    # test_conformance_hook_armed.py pins the full schema-less delegate set
-    # fail-closed.
-    from ltspice_mcp.tools import analysis as _analysis_mod
-
-    _skip_codes: set = {
-        getattr(fn, "__wrapped__", fn).__code__
-        for fn in (getattr(_analysis_mod, name) for name in INTERMEDIATE_NO_SCHEMA_ADAPTERS)
-    }
-
     def _validate(result) -> None:
         sc = result.structuredContent
         if sc is None:
@@ -620,10 +592,6 @@ def _enforce_output_schema_conformance():
         frame = sys._getframe(2)
         for _ in range(25):
             if frame is None:
-                return
-            if frame.f_code in _skip_codes:
-                # An unregistered compute adapter's intermediate emission — the
-                # delegating tool reads a value from it but does not return it.
                 return
             contract = contracts.get(frame.f_code)
             if contract is not None:

@@ -20,9 +20,10 @@ from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp import resources
 from ltspice_mcp.lib import recent, services
+from ltspice_mcp.lib.metrics import signal_stats
+from ltspice_mcp.lib.recipes import SignalStatsRecipe
 from ltspice_mcp.server import read_resource
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.analysis import SignalStatsInput, handle_signal_stats
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from tests.conftest import _FakeServer, stage_recorded_fixture
 
@@ -74,8 +75,10 @@ async def test_light_tool_served_while_heavy_parse_in_flight(
     monkeypatch.setattr(services, "RawRead", slow_rawread)
 
     heavy = asyncio.create_task(
-        handle_signal_stats(
-            SignalStatsInput(raw_file=str(raw_path), signal="V(out)"),
+        signal_stats(
+            services.AnalysisSource.for_raw(raw_path),
+            SignalStatsRecipe(key="s", metric="signal_stats", signal="V(out)"),
+            0,
             state_no_sim,
         )
     )
@@ -85,9 +88,7 @@ async def test_light_tool_served_while_heavy_parse_in_flight(
     await assert_light_request_served(heavy, state_no_sim)
 
     # The offloaded parse must still produce the correct result afterward.
-    result = await heavy
-    sc = result.structuredContent
-    assert sc is not None
+    sc = await heavy
     assert sc["analysis_type"] == "ac"
     assert sc["point_count"] == 81  # dec 20 over 4 decades, recorded fixture
 
