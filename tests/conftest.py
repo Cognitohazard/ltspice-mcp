@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
 import typing
 from collections.abc import Coroutine, Iterator
 from pathlib import Path
@@ -11,6 +12,7 @@ from pathlib import Path
 import pytest
 from spicelib import AscEditor
 
+from ltspice_mcp.api import _detach
 from ltspice_mcp.api import _session as _api_session
 from ltspice_mcp.api._methods import ApiMethodsMixin
 from ltspice_mcp.config import ServerConfig
@@ -325,6 +327,11 @@ class SyncApi(ApiMethodsMixin):
 
     def __init__(self, state: SessionState) -> None:
         self._state = state
+        # The mixin's detached-owner surface needs the same two attributes a
+        # real Api carries: which constructor arguments an owner reproduces,
+        # and where the owners this host spawned are remembered.
+        self._boot = _detach.boot_spec(state.working_dir, None, {})
+        self._detached_children: list[subprocess.Popen[bytes]] = []
 
     def _check_process_and_thread(self) -> None:
         return None
