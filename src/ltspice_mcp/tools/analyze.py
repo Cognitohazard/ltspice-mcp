@@ -25,6 +25,7 @@ from ltspice_mcp.lib import (
     fsync_dir,
     fsync_fd,
     metrics,
+    pagination,
     response_budget,
     result_store,
     services,
@@ -37,6 +38,7 @@ from ltspice_mcp.lib.log_parser import (
     extract_log_diagnostics,
     parse_step_iterations,
 )
+from ltspice_mcp.lib.pagination import retotal_page
 from ltspice_mcp.lib.raw_parser import get_step_count, safe_magnitude_db
 from ltspice_mcp.lib.recipes import (
     OperatingPointRecipe,
@@ -566,35 +568,14 @@ class _ResolvedRun:
 def _page(
     items: list[Any], offset: int = 0, limit: int = MAX_PAGE_SIZE
 ) -> tuple[dict[str, Any], int]:
-    """One page of ``items``, with the offset the page after it starts at.
+    """One page of ``items`` at this tool's default cap.
 
-    ``next_cursor`` starts null and is filled in by the caller for the views
-    that are resumable (per_run, coverage.missing_cases); a view that cannot be
-    resumed says so in a warning instead. The resumable callers encode the
-    returned offset rather than re-deriving it, so where the next page begins
-    is decided here only.
+    ``next_cursor`` starts null: every resumable view here (per_run,
+    coverage.missing_cases) needs a cursor carrying the work position too, so it
+    is minted during assembly from the offset this returns. A view that cannot
+    be resumed at all — spec.fail_cases — says so in a warning instead.
     """
-    page: dict[str, Any] = {
-        "items": [],
-        "total": len(items),
-        "returned": 0,
-        "truncated": False,
-        "next_cursor": None,
-    }
-    shown = items[offset : offset + limit]
-    return page, retotal_page(page, shown, offset)
-
-
-def retotal_page(page: dict[str, Any], rows: list[Any], offset: int) -> int:
-    """Replace a page's rows and reconcile its pagination metadata."""
-    next_offset = offset + len(rows)
-    page.update(
-        items=rows,
-        returned=len(rows),
-        truncated=next_offset < page["total"],
-        next_cursor=None,
-    )
-    return next_offset
+    return pagination.page(items, offset, limit)
 
 
 def _pick(source: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
