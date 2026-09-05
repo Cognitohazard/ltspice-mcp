@@ -789,9 +789,19 @@ def _scratch_dir(state: SessionState, name: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _syntax_findings(text: str, path: Path) -> list[dict[str, Any]]:
-    """Directive and element-arity findings in a netlist, in the shared shape."""
+def _syntax_findings(text: str, path: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    """Directive and element-arity findings in a netlist, in the shared shape,
+    plus the lexer's own notes about what it had to guess.
+
+    Those notes are facts about the read, not rule violations: an unclosed
+    ``.SUBCKT``, an ``.ENDS`` that matches nothing, a continuation with no card
+    to continue. The lexer assigns them no severity, so they are relayed as
+    observations rather than promoted to findings — but relayed they must be,
+    since the deck they describe parsed into cards that mean something other
+    than what the file says.
+    """
     findings: list[dict[str, Any]] = []
+    lex_notes: list[str] = []
     for lineno, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line.startswith("."):
@@ -811,7 +821,9 @@ def _syntax_findings(text: str, path: Path) -> list[dict[str, Any]]:
         )
 
     try:
-        cards = lex(text).cards
+        result = lex(text)
+        cards = result.cards
+        lex_notes.extend(f"netlist lexer: {note}" for note in result.warnings)
     except SpiceLexError as exc:
         findings.append(
             _finding(
@@ -844,7 +856,7 @@ def _syntax_findings(text: str, path: Path) -> list[dict[str, Any]]:
                 evidence={"detail": detail, "card": card},
             )
         )
-    return findings
+    return findings, lex_notes
 
 
 # ---------------------------------------------------------------------------
@@ -1671,7 +1683,9 @@ async def evaluate_verify_circuit(
             failures.append(_failure("read", str(exc), where=str(path)))
 
     if wanted.get("syntax") and text is not None:
-        findings.extend(await asyncio.to_thread(_syntax_findings, text, path))
+        syntax_findings, lex_notes = await asyncio.to_thread(_syntax_findings, text, path)
+        findings.extend(syntax_findings)
+        observation_events.extend(lex_notes)
         checks_run.append("syntax")
 
     # --- scene-derived checks (symbols, layout, quality, dropped wires) -----

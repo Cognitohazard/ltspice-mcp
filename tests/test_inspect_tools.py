@@ -420,6 +420,28 @@ async def test_components_netlist_has_no_digest(netlist: Path, state_no_sim: Ses
     assert "sha256" not in res["data"]
 
 
+async def test_components_netlist_relays_lexer_warnings(
+    work_dir: Path, state_no_sim: SessionState
+):
+    """The lexer reports what it had to guess about — here, a .SUBCKT that
+    never closes, which means every card after it was read as subcircuit body
+    and the component list is a list of the wrong scope. Reading only the
+    cards drops that: the rows come back looking authoritative."""
+    deck = work_dir / "unclosed.cir"
+    deck.write_text("* unclosed\n.subckt AMP a b\nR1 a b 1k\nV1 a 0 1\n.end\n")
+
+    (res,) = await _run(state_no_sim, [{"kind": "components", "path": str(deck)}])
+
+    assert any("unclosed .SUBCKT" in note for note in res["data"]["warnings"])
+
+
+async def test_components_netlist_omits_the_warnings_key_when_clean(
+    netlist: Path, state_no_sim: SessionState
+):
+    (res,) = await _run(state_no_sim, [{"kind": "components", "path": str(netlist)}])
+    assert "warnings" not in res["data"]
+
+
 async def test_net_asc_reports_sheet_digest(asc_file: Path, asc_state: SessionState):
     (res,) = await _run(asc_state, [{"kind": "net", "path": str(asc_file), "at": "net:filtered"}])
     assert res["data"]["sha256"] == _digest(asc_file)
