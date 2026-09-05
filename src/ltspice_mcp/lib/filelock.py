@@ -28,6 +28,8 @@ import time
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
+from ltspice_mcp.lib.store import SIDECAR_DIRNAME
+
 logger = logging.getLogger(__name__)
 
 _LOCK_POLL_INTERVAL = 0.05  # seconds between retry attempts
@@ -125,8 +127,9 @@ def file_lock(
 # These live here rather than in the tool layer because the schematic edit
 # engine (a lib module) takes them, and a core module must not import the layer
 # that imports it. ``tools/_base`` re-exports them.
-
-SIDECAR_DIRNAME = ".ltspice-mcp"
+#
+# The sidecar directory name comes from lib/store.py, which owns the layout:
+# a second declaration here is a second thing to change when it moves.
 
 
 def path_lock(registry: dict[Path, asyncio.Lock], path: Path, cap: int = 64) -> asyncio.Lock:

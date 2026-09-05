@@ -132,8 +132,9 @@ def resolve_experiment_paths(
         # Staged decks live inside the job's own run directory: they are part of
         # what that run produced, they must sit on the same filesystem as the
         # output for the WSL case, and grouping them there is what makes a job's
-        # files enumerable as a set.
-        staging_root=base.runs / job_id / "staged" / circuit_id,
+        # files enumerable as a set. The Store names it, so this is not a second
+        # copy of the layout that can drift from the one that reads it back.
+        staging_root=store.staged_deck_root(job_id, circuit_id, simulator),
         output_folder=base.runs,
         windows_native=base.windows_native,
     )

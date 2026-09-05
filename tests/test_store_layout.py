@@ -15,7 +15,8 @@ from typing import Any
 
 import pytest
 
-from ltspice_mcp.lib.store import Store
+from ltspice_mcp.lib.deck_staging import resolve_experiment_paths
+from ltspice_mcp.lib.store import Store, StoreError
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
@@ -36,6 +37,10 @@ DECLARED_ROOTS: dict[str, str] = {
 
 # The store's own version stamp, which is a file rather than a directory.
 DECLARED_FILES: frozenset[str] = frozenset({"store.json"})
+
+
+class FakeNonLTspice:
+    """Any simulator that is not LTspice, so artifact routing stays in-store."""
 
 
 def _normalize(store: Store, path: Path, job_id: str) -> str:
@@ -161,6 +166,7 @@ _PATH_MEMBERS: dict[str, Any] = {
 _OUTSIDE_THE_STORE: dict[str, str] = {
     "circuit_sidecar": "belongs to the user's circuit, not to a session",
     "circuit_exports": "a receipt's provenance names it; it outlives the session",
+    "circuit_plots": "a plot belongs beside the circuit it was made from",
     "legacy_jobs_dir": "written by releases before 0.6; read, never written",
     "artifact_base": "returns the routing decision, not a path",
 }
@@ -199,3 +205,25 @@ def test_every_store_path_lands_in_a_declared_root(tmp_path: Path) -> None:
             roots.add(relative.parts[0])
 
     assert roots == set(DECLARED_ROOTS) | DECLARED_FILES
+
+
+@pytest.mark.parametrize("circuit_id", ["../escape", "a/b", "", "."])
+def test_staged_deck_root_refuses_a_circuit_id_that_is_not_one_segment(
+    tmp_path: Path, circuit_id: str
+) -> None:
+    """Every other caller-supplied segment is validated; this one was not.
+
+    ``circuit_id`` reaches the store from the experiment request, so a value
+    that walks out of the job's directory has to be refused where the path is
+    built, not wherever someone remembers to check.
+    """
+    with pytest.raises(StoreError):
+        Store(tmp_path).staged_deck_root("exp_1", circuit_id)
+
+
+def test_deck_staging_reads_its_staging_root_from_the_store(tmp_path: Path) -> None:
+    """One formula for where a staged deck lands, not two that agree today."""
+    paths = resolve_experiment_paths(tmp_path, "exp_staging", "dut", FakeNonLTspice)
+    assert paths.staging_root == Store(tmp_path).staged_deck_root(
+        "exp_staging", "dut", FakeNonLTspice
+    )

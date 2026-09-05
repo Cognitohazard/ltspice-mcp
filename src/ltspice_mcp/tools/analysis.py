@@ -45,7 +45,6 @@ from ltspice_mcp.lib.ac_analysis import (
     unwrap_phase_safe,
 )
 from ltspice_mcp.lib.ac_structure import AcStructureResult, analyze_ac_structure
-from ltspice_mcp.lib.job_store import SIDECAR_DIRNAME
 from ltspice_mcp.lib.log_parser import parse_step_iterations
 from ltspice_mcp.lib.metrics import (
     classify_analysis,
@@ -66,6 +65,7 @@ from ltspice_mcp.lib.raw_parser import (
 from ltspice_mcp.lib.signal_analysis import (
     downsample_minmax,
 )
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import ExperimentJob, SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
@@ -134,23 +134,21 @@ async def _resolve_artifact_dest(
     out_dir: str | None,
     job_id: str | None,
     raw_file: str | None,
-    subdir: str,
     filename: str,
     artifact: str,
     state: SessionState,
     circuit_dir: Path | None = None,
 ) -> Path:
-    """Resolve where a generated artifact (CSV / HTML) is written.
+    """Resolve where a generated artifact (the plot HTML) is written.
 
-    An explicit ``out_dir`` (validated via ``safe_path``) wins; otherwise a
-    Linux-side ``.ltspice-mcp/<subdir>/`` sidecar next to the CIRCUIT for a
-    job_id, or next to the raw for a raw_file — a job-run raw can live in a
-    Windows temp under /mnt/c the client cannot Read, so the job path anchors on
-    the circuit. A caller that already resolved the circuit (an experiment case,
-    whose job has no single netlist) passes it as ``circuit_dir``.
-    Server-artifact paths skip ``safe_path`` except the out_dir
-    override; the resolved path must stay under its anchor (a symlinked sidecar
-    would otherwise redirect the write out).
+    An explicit ``out_dir`` (validated via ``safe_path``) wins; otherwise the
+    destination is ``Store.circuit_plots`` of a Linux-side anchor — the CIRCUIT
+    for a job_id, the raw's own directory for a raw_file, because a job-run raw
+    can live in a Windows temp under /mnt/c the client cannot Read. A caller
+    that already resolved the circuit (an experiment case, whose job has no
+    single netlist) passes it as ``circuit_dir``. Server-artifact paths skip
+    ``safe_path`` except the out_dir override; the resolved path must stay under
+    its anchor (a symlinked sidecar would otherwise redirect the write out).
     """
     if out_dir:
         dest_anchor = safe_path(out_dir, state)
@@ -168,12 +166,7 @@ async def _resolve_artifact_dest(
             )
         else:
             dest_anchor = safe_path(raw_file, state).parent  # type: ignore[arg-type]
-        # Sidecar next to the anchor — but if the anchor is already inside a
-        # .ltspice-mcp/ tree (e.g. a job-run raw passed by path), write the
-        # subdir there directly rather than nesting another sidecar
-        # (…/.ltspice-mcp/runs/.ltspice-mcp/waveforms/…).
-        rel = subdir if SIDECAR_DIRNAME in dest_anchor.parts else f"{SIDECAR_DIRNAME}/{subdir}"
-        out_path = (dest_anchor / rel / filename).resolve()
+        out_path = (Store.circuit_plots(dest_anchor) / filename).resolve()
     if not out_path.is_relative_to(dest_anchor.resolve()):
         raise ResultError(
             f"Refusing to write the {artifact} outside the destination directory "
@@ -404,7 +397,6 @@ def build_waveform_csv(
 # plot_waveform — interactive HTML chart opened on the local desktop
 # ---------------------------------------------------------------------------
 
-PLOTS_SUBDIR = "plots"
 # Per-series point budget for the in-chat widget's chart spec (MCP Apps): the
 # spec rides in the tool result (hidden in _meta), so it is decimated harder than
 # the on-disk file (full fidelity stays in the file) — an overview for the eye.
@@ -970,7 +962,6 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         out_dir=args.out_dir,
         job_id=args.job_id,
         raw_file=args.raw_file,
-        subdir=PLOTS_SUBDIR,
         filename=_plot_filename(raw_path, analysis_type, args.job_id, run_index),
         artifact="plot",
         state=state,

@@ -624,7 +624,8 @@ FINDING_SCHEMA: dict[str, Any] = {
     "required": ["rule_id", "severity", "ok", "evidence", "at", "subject"],
 }
 
-#: The keys every offset page declares — see ``tools/_page.page``.
+#: The keys every offset page declares — see ``lib/pagination.page``, which
+#: builds them.
 PAGE_REQUIRED: list[str] = ["items", "total", "returned", "truncated", "next_cursor"]
 
 

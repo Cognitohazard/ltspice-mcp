@@ -35,9 +35,13 @@ Three things live outside that root, each for a reason:
   writer asks it rather than re-deciding.
 * **Circuit-scoped sidecars** sit next to the user's file, because they belong
   to that file and not to whichever directory a session was started in: the
-  export snapshots a receipt's provenance names, the per-circuit locks parallel
-  sessions coordinate on, and the read-only job sidecars a pre-0.6 release
-  wrote. See the ``circuit_*`` helpers.
+  export snapshots a receipt's provenance names
+  (:meth:`Store.circuit_exports`), the plots ``plot_waveform`` writes
+  (:meth:`Store.circuit_plots`), and the read-only job sidecars a pre-0.6
+  release wrote (:meth:`Store.legacy_jobs_dir`) — all under
+  :meth:`Store.circuit_sidecar`. The per-circuit lock files parallel sessions
+  coordinate on live in the same sidecar, but their path is built by
+  ``lib/filelock.py``, which owns the locking protocol.
 * **The recent-circuits index is user-global** (``lib/recent.py``), so a session
   started anywhere can surface prior work.
 
@@ -502,7 +506,9 @@ class Store:
         simulator: type | None = None,
     ) -> Path:
         """Where one circuit's staged deck closure lands for one job."""
-        return self.run_dir(job_id, simulator) / "staged" / circuit_id
+        return (
+            self.run_dir(job_id, simulator) / "staged" / _validate_name(circuit_id, "circuit_id")
+        )
 
     # -- analysis results ---------------------------------------------------
 
@@ -562,6 +568,23 @@ class Store:
     def legacy_jobs_dir(circuit_path: Path) -> Path:
         """Where a pre-0.6 release wrote its job sidecars. Read, never written."""
         return Store.circuit_sidecar(circuit_path) / "jobs"
+
+    @staticmethod
+    def circuit_plots(anchor_dir: Path) -> Path:
+        """Where ``plot_waveform`` writes its interactive chart.
+
+        Takes the DIRECTORY the plot belongs beside — the circuit's, or the
+        raw's when the caller named a raw directly. Beside the circuit rather
+        than in the working-dir store: a plot belongs to the file it was made
+        from, and that is where an agent looks for it. A directory already
+        inside a sidecar tree (a job-run raw passed by path, whose directory is
+        under ``runs/``) takes the plots directory there rather than nesting a
+        second ``.ltspice-mcp/`` inside the first.
+        """
+        sidecar = (
+            anchor_dir if SIDECAR_DIRNAME in anchor_dir.parts else anchor_dir / SIDECAR_DIRNAME
+        )
+        return sidecar / "plots"
 
 
 def run_dir_in(runs_root: Path, job_id: str) -> Path:
