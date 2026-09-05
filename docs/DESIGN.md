@@ -406,9 +406,10 @@ accepted in `[tools] profile` and `LTSPICE_MCP_TOOL_PROFILE` for one
 release; each logs a warning and serves the consolidated surface, so a
 config that names a removed profile still starts a working server instead
 of failing. A deployment that needs the old tools pins
-`ltspice-mcp==0.5.*`. The handlers behind those tools were not deleted:
-they are internal adapters that the recipes and ops dispatch to, so the
-consolidated surface runs the same code paths the 0.5 tools did.
+`ltspice-mcp==0.5.*`. The handlers behind those tools were kept as internal
+adapters through 0.6 development, so the consolidated surface could be shown
+to run the same code paths; they are gone now, and the numeric core they
+carried lives in `lib/metrics.py` as one function per recipe.
 
 ## Backend: spicelib
 

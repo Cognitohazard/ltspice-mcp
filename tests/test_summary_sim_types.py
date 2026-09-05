@@ -15,41 +15,28 @@ copying the resulting ``.raw``/``.log`` pairs verbatim:
   V(hot) sits at 1e9 V (also exercised by test_result_observations).
 
 CI cannot run LTspice, so these recordings are the only coverage of the
-LTspice binary-raw dialect flowing through ``handle_simulation_summary``
-(everything else in the suite drives it with mocked RawRead instances).
+LTspice binary-raw dialect flowing through the summary recipe (everything else
+in the suite drives it with mocked RawRead instances).
 """
 
 from pathlib import Path
 
 import pytest
 
+from ltspice_mcp.lib.metrics import MetricValue
+from ltspice_mcp.lib.recipes import SummaryRecipe, ValueRecipe
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.analysis import (
-    QueryValueInput,
-    SimulationSummaryInput,
-    handle_query_value,
-    handle_simulation_summary,
-)
 from tests.conftest import LTSPICE_TRAN_RC_VFINAL
 from tests.conftest import stage_recorded_fixture as _stage
+from tests.test_analysis_tools import _metric
 
 
-async def _summary(state: SessionState, raw: Path, signal: str | None = None) -> dict:
-    result = await handle_simulation_summary(
-        SimulationSummaryInput(raw_file=str(raw), signal=signal, format="json"),
-        state,
-    )
-    assert result.structuredContent is not None
-    return result.structuredContent
+async def _summary(state: SessionState, raw: Path, signal: str | None = None) -> MetricValue:
+    return await _metric(state, raw, SummaryRecipe(key="s", metric="summary"), signal=signal)
 
 
-async def _value_at(state: SessionState, raw: Path, signal: str, at: str) -> dict:
-    result = await handle_query_value(
-        QueryValueInput(raw_file=str(raw), signal=signal, at=at, format="json"),
-        state,
-    )
-    assert result.structuredContent is not None
-    return result.structuredContent
+async def _value_at(state: SessionState, raw: Path, signal: str, at: str) -> MetricValue:
+    return await _metric(state, raw, ValueRecipe(key="v", metric="value", expr=signal, at=at))
 
 
 @pytest.mark.asyncio

@@ -156,14 +156,14 @@ class SpecLimits(StrictModel):
         return self
 
 
-class _RecipeBase(StrictModel):
+class RecipeBase(StrictModel):
     key: str = Field(min_length=1)
     sources: list[str] | None = None
     step: StepSelector | None = None
     all_steps: bool = False
 
     @model_validator(mode="after")
-    def _step_xor_all(self) -> _RecipeBase:
+    def _step_xor_all(self) -> RecipeBase:
         if self.step is not None and self.all_steps:
             raise ValueError("'step' and 'all_steps=true' are mutually exclusive")
         if self.sources is not None and (
@@ -173,18 +173,18 @@ class _RecipeBase(StrictModel):
         return self
 
 
-class _ScalarRecipe(_RecipeBase):
+class ScalarRecipe(RecipeBase):
     reduce: list[ReduceStat] = Field(default_factory=list)
     spec: SpecLimits | None = None
 
 
-class _MultiRecipe(_RecipeBase):
+class MultiRecipe(RecipeBase):
     reduce: list[ReduceStat] = Field(default_factory=list)
     reduce_field: str | None = None
     spec: SpecLimits | None = None
 
     @model_validator(mode="after")
-    def _field_for_cross_run_work(self) -> _MultiRecipe:
+    def _field_for_cross_run_work(self) -> MultiRecipe:
         wants_reduction = bool(self.reduce) or self.spec is not None
         field = self.reduce_field or (self.spec.field if self.spec else None)
         if wants_reduction and field is None:
@@ -212,18 +212,18 @@ class _MultiRecipe(_RecipeBase):
         return self
 
 
-class _KeyedRecipe(_RecipeBase):
+class KeyedRecipe(RecipeBase):
     reduce: list[ReduceStat] = Field(default_factory=list)
     spec: SpecLimits | None = None
 
     @model_validator(mode="after")
-    def _spec_names_key(self) -> _KeyedRecipe:
+    def _spec_names_key(self) -> KeyedRecipe:
         if self.spec is not None and not self.spec.field:
             raise ValueError("spec.field is required for a keyed recipe")
         return self
 
 
-class _VariableRecipe(_RecipeBase):
+class VariableRecipe(RecipeBase):
     """Base for recipes whose per-run value has no cross-run reduction.
 
     These carry no ``reduce``/``spec``/``reduce_field`` — an unsupported one is
@@ -234,11 +234,11 @@ class _VariableRecipe(_RecipeBase):
     """
 
 
-class SummaryRecipe(_VariableRecipe):
+class SummaryRecipe(VariableRecipe):
     metric: Literal["summary"]
 
 
-class MeasurementsRecipe(_KeyedRecipe):
+class MeasurementsRecipe(KeyedRecipe):
     metric: Literal["measurements"]
     names: list[str] | None = None
     histogram_bins: int = Field(
@@ -252,13 +252,13 @@ class MeasurementsRecipe(_KeyedRecipe):
     )
 
 
-class ValueRecipe(_ScalarRecipe):
+class ValueRecipe(ScalarRecipe):
     metric: Literal["value"]
     expr: str
     at: float | str | None = None
 
 
-class SignalStatsRecipe(_MultiRecipe):
+class SignalStatsRecipe(MultiRecipe):
     metric: Literal["signal_stats"]
     signal: str
     window: Window | None = None
@@ -269,7 +269,7 @@ class Levels(StrictModel):
     high: float | None = None
 
 
-class EdgesRecipe(_MultiRecipe):
+class EdgesRecipe(MultiRecipe):
     metric: Literal["edges"]
     signal: str
     levels: Levels | None = None
@@ -283,7 +283,7 @@ class TimingEndpoint(StrictModel):
     level: float | None = None
 
 
-class TimingRecipe(_MultiRecipe):
+class TimingRecipe(MultiRecipe):
     metric: Literal["timing"]
     from_: TimingEndpoint = Field(alias="from")
     to: TimingEndpoint
@@ -291,7 +291,7 @@ class TimingRecipe(_MultiRecipe):
     window: Window | None = None
 
 
-class PeriodicRecipe(_MultiRecipe):
+class PeriodicRecipe(MultiRecipe):
     metric: Literal["periodic"]
     signal: str
     window: Window | None = None
@@ -301,7 +301,7 @@ class PeriodicRecipe(_MultiRecipe):
     )
 
 
-class TransientResponseRecipe(_MultiRecipe):
+class TransientResponseRecipe(MultiRecipe):
     metric: Literal["transient_response"]
     signal: str
     mode: Literal["step", "disturbance"]
@@ -324,7 +324,7 @@ class TransientResponseRecipe(_MultiRecipe):
         return self
 
 
-class ThdRecipe(_ScalarRecipe):
+class ThdRecipe(ScalarRecipe):
     metric: Literal["thd"]
     signal: str
     fundamental_hz: float | str | None = None
@@ -332,18 +332,18 @@ class ThdRecipe(_ScalarRecipe):
     window: Window | None = None
 
 
-class BodeFilterRecipe(_MultiRecipe):
+class BodeFilterRecipe(MultiRecipe):
     metric: Literal["bode_filter"]
     signal: str
 
 
-class BodePointRecipe(_ScalarRecipe):
+class BodePointRecipe(ScalarRecipe):
     metric: Literal["bode_point"]
     signal: str
     at_hz: float | str
 
 
-class BodeCrossingRecipe(_VariableRecipe):
+class BodeCrossingRecipe(VariableRecipe):
     metric: Literal["bode_crossing"]
     signal: str
     level_db: float | None = Field(
@@ -371,29 +371,29 @@ class BodeCrossingRecipe(_VariableRecipe):
         return self
 
 
-class BodeSlopeRecipe(_ScalarRecipe):
+class BodeSlopeRecipe(ScalarRecipe):
     metric: Literal["bode_slope"]
     signal: str
     from_hz: float | str
     to_hz: float | str
 
 
-class StabilityRecipe(_MultiRecipe):
+class StabilityRecipe(MultiRecipe):
     metric: Literal["stability"]
     signal: str
 
 
-class AcStructureRecipe(_VariableRecipe):
+class AcStructureRecipe(VariableRecipe):
     metric: Literal["ac_structure"]
     signal: str
 
 
-class ResonanceRecipe(_VariableRecipe):
+class ResonanceRecipe(VariableRecipe):
     metric: Literal["resonance"]
     signal: str
 
 
-class ReturnLossRecipe(_MultiRecipe):
+class ReturnLossRecipe(MultiRecipe):
     metric: Literal["return_loss"]
     signal: str
     z0: float = Field(default=50.0, gt=0)
@@ -404,7 +404,7 @@ class ReturnLossRecipe(_MultiRecipe):
     )
 
 
-class NoiseIntegralRecipe(_ScalarRecipe):
+class NoiseIntegralRecipe(ScalarRecipe):
     metric: Literal["noise_integral"]
     signal: str | None = None
     from_hz: float | str | None = None
@@ -415,7 +415,7 @@ class NoiseIntegralRecipe(_ScalarRecipe):
     )
 
 
-class OperatingPointRecipe(_KeyedRecipe):
+class OperatingPointRecipe(KeyedRecipe):
     metric: Literal["operating_point"]
     device: str | None = Field(
         default=None,
@@ -429,7 +429,7 @@ class OperatingPointRecipe(_KeyedRecipe):
     )
 
 
-class WaveformRecipe(_VariableRecipe):
+class WaveformRecipe(VariableRecipe):
     metric: Literal["waveform"]
     signals: list[str] = Field(min_length=1, max_length=32)
     max_points: int = Field(default=2000, ge=1, le=2_000_000)
@@ -442,7 +442,7 @@ class PlotSpan(StrictModel):
     end: float | str | None = None
 
 
-class PlotRecipe(_VariableRecipe):
+class PlotRecipe(VariableRecipe):
     metric: Literal["plot"]
     signals: list[str] = Field(min_length=1, max_length=32)
     title: str | None = None
@@ -479,10 +479,10 @@ RECIPE_ADAPTER = TypeAdapter(Recipe)
 # The discriminated union is the single source of truth for the recipe set; the
 # concrete models and their discriminants are read straight off it so there is
 # no parallel list to keep in sync.
-RECIPE_MODELS: tuple[type[_RecipeBase], ...] = get_args(get_args(Recipe)[0])
+RECIPE_MODELS: tuple[type[RecipeBase], ...] = get_args(get_args(Recipe)[0])
 
 
-def _discriminant_of(model: type[_RecipeBase]) -> str:
+def _discriminant_of(model: type[RecipeBase]) -> str:
     return get_args(model.model_fields["metric"].annotation)[0]
 
 

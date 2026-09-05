@@ -618,12 +618,19 @@ class TestExtractOperatingPointCaseInsensitive:
 
 
 @pytest.mark.asyncio
-class TestQueryValueRejectsNaNInf:
-    async def test_nan_at_rejected(self, state_no_sim, work_dir):
+class TestValueRecipeRejectsNaNInf:
+    """np.searchsorted treats NaN as greater than everything and returns the
+    last index, which looks like a valid answer and is not — so a non-finite
+    ``at`` is refused before the lookup rather than snapped to the sweep end."""
+
+    @pytest.mark.parametrize("spelling", ["nan", "inf"])
+    async def test_non_finite_at_rejected(self, state_no_sim, work_dir, spelling):
         import numpy as np
 
         from ltspice_mcp.errors import ResultError
-        from ltspice_mcp.tools.analysis import QueryValueInput, handle_query_value
+        from ltspice_mcp.lib.metrics import value
+        from ltspice_mcp.lib.recipes import ValueRecipe
+        from tests.test_analysis_tools import _source
 
         raw_file = work_dir / "x.raw"
         raw_file.write_bytes(b"placeholder")
@@ -637,31 +644,10 @@ class TestQueryValueRejectsNaNInf:
         state_no_sim.results.set(raw_file, raw)
 
         with pytest.raises(ResultError, match="finite"):
-            await handle_query_value(
-                QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="nan"),
-                state_no_sim,
-            )
-
-    async def test_inf_at_rejected(self, state_no_sim, work_dir):
-        import numpy as np
-
-        from ltspice_mcp.errors import ResultError
-        from ltspice_mcp.tools.analysis import QueryValueInput, handle_query_value
-
-        raw_file = work_dir / "x.raw"
-        raw_file.write_bytes(b"placeholder")
-        raw = MagicMock()
-        raw.get_raw_property.return_value = "Transient Analysis"
-        raw.get_trace_names.return_value = ["time", "V(out)"]
-        raw.get_steps.return_value = [0]
-        axis = np.array([0.0, 1.0, 2.0])
-        raw.get_axis.return_value = axis
-        raw.get_wave = lambda n, step=0: axis
-        state_no_sim.results.set(raw_file, raw)
-
-        with pytest.raises(ResultError, match="finite"):
-            await handle_query_value(
-                QueryValueInput(raw_file=raw_file.name, signal="V(out)", at="inf"),
+            await value(
+                _source(state_no_sim, raw_file.name),
+                ValueRecipe(key="v", metric="value", expr="V(out)", at=spelling),
+                0,
                 state_no_sim,
             )
 

@@ -13,14 +13,13 @@ from pathlib import Path
 
 import pytest
 
+from ltspice_mcp.lib import services
 from ltspice_mcp.lib.metrics import (
     aggregate_log_measurements as _aggregate_log_measurements,
 )
+from ltspice_mcp.lib.metrics import measurements
+from ltspice_mcp.lib.recipes import MeasurementsRecipe
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.analysis import (
-    MeasurementStatsInput,
-    handle_measurement_stats,
-)
 from tests.conftest import (
     FIXTURES_DIR,
 )
@@ -94,11 +93,20 @@ class TestSteppedLogWhenAxis:
     ):
         staged = work_dir / STEP_WHEN_LOG.name
         staged.write_bytes(STEP_WHEN_LOG.read_bytes())
-        result = await handle_measurement_stats(
-            MeasurementStatsInput(log_file=str(staged)), state_no_sim
+        data = await measurements(
+            services.AnalysisSource(
+                raw=staged.with_suffix(".raw"),
+                log=staged,
+                netlist=None,
+                dialect=None,
+                identity=None,
+                trusted_job_artifact=False,
+            ),
+            MeasurementsRecipe(key="m", metric="measurements"),
+            0,
+            state_no_sim,
         )
-        assert result.structuredContent is not None
-        tcross = result.structuredContent["stats"]["tcross"]
+        tcross = data["stats"]["tcross"]
         assert tcross["aggregated_field"] == "at"
         assert tcross["min"] == pytest.approx(STEP_WHEN_TCROSS_AT[0])
         assert tcross["max"] == pytest.approx(STEP_WHEN_TCROSS_AT[2])
@@ -106,6 +114,6 @@ class TestSteppedLogWhenAxis:
         # The FIND measurement in the same log stays on the value axis. Its
         # per-step ``at`` (probe point 0.9m) must NOT be echoed: the n=1 crossing
         # echo is gated on total_count==1, and this is a 3-step aggregate.
-        vfinal = result.structuredContent["stats"]["vfinal"]
+        vfinal = data["stats"]["vfinal"]
         assert vfinal["aggregated_field"] == "value"
         assert "at" not in vfinal

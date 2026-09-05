@@ -754,8 +754,8 @@ The pre-0.6.0 surface had 49 tools. The mapping:
 
 The variation and recipe unions are strict discriminated unions written for
 this surface. Their field *semantics* bind to the existing engines
-(`lib/montecarlo.py` sampling math, the analysis adapters, the reducer
-categories in `lib/recipes.py`); their *shapes* are contracted here and inlined
+(`lib/montecarlo.py` sampling math, the metric functions in `lib/metrics.py`,
+the reducer categories in `lib/recipes.py`); their *shapes* are contracted here and inlined
 into `inputSchema`. They exist because free-form `options` dictionaries were
 what produced the only measured argument failures.
 
