@@ -553,9 +553,8 @@ class JobRegistry:
         for a circular reference.
         """
         own_pid = os.getpid()
-        # Snapshot the view before iterating: the typed view iterates the live
-        # union dict lazily, and the awaits below suspend this coroutine — a
-        # concurrent job registration during a cancel would otherwise raise
+        # Snapshot before iterating: the awaits below suspend this coroutine,
+        # and a concurrent registration would change the dict under us —
         # "dictionary changed size during iteration".
         #
         # Only THIS process's jobs are cancelled: a parallel server session's

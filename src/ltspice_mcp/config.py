@@ -559,8 +559,8 @@ class ServerConfig:
     anything called on it — so a client may cache either one."""
 
     persist_jobs: bool = True
-    """Persist simulation/batch job metadata to ``.ltspice-mcp/jobs/`` next
-    to each circuit file so a restarted server can surface prior runs."""
+    """Persist experiment job records to the working directory's
+    ``.ltspice-mcp/`` store so a restarted server can surface prior runs."""
 
     preload_recent_count: int = 10
     """At startup, eagerly load persisted jobs for this many recently-touched

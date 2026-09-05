@@ -43,9 +43,9 @@ class TestStateMachineStructure:
     def test_every_transition_target_has_event_mapping(self) -> None:
         """Every status reachable as a transition target must map to an event.
 
-        'interrupted' is special — it is reached only through persistence
-        deserialization (job_store._finalize_loaded_status), never through
-        ``transition()``, so it needs no STATUS_TO_EVENT entry.
+        'interrupted' is special — it is reached only when a record is loaded
+        back from disk and its owner is gone (experiment_store._reconcile_restart),
+        never through ``transition()``, so it needs no STATUS_TO_EVENT entry.
         """
         special = {"interrupted"}
         for source, targets in VALID_EXPERIMENT_TRANSITIONS.items():
