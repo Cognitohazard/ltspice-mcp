@@ -66,6 +66,7 @@ from ltspice_mcp.tools._base import (
     ToolInput,
     format_response,
     outcome_of,
+    page_schema,
     registry,
     resolve_response_budget,
     safe_path,
@@ -2101,19 +2102,19 @@ def _source_hashes(
     return [{key: manifest.get(key) for key in keys} for manifest in item.source_manifests]
 
 
-_PAGE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "items": response_budget.row_items_schema({"type": "object"}),
-        "items_columns": response_budget.COLUMNAR_ROWS_SCHEMA,
-        "total": {"type": "integer"},
-        "returned": {"type": "integer"},
-        "truncated": {"type": "boolean"},
-        "next_cursor": {"type": ["string", "null"]},
-    },
-    "required": ["items", "total", "returned", "truncated", "next_cursor"],
-    "additionalProperties": False,
-}
+def _page_of(item_schema: dict[str, Any]) -> dict[str, Any]:
+    """The shared offset page, with its rows narrowed to ``item_schema``.
+
+    Closed to extra keys: a page this tool renders carries the five page keys
+    and nothing else, so anything else on it is a schema failure rather than a
+    silent pass. A fresh dict per call — the surfaces that share this shape
+    each declare their own row type.
+    """
+    return {**page_schema({"type": "array", "items": item_schema}), "additionalProperties": False}
+
+
+_PAGE_SCHEMA: dict[str, Any] = _page_of({"type": "object"})
+
 
 # One per_run/values row. No ``required`` list: include.fields projects a row
 # down to the requested paths, so any subset of these keys is a valid row. The
@@ -2197,16 +2198,12 @@ _RESULT_ENTRY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "metric": {"type": "string"},
-        "reduced": response_budget.row_items_schema(_REDUCED_SCHEMA),
-        "reduced_columns": response_budget.COLUMNAR_ROWS_SCHEMA,
+        "reduced": {"type": "array", "items": _REDUCED_SCHEMA},
         "groups": {"type": "array", "items": {"type": "object"}},
         "steps": {"type": "array", "items": {"type": "object"}},
         "spec": _SPEC_SCHEMA,
-        "per_run": response_budget.row_page_schema(
-            _PAGE_SCHEMA, item_schema=_ATTRIBUTED_VALUE_SCHEMA
-        ),
-        "values": response_budget.row_items_schema(_ATTRIBUTED_VALUE_SCHEMA),
-        "values_columns": response_budget.COLUMNAR_ROWS_SCHEMA,
+        "per_run": _page_of(_ATTRIBUTED_VALUE_SCHEMA),
+        "values": {"type": "array", "items": _ATTRIBUTED_VALUE_SCHEMA},
         "warnings": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["metric", "reduced", "warnings"],
@@ -2924,22 +2921,6 @@ def render_attached_analysis(
     return data
 
 
-def columnarize_analysis_view(data: dict[str, Any]) -> None:
-    """Render every declared attached-analysis row surface positionally."""
-    for entry in data.get("results", {}).values():
-        response_budget.columnarize(entry, "reduced")
-        response_budget.columnarize(entry, "values")
-        per_run = entry.get("per_run")
-        if isinstance(per_run, dict):
-            response_budget.columnarize(per_run, "items")
-        spec = entry.get("spec")
-        if isinstance(spec, dict):
-            response_budget.columnarize(spec["fail_cases"], "items")
-    coverage = data.get("coverage")
-    if isinstance(coverage, dict) and isinstance(coverage.get("missing_cases"), dict):
-        response_budget.columnarize(coverage["missing_cases"], "items")
-
-
 def analysis_rows(data: dict[str, Any]) -> list[Any]:
     """Every row this response is currently showing, across all row surfaces.
 
@@ -2982,7 +2963,7 @@ def _degrade_analysis(
     *,
     preserve_provenance: bool = False,
 ) -> None:
-    """Apply the budget ladder's in-place presentation rungs to this envelope.
+    """Apply the budget ladder's in-place trim rung to this envelope.
 
     The answer rung and the shrink rung are not here: revoking an opt-in changes
     what gets computed, and shrinking a page has to happen before its cursor is
@@ -3003,17 +2984,6 @@ def _degrade_analysis(
         keep = preserve_provenance and not rung.answer_channel
         empty = () if keep else _TRIM_EMPTY_ENVELOPE
         response_budget.apply_trim(data, remove=_TRIM_REMOVE_ENVELOPE, empty=empty)
-    if rung.columnar:
-        for entry in data["results"].values():
-            response_budget.columnarize(entry, "reduced")
-            response_budget.columnarize(entry, "values")
-            per_run = entry.get("per_run")
-            if isinstance(per_run, dict):
-                response_budget.columnarize(per_run, "items")
-            spec = entry.get("spec")
-            if isinstance(spec, dict):
-                response_budget.columnarize(spec["fail_cases"], "items")
-        response_budget.columnarize(data["coverage"]["missing_cases"], "items")
 
 
 #: This tool's budget epilogue. No hint mirror: an analyze ``hint`` is the resume
