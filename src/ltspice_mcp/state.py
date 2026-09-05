@@ -29,6 +29,7 @@ from ltspice_mcp.lib.job_types import (
 from ltspice_mcp.lib.library_manager import LibraryManager
 from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.lib.simulator import simulator_dialect
+from ltspice_mcp.lib.store import Store
 
 if TYPE_CHECKING:
     from mcp import types
@@ -108,6 +109,17 @@ class SessionState:
     when the client never set one (send everything — the pre-setLevel
     default). Registering the setLevel handler is also what makes the SDK
     declare the logging capability in the initialize result."""
+
+    @property
+    def store(self) -> Store:
+        """Every path this session writes. See ``lib/store.py`` for the layout.
+
+        A value object over the working directory, so it is rebuilt per access
+        rather than cached — nothing about it is stateful, and a session that
+        changed its working directory would otherwise keep writing to the old
+        one.
+        """
+        return Store(self.working_dir)
 
     @property
     def raw_dialect(self) -> str | None:

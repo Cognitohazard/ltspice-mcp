@@ -72,7 +72,16 @@ Error codes that only those handlers emitted are gone with them:
 `decimated`, `window_applied`, `complex_format_used`, `unrecognized_save`,
 `max_pk_pk_bucket`, and `export_written`.
 
-### Changed — a job record from an earlier release is inert, not broken
+### Changed
+
+- One on-disk store. Everything the server writes under a working directory's
+  `.ltspice-mcp/` is laid out by one `Store`: `experiments/` (job records, a
+  request index, a per-circuit index, cancellation markers), `runs/{job_id}/`
+  (every artifact one job produced, with its staged decks), `results/`,
+  `renders/`, `verify/`, `edit-exports/`, and `locks/`, stamped with a single
+  `store_version`. The per-circuit pointer files that let a circuit's sidecar
+  find working-directory jobs are gone; the store's own index does that. A
+  job sidecar written by 0.5 still loads as an inert record. — a job record from an earlier release is inert, not broken
 
 A job sidecar written by a pre-0.6 release still loads, and loading one
 never breaks the registry or the startup preload. It comes back as a record

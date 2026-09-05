@@ -18,11 +18,12 @@ import jsonschema
 import pytest
 from pydantic import ValidationError
 
-from ltspice_mcp.lib import experiment_store, response_budget, result_store, wsl
+from ltspice_mcp.lib import experiment_store, response_budget, result_store, store, wsl
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
 from ltspice_mcp.lib.runner_base import RunOutcome, collect_run_outcome
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments as experiments_mod
@@ -40,6 +41,7 @@ from ltspice_mcp.tools.jobs import (
 )
 from ltspice_mcp.tools.receipts import RUN_EXPERIMENTS_OUTPUT_SCHEMA
 from tests.conftest import (
+    fake_artifact_paths,
     fake_simulator,
     recorded_fixture_simulator,
     resolve_local_ref,
@@ -1115,7 +1117,7 @@ class TestReplayRejectsChangedSources:
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
         await state_with_sim.job_registry.drain_pending()
 
-        record = experiment_store.record_path(first["job_id"], work_dir)
+        record = Store(work_dir).job_record(first["job_id"])
         stored = json.loads(record.read_text())
         for source in stored["sources"]:
             source["sha256"] = ""
@@ -1345,8 +1347,7 @@ class TestPerCircuitFailuresAndAccounting:
 
         def submit(self, netlist: Path, run_filename: str, callback):
             submitted.append(netlist)
-            raw = self.output_folder / f"{Path(run_filename).stem}.raw"
-            log = self.output_folder / f"{Path(run_filename).stem}.log"
+            raw, log = fake_artifact_paths(self.output_folder, run_filename)
             raw.write_bytes(b"Title: mock")
             log.write_text("ok")
             outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
@@ -1444,7 +1445,7 @@ def _failing_simulator(monkeypatch: pytest.MonkeyPatch, log_text: str) -> None:
     """Every case aborts the way the simulator aborts: non-zero exit, .fail log."""
 
     def submit(self, _netlist: Path, run_filename: str, callback):
-        log = self.output_folder / f"{Path(run_filename).stem}.fail"
+        log = fake_artifact_paths(self.output_folder, run_filename)[1].with_suffix(".fail")
         log.write_text(log_text)
         self.loop.call_soon_threadsafe(callback, collect_run_outcome(".", str(log)))
         return object()
@@ -1471,7 +1472,7 @@ def _per_case_failing_simulator(
     def submit(self, _netlist: Path, run_filename: str, callback):
         stem = Path(run_filename).stem
         match = re.search(r"_case_(\d+)", stem)
-        log = self.output_folder / f"{stem}.fail"
+        log = fake_artifact_paths(self.output_folder, run_filename)[1].with_suffix(".fail")
         log.write_text(log_for(int(match.group(1)) if match else next(counter)))
         self.loop.call_soon_threadsafe(callback, collect_run_outcome(".", str(log)))
         return object()
@@ -1764,7 +1765,7 @@ class TestAttachedAnalysis:
         assert "keys present" in warning
         job = state_with_sim.experiment_jobs[lean["job_id"]]
         assert job.analysis.result is not None
-        assert job.analysis.result["schema"] == "ltspice-mcp/attached-analysis-snapshot"
+        assert job.analysis.result["kind"] == store.KIND_ANALYSIS_SNAPSHOT
         assert job.analysis.request is not None
         assert job.analysis.request["include"] is None
 
@@ -2064,8 +2065,7 @@ def _recording_simulator(monkeypatch: pytest.MonkeyPatch, submitted: list[Path])
 
     def submit(self, netlist: Path, run_filename: str, callback):
         submitted.append(Path(netlist))
-        raw = self.output_folder / f"{Path(run_filename).stem}.raw"
-        log = self.output_folder / f"{Path(run_filename).stem}.log"
+        raw, log = fake_artifact_paths(self.output_folder, run_filename)
         raw.write_bytes(b"Title: mock")
         log.write_text("ok")
         outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)

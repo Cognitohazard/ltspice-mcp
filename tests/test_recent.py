@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ltspice_mcp.lib import recent
+from ltspice_mcp.lib import recent, store
 
 
 @pytest.fixture
@@ -101,14 +101,17 @@ class TestIsCircuitFile:
         assert not recent.is_circuit_file(Path(name))
 
 
-class TestSchemaVersion:
-    def test_write_includes_schema_header(self, recent_home: Path, tmp_path: Path) -> None:
+class TestStoreVersion:
+    """The index is a store record and carries the store's one version."""
+
+    def test_write_includes_the_store_envelope(self, recent_home: Path, tmp_path: Path) -> None:
         circuit = tmp_path / "rc.cir"
         circuit.write_text("")
         recent.touch(circuit)
         on_disk = json.loads(recent.index_path().read_text())
-        assert on_disk["schema"] == recent.SCHEMA
-        assert on_disk["schema_version"] == recent.SCHEMA_VERSION
+        assert on_disk["schema"] == store.STORE_SCHEMA
+        assert on_disk["store_version"] == store.STORE_VERSION
+        assert on_disk["kind"] == store.KIND_RECENT
 
     def test_read_rejects_versionless_file(self, recent_home: Path, tmp_path: Path) -> None:
         recent_home.mkdir(parents=True, exist_ok=True)
@@ -124,10 +127,25 @@ class TestSchemaVersion:
         (recent_home / "recent.json").write_text(
             json.dumps(
                 {
-                    "schema": recent.SCHEMA,
-                    "schema_version": 999,
+                    "schema": store.STORE_SCHEMA,
+                    "store_version": 999,
+                    "kind": store.KIND_RECENT,
                     "circuits": [{"path": "/tmp/x.cir", "last_touched": None}],
                 }
+            )
+        )
+        assert recent.load() == []
+
+    def test_read_rejects_another_record_kind(self, recent_home: Path) -> None:
+        # The one store record a session is likely to meet from elsewhere, so
+        # "right store, wrong record" has to be an answer it can give.
+        recent_home.mkdir(parents=True, exist_ok=True)
+        (recent_home / "recent.json").write_text(
+            json.dumps(
+                store.envelope(
+                    store.KIND_RESULT_SET,
+                    circuits=[{"path": "/tmp/x.cir", "last_touched": None}],
+                )
             )
         )
         assert recent.load() == []
