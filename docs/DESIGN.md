@@ -340,7 +340,7 @@ capping only at very large sizes.
 interactive channel adds only uPlot (~50 KB, zero-dep, inlined); matplotlib
 is confined to the static-PNG tier and ships as the optional `[plot]` extra.
 **Renderer principle:** the plot layer takes plain arrays plus labels and
-knows nothing about `job` / `RunRef` internals, so the three channels stay
+knows nothing about job or run internals, so the three channels stay
 swappable behind one data contract.
 
 ## Architecture
@@ -355,17 +355,17 @@ Config / state        config.py, state.py, errors.py
 
 Tool modules use a decorator-based registry (`@registry.tool(...)`).
 Each registration declares `name`, `description`, `input_model` (Pydantic),
-`annotations`, `profiles` (which tool profiles expose this tool), and an
-optional `output_schema`. `SessionState.create()` filters tools by
-profile during lifespan init; the dispatch table and tool definitions
-both come from `registry`.
+`annotations`, and an optional `output_schema`. `SessionState.create()`
+builds the surface once during lifespan init; the dispatch table and the
+tool definitions both come from `registry`.
 
 Key `lib/` modules:
 
 |module|purpose|
 |-|-|
 |`services.py`|service layer shared by tools and resources — job resolution, cached result loading, reusable extraction|
-|`sim_runner.py`, `sweep_runner.py`, `montecarlo_runner.py`|spicelib runner wrappers|
+|`runner_base.py`, `experiment_runner.py`|the spicelib runner wrapper and the experiment coordinator built on it|
+|`schematic_ops.py`|the `.asc` edit engine — op models, appliers, geometry, net tracing|
 |`runner_manager.py`|centralized runner lifecycle with auto-invalidation on loop / simulator / output-folder change|
 |`simulator.py`|simulator detection, WSL/Wine selection|
 |`ltspice_wsl.py`, `wsl.py`|WSL path conversion and Windows interop|
@@ -393,7 +393,10 @@ tools are `inspect` kinds. Netlist text editing has no tool at all: an
 agent with file access does it natively, and a wrapper added nothing.
 
 **What 0.6.0 removed.** The `full` (49-tool) and `agentic` (41-tool)
-profiles, and with them one tool per operation. Their names are still
+profiles, and with them one tool per operation, the single-simulation and
+batch job types those tools ran, and the runners behind them. A job
+sidecar an earlier release wrote still loads, inert: reading one reports
+what it is and that it must be re-run. Their profile names are still
 accepted in `[tools] profile` and `LTSPICE_MCP_TOOL_PROFILE` for one
 release; each logs a warning and serves the consolidated surface, so a
 config that names a removed profile still starts a working server instead
@@ -468,8 +471,8 @@ adaptations:
   (`\\wsl.localhost\...`), which loses measurement data from `.log`
   files.
 - **Extension preservation**: LTspice requires netlist files to have an
-  extension (`.cir`, `.net`, `.sp`). `sim_runner.py` preserves the
-  original extension in `run_filename`.
+  extension (`.cir`, `.net`, `.sp`). `runner_base.submit_netlist` preserves
+  the original extension in `run_filename`.
 
 `simulator.path` in `ltspice-mcp.toml` must point at the
 Windows-side executable (e.g.
