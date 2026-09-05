@@ -41,13 +41,13 @@ from ltspice_mcp.lib.log_parser import (
 from ltspice_mcp.lib.pagination import retotal_page
 from ltspice_mcp.lib.raw_parser import get_step_count, safe_magnitude_db
 from ltspice_mcp.lib.recipes import (
+    KeyedRecipe,
+    MultiRecipe,
     OperatingPointRecipe,
     PlotRecipe,
     Recipe,
+    ScalarRecipe,
     WaveformRecipe,
-    _KeyedRecipe,
-    _MultiRecipe,
-    _ScalarRecipe,
     recipe_error,
     validate_recipe,
 )
@@ -1638,7 +1638,7 @@ def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Reco
     out: dict[str, list[tuple[Record, float]]] = {}
     for record in records:
         value = record.value
-        if isinstance(recipe, _ScalarRecipe):
+        if isinstance(recipe, ScalarRecipe):
             nested = _SCALAR_NESTED.get(recipe.metric)
             if nested is not None:
                 field, candidate = nested(value)
@@ -1651,7 +1651,7 @@ def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Reco
             number = _number(candidate)
             if number is not None:
                 out.setdefault(field, []).append((record, number))
-        elif isinstance(recipe, _MultiRecipe):
+        elif isinstance(recipe, MultiRecipe):
             field = recipe.reduce_field
             if field is None and recipe.spec is not None:
                 field = recipe.spec.field
@@ -1660,7 +1660,7 @@ def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Reco
                 number = _number(value.get(actual))
                 if number is not None:
                     out.setdefault(field, []).append((record, number))
-        elif isinstance(recipe, _KeyedRecipe):
+        elif isinstance(recipe, KeyedRecipe):
             for name, candidate in _KEYED_EXTRACTORS[recipe.metric](value).items():
                 number = _number(candidate)
                 if number is not None:

@@ -20,17 +20,14 @@ import re
 from pathlib import Path
 from typing import Any, cast
 
-import jsonschema
 import pytest
 
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import get_tools
-from ltspice_mcp.tools.analysis import SignalStatsInput, handle_signal_stats
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from ltspice_mcp.tools.experiments import JobsInput, handle_jobs
 from tests.conftest import (
-    NO_CONTRACT_DELEGATES,
     make_experiment_job,
     stage_recorded_fixture,
 )
@@ -74,51 +71,14 @@ def test_scenario_calls_only_registered_tools():
 
 # ---------------------------------------------------------------------------
 # Delegated-contract attribution (the schema belongs to the handler, not to
-# its registration): analyze_results delegates to internal compute adapters,
-# and each adapter's structuredContent must be validated against the
-# ADAPTER's declared contract, never against the delegating tool's envelope.
+# its registration): a tool that delegates to another handler must have that
+# handler's structuredContent validated against the DELEGATE's declared
+# contract, never against the delegating tool's envelope.
 # ---------------------------------------------------------------------------
 
 
 def _tran_recipe() -> list[dict[str, Any]]:
     return [{"key": "signal_stats", "metric": "signal_stats", "signal": "V(out)"}]
-
-
-async def test_adapter_emission_validates_against_the_adapters_own_contract(
-    state_no_sim: SessionState, work_dir: Path
-):
-    """The adapter's real payload is legal for its own declared contract and
-    ILLEGAL for the delegating envelope — so a walk that misattributed the
-    emission to analyze_results would raise. Both discriminations asserted."""
-    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    result = await handle_signal_stats(
-        SignalStatsInput(raw_file=str(raw), signal="V(out)"), state_no_sim
-    )
-    payload = result.structuredContent
-    assert payload is not None
-    adapter_schema = getattr(handle_signal_stats, "__output_schema__", None)
-    assert adapter_schema is not None, "handle_signal_stats declares no contract"
-    # Legal for the adapter's contract (this direct call already ran under the
-    # live hook, which attributed it to the adapter's own frame).
-    jsonschema.Draft202012Validator(adapter_schema).validate(payload)
-    # Illegal for the delegating envelope — the discrimination that makes the
-    # attribution test below meaningful.
-    envelope = getattr(handle_analyze_results, "__output_schema__", None)
-    assert envelope is not None
-    assert list(jsonschema.Draft202012Validator(envelope).iter_errors(payload)), (
-        "adapter payload unexpectedly satisfies the analyze_results envelope — "
-        "this test can no longer distinguish the two contracts"
-    )
-    # The same adapter emission inside analyze_results' frame passes the hook:
-    # the walk stops at the adapter's contract instead of falling through.
-    data = await handle_analyze_results(
-        AnalyzeResultsInput.model_validate(
-            {"sources": [{"raw_path": str(raw), "label": "dut"}], "recipes": _tran_recipe()}
-        ),
-        state_no_sim,
-    )
-    assert data.structuredContent is not None
-    assert "signal_stats" in data.structuredContent["results"]
 
 
 async def test_malformed_final_analyze_results_payload_still_trips_the_hook(
@@ -183,16 +143,11 @@ def test_every_delegated_handler_resolves_to_a_declared_contract():
     targets = _delegate_targets()
     assert targets, "derived no delegate names — the source scan has rotted"
     missing = sorted(
-        name
-        for name, fn in targets.items()
-        if getattr(fn, "__output_schema__", None) is None and name not in NO_CONTRACT_DELEGATES
+        name for name, fn in targets.items() if getattr(fn, "__output_schema__", None) is None
     )
-    assert not missing, f"delegated handlers without a declared contract: {missing}"
-    # Fail-closed pins: every exemption must still be real. (The hook's
-    # walk-stop set derives from this same conftest table, so walk-stop ⊆
-    # exemptions holds by construction.)
-    for name in NO_CONTRACT_DELEGATES:
-        assert name in targets, f"exemption {name!r} is stale — no longer delegated to"
-        assert getattr(targets[name], "__output_schema__", None) is None, (
-            f"exemption {name!r} is slack — the handler now declares a contract"
-        )
+    assert not missing, (
+        f"delegated handlers without a declared contract: {missing}. The hook "
+        "attributes an emission to the first frame that declares one, so a "
+        "delegate with none would be validated against the delegating tool's "
+        "envelope instead — declare @declare_output_schema on it."
+    )

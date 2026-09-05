@@ -11,21 +11,21 @@ from ltspice_mcp.lib.recipes import (
     DISCRIMINANTS,
     RECIPE_MODELS,
     BodeCrossingRecipe,
+    KeyedRecipe,
+    MultiRecipe,
+    ScalarRecipe,
     ValueRecipe,
-    _KeyedRecipe,
-    _MultiRecipe,
-    _ScalarRecipe,
-    _VariableRecipe,
+    VariableRecipe,
     validate_recipe,
 )
 
 # A recipe's reducer category is which of the four bases it inherits (exactly
 # one). The bases encode the accept/reject behavior the matrix below checks.
 _CATEGORY_BASES = {
-    "scalar": _ScalarRecipe,
-    "multi": _MultiRecipe,
-    "keyed": _KeyedRecipe,
-    "variable": _VariableRecipe,
+    "scalar": ScalarRecipe,
+    "multi": MultiRecipe,
+    "keyed": KeyedRecipe,
+    "variable": VariableRecipe,
 }
 
 

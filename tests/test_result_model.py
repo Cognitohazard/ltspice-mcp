@@ -1,10 +1,10 @@
-"""Tests for the unified single-run/batch result read-model (runs_of/RunRef).
+"""Reading a result by the step it belongs to, and naming exactly one source.
 
-The read-model treats a single-run job as a batch-of-one so every result
-extraction routine can be written once against ``RunRef``. Covers:
-- ``runs_of`` over both job shapes + empty-path normalization,
-- ``resolve_run`` index bounds,
-- ``resolve_raw_file``/``resolve_log_file`` reaching an arbitrary run index.
+Two rules that used to live in the removed per-metric tools and now sit on the
+paths that survived them: a summary reflects the ``.step`` point it was asked
+for (it once hardcoded step 0, so a stepped run always reported the first
+step's range), and a direct read must name a raw or a job, never both and never
+neither — with an empty or whitespace path counting as neither.
 """
 
 from pathlib import Path
@@ -14,15 +14,11 @@ import numpy as np
 import pytest
 
 from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib.metrics import summary
+from ltspice_mcp.lib.recipes import SummaryRecipe
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.analysis import (
-    BodeMetricsInput,
-    QueryValueInput,
-    SimulationSummaryInput,
-    handle_bode_metrics,
-    handle_query_value,
-    handle_simulation_summary,
-)
+from ltspice_mcp.tools.analysis import PlotWaveformInput, _direct_source
+from tests.test_analysis_tools import _source
 
 
 def _inject_raw(state: SessionState, path: Path, raw: MagicMock) -> None:
@@ -45,19 +41,14 @@ def _stepped_tran_raw() -> MagicMock:
 @pytest.mark.asyncio
 class TestSimulationSummaryStepAware:
     async def test_summary_reflects_chosen_step(self, state_no_sim: SessionState, work_dir: Path):
-        # Seam 3: build_simulation_summary used to hardcode step 0, so the range
-        # was always step 0's. It must now reflect args.step.
         path = work_dir / "stepped.raw"
         _inject_raw(state_no_sim, path, _stepped_tran_raw())
-        res0 = await handle_simulation_summary(
-            SimulationSummaryInput(raw_file="stepped.raw", step=0), state_no_sim
-        )
-        res1 = await handle_simulation_summary(
-            SimulationSummaryInput(raw_file="stepped.raw", step=1), state_no_sim
-        )
-        assert res0.structuredContent is not None and res1.structuredContent is not None
-        assert res0.structuredContent["range"]["time_end"] == 1.0
-        assert res1.structuredContent["range"]["time_end"] == 5.0  # step 1, not step 0
+        recipe = SummaryRecipe(key="s", metric="summary")
+        source = _source(state_no_sim, "stepped.raw")
+        first = await summary(source, recipe, 0, state_no_sim)
+        second = await summary(source, recipe, 1, state_no_sim)
+        assert first["range"]["time_end"] == 1.0
+        assert second["range"]["time_end"] == 5.0  # step 1, not step 0
 
     async def test_summary_out_of_range_step_rejected(
         self, state_no_sim: SessionState, work_dir: Path
@@ -65,91 +56,36 @@ class TestSimulationSummaryStepAware:
         path = work_dir / "stepped2.raw"
         _inject_raw(state_no_sim, path, _stepped_tran_raw())
         with pytest.raises(ResultError, match="out of range"):
-            await handle_simulation_summary(
-                SimulationSummaryInput(raw_file="stepped2.raw", step=9), state_no_sim
-            )
-
-
-# ---------------------------------------------------------------------------
-# Phase 2 — query_value / bode_metrics address a batch run (job_id + run_index)
-# ---------------------------------------------------------------------------
-
-
-def _tran_raw() -> MagicMock:
-    raw = MagicMock()
-    raw.get_raw_property.return_value = "Transient Analysis"
-    raw.get_trace_names.return_value = ["time", "V(out)"]
-    raw.get_steps.return_value = [0]
-    raw.get_axis.return_value = np.array([0.0, 1.0])
-    raw.get_wave.return_value = np.array([1.0, 2.0])
-    return raw
-
-
-def _ac_raw_lpf(fc: float) -> MagicMock:
-    raw = MagicMock()
-    raw.get_raw_property.return_value = "AC Analysis"
-    raw.get_trace_names.return_value = ["frequency", "V(out)"]
-    freq = np.logspace(0, 5, 200)
-    H = 1.0 / (1.0 + 1j * (freq / fc))
-    raw.get_axis.return_value = freq
-    raw.get_steps.return_value = [0]
-    raw.get_wave = lambda name, step=0: H
-    return raw
-
-
-@pytest.mark.asyncio
-class TestQueryValueJobRun:
-    async def test_raw_file_and_job_id_mutually_exclusive(self, state_no_sim: SessionState):
-        with pytest.raises(ResultError, match="exactly one"):
-            await handle_query_value(
-                QueryValueInput(raw_file="x.raw", job_id="b1", signal="V(out)", at="1"),
-                state_no_sim,
-            )
-
-    async def test_neither_raw_nor_job(self, state_no_sim: SessionState):
-        with pytest.raises(ResultError, match="exactly one"):
-            await handle_query_value(QueryValueInput(signal="V(out)", at="1"), state_no_sim)
-
-    async def test_step_axis_with_job_id_rejected(self, state_no_sim: SessionState):
-        with pytest.raises(ResultError, match="can't be combined with 'job_id'"):
-            await handle_query_value(
-                QueryValueInput(job_id="b1", step_axis="R", step_value="1k", signal="V(out)"),
+            await summary(
+                _source(state_no_sim, "stepped2.raw"),
+                SummaryRecipe(key="s", metric="summary"),
+                9,
                 state_no_sim,
             )
 
 
-@pytest.mark.asyncio
-class TestBodeMetricsJobRun:
-    async def test_bode_raw_and_job_mutually_exclusive(self, state_no_sim: SessionState):
+class TestExactlyOneSource:
+    """A direct read names a raw path OR a job, never both and never neither.
+
+    Truthiness, not identity: an empty or whitespace path is stripped to ``""``
+    by the input model, and must count as absent — otherwise it slips past and
+    resolves to the working directory, which fails later with an error about
+    the wrong thing.
+    """
+
+    @pytest.mark.parametrize(
+        ("raw_file", "job_id"),
+        [("x.raw", "b1"), (None, None), ("", None)],
+        ids=["both", "neither", "empty"],
+    )
+    def test_refused(self, state_no_sim: SessionState, raw_file: str | None, job_id: str | None):
         with pytest.raises(ResultError, match="exactly one"):
-            await handle_bode_metrics(
-                BodeMetricsInput(raw_file="x.raw", job_id="b1", signal="V(out)", mode="filter"),
-                state_no_sim,
-            )
+            _direct_source(raw_file, job_id, state_no_sim)
 
-
-# ---------------------------------------------------------------------------
-# Review fixes: status gate, non-contiguous range message, empty-string guard
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-class TestEmptyRawFileGuard:
-    async def test_query_value_empty_raw_file(self, state_no_sim: SessionState):
+    @pytest.mark.parametrize("spelling", ["", "  "])
+    def test_a_blank_path_arrives_as_absent(self, state_no_sim: SessionState, spelling: str):
+        # The input model strips whitespace, so a blank path reaches the
+        # resolver as "" — which the check above reads as no source at all.
+        args = PlotWaveformInput(raw_file=spelling)
         with pytest.raises(ResultError, match="exactly one"):
-            await handle_query_value(
-                QueryValueInput(raw_file="", signal="V(out)", at="1"), state_no_sim
-            )
-
-    async def test_query_value_whitespace_raw_file(self, state_no_sim: SessionState):
-        # StrictModel strips to "" — must still be treated as absent.
-        with pytest.raises(ResultError, match="exactly one"):
-            await handle_query_value(
-                QueryValueInput(raw_file="  ", signal="V(out)", at="1"), state_no_sim
-            )
-
-    async def test_bode_metrics_empty_raw_file(self, state_no_sim: SessionState):
-        with pytest.raises(ResultError, match="exactly one"):
-            await handle_bode_metrics(
-                BodeMetricsInput(raw_file="", signal="V(out)", mode="filter"), state_no_sim
-            )
+            _direct_source(args.raw_file, args.job_id, state_no_sim)
