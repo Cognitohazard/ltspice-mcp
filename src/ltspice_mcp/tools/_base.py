@@ -760,23 +760,6 @@ def coerce_render_policy(value: Any, *, policy: type[RenderPolicy] = RenderPolic
     raise ValueError(render_spellings(policy))
 
 
-def one_spelling(chosen: Any, aliases: Mapping[str, Any], *, argument: str) -> None:
-    """Refuse a call that says the same thing twice, naming the one to keep.
-
-    The flat spellings retained as aliases are equivalent to the object form,
-    never additive: two of them in one call have no defined precedence, so the
-    call is refused rather than silently resolved one way.
-    """
-    if chosen is None:
-        return
-    named = sorted(key for key, value in aliases.items() if value is not None)
-    if named:
-        raise ValueError(
-            f"{argument} and {', '.join(named)} say the same thing — pass one. "
-            f"The flat spelling is a retained alias for {argument}."
-        )
-
-
 RO_ANNOTATIONS = types.ToolAnnotations(
     read_only_hint=True,
     destructive_hint=False,

@@ -654,6 +654,21 @@ R1 in out {mc(10k, 0.1)}         ; uniform dist, 10k +/-10%
 `mc(nominal, tolerance)` — uniform between `nom*(1-tol)` and `nom*(1+tol)`.
 
 <!-- profile: consolidated -->
+A `random` variation on `run_experiments` does the same without touching the
+deck, and its `rules` list carries four kinds — pick the one that matches what
+actually varies in the part you are modelling:
+
+| rule | what it perturbs | typical use |
+|-|-|-|
+| `component` | one part's value, by tolerance | 1% resistors, 10% capacitors |
+| `param` | a declared `.param` | a design variable with a spread |
+| `model` | one named parameter of a `.model` card | process corners drawn statistically |
+| `mismatch` | per-instance `delvto`/`mulu0` from device area | matched-transistor offset (below) |
+
+The first three take `{target, tolerance, scale: "relative"|"absolute",
+distribution: "normal"|"uniform"}`; `model` adds `param`. Full field tables:
+`inspect(kind="reference", query="monte carlo")`.
+
 ### Per-instance mismatch (flat devices and subckt-wrapped devices)
 
 Two distinct request shapes, both under `run_experiments` `variations`:

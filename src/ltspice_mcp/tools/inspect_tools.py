@@ -384,8 +384,8 @@ class CapabilitiesQuery(StrictModel):
 
 class SymbolsQuery(StrictModel):
     """The .asy symbol names that resolve, and the directory precedence they
-    resolve through. Ask this before placing a component — a name absent here
-    will not place."""
+    resolve through. Ask it before an add_component op to learn the name to
+    place, and after a symbol_unresolved failure to see what this box has."""
 
     kind: Literal["symbols"]
     path: str | None = Field(
@@ -469,7 +469,8 @@ class ComponentsQuery(StrictModel):
 
 class ModelQuery(StrictModel):
     """Find a .model or .subckt definition — by fuzzy name match, or by listing
-    everything the given libraries define."""
+    everything the given libraries define. Ask it when a run failed on a model
+    the deck names, or to get a part's exact spelling before writing it in."""
 
     kind: Literal["model"]
     mode: Literal["search", "enumerate"] = Field(
