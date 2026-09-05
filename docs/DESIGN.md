@@ -400,7 +400,10 @@ Key `lib/` modules:
 ### The tool surface
 
 There is one tool profile, and no setting selects it: `config.tool_profile`
-is a fixed name the guide and the prompts are written against.
+is a fixed name the guide and the prompts are written against. What `[tools]`
+does still select is `listing` — `full` or `compact`, the two amounts of each
+definition the same seven tools can be advertised with (see
+[docs/design/mcp_surface.md](design/mcp_surface.md), "Two listing modes").
 
 |profile|tool count|use case|
 |-|-|-|

@@ -233,9 +233,14 @@ allowed_paths = ["."]    # sandbox: only these directories are accessible
 # max_parallel = 4       # default: number of CPU cores, capped at 8
 timeout = 300.0          # seconds
 
+[tools]
+listing = "full"         # "compact" serves the same seven tools without their per-argument descriptions
+
 [state]
 persist_jobs = true
 ```
+
+`listing = "compact"` cuts about 45% off what a session loads before it can call anything; the same seven tools accept exactly the same calls, and `inspect(kind="reference", query="...")` looks up a branch's arguments when you need them.
 
 See [`src/ltspice_mcp/config.py`](src/ltspice_mcp/config.py) for the full option list (`[analysis]`, `[schematic]`, `[logging]`, ...).
 
@@ -273,7 +278,7 @@ Netlists are written and edited with the agent's own file tools; the server does
 
 The `skills/` directory carries the domain knowledge that pairs with the surface: `skills/spice-experiments/SKILL.md` (the experiment workflow), `skills/ltspice/SKILL.md` and `skills/ngspice/SKILL.md` (SPICE syntax per engine), `skills/spice-bench-craft/SKILL.md` (bench archetypes). Copy the relevant skill into your client's persistent-instructions location.
 
-**Migration from 0.5.** The `full` (49-tool) and `agentic` (41-tool) profiles were removed in 0.6.0; the consolidated surface above replaces them. `[tools] profile` is no longer a key the server reads — a config that still sets it loads with the key ignored. Pin `ltspice-mcp==0.5.*` if you need the old per-operation tools.
+**Migration from 0.5.** The `full` (49-tool) and `agentic` (41-tool) profiles were removed in 0.6.0; the consolidated surface above replaces them. `[tools] profile` is no longer a key the server reads — a config that still sets it loads with the key ignored. Keep the `[tools]` section rather than deleting it: it now holds `listing`, above. Pin `ltspice-mcp==0.5.*` if you need the old per-operation tools.
 
 **Where it runs.** The server shells out to a local LTspice/ngspice and reads circuit files from disk, so it must run where the simulator and the files are. Two setups work: a local MCP host (Claude Desktop, Claude Code, Cursor, Gemini CLI, Codex, …) on your own machine, or a browser-based cloud agent whose sandbox can install ngspice and register the server (verified with Claude). LTspice is local-only (a Windows app); ngspice is open-source and works in either place. Consumer web chat with no sandbox has no simulator and no file access, so it can't run this server directly; bridge it to a machine you control with a stdio→HTTP bridge such as [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy) if you want that UI. Only expose the server on a network you fully control: it writes files and spawns processes inside `allowed_paths`.
 
