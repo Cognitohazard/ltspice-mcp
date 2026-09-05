@@ -723,8 +723,17 @@ and a warning names the deck that failed. Either way the call's outcome is
 `partial` and the reason is in the response.
 
 Output: findings in the shared shape, a comparison block per mode, a render
-block `{path, sha256, width, height, downscaled}`, a scene summary, `outcome`
-and `hint`.
+block `{path, sha256, source_sha256, width, height, downscaled}`, a scene
+summary, `outcome` and `hint`.
+
+The render block carries three digests' worth of care in two names. `sha256` is
+the image's; `source_sha256` is the sheet's own, read from the file this call
+drew. Rendering reads the file on disk, and a peer sharing the working
+directory may commit between `edit_schematic` returning and this call running —
+so without the second digest a picture of a revision the caller never wrote is
+indistinguishable from a picture of theirs. Comparing `source_sha256` with the
+`sha256` `edit_schematic` returned settles it. The export block's `sha256` is a
+third thing again: the netlist's.
 
 The historical per-rule finding cap applies only to layout and quality issue
 rules and to `dropped_wire`; `dropped_wire` carries no truncation observation.
