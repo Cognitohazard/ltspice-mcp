@@ -1209,7 +1209,7 @@ async def _routing_failure_response(
     return await render_run_receipt(budget, build)
 
 
-async def _error_response(
+def submission_error_payload(
     request_id: str,
     *,
     code: str,
@@ -1217,8 +1217,13 @@ async def _error_response(
     stage: str,
     retryable: bool,
     commit_state: Literal["not_started", "committed", "unknown"],
-    budget: ResponseBudget,
-) -> types.CallToolResult:
+) -> dict[str, Any]:
+    """The receipt-shaped payload for a call that produced no job.
+
+    Public because a submission can now fail outside this handler: the Python
+    API's detached mode spawns a process to submit, and a failure there has to
+    reach the caller in the same shape as a failure here.
+    """
     data = _empty_payload(request_id)
     data.update(
         {
@@ -1232,7 +1237,27 @@ async def _error_response(
             },
         }
     )
-    finalize_receipt(data)
+    return finalize_receipt(data)
+
+
+async def _error_response(
+    request_id: str,
+    *,
+    code: str,
+    message: str,
+    stage: str,
+    retryable: bool,
+    commit_state: Literal["not_started", "committed", "unknown"],
+    budget: ResponseBudget,
+) -> types.CallToolResult:
+    data = submission_error_payload(
+        request_id,
+        code=code,
+        message=message,
+        stage=stage,
+        retryable=retryable,
+        commit_state=commit_state,
+    )
     return await _render_static_run_receipt(
         data,
         message,

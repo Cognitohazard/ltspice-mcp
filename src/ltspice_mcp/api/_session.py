@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import subprocess
 import threading
 from collections.abc import Coroutine
 from concurrent.futures import CancelledError as FutureCancelledError
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Literal, TypeVar
 
+from ltspice_mcp.api import _detach
 from ltspice_mcp.api._exceptions import (
     ApiClosedError,
     ApiInterrupted,
@@ -104,6 +106,8 @@ class Api(ApiMethodsMixin):
         self._status: Literal["open", "closing", "closed"] = "open"
         self._bridge_tasks: dict[asyncio.Task[Any], bool] = {}
         self._state: SessionState
+        self._boot = _detach.boot_spec(working_dir, config_path, overrides)
+        self._detached_children: list[subprocess.Popen[bytes]] = []
 
         self._lease_pid = acquire_session_lease(self)
         try:
@@ -282,6 +286,11 @@ class Api(ApiMethodsMixin):
         if wait_for_owner:
             self._closed_event.wait()
             return
+
+        # Detached owners are not this session's to stop: reap the ones that
+        # have already exited and leave the rest running, which is what the
+        # caller detached them for.
+        _detach.prune(self._detached_children)
 
         close_error: BaseException | None = None
         try:

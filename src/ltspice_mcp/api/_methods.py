@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import os
+import subprocess
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
@@ -13,7 +14,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from ltspice_mcp.api import _reference
+from ltspice_mcp.api import _detach, _reference
 from ltspice_mcp.api._exceptions import (
     ApiCallError,
     ApiInternalError,
@@ -293,6 +294,77 @@ def _note_process_owned_job(receipt: dict[str, Any]) -> dict[str, Any]:
     return receipt
 
 
+def _note_detached_owner(
+    receipt: dict[str, Any],
+    *,
+    owner_pid: int,
+    log_file: Path,
+) -> dict[str, Any]:
+    """Say who owns this job now, and where that process writes.
+
+    The receipt was rendered by the detached owner, so it carries that
+    process's ``process_owned_job`` note — true there and misleading here,
+    where "the current process" is the caller's and does not own the job. One
+    fact replaces the other rather than sitting beside it.
+    """
+    observations = receipt.get("observations")
+    if not isinstance(observations, list):
+        observations = []
+        receipt["observations"] = observations
+    observations[:] = [
+        item
+        for item in observations
+        if not (isinstance(item, Mapping) and item.get("code") == "process_owned_job")
+    ]
+    observations.append(
+        {
+            "code": "detached_owner",
+            "kind": "lifecycle",
+            "detail": (
+                f"This job is owned by a detached process (pid {owner_pid}) that "
+                "supervises it until it is terminal. The current process does not "
+                "own it, so closing the Api or exiting the interpreter will not "
+                "cancel it. Read it back with jobs(action='status'|'wait') by "
+                "job_id, and stop it with jobs(action='cancel') and this receipt's "
+                f"control_token. The owner's console output is at {log_file}."
+            ),
+            "evidence": {"owner_pid": owner_pid, "log_file": str(log_file)},
+        }
+    )
+    return receipt
+
+
+def _submitted_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    """The same arguments with the wire dwell removed.
+
+    The API always submits with ``execution.wait_s=0`` — the dwell is a
+    presentation constant this interface rejects as caller input — and the
+    detached owner submits the same way, so the two produce the same
+    idempotency fingerprint for the same call.
+    """
+    execution = arguments.get("execution")
+    if execution is None:
+        arguments["execution"] = {"wait_s": 0}
+    elif isinstance(execution, Mapping):
+        arguments["execution"] = {**execution, "wait_s": 0}
+    return arguments
+
+
+async def _record_owner_pid(receipt: Mapping[str, Any], state: SessionState) -> int | None:
+    """The pid recorded on the job's own record, or None if it names no job.
+
+    Read from the record rather than taken from the process just spawned: an
+    idempotent replay hands back a job somebody else already owns, and naming
+    the wrong process as its owner is worse than naming none.
+    """
+    job_id = receipt.get("job_id")
+    if not isinstance(job_id, str):
+        return None
+    job = await services.resolve_job_async(job_id, state)
+    owner_pid = getattr(job, "owner_pid", None)
+    return owner_pid if isinstance(owner_pid, int) and owner_pid > 0 else None
+
+
 async def _collect_analysis(
     request: analyze.AnalyzeResultsInput,
     state: SessionState,
@@ -514,6 +586,12 @@ class ApiMethodsMixin(ABC):
     """Public consolidated methods mixed into :class:`ltspice_mcp.api.Api`."""
 
     _state: SessionState
+    #: The constructor arguments a detached owner is given so it opens the same
+    #: engine this session opened.
+    _boot: _detach.DetachedBoot
+    #: Owners spawned by this session. Held only so the finished ones can be
+    #: reaped; a running one is never waited on.
+    _detached_children: list[subprocess.Popen[bytes]]
 
     @staticmethod
     def reference(op: str | None = None) -> str:
@@ -606,12 +684,30 @@ class ApiMethodsMixin(ABC):
         *,
         wait: bool = True,
         raw_page: bool = False,
+        detach: bool = False,
         **arguments: Any,
     ) -> dict[str, Any]:
         """Submit an experiment and optionally wait for its complete receipt."""
         self._check_process_and_thread()
         if not isinstance(wait, bool):
             raise TypeError("wait must be a bool")
+        if not isinstance(detach, bool):
+            raise TypeError("detach must be a bool")
+        if detach:
+            if wait:
+                raise ApiValidationError(
+                    "detach=True requires wait=False: a detached job is owned by the "
+                    "process spawned for it, so this process cannot wait on it as its "
+                    "owner. Drop detach to run the job here, or pass wait=False and "
+                    "follow the receipt with api.wait(job_id)."
+                )
+            if raw_page:
+                raise ApiValidationError(
+                    "detach=True cannot be combined with raw_page=True: raw_page returns "
+                    "one handler page from a submission this process performs, and a "
+                    "detached submission is performed by another process."
+                )
+            return self._run_detached(arguments)
         if raw_page:
             request = _validate(
                 "run_experiments", experiments.RunExperimentsInput, arguments, self._state
@@ -621,12 +717,7 @@ class ApiMethodsMixin(ABC):
             )
 
         _enforce_auto_door(arguments)
-        submitted_arguments = copy.deepcopy(arguments)
-        execution = submitted_arguments.get("execution")
-        if execution is None:
-            submitted_arguments["execution"] = {"wait_s": 0}
-        elif isinstance(execution, Mapping):
-            submitted_arguments["execution"] = {**execution, "wait_s": 0}
+        submitted_arguments = _submitted_arguments(copy.deepcopy(arguments))
         request = _validate(
             "run_experiments",
             experiments.RunExperimentsInput,
@@ -659,6 +750,44 @@ class ApiMethodsMixin(ABC):
             raise ApiInterrupted(receipt=receipt, job_id=waited_job) from exc
         except Exception as exc:
             raise _collector_error(receipt, exc) from exc
+
+    def _run_detached(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
+        """Submit through a process spawned for this one job, and return its receipt.
+
+        The arguments are validated here so a malformed call still raises in
+        the caller's own traceback, before any process exists — but nothing
+        else about the experiment happens in this process. Staging and
+        submission both belong to the owner, which is what makes the job record
+        name a live owner from its first byte.
+        """
+        _enforce_auto_door(arguments)
+        # The owner is given the call as the caller wrote it and applies the
+        # same automatic-mode rules to it, dwell removal included — it is an
+        # ordinary Api caller. Sending it a request that already carried
+        # execution.wait_s would hand it a control its own door refuses.
+        payload = _detach.request_arguments(arguments)
+        request = _validate(
+            "run_experiments",
+            experiments.RunExperimentsInput,
+            _submitted_arguments(copy.deepcopy(payload)),
+            self._state,
+        )
+        handoff = _detach.submit(
+            self._state,
+            self._boot,
+            payload,
+            request.request_id,
+            self._detached_children,
+        )
+        try:
+            owner_pid = self._marshal(_record_owner_pid(handoff.receipt, self._state))
+        except Exception as exc:
+            raise _collector_error(handoff.receipt, exc) from exc
+        return _note_detached_owner(
+            handoff.receipt,
+            owner_pid=owner_pid if owner_pid is not None else handoff.supervisor_pid,
+            log_file=handoff.log_file,
+        )
 
     def jobs(self, *, raw_page: bool = False, **arguments: Any) -> dict[str, Any]:
         """Control jobs, collecting list and receipt pages in automatic mode."""
