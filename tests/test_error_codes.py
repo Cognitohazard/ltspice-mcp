@@ -95,7 +95,7 @@ class TestAnalysisDeadlineIsTyped:
             asyncio.get_running_loop().time() + 60.0,
             {},
         )
-        assert failures["m1"].split(":", 1)[0] == "source_drift"
+        assert failures["m1"].code == "source_drift"
 
     async def test_real_deadline_still_reports_analysis_deadline(
         self, state_no_sim: SessionState, work_dir: Path
@@ -116,7 +116,7 @@ class TestAnalysisDeadlineIsTyped:
                 loop.time() + 60.0,
                 {},
             )
-        assert failures["m1"].split(":", 1)[0] == "analysis_deadline"
+        assert failures["m1"].code == "analysis_deadline"
 
     async def test_manifest_digest_out_of_quota_is_source_unavailable(
         self,
@@ -269,6 +269,7 @@ class TestPortArityIsTyped:
 # codes themselves are always read from the source.
 _CODE_FIRST_CONSTRUCTORS = frozenset(
     {
+        "SourceFault",
         "_JobsActionError",
         "_QueryError",
         "VariationError",

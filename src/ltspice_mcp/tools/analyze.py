@@ -11,7 +11,7 @@ import statistics
 import time
 from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -159,18 +159,144 @@ class AnalyzeSourceInput(StrictModel):
         return self
 
 
-# The canonical per-record identity keys. Reduced/spec attribution rows omit the
-# trailing provenance pair (their output schema forbids the extra keys), so they
-# pick the first five — a slice of the one list, never a parallel one.
-_IDENTITY_KEYS: tuple[str, ...] = (
-    "case_id",
-    "run_index",
-    "step_index",
-    "step_values",
-    "assignments",
-    "circuit",
-    "deck_sha256",
-)
+@dataclass
+class _PendingArtifact:
+    pending: Path
+    final: Path
+    content_type: str
+    manifest_id: str
+
+
+@dataclass(frozen=True)
+class RowIdentity:
+    """What identifies one analyzed run/step, in emission order.
+
+    Declared here rather than as a list of key strings so the row shape, the
+    attribution block and the projector's alphabet all read off one definition.
+    """
+
+    case_id: str | None = None
+    run_index: int | None = 0
+    step_index: int | None = None
+    step_values: dict[str, Any] = field(default_factory=dict)
+    assignments: dict[str, Any] = field(default_factory=dict)
+    circuit: str | None = None
+    deck_sha256: str | None = None
+
+    def wire(self, keys: tuple[str, ...]) -> dict[str, Any]:
+        return {key: getattr(self, key) for key in keys}
+
+
+@dataclass(frozen=True)
+class Record:
+    """One recipe's answer for one run at one step, before any rendering.
+
+    ``manifest_id`` is the join back to the source manifest; it is evaluator
+    bookkeeping and never reaches the wire, which is why it is a field here
+    rather than a key smuggled into the row and stripped again later.
+    """
+
+    manifest_id: str
+    source: str
+    identity: RowIdentity
+    value: dict[str, Any]
+
+    def attribution(self) -> dict[str, Any]:
+        """The identity block a reduced/spec row carries (no provenance pair)."""
+        return self.identity.wire(_ATTRIBUTION_KEYS)
+
+    def wire(self) -> dict[str, Any]:
+        """This record as one per_run/values row."""
+        return {
+            "source": self.source,
+            **self.identity.wire(_IDENTITY_KEYS),
+            "value": self.value,
+        }
+
+
+@dataclass(frozen=True)
+class Failure:
+    """One item that did not produce a value, and what stage lost it."""
+
+    code: str
+    stage: str
+    where: str
+    message: str
+
+    def wire(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "stage": self.stage,
+            "where": self.where,
+            "message": self.message,
+        }
+
+
+@dataclass(frozen=True)
+class Observation:
+    """A fact about the data or its provenance, for the reader to weigh."""
+
+    code: str
+    kind: str
+    detail: str
+    evidence: dict[str, Any] | None = None
+
+    @classmethod
+    def of(cls, data: Mapping[str, Any]) -> Observation:
+        """One observation read back from a persisted result set."""
+        return cls(
+            code=str(data.get("code", "")),
+            kind=str(data.get("kind", "")),
+            detail=str(data.get("detail", "")),
+            evidence=data.get("evidence"),
+        )
+
+    def wire(self) -> dict[str, Any]:
+        data: dict[str, Any] = {"code": self.code, "kind": self.kind, "detail": self.detail}
+        if self.evidence is not None:
+            data["evidence"] = self.evidence
+        return data
+
+
+@dataclass(frozen=True)
+class SourceFault:
+    """Why one source failed verification: the wire code, plus any detail.
+
+    A pair rather than a ``"code: detail"`` string, because both halves have
+    consumers — the code decides how the failure is classified, the whole line
+    is what the caller reads — and splitting the string back apart at each use
+    is how the two drift.
+    """
+
+    code: str
+    detail: str | None = None
+
+    @property
+    def message(self) -> str:
+        return self.code if self.detail is None else f"{self.code}: {self.detail}"
+
+
+@dataclass
+class WorkUnit:
+    """One recipe's evaluated result, plus where it sat in the work list."""
+
+    key: str
+    recipe: Recipe
+    records: list[Record]
+    failures: list[Failure]
+    pending: list[_PendingArtifact]
+    eligible_ids: set[str]
+    #: Row offset this unit's per_run page starts at (a resumed unit starts mid-list).
+    per_run_offset: int
+    #: Index of this unit in the result set's work list.
+    position: int
+    observations: list[Observation]
+
+
+# Reduced/spec attribution rows omit the trailing provenance pair (their output
+# schema forbids the extra keys), so they take the first five — a slice of the
+# one definition, never a parallel list.
+_IDENTITY_KEYS: tuple[str, ...] = tuple(f.name for f in fields(RowIdentity))
 _ATTRIBUTION_KEYS: tuple[str, ...] = _IDENTITY_KEYS[:5]
 # Every key a per_run/values row carries, in emission order. ``include.fields``
 # paths are rooted here, so this one list is both the projector's alphabet and
@@ -437,14 +563,6 @@ class _ResolvedRun:
     job_id: str | None
 
 
-@dataclass
-class _PendingArtifact:
-    pending: Path
-    final: Path
-    content_type: str
-    manifest_id: str
-
-
 def _page(
     items: list[Any], offset: int = 0, limit: int = MAX_PAGE_SIZE
 ) -> tuple[dict[str, Any], int]:
@@ -619,17 +737,18 @@ def _projection_presence(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _identity(
     source: services.AnalysisSource, step: int | None, values: dict[str, Any]
-) -> dict[str, Any]:
+) -> RowIdentity:
+    """The identity of one step of one resolved run."""
     base = dict(source.identity or {})
-    return {
-        "case_id": base.get("case_id"),
-        "run_index": base.get("run_index", 0),
-        "step_index": step,
-        "step_values": values,
-        "assignments": dict(base.get("assignments") or {}),
-        "circuit": base.get("circuit"),
-        "deck_sha256": base.get("deck_sha256"),
-    }
+    return RowIdentity(
+        case_id=base.get("case_id"),
+        run_index=base.get("run_index", 0),
+        step_index=step,
+        step_values=values,
+        assignments=dict(base.get("assignments") or {}),
+        circuit=base.get("circuit"),
+        deck_sha256=base.get("deck_sha256"),
+    )
 
 
 def _serialize_run(run: _ResolvedRun) -> dict[str, Any]:
@@ -672,11 +791,11 @@ def _deserialize_runs(item: result_store.ResultSet, state: SessionState) -> list
 
 async def _resolve_sources(
     inputs: list[AnalyzeSourceInput], state: SessionState
-) -> tuple[list[_ResolvedRun], list[dict[str, Any]], dict[str, str | None], list[dict[str, Any]]]:
+) -> tuple[list[_ResolvedRun], list[dict[str, Any]], dict[str, str | None], list[Observation]]:
     runs: list[_ResolvedRun] = []
     missing: list[dict[str, Any]] = []
     source_jobs: dict[str, str | None] = {}
-    observations: list[dict[str, Any]] = []
+    observations: list[Observation] = []
     for source_input in inputs:
         if source_input.raw_path is not None:
             requested_indices = {0} if source_input.runs == "all" else set(source_input.runs)
@@ -730,14 +849,14 @@ async def _resolve_sources(
                 )
             )
             observations.append(
-                {
-                    "code": "raw_path_without_deck_provenance",
-                    "kind": "provenance",
-                    "detail": (
+                Observation(
+                    code="raw_path_without_deck_provenance",
+                    kind="provenance",
+                    detail=(
                         f"Source {source_input.label!r} is a caller-supplied raw path; "
                         "deck_sha256 is null because no producing job was supplied."
                     ),
-                }
+                )
             )
             continue
 
@@ -847,7 +966,7 @@ _SOLVE_FAILURE_RUN_CAP = 10
 """How many run labels a relayed solve failure names before deferring to ``runs``."""
 
 
-async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[dict[str, Any]]:
+async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[Observation]:
     """Relay each resolved run's simulator-declared solve failures.
 
     The one chokepoint for this rule on this surface: a run that produced a raw
@@ -882,36 +1001,36 @@ async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[dict[str, Any]
         for line in services.solve_failure_lines(diagnostics):
             grouped.setdefault(diagnostic_collapse_key(line), (line, []))[1].append(run.label)
 
-    relayed: list[dict[str, Any]] = [
-        {
-            "code": "solve_failure",
-            "kind": "relay",
-            "detail": (
+    relayed: list[Observation] = [
+        Observation(
+            code="solve_failure",
+            kind="relay",
+            detail=(
                 f"The simulator reported a failed solve on {len(labels)} run(s); "
                 f"every value read from them is affected. Simulator line: {line}"
             ),
-            "evidence": {
+            evidence={
                 "log": line,
                 "runs": labels[:_SOLVE_FAILURE_RUN_CAP],
                 "run_count": len(labels),
             },
-        }
+        )
         for line, labels in grouped.values()
     ]
     if unread:
         relayed.append(
-            {
-                "code": "log_unread",
-                "kind": "coverage",
-                "detail": (
+            Observation(
+                code="log_unread",
+                kind="coverage",
+                detail=(
                     f"{len(unread)} run log(s) could not be parsed within the analysis "
                     "deadline, so a solve failure on them would not be reported here."
                 ),
-                "evidence": {
+                evidence={
                     "runs": unread[:_SOLVE_FAILURE_RUN_CAP],
                     "run_count": len(unread),
                 },
-            }
+            )
         )
     return relayed
 
@@ -1034,7 +1153,7 @@ async def _create_result_set(
         "request_hash": _request_hash(args),
         "resolved_runs": [_serialize_run(run) for run in runs],
         "missing": missing,
-        "observations": observations,
+        "observations": [observation.wire() for observation in observations],
     }
     return await asyncio.to_thread(
         result_store.create,
@@ -1052,8 +1171,8 @@ async def _verify_direct_sources(
     selected_ids: set[str],
     deadline: float,
     cache: _DigestCache,
-) -> dict[str, str]:
-    failures: dict[str, str] = {}
+) -> dict[str, SourceFault]:
+    failures: dict[str, SourceFault] = {}
     for manifest in manifests:
         manifest_id = str(manifest["manifest_id"])
         if (
@@ -1072,14 +1191,14 @@ async def _verify_direct_sources(
             )
             composite = result_store.composite_digest(raw_sha, log_sha, log_present)
             if composite != manifest["composite_sha256"]:
-                failures[manifest_id] = "source_drift"
+                failures[manifest_id] = SourceFault("source_drift")
         except (LTSpiceMCPError, OSError) as exc:
-            code = (
+            failures[manifest_id] = SourceFault(
                 "analysis_deadline"
                 if isinstance(exc, AnalysisDeadlineExceeded)
-                else "source_drift"
+                else "source_drift",
+                str(exc),
             )
-            failures[manifest_id] = f"{code}: {exc}"
     return failures
 
 
@@ -1164,9 +1283,7 @@ async def _adapter_value(
     return sanitize_payload(await metrics.METRICS[type(recipe)](source, recipe, step, state))
 
 
-def _absence_observations(
-    recipe: Recipe, key: str, records: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
+def _absence_observations(recipe: Recipe, key: str, records: list[Record]) -> list[Observation]:
     """State what a successful recipe looked for and did not find.
 
     A keyed metric answers with a map, and an empty map is indistinguishable
@@ -1180,24 +1297,24 @@ def _absence_observations(
 
     if not isinstance(recipe, OperatingPointRecipe):
         return []
-    values = [record["value"] for record in records if isinstance(record.get("value"), dict)]
+    values = [record.value for record in records]
     if not values or any(value.get("device_op_points") for value in values):
         return []
     if not any(metrics.has_active_device(value.get("currents") or {}) for value in values):
         return []
     return [
-        {
-            "code": "device_op_points_absent",
-            "kind": "coverage",
-            "detail": (
+        Observation(
+            code="device_op_points_absent",
+            kind="coverage",
+            detail=(
                 f"Recipe {key!r} read the bias point of a run carrying "
                 f"semiconductor terminal currents, but no per-device @dev[param] "
                 f"values: neither the raw's @-param traces nor the run's .log "
                 f"'Semiconductor Device Operating Points:' block held any. "
                 f"{metrics.NO_DEVICE_OP_POINTS_NOTE}"
             ),
-            "evidence": {"recipe": key, "runs": len(values)},
-        }
+            evidence={"recipe": key, "runs": len(values)},
+        )
     ]
 
 
@@ -1280,7 +1397,7 @@ async def _waveform(
                     default=0,
                 ),
                 "points_total": total_max,
-                **_identity(run.source, step, step_values),
+                **_identity(run.source, step, step_values).wire(_IDENTITY_KEYS),
             },
             [],
         )
@@ -1333,7 +1450,7 @@ async def _waveform(
                 run.source,
                 step if export_steps is None or len(export_steps) == 1 else None,
                 step_values if export_steps is None or len(export_steps) == 1 else {},
-            ),
+            ).wire(_IDENTITY_KEYS),
         },
         [_PendingArtifact(pending, final, "text/csv", run.manifest_id)],
     )
@@ -1394,7 +1511,7 @@ async def _plot(
                 run.source,
                 steps[0][0] if len(steps) == 1 else None,
                 steps[0][1] if len(steps) == 1 else {},
-            ),
+            ).wire(_IDENTITY_KEYS),
         },
         [_PendingArtifact(pending, final, "text/html", run.manifest_id)],
     )
@@ -1534,14 +1651,12 @@ _KEYED_EXTRACTORS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
 _WHOLE_VALUE_METRICS: frozenset[str] = frozenset({"waveform", *_KEYED_EXTRACTORS})
 
 
-def _samples(
-    recipe: Recipe, records: list[dict[str, Any]]
-) -> dict[str, list[tuple[dict[str, Any], float]]]:
+def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Record, float]]]:
     # The reducer category is the base the recipe inherits (exactly one); a
     # variable-length recipe matches none and yields no samples.
-    out: dict[str, list[tuple[dict[str, Any], float]]] = {}
+    out: dict[str, list[tuple[Record, float]]] = {}
     for record in records:
-        value = record["value"]
+        value = record.value
         if isinstance(recipe, _ScalarRecipe):
             nested = _SCALAR_NESTED.get(recipe.metric)
             if nested is not None:
@@ -1596,28 +1711,22 @@ def _stat(name: str, values: list[float]) -> float | int | None:
     )
 
 
-def _attribution(stat: str, samples: list[tuple[dict[str, Any], float]]) -> dict[str, Any]:
+def _attribution(stat: str, samples: list[tuple[Record, float]]) -> dict[str, Any]:
     if stat not in {"min", "max"} or not samples:
-        return {
-            "case_id": None,
-            "run_index": None,
-            "step_index": None,
-            "step_values": {},
-            "assignments": {},
-        }
+        return RowIdentity(run_index=None).wire(_ATTRIBUTION_KEYS)
     chosen = (min if stat == "min" else max)(samples, key=lambda pair: pair[1])[0]
-    return _pick(chosen, _ATTRIBUTION_KEYS)
+    return chosen.attribution()
 
 
-def _reduce(recipe: Recipe, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _reduce(recipe: Recipe, records: list[Record]) -> list[dict[str, Any]]:
     stats = list(getattr(recipe, "reduce", []))
     reduced: list[dict[str, Any]] = []
-    for field, field_samples in _samples(recipe, records).items():
+    for field_name, field_samples in _samples(recipe, records).items():
         values = [value for _, value in field_samples]
         for stat in stats:
             reduced.append(
                 {
-                    "field": field,
+                    "field": field_name,
                     "stat": stat,
                     "value": _stat(stat, values),
                     **_attribution(stat, field_samples),
@@ -1628,7 +1737,7 @@ def _reduce(recipe: Recipe, records: list[dict[str, Any]]) -> list[dict[str, Any
 
 def _spec(
     recipe: Recipe,
-    records: list[dict[str, Any]],
+    records: list[Record],
     *,
     incomplete: bool,
     include_outliers: bool,
@@ -1651,7 +1760,7 @@ def _spec(
         if passed:
             pass_count += 1
         else:
-            failed.append({"value": value, **_pick(record, _ATTRIBUTION_KEYS)})
+            failed.append({"value": value, **record.attribution()})
     if not samples or (incomplete and not limits.allow_incomplete):
         verdict = "indeterminate"
     else:
@@ -1673,21 +1782,19 @@ def _spec(
 
 
 def _group_values(
-    recipe: Recipe, records: list[dict[str, Any]], dimensions: list[str]
+    recipe: Recipe, records: list[Record], dimensions: list[str]
 ) -> list[dict[str, Any]]:
     if not dimensions:
         return []
-    grouped: dict[tuple[tuple[str, Any], ...], list[dict[str, Any]]] = {}
+    grouped: dict[tuple[tuple[str, Any], ...], list[Record]] = {}
     for record in records:
-        identity = record
-        assignments = identity["assignments"]
-        step_values = identity["step_values"]
+        identity = record.identity
         values: list[tuple[str, Any]] = []
         for dimension in dimensions:
             if dimension == "circuit":
-                value = identity.get("circuit")
+                value = identity.circuit
             else:
-                value = assignments.get(dimension, step_values.get(dimension))
+                value = identity.assignments.get(dimension, identity.step_values.get(dimension))
             values.append((dimension, value))
         grouped.setdefault(tuple(values), []).append(record)
     return [
@@ -1700,6 +1807,21 @@ def _group_values(
     ]
 
 
+def _artifact_record(run: _ResolvedRun, value: dict[str, Any]) -> Record:
+    """A waveform/plot record, whose identity the value already carries.
+
+    Those two recipes report the run they describe inside the value itself (a
+    caller reading one series wants to know which case it came from), so the
+    row identity is read back out of it rather than derived a second time.
+    """
+    return Record(
+        manifest_id=run.manifest_id,
+        source=run.label,
+        identity=RowIdentity(**_pick(value, _IDENTITY_KEYS)),
+        value=value,
+    )
+
+
 async def _evaluate_item(
     recipe: Recipe,
     runs: list[_ResolvedRun],
@@ -1708,22 +1830,22 @@ async def _evaluate_item(
     item: result_store.ResultSet,
     item_deadline: float,
     step_cache: dict[str, list[dict[str, Any]]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[_PendingArtifact]]:
+) -> tuple[list[Record], list[Failure], list[_PendingArtifact]]:
     selected = set(recipe.sources or [run.label for run in runs])
     selected_runs = [run for run in runs if run.label in selected]
-    records: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
+    records: list[Record] = []
+    failures: list[Failure] = []
     pending: list[_PendingArtifact] = []
     for run in selected_runs:
         manifest = manifests[run.manifest_id]
         if manifest.get("digest_error"):
             failures.append(
-                {
-                    "code": manifest.get("digest_code", "source_unavailable"),
-                    "stage": "source_digest",
-                    "where": run.manifest_id,
-                    "message": manifest["digest_error"],
-                }
+                Failure(
+                    code=manifest.get("digest_code", "source_unavailable"),
+                    stage="source_digest",
+                    where=run.manifest_id,
+                    message=manifest["digest_error"],
+                )
             )
             continue
         try:
@@ -1738,14 +1860,7 @@ async def _evaluate_item(
                         item,
                         manifest,
                     )
-                    records.append(
-                        {
-                            "_manifest_id": run.manifest_id,
-                            "source": run.label,
-                            **_pick(value, _IDENTITY_KEYS),
-                            "value": value,
-                        }
-                    )
+                    records.append(_artifact_record(run, value))
                     pending.extend(artifacts)
                     continue
                 if isinstance(recipe, WaveformRecipe) and recipe.format == "csv":
@@ -1761,14 +1876,7 @@ async def _evaluate_item(
                         item_deadline,
                         [index for index, _ in step_plan],
                     )
-                    records.append(
-                        {
-                            "_manifest_id": run.manifest_id,
-                            "source": run.label,
-                            **_pick(value, _IDENTITY_KEYS),
-                            "value": value,
-                        }
-                    )
+                    records.append(_artifact_record(run, value))
                     pending.extend(artifacts)
                     continue
                 for step, step_values in step_plan:
@@ -1789,28 +1897,27 @@ async def _evaluate_item(
                             await _adapter_value(recipe, run.source, step, state),
                         )
                         artifacts = []
-                    identity = _identity(run.source, step, step_values)
                     records.append(
-                        {
-                            "_manifest_id": run.manifest_id,
-                            "source": run.label,
-                            **identity,
-                            "value": value,
-                        }
+                        Record(
+                            manifest_id=run.manifest_id,
+                            source=run.label,
+                            identity=_identity(run.source, step, step_values),
+                            value=value,
+                        )
                     )
                     pending.extend(artifacts)
         except (LTSpiceMCPError, ValueError, OSError) as exc:
             failures.append(
-                {
-                    "code": (
+                Failure(
+                    code=(
                         "analysis_deadline"
                         if isinstance(exc, AnalysisDeadlineExceeded)
                         else "recipe_failed"
                     ),
-                    "stage": "analyze",
-                    "where": run.manifest_id,
-                    "message": str(exc),
-                }
+                    stage="analyze",
+                    where=run.manifest_id,
+                    message=str(exc),
+                )
             )
     return records, failures, pending
 
@@ -1868,7 +1975,7 @@ def _selected_manifest_ids(recipe: Recipe, runs: list[_ResolvedRun]) -> set[str]
     return {run.manifest_id for run in runs if run.label in labels}
 
 
-def _record_warnings(records: list[dict[str, Any]]) -> list[str]:
+def _record_warnings(records: list[Record]) -> list[str]:
     """Every distinct record warning once, in first-appearance order, carrying
     how many records raised it.
 
@@ -1882,7 +1989,7 @@ def _record_warnings(records: list[dict[str, Any]]) -> list[str]:
     counts: dict[str, int] = {}
     for record in records:
         seen: set[str] = set()
-        for warning in record["value"].get("warnings", []):
+        for warning in record.value.get("warnings", []):
             if not isinstance(warning, str) or warning in seen:
                 continue
             seen.add(warning)
@@ -1894,8 +2001,8 @@ def _record_warnings(records: list[dict[str, Any]]) -> list[str]:
 
 def _result_entry(
     recipe: Recipe,
-    records: list[dict[str, Any]],
-    failures: list[dict[str, Any]],
+    records: list[Record],
+    failures: list[Failure],
     group_by: list[str],
     missing: list[dict[str, Any]],
     per_run_offset: int,
@@ -1957,11 +2064,11 @@ def _result_entry(
     per_run_next = per_run_offset
     if per_run_limit is not None:
         page, per_run_next = _page(records, per_run_offset, per_run_limit)
-        page["items"] = [render(row) for row in page["items"]]
+        page["items"] = [render(record.wire()) for record in page["items"]]
         entry["per_run"] = page
     elif not getattr(recipe, "reduce", []):
         shown = records[:values_limit]
-        entry["values"] = [render(row) for row in shown]
+        entry["values"] = [render(record.wire()) for record in shown]
         if len(records) > values_limit:
             entry["warnings"].append(
                 _VALUES_OMITTED_WARNING.format(omitted=len(records) - values_limit)
@@ -1970,7 +2077,9 @@ def _result_entry(
     # reduce-only recipe has no row surface by construction, so its fields did
     # not fail to resolve — they had nothing to apply to.
     if fields and records and ("per_run" in entry or "values" in entry):
-        entry["warnings"].extend(_projection_warnings(records, fields))
+        entry["warnings"].extend(
+            _projection_warnings([record.wire() for record in records], fields)
+        )
     return entry, per_run_next
 
 
@@ -2290,12 +2399,16 @@ class AnalysisEvaluation:
     """
 
     item: result_store.ResultSet
-    processed: list[dict[str, Any]]
+    processed: list[WorkUnit]
     runs: list[_ResolvedRun]
+    #: Runs a source named but could not deliver, already in wire shape: they
+    #: are stored verbatim in the result set and paged straight into
+    #: ``coverage.missing_cases``, so they are never anything else.
     missing: list[dict[str, Any]]
     missing_offset: int
-    skipped: list[tuple[int, dict[str, Any]]]
-    base_observations: list[dict[str, Any]]
+    #: Rejections, each with the work position it was rejected at.
+    skipped: list[tuple[int, Failure]]
+    base_observations: list[Observation]
     include: AnalyzeInclude
     group_by: list[str]
     natural_position: int
@@ -2304,10 +2417,10 @@ class AnalysisEvaluation:
     signals: dict[str, list[str]] | None
 
     @property
-    def failure_inventory(self) -> tuple[dict[str, Any], ...]:
+    def failure_inventory(self) -> tuple[Failure, ...]:
         """Every failure produced by this drive, without the MCP failure cap."""
         failures = [failure for _position, failure in self.skipped]
-        failures.extend(failure for unit in self.processed for failure in unit["item_failures"])
+        failures.extend(failure for unit in self.processed for failure in unit.failures)
         return tuple(failures)
 
     @property
@@ -2350,12 +2463,11 @@ def _assemble(
     position, intra_item = a.natural_position, a.natural_intra
     if limits.per_run is not None:
         for index, unit in enumerate(a.processed):
-            offset = unit["per_run_offset"]
-            records = unit["records"]
-            if (records or not unit["item_failures"]) and offset + limits.per_run < len(records):
+            offset = unit.per_run_offset
+            if (unit.records or not unit.failures) and offset + limits.per_run < len(unit.records):
                 units = a.processed[: index + 1]
                 paginating = index
-                position = unit["position"]
+                position = unit.position
                 intra_item = offset + limits.per_run
                 break
 
@@ -2369,28 +2481,24 @@ def _assemble(
     # A rejection for work this response no longer reaches belongs to the call
     # that resumes it, not to this one.
     failures = [failure for at, failure in a.skipped if at < position]
-    observations = [*a.base_observations, *(o for unit in units for o in unit["observations"])]
+    observations = [*a.base_observations, *(o for unit in units for o in unit.observations)]
     results: dict[str, Any] = {}
     analyzed_identities: set[tuple[Any, Any, Any]] = set()
 
     for index, unit in enumerate(units):
-        key = unit["key"]
-        recipe = unit["recipe"]
-        records = unit["records"]
-        item_failures = unit["item_failures"]
-        failures.extend(item_failures)
+        failures.extend(unit.failures)
         relevant_missing = [
             case
             for case in a.missing
-            if recipe.sources is None or case.get("label") in set(recipe.sources)
+            if unit.recipe.sources is None or case.get("label") in set(unit.recipe.sources)
         ]
         entry, per_run_next = _result_entry(
-            recipe,
-            records,
-            item_failures,
+            unit.recipe,
+            unit.records,
+            unit.failures,
             a.group_by,
             relevant_missing,
-            unit["per_run_offset"],
+            unit.per_run_offset,
             limits.per_run,
             outliers,
             a.include.fields,
@@ -2398,19 +2506,21 @@ def _assemble(
             fail_case_limit=limits.fail_cases,
             groups_limit=limits.groups,
         )
-        if records or not item_failures:
-            results[key] = entry
-        for record in records:
-            analyzed_identities.add((record["source"], record["case_id"], record["run_index"]))
+        if unit.records or not unit.failures:
+            results[unit.key] = entry
+        for record in unit.records:
+            analyzed_identities.add(
+                (record.source, record.identity.case_id, record.identity.run_index)
+            )
         if (
             index == paginating
-            and key in results
+            and unit.key in results
             and a.include.per_run is not None
             and entry["per_run"]["truncated"]
         ):
             entry["per_run"]["next_cursor"] = result_store.encode_cursor(
                 item,
-                unit["position"],
+                unit.position,
                 intra_item=per_run_next,
                 missing_offset=missing_next,
                 view_fields=a.include.fields,
@@ -2432,14 +2542,14 @@ def _assemble(
     if failure_total > _FAILURE_CAP:
         failures = failures[:_FAILURE_CAP]
         observations.append(
-            {
-                "code": "failures_truncated",
-                "kind": "coverage",
-                "detail": (
+            Observation(
+                code="failures_truncated",
+                kind="coverage",
+                detail=(
                     f"Returned {_FAILURE_CAP} of {failure_total} failure records; "
                     "coverage and recipe result presence still reflect the full call."
                 ),
-            }
+            )
         )
     runs_requested = len(a.runs) + len(a.missing)
     outcome = (
@@ -2469,8 +2579,8 @@ def _assemble(
         "outcome": outcome,
         "coverage": coverage,
         "results": results,
-        "observations": observations,
-        "failures": failures,
+        "observations": [observation.wire() for observation in observations],
+        "failures": [failure.wire() for failure in failures],
         "source_hashes": _source_hashes(item, provenance=provenance),
         "result_set_id": item.result_set_id,
         "cursor": next_value["cursor"] if next_value is not None else None,
@@ -2525,7 +2635,7 @@ def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
         )
 
     requested_coverage_cursor = coverage_cursor_base(top)
-    units = {unit["key"]: unit for unit in a.processed}
+    units = {unit.key: unit for unit in a.processed}
     missing_next = min(a.missing_offset + MAX_PAGE_SIZE, len(a.missing))
     natural_cursor_base = result_store.encode_cursor(
         a.item,
@@ -2540,23 +2650,22 @@ def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
         per_run = entry.pop("per_run", None)
         had_values = "values" in entry
         entry.pop("values", None)
-        answer_rows = (
-            unit["records"][:MAX_PAGE_SIZE] if not getattr(unit["recipe"], "reduce", []) else []
-        )
+        rows = [record.wire() for record in unit.records]
+        answer_rows = rows[:MAX_PAGE_SIZE] if not getattr(unit.recipe, "reduce", []) else []
         block: dict[str, Any] = {
             "facts": entry,
             "answer_rows": answer_rows,
-            "answer_total": len(unit["records"]),
+            "answer_total": len(unit.records),
             "surface": ("per_run" if per_run is not None else "values" if had_values else "none"),
-            "projection_presence": _projection_presence(unit["records"]),
+            "projection_presence": _projection_presence(rows),
         }
         if per_run is not None:
             block["per_run"] = per_run
-            block["per_run_offset"] = unit["per_run_offset"]
+            block["per_run_offset"] = unit.per_run_offset
             block["per_run_cursor_base"] = result_store.encode_cursor(
                 a.item,
-                unit["position"],
-                intra_item=unit["per_run_offset"],
+                unit.position,
+                intra_item=unit.per_run_offset,
                 missing_offset=missing_next,
             )
         results[key] = block
@@ -2962,24 +3071,193 @@ async def _negotiate_analysis(
     return format_response(text, result.data)
 
 
-async def _evaluate_analysis_drive(
+async def _evaluate_unit(
+    recipe: Recipe,
+    key: str,
+    selected_runs: list[_ResolvedRun],
+    runs: list[_ResolvedRun],
+    precheck: dict[str, SourceFault],
+    manifests: dict[str, dict[str, Any]],
+    state: SessionState,
+    item: result_store.ResultSet,
+    item_deadline: float,
+    step_cache: dict[str, list[dict[str, Any]]],
+    *,
+    per_run_offset: int,
+    position: int,
+) -> WorkUnit:
+    """Evaluate one recipe over the runs that survived the source precheck.
+
+    A source the precheck rejected is reported as this unit's failure and not
+    read: the recipe still produces an entry from the runs that are intact,
+    which is what makes one drifted source a partial result instead of a lost
+    call.
+    """
+    selected_ids = _selected_manifest_ids(recipe, runs)
+    failures = [
+        Failure(
+            code=fault.code,
+            stage="source_precheck",
+            where=manifest_id,
+            message=fault.message,
+        )
+        for manifest_id, fault in precheck.items()
+        if manifest_id in selected_ids
+    ]
+    eligible_runs = [run for run in selected_runs if run.manifest_id not in precheck]
+    # max_points bounds the INLINE series only; a csv artifact is written at
+    # full fidelity over the requested window. Say so when the caller set it
+    # on a csv recipe, so a silently inert argument becomes a stated fact.
+    # Carried on the unit, so it travels with the result it describes.
+    observations: list[Observation] = []
+    if (
+        isinstance(recipe, WaveformRecipe)
+        and recipe.format == "csv"
+        and "max_points" in recipe.model_fields_set
+    ):
+        observations.append(
+            Observation(
+                code="max_points_not_applied",
+                kind="provenance",
+                detail=(
+                    f"Recipe {key!r} sets max_points, which bounds format='inline' "
+                    "series only; the csv artifact holds every sample in the "
+                    "requested window. Narrow the recipe window to write fewer rows."
+                ),
+            )
+        )
+
+    records, item_failures, pending = await _evaluate_item(
+        recipe,
+        eligible_runs,
+        manifests,
+        state,
+        item,
+        item_deadline,
+        step_cache,
+    )
+    failures.extend(item_failures)
+    observations.extend(_absence_observations(recipe, key, records))
+    return WorkUnit(
+        key=key,
+        recipe=recipe,
+        records=records,
+        failures=failures,
+        pending=pending,
+        eligible_ids={run.manifest_id for run in eligible_runs},
+        per_run_offset=per_run_offset,
+        position=position,
+        observations=observations,
+    )
+
+
+def _discard_drifted(
+    processed: list[WorkUnit],
+    pending: list[_PendingArtifact],
+    postcheck: dict[str, SourceFault],
+) -> list[_PendingArtifact]:
+    """Drop every record and artifact derived from a source that drifted.
+
+    Drift is discovered after the reads, so this runs over finished work: the
+    records go, the temp artifacts are left for the caller to remove, and each
+    unit that used the source gains the failure that says why its rows thinned.
+    """
+    failed_ids = set(postcheck)
+    for unit in processed:
+        relevant = {
+            manifest_id: fault
+            for manifest_id, fault in postcheck.items()
+            if manifest_id in unit.eligible_ids
+        }
+        if not relevant:
+            continue
+        unit.records = [record for record in unit.records if record.manifest_id not in failed_ids]
+        unit.failures.extend(
+            Failure(
+                code=fault.code,
+                stage="source_postcheck",
+                where=manifest_id,
+                message=fault.message,
+            )
+            for manifest_id, fault in relevant.items()
+        )
+    return [artifact for artifact in pending if artifact.manifest_id not in failed_ids]
+
+
+async def _publish_unit_artifacts(
+    processed: list[WorkUnit], pending: list[_PendingArtifact], deadline: float
+) -> None:
+    """Publish every surviving artifact once and hand each record its handle.
+
+    A record's ``artifact`` block is written before the file has a digest or a
+    size, because those are only known once the temp is complete; merging the
+    handles here fills them in on the dicts the entries will render. A publish
+    that fails takes the temps with it and marks only the units that had one.
+    """
+    try:
+        handles = await _publish(pending, deadline)
+    except (LTSpiceMCPError, OSError) as exc:
+        await asyncio.to_thread(_remove_pending, pending)
+        code = (
+            "analysis_deadline"
+            if isinstance(exc, AnalysisDeadlineExceeded)
+            else "artifact_publish_failed"
+        )
+        for unit in processed:
+            if unit.pending:
+                unit.failures.append(
+                    Failure(code=code, stage="publish", where=unit.key, message=str(exc))
+                )
+        return
+    by_path = {handle["path"]: handle for handle in handles}
+    for unit in processed:
+        for record in unit.records:
+            artifact = record.value.get("artifact")
+            if isinstance(artifact, dict) and artifact["path"] in by_path:
+                artifact.update(by_path[artifact["path"]])
+
+
+@dataclass(frozen=True)
+class _PageStop:
+    """Stop the drive once one per_run page of a recipe is filled.
+
+    One object rather than a flag plus a limit, because the limit means nothing
+    without the stop: a reservoir size handed to a drive that runs to
+    completion would silently change nothing. ``reservoir`` overrides the
+    caller's requested page size for THIS evaluation only — the result set
+    keeps the requested limit, so the cursor it mints resumes that view.
+    """
+
+    reservoir: int | None = None
+
+
+@dataclass
+class _DriveStart:
+    """Where a drive begins: the immutable set and the position within it."""
+
+    item: result_store.ResultSet
+    position: int
+    intra_item: int
+    missing_offset: int
+    include: AnalyzeInclude
+
+
+async def _resolve_drive_start(
     args: AnalyzeResultsInput,
     state: SessionState,
-    *,
-    continuation: AnalysisContinuationPosition | None = None,
-    loaded: result_store.ResultSet | None = None,
-    stop_after_per_run_page: bool = False,
-    per_run_reservoir_limit: int | None = None,
-) -> AnalysisEvaluation:
-    """Implementation shared by the neutral seam and MCP's paged presentation."""
-    loop = asyncio.get_running_loop()
-    call_started = loop.time()
-    call_deadline = call_started + state.config.analysis_budget_s
-    # Per-call caches: one file hash per (path, mtime, size); one step-table
-    # parse per log path. Shared across manifest build, verification and steps.
-    digest_cache: _DigestCache = {}
-    step_cache: dict[str, list[dict[str, Any]]] = {}
+    continuation: AnalysisContinuationPosition | None,
+    loaded: result_store.ResultSet | None,
+    call_deadline: float,
+    digest_cache: _DigestCache,
+) -> _DriveStart:
+    """Load or create the result set this drive runs over, and find its start.
 
+    Four ways in — a neutral continuation, a fresh request, a caller cursor, and
+    a per_run page cursor — and each decides both the set and the position
+    inside it. Kept together because they are one decision: which of the four a
+    call is determines what may be validated (a page cursor must match the
+    request that minted it) and which view the drive inherits.
+    """
     page_cursor = (
         args.include.per_run.cursor
         if args.continuation is None and args.include.per_run is not None
@@ -3052,19 +3330,45 @@ async def _evaluate_analysis_drive(
             )
         position, intra_item, missing_offset = result_store.decode_cursor(page_cursor, item)
 
+    include = AnalyzeInclude.model_validate(item.inputs.get("include", {}))
+    if continuation is not None or args.continuation is not None or page_cursor is not None:
+        include = include.model_copy(
+            update={"fields": cursor_fields if cursor_has_view else include.fields}
+        )
+    return _DriveStart(item, position, intra_item, missing_offset, include)
+
+
+async def _evaluate_analysis_drive(
+    args: AnalyzeResultsInput,
+    state: SessionState,
+    *,
+    continuation: AnalysisContinuationPosition | None = None,
+    loaded: result_store.ResultSet | None = None,
+    page_stop: _PageStop | None = None,
+) -> AnalysisEvaluation:
+    """Implementation shared by the neutral seam and MCP's paged presentation."""
+    loop = asyncio.get_running_loop()
+    call_deadline = loop.time() + state.config.analysis_budget_s
+    # Per-call caches: one file hash per (path, mtime, size); one step-table
+    # parse per log path. Shared across manifest build, verification and steps.
+    digest_cache: _DigestCache = {}
+    step_cache: dict[str, list[dict[str, Any]]] = {}
+
+    start = await _resolve_drive_start(
+        args, state, continuation, loaded, call_deadline, digest_cache
+    )
+    item = start.item
+    position, intra_item, missing_offset = start.position, start.intra_item, start.missing_offset
+    include = start.include
+
     runs = _deserialize_runs(item, state)
     manifests = {str(manifest["manifest_id"]): manifest for manifest in item.source_manifests}
     missing = list(item.inputs.get("missing", []))
     # Skipped work carries the position it was skipped at: the budget ladder can
     # stop this response short of where the loop ended, and a rejection for work
     # that now resumes unread would be reported twice.
-    skipped: list[tuple[int, dict[str, Any]]] = []
-    observations = list(item.inputs.get("observations", []))
-    include = AnalyzeInclude.model_validate(item.inputs.get("include", {}))
-    if continuation is not None or args.continuation is not None or page_cursor is not None:
-        include = include.model_copy(
-            update={"fields": cursor_fields if cursor_has_view else include.fields}
-        )
+    skipped: list[tuple[int, Failure]] = []
+    observations = [Observation.of(data) for data in item.inputs.get("observations", [])]
     group_by = list(item.inputs.get("group_by", []))
     declared_labels = {
         str(source.get("label"))
@@ -3074,7 +3378,7 @@ async def _evaluate_analysis_drive(
     work_done = False
     deferred = False
 
-    def _skip(failure: dict[str, Any]) -> None:
+    def _skip(failure: Failure) -> None:
         """Record a per-recipe rejection and advance past it (item is done)."""
         nonlocal position, intra_item, work_done
         skipped.append((position, failure))
@@ -3094,7 +3398,7 @@ async def _evaluate_analysis_drive(
         digest_cache,
     )
 
-    processed: list[dict[str, Any]] = []
+    processed: list[WorkUnit] = []
     all_pending: list[_PendingArtifact] = []
     evaluated_ids: set[str] = set()
 
@@ -3106,26 +3410,26 @@ async def _evaluate_analysis_drive(
             recipe = validate_recipe(raw_recipe)
         except (ValueError, TypeError) as exc:
             _skip(
-                {
-                    "code": "recipe_invalid",
-                    "stage": "validate",
-                    "where": f"recipes[{work_item['index']}]",
-                    "message": recipe_error(exc),
-                }
+                Failure(
+                    code="recipe_invalid",
+                    stage="validate",
+                    where=f"recipes[{work_item['index']}]",
+                    message=recipe_error(exc),
+                )
             )
             continue
 
         unknown_labels = set(recipe.sources or ()) - declared_labels
         if unknown_labels:
             _skip(
-                {
-                    "code": "recipe_invalid",
-                    "stage": "validate",
-                    "where": f"recipes[{work_item['index']}]",
-                    "message": (
+                Failure(
+                    code="recipe_invalid",
+                    stage="validate",
+                    where=f"recipes[{work_item['index']}]",
+                    message=(
                         "recipe sources name unknown labels: " + ", ".join(sorted(unknown_labels))
                     ),
-                }
+                )
             )
             continue
 
@@ -3136,11 +3440,11 @@ async def _evaluate_analysis_drive(
         remaining = call_deadline - loop.time()
         if estimate > state.config.analysis_budget_s * _ARTIFACT_SAFETY_FACTOR:
             _skip(
-                {
-                    "code": "artifact_too_large",
-                    "stage": "preflight",
-                    "where": key,
-                    "message": (
+                Failure(
+                    code="artifact_too_large",
+                    stage="preflight",
+                    where=key,
+                    message=(
                         "Artifact estimate exceeds the per-call safety bound. The "
                         "bound is computed from raw file size and signal count "
                         "before any data is read, so request fewer signals or "
@@ -3150,7 +3454,7 @@ async def _evaluate_analysis_drive(
                         "— raise [analysis] analysis_budget_s "
                         "(LTSPICE_MCP_ANALYSIS_BUDGET_S) instead."
                     ),
-                }
+                )
             )
             continue
         if estimate > remaining and work_done:
@@ -3159,79 +3463,35 @@ async def _evaluate_analysis_drive(
         if remaining <= 0 and work_done:
             break
         item_deadline = loop.time() + max(_MIN_ITEM_DEADLINE_S, remaining)
-        selected_ids = _selected_manifest_ids(recipe, runs)
-        precheck_failures = [
-            {
-                "code": code.split(":", 1)[0],
-                "stage": "source_precheck",
-                "where": manifest_id,
-                "message": code,
-            }
-            for manifest_id, code in precheck.items()
-            if manifest_id in selected_ids
-        ]
-        eligible_runs = [run for run in selected_runs if run.manifest_id not in precheck]
-        # max_points bounds the INLINE series only; a csv artifact is written at
-        # full fidelity over the requested window. Say so when the caller set it
-        # on a csv recipe, so a silently inert argument becomes a stated fact.
-        # Carried on the unit, so it travels with the result it describes.
-        item_observations: list[dict[str, Any]] = []
-        if (
-            isinstance(recipe, WaveformRecipe)
-            and recipe.format == "csv"
-            and "max_points" in recipe.model_fields_set
-        ):
-            item_observations.append(
-                {
-                    "code": "max_points_not_applied",
-                    "kind": "provenance",
-                    "detail": (
-                        f"Recipe {key!r} sets max_points, which bounds format='inline' "
-                        "series only; the csv artifact holds every sample in the "
-                        "requested window. Narrow the recipe window to write fewer rows."
-                    ),
-                }
-            )
-
-        records, item_failures, pending = await _evaluate_item(
+        unit = await _evaluate_unit(
             recipe,
-            eligible_runs,
+            key,
+            selected_runs,
+            runs,
+            precheck,
             manifests,
             state,
             item,
             item_deadline,
             step_cache,
+            per_run_offset=intra_item,
+            position=position,
         )
-        item_failures[:0] = precheck_failures
-        item_observations.extend(_absence_observations(recipe, key, records))
-        evaluated_ids.update(run.manifest_id for run in eligible_runs)
-        all_pending.extend(pending)
-        unit: dict[str, Any] = {
-            "key": key,
-            "recipe": recipe,
-            "records": records,
-            "item_failures": item_failures,
-            "pending": pending,
-            "eligible_ids": {run.manifest_id for run in eligible_runs},
-            "per_run_offset": intra_item,
-            "position": position,
-            "observations": item_observations,
-        }
+        evaluated_ids.update(unit.eligible_ids)
+        all_pending.extend(unit.pending)
         processed.append(unit)
 
         # Per_run pagination: decided on record count so the break can stop the
         # call here; the page and its cursor are built during assembly below,
         # which re-decides this against whatever limit it assembles at.
-        # Attached capture raises only this evaluation bound: the result set
-        # keeps the caller's requested limit, so its cursor resumes that view.
         per_run_limit = include.per_run.limit if include.per_run is not None else None
-        if per_run_limit is not None and per_run_reservoir_limit is not None:
-            per_run_limit = per_run_reservoir_limit
+        if page_stop is not None and page_stop.reservoir is not None and per_run_limit is not None:
+            per_run_limit = page_stop.reservoir
         if (
-            stop_after_per_run_page
+            page_stop is not None
             and per_run_limit is not None
-            and (records or not item_failures)
-            and intra_item + per_run_limit < len(records)
+            and (unit.records or not unit.failures)
+            and intra_item + per_run_limit < len(unit.records)
         ):
             intra_item += per_run_limit
             work_done = True
@@ -3253,70 +3513,13 @@ async def _evaluate_analysis_drive(
     )
     if postcheck:
         failed_ids = set(postcheck)
-        drifted_pending = [
-            artifact for artifact in all_pending if artifact.manifest_id in failed_ids
-        ]
-        await asyncio.to_thread(_remove_pending, drifted_pending)
-        all_pending = [
-            artifact for artifact in all_pending if artifact.manifest_id not in failed_ids
-        ]
-        for unit in processed:
-            relevant = {
-                manifest_id: code
-                for manifest_id, code in postcheck.items()
-                if manifest_id in unit["eligible_ids"]
-            }
-            if not relevant:
-                continue
-            unit["records"] = [
-                record for record in unit["records"] if record["_manifest_id"] not in failed_ids
-            ]
-            unit["item_failures"].extend(
-                {
-                    "code": code.split(":", 1)[0],
-                    "stage": "source_postcheck",
-                    "where": manifest_id,
-                    "message": code,
-                }
-                for manifest_id, code in relevant.items()
-            )
-
-    # Source drift is the last consumer of this evaluation-only join key.
-    # Remove it once so every assembly and durable snapshot can use the records
-    # directly without copying their nested values.
-    for unit in processed:
-        for record in unit["records"]:
-            record.pop("_manifest_id", None)
-
-    # Publish every surviving artifact once, then merge the handles back into the
-    # records that reference them (shared dicts, so entries built below see them).
-    try:
-        handles = await _publish(all_pending, postcheck_deadline)
-    except (LTSpiceMCPError, OSError) as exc:
-        await asyncio.to_thread(_remove_pending, all_pending)
-        publish_code = (
-            "analysis_deadline"
-            if isinstance(exc, AnalysisDeadlineExceeded)
-            else "artifact_publish_failed"
+        await asyncio.to_thread(
+            _remove_pending,
+            [artifact for artifact in all_pending if artifact.manifest_id in failed_ids],
         )
-        for unit in processed:
-            if unit["pending"]:
-                unit["item_failures"].append(
-                    {
-                        "code": publish_code,
-                        "stage": "publish",
-                        "where": unit["key"],
-                        "message": str(exc),
-                    }
-                )
-        handles = []
-    if handles:
-        by_path = {handle["path"]: handle for handle in handles}
-        for unit in processed:
-            for record in unit["records"]:
-                artifact = record["value"].get("artifact")
-                if isinstance(artifact, dict) and artifact["path"] in by_path:
-                    artifact.update(by_path[artifact["path"]])
+        all_pending = _discard_drifted(processed, all_pending, postcheck)
+
+    await _publish_unit_artifacts(processed, all_pending, postcheck_deadline)
 
     signals: dict[str, list[str]] | None = None
     if include.signals_available:
@@ -3392,7 +3595,7 @@ def complete_analysis_evaluations(drives: list[AnalysisEvaluation]) -> dict[str,
         deferred=any(drive.deferred for drive in drives),
         signals=signals,
     )
-    max_rows = max([len(combined.missing), *(len(unit["records"]) for unit in processed), 1])
+    max_rows = max([len(combined.missing), *(len(unit.records) for unit in processed), 1])
     limits = _Limits(
         per_run=max_rows if combined.include.per_run is not None else None,
         rows=max_rows,
@@ -3400,7 +3603,7 @@ def complete_analysis_evaluations(drives: list[AnalysisEvaluation]) -> dict[str,
         groups=None,
     )
     data, _text = _assemble(combined, None, limits)
-    data["failures"] = list(combined.failure_inventory)
+    data["failures"] = [failure.wire() for failure in combined.failure_inventory]
     data["observations"] = [
         observation
         for observation in data["observations"]
@@ -3416,8 +3619,7 @@ async def capture_attached_analysis(
     assembly = await _evaluate_analysis_drive(
         args,
         state,
-        stop_after_per_run_page=True,
-        per_run_reservoir_limit=MAX_PAGE_SIZE,
+        page_stop=_PageStop(reservoir=MAX_PAGE_SIZE),
     )
     return await asyncio.to_thread(_snapshot_from_assembly, assembly)
 
@@ -3445,11 +3647,7 @@ async def capture_attached_analysis(
 async def handle_analyze_results(
     args: AnalyzeResultsInput, state: SessionState
 ) -> types.CallToolResult:
-    assembly = await _evaluate_analysis_drive(
-        args,
-        state,
-        stop_after_per_run_page=True,
-    )
+    assembly = await _evaluate_analysis_drive(args, state, page_stop=_PageStop())
     budget = resolve_response_budget(args.budget, state)
     if budget.tokens is None:
         data, text = _assemble(assembly, None, _Limits.of(assembly.include))
