@@ -59,7 +59,8 @@ every sample to a file and returns its path.
   `anchors` or `rtol`; pass the `compare` object, which carries all four.
 - `edit_schematic` no longer accepts the flat `reference`; pass `compare`.
 - `edit_schematic` no longer accepts `render`, `render_format`, `render_scale`,
-  or `render` in `return_views`, and its response carries no `views.render`.
+  or `render` in `return_views`, and its response carries neither `views.render`
+  nor the `artifacts` array that rendering was the only producer for.
   Rendering is `verify_circuit`'s, whose policy adds a pixel cap, inline
   delivery and a render-only mode.
 - `edit_schematic` no longer accepts `write_failed_draft`. A failed batch writes
@@ -133,11 +134,12 @@ Error codes that only those handlers emitted are gone with them:
   replaces `reduce_field` and `spec.field`, which said the same thing and had to
   agree; `spec` keeps `min`, `max` and `allow_incomplete`. A multi-field recipe
   requires `field` as soon as `reduce` or `spec` is given; a keyed recipe
-  requires it for `spec`; a scalar recipe takes none.
+  requires it for `spec`, and where it is given it narrows that recipe's
+  reduction to the named key too; a scalar recipe takes none.
 - The published JSON Schema no longer carries `"default": null` annotations or
   `discriminator.mapping` tables: `required` and each branch's own `const`
-  already say both. Nothing a call may send changed. With the removals below,
-  the full tool listing is about 8% smaller and the compact one about 14%.
+  already say both. Nothing a call may send changed, and together with the
+  argument removals above the tool listing is smaller in both modes.
 
 - Calling a tool name the server does not have now answers a JSON-RPC
   invalid-params error (-32602) naming the unknown tool and listing the seven
