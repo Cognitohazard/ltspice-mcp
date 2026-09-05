@@ -571,9 +571,11 @@ class ServerConfig:
     it interleaved with their own output — and a ~34-line INFO startup banner
     there is answered with a blanket ``2>/dev/null``, which then hides the
     tracebacks that mattered. Startup detail is still one setting away
-    (``[logging] level`` or ``LTSPICE_MCP_LOG_LEVEL``) and ``server_status``
-    reports the same facts on demand; MCP protocol log notifications are a
-    separate channel and are unaffected."""
+    (``[logging] level`` or ``LTSPICE_MCP_LOG_LEVEL``), and an ``inspect``
+    capabilities query reports the same facts on demand. Stderr is the server's
+    only log channel: the MCP logging capability that once carried these
+    messages to the client is deprecated as of the 2026-07-28 revision and is
+    no longer served."""
 
     symbol_paths: list[Path] = field(default_factory=list)
     """Custom paths to LTspice symbol (.asy) files for .asc schematic support.

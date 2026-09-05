@@ -25,7 +25,7 @@ import pytest
 from mcp import types as mcp_types
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
-from mcp.shared.exceptions import MCPError
+from mcp.shared.exceptions import MCPDeprecationWarning, MCPError
 from mcp.types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_MODERN_VERSION
 
 from tests.conftest import FIXTURES_DIR
@@ -173,6 +173,17 @@ class TestServerLifecycle:
             assert caps.tools is not None
             assert caps.resources is not None
             assert caps.prompts is not None  # workflow-starter prompts
+            # The logging capability is deprecated as of 2026-07-28 and this
+            # server does not serve it, so it must not be advertised either.
+            assert caps.logging is None
+
+    async def test_set_logging_level_is_not_served(self, tmp_path):
+        # Dropping the capability means dropping the request that went with
+        # it: a client that asks anyway gets method-not-found, not silence.
+        async with mcp_session(tmp_path) as session:
+            with pytest.warns(MCPDeprecationWarning), pytest.raises(MCPError) as excinfo:
+                await session.set_logging_level("info")
+            assert excinfo.value.code == mcp_types.METHOD_NOT_FOUND
 
     async def test_initialize_reports_package_version_and_active_simulator(self, tmp_path):
         # A real handshake must carry the ltspice-mcp package version (not the
@@ -205,6 +216,7 @@ class TestServerLifecycle:
             assert result.capabilities.tools is not None
             assert result.capabilities.resources is not None
             assert result.capabilities.prompts is not None
+            assert result.capabilities.logging is None
             assert result.instructions is not None
             # Detection is disabled in this harness -> the no-simulator line.
             assert "No SPICE simulator detected" in result.instructions
