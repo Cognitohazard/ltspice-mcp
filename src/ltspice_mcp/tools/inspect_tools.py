@@ -27,9 +27,10 @@ stray continuation) — the answer was read from cards that mean something other
 than the file says, and the key is absent when it read cleanly.
 
 Both circuit kinds report the sheet's ``sha256`` when the target is a ``.asc``
-— the token ``edit_schematic`` requires as ``expected_sha256``. This is the only
-place on the profile that hands it out, so a read here is what lets a first
-edit commit in one call instead of mining the digest out of an error.
+— the token ``edit_schematic`` requires as ``expected_sha256``. Reading it here
+is what lets a first edit commit in one call; an edit attempted without it is
+refused with the current digest attached, so that path costs one retry rather
+than a hunt.
 * ``model`` — model/subcircuit lookup: ``search`` fuzzy-matches a ``query``;
   ``enumerate`` lists every model defined in the given ``libs``.
 
@@ -797,9 +798,10 @@ async def _asc_digest(path: Path) -> str:
     """The sheet's SHA-256 — the edit token ``edit_schematic`` takes as
     ``expected_sha256``.
 
-    Read tools are where a caller can get it: nothing else on this profile
-    reports it, so without this a fresh session has no supported way to obtain
-    its first one. Taken BEFORE the rows are read, so the digest can never be
+    Read tools are where a caller gets it alongside the content it describes;
+    ``edit_schematic``'s own refusals also report the target's current digest,
+    so a caller who edits without reading first still recovers in one retry.
+    Taken BEFORE the rows are read, so the digest can never be
     newer than the content reported alongside it — a token from the future
     would let an edit made against stale rows commit, while a stale token only
     conflicts, which is the safe direction.

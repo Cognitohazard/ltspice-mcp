@@ -269,9 +269,16 @@ async def test_first_edit_commits_with_the_digest_inspect_reported(asc_state, wo
     assert "R3" in (work_dir / "firstedit.asc").read_text()
 
 
-async def test_missing_expected_sha_on_existing_target_is_validation_error(asc_state, work_dir):
+async def test_missing_expected_sha_refusal_hands_back_the_current_digest(asc_state, work_dir):
+    """The guard stands — nothing is written without the token — but the
+    refusal is what the caller reads next, so it carries the digest they need
+    instead of sending them off to fetch it. Otherwise the first edit of every
+    session pays a refused call plus a read before anything can commit."""
     await _build_blank(asc_state, "needsha", _DIVIDER_OPS)
-    with pytest.raises(NetlistError, match="expected_sha256"):
+    current = _sha(work_dir / "needsha.asc")
+    before = (work_dir / "needsha.asc").read_bytes()
+
+    data = _assert_schema(
         await handle_edit_schematic(
             _edit_input(
                 target="needsha.asc",
@@ -287,6 +294,14 @@ async def test_missing_expected_sha_on_existing_target_is_validation_error(asc_s
             ),
             asc_state,
         )
+    )
+
+    assert data["outcome"] == "failed"
+    assert data["commit_state"] == "not_committed"
+    assert data["error"]["code"] == "expected_sha256_required"
+    assert data["sha256"] == current
+    assert current in data["error"]["message"]
+    assert (work_dir / "needsha.asc").read_bytes() == before
 
 
 async def test_parallel_session_revision_race(config, work_dir, asc_symbols):
