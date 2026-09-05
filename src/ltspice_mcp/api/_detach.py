@@ -16,6 +16,7 @@ import contextlib
 import json
 import os
 import secrets
+import signal
 import subprocess
 import sys
 import time
@@ -26,6 +27,7 @@ from typing import Any
 
 from ltspice_mcp.api._exceptions import ApiCallError, ApiInternalError
 from ltspice_mcp.lib import atomic_write_json
+from ltspice_mcp.lib.experiment_runner import REQUEST_GATE_TIMEOUT_S
 from ltspice_mcp.lib.store import (
     KIND_DETACHED_RECEIPT,
     KIND_DETACHED_REQUEST,
@@ -34,11 +36,19 @@ from ltspice_mcp.lib.store import (
 )
 from ltspice_mcp.state import SessionState
 
+#: What the owner gets on top of its own longest legitimate wait: a cold
+#: interpreter start, the engine bootstrap, argument validation, and staging a
+#: large include closure on a slow filesystem.
+_OWNER_BOOT_ALLOWANCE_S = 60.0
+
 #: How long the owner gets to boot, stage its decks and submit before the
-#: caller stops waiting. Generous because staging a large include closure on a
-#: slow filesystem is legitimately slow, and because the cost of being wrong is
-#: a spawned process the caller then has to reason about.
-HANDSHAKE_TIMEOUT_S = 300.0
+#: caller stops waiting. Strictly longer than the owner's own wait for the
+#: request gate, and derived from that constant rather than restating it: an
+#: owner blocked on the gate is doing exactly the right thing — waiting to
+#: replay whatever holds that request_id — and a parent deadline that expired
+#: first would kill it and report a timeout for the one case the caller most
+#: needs an answer to.
+HANDSHAKE_TIMEOUT_S = REQUEST_GATE_TIMEOUT_S + _OWNER_BOOT_ALLOWANCE_S
 
 #: How often the receipt file is looked for. Small: the whole point of
 #: detaching is to get the handle back and move on.
@@ -278,6 +288,27 @@ def submit(
     )
 
 
+def _stop_owner(process: subprocess.Popen[bytes]) -> None:
+    """Stop one owner and the simulators it started.
+
+    The owner is spawned with ``start_new_session=True``, so it leads its own
+    process group and every simulator it launched is in that group. A signal
+    to the owner alone leaves those running with nothing supervising them —
+    and the message the caller gets says the owner "was stopped", which would
+    then be true only of the supervisor. Windows has no process group to
+    signal, so there the single terminate is all there is.
+    """
+    if os.name == "posix":
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            return
+        except OSError:
+            # Already gone, or never a group leader. Fall through: a plain
+            # terminate is still the right thing to try.
+            pass
+    process.terminate()
+
+
 def _prune_handoff_logs(detached_dir: Path) -> None:
     """Keep the newest hand-off logs and drop the rest.
 
@@ -323,15 +354,16 @@ def _await_report(
                 log_path,
             )
         if time.monotonic() >= deadline:
-            process.terminate()
+            _stop_owner(process)
             raise _failure(
                 request_id,
                 "detached_owner_timeout",
                 (
                     f"The detached owner did not report a submission within "
-                    f"{HANDSHAKE_TIMEOUT_S:.0f}s and was stopped. If it had already "
-                    f"submitted, request_id {request_id!r} still names that job: ask "
-                    "for it again to replay it."
+                    f"{HANDSHAKE_TIMEOUT_S:.0f}s, and it and the processes it started "
+                    f"were stopped. If it had already submitted, request_id "
+                    f"{request_id!r} still names that job: ask for it again to "
+                    "replay it."
                 ),
                 log_path,
             )

@@ -9,10 +9,13 @@ record another process can read, or about an owner that is killed.
 
 from __future__ import annotations
 
+import contextlib
 import multiprocessing
 import os
 import shutil
 import signal
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import cast
@@ -20,8 +23,9 @@ from typing import cast
 import psutil
 import pytest
 
-from ltspice_mcp.api import Api, ApiValidationError, _detach
+from ltspice_mcp.api import Api, ApiCallError, ApiValidationError, _detach
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib.experiment_runner import REQUEST_GATE_TIMEOUT_S
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from tests.conftest import SyncApi
@@ -275,6 +279,51 @@ def test_replaying_a_detached_request_returns_the_same_job(work_dir: Path) -> No
     # The owner named on the replay is the process that actually owns the
     # record, not the owner just spawned to look it up.
     assert again["evidence"]["owner_pid"] != os.getpid()
+
+
+def test_the_handshake_budget_outlasts_the_owners_own_gate_wait() -> None:
+    """An owner blocked on the request gate is doing the right thing.
+
+    It is waiting to replay whatever holds that request_id. The parent's
+    deadline starts at spawn and the owner's gate wait starts only after
+    interpreter boot and validation, so an equal budget always expires first:
+    every contended detached submission would be killed and reported as a
+    timeout, and the script would never learn the job it asked about exists.
+    """
+    assert _detach.HANDSHAKE_TIMEOUT_S > REQUEST_GATE_TIMEOUT_S
+
+
+def test_a_timed_out_owner_is_stopped_with_the_processes_it_started(
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The owner leads its own session, and its simulators are in that group."""
+    monkeypatch.setattr(_detach, "HANDSHAKE_TIMEOUT_S", 0.3)
+    child_pid_file = work_dir / "child.pid"
+    program = (
+        "import subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+        f"open({str(child_pid_file)!r}, 'w').write(str(child.pid))\n"
+        "time.sleep(120)\n"
+    )
+    owner = subprocess.Popen([sys.executable, "-c", program], start_new_session=True)
+    try:
+        _until(child_pid_file.is_file, 30.0, "the owner to start a child")
+        child_pid = int(child_pid_file.read_text())
+
+        with pytest.raises(ApiCallError, match="did not report a submission"):
+            _detach._await_report(
+                owner,
+                work_dir / "never-written.receipt.json",
+                "gate-held-elsewhere",
+                work_dir / "owner.log",
+            )
+
+        _until(lambda: _gone(child_pid), 30.0, "the owner's child to be stopped too")
+    finally:
+        with contextlib.suppress(OSError):
+            os.killpg(os.getpgid(owner.pid), signal.SIGKILL)
+        owner.wait(timeout=30)
 
 
 def test_finished_hand_off_logs_are_capped(work_dir: Path) -> None:
