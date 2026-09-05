@@ -1141,23 +1141,34 @@ class TestCancellationAuthority:
             lambda *_args, **_kwargs: store.OwnerLiveness.ALIVE,
         )
 
+        cancel_args = _args(
+            "cancel",
+            job_id=receipt.job.job_id,
+            control_token=receipt.control_token,
+        )
         data = _assert_jobs_schema(
-            await asyncio.wait_for(
-                handle_jobs(
-                    _args(
-                        "cancel",
-                        job_id=receipt.job.job_id,
-                        control_token=receipt.control_token,
-                    ),
-                    foreign_state,
-                ),
-                30,
-            )
+            await asyncio.wait_for(handle_jobs(cancel_args, foreign_state), 30)
         )
 
-        assert data["status"] == "cancelled"
+        # The durable barrier is what the contract acknowledges: no further case
+        # enters submission. The receipt's own status is whatever the owner had
+        # reached inside a bounded best-effort poll, so pinning a terminal one
+        # here would pin a latency instead — the wait scales with a real
+        # process-table scan, which is why this asserts state and then waits on
+        # the coordinator's own completion event rather than on a clock.
+        assert data["job_id"] == receipt.job.job_id
         assert experiment_store.cancellation_requested(receipt.job.job_id, work_dir)
+
+        await asyncio.wait_for(receipt.job.done_event.wait(), 30)
+        assert receipt.job.status == "cancelled"
         assert receipt.job.completeness.submitted == 1
+
+        # And a foreign caller asking again, now that the owner has finished,
+        # gets the terminal status on the receipt.
+        settled = _assert_jobs_schema(
+            await asyncio.wait_for(handle_jobs(cancel_args, foreign_state), 30)
+        )
+        assert settled["status"] == "cancelled"
         callback = next(iter(callbacks.values()))
         callback(RunOutcome("", str(work_dir / "cancelled.fail"), 0, "killed"))
         await _wait_for(lambda: not runner.has_active_work())
