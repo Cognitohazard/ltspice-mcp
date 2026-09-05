@@ -126,6 +126,25 @@ def test_variation_schema_keeps_discriminated_union_through_defs():
     )
 
 
+def test_the_random_rules_field_names_all_four_kinds_in_plain_words():
+    """Four rule kinds ship; only 'mismatch' was ever used, because only it was
+    taught. A caller reading 'rules' has to learn from that line what the other
+    three vary, or the capability is there and unreachable."""
+    schema = build_input_schema(RunExperimentsInput)
+    variations = resolve_local_ref(schema, schema["properties"]["variations"]["items"])
+    branches = {
+        resolve_local_ref(schema, ref)["properties"]["kind"]["const"]: resolve_local_ref(
+            schema, ref
+        )
+        for ref in variations["oneOf"]
+    }
+    description = branches["random"]["properties"]["rules"]["description"]
+    for kind in ("component", "param", "model", "mismatch"):
+        assert f"'{kind}'" in description, f"'rules' does not say what {kind} varies"
+    assert "tolerance" in description  # what 'component' means in a caller's words
+    assert "Pelgrom" in description  # and what 'mismatch' means in an engineer's
+
+
 def _deck(path: Path, body: str | None = None) -> Path:
     path.write_text(body or "V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
     return path
