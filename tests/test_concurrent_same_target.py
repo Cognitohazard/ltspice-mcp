@@ -85,6 +85,25 @@ def _staged_deck_dirs(work_dir: Path) -> list[Path]:
     return sorted(p for p in runs.glob("*/staged") if p.is_dir())
 
 
+def _spy_on_staging(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    """Record the staging root of every deck set a submission actually stages.
+
+    The list is the whole history, not the directories left at the end: a
+    duplicate that stages and is then cleaned up still shows up here.
+    """
+    from ltspice_mcp.tools import experiments as experiments_module
+
+    real = experiments_module.stage_deck
+    staged: list[Path] = []
+
+    def spy(source_path: Path, staging_root: Path, *args: Any, **kwargs: Any):
+        staged.append(Path(staging_root))
+        return real(source_path, staging_root, *args, **kwargs)
+
+    monkeypatch.setattr(experiments_module, "stage_deck", spy)
+    return staged
+
+
 # ---------------------------------------------------------------------------
 # 1. Two edit_schematic batches carrying the same expected_sha256
 # ---------------------------------------------------------------------------
@@ -153,9 +172,15 @@ async def test_simultaneous_edits_on_one_sha_commit_exactly_one(
 async def test_identical_request_id_submits_one_job(
     state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """Same id, same payload, fired together: one job, one record, one deck set."""
+    """Same id, same payload, fired together: one job, one record, one deck set.
+
+    The duplicate waits on the request gate and replays what it finds there, so
+    only one submission ever stages: the deck set that exists is the one the
+    surviving job claims, not the survivor of two that were staged.
+    """
     submissions: list[str] = []
     fake_simulator(monkeypatch, submissions)
+    staged = _spy_on_staging(monkeypatch)
     deck = _deck(work_dir / "same-request.cir")
     payload = _run_payload(deck, "same-request")
 
@@ -176,6 +201,8 @@ async def test_identical_request_id_submits_one_job(
     ]
     assert len(replayed) == 1
     assert len(submissions) == 1, f"the loser also reached the simulator: {submissions}"
+    assert len(staged) == 1, f"both submissions staged a deck set: {staged}"
+    assert first["job_id"] in staged[0].parts
     assert [p.parent.name for p in _staged_deck_dirs(work_dir)] == [first["job_id"]]
 
 
@@ -240,10 +267,13 @@ async def test_same_request_id_different_payload_conflicts(
 
     The contract in docs/design/mcp_surface.md is fingerprint-keyed: the same
     id with a different canonical payload is ``idempotency_conflict``. Firing
-    both at once must not turn that into two jobs under one id.
+    both at once must not turn that into two jobs under one id, and the refused
+    payload must be refused before it stages anything: the conflict is decided
+    inside the request gate, which the loser waits on.
     """
     submissions: list[str] = []
     fake_simulator(monkeypatch, submissions)
+    staged = _spy_on_staging(monkeypatch)
     first_deck = _deck(work_dir / "conflict-a.cir")
     second_deck = _deck(work_dir / "conflict-b.cir")
 
@@ -260,8 +290,10 @@ async def test_same_request_id_different_payload_conflicts(
 
     assert [p.stem for p in _job_records(work_dir)] == [accepted[0]["job_id"]]
     assert len(submissions) == 1, f"the refused payload still ran: {submissions}"
-    # A refused submission leaves no run directory behind for a job that does
-    # not exist: staged decks belong to a record that claims them.
+    # A refused submission never stages: staged decks belong to a record that
+    # claims them, and the refusal happens before any deck is copied.
+    assert len(staged) == 1, f"the refused payload staged a deck set: {staged}"
+    assert accepted[0]["job_id"] in staged[0].parts
     assert [p.parent.name for p in _staged_deck_dirs(work_dir)] == [accepted[0]["job_id"]]
 
 

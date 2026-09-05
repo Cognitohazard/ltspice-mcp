@@ -581,12 +581,13 @@ key is deleted in 0.7.0. Serving zero tools is still a hard error.
 ### Fixed
 
 - Two `run_experiments` calls sharing a `request_id` and fired at the same
-  time no longer leave a run directory behind. Both stage a full set of decks
-  before the idempotency gate decides which one becomes the job; the loser's
-  `runs/{job_id}/` tree used to stay in the shared runs root with no job
-  record naming it, which is exactly the unclaimed artifact a later inventory
-  of that folder mistakes for its own. The same applies when the second call
-  is refused as an `idempotency_conflict`.
+  time now stage one set of decks between them, not two. A submission claims
+  its `request_id` before it stages: it takes that id's gate, looks the id up,
+  and only stages if nothing is recorded under it. The second call waits on
+  the gate, finds the record, and replays it — or is refused as an
+  `idempotency_conflict` — without copying a deck set of its own. Both used to
+  stage in full and the loser's `runs/{job_id}/` tree was deleted afterwards,
+  so a crash in between left an unclaimed tree in the shared runs root.
 - `edit_schematic` reports `outcome: "partial"` when a dry run's ops fail,
   when the post-commit comparison against `reference` does not match or
   cannot export, or when a requested render fails. It reported `complete`

@@ -41,6 +41,7 @@ from ltspice_mcp.lib.experiment_runner import (
     ExperimentReceipt,
     ExperimentRunRequest,
     IdempotencyConflictError,
+    StagedDecks,
     canonical_fingerprint,
     verify_replay_sources,
 )
@@ -589,41 +590,48 @@ async def handle_run_experiments(
             )
         await asyncio.to_thread(route.output_folder.mkdir, parents=True, exist_ok=True)
 
-        cases: list[ExperimentCase] = []
-        sources: list[SourceRecord] = []
-        lint_by_circuit: dict[str, list[dict[str, Any]]] = {
-            circuit.circuit_id: [] for circuit in circuit_inputs
-        }
-        preparations = await asyncio.gather(
-            *(
-                _prepare_circuit(
-                    circuit_input,
-                    circuit_arg,
-                    args,
-                    state,
-                    simulator,
-                    job_id,
-                )
-                for circuit_input, circuit_arg in zip(
-                    circuit_inputs,
-                    args.circuits,
-                    strict=True,
-                )
-            )
-        )
-        for preparation in preparations:
-            lint_by_circuit[preparation.circuit_id] = preparation.lint_findings
-            if preparation.source is not None:
-                sources.append(preparation.source)
-            for case in preparation.cases:
-                case.run_index = len(cases)
-                cases.append(case)
+        # Staging runs inside the coordinator's request gate, not here: a second
+        # call carrying this request_id waits on that gate and replays the job it
+        # finds, so only one submission ever copies a deck set. The findings this
+        # pass produces are read back through the closure below, and stay empty
+        # when the gate answered with a replay — the recorded job's own findings
+        # are what a replay receipt reports.
+        lint_by_circuit: dict[str, list[dict[str, Any]]] = {}
 
-        if len(cases) != projected:
-            raise VariationError(
-                "completeness_mismatch",
-                f"Prepared {len(cases)} cases but variation expansion declared {projected}",
+        async def stage_decks() -> StagedDecks:
+            cases: list[ExperimentCase] = []
+            sources: list[SourceRecord] = []
+            preparations = await asyncio.gather(
+                *(
+                    _prepare_circuit(
+                        circuit_input,
+                        circuit_arg,
+                        args,
+                        state,
+                        simulator,
+                        job_id,
+                    )
+                    for circuit_input, circuit_arg in zip(
+                        circuit_inputs,
+                        args.circuits,
+                        strict=True,
+                    )
+                )
             )
+            for preparation in preparations:
+                lint_by_circuit[preparation.circuit_id] = preparation.lint_findings
+                if preparation.source is not None:
+                    sources.append(preparation.source)
+                for case in preparation.cases:
+                    case.run_index = len(cases)
+                    cases.append(case)
+
+            if len(cases) != projected:
+                raise VariationError(
+                    "completeness_mismatch",
+                    f"Prepared {len(cases)} cases but variation expansion declared {projected}",
+                )
+            return StagedDecks(cases=cases, sources=sources)
 
         analysis_request = args.strip_presentation()["analyze"]
         runner = state.runners.get_experiment_runner(
@@ -638,8 +646,7 @@ async def handle_run_experiments(
             state=state,
             request_id=args.request_id,
             fingerprint=fingerprint,
-            cases=cases,
-            sources=sources,
+            stage=stage_decks,
             simulator=simulator.__name__,
             job_id=job_id,
             declared=len(args.circuits),
@@ -661,7 +668,7 @@ async def handle_run_experiments(
                 receipt,
                 args.execution.wait_s,
                 state,
-                lint_by_circuit=lint_by_circuit,
+                lint_by_circuit=lint_by_circuit or None,
                 provenance=args.provenance,
                 run_fields=args.run_fields,
                 analysis_fields=analysis_fields,
@@ -671,7 +678,7 @@ async def handle_run_experiments(
             return await _post_submit_error_response(
                 receipt,
                 exc,
-                lint_by_circuit,
+                lint_by_circuit or None,
                 budget=budget,
             )
     except IdempotencyConflictError as exc:
