@@ -15,9 +15,11 @@ from mcp import types
 from pydantic import (
     BeforeValidator,
     Field,
+    SkipValidation,
     TypeAdapter,
     ValidationError,
     ValidatorFunctionWrapHandler,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -64,7 +66,7 @@ from ltspice_mcp.lib.job_types import (
 )
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
-from ltspice_mcp.lib.recipes import validate_recipe
+from ltspice_mcp.lib.recipes import Recipe, validate_recipe
 from ltspice_mcp.lib.simulator import simulator_dialect, simulator_library_roots
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.variations import (
@@ -265,7 +267,14 @@ coerce_attached_include_flags = include_flag_coercer(AnalysisInclude)
 
 
 class AttachedAnalysis(StrictModel):
-    recipes: list[dict[str, Any]] = Field(
+    # The same typed union analyze_results advertises, not a free-form object:
+    # this block IS an analyze_results request, and a schema that said
+    # "any object" left a caller to discover the recipe grammar by having a
+    # whole simulation run and then fail at the analysis stage. SkipValidation
+    # keeps the strict union in the published schema while leaving the items as
+    # the caller sent them, which is what _validate_attached_analysis then
+    # checks recipe by recipe, before anything is staged.
+    recipes: list[SkipValidation[Recipe]] = Field(
         description=(
             "analyze_results recipes, in that tool's exact shape, run over this "
             "job's own runs once they finish. Saves a round trip when the "
@@ -292,6 +301,20 @@ class AttachedAnalysis(StrictModel):
             "a bare list of flag names switches them on."
         ),
     )
+
+    @field_serializer("recipes")
+    def _serialize_recipes(self, recipes: list[Any]) -> list[Any]:
+        """Serialize each recipe exactly as it arrived.
+
+        Skipped validation leaves a wire recipe as the dict the caller sent,
+        while the annotation promises a model. Without this the default
+        serializer warns on every dump — including the one that computes the
+        durable fingerprint, which must keep hashing the caller's own bytes.
+        """
+        return [
+            recipe if isinstance(recipe, dict) else recipe.model_dump(mode="json")
+            for recipe in recipes
+        ]
 
 
 class RunExperimentsInput(ToolInput):
