@@ -62,10 +62,15 @@ Python, and there's an extra process to maintain.
 |`ltspice-mcp` (this)|direct `.asc` editing|pin coords, bbox, diagonal-wire refusal, named-net-short detection|sweep + Monte Carlo + batch metrics|supported|
 |spicelib `AscEditor`|text-level mutator|none|via SimStepper / Montecarlo (lower-level)|N/A|
 |PyLTSpice|spicelib re-export|none|same as spicelib|N/A|
-|`xuio/ltspice-mcp`|create/modify/lint|not documented|not documented|macOS-only|
-|`daviditkin/ltspice-mcp`|netlist-level (9 tools)|none|none|not documented|
+|`xuio/ltspice-mcp`|create/modify/lint|not compared|not compared|macOS-only|
+|`daviditkin/ltspice-mcp`|netlist-level (9 tools)|none|none|not compared|
 |SPICEAssistant (arxiv 2507.10639)|none|N/A|measurement extractors|N/A — research only|
 |LTspice GUI|interactive|interactive|GUI-driven|N/A|
+
+"not compared" means we have not run that project and are not claiming
+anything about it either way. It is not a statement that the capability is
+absent — the other cells are read from each project's own description, and
+none of the third-party rows have been benchmarked against this one.
 
 Geometry-aware editing is `edit_schematic`, one transactional op batch
 (`add_component`, `move_component`, `remove_component`,
@@ -548,8 +553,8 @@ geometry-aware, and LTspice-specific comes first.
 - **Cross-run analysis**: `compare_corners`, `find_worst_case`,
   `sensitivity_ranking` — tools that aggregate measurements across a
   set of runs and return structured deltas.
-- **Waveform egress & plotting**: shipped (see *Decided egress & plot
-  surface* above) — the `waveform` recipe's CSV form and both `plot_waveform`
+- **Waveform egress & plotting**: shipped (see *Egress & plot surface*
+  above) — the `waveform` recipe's CSV form and both `plot_waveform`
   delivery tiers. What remains open is the opt-in static-PNG attach for the
   vision tier.
 - **Pin-compatible alternate suggestions** for unknown parts.
