@@ -217,6 +217,12 @@ every sample to a file and returns its path.
 
 ### Changed
 
+- Every error class declares a stable `code`. No code a client sees has
+  changed; the full vocabulary (82 codes) is pinned by
+  `tests/test_error_codes.py`, and renaming or removing one is a breaking
+  change that will be listed here. See `docs/design/mcp_surface.md`, "Error
+  codes".
+
 - The `mcp` dependency no longer pulls the `cli` extra: six packages fewer
   (typer, rich, markdown-it-py, mdurl, shellingham, annotated-doc) for a
   server that never imported them.
@@ -323,6 +329,18 @@ every sample to a file and returns its path.
   refers to. Facts, code, and tested instructions are unchanged.
 
 ### Fixed
+
+- An analysis failure is classified as a deadline by its exception type, not
+  by whether its message contained "deadline" or "exceeded". A source path, a
+  signal name, or a filesystem error carrying those words (a full disk
+  reports "Disk quota exceeded") was reported as `analysis_deadline`, sending
+  the caller to retry a fault that more time cannot fix.
+- Opening a schematic whose symbol, sub-sheet, or model library is missing
+  reports the missing dependency. The old check looked for ".asy" in the
+  editor's message, so a hierarchical block whose sheet was gone reported
+  "File not found" against the schematic that had opened fine.
+- Cancelling a job distinguishes an unauthorized request from any other
+  cancellation failure by type rather than by the words "not authorized".
 
 - ngspice decks that drive their own analysis from a `.control` block now get
   a rawfile through `run_experiments`. The write injection was wired only into
