@@ -635,8 +635,8 @@ def page_schema(
 ) -> dict[str, Any]:
     """The offset-page object: the five shared keys plus a tool's own additions.
 
-    ``items`` overrides the item-array schema (a row-page tool passes its
-    columnar-aware fragment). ``extra_properties`` are declared but not
+    ``items`` overrides the item-array schema (a tool with a narrower row
+    passes its own fragment). ``extra_properties`` are declared but not
     required, so a reader of any page can rely on the five without knowing
     which tool produced it.
     """

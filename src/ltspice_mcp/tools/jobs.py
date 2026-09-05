@@ -344,11 +344,6 @@ _JOBS_COMMON_REQUIRED = [
     "hint",
 ]
 
-_JOBS_PAGE_PROPERTIES: dict[str, Any] = page_schema(
-    {"type": "array"},
-    items_columns=response_budget.COLUMNAR_ROWS_SCHEMA,
-)["properties"]
-
 
 _JOBS_RECEIPT_PROPERTIES: dict[str, Any] = {
     "job_id": {"type": ["string", "null"]},
@@ -475,13 +470,13 @@ def _jobs_page_schema(
     *,
     addressed: bool,
 ) -> dict[str, Any]:
+    page = page_schema({"type": "array", "items": item_schema})
     properties = {
         "action": {"const": action},
         **_JOBS_COMMON_PROPERTIES,
-        **_JOBS_PAGE_PROPERTIES,
+        **page["properties"],
     }
-    properties["items"] = response_budget.row_items_schema(item_schema)
-    required = [*_JOBS_COMMON_REQUIRED, "items", "total", "returned", "truncated", "next_cursor"]
+    required = [*_JOBS_COMMON_REQUIRED, *page["required"]]
     if addressed:
         properties.update(
             {

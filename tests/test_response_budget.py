@@ -152,6 +152,24 @@ async def _spec_analysis(state: SessionState, raw: Path, **extra: Any) -> dict[s
     return result.structuredContent
 
 
+# Fractions of an undegraded response's own size, spanning a met budget down
+# past the floor. A rung that only misbehaves partway down the ladder is
+# invisible to a floor-only probe, so every walk in this file covers the spread.
+_WALK_DIVISORS = (1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 64)
+
+
+def _budget_walk(full: int) -> list[int]:
+    """The distinct budgets to try against a response measuring ``full`` tokens.
+
+    Distinct because the deeper divisors all clamp to the floor, and the same
+    budget twice returns the same bytes — paying for that twice buys nothing.
+    """
+    return sorted(
+        {max(full // divisor, response_budget.BUDGET_MIN_TOKENS) for divisor in _WALK_DIVISORS},
+        reverse=True,
+    )
+
+
 def _observation(data: dict[str, Any], code: str) -> dict[str, Any] | None:
     for item in data.get("observations", []):
         if item.get("code") == code:
@@ -173,15 +191,6 @@ def _stable(data: Any) -> str:
     return text
 
 
-def _uncolumnar(container: dict[str, Any], key: str) -> list[Any]:
-    """The rows under ``key``, back in object form if the columnar rung fired."""
-    rows = container[key]
-    columns = container.get(response_budget.columnar_key(key))
-    if columns is None:
-        return rows
-    return [dict(zip(columns, row, strict=True)) for row in rows]
-
-
 # ---------------------------------------------------------------------------
 # The ladder's primitives
 # ---------------------------------------------------------------------------
@@ -192,26 +201,6 @@ class TestLadderPrimitives:
         payload = {"a": [1, 2, 3], "b": "xyz"}
         expected = len(json.dumps(payload, separators=(",", ":"))) // 4
         assert response_budget.estimate_tokens(payload) == expected
-
-    def test_columnar_is_lossless_and_reversible(self):
-        rows = [{"a": 1, "b": None}, {"a": 2, "b": "x"}]
-        block = {"items": [dict(row) for row in rows]}
-        assert response_budget.columnarize(block, "items") is True
-        assert block["items_columns"] == ["a", "b"]
-        assert block["items"] == [[1, None], [2, "x"]]
-        assert _uncolumnar(block, "items") == rows
-
-    def test_columnar_refuses_rows_that_do_not_share_a_key_set(self):
-        """Null-filling a missing column cannot be told apart from a real null,
-        so a heterogeneous surface stays as it is rather than losing that."""
-        block = {"items": [{"a": 1, "b": 2}, {"a": 2}]}
-        assert response_budget.columnarize(block, "items") is False
-        assert block["items"] == [{"a": 1, "b": 2}, {"a": 2}]
-        assert response_budget.columnar_key("items") not in block
-
-    def test_columnar_leaves_a_single_row_alone(self):
-        block = {"items": [{"a": 1, "b": 2}]}
-        assert response_budget.columnarize(block, "items") is False
 
     def test_fit_limit_never_grows_and_never_reaches_zero(self):
         measure = response_budget.RowMeasure.of([{"a": "x" * 40} for _ in range(20)])
@@ -380,9 +369,7 @@ class TestAnalysisBudget:
         rejects — walked from a met budget down to the floor."""
         raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
         plain = await _analysis(state_no_sim, raw, include={"per_run": {"limit": 45}})
-        full = response_budget.estimate_tokens(plain)
-        for divisor in (1, 2, 4, 8, 16, 64):
-            budget = max(full // divisor, response_budget.BUDGET_MIN_TOKENS)
+        for budget in _budget_walk(response_budget.estimate_tokens(plain)):
             data = await _analysis(
                 state_no_sim, raw, budget=budget, include={"per_run": {"limit": 45}}
             )
@@ -391,8 +378,8 @@ class TestAnalysisBudget:
     async def test_the_deepest_rung_applies_every_rung_above_it(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        """Rungs are cumulative, so the floor response is where all four show at
-        once: empty identity echo, revoked opt-ins, columnar rows, shrunk page."""
+        """Rungs are cumulative, so the floor response is where all three show
+        at once: empty identity echo, revoked opt-ins, shrunk page."""
         raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
         include = {"per_run": {"limit": 45}, "provenance": True, "signals_available": True}
         # The undegraded reference this test measures the rungs against; the
@@ -407,16 +394,13 @@ class TestAnalysisBudget:
             state_no_sim, raw, budget=response_budget.BUDGET_MIN_TOKENS, include=include
         )
         detail = _observation(data, "budget_truncated")["detail"]  # type: ignore[index]
-        assert "rung 3 (shrink)" in detail
+        assert "rung 2 (shrink)" in detail
         # rung 0: required identity echo emptied, never removed.
         assert data["source_hashes"] == []
         # rung 1: the payload-growing opt-ins are revoked.
         assert "signals_available" not in data
-        # rung 3: the page shrank, and it shrank before the cursor was minted —
+        # rung 2: the page shrank, and it shrank before the cursor was minted —
         # returned is what the page holds, and the cursor resumes after it.
-        # (Rung 2 leaves a one-row page alone: a column list the size of the row
-        # it describes saves nothing. The columnar rung is exercised where it can
-        # fire, in test_columnar_rows_carry_the_same_values.)
         page = data["results"]["loop"]["per_run"]
         assert page["returned"] < plain["results"]["loop"]["per_run"]["returned"]
         assert page["returned"] == len(page["items"])
@@ -446,7 +430,7 @@ class TestAnalysisBudget:
                 include={"per_run": per_run},
             )
             page = page_data["results"]["loop"]["per_run"]
-            rows = _uncolumnar(page, "items")
+            rows = page["items"]
             assert rows, "a shrunk page must still carry at least one row"
             assert page["returned"] < 45, "this budget is supposed to shrink the page"
             seen.extend((row["source"], row["step_index"]) for row in rows)
@@ -479,7 +463,7 @@ class TestAnalysisBudget:
             state_no_sim,
         )
         assert resumed.structuredContent is not None
-        rows = _uncolumnar(resumed.structuredContent["results"]["loop"]["per_run"], "items")
+        rows = resumed.structuredContent["results"]["loop"]["per_run"]["items"]
         assert rows[0] == expected[shown], "the continuation skipped rows the page never showed"
 
     async def test_the_same_budget_gives_the_same_bytes(
@@ -489,30 +473,6 @@ class TestAnalysisBudget:
         first = await _analysis(state_no_sim, raw, budget=800)
         second = await _analysis(state_no_sim, raw, budget=800)
         assert _stable(first) == _stable(second)
-
-    async def test_columnar_rows_carry_the_same_values(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        """Columnar is a presentation change: the same rows, without the key
-        names repeated on every one of them."""
-        raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
-        include = {"per_run": {"limit": 45}}
-        plain = await _analysis(state_no_sim, raw, include=include)
-        expected = plain["results"]["loop"]["per_run"]["items"]
-        full = response_budget.estimate_tokens(plain)
-
-        columnar: dict[str, Any] | None = None
-        for divisor in (2, 3, 4, 6, 8, 12, 16, 24, 32):
-            budget = max(full // divisor, response_budget.BUDGET_MIN_TOKENS)
-            data = await _analysis(state_no_sim, raw, budget=budget, include=include)
-            page = data["results"]["loop"]["per_run"]
-            if response_budget.columnar_key("items") in page:
-                columnar = page
-                break
-        assert columnar is not None, "no budget in the walk reached the columnar rung"
-        rows = _uncolumnar(columnar, "items")
-        assert len(rows) > 1
-        assert rows == expected[: len(rows)]
 
     async def test_a_spec_heavy_call_shrinks_its_fail_cases(
         self, state_no_sim: SessionState, work_dir: Path
@@ -528,7 +488,7 @@ class TestAnalysisBudget:
 
         data = await _spec_analysis(state_no_sim, raw, budget=response_budget.BUDGET_MIN_TOKENS)
         spec = data["results"]["vout"]["spec"]
-        page = _uncolumnar(spec["fail_cases"], "items")
+        page = spec["fail_cases"]["items"]
         assert len(page) < wide["fail_cases"]["returned"]
         assert spec["fail_count"] == wide["fail_count"], "a count is a fact, not a page"
         assert spec["verdict"] == wide["verdict"]
@@ -585,9 +545,9 @@ class TestAnalysisBudget:
             )
 
 
-@pytest.mark.asyncio
-async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
-    rows = [
+def _run_rows(count: int) -> list[dict[str, Any]]:
+    """``count`` produced run records — the row surface a receipt budget shrinks."""
+    return [
         {
             "case_id": f"case-{index:03d}",
             "run_index": index,
@@ -597,10 +557,14 @@ async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
             "raw": f"/tmp/run-{index:03d}.raw",
             "log": f"/tmp/run-{index:03d}.log",
         }
-        for index in range(80)
+        for index in range(count)
     ]
 
-    def build(limit: int, _rung: Rung | None):
+
+def _run_receipt_build(rows: list[dict[str, Any]]) -> receipts_mod.ReceiptBuild:
+    """A receipt builder over ``rows``, paging to whatever limit a rung asks for."""
+
+    def build(limit: int, _rung: Rung | None) -> receipts_mod.ReceiptBuilt:
         data = exp_mod._empty_payload("budgeted-runs")
         selected = rows[:limit]
         data.update(
@@ -618,26 +582,26 @@ async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
         )
         return receipts_mod.finalize_receipt(data), "completed"
 
+    return build
+
+
+@pytest.mark.asyncio
+async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
+    rows = _run_rows(80)
+
     result = await receipts_mod.render_run_receipt(
         ResponseBudget(response_budget.BUDGET_MIN_TOKENS),
-        build,
+        _run_receipt_build(rows),
     )
     data = result.structuredContent
     assert data is not None
     jsonschema.Draft202012Validator(receipts_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
     page = data["runs"]
     assert 0 < page["returned"] < 50
-    assert page["items_columns"] == [
-        "case_id",
-        "run_index",
-        "circuit",
-        "assignments",
-        "status",
-    ]
     assert page["next_cursor"] is not None
     offset = jobs_mod._decode_jobs_cursor(page["next_cursor"])
     assert offset == page["returned"]
-    rendered_rows = _uncolumnar(page, "items")
+    rendered_rows = page["items"]
     assert all("raw" not in row and "log" not in row for row in rendered_rows)
     assert [item["case_id"] for item in rendered_rows] == [
         item["case_id"] for item in rows[:offset]
@@ -794,7 +758,7 @@ class TestJobsBudget:
                 budget=response_budget.BUDGET_MIN_TOKENS,
                 **({"cursor": cursor} if cursor is not None else {}),
             )
-            rows = _uncolumnar(page, "items")
+            rows = page["items"]
             assert rows
             assert page["returned"] < 50, "this budget is supposed to shrink the page"
             seen.extend(row["case_id"] for row in rows)
@@ -823,7 +787,7 @@ class TestJobsBudget:
             job_id=job.job_id,
             budget=response_budget.BUDGET_MIN_TOKENS,
         )
-        rows = _uncolumnar(page, "items")
+        rows = page["items"]
         assert all("raw" not in row for row in rows if row["status"] == "produced")
         assert all("raw" in row for row in rows if row["status"] != "produced")
 
@@ -938,7 +902,7 @@ class TestInspectBudget:
             item = data["results"][0]
             assert item["ok"] is True
             payload = item["data"]
-            rows = _uncolumnar(payload, "components")
+            rows = payload["components"]
             assert rows
             assert len(rows) < 250, "this budget is supposed to shrink the page"
             seen.extend(rows)
@@ -988,22 +952,6 @@ class TestInspectBudget:
                 over_and_silent.append((budget, estimate))
         assert not over_and_silent, f"over cap, flagged only truncated: {over_and_silent}"
 
-    async def test_the_row_sweep_skips_the_columnar_sibling_lists(self):
-        """The columnar rung mints a '*_columns' list beside each row surface.
-        It is one list of names, not rows, and it shrinks only when its rows do —
-        counting it skews both the row count and the per-row cost."""
-        data = {
-            "results": [
-                {
-                    "data": {
-                        "components": [["R1", "1k"], ["R2", "2k"]],
-                        "components_columns": ["reference", "value"],
-                    }
-                }
-            ]
-        }
-        assert insp._paged_rows(data) == [["R1", "1k"], ["R2", "2k"]]
-
     async def test_the_answer_rung_falls_back_to_the_component_list(
         self, state_no_sim: SessionState, work_dir: Path
     ):
@@ -1016,3 +964,128 @@ class TestInspectBudget:
             budget=response_budget.BUDGET_MIN_TOKENS,
         )
         assert data["results"][0]["data"]["detail"] == "list"
+
+
+# ---------------------------------------------------------------------------
+# Rows keep their shape at every budget
+# ---------------------------------------------------------------------------
+
+
+def _columns_siblings(node: Any, path: str = "") -> list[str]:
+    """Every ``*_columns`` key in a response, by path.
+
+    A positional row rendering cannot exist without one: arrays of values are
+    unreadable unless something names the positions. So an empty list here is
+    the machine-checkable form of "these rows are still objects", wherever in
+    the envelope they sit.
+    """
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            here = f"{path}.{key}" if path else key
+            if key.endswith("_columns"):
+                found.append(here)
+            found.extend(_columns_siblings(value, here))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            found.extend(_columns_siblings(value, f"{path}[{index}]"))
+    return found
+
+
+def _assert_object_rows(rows: list[Any], within: set[str], *, where: str) -> None:
+    """``rows`` are objects, keyed by names the untightened response also had."""
+    assert rows, f"{where}: a budgeted page must still carry at least one row"
+    for row in rows:
+        assert isinstance(row, dict), f"{where}: row rendered positionally as {row!r}"
+        assert set(row) <= within, f"{where}: row grew keys the plain response never had"
+
+
+@pytest.mark.asyncio
+class TestRowsKeepTheirShape:
+    """A row is an object at every rung of the ladder.
+
+    The ladder once carried a rung that re-rendered row surfaces positionally —
+    a column list plus arrays of values — so a row's shape depended on how tight
+    the budget was. That made the caller branch on the shape of what came back,
+    so it was removed before 0.6.0. A smaller response now comes from a smaller
+    page, which pages on through the same cursors.
+    """
+
+    async def test_analysis_rows_stay_objects_at_every_budget(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """Swept rather than spot-checked: the deepest rung shrinks the page to
+        a row or two, and it was the budgets ABOVE the floor that rendered a
+        wide page positionally."""
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
+        include = {"per_run": {"limit": 45}}
+        plain = await _analysis(state_no_sim, raw, include=include)
+        keys = set(plain["results"]["loop"]["per_run"]["items"][0])
+
+        for budget in _budget_walk(response_budget.estimate_tokens(plain)):
+            data = await _analysis(state_no_sim, raw, budget=budget, include=include)
+            assert _columns_siblings(data) == [], f"budget={budget} renamed its rows"
+            _assert_object_rows(
+                data["results"]["loop"]["per_run"]["items"], keys, where=f"budget={budget}"
+            )
+
+    async def test_spec_rows_stay_objects_at_every_budget(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The row surface beside per_run — a spec's failing cases — keeps its
+        shape too, at every budget the ladder can be handed."""
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+        plain = await _spec_analysis(state_no_sim, raw)
+        keys = set(plain["results"]["vout"]["spec"]["fail_cases"]["items"][0])
+
+        for budget in _budget_walk(response_budget.estimate_tokens(plain)):
+            data = await _spec_analysis(state_no_sim, raw, budget=budget)
+            assert _columns_siblings(data) == [], f"budget={budget} renamed its rows"
+            _assert_object_rows(
+                data["results"]["vout"]["spec"]["fail_cases"]["items"],
+                keys,
+                where=f"fail_cases budget={budget}",
+            )
+
+    async def test_run_receipt_rows_stay_objects(self):
+        rows = _run_rows(80)
+        result = await receipts_mod.render_run_receipt(
+            ResponseBudget(response_budget.BUDGET_MIN_TOKENS),
+            _run_receipt_build(rows),
+        )
+        data = result.structuredContent
+        assert data is not None
+        jsonschema.Draft202012Validator(receipts_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
+        assert _columns_siblings(data) == []
+        _assert_object_rows(data["runs"]["items"], set(rows[0]), where="receipt runs")
+
+    async def test_jobs_run_page_rows_stay_objects(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        job = _batch_with_runs(state_no_sim, 60)
+        plain = await _jobs(state_no_sim, action="runs", job_id=job.job_id)
+        keys = set(plain["items"][0])
+
+        data = await _jobs(
+            state_no_sim,
+            action="runs",
+            job_id=job.job_id,
+            budget=response_budget.BUDGET_MIN_TOKENS,
+        )
+        assert _columns_siblings(data) == []
+        _assert_object_rows(data["items"], keys, where="jobs runs")
+
+    async def test_inspect_rows_stay_objects(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr(insp, "_PAGE_SIZE", 250)
+        path = _many_component_netlist(work_dir, 250)
+        query = {"kind": "components", "path": str(path)}
+        plain = await _inspect(state_no_sim, [query])
+        keys = set(plain["results"][0]["data"]["components"][0])
+
+        data = await _inspect(state_no_sim, [query], budget=response_budget.BUDGET_MIN_TOKENS)
+        assert _columns_siblings(data) == []
+        _assert_object_rows(
+            data["results"][0]["data"]["components"], keys, where="inspect components"
+        )

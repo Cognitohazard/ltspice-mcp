@@ -58,8 +58,10 @@ in order until it fits:
 |-|-|
 | 0 trim | empty presentation blocks and the identity echo (`source`, `source_hashes`) |
 | 1 answer | your detail opt-ins — `include.provenance`, `outliers`, `detail:"full"` |
-| 2 columnar | per-row key repetition: rows become a column list plus value rows |
-| 3 shrink | page size, with cursors minted against the smaller page so paging still walks every row |
+| 2 shrink | page size, with cursors minted against the smaller page so paging still walks every row |
+
+Rows keep their shape at every rung: a row is always an object with the same
+keys, so a tight budget returns fewer rows, never differently shaped ones.
 
 Facts are never cut at any rung: `failures`, `observations`, `warnings`,
 `completeness` and spec verdicts always come back whole, and a budget too small
