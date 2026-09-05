@@ -1077,7 +1077,7 @@ async def _value_from_operating_point(
         raise ResultError(
             f"{recipe.expr!r} is not present in this operating-point "
             "result. Address a value by the name it carries (e.g. "
-            "'@m1[gm]', 'V(out)'); a TOP-LEVEL device also accepts the "
+            "'@m1[gm]', 'V(out)'); a top-level device also accepts the "
             "'m1.gm' shorthand, but a subcircuit device keeps LTspice's "
             "colon-qualified name ('@q:q2:1:2[gm]') and must be named "
             f"literally. Present here: {present}"

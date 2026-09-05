@@ -31,7 +31,7 @@ Four rules hold at every rung:
   validates against the tool's declared output schema.
 - **Termination rests on rung finiteness.** The ladder ends after rung 2
   whether or not the budget was met. A budget smaller than the facts floor
-  returns the floor plus an observation saying so — over budget by honesty.
+  returns the floor plus an observation saying so, and stays over the budget.
 """
 
 from __future__ import annotations
@@ -270,8 +270,8 @@ def not_met_observation(rung: Rung, estimate: int) -> dict[str, Any]:
             f"response is an estimated {estimate} tokens, and what remains is the "
             "fact floor (failures, observations, warnings, completeness, verdicts) "
             "plus the handles to reach the rest. Facts are never cut to fit a "
-            "budget, so this response is over it by honesty. Narrow the request "
-            "itself — fewer sources, recipes or queries per call."
+            "budget, so this response is over the budget instead. Narrow the "
+            "request itself — fewer sources, recipes or queries per call."
         ),
     }
 

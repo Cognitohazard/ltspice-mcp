@@ -1,4 +1,4 @@
-"""inspect — the consolidated, honestly read-only UNDERSTAND surface.
+"""inspect — the consolidated read-only UNDERSTAND surface.
 
 One tool answers a batch of independent read-only ``queries`` about the server
 and the circuits it can reach. Each query is one of six kinds:

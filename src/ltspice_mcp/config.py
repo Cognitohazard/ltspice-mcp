@@ -526,7 +526,7 @@ class ServerConfig:
 
     default_budget: int = 4000
     """Server-side response budget, in estimated tokens, for a consolidated-profile
-    call that sets no ``budget`` of its own. It engages the ladder's trim rung ONLY
+    call that sets no ``budget`` of its own. It engages only the ladder's trim rung
     — empty presentation blocks and the identity echo — so it can never cut a fact
     or revoke a detail the caller explicitly asked for. Set 0 to leave every default
     response undegraded. ``[analysis] default_budget``."""

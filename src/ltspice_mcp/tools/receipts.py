@@ -815,7 +815,7 @@ def _api_pointer_route(snapshot: ReceiptSnapshot) -> list[str]:
     if snapshot.completeness.expanded < _API_POINTER_MIN_CASES:
         return []
     return [
-        "Loop-shaped follow-ups run cheaper in-process: "
+        "To run follow-up calls in a loop, use the in-process Python API: "
         "from ltspice_mcp.api import Api (same ops; api.reference() documents them)."
     ]
 

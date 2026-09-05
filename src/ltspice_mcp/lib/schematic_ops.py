@@ -1628,7 +1628,7 @@ def _plan_connect_route(
             f"wire — it ties two pins of the same component {ref} ({ref}.{pin_a} "
             f"and {ref}.{pin_b}). LTspice drops such a wire from the exported "
             f"netlist, so the tie would have no electrical effect. To tie two pins "
-            f"of one component: route the wire so it bends OUT OF LINE with the two "
+            f"of one component: route the wire so it bends out of line with the two "
             f"pins (a waypoint that stays collinear with them is merged back into a "
             f"straight wire and still dropped; the bend must leave that line), or "
             f"drop the wire and give both pins the same net label via the "
@@ -1798,7 +1798,7 @@ _ROTATION_DESCRIPTION = (
 )
 _REFERENCE_DESCRIPTION = "Reference designator of an existing component, e.g. 'R1', 'M3'."
 COORDINATE_DESCRIPTION = (
-    "All x/y are LTspice grid units, with x increasing to the right and y increasing DOWNWARD."
+    "All x/y are LTspice grid units, with x increasing to the right and y increasing downward."
 )
 
 

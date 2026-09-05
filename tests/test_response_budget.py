@@ -342,7 +342,7 @@ class TestAnalysisBudget:
         assert "source_hashes" in data
         assert "next" in data and "cursor" in data
 
-    async def test_over_budget_by_honesty_is_stated(
+    async def test_a_response_over_its_budget_says_so(
         self, state_no_sim: SessionState, work_dir: Path
     ):
         """A response whose fact floor is bigger than the budget comes back over
@@ -358,7 +358,7 @@ class TestAnalysisBudget:
         observation = _observation(data, "budget_not_met")
         if floor > response_budget.BUDGET_MIN_TOKENS:
             assert observation is not None
-            assert "over it by honesty" in observation["detail"]
+            assert "over the budget instead" in observation["detail"]
         else:
             assert observation is None
 
