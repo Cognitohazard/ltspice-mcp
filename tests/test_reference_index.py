@@ -1,11 +1,11 @@
-"""The branch index behind ``inspect(kind="reference")``.
+"""The vocabulary index behind ``inspect(kind="reference")``.
 
-Three things have to hold. The index must cover every branch the models
-declare, because a recipe missing from the index is a capability a caller
-cannot find. Every branch must carry a readable one line, because a name alone
-answers nothing. And search has to reach a recipe both by its own name and by
-the plain words a person types instead — that last one is what the whole
-lookup exists for.
+Three things have to hold. The index must cover everything the models declare
+— every branch, and every tool's own arguments — because anything missing from
+it is a capability a caller cannot find. Every entry must carry a readable one
+line, because a name alone answers nothing. And search has to reach a recipe
+both by its own name and by the plain words a person types instead — that last
+one is what the whole lookup exists for.
 """
 
 from __future__ import annotations
@@ -109,6 +109,10 @@ class TestIndexCompleteness:
             if entry.family == "argument":
                 assert entry.tool == entry.name, "an argument table is named for its tool"
                 assert entry.fields, f"{entry.name} indexed no arguments"
+                assert len(entry.fields) < reference_index._MAX_FIELDS, (
+                    f"{entry.name}'s argument table hit the field cap, so the "
+                    "tail of it is silently missing"
+                )
 
     def test_the_index_has_no_branch_the_models_do_not_declare(self):
         """The reverse direction: nothing is indexed that cannot be called."""
