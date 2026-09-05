@@ -909,11 +909,11 @@ _SOLVE_FAILURE_RUN_CAP = 10
 async def _relay_solve_failures(runs: list[_ResolvedRun]) -> list[dict[str, Any]]:
     """Relay each resolved run's simulator-declared solve failures.
 
-    The doctrine's chokepoint for this profile: a run that produced a raw
+    The one chokepoint for this rule on this surface: a run that produced a raw
     despite a failed solve is analyzed and reported like any other, so unless
     the simulator's own line is relayed here the caller reads a number with no
-    way to know the solve behind it collapsed. The full profile enforces the
-    same rule at ``analysis._finish_metric``; both classify through
+    way to know the solve behind it collapsed. The internal metric adapters
+    enforce the same rule at ``analysis._finish_metric``; both classify through
     ``services.solve_failure_lines`` so they cannot drift.
 
     One observation per distinct cause rather than per run: a sweep that fails
@@ -979,9 +979,9 @@ async def _digest(path: Path, deadline: float, cache: _DigestCache) -> str:
     """Digest ``path``, memoized by (path, mtime, size) for this call.
 
     A file whose mtime and size are unchanged since it was first digested is not
-    re-read — manifest creation, ID-13 precheck and postcheck share one hash per
-    unchanged source. A drifting file gets a fresh (mtime, size) key, so a real
-    change is always re-digested.
+    re-read — manifest creation and the source-drift checks before and after
+    evaluation share one hash per unchanged source. A drifting file gets a fresh
+    (mtime, size) key, so a real change is always re-digested.
     """
     key: tuple[str, int, int] | None
     try:
@@ -1859,8 +1859,8 @@ def _unity_gain_sample(value: dict[str, Any]) -> tuple[str, Any]:
 
     An engineer's prior for stability metrics is gain margin, phase margin, AND
     the crossover frequency; only the first two shipped flat, so the very first
-    question an S1 session asks got half an answer and paid a second call for
-    the rest. None when the loop never reaches unity, which is what
+    stability question a caller asks got half an answer and paid a second call
+    for the rest. None when the loop never reaches unity, which is what
     ``stability`` already says in words."""
     crossovers = value.get("unity_gain_crossovers") or []
     return "unity_gain_hz", (crossovers[0].get("frequency_hz") if crossovers else None)
@@ -1875,9 +1875,9 @@ _SCALAR_NESTED: dict[str, Callable[[dict[str, Any]], tuple[str, Any]]] = {
 
 
 # Metrics whose headline number lives only inside a list (points[]/crossings[])
-# where dotted ``include.fields`` projection cannot reach — measured at 13-22x
-# the shell-equivalent size for a 12-case sweep table because the caller could
-# not name the one leaf it wanted. Promote that number to a flat ``value`` leaf
+# where dotted ``include.fields`` projection cannot reach — 13-22x the size of
+# the equivalent shell output for a 12-case sweep table, because the caller
+# could not name the one leaf it wanted. Promote that number to a flat ``value`` leaf
 # at row-build time. bode_point's extractor is the reducer's own, so the
 # projected leaf and a reduce over that recipe can never disagree;
 # bode_crossing is a variable-length recipe whose category rejects ``reduce``
@@ -2379,8 +2379,9 @@ def _result_entry(
 
 
 # What a caller addresses a run by, versus the audit trail proving what it ran
-# against. The trail was 1,174 chars of a 7,835-char receipt on a real fleet
-# run — a sixth of it, naming files the analysis tools already resolve by id.
+# against. In one measured response the trail was a sixth of the whole receipt
+# (1,174 of 7,835 characters), naming files the analysis tools already resolve
+# by id.
 _RUN_IDENTITY_KEYS = ("manifest_id", "label")
 _RUN_PROVENANCE_KEYS = (
     "log_present",
@@ -3526,9 +3527,10 @@ async def _evaluate_analysis_drive(
         intra_item = 0
         work_done = True
 
-    # ID-13 precheck (per call): verify every direct source once, before any
-    # recipe reads it. The shared digest cache makes this free for the sources a
-    # fresh set just hashed; a continuation re-checks them against the manifest.
+    # Source-drift precheck (once per call): verify every direct source before
+    # any recipe reads it. The shared digest cache makes this free for the
+    # sources a fresh set just hashed; a continuation re-checks them against the
+    # manifest.
     precheck_deadline = loop.time() + max(_MIN_ITEM_DEADLINE_S, call_deadline - loop.time())
     precheck = await _verify_direct_sources(
         item.source_manifests,
@@ -3683,9 +3685,10 @@ async def _evaluate_analysis_drive(
         intra_item = 0
         work_done = True
 
-    # ID-13 postcheck (per call): verify every evaluated source once, before any
-    # artifact is published or results are returned. Drift discards the records
-    # and artifacts derived from that source across every recipe that used it.
+    # Source-drift postcheck (once per call): verify every evaluated source
+    # before any artifact is published or results are returned. Drift discards
+    # the records and artifacts derived from that source across every recipe
+    # that used it.
     postcheck_deadline = loop.time() + max(_MIN_ITEM_DEADLINE_S, call_deadline - loop.time())
     postcheck = await _verify_direct_sources(
         item.source_manifests,

@@ -101,11 +101,11 @@ class TestBuildInstructions:
         assert "Active simulators: LTspice (default), ngspice." in text
         assert "LTspice not detected" not in text
 
-    def test_every_instruction_edition_fits_client_budget(self):
+    def test_every_profile_instruction_fits_client_budget(self):
         """Claude Code truncates server instructions at 2048 chars; the tail
-        (the result-trust guidance) must survive under every prefix shape,
-        for EVERY profile edition — an edition left out of this loop ships
-        silently truncated."""
+        (the result-trust guidance) must survive under every prefix shape, for
+        EVERY profile — a profile left out of this loop ships silently
+        truncated."""
         from ltspice_mcp.server import _INSTRUCTIONS_BUDGET, _PROFILE_GUIDANCE
 
         for profile in _PROFILE_GUIDANCE:
@@ -470,7 +470,8 @@ class TestToolAnnotationHonesty:
         expected = {
             "edit_schematic": False,
             "plot_waveform": False,
-            "run_experiments": True,
+            # Without a caller request_id the same arguments start new work.
+            "run_experiments": False,
             "jobs": True,
             "analyze_results": True,
             "verify_circuit": True,

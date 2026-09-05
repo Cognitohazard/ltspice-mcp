@@ -322,7 +322,7 @@ def parse_library_file(path: Path) -> LibraryIndex:
                 # public ModelEntry contract that find_model and
                 # resources emit. Truncating would silently hand back
                 # incomplete pinning to callers instantiating the
-                # subckt (Codex M4).
+                # subckt.
                 ports = list(subckt_view.ports)
                 params = dict(subckt_view.param_defaults)
             except Exception as e:

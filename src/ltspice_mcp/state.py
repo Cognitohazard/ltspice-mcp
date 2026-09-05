@@ -81,7 +81,8 @@ class SessionState:
         runners: RunnerManager (sim/sweep/MC/experiment runner lifecycle)
         working_dir: Base directory for relative paths
         tool_defs / tool_dispatch / field_owners: Profile-filtered MCP tool exposure
-        sweep_configs / mc_configs: Saved configs keyed by config_id
+        sweep_configs / mc_configs: Sweep and Monte Carlo run configurations
+            held for the session, keyed by config_id
         job_registry: Owns the union job store + disk persistence
     """
 
@@ -98,8 +99,8 @@ class SessionState:
     mc_configs: dict[str, MonteCarloConfig] = field(default_factory=dict)
     diagnostics: list[str] = field(default_factory=list)
     """Startup diagnostics (bad simulator path, requested≠active fallback, WSL
-    auto-detection). Surfaced via ``server_status`` so silent degradation is
-    visible to the client instead of buried in the server log."""
+    auto-detection). Logged at startup; not yet carried on the ``inspect``
+    capabilities payload, so a client cannot see the degradation today."""
     _touched_recent: set[Path] = field(default_factory=set, repr=False)
     """Resolved circuit paths already recorded in the recent-circuits index this session."""
     config_write_attempted: bool = field(default=False, repr=False)
@@ -107,7 +108,8 @@ class SessionState:
     asc_snapshots: dict[str, bytes] = field(default_factory=dict, repr=False)
     """Pre-first-edit byte snapshots of .asc schematics touched this session,
     keyed by resolved path string. Captured before the first in-session
-    mutation; backs ``reset_schematic`` (revert to last good state)."""
+    mutation. Read by ``handle_reset_schematic`` (tools/circuit.py), the
+    retained revert handler that no registered tool exposes yet."""
     raw_dialect_hints: dict[Path, str | None] = field(default_factory=dict, repr=False)
     """Raw dialect per job-resolved raw path, recorded when the path is
     resolved (``services._resolve_result_file``) and read by ``load_raw`` —
@@ -175,7 +177,7 @@ class SessionState:
         ``diagnostics`` carries any startup notes accumulated during simulator
         detection (e.g. a bad configured path); ``select_default_simulator``
         appends to it when it has to fall back, and the merged list is stored
-        on the session for ``server_status`` to surface.
+        on the session and logged at startup.
         """
         from ltspice_mcp.lib.simulator import select_default_simulator
 

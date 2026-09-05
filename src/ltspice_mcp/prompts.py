@@ -6,10 +6,10 @@ task, with the circuit path (and optional node/signal) filled in. They are a
 human-facing discovery surface, complementary to the tool descriptions and the
 server instructions — those remain the agent's primary orientation channel.
 
-Every prompt is written once per tool profile edition, and both listing and
-content are profile-scoped: a starter that walks the caller through tools the
-connected client cannot see is a dead end. The consolidated profile (the only
-one since 0.6.0) teaches each workflow through its six tools.
+Every prompt is written against one tool profile, and both listing and content
+are profile-scoped: a starter that walks the caller through tools the connected
+client cannot see is a dead end. The consolidated profile (the only one since
+0.6.0) teaches each workflow through its six tools.
 """
 
 from collections.abc import Callable, Mapping

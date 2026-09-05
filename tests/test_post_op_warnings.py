@@ -3,7 +3,7 @@
 Pins the structured ``validation_warnings`` payload returned by mutating
 .asc handlers (apply_schematic_ops, wire_pins, add_component) and the
 text-message warnings on move_component / remove_component. Enforces the
-project's validate-before-write doctrine.
+project's rule that a mutation is validated before it is written.
 """
 
 from __future__ import annotations
