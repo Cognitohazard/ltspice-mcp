@@ -281,6 +281,120 @@ class TestChannelSeparation:
                 )
 
 
+def _module_source(mod: str) -> tuple[Path, str]:
+    import importlib
+
+    module = importlib.import_module(f"ltspice_mcp.tools.{mod}")
+    assert module.__file__ is not None
+    path = Path(module.__file__)
+    return path, path.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# The outcome scan: which modules, and what counts as naming an outcome
+# ---------------------------------------------------------------------------
+
+# ``_base`` owns the rule, so it is the one module allowed to spell the
+# vocabulary out; everything else has to call it.
+_OUTCOME_RULE_MODULE = "_base"
+
+
+def _tools_module_closure(seeds: Iterator[str] | list[str]) -> tuple[str, ...]:
+    """Every ``ltspice_mcp.tools`` module reachable from the seed modules.
+
+    Derived rather than listed: ``jobs`` and ``run_experiments`` build their
+    envelopes in ``receipts``, so scanning only the modules that carry
+    ``@registry.tool`` would miss where their outcome is actually decided.
+    """
+    seen: set[str] = set()
+    queue = list(seeds)
+    while queue:
+        name = queue.pop()
+        if name in seen or name == _OUTCOME_RULE_MODULE:
+            continue
+        seen.add(name)
+        _, source = _module_source(name)
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            if node.module == "ltspice_mcp.tools":
+                queue += [alias.name for alias in node.names]
+            elif node.module and node.module.startswith("ltspice_mcp.tools."):
+                queue.append(node.module.split(".")[-1])
+    return tuple(sorted(seen))
+
+
+def _handler_modules() -> list[str]:
+    """The module each registered consolidated tool's handler lives in."""
+    _, dispatch = get_tools()
+    return [dispatch[name].handler.__module__.split(".")[-1] for name in CONSOLIDATED_TOOLS]
+
+
+_OUTCOME_MODULES = _tools_module_closure(_handler_modules())
+
+
+def _outcome_value_nodes(tree: ast.AST) -> Iterator[ast.expr]:
+    """Every expression that becomes a payload's ``outcome``.
+
+    A dict entry, a keyword argument, an assignment to ``outcome`` or to
+    ``…["outcome"]``, and what an ``…_outcome`` helper returns. A bare
+    ``"failed"`` elsewhere is a job status that happens to share a spelling, and
+    an ``enum`` list is the declared vocabulary — neither is a decision.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values, strict=True):
+                if isinstance(key, ast.Constant) and key.value == "outcome":
+                    yield value
+        elif isinstance(node, ast.keyword) and node.arg == "outcome":
+            yield node.value
+        elif isinstance(node, ast.Assign) and node.value is not None:
+            for target in node.targets:
+                if (isinstance(target, ast.Name) and target.id == "outcome") or (
+                    isinstance(target, ast.Subscript)
+                    and isinstance(target.slice, ast.Constant)
+                    and target.slice.value == "outcome"
+                ):
+                    yield node.value
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.endswith(
+            "_outcome"
+        ):
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Return) and inner.value is not None:
+                    yield inner.value
+
+
+def _binds_an_outcome(tree: ast.AST) -> bool:
+    return any(True for _ in _outcome_value_nodes(tree))
+
+
+def _spelled_out(value: ast.expr) -> Iterator[ast.Constant]:
+    """The outcome names an expression states directly, ladder branches included.
+
+    Only the shapes a hand-rolled verdict takes: the bare literal and the
+    conditional/boolean trees it hides in. A call is NOT descended into —
+    ``outcome_schema("complete", "partial")`` declares the vocabulary and
+    ``outcome_of(...)`` applies the rule; neither is a tool deciding for itself.
+    """
+    if isinstance(value, ast.Constant) and value.value in CONTRACT_OUTCOMES:
+        yield value
+    elif isinstance(value, ast.IfExp):
+        yield from _spelled_out(value.body)
+        yield from _spelled_out(value.orelse)
+    elif isinstance(value, ast.BoolOp):
+        for operand in value.values:
+            yield from _spelled_out(operand)
+
+
+def _outcome_literals(source: str) -> list[tuple[int, str]]:
+    """Outcome names spelled out where the shared rule should have decided them."""
+    return [
+        (node.lineno, str(node.value))
+        for value in _outcome_value_nodes(ast.parse(source))
+        for node in _spelled_out(value)
+    ]
+
+
 class TestSharedOutcomeRule:
     """One rule decides every call-level outcome, and every tool routes through it.
 
@@ -323,51 +437,32 @@ class TestSharedOutcomeRule:
         failures = kwargs.pop("failures", [])
         assert _base.outcome_of(failures, **kwargs) == expected
 
-    @pytest.mark.parametrize(
-        ("module", "function"),
-        [
-            ("verify", "_outcome"),
-            ("receipts", "_terminal_outcome"),
-            ("receipts", "_jobs_outcome"),
-            ("inspect_tools", "inspect_envelope"),
-        ],
-    )
-    def test_every_tool_outcome_is_decided_by_the_shared_rule(self, module: str, function: str):
-        # Source-level, because the point is that no tool re-derives the
-        # vocabulary: a re-added ``return "partial"`` ladder fails here even
-        # while it happens to agree with the rule it replaced.
+    @pytest.mark.parametrize("module", _OUTCOME_MODULES)
+    def test_no_handler_module_writes_an_outcome_literal(self, module: str):
+        """Source-level, because the point is that no tool re-derives the
+        vocabulary: a re-added ``"outcome": "complete"`` fails here even while
+        it happens to agree with the rule it replaced.
+
+        The module list is DERIVED from the registered tools (see
+        ``_OUTCOME_MODULES``), so a tool that never routed through the rule
+        cannot be missing from a hand-written list the way edit_schematic was:
+        it is scanned because it is registered.
+        """
+        _, source = _module_source(module)
+        offenders = sorted(f"line {line}: {value!r}" for line, value in _outcome_literals(source))
+        assert not offenders, (
+            f"{module} names an outcome with a literal ({'; '.join(offenders)}) — "
+            "_base.outcome_of is what decides it"
+        )
+
+    @pytest.mark.parametrize("module", _OUTCOME_MODULES)
+    def test_every_module_that_names_an_outcome_calls_the_shared_rule(self, module: str):
         _, source = _module_source(module)
         tree = ast.parse(source)
-        target = next(
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.FunctionDef) and node.name == function
-        )
-        called = {_call_name(node) for node in ast.walk(target) if isinstance(node, ast.Call)}
-        assert "outcome_of" in called, f"{module}.{function} does not call outcome_of"
-
-        # A returned outcome literal is the ladder this replaced. A literal
-        # elsewhere is a status name that happens to share a spelling
-        # ("failed" is both a job status and an outcome), so only the direct
-        # return position counts.
-        returned: set[str] = set()
-        for node in ast.walk(target):
-            if not isinstance(node, ast.Return) or node.value is None:
-                continue
-            branches = (
-                [node.value.body, node.value.orelse]
-                if isinstance(node.value, ast.IfExp)
-                else [node.value]
-            )
-            returned |= {
-                branch.value
-                for branch in branches
-                if isinstance(branch, ast.Constant) and branch.value in CONTRACT_OUTCOMES
-            }
-        assert not returned, (
-            f"{module}.{function} still returns outcome literals {sorted(returned)} — "
-            "the shared rule decides them"
-        )
+        if not _binds_an_outcome(tree):
+            pytest.skip(f"{module} does not build an outcome")
+        called = {_call_name(node) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+        assert "outcome_of" in called, f"{module} builds an outcome without calling outcome_of"
 
 
 class TestOutcomeEnvelope:
@@ -787,15 +882,6 @@ _SIX_MODULES = (
     "verify",
     "inspect_tools",
 )
-
-
-def _module_source(mod: str) -> tuple[Path, str]:
-    import importlib
-
-    module = importlib.import_module(f"ltspice_mcp.tools.{mod}")
-    assert module.__file__ is not None
-    path = Path(module.__file__)
-    return path, path.read_text(encoding="utf-8")
 
 
 def _call_name(node: ast.Call) -> str | None:

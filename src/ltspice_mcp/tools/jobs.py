@@ -54,6 +54,7 @@ from ltspice_mcp.tools._base import (
     ToolInput,
     failures_schema,
     format_response,
+    outcome_of,
     page_schema,
     registry,
     resolve_response_budget,
@@ -916,7 +917,8 @@ def _jobs_error_payload(evaluation: JobsEvaluation) -> dict[str, Any]:
     addressed = args if isinstance(args, _AddressedJobsInput) else None
     common: dict[str, Any] = {
         "action": args.action,
-        "outcome": "failed",
+        # The action never ran, so nothing came back beside the error.
+        "outcome": outcome_of(error, delivered=False),
         "observations": [],
         "warnings": [],
         "failures": [],
@@ -1121,13 +1123,16 @@ def render_jobs_data(
             if limit is None
             else _page(groups, offset=_decode_jobs_cursor(args.cursor), limit=limit)
         )
+        # A listing has no per-item failure channel to fill: every group it
+        # found is reported, and a short page is a cursor, not a shortfall.
+        list_failures: list[Any] = []
         data = {
             "action": "list",
-            "outcome": "complete",
+            "outcome": outcome_of(list_failures),
             **page,
             "observations": list(evaluation.observations),
             "warnings": [],
-            "failures": [],
+            "failures": list_failures,
             "hint": (
                 (
                     "Recent circuit groups are ordered by the recent-circuits index."
@@ -1144,16 +1149,19 @@ def render_jobs_data(
 
     if isinstance(args, JobsCancelInput):
         receipts = list(evaluation.kill_receipts)
+        # An acknowledged cancellation is the whole result; a job that was
+        # already terminal needed none, which is not a shortfall either.
+        cancel_failures: list[Any] = []
         data = {
             "action": "cancel",
-            "outcome": "complete",
+            "outcome": outcome_of(cancel_failures),
             "job_id": evaluation.job_id,
             "request_id": evaluation.request_id,
             "status": evaluation.status,
             **unpaged(receipts),
             "observations": [],
             "warnings": [],
-            "failures": [],
+            "failures": cancel_failures,
             "hint": (
                 f"Job {evaluation.job_id} was already terminal; no cancellation was needed."
                 if not receipts

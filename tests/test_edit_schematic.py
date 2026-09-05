@@ -434,8 +434,9 @@ async def test_crash_after_rename_stays_committed(asc_state, work_dir, monkeypat
 
     data = await _build_blank(asc_state, "aftercommit", _DIVIDER_OPS, reference="ref.cir")
     # The rename succeeded, so the sheet is committed even though a post-rename
-    # (reference-export) stage failed.
-    assert data["outcome"] == "complete"
+    # (reference-export) stage failed. The failed stage is the shortfall that
+    # keeps the call off "complete".
+    assert data["outcome"] == "partial"
     assert data["commit_state"] == "committed"
     assert (work_dir / "aftercommit.asc").is_file()
     assert data["verification"]["export_error"]
@@ -525,9 +526,10 @@ async def test_dry_run_surfaces_all_op_failures(asc_state):
             asc_state,
         )
     )
-    # Both bad ops surface at once (dry run does not stop on the first).
-    assert data["outcome"] == "complete"
+    # Both bad ops surface at once (dry run does not stop on the first), and a
+    # validation pass in which every op failed is not a complete call.
     assert len(data["failures"]) == 2
+    assert data["outcome"] == "partial"
 
 
 async def test_default_view_covers_only_the_refs_the_batch_touched(asc_state, work_dir):
@@ -821,6 +823,63 @@ async def test_reference_mismatch_stays_committed(asc_state, work_dir, monkeypat
     assert data["verification"]["equivalent"] is False
     # A difference is data, not a failure: the sheet stays committed.
     assert (work_dir / "refbad.asc").is_file()
+
+
+async def test_reference_mismatch_is_a_partial_outcome(asc_state, work_dir, monkeypatch):
+    """A committed sheet that does not match its reference is not a clean call.
+
+    verify_circuit already reports a non-equivalent comparison as ``partial``;
+    the same comparison reached through edit_schematic's reference stage must
+    say the same thing, or the caller is told the same mismatch is a shortfall
+    on one tool and a clean result on the other.
+    """
+    (work_dir / "ref.cir").write_text(_REF_DECK)
+
+    async def fake_export(_copy, _state):
+        return _REF_DECK_DIFFERENT
+
+    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
+    data = await _build_blank(asc_state, "refpartial", _DIVIDER_OPS, reference="ref.cir")
+    assert data["verification"]["equivalent"] is False
+    assert data["outcome"] == "partial"
+    assert data["commit_state"] == "committed"
+
+
+async def test_reference_export_failure_is_a_partial_outcome(asc_state, work_dir, monkeypatch):
+    """An unexportable sheet leaves the comparison with no verdict at all.
+
+    ``equivalent: null`` is the absence of a result, so it keeps the call off
+    ``complete`` the same way a real difference does.
+    """
+    (work_dir / "ref.cir").write_text(_REF_DECK)
+
+    async def boom_export(_copy, _state):
+        raise RuntimeError("injected export failure")
+
+    monkeypatch.setattr(se, "_export_asc_to_netlist", boom_export)
+    data = await _build_blank(asc_state, "refnoverdict", _DIVIDER_OPS, reference="ref.cir")
+    assert data["verification"]["equivalent"] is None
+    assert data["verification"]["export_error"]
+    assert data["outcome"] == "partial"
+    assert data["commit_state"] == "committed"
+
+
+async def test_render_view_failure_is_a_partial_outcome(asc_state, monkeypatch):
+    """A view that failed is recorded in ``failures``, so the call is partial.
+
+    The commit itself stands; what the caller asked for and did not get is the
+    render, and the outcome has to say so rather than reporting ``complete``
+    beside a populated failures channel.
+    """
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("injected render failure")
+
+    monkeypatch.setattr(se, "_render_committed_text", boom)
+    data = await _build_blank(asc_state, "renderfail", _DIVIDER_OPS, return_views=["render"])
+    assert [f["stage"] for f in data["failures"]] == ["render"]
+    assert data["outcome"] == "partial"
+    assert data["commit_state"] == "committed"
 
 
 async def test_rejected_reference_path_refuses_before_committing(asc_state, work_dir):
