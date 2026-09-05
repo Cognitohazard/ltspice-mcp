@@ -199,7 +199,12 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
         logger.info(f"Server name: {server.name}")
         logger.info(f"Config source: {config_source}")
         logger.info(f"Working directory: {state.working_dir}")
-        logger.info(f"Tool profile: {config.tool_profile} ({len(state.tool_defs)} tools)")
+        # The listing belongs on this line because it is the operator's answer
+        # to "why did my argument descriptions vanish".
+        logger.info(
+            f"Tool profile: {config.tool_profile} ({len(state.tool_defs)} tools), "
+            f"listing: {config.tool_listing}"
+        )
         logger.info(f"Log level: {config.log_level}")
 
         logger.info("Detected simulators:")

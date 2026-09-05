@@ -262,6 +262,16 @@ class TestSessionStateHonoursTheListing:
         names = [d.name for d in state.tool_defs]
         assert names == [d.name for d in get_tools(listing)[0]]
 
+    @pytest.mark.parametrize("listing", ["full", "compact"])
+    def test_capabilities_reports_which_listing_the_session_got(self, work_dir, listing: str):
+        """spice://guide tells a caller to reach for the reference lookup when
+        the listing is compact. Nothing else on the wire says which one it is:
+        both modes advertise the same seven tools and the same schemas, so a
+        caller could only infer it from prose that is not there."""
+        from ltspice_mcp.tools.inspect_tools import _do_capabilities
+
+        assert _do_capabilities(_state(work_dir, listing))["tool_listing"] == listing
+
     def test_compact_state_serves_no_argument_prose(self, work_dir):
         state = _state(work_dir, "compact")
         full = {d.name: d for d in get_tools("full")[0]}

@@ -189,7 +189,10 @@ keeps its description. That marker sits on the dormant recipe branches, which
 are advertised as their discriminant and nothing else — the rule above holds
 because a stripped branch still has structure to build a call from, and these
 have none, so the description is the whole branch. Stripping it would publish
-a metric name a client could send and the server would then reject. Both modes are
+a metric name a client could send and the server would then reject. Which of the two a session got is reported as `tool_listing` by
+`inspect(kind: "capabilities")` — the guide tells a caller to change what it
+does on compact, so the mode has to be readable rather than inferred from
+prose that is missing. Both modes are
 *static* listings: the same for every connection and unchanged by anything
 called on one, which is what the 2026-07-28 specification requires of
 `tools/list`. Nothing keys on the mode below the listing — dispatch,
@@ -759,8 +762,9 @@ rules and to `dropped_wire`; `dropped_wire` carries no truncation observation.
 ```
 {kind: "capabilities"}
     simulators and versions, exporter presence, dialects, persistence,
-    allowed roots, profile, limits, linter_version, and the startup
-    diagnostics that say whether this server started degraded
+    allowed roots, profile, the tool listing this session was served,
+    limits, linter_version, and the startup diagnostics that say whether
+    this server started degraded
 {kind: "symbols", path?, filter?, cursor?}
     legal symbol names and resolution order; `path` adds schematic-local
     directories to the reported precedence
