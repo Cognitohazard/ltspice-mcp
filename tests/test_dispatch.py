@@ -142,7 +142,9 @@ class TestDestructiveAnnotations:
         # tied so the hint can't silently rot if that op is ever dropped. The
         # tie is the op union itself, which names every op it accepts.
         ops = tool.input_schema["properties"]["ops"]["items"]
-        assert "remove_component" in ops["discriminator"]["mapping"]
+        defs = tool.input_schema["$defs"]
+        branches = [defs[branch["$ref"].split("/")[-1]] for branch in ops["oneOf"]]
+        assert "remove_component" in {branch["properties"]["op"]["const"] for branch in branches}
 
 
 # A self-inverse op reverts itself: re-applying it with the prior arguments
@@ -356,6 +358,32 @@ def _assert_no_title_annotation(node, tool_name: str, path: str, *, in_name_map=
             _assert_no_title_annotation(item, tool_name, f"{path}[{index}]")
 
 
+def _assert_no_null_default(node, tool_name: str, path: str, *, in_name_map=False) -> None:
+    """Assert no ``"default": null`` SCHEMA KEYWORD survives, at any depth.
+
+    A key named 'default' inside a properties/$defs map is an argument name and
+    is left alone, exactly as the title walk leaves a property called 'title'.
+    """
+    if isinstance(node, dict):
+        if in_name_map:
+            for name, value in node.items():
+                _assert_no_null_default(value, tool_name, f"{path}.{name}")
+            return
+        assert node.get("default", "absent") is not None, (
+            f"{tool_name}: null default annotation at {path}"
+        )
+        for key, value in node.items():
+            _assert_no_null_default(
+                value,
+                tool_name,
+                f"{path}.{key}",
+                in_name_map=key in _schema._SCHEMA_NAME_MAPS,
+            )
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            _assert_no_null_default(item, tool_name, f"{path}[{index}]")
+
+
 class TestSchemaPostProcessing:
     """Verify that Pydantic-generated schemas are cleaned for MCP compatibility."""
 
@@ -441,6 +469,64 @@ class TestSchemaPostProcessing:
                         walk(item, f"{path}[{i}]")
 
             walk(tool_def.input_schema, "root")
+
+    def test_no_null_default_is_advertised(self):
+        """``"default": null`` says nothing ``required`` has not said.
+
+        Pydantic writes one for every optional field with a ``None`` default,
+        and a JSON Schema ``default`` does not constrain anything, so the
+        annotation is characters every client downloads for no information.
+        Non-null defaults stay — those carry the value the server uses."""
+        for tool_def in _all_profile_defs():
+            _assert_no_null_default(tool_def.input_schema, tool_def.name, "root")
+
+    def test_discriminators_advertise_no_branch_mapping(self):
+        """``discriminator.mapping`` repeats each branch's own ``const``.
+
+        The useful half is ``propertyName``, which names the field that picks
+        the branch; the mapping restates, once per branch, the discriminant
+        value the branch already declares plus the ``$ref`` the ``oneOf`` list
+        already carries."""
+        seen = 0
+        for tool_def in _all_profile_defs():
+
+            def walk(node, path, tool=tool_def.name):
+                nonlocal seen
+                if isinstance(node, dict):
+                    block = node.get("discriminator")
+                    if isinstance(block, dict):
+                        seen += 1
+                        assert "mapping" not in block, f"{tool}: discriminator.mapping at {path}"
+                        assert "propertyName" in block, (
+                            f"{tool}: discriminator without propertyName at {path}"
+                        )
+                    for key, value in node.items():
+                        walk(value, f"{path}.{key}")
+                elif isinstance(node, list):
+                    for index, item in enumerate(node):
+                        walk(item, f"{path}[{index}]")
+
+            walk(tool_def.input_schema, "root")
+        assert seen, "no discriminator survives — the tagged unions stopped being advertised"
+
+    def test_a_property_actually_named_default_would_survive(self):
+        """Both new passes descend structurally, like the title stripper.
+
+        Filtering by key name at every level would delete an argument called
+        ``default`` (or a ``discriminator`` object a caller sends), which is
+        exactly the bug the title stripper already had once."""
+        schema = {
+            "properties": {
+                "default": {"type": "string", "default": None},
+                "discriminator": {"type": "object"},
+            },
+            "default": None,
+        }
+        cleaned = _schema._drop_discriminator_mappings(_schema._drop_null_defaults(schema))
+        assert set(cleaned["properties"]) == {"default", "discriminator"}
+        assert cleaned["properties"]["default"] == {"type": "string"}
+        assert cleaned["properties"]["discriminator"] == {"type": "object"}
+        assert "default" not in cleaned
 
     def test_no_title_annotation_survives_in_any_profile(self):
         """Pydantic's 'title' metadata is stripped wherever it is a keyword.

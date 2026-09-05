@@ -281,9 +281,10 @@ def jobs_input_schema() -> dict[str, Any]:
     legal actions nor the offending field; under ``if``/``then`` only the
     matching action's constraints fail, so the caller is told that 'frobnicate'
     is not one of the five, or exactly which field this action does not take.
-    The ``discriminator`` mapping is kept beside them: it is what says the
-    branches are alternatives chosen by ``action``, and it is the reference a
-    reader (or an OpenAPI-shaped client) follows into ``$defs``.
+    ``discriminator.propertyName`` is kept beside them, saying that the
+    branches are alternatives chosen by ``action``; the branch table itself is
+    not, because each ``if``/``then`` pair already names an action and the
+    ``$defs`` entry it selects.
     """
     union = _JOBS_ADAPTER.json_schema(ref_template="#/$defs/{model}")
     shared = JobsInput.model_json_schema()["properties"]
