@@ -462,7 +462,7 @@ def test_two_unparseable_decks_are_not_equivalent(work_dir):
 
 async def test_unreadable_reference_contract_differs_by_mode_as_documented(state_no_sim, work_dir):
     """The two modes answer an unreadable reference differently, on purpose, and
-    ``compare_mode``'s description promises exactly this. Equivalence cannot build
+    ``compare.mode``'s description promises exactly this. Equivalence cannot build
     a comparison at all — isomorphism is undefined without both graphs — so it
     reports a compare failure and no comparison. structural_diff diffs the missing
     side as empty, so the delta survives with a null verdict and a warning. Pinned

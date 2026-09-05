@@ -142,10 +142,8 @@ class StepSelector(StrictModel):
 class SpecLimits(StrictModel):
     """Caller-declared limits used to count a recipe's scalar samples.
 
-    Which number the limits apply to is the recipe's own ``field``, not a
-    second copy here: a reduction and a spec on one recipe always read the
-    same number, and two spellings of that could only ever agree or be
-    refused.
+    Which number the limits apply to is the recipe's own 'field' — or its
+    single number, on a recipe that produces one and declares no 'field'.
     """
 
     min: float | None = None
