@@ -1128,6 +1128,42 @@ class TestLintModes:
             finding["rule_id"] == "suffix-mega-milli" for finding in data["lint"][0]["findings"]
         )
 
+    async def test_a_step_deck_on_ngspice_is_told_the_sweep_will_not_happen(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """ngspice ignores .step in batch mode and reports no error, so the run
+        comes back complete having swept nothing. The default lint mode has to
+        say so — this is the deck's only warning that the answer is one point,
+        not a curve."""
+        from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+        state_with_sim.available_simulators["ngspice"] = NGspiceSimulator
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(
+            work_dir / "stepped.cir",
+            "V1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.step param r 1k 10k 1k\n.op\n.end\n",
+        )
+
+        result = await handle_run_experiments(
+            _args(
+                deck,
+                "ngspice-step",
+                execution={"wait_s": 1.0, "simulator": "ngspice"},
+            ),
+            state_with_sim,
+        )
+        data = _assert_schema(result)
+
+        assert len(submissions) == 1
+        finding = next(
+            item for item in data["lint"][0]["findings"] if item["rule_id"] == "step-ngspice"
+        )
+        assert "variations" in finding["evidence"]["reason"]
+
     async def test_block_resolves_models_through_staged_includes(
         self,
         state_with_sim: SessionState,
