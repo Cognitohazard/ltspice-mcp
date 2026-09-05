@@ -39,6 +39,7 @@ from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import atomic_write_bytes, fsync_dir, fsync_fd
+from ltspice_mcp.lib.deck_prep import resolve_runnable_netlist
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.netlist_graph import IncludeResolver, compare_graphs, parse_netlist_graph
 from ltspice_mcp.lib.pin_legend import (
@@ -85,7 +86,6 @@ from ltspice_mcp.tools._base import (
     make_include_resolver,
     registry,
     render_scene_artifact,
-    resolve_runnable_netlist,
     safe_path,
     symbol_resolver_for,
 )

@@ -135,8 +135,8 @@ from ltspice_mcp.tools._base import (
     registry,
     result_text,
     safe_path,
-    schema_from_typeddict,
 )
+from ltspice_mcp.tools._schema import schema_from_typeddict
 
 FormatField = Literal["json", "text"] | None
 

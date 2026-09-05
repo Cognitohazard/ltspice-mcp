@@ -8,7 +8,7 @@ from mcp import types
 from pydantic import ValidationError
 
 from ltspice_mcp.lib.schematic_ops import SchematicOp
-from ltspice_mcp.tools import _base, get_tools
+from ltspice_mcp.tools import _base, _schema, get_tools
 from tests.conftest import resolve_local_ref
 
 
@@ -352,7 +352,7 @@ def _assert_no_title_annotation(node, tool_name: str, path: str, *, in_name_map=
                 value,
                 tool_name,
                 f"{path}.{key}",
-                in_name_map=key in _base._SCHEMA_NAME_MAPS,
+                in_name_map=key in _schema._SCHEMA_NAME_MAPS,
             )
     elif isinstance(node, list):
         for index, item in enumerate(node):

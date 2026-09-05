@@ -66,7 +66,9 @@ from spicelib import AscEditor
 
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import services
+from ltspice_mcp.lib.deck_prep import asc_export_lock
 from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.filelock import circuit_file_lock
 from ltspice_mcp.lib.netlist_graph import (
     IncludeResolver,
     NetlistGraph,
@@ -99,8 +101,6 @@ from ltspice_mcp.tools._base import (
     WARNINGS_SCHEMA,
     StrictModel,
     ToolInput,
-    asc_export_lock,
-    circuit_file_lock,
     format_response,
     make_include_resolver,
     registry,

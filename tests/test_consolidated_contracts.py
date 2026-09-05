@@ -385,7 +385,7 @@ class TestOutputSchemaCoverage:
 # What the wire carries: each tool's own description verbatim (a client that
 # does not show server instructions has nothing else to route on), field
 # descriptions only when they carry a unit/convention/inversion/pointer marker
-# (_WIRE_PROSE_KEEP in tools/_base.py), and no outputSchema. The full prose
+# (_WIRE_PROSE_KEEP in tools/_schema.py), and no outputSchema. The full prose
 # stays on the registered definition, api.reference(), and spice://guide.
 _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Variations, attached analysis, and the receipt row shape. The attached
@@ -532,7 +532,7 @@ class TestSemanticsOnlyWire:
 
     @pytest.mark.parametrize("name", REGISTERED_TOOLS)
     def test_every_advertised_description_carries_a_keep_marker(self, name: str):
-        from ltspice_mcp.tools._base import _WIRE_PROSE_KEEP
+        from ltspice_mcp.tools._schema import _WIRE_PROSE_KEEP
 
         tool_def = _registered()[name]
         # The tool's own description ships verbatim: a client that does not
@@ -558,7 +558,7 @@ class TestSemanticsOnlyWire:
     @pytest.mark.parametrize("name", REGISTERED_TOOLS)
     def test_structure_survives_the_strip(self, name: str):
         """Names, enums, and defaults are untouchable — only prose moves."""
-        from ltspice_mcp.tools._base import _strip_wire_prose
+        from ltspice_mcp.tools._schema import _strip_wire_prose
 
         source = _source_definitions()[name].inputSchema
         advertised = _registered()[name].inputSchema

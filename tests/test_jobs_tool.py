@@ -25,7 +25,7 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import _build_input_schema
+from ltspice_mcp.tools._schema import _build_input_schema
 from ltspice_mcp.tools.experiments import (
     _RECENT_JOBS_CAP,
     JOBS_ACTIONS,
