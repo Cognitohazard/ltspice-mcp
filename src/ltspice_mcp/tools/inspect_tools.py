@@ -1418,12 +1418,18 @@ _REFERENCE_CONTENTS_HINT = (
 )
 
 
-def _do_reference(q: ReferenceQuery) -> dict[str, Any]:
+def _do_reference(q: ReferenceQuery, view: _View) -> dict[str, Any]:
     """Search the tools' branch vocabulary, or list it when no query is given.
 
     Nothing here reads a file or the session, so there is no path to resolve,
     no cursor to bind and nothing to offload: the index is derived from the
     input models once per process and searched in memory.
+
+    ``view`` is how a caller's ``budget`` reaches this kind. The shrink rung
+    lowers the page size below ``REFERENCE_LIMIT_CAP``, and taking the smaller
+    of the two is what lets a tight budget return fewer branches instead of
+    reporting that it could not be met. There is no cursor to leave pointing
+    past rows nobody saw, because the caller's own ``limit`` is the handle.
     """
     if q.query is None:
         return {
@@ -1434,7 +1440,7 @@ def _do_reference(q: ReferenceQuery) -> dict[str, Any]:
             }
         }
 
-    matches, total = search_branches(q.query, limit=q.limit)
+    matches, total = search_branches(q.query, limit=min(q.limit, view.limit))
     data: dict[str, Any] = {
         "query": q.query,
         "matches": [entry.as_dict() for entry in matches],
@@ -1479,7 +1485,7 @@ async def _dispatch(query: Query, state: SessionState, view: _View) -> dict[str,
     if isinstance(query, ComponentsQuery):
         return await _do_components(query, state, view)
     if isinstance(query, ReferenceQuery):
-        return _do_reference(query)
+        return _do_reference(query, view)
     # Exhaustive over the sealed union: ModelQuery is the only remaining member.
     return await _do_model(query, state, view)
 

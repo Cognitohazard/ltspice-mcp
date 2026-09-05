@@ -1089,3 +1089,27 @@ class TestRowsKeepTheirShape:
         _assert_object_rows(
             data["results"][0]["data"]["components"], keys, where="inspect components"
         )
+
+
+async def test_a_budget_shrinks_a_reference_lookup_instead_of_giving_up(
+    state_no_sim: SessionState,
+):
+    """The reference kind reads no file, so it has no page and no cursor — but
+    it does have a caller-visible size lever in ``limit``. The shrink rung
+    reaches it, so a tight budget returns fewer branches rather than reporting
+    a floor it could not meet, and the match count still says how many there
+    were."""
+    query = {"kind": "reference", "query": "gain", "limit": insp.REFERENCE_LIMIT_CAP}
+    plain = await _inspect(state_no_sim, [query])
+    tight = await _inspect(state_no_sim, [query], budget=response_budget.BUDGET_MIN_TOKENS)
+
+    full_matches = plain["results"][0]["data"]["matches"]
+    cut_matches = tight["results"][0]["data"]["matches"]
+    assert len(full_matches) > 1
+    assert len(cut_matches) < len(full_matches)
+    # The number that matched is a fact and is not cut with the rows.
+    assert tight["results"][0]["data"]["total_matches"] == len(full_matches)
+    # Best-first ordering survives the shrink: what is dropped is the tail.
+    assert [m["name"] for m in cut_matches] == [
+        m["name"] for m in full_matches[: len(cut_matches)]
+    ]
