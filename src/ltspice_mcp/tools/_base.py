@@ -43,29 +43,6 @@ from ltspice_mcp.tools._schema import (
     schema_from_typeddict,
 )
 
-# isort: split
-# Compatibility re-exports — names that moved out of this module and that it
-# does not itself use. Every in-repo importer already names the new home; the
-# block keeps a stale ``from ltspice_mcp.tools._base import ...`` working and is
-# safe to delete once nothing outside the repo relies on it.
-from ltspice_mcp.lib.deck_prep import (  # noqa: F401
-    asc_export_lock,
-    resolve_netlist_path,
-    resolve_runnable_netlist,
-)
-from ltspice_mcp.lib.projection import (  # noqa: F401
-    ABSENT,
-    KeepPlan,
-    escape_field_segment,
-    keep_plan,
-    project_row,
-    split_field_path,
-)
-from ltspice_mcp.tools._schema import (  # noqa: F401
-    prune_unreferenced_defs,
-    schema_for_type,
-)
-
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
