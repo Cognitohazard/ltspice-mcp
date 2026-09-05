@@ -49,6 +49,23 @@ from tests.conftest import (
 )
 
 
+def test_step_and_all_steps_are_exclusive_on_the_attached_block():
+    """The block states the rule in its own prose, so the block enforces it.
+
+    Left to the pre-flight that re-validates the expanded payload, the guard
+    sits one call site away from the model that claims it, and a future builder
+    that skips the pre-flight would send both.
+    """
+    with pytest.raises(ValidationError, match="mutually exclusive"):
+        experiments_mod.AttachedAnalysis.model_validate(
+            {
+                "recipes": [{"key": "v", "metric": "value", "expr": "V(out)"}],
+                "step": {"axis": "temp", "value": 27},
+                "all_steps": True,
+            }
+        )
+
+
 def test_attached_per_run_limit_shares_the_analyze_page_cap():
     """One cap, both surfaces.
 
