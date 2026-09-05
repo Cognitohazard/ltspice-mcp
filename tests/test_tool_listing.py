@@ -1,9 +1,9 @@
-"""The three ways the same tool surface can be served: full, compact, discover.
+"""The two ways the same tool surface can be served: full and compact.
 
-``[tools] listing`` changes only what a client is shown at ``tools/list``. No
-mode adds or removes a capability, and ``full`` — the default — must stay byte
-for byte what the registry produces, because every other contract test in the
-suite reads that listing.
+``[tools] listing`` changes only how much of each definition a client is shown
+at ``tools/list``. Neither mode adds or removes a capability, both are static
+listings, and ``full`` — the default — must stay byte for byte what the
+registry produces, because every other contract test in the suite reads it.
 """
 
 from __future__ import annotations
@@ -76,6 +76,23 @@ class TestCompactListing:
         compact = {d.name: d for d in get_tools("compact")[0]}[name]
         assert compact.inputSchema == strip_argument_descriptions(full.inputSchema)
         assert set(compact.inputSchema.get("$defs", {})) == set(full.inputSchema.get("$defs", {}))
+
+    def test_compact_is_materially_smaller_than_full(self):
+        """What the mode is for. docs/design/mcp_surface.md claims roughly 40%
+        off; a change that left the two listings the same size would mean the
+        transform stopped being applied."""
+
+        def total(listing: str) -> int:
+            return sum(
+                len(d.model_dump_json(by_alias=True, exclude_none=True))
+                for d in get_tools(listing)[0]
+            )
+
+        full, compact = total("full"), total("compact")
+        assert compact < full * 0.75, (
+            f"compact listing is {compact} chars against full's {full} — the "
+            "argument-description strip is no longer paying for itself"
+        )
 
     def test_dispatch_and_validation_are_untouched(self):
         """The published copy is filtered, never the models — a compact-mode
