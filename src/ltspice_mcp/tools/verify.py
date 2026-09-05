@@ -106,6 +106,7 @@ from ltspice_mcp.tools._base import (
     RenderPolicy,
     ToolInput,
     coerce_render_policy,
+    comparison_mismatch,
     failures_schema,
     format_response,
     make_include_resolver,
@@ -1596,17 +1597,6 @@ def _comparison_unverified(comparison: dict[str, Any] | None) -> bool:
     return comparison is not None and comparison.get("equivalent") is None
 
 
-def _comparison_mismatch(comparison: dict[str, Any] | None) -> bool:
-    """Anything short of a positive match — a real difference OR no verdict at all.
-
-    Deliberately not ``not equivalent``: only ``True`` is a clean result, so a null
-    verdict keeps the outcome off ``complete`` instead of falling through it.
-    """
-    if comparison is None:
-        return False
-    return comparison.get("equivalent") is not True
-
-
 def _outcome(
     findings: list[dict[str, Any]],
     failures: list[dict[str, Any]],
@@ -1623,7 +1613,7 @@ def _outcome(
     return outcome_of(
         failures,
         partial=any(f["severity"] in ("error", "warning") for f in findings)
-        or _comparison_mismatch(comparison),
+        or comparison_mismatch(comparison),
     )
 
 
@@ -1659,7 +1649,7 @@ def _hint(data: dict[str, Any]) -> str:
         # Not the same news as a mismatch: nothing was compared, so telling the
         # caller the decks "did not match" would invent a difference.
         parts.append("reference comparison reached no verdict — see warnings")
-    elif _comparison_mismatch(comparison):
+    elif comparison_mismatch(comparison):
         parts.append("reference comparison did not match — see comparison")
     observations = [f for f in data["findings"] if f["severity"] == "observation"]
     if observations and not parts:
@@ -1707,10 +1697,16 @@ class VerifyCircuitEvaluation:
 
 
 def _base_data(path: str) -> dict[str, Any]:
+    """The payload every path starts from.
+
+    Its outcome is the verdict for a call that refuses before any check runs —
+    something is wrong and nothing came back with it — and ``_outcome`` decides
+    it again the moment the checks report.
+    """
     return {
         "path": path,
         "kind": "unknown",
-        "outcome": "failed",
+        "outcome": outcome_of(True, delivered=False),
         "checks_run": [],
         "checks_skipped": [],
         "findings": [],

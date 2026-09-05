@@ -560,6 +560,22 @@ def outcome_of(
     return "complete"
 
 
+def comparison_mismatch(comparison: Mapping[str, Any] | None) -> bool:
+    """Anything short of a positive match — a real difference OR no verdict at all.
+
+    Deliberately not ``not equivalent``: only ``True`` is a clean result, so a null
+    verdict (the compared side could not be exported or parsed) keeps the outcome
+    off ``complete`` instead of falling through it. Shared, because
+    ``verify_circuit`` and ``edit_schematic`` both compare against a reference and
+    a caller cannot be told the same mismatch is a shortfall on one and a clean
+    result on the other. ``None`` means no comparison was asked for, which is no
+    shortfall.
+    """
+    if comparison is None:
+        return False
+    return comparison.get("equivalent") is not True
+
+
 def outcome_schema(*outcomes: str) -> dict[str, Any]:
     """The ``outcome`` property, restricted to the outcomes a tool can reach.
 
