@@ -489,7 +489,10 @@ is exactly that process. `owner_liveness` therefore asks what the process is
 doing, and reads an exited one as dead.
 
 **A caller that stops waiting.** The wait for the handshake bounds itself at
-five minutes; past that the owner is stopped and the call raises. A Ctrl-C
+the owner's own wait for the request gate plus a boot allowance — an owner
+blocked on that gate is waiting to replay whatever holds the id, and a shorter
+bound would kill it for doing the right thing. Past that the owner and the
+processes it started are stopped and the call raises. A Ctrl-C
 during it raises `KeyboardInterrupt` and leaves the owner running — it is in
 its own session, so the signal never reached it. Neither loses the job: asking
 again with the same `request_id` replays whatever it submitted.
