@@ -5,6 +5,7 @@ specifically to find logic bugs by exercising boundary conditions, malformed
 input, and edge cases that the happy-path tests don't cover.
 """
 
+import hashlib
 import math
 import tempfile
 from pathlib import Path
@@ -326,14 +327,26 @@ class TestAcBandwidthMetrics:
 @pytest.mark.asyncio
 class TestWirePinsZeroLength:
     async def test_self_loop_rejected(self, asc_state, asc_file):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import WirePinsInput, handle_wire_pins
+        # Wiring a pin to itself would emit a zero-length wire, which LTspice
+        # renders as an invisible artifact rather than a connection. The op
+        # fails with the coordinate named instead of writing one.
+        from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
 
-        with pytest.raises(NetlistError, match="same coordinate"):
-            await handle_wire_pins(
-                WirePinsInput(path=asc_file.name, from_pin="R1.1", to_pin="R1.1"),
-                asc_state,
-            )
+        result = await handle_edit_schematic(
+            EditSchematicInput.model_validate(
+                {
+                    "target": asc_file.name,
+                    "expected_sha256": hashlib.sha256(asc_file.read_bytes()).hexdigest(),
+                    "dry_run": True,
+                    "ops": [{"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R1.1"}],
+                }
+            ),
+            asc_state,
+        )
+        data = result.structuredContent
+        assert data is not None
+        assert len(data["failures"]) == 1
+        assert "same coordinate" in data["failures"][0]["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -485,56 +498,9 @@ class TestParseMeasurementsUnparseable:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-class TestCheckJobQueued:
-    async def test_queued_job_reported_correctly(self, state_no_sim):
-        from ltspice_mcp.lib import now
-        from ltspice_mcp.state import SimulationJob
-        from ltspice_mcp.tools.simulation import CheckJobInput, handle_check_job
-
-        state_no_sim.jobs["jq"] = SimulationJob(
-            job_id="jq",
-            netlist=Path("/tmp/x.cir"),
-            simulator="F",
-            status="queued",
-            started_at=now(),
-        )
-        r = await handle_check_job(CheckJobInput(job_id="jq"), state_no_sim)
-        assert "unexpected" not in r.content[0].text
-        assert r.structuredContent["status"] == "queued"
-
-
 # ---------------------------------------------------------------------------
 # handle_set_component_value silently accepts contradictory inputs
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-class TestSetComponentValueAmbiguous:
-    async def test_both_modes_rejected(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import SetComponentValueInput, handle_set_component_value
-
-        with pytest.raises(NetlistError, match="mutually exclusive"):
-            await handle_set_component_value(
-                SetComponentValueInput(
-                    path=sample_netlist.name,
-                    reference="R1",
-                    value="2k",
-                    values={"C1": "5n"},
-                ),
-                state_no_sim,
-            )
-
-    async def test_empty_values_dict_rejected(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import SetComponentValueInput, handle_set_component_value
-
-        with pytest.raises(NetlistError, match="empty"):
-            await handle_set_component_value(
-                SetComponentValueInput(path=sample_netlist.name, values={}),
-                state_no_sim,
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -677,30 +643,6 @@ class TestBatchPaginationValidation:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-class TestAddComponentSymbolValidation:
-    async def test_nonexistent_symbol_rejected(self, asc_state, asc_file):
-        from spicelib import AscEditor
-
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import AddComponentInput, handle_add_component
-
-        with pytest.raises(NetlistError, match="not found in any configured"):
-            await handle_add_component(
-                AddComponentInput(
-                    path=asc_file.name,
-                    reference="X99",
-                    symbol="totally_fake_symbol_xyz",
-                    x=0,
-                    y=0,
-                ),
-                asc_state,
-            )
-        # The file must still be readable (previously this would corrupt it)
-        editor = AscEditor(str(asc_file))
-        assert "X99" not in editor.components
-
-
 # ---------------------------------------------------------------------------
 # Round 5: continuation-line merge, edit_directive empty patterns, queued
 # status, AC/DC substring false-positives, list_components metacharacters.
@@ -722,65 +664,6 @@ class TestMergeContinuationBlankLine:
 
         result = _merge_continuation_lines([".MODEL Q NPN", "", "", "+ BF=200", "+ IS=1e-14"])
         assert result == [".MODEL Q NPN BF=200 IS=1e-14"]
-
-
-@pytest.mark.asyncio
-class TestEditDirectiveEmpty:
-    async def test_empty_instruction_rejected(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import EditDirectiveInput, handle_edit_directive
-
-        with pytest.raises(NetlistError, match="must not be empty"):
-            await handle_edit_directive(
-                EditDirectiveInput(path=sample_netlist.name, action="add", instruction=""),
-                state_no_sim,
-            )
-
-    async def test_empty_regex_rejected(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import EditDirectiveInput, handle_edit_directive
-
-        with pytest.raises(NetlistError, match="Empty regex"):
-            await handle_edit_directive(
-                EditDirectiveInput(
-                    path=sample_netlist.name, action="remove", instruction="regex:"
-                ),
-                state_no_sim,
-            )
-
-
-@pytest.mark.asyncio
-class TestHandleParameterModes:
-    async def test_value_without_name_rejected(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import ParameterInput, handle_parameter
-
-        with pytest.raises(NetlistError, match="requires 'name'"):
-            await handle_parameter(
-                ParameterInput(path=sample_netlist.name, value="2k"),
-                state_no_sim,
-            )
-
-    async def test_empty_name_rejected(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import ParameterInput, handle_parameter
-
-        with pytest.raises(NetlistError, match="name must not be empty"):
-            await handle_parameter(
-                ParameterInput(path=sample_netlist.name, name=" ", value="2k"),
-                state_no_sim,
-            )
-
-    async def test_read_single_param(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.tools.circuit import ParameterInput, handle_parameter
-
-        r = await handle_parameter(
-            ParameterInput(path=sample_netlist.name, name="Rval"),
-            state_no_sim,
-        )
-        # Previously returned ALL params when given only name.
-        assert "Rval" in r.structuredContent["parameters"]
-        assert len(r.structuredContent["parameters"]) == 1
 
 
 class TestSimulatorSelectionCaseInsensitive:
@@ -864,87 +747,6 @@ class TestExtractOperatingPointCaseInsensitive:
         # Previously lowercase V/I prefixes were silently dropped.
         assert r["voltages"].get("v(out)") == 3.3
         assert r["currents"].get("i(r1)") == 0.001
-
-
-@pytest.mark.asyncio
-class TestMoveComponentWraps:
-    async def test_move_unknown_ref_raises_netlist_error(self, asc_state, asc_file):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import MoveComponentInput, handle_move_component
-
-        # Previously leaked spicelib's ComponentNotFoundError.
-        with pytest.raises(NetlistError, match="not found"):
-            await handle_move_component(
-                MoveComponentInput(path=asc_file.name, reference="ZZZ", x=0, y=0),
-                asc_state,
-            )
-
-
-@pytest.mark.asyncio
-class TestSetComponentAttributeWraps:
-    async def test_unknown_ref_raises_netlist_error(self, asc_state, asc_file):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import (
-            SetComponentAttributeInput,
-            handle_set_component_attribute,
-        )
-
-        with pytest.raises(NetlistError, match="not found"):
-            await handle_set_component_attribute(
-                SetComponentAttributeInput(
-                    path=asc_file.name, reference="ZZZ", attribute="SpiceLine", value="x"
-                ),
-                asc_state,
-            )
-
-    async def test_empty_attribute_rejected(self, asc_state, asc_file):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import (
-            SetComponentAttributeInput,
-            handle_set_component_attribute,
-        )
-
-        with pytest.raises(NetlistError, match="not be empty"):
-            await handle_set_component_attribute(
-                SetComponentAttributeInput(
-                    path=asc_file.name, reference="R1", attribute="  ", value="x"
-                ),
-                asc_state,
-            )
-
-
-@pytest.mark.asyncio
-class TestListComponentsValidation:
-    async def test_reference_and_prefix_mutually_exclusive(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import ListComponentsInput, handle_list_components
-
-        with pytest.raises(NetlistError, match="mutually exclusive"):
-            await handle_list_components(
-                ListComponentsInput(path=sample_netlist.name, reference="R1", prefix="C"),
-                state_no_sim,
-            )
-
-    async def test_metachar_prefix_rejected(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import ListComponentsInput, handle_list_components
-
-        # Previously propagated a raw NotImplementedError from spicelib.
-        with pytest.raises(NetlistError, match="single letter"):
-            await handle_list_components(
-                ListComponentsInput(path=sample_netlist.name, prefix="R.*"),
-                state_no_sim,
-            )
-
-    async def test_multichar_prefix_rejected(self, state_no_sim, sample_netlist):
-        from ltspice_mcp.errors import NetlistError
-        from ltspice_mcp.tools.circuit import ListComponentsInput, handle_list_components
-
-        with pytest.raises(NetlistError, match="single letter"):
-            await handle_list_components(
-                ListComponentsInput(path=sample_netlist.name, prefix="RR"),
-                state_no_sim,
-            )
 
 
 @pytest.mark.asyncio

@@ -114,7 +114,6 @@ from ltspice_mcp.lib.signal_analysis import (
     compute_measurement_stats,
     compute_signal_stats,
     downsample_minmax,
-    stat_envelope,
     window_and_clean,
 )
 from ltspice_mcp.state import BatchJob, ExperimentJob, SessionState
@@ -419,7 +418,7 @@ def _effective_raw_path(
         # existing result — a caller holding only a netlist runs it first.
         raise ResultError(
             "Pass exactly one of 'raw_file' or 'job_id'. Analysis tools read "
-            "an existing result — if you only have a netlist, run_simulation "
+            "an existing result — if you only have a netlist, run_experiments "
             "produces the job_id/raw to analyze.",
             show_hint=False,
         )
@@ -902,239 +901,9 @@ async def handle_signal_stats(args: SignalStatsInput, state: SessionState):
     return format_response("\n".join(lines), out, fmt)
 
 
-_DEFAULT_WAVEFORM_BUCKETS = 200
-
-# Each bucket carries ~8 scalar fields, so it serializes far heavier than a
-# single raw sample. max_points_returned is sized for one-value-per-point
-# arrays; clamping buckets to it lets the documented max overflow the MCP
-# response budget (forcing overflow-to-file at the tool's own ceiling). Cap
-# buckets well below that — 2000 buckets is a generous overview and stays
-# comfortably inside the budget.
-_MAX_WAVEFORM_BUCKETS = 2000
-
-
-def _busiest_bucket(buckets: list[dict]) -> int | None:
-    """Index of the bucket with the largest peak-to-peak (a where-to-look fact)."""
-    if not buckets:
-        return None
-    return max(range(len(buckets)), key=lambda i: buckets[i]["pk_pk"])
-
-
-def _format_waveform_text(
-    signal: str,
-    sim_type: str,
-    axis_unit: str,
-    env: dict,
-    observations: list[dict],
-) -> list[str]:
-    buckets = env["buckets"]
-    g_min = min((b["min"] for b in buckets), default=float("nan"))
-    g_max = max((b["max"] for b in buckets), default=float("nan"))
-    unit = f" {axis_unit}" if axis_unit else ""
-    lines = [
-        f"Waveform envelope: {signal} ({sim_type})",
-        f"  Window:  [{env['x_start']:.6g}, {env['x_end']:.6g}]{unit}",
-        f"  Points:  {env['point_count']} -> {env['bucket_count']} buckets"
-        + ("  (decimated)" if env["decimated"] else ""),
-        f"  Range:   min {g_min:.6g}   max {g_max:.6g}",
-        "",
-        "Per-bucket envelope (x_start, x_end, min, max, mean, rms, pk_pk, "
-        "crest_factor) is in structuredContent; narrow [t_start, t_end] to zoom.",
-    ]
-    lines.extend(format_observations(observations))
-    return lines
-
-
-class GetWaveformInput(ToolInput):
-    raw_file: str | None = Field(
-        default=None,
-        description="Path to .raw result file. Pass this OR ``job_id`` (a job run), not both.",
-    )
-    job_id: str | None = Field(
-        default=None,
-        description=(
-            "Decimate a specific run of a completed sweep/MC (or single) job "
-            "instead of a raw_file path; pair with ``run_index``."
-        ),
-    )
-    run_index: int = Field(
-        default=0,
-        description="0-based run to read when ``job_id`` is given (default 0).",
-    )
-    signal: str = Field(description=_OP_SIGNAL_FIELD_DESC)
-    step: int = Field(default=0, description="Step index for .step directives.")
-    t_start: str | None = Field(
-        default=None,
-        description=(
-            "Window start in SPICE notation (e.g. '1m', '100u'). Narrow the window "
-            "and re-request to zoom into a region of interest."
-        ),
-    )
-    t_end: str | None = Field(
-        default=None,
-        description="Window end in SPICE notation.",
-    )
-    buckets: int | None = Field(
-        default=None,
-        ge=1,
-        description=(
-            "Number of equal-time envelope buckets (overview resolution). Defaults "
-            "to 200; capped at 2000 (and at the server's max_points_returned ceiling "
-            "and the sample count)."
-        ),
-    )
-    format: Literal["json", "text"] | None = Field(
-        default=None,
-        description=FORMAT_DESCRIPTION,
-    )
-
-
-@declare_output_schema(
-    {
-        "type": "object",
-        "properties": {
-            "signal": {"type": "string"},
-            "analysis_type": {"type": "string"},
-            "axis_unit": {"type": "string"},
-            "window_start_used": {"type": "number"},
-            "window_end_used": {"type": "number"},
-            "point_count": {"type": "integer"},
-            "bucket_count": {"type": "integer"},
-            "max_points_ceiling": {"type": "integer"},
-            "decimated": {"type": "boolean"},
-            "buckets": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "x_start": {"type": "number"},
-                        "x_end": {"type": "number"},
-                        "min": {"type": "number"},
-                        "max": {"type": "number"},
-                        "mean": {"type": "number"},
-                        "rms": {"type": "number"},
-                        "pk_pk": {"type": "number"},
-                        "crest_factor": {"type": ["number", "null"]},
-                        "num_samples": {"type": "integer"},
-                    },
-                },
-            },
-            "observations": OBSERVATIONS_SCHEMA,
-        },
-    }
-)
-async def handle_get_waveform(args: GetWaveformInput, state: SessionState):
-    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
-    fmt = args.format
-    step = args.step
-
-    raw = await services.load_raw(raw_path, state)
-    signal = services.validate_signal(raw, args.signal)
-    services.validate_step(raw, step)
-
-    try:
-        wave = np.asarray(raw.get_wave(signal, step=step))
-    except Exception as e:
-        raise ResultError(f"Failed to read signal {signal!r}: {e}") from e
-    if wave.size == 0:
-        raise ResultError(f"Signal {signal!r} has no data points at step {step}.")
-    if np.iscomplexobj(wave):
-        raise ResultError(
-            "get_waveform returns a real-valued (time/sweep-domain) envelope; "
-            f"signal {signal!r} is complex (AC analysis). For magnitude/phase vs "
-            "frequency use bode_metrics; for the full numeric |value|(f) table in one "
-            "call use export_waveform; for peak/notch frequencies (e.g. an impedance "
-            "sweep) use resonance; or query_value at a specific frequency.",
-            show_hint=False,
-        )
-
-    axis = _guarded_axis(raw, step, raw_path)
-
-    sim_type_raw, analysis_type, axis_unit, _ = _classify_analysis(raw)
-
-    x_win, y_win, dropped = _window(
-        axis, wave, args.t_start, args.t_end, allow_descending=_axis_may_descend(sim_type_raw)
-    )
-
-    ceiling = min(state.config.max_points_returned, _MAX_WAVEFORM_BUCKETS)
-    requested = args.buckets if args.buckets is not None else _DEFAULT_WAVEFORM_BUCKETS
-    n_buckets = max(1, min(requested, ceiling))
-
-    env = _run(stat_envelope, x_win, y_win, n_buckets)
-
-    # Surface FACTS, not verdicts (result-trust doctrine): decimation coverage,
-    # dropped non-finite samples, and a where-to-look pointer to the busiest
-    # bucket. The model decides what the shape is and where to zoom next.
-    observations: list[dict] = []
-    if env["decimated"]:
-        observations.append(
-            {
-                "code": "decimated",
-                "kind": "coverage",
-                "detail": (
-                    f"{env['point_count']} samples reduced to {env['bucket_count']} "
-                    "equal-time buckets; sub-bucket detail is not represented. "
-                    "Re-request a narrower [t_start, t_end] to resolve a region. "
-                    "If this is a switching-converter waveform, per-bucket peak-to-peak "
-                    "is the settling envelope, not the ripple; size the window to 1-2 "
-                    "switching periods to read ripple."
-                ),
-            }
-        )
-    if dropped:
-        observations.append(
-            {
-                "code": "non_finite",
-                "kind": "value",
-                "detail": (
-                    f"{dropped} non-finite sample(s) dropped from the window before bucketing."
-                ),
-            }
-        )
-    busiest = _busiest_bucket(env["buckets"])
-    if busiest is not None:
-        b = env["buckets"][busiest]
-        unit = f" {axis_unit}" if axis_unit else ""
-        observations.append(
-            {
-                "code": "max_pk_pk_bucket",
-                "kind": "value",
-                "detail": (
-                    f"Bucket {busiest} ([{b['x_start']:.6g}, {b['x_end']:.6g}]{unit}) "
-                    f"has the largest peak-to-peak ({b['pk_pk']:.6g}) in the window; "
-                    "narrow the window there to resolve it."
-                ),
-                "evidence": {
-                    "bucket_index": busiest,
-                    "x_start": b["x_start"],
-                    "x_end": b["x_end"],
-                    "pk_pk": b["pk_pk"],
-                },
-            }
-        )
-
-    data = {
-        "signal": signal,
-        "analysis_type": analysis_type,
-        "axis_unit": axis_unit,
-        "window_start_used": env["x_start"],
-        "window_end_used": env["x_end"],
-        "point_count": env["point_count"],
-        "bucket_count": env["bucket_count"],
-        "max_points_ceiling": ceiling,
-        "decimated": env["decimated"],
-        "buckets": env["buckets"],
-        "observations": observations,
-    }
-    lines = _format_waveform_text(signal, sim_type_raw, axis_unit, env, observations)
-    return format_response("\n".join(lines), data, fmt)
-
-
 # ---------------------------------------------------------------------------
 # export_waveform — full-fidelity CSV egress to disk
 # ---------------------------------------------------------------------------
-
-WAVEFORMS_SUBDIR = "waveforms"
 
 # Generous backstop against a pathological export exhausting memory/disk. Full
 # fidelity is the contract, so this is high and RAISES with guidance to window —
@@ -1210,14 +979,6 @@ def _complex_columns(
         [f"{name}_mag_dB", f"{name}_phase_deg"],
         [safe_magnitude_db(wave), np.degrees(np.angle(wave))],
     )
-
-
-def _export_filename(
-    raw_path: Path, analysis_type: str, job_id: str | None, run_index: int
-) -> str:
-    stamp = datetime.now().strftime("%Y%m%dT%H%M%S_%f")
-    run = f"_run{run_index}" if job_id else ""
-    return f"{raw_path.stem}_{analysis_type}{run}_{stamp}.csv"
 
 
 def _build_and_write(
@@ -1358,266 +1119,6 @@ def _build_and_write(
         "empty_steps": empty_steps,
         "step_values_available": bool(step_dicts) if stepped else None,
     }
-
-
-class ExportWaveformInput(ToolInput):
-    raw_file: str | None = Field(
-        default=None,
-        description="Path to .raw result file. Pass this OR ``job_id`` (a job run), not both.",
-    )
-    job_id: str | None = Field(
-        default=None,
-        description=(
-            "Export a specific run of a completed sweep/MC (or single) job "
-            "instead of a raw_file path; pair with ``run_index``."
-        ),
-    )
-    run_index: int = Field(
-        default=0,
-        description="0-based run to read when ``job_id`` is given (default 0).",
-    )
-    signals: list[str] | Literal["all"] = Field(
-        default="all",
-        description=(
-            "Trace names to export (e.g. ['V(out)', 'I(R1)']) or 'all' for every "
-            "non-axis trace. Device operating-point params work too, by name or shorthand "
-            "(e.g. ['m1.gm', 'm1.gds', 'm1.id']) — across a `.dc` sweep with "
-            "`.save @m1[…]` this is the gm/ID-table read, one CSV."
-        ),
-    )
-    t_start: str | None = Field(
-        default=None,
-        description=(
-            "Window start in SPICE notation (e.g. '1m', '100u', '1k'). Bounds the "
-            "export by windowing, not decimation — full fidelity inside the window."
-        ),
-    )
-    t_end: str | None = Field(
-        default=None,
-        description="Window end in SPICE notation.",
-    )
-    complex_format: Literal["mag_phase", "re_im", "both"] = Field(
-        default="mag_phase",
-        description=(
-            "How complex AC traces become columns: 'mag_phase' = magnitude(dB) + "
-            "phase(deg) [default], 're_im' = real + imag, 'both' = all four. Ignored "
-            "for real-valued (.tran/.dc/.noise) traces."
-        ),
-    )
-    out_dir: str | None = Field(
-        default=None,
-        description=(
-            "Directory to write the CSV into (resolved under an allowed path; "
-            "created if needed). Default: a '.ltspice-mcp/waveforms/' sidecar next "
-            "to the circuit for a job_id, or next to the raw for a raw_file."
-        ),
-    )
-    format: Literal["json", "text"] | None = Field(
-        default=None,
-        description=FORMAT_DESCRIPTION,
-    )
-
-
-@declare_output_schema(
-    {
-        "type": "object",
-        "properties": {
-            "path": {"type": "string"},
-            "row_count": {"type": "integer"},
-            "column_count": {"type": "integer"},
-            "columns": {"type": "array", "items": {"type": "string"}},
-            "signals": {"type": "array", "items": {"type": "string"}},
-            "analysis_type": {"type": "string", "enum": ["transient", "ac", "dc", "noise"]},
-            "n_steps": {"type": "integer"},
-            "window_used": {"type": "array", "items": {"type": "number"}},
-            "complex_format": {"type": ["string", "null"]},
-            "observations": OBSERVATIONS_SCHEMA,
-        },
-    }
-)
-async def handle_export_waveform(args: ExportWaveformInput, state: SessionState):
-    raw_path = _effective_raw_path(args.raw_file, args.job_id, args.run_index, state)
-    fmt = args.format
-    if isinstance(args.signals, list) and not args.signals:
-        raise ResultError("Pass at least one signal, or 'all'.")
-
-    raw = await services.load_raw(raw_path, state)
-    # A .op raw has no sweep axis to tabulate — refuse early with the clean
-    # pointer to operating_point, not by failing mid-write inside the worker.
-    _guarded_axis(raw, 0, raw_path)
-
-    _, analysis_type, _, _ = _classify_analysis(raw)
-
-    # Signal columns (canonical names), excluding the axis (trace 0).
-    trace_names = raw.get_trace_names()
-    axis_name = trace_names[0]
-    if args.signals == "all":
-        cols = list(trace_names[1:])
-    else:
-        seen: set[str] = set()
-        cols = []
-        for s in args.signals:
-            canon = services.validate_signal(raw, s)
-            if canon == axis_name:
-                raise ResultError(f"{s!r} is the sweep axis, not a signal column.")
-            if canon not in seen:
-                seen.add(canon)
-                cols.append(canon)
-    if not cols:
-        raise ResultError("No signal traces to export (the result has only an axis).")
-
-    n_steps = get_step_count(raw)
-    ts = _parse_time(args.t_start, "t_start")
-    te = _parse_time(args.t_end, "t_end")
-
-    out_path = await _resolve_artifact_dest(
-        out_dir=args.out_dir,
-        job_id=args.job_id,
-        raw_file=args.raw_file,
-        subdir=WAVEFORMS_SUBDIR,
-        filename=_export_filename(raw_path, analysis_type, args.job_id, args.run_index),
-        artifact="export",
-        state=state,
-    )
-
-    try:
-        facts = await asyncio.to_thread(
-            _build_and_write,
-            raw,
-            raw_path,
-            cols,
-            n_steps,
-            analysis_type,
-            ts,
-            te,
-            args.complex_format,
-            out_path,
-        )
-    except ValueError as e:
-        raise ResultError(
-            f"Failed to assemble the export (corrupt or truncated .raw?): {e}"
-        ) from e
-
-    # Surface FACTS, not verdicts (result-trust doctrine).
-    observations: list[dict] = []
-    step_note = " with step_index/step_value columns (tidy/long)" if facts["n_steps"] > 1 else ""
-    observations.append(
-        {
-            "code": "export_written",
-            "kind": "coverage",
-            "detail": (
-                f"Wrote {facts['row_count']} row(s) x {facts['column_count']} column(s) "
-                f"for {facts['n_steps']} step(s){step_note}."
-            ),
-        }
-    )
-    if args.t_start is not None or args.t_end is not None:
-        observations.append(
-            {
-                "code": "window_applied",
-                "kind": "coverage",
-                "detail": (
-                    f"Exported the windowed range {facts['window_used']} "
-                    f"({_X_HEADER[analysis_type]}); samples outside it were excluded."
-                ),
-            }
-        )
-    if facts["empty_steps"]:
-        observations.append(
-            {
-                "code": "window_empty_steps",
-                "kind": "coverage",
-                "detail": (
-                    f"{len(facts['empty_steps'])} step(s) had no samples in the window "
-                    f"and were omitted: {facts['empty_steps']}."
-                ),
-            }
-        )
-    if facts["non_finite"]:
-        observations.append(
-            {
-                "code": "non_finite",
-                "kind": "value",
-                "detail": (
-                    f"{facts['non_finite']} non-finite sample(s) are present and were "
-                    "KEPT in the CSV (full fidelity), not dropped."
-                ),
-            }
-        )
-    if facts["step_values_available"] is False:
-        observations.append(
-            {
-                "code": "step_value_unavailable",
-                "kind": "value",
-                "detail": (
-                    "step_value column left blank: no .step parameter map found in the "
-                    "sibling .log."
-                ),
-            }
-        )
-    if facts["had_complex"]:
-        observations.append(
-            {
-                "code": "complex_format_used",
-                "kind": "value",
-                "detail": (
-                    f"Complex AC traces written as {args.complex_format!r}; phase is "
-                    "the WRAPPED np.angle in degrees (run np.unwrap for a continuous curve)."
-                ),
-            }
-        )
-
-    # Relay the simulator's own log diagnostics — the export's observations
-    # channel is the only place a run→export-only loop sees them (the other read
-    # tools relay these, this egress path did not). A run-level solve failure
-    # (singular/non-converged) taints every exported value, so relay it whole.
-    # An unrecognized .save'd @dev[param] is written to the raw as a real-looking
-    # 0.0 column — but only the warnings naming an EXPORTED column belong on THIS
-    # CSV's observations; a warning about a variable we didn't export is a true
-    # run-log fact yet a false claim about this file, so gate it on cols.
-    unrecognized, solve_failures = await asyncio.to_thread(_read_log_warnings, raw_path)
-    # relay_observations returns the doctrine TypedDict; copy to plain dicts to
-    # match this handler's list[dict] (keeps schema-gen off the typed path).
-    observations.extend(dict(o) for o in relay_observations({"errors": solve_failures}))
-    exported_unrecognized = [
-        w for w in unrecognized if any(_unrecognized_matches(w, c) for c in cols)
-    ]
-    for w in exported_unrecognized:
-        observations.append(
-            {
-                "code": "unrecognized_save",
-                "kind": "relay",
-                "severity": "warning",
-                "detail": (
-                    "The simulator did not recognize a .save'd variable; it is written "
-                    f"to the CSV as a bogus 0.0 column (not a real result): {w}"
-                ),
-                "evidence": {"log": w},
-            }
-        )
-
-    data = {
-        "path": str(out_path),
-        "row_count": facts["row_count"],
-        "column_count": facts["column_count"],
-        "columns": facts["columns"],
-        "signals": cols,
-        "analysis_type": analysis_type,
-        "n_steps": facts["n_steps"],
-        "window_used": facts["window_used"],
-        "complex_format": args.complex_format if facts["had_complex"] else None,
-        "observations": observations,
-    }
-    # Relay items are omitted by format_observations (they normally print in an
-    # Errors section export has none of), so surface them as ⚠ lines here too.
-    relay_lines = [f"⚠ {o.get('detail', '')}" for o in observations if o.get("kind") == "relay"]
-    lines = [
-        f"Exported {facts['row_count']} row(s) to {out_path}",
-        f"Columns: {', '.join(facts['columns'])}",
-        *relay_lines,
-        *format_observations(observations),
-    ]
-    return format_response("\n".join(lines), data, fmt)
 
 
 def _query_x_label(raw, sim_type: str) -> str:
@@ -1862,8 +1363,8 @@ def _format_measurements(
 # same dead end by either route must be given the same way out.
 NO_DEVICE_OP_POINTS_NOTE = (
     "No small-signal device params (gm/gds/vth/vdsat) in this run. "
-    "On LTspice add '.options logopinfo' to the deck (run_simulation / "
-    "run_sweep / run_montecarlo add it automatically for .op runs); on "
+    "On LTspice add '.options logopinfo' to the deck (run_experiments adds "
+    "it automatically for .op runs); on "
     "ngspice .save them, e.g. '.save all @m1[gm] @m1[gds] @m1[id]'."
 )
 
@@ -2677,88 +2178,6 @@ class DisturbanceResponseInput(ToolInput):
     format: FormatField = Field(default=None, description="'json' or 'text'")
 
 
-TransientResponseMode = Literal["step", "disturbance"]
-
-
-class TransientResponseInput(ToolInput):
-    mode: TransientResponseMode = Field(
-        description=(
-            "Response to measure: 'step' for a transition that ends at a new "
-            "steady level, or 'disturbance' for an excursion that returns to "
-            "its pre-event baseline."
-        )
-    )
-    raw_file: str | None = Field(
-        default=None,
-        description="Path to .raw transient result file. Pass this OR ``job_id`` (a job run), not both.",
-    )
-    job_id: str | None = Field(
-        default=None,
-        description=(
-            "Analyze a specific run of a completed sweep/MC (or single) job instead "
-            "of a raw_file path; pair with ``run_index``."
-        ),
-    )
-    run_index: int = Field(
-        default=0,
-        description="0-based run to analyze when ``job_id`` is given (default 0).",
-    )
-    signal: str = Field(description="Signal name (e.g. 'V(out)')")
-    step: int = Field(default=0, description="Step index for .step sweeps")
-    t_start: str | None = Field(
-        default=None,
-        description=(
-            "Window start in SPICE notation. For mode='step', place it at the "
-            "stimulus edge. For mode='disturbance', place it at or just before "
-            "the disturbance edge because recovery_time is measured from here."
-        ),
-    )
-    t_end: str | None = Field(
-        default=None,
-        description="Window end in SPICE notation; include enough tail to observe settling or recovery.",
-    )
-    initial_value: float | None = Field(
-        default=None,
-        description=(
-            "mode='step' only: pre-step steady value. Auto = mean of the first 10% of the window."
-        ),
-    )
-    final_value: float | None = Field(
-        default=None,
-        description=(
-            "mode='step' only: post-step steady value. Auto = mean of the last 10% of the window."
-        ),
-    )
-    settling_tolerance_pct: float = Field(
-        default=2.0,
-        description=(
-            "mode='step' only: settling band as percent of |final - initial| (default 2%)."
-        ),
-    )
-    baseline: float | None = Field(
-        default=None,
-        description=(
-            "mode='disturbance' only: pre-disturbance output level. Auto = mean "
-            "of the leading 10% of the window."
-        ),
-    )
-    settle_band: float | None = Field(
-        default=None,
-        description=(
-            "mode='disturbance' only: absolute recovery tolerance in signal "
-            "units; overrides settle_band_pct."
-        ),
-    )
-    settle_band_pct: float = Field(
-        default=2.0,
-        description=(
-            "mode='disturbance' only: recovery tolerance as percent of "
-            "|baseline| when settle_band is omitted (default 2%)."
-        ),
-    )
-    format: FormatField = Field(default=None, description="'json' or 'text'")
-
-
 class TimingBetweenInput(ToolInput):
     raw_file: str | None = Field(
         default=None,
@@ -3061,45 +2480,6 @@ async def handle_disturbance_response(args: DisturbanceResponseInput, state: Ses
     if data.get("quality"):
         lines.append(f"Quality flags: {', '.join(data['quality'])}")
     return await _finish_metric(lines, data, raw_path, args.format)
-
-
-async def handle_transient_response(
-    args: TransientResponseInput, state: SessionState
-) -> types.CallToolResult:
-    """Dispatch to the selected transient response compute adapter."""
-    if args.mode == "step":
-        return await handle_pulse_response(
-            PulseResponseInput(
-                raw_file=args.raw_file,
-                job_id=args.job_id,
-                run_index=args.run_index,
-                signal=args.signal,
-                step=args.step,
-                t_start=args.t_start,
-                t_end=args.t_end,
-                initial_value=args.initial_value,
-                final_value=args.final_value,
-                settling_tolerance_pct=args.settling_tolerance_pct,
-                format=args.format,
-            ),
-            state,
-        )
-    return await handle_disturbance_response(
-        DisturbanceResponseInput(
-            raw_file=args.raw_file,
-            job_id=args.job_id,
-            run_index=args.run_index,
-            signal=args.signal,
-            step=args.step,
-            t_start=args.t_start,
-            t_end=args.t_end,
-            baseline=args.baseline,
-            settle_band=args.settle_band,
-            settle_band_pct=args.settle_band_pct,
-            format=args.format,
-        ),
-        state,
-    )
 
 
 @declare_output_schema(output_model=TimingBetweenResponse)
@@ -3583,7 +2963,7 @@ def _aggregate_job_measurements(
     if not batch_job.run_results:
         raise ResultError(
             f"Batch job {batch_job.job_id!r} has no completed runs yet — wait for it "
-            "to finish (use check_job to monitor)."
+            "to finish (use jobs(action='status') to monitor)."
         )
 
     samples: dict[str, _MeasSamples] = {}
@@ -5630,7 +5010,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
                 "kind": "value",
                 "detail": (
                     "Bode phase is UNWRAPPED for a readable continuous curve — this differs "
-                    "from export_waveform, which keeps the wrapped np.angle as its lossless "
+                    "from the CSV export recipe, which keeps the wrapped np.angle as its lossless "
                     "primitive."
                 ),
             }

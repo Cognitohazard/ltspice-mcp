@@ -104,10 +104,6 @@ class SessionState:
     """Resolved circuit paths already recorded in the recent-circuits index this session."""
     config_write_attempted: bool = field(default=False, repr=False)
     """Whether the lazy default-config write has been tried this session (once)."""
-    asc_snapshots: dict[str, bytes] = field(default_factory=dict, repr=False)
-    """Pre-first-edit byte snapshots of .asc schematics touched this session,
-    keyed by resolved path string. Captured before the first in-session
-    mutation; backs ``reset_schematic`` (revert to last good state)."""
     raw_dialect_hints: dict[Path, str | None] = field(default_factory=dict, repr=False)
     """Raw dialect per job-resolved raw path, recorded when the path is
     resolved (``services._resolve_result_file``) and read by ``load_raw`` —
@@ -293,6 +289,5 @@ class SessionState:
         """Clean up session resources at server shutdown."""
         self.editors.clear()
         self.results.clear()
-        self.asc_snapshots.clear()
         await self.job_registry.cancel_running(self.runners, self)
         await self.job_registry.drain_pending()

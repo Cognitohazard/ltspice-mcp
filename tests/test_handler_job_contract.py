@@ -32,8 +32,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from mcp import types
 
-from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.errors import ResultError
 from ltspice_mcp.state import (
     NON_TERMINAL_LIVE_STATUSES,
     TERMINAL_STATUSES,
@@ -41,27 +39,14 @@ from ltspice_mcp.state import (
     SessionState,
     SimulationJob,
 )
-from ltspice_mcp.tools.analysis import MeasurementStatsInput, handle_measurement_stats
-from ltspice_mcp.tools.circuit import (
-    CircuitReadInput,
-    ListComponentsInput,
-    SetComponentValueInput,
-    handle_list_components,
-    handle_read_circuit,
-    handle_set_component_value,
-)
 from ltspice_mcp.tools.experiments import JobsInput, handle_jobs
 from ltspice_mcp.tools.simulation import (
     CancelJobInput,
-    CheckJobInput,
     handle_cancel_job,
-    handle_check_job,
 )
 from tests.conftest import (
     FIXTURES_DIR,
-    LTSPICE_SWEEP_RUN_LOGS,
     LTSPICE_TRAN_RC_LOG,
-    LTSPICE_TRAN_RC_VFINAL,
     make_batch_job,
     make_sim_job,
 )
@@ -128,83 +113,6 @@ class TestBatchStatusCompleteness:
         assert "unexpected status" not in _text(result).lower()
         # the status is surfaced to the caller (not swallowed)
         assert data["status"] == status
-
-
-class TestSingleSimStatusCompleteness:
-    """check_job must format EVERY terminal single-sim status without falling
-    through to 'unexpected status'. Same class as the batch interrupted-status
-    formatter bug, one store over: the single-sim formatter omitted
-    'interrupted' (assigned on restart recovery, e.g. a job whose raw didn't
-    survive to be promoted to completed)."""
-
-    @pytest.mark.parametrize("status", SINGLE_TERMINAL_STATUSES_NO_FILES)
-    async def test_check_job_handles_terminal_status(
-        self, status: str, state_no_sim: SessionState
-    ):
-        _make_sim(state_no_sim, status=status)
-        result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
-        assert "unexpected status" not in _text(result).lower()
-
-
-class TestJobHandlerDualStore:
-    """A job_id-taking handler must resolve BOTH job stores. Regression class:
-    cancel_job resolved only the single-sim store and rejected batch ids."""
-
-    async def test_check_job_resolves_single_sim_job(self, state_no_sim: SessionState):
-        _make_sim(state_no_sim, status="running")
-        result = await handle_check_job(CheckJobInput(job_id="j1"), state_no_sim)
-        assert "not found" not in _text(result).lower()
-
-    async def test_check_job_resolves_batch_job(self, state_no_sim: SessionState):
-        _make_batch(state_no_sim, status="running")
-        result = await handle_check_job(CheckJobInput(job_id="b1"), state_no_sim)
-        assert "not found" not in _text(result).lower()
-
-    async def test_cancel_job_resolves_single_sim_job(self, state_with_sim: SessionState):
-        _make_sim(state_with_sim, status="running")
-        fake_runner = MagicMock(cancel=AsyncMock())
-        with patch("ltspice_mcp.tools.simulation._get_or_create_runner", return_value=fake_runner):
-            result = await handle_cancel_job(CancelJobInput(job_id="j1"), state_with_sim)
-        assert "not found" not in _text(result).lower()
-
-    async def test_cancel_job_resolves_batch_job(self, state_with_sim: SessionState):
-        _make_batch(state_with_sim, status="running")
-        fake_runner = MagicMock(cancel=AsyncMock())
-        with patch.object(
-            state_with_sim.runners, "get_batch_runner_for", return_value=fake_runner
-        ):
-            result = await handle_cancel_job(CancelJobInput(job_id="b1"), state_with_sim)
-        assert "not found" not in _text(result).lower()
-
-    async def test_measurement_stats_aggregates_batch_job(self, state_no_sim: SessionState):
-        bj = _make_batch(state_no_sim, status="completed")
-        for i, log in enumerate(LTSPICE_SWEEP_RUN_LOGS):
-            bj.run_results[i] = {"log_file": str(log), "params": {"R1": float(i)}}
-        result = await handle_measurement_stats(MeasurementStatsInput(job_id="b1"), state_no_sim)
-        assert result.structuredContent is not None
-        entry = result.structuredContent["stats"]["vfinal"]
-        assert entry["total_count"] == 3
-        assert entry["valid_count"] == 3
-
-    async def test_measurement_stats_aggregates_single_sim_job(self, state_no_sim: SessionState):
-        _make_sim(state_no_sim, status="completed", log_file=LTSPICE_TRAN_RC_LOG)
-        result = await handle_measurement_stats(MeasurementStatsInput(job_id="j1"), state_no_sim)
-        assert result.structuredContent is not None
-        entry = result.structuredContent["stats"]["vfinal"]
-        assert entry["total_count"] == 1
-        assert entry["valid_count"] == 1
-        assert entry["mean"] == pytest.approx(LTSPICE_TRAN_RC_VFINAL)
-
-    async def test_measurement_stats_unknown_id_errors_not_found(self, state_no_sim: SessionState):
-        with pytest.raises(ResultError, match="Job not found: ghost"):
-            await handle_measurement_stats(MeasurementStatsInput(job_id="ghost"), state_no_sim)
-
-    async def test_measurement_stats_running_single_sim_errors_not_completed(
-        self, state_no_sim: SessionState
-    ):
-        _make_sim(state_no_sim, status="running")
-        with pytest.raises(ResultError, match="is not completed"):
-            await handle_measurement_stats(MeasurementStatsInput(job_id="j1"), state_no_sim)
 
 
 class TestCrossTypeResolution:
@@ -299,119 +207,3 @@ def circuit_file(request: pytest.FixtureRequest, work_dir: Path) -> Path:
     path = work_dir / "rc_filter.cir"
     path.write_text(_CIR_NETLIST)
     return path
-
-
-@pytest.mark.parametrize("circuit_file", ["cir", "asc"], indirect=True)
-class TestCircuitToolDualDispatch:
-    """Circuit tools that accept both .cir and .asc must work through BOTH
-    extension-dispatch branches. The .cir branch (spice_lex pipeline) had unit
-    coverage; the .asc branch (AscEditor) was only reachable through separate
-    .asc-specific tests, so a regression in the shared dispatch seam — or an
-    .asc write that mutates only the cached editor — would escape. Writes are
-    verified against raw disk bytes AND re-read through a fresh SessionState
-    (fresh editor cache) so the value provably comes from disk."""
-
-    async def test_read_circuit_surfaces_known_component(
-        self, circuit_file: Path, state_no_sim: SessionState
-    ):
-        result = await handle_read_circuit(CircuitReadInput(path=str(circuit_file)), state_no_sim)
-        text = _text(result)
-        assert "R1" in text
-        assert "1k" in text
-
-    async def test_list_components_finds_reference(
-        self, circuit_file: Path, state_no_sim: SessionState
-    ):
-        result = await handle_list_components(
-            ListComponentsInput(path=str(circuit_file), reference="R1"), state_no_sim
-        )
-        assert _text(result) == "R1 = 1k"
-        assert result.structuredContent == {"reference": "R1", "value": "1k"}
-
-    async def test_set_component_value_persists_to_disk(
-        self, circuit_file: Path, state_no_sim: SessionState, config: ServerConfig
-    ):
-        result = await handle_set_component_value(
-            SetComponentValueInput(path=str(circuit_file), reference="R1", value="4.7k"),
-            state_no_sim,
-        )
-        assert "4.7k" in _text(result)
-
-        # The new value reached the file itself, not just an in-memory editor.
-        # (bytes, not text: Draft1.asc carries a non-UTF-8 µ byte)
-        assert b"4.7k" in _read_bytes(circuit_file)
-
-        # Re-read through the real read path with a FRESH SessionState so a
-        # warm editor cache can't fake persistence.
-        fresh_state = SessionState.create(config, available={})
-        reread = await handle_list_components(
-            ListComponentsInput(path=str(circuit_file), reference="R1"), fresh_state
-        )
-        assert _text(reread) == "R1 = 4.7k"
-        assert reread.structuredContent == {"reference": "R1", "value": "4.7k"}
-
-
-@pytest.mark.asyncio
-class TestCheckJobOutputSchemaContract:
-    """5. SCHEMA HONESTY — ``check_job``'s structuredContent must validate
-    against its own declared output_schema for every job shape. Emitting
-    ``"error": null`` (schema types it as non-nullable string) made every
-    schema-validating MCP client — including the official python SDK —
-    raise on every batch-job poll, running or completed.
-    """
-
-    @classmethod
-    def _validator(cls):
-        # Compiled once per class — jsonschema re-checks the metaschema on
-        # every plain validate() call otherwise.
-        import jsonschema
-
-        cached = getattr(cls, "_cached_validator", None)
-        if cached is None:
-            # check_job is an internal adapter now; its declared shape lives
-            # on the handler itself (declare_output_schema).
-            schema = getattr(handle_check_job, "__output_schema__", None)
-            assert schema is not None
-            cached = jsonschema.Draft202012Validator(schema)
-            cls._cached_validator = cached
-        return cached
-
-    async def _validated(self, job_id: str, state: SessionState) -> dict:
-        # The conformance hook in conftest also validates this emission;
-        # the explicit check here is the named, hook-independent contract.
-        result = await handle_check_job(CheckJobInput(job_id=job_id, format="json"), state)
-        assert result.structuredContent is not None
-        errors = list(self._validator().iter_errors(result.structuredContent))
-        assert not errors, [e.message for e in errors]
-        return result.structuredContent
-
-    async def test_running_batch_job_validates(self, state_no_sim: SessionState):
-        bj = make_batch_job("b1", status="running")
-        state_no_sim.batch_jobs[bj.job_id] = bj
-        data = await self._validated("b1", state_no_sim)
-        # No error yet -> the key is omitted, not emitted as null.
-        assert "error" not in data
-        assert data["job_type"] == "sweep"
-
-    async def test_completed_batch_job_validates(self, state_no_sim: SessionState):
-        bj = make_batch_job("b2", status="completed", completed_runs=2)
-        state_no_sim.batch_jobs[bj.job_id] = bj
-        data = await self._validated("b2", state_no_sim)
-        assert "error" not in data
-        assert data["completed_runs"] == 2
-
-    async def test_failed_batch_job_validates_with_error(self, state_no_sim: SessionState):
-        bj = make_batch_job("b3", status="failed", error="sweep execution failed")
-        state_no_sim.batch_jobs[bj.job_id] = bj
-        data = await self._validated("b3", state_no_sim)
-        assert data["error"] == "sweep execution failed"
-
-    async def test_failed_single_job_without_error_text_validates(
-        self, state_no_sim: SessionState
-    ):
-        # A failed job whose error was never populated must still emit a
-        # string (the schema forbids null).
-        job = make_sim_job("s1", status="failed", error=None)
-        state_no_sim.jobs[job.job_id] = job
-        data = await self._validated("s1", state_no_sim)
-        assert data["error"] == "Unknown error"
