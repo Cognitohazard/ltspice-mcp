@@ -593,8 +593,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     "jobs": 5227,
     # Twenty-odd recipe branches; the largest schema on the surface.
     "analyze_results": 19416,
-    # Five query kinds, each with its own argument shape.
-    "inspect": 6410,
+    # Seven query kinds, each with its own argument shape — including the
+    # reference lookup, which is what a session on the compact listing uses to
+    # learn a branch's fields at all.
+    "inspect": 7326,
     # The typed op union — eleven ops, each its own branch — plus the render
     # and compare views. It advertises BOTH spellings of those two: the
     # objects, and the flat fields retained as aliases for 0.6. That

@@ -1,7 +1,8 @@
 """Tests for inspect — the consolidated, honestly read-only UNDERSTAND surface.
 
-Covers the six query kinds' happy paths (capabilities / symbols / symbol /
-net over both a .asc and a netlist / components / model search+enumerate),
+Covers the seven query kinds' happy paths (capabilities / symbols / symbol /
+net over both a .asc and a netlist / components / model search+enumerate /
+reference search and its table of contents),
 cursor paging with resumption and tampered/stale/cross-query cursor rejection,
 mixed-batch partial failure (a denied path and an unknown kind returning
 alongside good items), the model search/enumerate requirement matrix, the
@@ -757,3 +758,95 @@ async def test_symbol_precedence_local_and_symlink_dedup(
     fixture_real = _real(fixture_dir)
     collapsed = [e for e in precedence if _real(e["dir"]) == fixture_real]
     assert len(collapsed) == 1
+
+
+# ---------------------------------------------------------------------------
+# reference — the tools' own branch vocabulary
+# ---------------------------------------------------------------------------
+
+
+async def test_reference_search_returns_ranked_branches_with_their_fields(
+    cap_state: SessionState,
+):
+    """The lookup a caller reaches for when they know the measurement but not
+    the recipe name. It runs through the real dispatch, so the suite's
+    conformance hook checks the payload against inspect's output schema."""
+    (res,) = await _run(cap_state, [{"kind": "reference", "query": "phase margin"}])
+    assert res["ok"] is True and res["kind"] == "reference"
+    data = res["data"]
+    assert data["query"] == "phase margin"
+    assert data["matches"], "phase margin matched nothing"
+    top = data["matches"][0]
+    assert (top["tool"], top["name"]) == ("analyze_results", "stability")
+    assert "phase margin" in top["summary"].lower()
+    assert "stability" in top["call"]
+    fields = {field["name"]: field for field in top["fields"]}
+    assert fields["signal"]["required"] is True
+    assert fields["signal"]["type"] == "string"
+    # A reference lookup reads nothing off disk, so it has no page to resume.
+    assert "next_cursor" not in res
+
+
+async def test_reference_limit_bounds_the_matches_and_reports_the_rest(
+    cap_state: SessionState,
+):
+    (res,) = await _run(cap_state, [{"kind": "reference", "query": "gain", "limit": 2}])
+    data = res["data"]
+    assert data["returned"] == 2 == len(data["matches"])
+    assert data["total_matches"] > 2
+    assert "limit" in data["hint"]
+
+
+async def test_reference_without_a_query_returns_the_table_of_contents(
+    cap_state: SessionState,
+):
+    (res,) = await _run(cap_state, [{"kind": "reference"}])
+    data = res["data"]
+    assert "matches" not in data
+    tools = {group["tool"] for group in data["contents"]}
+    assert tools == {
+        "run_experiments",
+        "analyze_results",
+        "inspect",
+        "edit_schematic",
+        "verify_circuit",
+        "jobs",
+    }
+    listed = sum(len(group["branches"]) for group in data["contents"])
+    assert listed == data["total_branches"]
+    for group in data["contents"]:
+        for branch in group["branches"]:
+            # A contents line is a name and one line; the field tables are what
+            # a query pays for.
+            assert set(branch) == {"name", "summary"}
+    assert "query" in data["hint"]
+
+
+async def test_reference_says_so_when_nothing_matches(cap_state: SessionState):
+    (res,) = await _run(cap_state, [{"kind": "reference", "query": "zzz quuxbar"}])
+    data = res["data"]
+    assert data["matches"] == [] and data["total_matches"] == 0
+    assert "spice://guide" in data["hint"]
+
+
+async def test_reference_limit_above_the_cap_is_rejected_for_that_item_only(
+    cap_state: SessionState,
+):
+    good, bad = await _run(
+        cap_state,
+        [
+            {"kind": "reference", "query": "thd"},
+            {"kind": "reference", "query": "thd", "limit": insp.REFERENCE_LIMIT_CAP + 1},
+        ],
+    )
+    assert good["ok"] is True
+    assert bad["ok"] is False and bad["error"]["code"] == "invalid_query"
+
+
+async def test_reference_is_advertised_as_a_supported_kind(cap_state: SessionState):
+    """An unknown kind reports the supported list, and 'reference' has to be in
+    it — a lookup nothing names is a lookup nobody finds."""
+    (res,) = await _run(cap_state, [{"kind": "nonsense"}])
+    assert res["ok"] is False
+    assert "reference" in res["error"]["supported"]
+    assert "reference" in insp.SUPPORTED_KINDS
