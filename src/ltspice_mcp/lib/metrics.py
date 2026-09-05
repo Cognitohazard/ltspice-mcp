@@ -73,6 +73,7 @@ from ltspice_mcp.lib.raw_parser import (
     trace_unit,
 )
 from ltspice_mcp.lib.recipes import (
+    RECIPE_MODELS,
     AcStructureRecipe,
     BodeCrossingRecipe,
     BodeFilterRecipe,
@@ -83,6 +84,7 @@ from ltspice_mcp.lib.recipes import (
     NoiseIntegralRecipe,
     OperatingPointRecipe,
     PeriodicRecipe,
+    PlotRecipe,
     Recipe,
     ResonanceRecipe,
     ReturnLossRecipe,
@@ -93,6 +95,7 @@ from ltspice_mcp.lib.recipes import (
     TimingRecipe,
     TransientResponseRecipe,
     ValueRecipe,
+    WaveformRecipe,
     Window,
 )
 from ltspice_mcp.lib.result_observations import (
@@ -2039,3 +2042,20 @@ METRICS: dict[type[Recipe], MetricFn] = {
     NoiseIntegralRecipe: noise_integral,
     OperatingPointRecipe: operating_point,
 }
+
+#: Recipes that produce an artifact and a series rather than one value; the
+#: evaluator writes those itself, so they are the only classes allowed to be
+#: absent from :data:`METRICS`.
+ARTIFACT_RECIPES: frozenset[type[Recipe]] = frozenset({WaveformRecipe, PlotRecipe})
+
+_unregistered = [
+    model.__name__
+    for model in RECIPE_MODELS
+    if model not in METRICS and model not in ARTIFACT_RECIPES
+]
+if _unregistered:  # pragma: no cover - a build-time contradiction, not a state
+    raise RuntimeError(
+        "These recipe classes have no metric function: "
+        f"{', '.join(sorted(_unregistered))}. Add one to METRICS, or list the "
+        "class in ARTIFACT_RECIPES if the evaluator produces its value itself."
+    )
