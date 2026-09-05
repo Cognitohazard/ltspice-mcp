@@ -10,7 +10,7 @@ def __getattr__(name: str) -> str:
     """Read the installed version on first access, not at import.
 
     ``importlib.metadata`` walks the installed distributions, and that walk is
-    most of the cost of a bare ``spice-mcp --help`` — a command with no use for
+    most of the cost of a bare ``ltspice-mcp --help`` — a command with no use for
     the version. Everything that does need it asks by name and pays there.
     """
     if name == "__version__":
