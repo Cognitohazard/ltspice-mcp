@@ -5,7 +5,8 @@ tool *does*:
 
 * ``ToolInput`` and ``build_input_schema`` — turn a Pydantic input model into
   the ``inputSchema`` the registry advertises, through the shrinking passes
-  (title strip, type-keyword compaction, shared-fragment ``$defs`` hoist).
+  (title strip, null-default drop, discriminator-mapping drop, type-keyword
+  compaction, shared-fragment ``$defs`` hoist).
 * ``schema_from_typeddict`` — the output-schema generator, so a tool's
   ``structuredContent`` contract is derived from the TypedDict the lib already
   returns instead of being hand-written twice.
@@ -104,6 +105,57 @@ def strip_argument_descriptions(node: Any, *, in_name_map: bool = False) -> Any:
         }
     if isinstance(node, list):
         return [strip_argument_descriptions(item) for item in node]
+    return node
+
+
+def _drop_null_defaults(node: Any, *, in_name_map: bool = False) -> Any:
+    """Remove every ``"default": null`` annotation.
+
+    Pydantic writes one for each optional field whose default is ``None``, and
+    it says nothing a reader could act on: ``required`` already lists the
+    fields that must be sent, and a JSON Schema ``default`` is an annotation
+    with no effect on validation. A non-null default is kept — that one carries
+    the value the server uses when the field is omitted.
+
+    Descends structurally for the same reason ``_strip_titles`` does: inside a
+    ``properties`` or ``$defs`` map the keys are argument names, so a field
+    genuinely called ``default`` must survive.
+    """
+    if isinstance(node, dict):
+        if in_name_map:
+            return {key: _drop_null_defaults(value) for key, value in node.items()}
+        return {
+            key: _drop_null_defaults(value, in_name_map=key in _SCHEMA_NAME_MAPS)
+            for key, value in node.items()
+            if not (key == "default" and value is None)
+        }
+    if isinstance(node, list):
+        return [_drop_null_defaults(item) for item in node]
+    return node
+
+
+def _drop_discriminator_mappings(node: Any, *, in_name_map: bool = False) -> Any:
+    """Remove the ``mapping`` half of every ``discriminator`` block.
+
+    ``discriminator`` is an OpenAPI extension to JSON Schema. Its
+    ``propertyName`` is the useful half — it names the field that picks the
+    branch — while ``mapping`` repeats, once per branch, the value each
+    branch's own ``const`` already states, plus the ``$ref`` a reader follows
+    from the ``oneOf`` list anyway. A validator ignores the whole keyword; a
+    reader loses nothing.
+    """
+    if isinstance(node, dict):
+        if in_name_map:
+            return {key: _drop_discriminator_mappings(value) for key, value in node.items()}
+        out: dict[str, Any] = {}
+        for key, value in node.items():
+            if key == "discriminator" and isinstance(value, dict):
+                out[key] = {name: sub for name, sub in value.items() if name != "mapping"}
+                continue
+            out[key] = _drop_discriminator_mappings(value, in_name_map=key in _SCHEMA_NAME_MAPS)
+        return out
+    if isinstance(node, list):
+        return [_drop_discriminator_mappings(item) for item in node]
     return node
 
 
@@ -368,18 +420,23 @@ def build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
     on the consolidated surface. Every ref is internal to
     the one schema document, so any conformant client resolves it locally.
 
-    Two further passes shrink the *advertised* shape only — the Pydantic model
+    Four further passes shrink the *advertised* shape only — the Pydantic model
     stays the validator and accepts exactly what it did before.
+    ``_drop_null_defaults`` removes the ``"default": null`` annotation pydantic
+    writes for every optional field, which ``required`` already says;
+    ``_drop_discriminator_mappings`` removes the branch table each
+    ``discriminator`` repeats from the branches' own ``const`` values;
     ``_compact_type_keywords`` drops the type keywords a schema already implies
     (a nullable branch becomes a multi-type ``type`` array; the ``type`` beside
     a ``const`` goes), and ``_hoist_shared_fragments`` gives a sub-schema
     repeated across models one ``$defs`` entry instead of a copy per use site.
-    Together they measured a tenth off the consolidated surface, most of it on
+    Together they measured a sixth off the consolidated surface, most of it on
     ``analyze_results``, whose twenty-odd recipe models each restated the same
     seven shared fields. ``tests/test_consolidated_contracts.py`` pins the
     resulting size per tool.
     """
     schema = _strip_titles(input_model.wire_input_schema())
+    schema = _drop_discriminator_mappings(_drop_null_defaults(schema))
     return _hoist_shared_fragments(_compact_type_keywords(schema))
 
 

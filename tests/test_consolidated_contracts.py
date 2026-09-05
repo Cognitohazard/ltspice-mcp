@@ -114,7 +114,15 @@ class TestAttachedRecipeGrammar:
 
         analyze = _registered()["analyze_results"].input_schema
         standalone = analyze["properties"]["recipes"]["items"]
-        assert set(standalone["discriminator"]["mapping"]) == set(DISCRIMINANTS)
+        # The branches themselves, not a discriminator mapping: the advertised
+        # schema drops that table because each branch's own 'metric' const
+        # already carries the value it maps.
+        branches = [
+            analyze["$defs"][branch["$ref"].split("/")[-1]] for branch in standalone["oneOf"]
+        ]
+        assert {branch["properties"]["metric"]["const"] for branch in branches} == set(
+            DISCRIMINANTS
+        )
 
     def test_the_stub_points_at_the_channels_that_carry_the_fields(self):
         items = self._attached_recipe_items(_registered()["run_experiments"].input_schema)
