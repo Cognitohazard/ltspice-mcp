@@ -37,6 +37,13 @@ from ltspice_mcp.lib.log_parser import (
     extract_log_diagnostics,
     parse_step_iterations,
 )
+from ltspice_mcp.lib.projection import (
+    ABSENT,
+    escape_field_segment,
+    keep_plan,
+    project_row,
+    split_field_path,
+)
 from ltspice_mcp.lib.raw_parser import get_step_count, safe_magnitude_db
 from ltspice_mcp.lib.recipes import (
     AcStructureRecipe,
@@ -69,18 +76,13 @@ from ltspice_mcp.lib.recipes import (
 )
 from ltspice_mcp.state import SessionState, legacy_record_message
 from ltspice_mcp.tools._base import (
-    ABSENT,
     ResponseBudget,
     StrictModel,
     ToolInput,
-    escape_field_segment,
     format_response,
-    keep_plan,
-    project_row,
     registry,
     resolve_response_budget,
     safe_path,
-    split_field_path,
 )
 
 _ARTIFACT_SAFETY_FACTOR = 4.0

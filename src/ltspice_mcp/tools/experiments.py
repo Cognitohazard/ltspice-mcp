@@ -34,6 +34,7 @@ from ltspice_mcp.errors import (
     raise_site_code,
 )
 from ltspice_mcp.lib import experiment_store, job_store, recent, response_budget, services
+from ltspice_mcp.lib.deck_prep import resolve_runnable_netlist
 from ltspice_mcp.lib.deck_staging import (
     DeckStagingError,
     resolve_experiment_paths,
@@ -68,6 +69,7 @@ from ltspice_mcp.lib.job_types import (
 )
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
+from ltspice_mcp.lib.projection import keep_plan, project_row
 from ltspice_mcp.lib.recipes import DISCRIMINANTS, Recipe, validate_recipe
 from ltspice_mcp.lib.simulator import simulator_dialect, simulator_library_roots
 from ltspice_mcp.lib.sweep_utils import generate_id
@@ -93,16 +95,13 @@ from ltspice_mcp.tools._base import (
     StrictModel,
     ToolInput,
     format_response,
-    keep_plan,
     paginate,
-    project_row,
-    prune_unreferenced_defs,
     registry,
     resolve_response_budget,
     resolve_run_simulator,
-    resolve_runnable_netlist,
     safe_path,
 )
+from ltspice_mcp.tools._schema import prune_unreferenced_defs
 from ltspice_mcp.tools.analyze import (
     MAX_PAGE_SIZE,
     coerce_per_run_default,

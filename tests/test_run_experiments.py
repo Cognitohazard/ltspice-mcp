@@ -26,7 +26,7 @@ from ltspice_mcp.lib.runner_base import RunOutcome, collect_run_outcome
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments as experiments_mod
-from ltspice_mcp.tools._base import _build_input_schema
+from ltspice_mcp.tools._schema import _build_input_schema
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput
 from ltspice_mcp.tools.experiments import (
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
