@@ -908,14 +908,50 @@ async def _evaluate_edit_schematic(
         exists = target.exists()
         expected = args.expected_sha256.lower() if args.expected_sha256 else None
         if exists:
-            if expected is None:
-                raise NetlistError(
-                    f"{target.name} already exists; pass expected_sha256 (the SHA-256 of "
-                    "the file you edited against) so a concurrent edit can't be lost. "
-                    "An inspect components or net query on this sheet returns it as "
-                    "'sha256'."
-                )
             current = sha256_file(target)
+            if expected is None:
+                # The guard stands — nothing is written without the token — but
+                # the refusal hands the token over rather than sending the
+                # caller off to fetch it. A digest read here is a fact about
+                # the file as it is right now, under the same edit guard the
+                # write would take, so a retry that quotes it is exactly as
+                # safe as one quoting a prior read: a peer's write between the
+                # two still loses the race and comes back as revision_conflict.
+                _stage("revision_check", False, "expected_sha256 missing")
+                return finish(
+                    EditSchematicEvaluation(
+                        data=_envelope(
+                            outcome="failed",
+                            commit_state="not_committed",
+                            target=target,
+                            build_id=build_id,
+                            base=args.base,
+                            stages=stages,
+                            sha256=current,
+                            error={
+                                "code": "expected_sha256_required",
+                                "message": (
+                                    f"{target.name} already exists, so expected_sha256 is "
+                                    "required — it is what keeps a concurrent edit from "
+                                    f"being lost. Its current sha256 is {current}; resubmit "
+                                    "with that if it is the revision you edited against."
+                                ),
+                                "stage": "revision_check",
+                                "retryable": True,
+                            },
+                            hint=(
+                                "Nothing was written. Resubmit the same ops with "
+                                f"expected_sha256={current}."
+                            ),
+                        ),
+                        text=(
+                            f"edit_schematic: {target.name} exists and needs "
+                            f"expected_sha256; its current sha256 is {current}. "
+                            "Nothing was written."
+                        ),
+                        format=args.format,
+                    )
+                )
             if current != expected:
                 _stage("revision_check", False, "sha mismatch")
                 return finish(
