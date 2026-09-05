@@ -707,6 +707,12 @@ class ApiMethodsMixin(ABC):
                     "one handler page from a submission this process performs, and a "
                     "detached submission is performed by another process."
                 )
+            if not self._state.config.persist_jobs:
+                raise ApiValidationError(
+                    "detach=True needs persisted job records: a detached job is read "
+                    "back from its record, and this session has [state] persist_jobs "
+                    "off, so nothing the owner submits would be visible here."
+                )
             return self._run_detached(arguments)
         if raw_page:
             request = _validate(

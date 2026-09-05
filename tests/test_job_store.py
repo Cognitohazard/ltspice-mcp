@@ -11,8 +11,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any
+
+import psutil
+import pytest
 
 from ltspice_mcp.lib import job_store, now, store
 from ltspice_mcp.state import LegacyJobRecord
@@ -291,8 +298,36 @@ class TestOwnerLivenessUnknown:
         """The two real answers must survive the third one being added."""
         monkeypatch.setattr(store.psutil, "pid_exists", lambda pid: False)
         assert store.owner_liveness(_FOREIGN_PID) is store.OwnerLiveness.DEAD
-        monkeypatch.setattr(store.psutil, "pid_exists", lambda pid: True)
-        assert store.owner_liveness(_FOREIGN_PID) is store.OwnerLiveness.ALIVE
+        monkeypatch.undo()
+        # A real live process for the ALIVE answer: the probe now also asks
+        # what the process is doing, and a pid that exists only in a stub has
+        # nothing to answer with.
+        assert store.owner_liveness(os.getppid()) is store.OwnerLiveness.ALIVE
         # A record with no pid predates pid tracking; recovering those jobs is
         # the behaviour this probe was added to, not something it takes away.
         assert store.owner_liveness(None) is store.OwnerLiveness.DEAD
+
+
+class TestOwnerLivenessExitedProcess:
+    """A process that has exited is not an owner, collected or not.
+
+    An exited child keeps its pid in the process table until the process that
+    started it collects it, so the pid alone still reads as "there". A job
+    whose owner stopped there has nobody supervising it, and reading that as
+    running is what keeps the restart reconciliation from ever running.
+    """
+
+    def test_probe_reports_an_exited_uncollected_process_as_dead(self) -> None:
+        child = subprocess.Popen([sys.executable, "-c", ""])
+        try:
+            deadline = time.monotonic() + 30
+            # Deliberately never poll() or wait() here: either would collect
+            # the child and remove the state under test.
+            while psutil.Process(child.pid).status() != psutil.STATUS_ZOMBIE:
+                if time.monotonic() >= deadline:
+                    pytest.fail("the child process never exited")
+                time.sleep(0.02)
+            assert psutil.pid_exists(child.pid)
+            assert store.owner_liveness(child.pid) is store.OwnerLiveness.DEAD
+        finally:
+            child.wait(timeout=30)

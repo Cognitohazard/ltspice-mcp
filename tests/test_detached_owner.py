@@ -20,6 +20,7 @@ import psutil
 import pytest
 
 from ltspice_mcp.api import Api, ApiValidationError
+from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from tests.conftest import SyncApi
@@ -35,11 +36,11 @@ FAST_DECK = "* dc divider\nV1 in 0 0\nR1 in out 1k\nR2 out 0 1k\n.dc V1 0 10 5\n
 
 # A transient long enough that a case is still in flight while a test cancels
 # or kills its owner: about half a second of real ngspice per case, run one at
-# a time, so a four-case job takes a couple of seconds.
+# a time, so a six-case job takes several seconds.
 SLOW_DECK = (
     "* slow rc\nV1 in 0 SIN(0 1 1k)\nR1 in out 1k\nC1 out 0 1u\n.save V(out)\n.tran 20u 8\n.end\n"
 )
-SLOW_VARIATIONS = [{"kind": "assign", "assign": {"R1": ["1k", "2k", "3k", "4k"]}}]
+SLOW_VARIATIONS = [{"kind": "assign", "assign": {"R1": ["1k", "2k", "3k", "4k", "5k", "6k"]}}]
 
 #: Long enough to cover a cold interpreter start plus staging in the owner.
 HANDOFF_TIMEOUT_S = 120.0
@@ -140,6 +141,16 @@ def test_detaching_a_raw_page_call_is_refused(state_no_sim: SessionState) -> Non
             circuits=[{"path": "d.cir"}],
         )
     assert "raw_page" in str(caught.value)
+
+
+def test_detaching_without_persisted_records_is_refused(work_dir: Path) -> None:
+    """Nothing to hand back: the owner's job would exist only in the owner."""
+    config = ServerConfig(working_dir=work_dir, allowed_paths=[work_dir], persist_jobs=False)
+    api = SyncApi(SessionState.create(config, available={}))
+    with pytest.raises(ApiValidationError, match="persist_jobs"):
+        api.run_experiments(
+            wait=False, detach=True, request_id="never", circuits=[{"path": "d.cir"}]
+        )
 
 
 def test_detach_must_be_a_bool(state_no_sim: SessionState) -> None:
