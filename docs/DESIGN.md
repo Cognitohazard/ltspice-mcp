@@ -152,7 +152,21 @@ follow-up inspection call.
 Tools that produce inspectable state declare an `output_schema` and
 return `structuredContent` alongside text. When MCP clients run code
 execution against tool calls, the schemas serve as the types the
-sandboxed code consumes.
+sandboxed code consumes. The schema stays on the registered definition and
+is not advertised in the tool listing: it was the largest block there, and a
+caller learns a response shape from a response.
+
+### The tool listing is what the source says
+
+A client loads every tool definition before it can call anything, and pays
+for it in every turn of the conversation afterwards. That cost is managed by
+writing each argument description short — the unit, the sign or direction
+convention, the default, how the field interacts with its siblings — and
+putting the depth in `docs/design/mcp_surface.md` or the packaged
+`spice://guide`, with a pointer on the field. It is not managed by filtering
+the descriptions on the way out: what a model declares is what a client is
+shown, so a reader of the source knows what ships, and the one text also
+serves `api.reference()` and the guide.
 
 ### Waveforms: scalars first, export and plots for shape
 
