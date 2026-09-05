@@ -13,7 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, NamedTuple
 
 import numpy as np
 from mcp import types
@@ -54,6 +54,7 @@ from ltspice_mcp.lib.recipes import (
     PlotRecipe,
     Recipe,
     ScalarRecipe,
+    StepSelector,
     WaveformRecipe,
     recipe_error,
     validate_recipe,
@@ -483,6 +484,22 @@ class AnalyzeResultsInput(ToolInput):
             "gives one reduction over every row."
         ),
     )
+    step: StepSelector | None = Field(
+        default=None,
+        description=(
+            "For a run whose deck carries a .step directive: read the one step "
+            "whose axis value this names, e.g. {axis:'temp', value:27}. Every "
+            "recipe in the call reads it. Default is the first step."
+        ),
+    )
+    all_steps: bool = Field(
+        default=False,
+        description=(
+            "For a run whose deck carries a .step directive: evaluate every "
+            "recipe at every step instead of only the first. Not combinable "
+            "with 'step'."
+        ),
+    )
     include: Annotated[
         AnalyzeInclude,
         BeforeValidator(
@@ -513,21 +530,30 @@ class AnalyzeResultsInput(ToolInput):
 
     @model_validator(mode="after")
     def _new_or_continue(self) -> AnalyzeResultsInput:
+        if self.step is not None and self.all_steps:
+            raise ValueError("'step' and 'all_steps=true' are mutually exclusive")
         if self.continuation is not None:
             # A continuation replays the execution request stored in the result
             # set and takes its presentation view from the cursor, never these
             # args. Reject them rather than accept and drop them: raising
             # include.per_run.limit on resume is the obvious thing to try, and
             # silently ignoring it hands back a page the caller did not ask for.
-            supplied = {"sources", "recipes", "include", "group_by"} & self.model_fields_set
+            supplied = {
+                "sources",
+                "recipes",
+                "include",
+                "group_by",
+                "step",
+                "all_steps",
+            } & self.model_fields_set
             if supplied:
                 raise ValueError(
                     "'continue' is mutually exclusive with "
                     + "/".join(sorted(supplied))
                     + "; a continuation replays the stored execution request and "
                     "the cursor's fields view. "
-                    "To change sources, recipes, grouping or include options, "
-                    "start a new analysis."
+                    "To change sources, recipes, grouping, step selection or "
+                    "include options, start a new analysis."
                 )
             return self
         if not self.sources or not self.recipes:
@@ -1092,6 +1118,7 @@ def _request_hash(args: AnalyzeResultsInput, *, include_fields: bool = False) ->
             "sources": [source.model_dump(mode="json") for source in args.sources],
             "work": _work_items(list(args.recipes)),
             "group_by": list(args.group_by),
+            **StepSelection.of(args).as_inputs(),
             "include": include,
         }
     )
@@ -1131,6 +1158,7 @@ async def _create_result_set(
         "working_dir": str(state.working_dir),
         "sources": [source.model_dump(mode="json") for source in args.sources],
         "group_by": list(args.group_by),
+        **StepSelection.of(args).as_inputs(),
         "include": include,
         "request_hash": _request_hash(args),
         "resolved_runs": [_serialize_run(run) for run in runs],
@@ -1196,8 +1224,39 @@ def _window_fields(window: Any) -> tuple[str | None, str | None]:
     return _spice(window.start), _spice(window.end)
 
 
+class StepSelection(NamedTuple):
+    """Which ``.step`` iteration(s) one whole call reads.
+
+    A run's step axis belongs to the run, not to the measurement taken on it,
+    so the choice is made once per ``analyze_results`` call and applies to
+    every recipe in it. It is stored in the result set's inputs beside
+    ``group_by``, so a continuation replays the same steps.
+    """
+
+    step: StepSelector | None = None
+    all_steps: bool = False
+
+    @classmethod
+    def of(cls, args: AnalyzeResultsInput) -> StepSelection:
+        return cls(args.step, args.all_steps)
+
+    @classmethod
+    def from_inputs(cls, inputs: Mapping[str, Any]) -> StepSelection:
+        raw = inputs.get("step")
+        return cls(
+            StepSelector.model_validate(raw) if isinstance(raw, Mapping) else None,
+            bool(inputs.get("all_steps")),
+        )
+
+    def as_inputs(self) -> dict[str, Any]:
+        return {
+            "step": self.step.model_dump(mode="json") if self.step is not None else None,
+            "all_steps": self.all_steps,
+        }
+
+
 async def _step_plan(
-    recipe: Recipe,
+    steps: StepSelection,
     source: services.AnalysisSource,
     state: SessionState,
     step_cache: dict[str, list[dict[str, Any]]],
@@ -1217,14 +1276,14 @@ async def _step_plan(
                 lambda: parse_step_iterations(source.log),
             )
             step_cache[log_key] = step_values
-    if recipe.all_steps:
+    if steps.all_steps:
         return [
             (index, step_values[index] if index < len(step_values) else {})
             for index in range(count)
         ]
-    if recipe.step is None:
+    if steps.step is None:
         return [(0, step_values[0] if step_values else {})]
-    step_sel = recipe.step
+    step_sel = steps.step
     candidates = [
         (index, values) for index, values in enumerate(step_values) if step_sel.axis in values
     ]
@@ -1653,9 +1712,7 @@ def _samples(recipe: Recipe, records: list[Record]) -> dict[str, list[tuple[Reco
             if number is not None:
                 out.setdefault(field, []).append((record, number))
         elif isinstance(recipe, MultiRecipe):
-            field = recipe.reduce_field
-            if field is None and recipe.spec is not None:
-                field = recipe.spec.field
+            field = recipe.field
             if field:
                 actual = _MULTI_FIELDS.get(recipe.metric, {}).get(field, field)
                 number = _number(value.get(actual))
@@ -1729,7 +1786,10 @@ def _spec(
     if limits is None:
         return None
     samples_by_field = _samples(recipe, records)
-    field = limits.field or getattr(recipe, "reduce_field", None)
+    # One spelling: the recipe's own 'field' names the number both a reduction
+    # and a spec read. A scalar recipe declares none because it produces one
+    # number, so its spec falls through to that single field.
+    field = getattr(recipe, "field", None)
     if field is None and len(samples_by_field) == 1:
         field = next(iter(samples_by_field))
     samples = samples_by_field.get(field or "", [])
@@ -1812,6 +1872,7 @@ async def _evaluate_item(
     item: result_store.ResultSet,
     item_deadline: float,
     step_cache: dict[str, list[dict[str, Any]]],
+    steps: StepSelection,
 ) -> tuple[list[Record], list[Failure], list[_PendingArtifact]]:
     selected = set(recipe.sources or [run.label for run in runs])
     selected_runs = [run for run in runs if run.label in selected]
@@ -1832,7 +1893,7 @@ async def _evaluate_item(
             continue
         try:
             with services.analysis_deadline(item_deadline):
-                step_plan = await _step_plan(recipe, run.source, state, step_cache)
+                step_plan = await _step_plan(steps, run.source, state, step_cache)
                 if isinstance(recipe, PlotRecipe):
                     value, artifacts = await _plot(
                         recipe,
@@ -3032,6 +3093,7 @@ async def _evaluate_unit(
     item: result_store.ResultSet,
     item_deadline: float,
     step_cache: dict[str, list[dict[str, Any]]],
+    steps: StepSelection,
     *,
     per_run_offset: int,
     position: int,
@@ -3085,6 +3147,7 @@ async def _evaluate_unit(
         item,
         item_deadline,
         step_cache,
+        steps,
     )
     failures.extend(item_failures)
     observations.extend(_absence_observations(recipe, key, records))
@@ -3320,6 +3383,9 @@ async def _evaluate_analysis_drive(
     skipped: list[tuple[int, Failure]] = []
     observations = [Observation.of(data) for data in item.inputs.get("observations", [])]
     group_by = list(item.inputs.get("group_by", []))
+    # Read from the stored request, not from ``args``: a continuation carries
+    # no step arguments and must read the steps the first call did.
+    steps = StepSelection.from_inputs(item.inputs)
     declared_labels = {
         str(source.get("label"))
         for source in item.inputs.get("sources", [])
@@ -3424,6 +3490,7 @@ async def _evaluate_analysis_drive(
             item,
             item_deadline,
             step_cache,
+            steps,
             per_run_offset=intra_item,
             position=position,
         )

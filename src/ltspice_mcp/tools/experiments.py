@@ -51,7 +51,7 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
-from ltspice_mcp.lib.recipes import DISCRIMINANTS, Recipe, validate_recipe
+from ltspice_mcp.lib.recipes import DISCRIMINANTS, Recipe, StepSelector, validate_recipe
 from ltspice_mcp.lib.simulator import simulator_dialect, simulator_library_roots
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.lib.variations import (
@@ -273,6 +273,21 @@ class AttachedAnalysis(StrictModel):
         description=(
             "Split reductions along these dimensions: a variation assignment "
             "parameter name, 'circuit', or a .step axis name."
+        ),
+    )
+    step: StepSelector | None = Field(
+        default=None,
+        description=(
+            "For a deck carrying a .step directive: read the one step whose "
+            "axis value this names, e.g. {axis:'temp', value:27}. Applies to "
+            "every recipe here. Default is the first step."
+        ),
+    )
+    all_steps: bool = Field(
+        default=False,
+        description=(
+            "For a deck carrying a .step directive: evaluate every recipe at "
+            "every step instead of only the first. Not combinable with 'step'."
         ),
     )
     include: Annotated[
@@ -911,7 +926,10 @@ def _attached_analysis_payload(job_id: str, request: dict[str, Any]) -> dict[str
         ],
         "recipes": request.get("recipes") or [],
         "group_by": request.get("group_by") or [],
+        "all_steps": bool(request.get("all_steps")),
     }
+    if request.get("step") is not None:
+        payload["step"] = request["step"]
     include = request.get("include")
     if include is not None:
         payload["include"] = include

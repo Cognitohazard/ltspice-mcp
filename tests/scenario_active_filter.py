@@ -240,7 +240,7 @@ async def run():
                                 "metric": "bode_filter",
                                 "signal": "V(out)",
                                 "reduce": ["min", "max"],
-                                "reduce_field": "cutoff_high_hz",
+                                "field": "cutoff_high_hz",
                             }
                         ],
                         "group_by": ["R1"],
