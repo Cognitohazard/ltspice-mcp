@@ -290,8 +290,10 @@ class TestOutputSchemaCoverage:
 _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Variations, attached analysis, and the receipt row shape.
     "run_experiments": 7516,
-    # Five actions and the receipt/page shapes.
-    "jobs": 1724,
+    # Five actions, each advertised as its own branch: one flat property list
+    # could not say which action takes which field, so it said nothing and the
+    # server decided after the fact. Stating it costs roughly 2.3 KB more.
+    "jobs": 4001,
     # Twenty-odd recipe branches; the largest schema on the surface.
     "analyze_results": 16897,
     # Five query kinds, each with its own argument shape.

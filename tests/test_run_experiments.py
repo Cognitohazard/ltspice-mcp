@@ -76,9 +76,15 @@ def test_wait_caps_keep_the_submission_and_control_plane_contracts():
         run_schema["properties"]["execution"],
     )
     jobs_schema = _build_input_schema(JobsInput)
+    # The dwell cap lives on the action that takes it, so it is read through
+    # that action's branch rather than off a flat property list.
+    wait_branch = resolve_local_ref(
+        jobs_schema,
+        {"$ref": jobs_schema["discriminator"]["mapping"]["wait"]},
+    )
 
     assert execution_schema["properties"]["wait_s"]["maximum"] == 120
-    assert jobs_schema["properties"]["timeout_s"]["maximum"] == 300
+    assert wait_branch["properties"]["timeout_s"]["maximum"] == 300
 
     with pytest.raises(ValidationError) as excinfo:
         experiments_mod.ExperimentExecution.model_validate({"wait_s": 121})

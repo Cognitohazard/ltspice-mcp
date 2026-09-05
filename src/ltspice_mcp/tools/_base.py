@@ -482,7 +482,16 @@ class StrictModel(BaseModel):
 class ToolInput(StrictModel):
     """Base for top-level tool input models registered via @registry.tool(input_model=...)."""
 
-    pass
+    @classmethod
+    def wire_input_schema(cls) -> dict[str, Any]:
+        """The JSON Schema this tool advertises, before the shrinking passes.
+
+        The model's own schema, except for a tool whose arguments are a
+        top-level union: pydantic emits a bare ``oneOf`` for one of those, and
+        MCP requires an object schema at the top level. Such a model overrides
+        this to wrap its branches; ``_build_input_schema`` calls it either way.
+        """
+        return cls.model_json_schema()
 
 
 @dataclass(frozen=True)
@@ -757,7 +766,7 @@ def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
     seven shared fields. ``tests/test_consolidated_contracts.py`` pins the
     resulting size per tool.
     """
-    schema = _strip_titles(input_model.model_json_schema())
+    schema = _strip_titles(input_model.wire_input_schema())
     return _hoist_shared_fragments(_compact_type_keywords(schema))
 
 

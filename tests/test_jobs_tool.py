@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 
 import jsonschema
 import pytest
+from pydantic import ValidationError
 
 from ltspice_mcp.lib import experiment_store, now, recent
 from ltspice_mcp.lib.experiment_runner import ExperimentRunRequest
@@ -24,8 +25,10 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools._base import _build_input_schema
 from ltspice_mcp.tools.experiments import (
     _RECENT_JOBS_CAP,
+    JOBS_ACTIONS,
     JOBS_OUTPUT_SCHEMA,
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     JobsInput,
@@ -139,6 +142,245 @@ def _persist_experiment(job: ExperimentJob, work_dir: Path) -> None:
 
 def _args(action: str, **values) -> JobsInput:
     return JobsInput.model_validate({"action": action, **values})
+
+
+# ---------------------------------------------------------------------------
+# Accepted argument spellings
+# ---------------------------------------------------------------------------
+
+# Every spelling a client may send, with the values the accepted call carries.
+# The same table ran against the previous model — one 'action' string plus nine
+# optionals policed after validation by a hand-written allowed-field table —
+# and against the discriminated union that replaced it, so the union is proved
+# to accept and reject exactly what that table did. Values are asserted by
+# projection, not whole-dump equality: an action model only carries its own
+# fields, which is the point of the change.
+_ACCEPTED_JOBS_ARGUMENTS: tuple[tuple[str, dict, dict], ...] = (
+    (
+        "status-by-job-id",
+        {"action": "status", "job_id": "exp-1"},
+        {"action": "status", "job_id": "exp-1", "request_id": None, "budget": None},
+    ),
+    (
+        "status-by-request-id",
+        {"action": "status", "request_id": "req-1"},
+        {"action": "status", "job_id": None, "request_id": "req-1"},
+    ),
+    (
+        "status-with-explicit-null-alternative",
+        {"action": "status", "job_id": "exp-1", "request_id": None},
+        {"action": "status", "job_id": "exp-1", "request_id": None},
+    ),
+    (
+        "status-under-a-budget",
+        {"action": "status", "job_id": "exp-1", "budget": 900},
+        {"action": "status", "job_id": "exp-1", "budget": 900},
+    ),
+    (
+        "status-strips-surrounding-whitespace",
+        {"action": "status", "job_id": "  exp-1  "},
+        {"action": "status", "job_id": "exp-1"},
+    ),
+    (
+        "wait-defaults",
+        {"action": "wait", "job_id": "exp-1"},
+        {"action": "wait", "job_id": "exp-1", "timeout_s": 60.0, "wait_for": "all"},
+    ),
+    (
+        "wait-with-dwell-and-mode",
+        {"action": "wait", "request_id": "req-1", "timeout_s": 0, "wait_for": "runs"},
+        {"action": "wait", "request_id": "req-1", "timeout_s": 0.0, "wait_for": "runs"},
+    ),
+    (
+        "wait-at-the-cap",
+        {"action": "wait", "job_id": "exp-1", "timeout_s": 300},
+        {"action": "wait", "job_id": "exp-1", "timeout_s": 300.0},
+    ),
+    (
+        "wait-under-a-budget",
+        {"action": "wait", "job_id": "exp-1", "timeout_s": 0, "budget": 800},
+        {"action": "wait", "job_id": "exp-1", "timeout_s": 0.0, "budget": 800},
+    ),
+    (
+        "cancel-by-owner",
+        {"action": "cancel", "job_id": "exp-1"},
+        {"action": "cancel", "job_id": "exp-1", "control_token": None},
+    ),
+    (
+        "cancel-with-control-token",
+        {"action": "cancel", "request_id": "req-1", "control_token": "tok"},
+        {"action": "cancel", "request_id": "req-1", "control_token": "tok"},
+    ),
+    (
+        "list-everything-recent",
+        {"action": "list"},
+        {"action": "list", "circuit": None, "limit": 50, "cursor": None, "budget": None},
+    ),
+    (
+        "list-one-circuit",
+        {"action": "list", "circuit": "dut.cir"},
+        {"action": "list", "circuit": "dut.cir", "limit": 50},
+    ),
+    (
+        "list-paged",
+        {"action": "list", "limit": 1, "cursor": "o:1"},
+        {"action": "list", "limit": 1, "cursor": "o:1"},
+    ),
+    (
+        "list-under-a-budget",
+        {"action": "list", "budget": 700},
+        {"action": "list", "budget": 700},
+    ),
+    (
+        "runs-first-page",
+        {"action": "runs", "job_id": "exp-1"},
+        {"action": "runs", "job_id": "exp-1", "cursor": None},
+    ),
+    (
+        "runs-continued",
+        {"action": "runs", "request_id": "req-1", "cursor": "o:50"},
+        {"action": "runs", "request_id": "req-1", "cursor": "o:50"},
+    ),
+)
+
+# The spellings that are refused, and why they were refused before the union.
+_REJECTED_JOBS_ARGUMENTS: tuple[tuple[str, dict], ...] = (
+    ("unknown-action", {"action": "frobnicate", "job_id": "exp-1"}),
+    ("no-action", {"job_id": "exp-1"}),
+    ("status-without-a-selector", {"action": "status"}),
+    ("wait-without-a-selector", {"action": "wait", "timeout_s": 0}),
+    ("cancel-without-a-selector", {"action": "cancel", "control_token": "tok"}),
+    ("runs-without-a-selector", {"action": "runs"}),
+    ("status-with-both-selectors", {"action": "status", "job_id": "exp-1", "request_id": "r"}),
+    ("list-with-a-job-id", {"action": "list", "job_id": "exp-1"}),
+    ("list-with-a-request-id", {"action": "list", "request_id": "req-1"}),
+    ("list-with-a-null-job-id", {"action": "list", "job_id": None}),
+    ("status-with-a-dwell", {"action": "status", "job_id": "exp-1", "timeout_s": 5}),
+    ("status-with-the-default-dwell", {"action": "status", "job_id": "exp-1", "timeout_s": 60}),
+    ("status-with-a-cursor", {"action": "status", "job_id": "exp-1", "cursor": "o:0"}),
+    ("status-with-a-control-token", {"action": "status", "job_id": "exp-1", "control_token": "t"}),
+    ("wait-with-a-control-token", {"action": "wait", "job_id": "exp-1", "control_token": "t"}),
+    ("cancel-with-a-dwell", {"action": "cancel", "job_id": "exp-1", "timeout_s": 5}),
+    ("cancel-with-a-wait-mode", {"action": "cancel", "job_id": "exp-1", "wait_for": "runs"}),
+    ("runs-with-a-limit", {"action": "runs", "job_id": "exp-1", "limit": 5}),
+    ("runs-with-a-dwell", {"action": "runs", "job_id": "exp-1", "timeout_s": 1}),
+    ("list-with-a-control-token", {"action": "list", "control_token": "tok"}),
+    ("list-with-a-wait-mode", {"action": "list", "wait_for": "runs"}),
+    ("unknown-field", {"action": "status", "job_id": "exp-1", "verbose": True}),
+    ("empty-job-id", {"action": "status", "job_id": ""}),
+    ("empty-request-id", {"action": "status", "request_id": ""}),
+    ("dwell-past-the-cap", {"action": "wait", "job_id": "exp-1", "timeout_s": 301}),
+    ("negative-dwell", {"action": "wait", "job_id": "exp-1", "timeout_s": -1}),
+    ("unknown-wait-mode", {"action": "wait", "job_id": "exp-1", "wait_for": "cases"}),
+    ("limit-below-one", {"action": "list", "limit": 0}),
+    ("limit-past-the-page-cap", {"action": "list", "limit": 51}),
+    ("budget-below-the-floor", {"action": "status", "job_id": "exp-1", "budget": 1}),
+)
+
+
+class TestAcceptedArgumentSpellings:
+    """The advertised argument grammar, spelling by spelling."""
+
+    @pytest.mark.parametrize(
+        ("payload", "expected"),
+        [(payload, expected) for _name, payload, expected in _ACCEPTED_JOBS_ARGUMENTS],
+        ids=[name for name, _payload, _expected in _ACCEPTED_JOBS_ARGUMENTS],
+    )
+    def test_accepted_call_keeps_its_values(self, payload: dict, expected: dict):
+        dumped = JobsInput.model_validate(payload).model_dump()
+        assert {key: dumped[key] for key in expected} == expected
+
+    @pytest.mark.parametrize(
+        "payload",
+        [payload for _name, payload in _REJECTED_JOBS_ARGUMENTS],
+        ids=[name for name, _payload in _REJECTED_JOBS_ARGUMENTS],
+    )
+    def test_rejected_call_stays_rejected(self, payload: dict):
+        with pytest.raises(ValidationError):
+            JobsInput.model_validate(payload)
+
+    def test_a_missing_selector_names_both_ways_to_address_a_job(self):
+        """The message a client acts on: the e2e surface asserts this wording."""
+        with pytest.raises(ValidationError) as excinfo:
+            JobsInput.model_validate({"action": "status"})
+        assert "requires exactly one of job_id or request_id" in str(excinfo.value)
+
+    def test_an_unknown_action_names_every_action(self):
+        with pytest.raises(ValidationError) as excinfo:
+            JobsInput.model_validate({"action": "frobnicate"})
+        message = str(excinfo.value)
+        for action in ("status", "wait", "cancel", "list", "runs"):
+            assert action in message
+
+
+class TestAdvertisedActionBranches:
+    """What the published schema says each action takes.
+
+    The argument shape used to be one flat list of nine optionals with the
+    per-action rules enforced only after validation, so a client reading the
+    schema could not tell which action took which field — and the SDK, which
+    validates arguments against this schema before dispatch, could not either.
+    """
+
+    @pytest.mark.parametrize(
+        ("action", "expected"),
+        [
+            ("status", {"action", "job_id", "request_id", "budget"}),
+            ("wait", {"action", "job_id", "request_id", "timeout_s", "wait_for", "budget"}),
+            ("cancel", {"action", "job_id", "request_id", "control_token", "budget"}),
+            ("list", {"action", "circuit", "limit", "cursor", "budget"}),
+            ("runs", {"action", "job_id", "request_id", "cursor", "budget"}),
+        ],
+    )
+    def test_each_action_advertises_its_own_fields(self, action: str, expected: set[str]):
+        schema = _build_input_schema(JobsInput)
+        branch = schema["$defs"][schema["discriminator"]["mapping"][action].split("/")[-1]]
+        assert set(branch["properties"]) == expected
+        assert branch["additionalProperties"] is False
+        assert branch["properties"]["action"]["const"] == action
+
+    def test_shared_arguments_stay_at_the_top_level(self):
+        """A client that reads `properties` and stops there still sees them."""
+        schema = _build_input_schema(JobsInput)
+        assert set(schema["properties"]) == {"action", "budget"}
+        assert schema["properties"]["action"]["enum"] == list(JOBS_ACTIONS)
+        assert schema["required"] == ["action"]
+
+    @pytest.mark.parametrize(
+        ("payload", "expected"),
+        [(payload, expected) for _name, payload, expected in _ACCEPTED_JOBS_ARGUMENTS],
+        ids=[name for name, _payload, _expected in _ACCEPTED_JOBS_ARGUMENTS],
+    )
+    def test_the_schema_accepts_everything_the_validator_accepts(
+        self,
+        payload: dict,
+        expected: dict,
+    ):
+        """The advertised schema may not be stricter than the tool: the SDK
+        validates against it first, so a call it rejects never reaches the
+        handler at all."""
+        del expected
+        jsonschema.Draft202012Validator(_build_input_schema(JobsInput)).validate(payload)
+
+    def test_a_field_the_action_does_not_take_is_named_by_the_schema(self):
+        with pytest.raises(jsonschema.ValidationError) as excinfo:
+            jsonschema.validate(
+                instance={"action": "list", "job_id": "exp-1"},
+                schema=_build_input_schema(JobsInput),
+            )
+        assert "job_id" in excinfo.value.message
+
+    def test_an_unknown_action_is_told_the_five_by_the_schema(self):
+        """Branches applied by if/then rather than oneOf, so the error the SDK
+        reports is this one instead of 'not valid under any of the given
+        schemas' — which names neither the actions nor the offending field."""
+        with pytest.raises(jsonschema.ValidationError) as excinfo:
+            jsonschema.validate(
+                instance={"action": "frobnicate"},
+                schema=_build_input_schema(JobsInput),
+            )
+        for action in JOBS_ACTIONS:
+            assert action in excinfo.value.message
 
 
 def _assert_jobs_schema(result) -> dict:
