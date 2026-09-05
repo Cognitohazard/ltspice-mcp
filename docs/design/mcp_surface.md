@@ -986,9 +986,11 @@ selection is not among them; it is one call-level choice (§3.3).
 `field` is one spelling for one thing: which of a recipe's numbers a `reduce`
 or a `spec` reads. It was two — `reduce_field` beside a `spec.field` — and the
 validator demanded they agree, so the second spelling could only ever restate
-the first or be refused. A multi-field recipe requires it as soon as either
-`reduce` or `spec` is given; a keyed recipe requires it for `spec` (`reduce`
-covers every key without it); a scalar recipe takes none, having one number.
+the first or be refused. It also means one thing on every category. A
+multi-field recipe requires it as soon as either `reduce` or `spec` is given; a
+keyed recipe requires it for `spec`, and when it is given it narrows the
+`reduce` to that key too — without it, `reduce` covers every key; a scalar
+recipe takes none, having one number.
 
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|

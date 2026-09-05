@@ -225,9 +225,9 @@ class KeyedRecipe(RecipeBase):
     field: str | None = Field(
         default=None,
         description=(
-            "Which key of this recipe's map a 'spec' applies to — a .meas name, "
-            "or a bias-point quantity. Required when 'spec' is given; 'reduce' "
-            "covers every key without it."
+            "Which key of this recipe's map a 'reduce' or a 'spec' reads — a "
+            ".meas name, or a bias-point quantity. Required when 'spec' is "
+            "given; without it, 'reduce' covers every key."
         ),
     )
     spec: SpecLimits | None = None
