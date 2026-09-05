@@ -60,11 +60,11 @@ shorthand here); `device` limits the output to one device.
 `run_experiments`, `analyze_results`, `inspect` and `jobs` take `budget`, a
 response cap in estimated tokens (compact JSON chars/4, minimum 500);
 omitted, the response is unchanged. Set one when a call can return a lot
-(`per_run`, long lists). Over the cap the server drops
-presentation in a fixed order (echoes, detail opt-ins, rows as value arrays,
-smaller pages with valid cursors) and never facts: `failures`,
-`observations`, `warnings` and `completeness` arrive complete, and a
-`budget_truncated` observation says what was cut and how to get it back.
+(`per_run`, long lists). Over the cap the server drops presentation in a fixed
+order (echoes, detail opt-ins, smaller pages with valid cursors) and never
+facts: `failures`, `observations`, `warnings` and `completeness` arrive
+complete, and a `budget_truncated` observation says what was cut and how to get
+it back.
 
 ## Other notes
 
