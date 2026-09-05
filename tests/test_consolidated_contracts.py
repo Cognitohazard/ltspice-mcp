@@ -591,8 +591,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
     "jobs": 5227,
-    # Twenty-odd recipe branches; the largest schema on the surface.
-    "analyze_results": 19416,
+    # Twenty-odd recipe branches; the largest schema on the surface. The
+    # description carries the recipe roster with plain synonyms, because a host
+    # that matches a request against tool descriptions cannot otherwise route
+    # "phase margin" or "distortion" to this tool at all.
+    "analyze_results": 20080,
     # Seven query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
@@ -931,3 +934,72 @@ class TestBoundedParseBackstop:
             f"{mod}: calls a log parser {sorted(unbounded)} outside a "
             "services.bounded_parse thunk — untrusted parses need a deadline."
         )
+
+
+# Claude Code silently truncates both a tool description and the server
+# instructions at this many characters. Truncation is invisible: the client
+# shows nothing, the server logs nothing, and what is lost is the tail — which
+# on this surface is where the caveats and the recovery routes are written.
+CLIENT_TEXT_TRUNCATION_CHARS = 2048
+
+
+class TestTextFitsTheClientTruncation:
+    """No description or instruction block reaches the client half-read."""
+
+    @pytest.mark.parametrize("name", REGISTERED_TOOLS)
+    def test_tool_description_fits(self, name: str):
+        description = _registered()[name].description or ""
+        assert len(description) <= CLIENT_TEXT_TRUNCATION_CHARS, (
+            f"{name}: description is {len(description)} chars; a client truncating "
+            f"at {CLIENT_TEXT_TRUNCATION_CHARS} would silently drop the tail"
+        )
+
+    def test_the_instructions_constant_fits(self):
+        """The runtime simulator prefix is measured separately, in
+        tests/test_server.py, across every prefix shape. This pins the constant
+        itself so a text edit is caught where the text lives."""
+        from ltspice_mcp.server import CONSOLIDATED_INSTRUCTIONS
+
+        assert len(CONSOLIDATED_INSTRUCTIONS) <= CLIENT_TEXT_TRUNCATION_CHARS
+
+
+class TestAnalyzeDescriptionNamesEveryRecipe:
+    """A host that routes on tool descriptions can only find a metric the
+    description names.
+
+    ``analyze_results`` answers twenty-one different questions behind one name,
+    and the compact tool listing strips the per-branch schema prose, so this
+    text is the only place the metric names appear. A recipe added to the union
+    without joining the roster is a capability nothing can route to — which is
+    why this is derived from the live discriminants rather than from a list.
+    """
+
+    def test_every_discriminant_appears_in_the_description(self):
+        description = _registered()["analyze_results"].description or ""
+        missing = [metric for metric in DISCRIMINANTS if metric not in description]
+        assert not missing, (
+            f"analyze_results' description does not name {', '.join(missing)}; add "
+            "each with the plain words a caller would search for"
+        )
+
+    def test_the_plain_synonyms_that_route_to_this_tool_are_present(self):
+        """A sample of the words a caller types instead of a discriminant. They
+        are what makes description-matching reach the right tool at all."""
+        description = (_registered()["analyze_results"].description or "").lower()
+        for phrase in (
+            "phase margin",
+            "gain margin",
+            "distortion",
+            "bias point",
+            "rise/fall time",
+            "propagation delay",
+            "overshoot",
+            "duty cycle",
+            "vswr",
+            "bandwidth",
+        ):
+            assert phrase in description, f"the roster no longer names {phrase!r}"
+
+    def test_it_points_at_the_reference_lookup(self):
+        description = _registered()["analyze_results"].description or ""
+        assert "inspect(kind='reference'" in description

@@ -3583,7 +3583,23 @@ async def capture_attached_analysis(
         "and many metrics, so batch them instead of calling per metric. Work is "
         "bounded by a compute budget; a partial response returns a result_set_id "
         "and cursor to resume with 'continue'. On a wide sweep set include.fields "
-        "to return only the numbers you need."
+        "to return only the numbers you need. "
+        # The recipe roster, with the plain words a caller searches for. A host
+        # matching a request against tool descriptions sees only this text, so a
+        # metric absent from it is a metric nothing can route to; and the
+        # compact listing strips the per-branch schema prose, which leaves this
+        # as the only place the names appear at all.
+        # tests/test_consolidated_contracts.py pins every discriminant here.
+        "Recipes: stability (phase margin, gain margin, unity-gain crossover, DC "
+        "gain), bode_filter (cutoff, bandwidth, Q), bode_point, bode_slope "
+        "(dB/decade), bode_crossing, ac_structure (poles, zeros), resonance, "
+        "return_loss (VSWR), thd (distortion), noise_integral, signal_stats (RMS, "
+        "ripple, peak-to-peak), edges (rise/fall time), timing (propagation "
+        "delay), periodic (duty cycle), transient_response (overshoot, settling, "
+        "load step), operating_point (bias point, gm/gds/vth), measurements "
+        "(.meas), value (one expression), summary, waveform (samples, CSV), plot "
+        "(chart). inspect(kind='reference', query=...) searches these by plain "
+        "words and returns a recipe's fields."
     ),
     input_model=AnalyzeResultsInput,
     annotations=types.ToolAnnotations(
