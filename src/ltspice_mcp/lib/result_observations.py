@@ -599,11 +599,9 @@ def surface_observations(
 ) -> list[Observation]:
     """Assemble the full observation list for a result summary.
 
-    ``value_scan`` is the caller's explicit coverage decision:
-    - ``"scan"``    — ``value_traces`` were loaded; scan them.
-    - ``"skipped_large"`` — traces were not loaded (bounded success path);
-      surface a coverage observation so the gap is visible.
-    - ``"off"``     — value surfacing not applicable for this caller.
+    ``value_scan`` is the caller's explicit decision about value surfacing:
+    - ``"scan"`` — ``value_traces`` were loaded; scan them.
+    - ``"off"``  — value surfacing not applicable for this caller.
 
     ``source_amplitudes`` (from ``parse_source_amplitudes``) arms the
     source-relative ``extreme_value`` trigger for real-valued analyses.
@@ -626,19 +624,4 @@ def surface_observations(
             if sim_type.startswith("transient") or sim_type.startswith("operating"):
                 source_reference = max(source_amplitudes.items(), key=lambda kv: kv[1])
         obs.extend(value_observations(value_traces, source_reference=source_reference))
-    elif value_scan == "skipped_large":
-        obs.append(
-            {
-                "code": "value_scan_skipped",
-                "kind": "coverage",
-                "detail": (
-                    "Result is too large to scan (trace samples exceed the value-scan "
-                    "budget); traces were not scanned for NaN/Inf or extreme values. "
-                    "Inspect specific signals with the analyze_results "
-                    "'signal_stats' or 'value' recipes if a degenerate result "
-                    "is suspected."
-                ),
-                "evidence": {"point_count": summary.get("point_count")},
-            }
-        )
     return obs

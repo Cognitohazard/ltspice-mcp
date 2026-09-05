@@ -688,9 +688,9 @@ def build_simulation_summary(
         requested: Parsed ``.meas``/``.four`` names from the deck, for the
             requested-vs-produced reconciliation in the observation surfacer.
             None when the caller has no netlist (skips reconciliation).
-        value_scan: Coverage decision for value surfacing — ``"scan"`` (this
-            ``raw`` has traces loaded; scan them), ``"skipped_large"`` (traces
-            not loaded; surface the coverage gap), or ``"off"``.
+        value_scan: Whether to surface value facts — ``"scan"`` (this ``raw``
+            has its traces loaded; scan them for non-finite and extreme values)
+            or ``"off"`` (value surfacing does not apply to this caller).
         source_amplitudes: Parsed independent voltage-source amplitudes from
             the deck (``parse_source_amplitudes``); arms the source-relative
             extreme-value observation. None when the caller has no netlist.
@@ -914,8 +914,7 @@ def build_simulation_summary(
 
     # Surface observations (a "surfacer", not a "judger" — see
     # ``result_observations``). Always present, possibly empty. Value traces are
-    # extracted here only when the caller signalled they're loaded; on the
-    # bounded success path they are not, and the surfacer records that gap.
+    # extracted here only when the caller signalled they're loaded.
     value_traces: dict | None = None
     if value_scan == "scan":
         # The sweep axis (time / frequency / DC source) is trace 0 and isn't a
