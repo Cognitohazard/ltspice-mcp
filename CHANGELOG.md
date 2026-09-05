@@ -148,6 +148,29 @@ key is deleted in 0.7.0. Serving zero tools is still a hard error.
 
 ### Added
 
+- `verify_circuit`'s `quality` check runs on a `.cir`/`.net`/`.sp` netlist,
+  not only on a schematic. Three connectivity rules that had been written but
+  never called report as findings: a node wired to a single element terminal
+  (`dangling_node`, an observation — a bias fragment or a test stub leaves
+  nodes open on purpose), a `V(...)`/`I(...)` reference in a directive naming
+  something no element declares (`undefined_reference`, a warning — the
+  unlabelled net that exports as `N00x` while the `.meas` still asks for
+  `V(vref)` and measures nothing), and a net with two or more terminals that
+  reaches ground through no DC-conductive element (`floating_net`, a warning —
+  its operating point is undefined). The default check set for a netlist is
+  `syntax` and `quality`; pass `checks` to narrow it.
+- A run that fails because the simulator could not open an `.include` or
+  `.lib` reports the failure code `missing_include` instead of the generic
+  `execution_failed`, with the file it could not find as evidence. When that
+  deck selects a `.lib` section and the run was ngspice in an LTspice or
+  PSPICE compatibility `ngbehavior`, the code is `ngspice_lib_section` and the
+  receipt's hint names the fix: `[simulator] ngbehavior = "hsa"` (or
+  `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart, or `set ngbehavior=hsa` in a
+  `.spiceinit` in the run directory. Those modes read `.lib <file> <section>`
+  — the standard PDK corner idiom — as two plain includes and drop the
+  section, so the corner select came back as a missing file with nothing
+  pointing at the cause.
+
 - `inspect(kind="capabilities")` reports `diagnostics`: the startup notes (a
   bad configured simulator path, a requested engine that fell back, WSL
   auto-detection) that say whether the server started degraded. They were
