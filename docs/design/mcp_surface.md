@@ -713,7 +713,7 @@ names and descriptions — nothing there can lead it from "phase margin" to the
 with plain synonyms for exactly that reason, but a roster cannot also carry
 each branch's fields; `reference` is where those live, and it is the only route
 to them at all on the `compact` listing. The index is built by walking the same
-input models the wire validates against (`lib/reference_index.py`), so a branch
+input models the wire validates against (`tools/reference_index.py`), so a branch
 cannot be missing from it; only the one-line summary for a model with no
 docstring and the plain words a person types instead of a discriminant are
 written by hand, and both are checked for completeness against the live unions.
