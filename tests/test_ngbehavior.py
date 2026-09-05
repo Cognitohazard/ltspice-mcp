@@ -1,13 +1,14 @@
-"""ngspice ngbehavior override + the sectioned-.lib failure hint.
+"""The ngspice ngbehavior override.
 
-The override changes a process-wide spicelib class attribute
+It changes a process-wide spicelib class attribute
 (``NGspiceSimulator._compatibility_mode``), so every test saves and restores it.
+The sectioned-.lib failure it exists for is covered where the failure is
+classified: ``tests/test_log_parser.py`` and ``tests/test_run_experiments.py``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
@@ -51,9 +52,3 @@ class TestApplyNgbehavior:
         assert current_ngbehavior() == "hsa"
         _apply_ngbehavior(unset)
         assert current_ngbehavior() == _SPICELIB_DEFAULT_NGBEHAVIOR
-
-
-def _write_deck(tmp_path: Path, body: str) -> Path:
-    deck = tmp_path / "deck.cir"
-    deck.write_text(body)
-    return deck
