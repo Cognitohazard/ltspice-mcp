@@ -18,6 +18,7 @@ from pydantic import (
     ValidatorFunctionWrapHandler,
     field_serializer,
     field_validator,
+    model_validator,
 )
 
 from ltspice_mcp.errors import (
@@ -304,6 +305,15 @@ class AttachedAnalysis(StrictModel):
             "a bare list of flag names switches them on."
         ),
     )
+
+    @model_validator(mode="after")
+    def _one_step_selection(self) -> AttachedAnalysis:
+        # The same rule analyze_results states, enforced by the model that
+        # advertises it rather than only by the pre-flight that re-validates
+        # the expanded payload one call site away.
+        if self.step is not None and self.all_steps:
+            raise ValueError("'step' and 'all_steps=true' are mutually exclusive")
+        return self
 
     @field_serializer("recipes")
     def _serialize_recipes(self, recipes: list[Any]) -> list[Any]:
