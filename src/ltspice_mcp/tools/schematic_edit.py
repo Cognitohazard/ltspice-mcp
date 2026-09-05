@@ -9,11 +9,10 @@ first turns a stale ``expected_sha256`` into a ``revision_conflict`` with nothin
 written.
 
 The op models and their in-place applier are reused verbatim from
-``lib/schematic_ops.py`` (the shipped ``apply_schematic_ops`` machinery).
-Post-commit, an optional
-``reference`` stage exports the committed sheet on a COPY and compares it to a
-reference netlist through the connectivity graph engine; a mismatch or an export
-failure there is reported but never un-commits the sheet.
+``lib/schematic_ops.py``. Post-commit, an optional compare stage exports the
+committed sheet on a COPY and compares it to a reference netlist through the
+connectivity graph engine; a mismatch or an export failure there is reported
+but never un-commits the sheet.
 """
 
 # The op models, the in-place applier and the net-partition helpers are the

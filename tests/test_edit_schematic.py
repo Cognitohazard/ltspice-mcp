@@ -2,10 +2,11 @@
 
 Covers the revision guard (sha match / mismatch / missing), the commit protocol
 (staged write + rename-last, with crash injection before and after the rename),
-the parity of a base:"blank" build against create_schematic + apply_schematic_ops,
-the wiring metric + paginated pin_legend / label_only_pins views, the SVG/PNG
-render view (present and forced-absent raster), the post-commit reference stage
-(success / mismatch / export failure), and an archetype-scale blank build.
+a base:"blank" build reaching the same sheet as the same ops applied to an
+existing one, the wiring metric and the paginated touched / pin_legend /
+label_only_pins views, the refusal of every spelling of a render this tool no
+longer has, the post-commit compare stage (success / mismatch / export
+failure), and an archetype-scale blank build.
 """
 
 from __future__ import annotations
