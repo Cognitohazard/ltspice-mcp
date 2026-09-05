@@ -39,7 +39,7 @@ _OPS_ADAPTER = TypeAdapter(list[se.ConsolidatedOp])
 
 
 def _assert_schema(result) -> dict:
-    data = result.structuredContent
+    data = result.structured_content
     assert data is not None
     jsonschema.Draft202012Validator(se._OUTPUT_SCHEMA).validate(data)
     return data
@@ -252,7 +252,7 @@ async def test_first_edit_commits_with_the_digest_inspect_reported(asc_state, wo
             ),
             asc_state,
         )
-    ).structuredContent["results"]
+    ).structured_content["results"]
 
     committed = _assert_schema(
         await handle_edit_schematic(
@@ -462,7 +462,7 @@ def test_connect_absent_from_input_schema():
     reg = next(r for r in registry._registered if r.definition.name == "edit_schematic")
     import json
 
-    schema_text = json.dumps(reg.definition.inputSchema)
+    schema_text = json.dumps(reg.definition.input_schema)
     # No op literal "connect" anywhere in the schema (description prose aside).
     assert '"connect"' not in schema_text
     assert "wire_pins" in schema_text

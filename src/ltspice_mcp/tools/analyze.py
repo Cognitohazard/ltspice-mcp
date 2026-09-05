@@ -3603,10 +3603,10 @@ async def capture_attached_analysis(
     ),
     input_model=AnalyzeResultsInput,
     annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
     ),
     output_schema=OUTPUT_SCHEMA,
 )

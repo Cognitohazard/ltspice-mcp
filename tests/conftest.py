@@ -151,7 +151,7 @@ async def terminal_experiment(state, payload: dict, *, wait_timeout_s: int = 120
     )
 
     result = await handle_run_experiments(RunExperimentsInput.model_validate(payload), state)
-    data = result.structuredContent
+    data = result.structured_content
     assert data is not None, result.content[0].text
     if data["outcome"] == "in_progress":
         waited = await handle_jobs(
@@ -160,7 +160,7 @@ async def terminal_experiment(state, payload: dict, *, wait_timeout_s: int = 120
             ),
             state,
         )
-        data = waited.structuredContent
+        data = waited.structured_content
         assert data is not None
     assert not data.get("timed_out"), f"job {data.get('job_id')} never went terminal: {data}"
     return data
@@ -430,6 +430,8 @@ def make_experiment_job(
 class _FakeSession:
     """Stub MCP session — log/progress calls are no-ops."""
 
+    client_capabilities = None
+
     async def send_log_message(self, **kwargs):
         pass
 
@@ -437,19 +439,42 @@ class _FakeSession:
         pass
 
 
-class _FakeRequestContext:
-    def __init__(self, state: SessionState):
-        self.lifespan_context = {"state": state}
-        self.session = _FakeSession()
-        self.meta = None
+def fake_request_context(state: SessionState, method: str = "tools/call"):
+    """The per-request context a dispatch-level test drives a handler with.
+
+    A real ``ServerRequestContext`` around a stub session, so the handlers run
+    against a plain SessionState without a live connection.
+    """
+    from typing import cast
+
+    from mcp.server.context import ServerRequestContext
+    from mcp.server.session import ServerSession
+    from mcp.types.version import LATEST_HANDSHAKE_VERSION
+
+    return ServerRequestContext(
+        session=cast(ServerSession, _FakeSession()),
+        lifespan_context={"state": state},
+        protocol_version=LATEST_HANDSHAKE_VERSION,
+        method=method,
+    )
 
 
-class _FakeServer:
-    """Stands in for the module-level MCP server so dispatch-level tests can
-    drive call_tool/read_resource against a plain SessionState."""
+def call_tool_params(name: str, arguments: dict | None = None):
+    """The ``tools/call`` params a dispatch-level test hands to ``call_tool``."""
+    from mcp import types
 
-    def __init__(self, state: SessionState):
-        self.request_context = _FakeRequestContext(state)
+    return types.CallToolRequestParams(name=name, arguments=arguments)
+
+
+def tool_text(result) -> str:
+    """The text channel of a tool result — the message a failing call carries."""
+    from mcp import types
+
+    first = result.content[0]
+    assert isinstance(first, types.TextContent), (
+        f"expected a text content block, got {type(first).__name__}"
+    )
+    return first.text
 
 
 @pytest.fixture
@@ -639,7 +664,7 @@ def _enforce_output_schema_conformance():
                 contracts[code] = (obj.__name__, jsonschema.Draft202012Validator(schema))
 
     def _validate(result) -> None:
-        sc = result.structuredContent
+        sc = result.structured_content
         if sc is None:
             return
         # 0=_validate, 1=checked_* wrapper, 2=the wrapper's caller.

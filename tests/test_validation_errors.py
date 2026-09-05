@@ -1,7 +1,5 @@
 """Validation failures stay compact and point to the right tool surface."""
 
-from unittest.mock import patch
-
 import pytest
 from pydantic import ValidationError
 
@@ -13,7 +11,7 @@ from ltspice_mcp.tools.experiments import (
     RunExperimentsInput,
     handle_run_experiments,
 )
-from tests.conftest import _FakeServer, fake_simulator
+from tests.conftest import call_tool_params, fake_request_context, fake_simulator, tool_text
 
 
 @pytest.mark.asyncio
@@ -47,9 +45,9 @@ async def test_malformed_attached_recipe_error_is_compact(
 
     result = await handle_run_experiments(args, state_with_sim)
 
-    assert result.isError
-    assert result.structuredContent is not None
-    message = result.structuredContent["error"]["message"]
+    assert result.is_error
+    assert result.structured_content is not None
+    message = result.structured_content["error"]["message"]
     assert len(message) < 400
     assert "Field required" in message
     assert "https://" not in message
@@ -81,13 +79,12 @@ async def test_top_level_budget_refers_to_accepting_tools(config):
         "budget": 500,
     }
 
-    with (
-        patch("ltspice_mcp.server.server", _FakeServer(state)),
-        pytest.raises(ValueError, match="Invalid arguments") as excinfo,
-    ):
-        await call_tool("verify_circuit", arguments)
+    result = await call_tool(
+        fake_request_context(state), call_tool_params("verify_circuit", arguments)
+    )
 
-    message = str(excinfo.value)
+    assert result.is_error
+    message = tool_text(result)
     # The field, and every tool the referral must send the caller to.
     assert "'budget'" in message
     for tool in ("analyze_results", "inspect", "jobs", "run_experiments"):
@@ -104,13 +101,12 @@ async def test_top_level_continue_alias_refers_to_analyze_results(config):
         "continue": {"cursor": "opaque"},
     }
 
-    with (
-        patch("ltspice_mcp.server.server", _FakeServer(state)),
-        pytest.raises(ValueError, match="Invalid arguments") as excinfo,
-    ):
-        await call_tool("run_experiments", arguments)
+    result = await call_tool(
+        fake_request_context(state), call_tool_params("run_experiments", arguments)
+    )
 
-    message = str(excinfo.value)
+    assert result.is_error
+    message = tool_text(result)
     # One tool takes it, so the referral names that one and no other.
     assert "'continue'" in message
     assert "analyze_results" in message
@@ -127,13 +123,12 @@ async def test_nested_extra_field_has_no_cross_tool_referral(config):
         "circuits": [{"path": "dut.cir", "budget": 500}],
     }
 
-    with (
-        patch("ltspice_mcp.server.server", _FakeServer(state)),
-        pytest.raises(ValueError, match="Invalid arguments") as excinfo,
-    ):
-        await call_tool("run_experiments", arguments)
+    result = await call_tool(
+        fake_request_context(state), call_tool_params("run_experiments", arguments)
+    )
 
-    message = str(excinfo.value)
+    assert result.is_error
+    message = tool_text(result)
     assert "circuits.0.budget" in message
     assert "is accepted by" not in message
 

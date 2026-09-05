@@ -88,7 +88,7 @@ async def _analyze(state: SessionState, job_id: str, recipes: list[dict], **kw) 
         ),
         state,
     )
-    data = result.structuredContent
+    data = result.structured_content
     assert data is not None, result.content[0].text
     return data
 
@@ -204,7 +204,7 @@ async def test_sweep_full_stack_analytic_values(ngspice_state: SessionState, wor
         ),
         ngspice_state,
     )
-    ssc = single.structuredContent
+    ssc = single.structured_content
     assert ssc is not None
     assert ssc["coverage"]["runs_analyzed"] == 1
     only = ssc["results"]["vout"]["values"][0]["value"]
@@ -272,7 +272,7 @@ async def test_montecarlo_without_meas_reports_no_measurements(
         ),
         ngspice_state,
     )
-    data = result.structuredContent
+    data = result.structured_content
     assert data is not None
     assert data["coverage"]["runs_analyzed"] == 3
 
@@ -523,7 +523,7 @@ async def test_job_status_reports_result_files_that_exist(
     status = await handle_jobs(
         JobsInput.model_validate({"action": "status", "job_id": receipt["job_id"]}), ngspice_state
     )
-    data = status.structuredContent
+    data = status.structured_content
     assert data is not None
     assert data["job_id"] == receipt["job_id"]
     assert data["status"] == "completed"

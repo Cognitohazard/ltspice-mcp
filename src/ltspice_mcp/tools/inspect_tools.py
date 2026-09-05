@@ -1135,7 +1135,7 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
     digest = await _asc_digest(path)
     trace_input = _trace_input_for(q.path, q.at)
     trace = await handle_trace_net(trace_input, state)
-    tdata = trace.structuredContent or {}
+    tdata = trace.structured_content or {}
     pins = list(tdata.get("pins", []))
     coords = list(tdata.get("coordinates", []))
 

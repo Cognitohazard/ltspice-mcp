@@ -19,12 +19,10 @@ import sys
 import textwrap
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import timedelta
 from pathlib import Path
 
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
-from pydantic import AnyUrl
 
 from tests.conftest import FIXTURES_DIR
 
@@ -32,7 +30,7 @@ from tests.conftest import FIXTURES_DIR
 # Helpers
 # ---------------------------------------------------------------------------
 
-TOOL_TIMEOUT = timedelta(seconds=20)
+TOOL_TIMEOUT = 20.0
 
 SYMBOL_FIXTURES = FIXTURES_DIR / "symbols"
 
@@ -104,7 +102,7 @@ async def mcp_session(work_dir: Path) -> AsyncIterator[ClientSession]:
         ClientSession(read_stream, write_stream) as session,
     ):
         init = await session.initialize()
-        assert init.serverInfo.name == "ltspice-mcp"
+        assert init.server_info.name == "ltspice-mcp"
         yield session
 
 
@@ -115,8 +113,8 @@ def _text(result) -> str:
 
 def _data(result) -> dict:
     """Extract structuredContent, asserting the tool actually emitted one."""
-    assert result.structuredContent is not None, f"no structuredContent: {_text(result)[:200]}"
-    return result.structuredContent
+    assert result.structured_content is not None, f"no structuredContent: {_text(result)[:200]}"
+    return result.structured_content
 
 
 def _call(session, name, args=None):
@@ -125,12 +123,13 @@ def _call(session, name, args=None):
 
 
 def _assert_tool_error(result, expected_substring: str):
-    """Assert the tool returned an error with isError=True containing expected_substring.
+    """Assert the tool returned an error with is_error=True containing expected_substring.
 
-    All tool errors (LTSpiceMCPError, ValueError) propagate to the MCP SDK,
-    which wraps them in CallToolResult(isError=True).
+    Every tool failure — a rejected argument, a sandbox violation, an
+    unexpected exception — comes back in the result with is_error set, not as
+    a JSON-RPC error, so the calling model can read it and correct itself.
     """
-    assert result.isError, f"Expected isError=True but got success: {_text(result)[:200]}"
+    assert result.is_error, f"Expected is_error=True but got success: {_text(result)[:200]}"
     text = _text(result)
     assert expected_substring.lower() in text.lower(), (
         f"Expected '{expected_substring}' in error text: {text[:200]}"
@@ -165,7 +164,7 @@ DIVIDER_OPS = [
 class TestServerLifecycle:
     async def test_initialize_reports_capabilities(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            caps = session.get_server_capabilities()
+            caps = session.server_capabilities
             assert caps is not None
             assert caps.tools is not None
             assert caps.resources is not None
@@ -182,7 +181,7 @@ class TestServerLifecycle:
             ClientSession(read_stream, write_stream) as session,
         ):
             init = await session.initialize()
-            assert init.serverInfo.version == pkg_version("ltspice-mcp")
+            assert init.server_info.version == pkg_version("ltspice-mcp")
             # Detection is disabled in this harness -> the no-simulator line.
             assert init.instructions is not None
             assert "No SPICE simulator detected" in init.instructions
@@ -198,7 +197,7 @@ class TestServerLifecycle:
             ClientSession(read_stream, write_stream) as session,
         ):
             init = await session.initialize()
-            assert init.serverInfo.name == "circuit-mcp"
+            assert init.server_info.name == "circuit-mcp"
 
     async def test_config_written_lazily_on_first_tool_call(self, tmp_path):
         # The server boots in whatever directory the MCP client launched it
@@ -280,7 +279,7 @@ class TestSchematicTools:
                 "edit_schematic",
                 {"target": "divider.asc", "base": "blank", "ops": DIVIDER_OPS},
             )
-            assert not result.isError, _text(result)
+            assert not result.is_error, _text(result)
             data = _data(result)
             assert data["outcome"] == "complete"
             assert data["commit_state"] == "committed"
@@ -388,7 +387,7 @@ class TestSchematicTools:
                 {"target": "checked.asc", "base": "blank", "ops": DIVIDER_OPS},
             )
             result = await _call(session, "verify_circuit", {"path": "checked.asc"})
-            assert not result.isError, _text(result)
+            assert not result.is_error, _text(result)
             data = _data(result)
             assert data["kind"] == "asc"
             assert "symbols" in data["checks_run"]
@@ -405,7 +404,7 @@ class TestSchematicTools:
         (tmp_path / "rc.cir").write_text(RC_NETLIST)
         async with mcp_session(tmp_path) as session:
             result = await _call(session, "verify_circuit", {"path": "rc.cir"})
-            assert not result.isError, _text(result)
+            assert not result.is_error, _text(result)
             data = _data(result)
             assert data["kind"] == "netlist"
             assert data["checks_run"] == ["syntax", "quality"]
@@ -492,7 +491,7 @@ class TestSimulationDegraded:
     async def test_jobs_list_empty(self, tmp_path):
         async with mcp_session(tmp_path) as session:
             result = await _call(session, "jobs", {"action": "list"})
-            assert not result.isError
+            assert not result.is_error
             data = _data(result)
             assert data["action"] == "list"
             assert data["outcome"] == "complete"
@@ -538,7 +537,7 @@ class TestAnalysisDegraded:
                     "recipes": [{"key": "s", "metric": "summary"}],
                 },
             )
-            assert not result.isError
+            assert not result.is_error
             data = _data(result)
             assert data["outcome"] == "failed"
             assert data["coverage"]["runs_analyzed"] == 0
@@ -573,7 +572,7 @@ class TestInspectCapabilities:
     async def test_capabilities_reports_degraded_simulator_state(self, tmp_path):
         async with mcp_session(tmp_path) as session:
             result = await _call(session, "inspect", {"queries": [{"kind": "capabilities"}]})
-            assert not result.isError, _text(result)
+            assert not result.is_error, _text(result)
             data = _data(result)
             assert data["ok_count"] == 1
             caps = data["results"][0]["data"]
@@ -622,21 +621,21 @@ class TestResources:
     async def test_list_resource_templates_returns_three(self, tmp_path):
         async with mcp_session(tmp_path) as session:
             result = await session.list_resource_templates()
-            templates = {t.name for t in result.resourceTemplates}
+            templates = {t.name for t in result.resource_templates}
             assert templates == {"netlist_content", "job_signals", "job_measurements"}
 
     async def test_read_ui_widget_resource_over_protocol(self, tmp_path):
         # The MCP Apps renderer is served under the ui:// scheme — exercise the
-        # full SDK read path (AnyUrl parsing of a non-ltspice scheme) end to end.
+        # full SDK read path for a non-ltspice scheme end to end.
         async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("ui://ltspice-mcp/plot"))
+            result = await session.read_resource("ui://ltspice-mcp/plot")
             entry = result.contents[0]
-            assert entry.mimeType == "text/html;profile=mcp-app"
+            assert entry.mime_type == "text/html;profile=mcp-app"
             assert "globalThis.ExtApps" in entry.text  # type: ignore[union-attr]
 
     async def test_read_config_resource_has_correct_fields(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("spice://config"))
+            result = await session.read_resource("spice://config")
             data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
             assert data["working_dir"] == str(tmp_path)
             assert isinstance(data["allowed_paths"], list)
@@ -650,7 +649,7 @@ class TestResources:
         (tmp_path / "circuit.cir").write_text("* Test\nR1 a b 1k\n.END\n")
         (tmp_path / "notes.txt").write_text("not a netlist")
         async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("spice://netlists/"))
+            result = await session.read_resource("spice://netlists/")
             data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
             names = [n["name"] for n in data["netlists"]]
             assert "circuit.cir" in names
@@ -662,19 +661,19 @@ class TestResources:
         netlist_text = "* My Circuit\nR1 a b 1k\nC1 b 0 10n\n.END\n"
         (tmp_path / "mycirc.cir").write_text(netlist_text)
         async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("spice://netlists/mycirc.cir"))
+            result = await session.read_resource("spice://netlists/mycirc.cir")
             content = result.contents[0].text  # type: ignore[union-attr]
             assert content == netlist_text
 
     async def test_read_results_empty(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("spice://results/"))
+            result = await session.read_resource("spice://results/")
             data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
             assert data == {"count": 0, "jobs": []}
 
     async def test_read_models_empty(self, tmp_path):
         async with mcp_session(tmp_path) as session:
-            result = await session.read_resource(AnyUrl("spice://models/"))
+            result = await session.read_resource("spice://models/")
             data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
             assert data["libraries"] == []
 
@@ -688,15 +687,15 @@ class TestErrorHandling:
     async def test_unknown_tool_returns_error(self, tmp_path):
         async with mcp_session(tmp_path) as session:
             result = await _call(session, "totally_fake_tool", {})
-            assert result.isError
+            assert result.is_error
             assert "Unknown tool: totally_fake_tool" in _text(result)
 
     async def test_missing_required_arg_returns_validation_error(self, tmp_path):
         async with mcp_session(tmp_path) as session:
             result = await _call(session, "run_experiments", {"request_id": "e2e-no-circuits"})
-            assert result.isError  # SDK-level schema validation
+            assert result.is_error
             text = _text(result)
-            assert text.startswith("Input validation error:")
+            assert text.startswith("Invalid arguments for run_experiments:")
             assert "circuits" in text
 
     async def test_unknown_op_kind_rejected_by_schema(self, tmp_path):
@@ -706,16 +705,16 @@ class TestErrorHandling:
                 "edit_schematic",
                 {"target": "bad.asc", "base": "blank", "ops": [{"op": "not_an_op"}]},
             )
-            assert result.isError
-            assert _text(result).startswith("Input validation error:")
+            assert result.is_error
+            assert _text(result).startswith("Invalid arguments for edit_schematic:")
             assert not (tmp_path / "bad.asc").exists()
 
     async def test_unknown_jobs_action_names_the_legal_set(self, tmp_path):
         async with mcp_session(tmp_path) as session:
             result = await _call(session, "jobs", {"action": "frobnicate"})
-            assert result.isError
+            assert result.is_error
             text = _text(result)
-            assert text.startswith("Input validation error:")
+            assert text.startswith("Invalid arguments for jobs:")
             for action in ("status", "wait", "cancel", "list", "runs"):
                 assert action in text
 

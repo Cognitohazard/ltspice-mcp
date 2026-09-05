@@ -43,8 +43,8 @@ def _data_blob(html: str) -> dict:
 async def _plot(state: SessionState, **kwargs) -> dict:
     kwargs.setdefault("open", False)
     result = await handle_plot_waveform(PlotWaveformInput(**kwargs), state)
-    assert result.structuredContent is not None
-    return result.structuredContent
+    assert result.structured_content is not None
+    return result.structured_content
 
 
 # --- pure helpers ----------------------------------------------------------
@@ -605,9 +605,9 @@ class TestWidgetDelivery:
         assert spec is not None and spec["bode"] is False
         assert not any(isinstance(c, types.EmbeddedResource) for c in result.content)
         # The full-fidelity HTML file is still written.
-        assert "uPlot" in _read(Path(result.structuredContent["path"]))
+        assert "uPlot" in _read(Path(result.structured_content["path"]))
 
-        sc = result.structuredContent
+        sc = result.structured_content
         assert sc["delivery"] == "ui"
         assert sc["opened"] is False
         assert any(o["code"] == "widget_delivered" for o in sc["observations"])
@@ -663,10 +663,10 @@ class TestWidgetDelivery:
             PlotWaveformInput(raw_file=str(raw), signals=["V(out)"], open=True), state_no_sim
         )
         assert _widget_spec(result) is None  # no widget
-        assert result.structuredContent["delivery"] == "terminal"  # fell back
+        assert result.structured_content["delivery"] == "terminal"  # fell back
         assert opens  # opened locally instead
         assert any(
-            o["code"] == "widget_unavailable" for o in result.structuredContent["observations"]
+            o["code"] == "widget_unavailable" for o in result.structured_content["observations"]
         )
 
     async def test_terminal_host_no_widget(
@@ -680,7 +680,7 @@ class TestWidgetDelivery:
         assert _widget_spec(result) is None
         assert result.meta is None
         assert not any(isinstance(c, types.EmbeddedResource) for c in result.content)
-        assert result.structuredContent["delivery"] == "terminal"
+        assert result.structured_content["delivery"] == "terminal"
 
 
 class TestWidgetTemplateAndResource:
@@ -713,7 +713,7 @@ class TestWidgetTemplateAndResource:
 
         result = handle_read_resource(WIDGET_RESOURCE_URI, state_no_sim)
         entry = result.contents[0]
-        assert entry.mimeType == "text/html;profile=mcp-app"
+        assert entry.mime_type == "text/html;profile=mcp-app"
         assert "globalThis.ExtApps" in getattr(entry, "text", "")
 
     def test_widget_resource_is_listed(self):

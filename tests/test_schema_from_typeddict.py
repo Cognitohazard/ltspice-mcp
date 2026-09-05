@@ -335,7 +335,7 @@ class TestRegisteredOutputSchemas:
         checked = 0
         for registered in dispatch.values():
             tool = registered.definition
-            if tool.outputSchema is not None:
+            if tool.output_schema is not None:
                 checked += 1
-                check(tool.outputSchema, tool.name)
+                check(tool.output_schema, tool.name)
         assert checked > 0, "no output schemas were checked — tool registration likely broken"

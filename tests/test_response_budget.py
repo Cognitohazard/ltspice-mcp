@@ -116,9 +116,9 @@ def _wide_args(raw: Path, **extra: Any) -> AnalyzeResultsInput:
 
 async def _analysis(state: SessionState, raw: Path, **extra: Any) -> dict[str, Any]:
     result = await handle_analyze_results(_wide_args(raw, **extra), state)
-    assert result.structuredContent is not None
-    jsonschema.Draft202012Validator(OUTPUT_SCHEMA).validate(result.structuredContent)
-    return result.structuredContent
+    assert result.structured_content is not None
+    jsonschema.Draft202012Validator(OUTPUT_SCHEMA).validate(result.structured_content)
+    return result.structured_content
 
 
 # The same fan-out with a spec every sample fails, so spec.fail_cases — not the
@@ -147,9 +147,9 @@ async def _spec_analysis(state: SessionState, raw: Path, **extra: Any) -> dict[s
         ),
         state,
     )
-    assert result.structuredContent is not None
-    jsonschema.Draft202012Validator(OUTPUT_SCHEMA).validate(result.structuredContent)
-    return result.structuredContent
+    assert result.structured_content is not None
+    jsonschema.Draft202012Validator(OUTPUT_SCHEMA).validate(result.structured_content)
+    return result.structured_content
 
 
 # Fractions of an undegraded response's own size, spanning a met budget down
@@ -330,8 +330,8 @@ class TestAnalysisBudget:
             }
         )
         result = await handle_analyze_results(args, state_no_sim)
-        assert result.structuredContent is not None
-        data = result.structuredContent
+        assert result.structured_content is not None
+        data = result.structured_content
         jsonschema.Draft202012Validator(OUTPUT_SCHEMA).validate(data)
         assert data["failures"], "a failing recipe's record is a fact, not presentation"
         assert data["coverage"]["runs_requested"] == 1
@@ -462,8 +462,8 @@ class TestAnalysisBudget:
             AnalyzeResultsInput.model_validate({"continue": first["next"]}),
             state_no_sim,
         )
-        assert resumed.structuredContent is not None
-        rows = resumed.structuredContent["results"]["loop"]["per_run"]["items"]
+        assert resumed.structured_content is not None
+        rows = resumed.structured_content["results"]["loop"]["per_run"]["items"]
         assert rows[0] == expected[shown], "the continuation skipped rows the page never showed"
 
     async def test_the_same_budget_gives_the_same_bytes(
@@ -593,7 +593,7 @@ async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
         ResponseBudget(response_budget.BUDGET_MIN_TOKENS),
         _run_receipt_build(rows),
     )
-    data = result.structuredContent
+    data = result.structured_content
     assert data is not None
     jsonschema.Draft202012Validator(receipts_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
     page = data["runs"]
@@ -622,9 +622,9 @@ def _batch_with_runs(state, count: int):
 
 async def _jobs(state: SessionState, **values: Any) -> dict[str, Any]:
     result = await handle_jobs(JobsInput.model_validate(values), state)
-    assert result.structuredContent is not None
-    jsonschema.Draft202012Validator(JOBS_OUTPUT_SCHEMA).validate(result.structuredContent)
-    return result.structuredContent
+    assert result.structured_content is not None
+    jsonschema.Draft202012Validator(JOBS_OUTPUT_SCHEMA).validate(result.structured_content)
+    return result.structured_content
 
 
 @pytest.mark.asyncio
@@ -700,7 +700,7 @@ class TestServerDefaultBudget:
             }
         )
         result = await handle_analyze_results(args, state_no_sim)
-        data = result.structuredContent
+        data = result.structured_content
         assert data is not None
         assert data["failures"], "a failing recipe is a fact, not presentation"
         assert data["coverage"]["runs_analyzed"] >= 1
@@ -823,8 +823,8 @@ async def _inspect(state: SessionState, queries: list[dict[str, Any]], **extra: 
     result = await handle_inspect(
         InspectInput.model_validate({"queries": queries, **extra}), state
     )
-    assert result.structuredContent is not None
-    return result.structuredContent
+    assert result.structured_content is not None
+    return result.structured_content
 
 
 def test_the_api_automatic_door_gets_no_server_default(state_no_sim: SessionState, work_dir: Path):
@@ -1053,7 +1053,7 @@ class TestRowsKeepTheirShape:
             ResponseBudget(response_budget.BUDGET_MIN_TOKENS),
             _run_receipt_build(rows),
         )
-        data = result.structuredContent
+        data = result.structured_content
         assert data is not None
         jsonschema.Draft202012Validator(receipts_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
         assert _columns_siblings(data) == []

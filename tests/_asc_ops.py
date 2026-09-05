@@ -23,7 +23,7 @@ def sha_of(path: Path) -> str:
 
 
 def _envelope(result: Any) -> dict[str, Any]:
-    data = result.structuredContent
+    data = result.structured_content
     assert data is not None, "edit_schematic must always return structuredContent"
     return dict(data)
 
@@ -264,7 +264,7 @@ async def inspect_one(state: SessionState, query: dict[str, Any]) -> dict[str, A
     from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 
     result = await handle_inspect(InspectInput.model_validate({"queries": [query]}), state)
-    data = result.structuredContent
+    data = result.structured_content
     assert data is not None
     item = data["results"][0]
     assert item["ok"], item

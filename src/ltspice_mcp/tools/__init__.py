@@ -42,7 +42,7 @@ def get_tools(
     if listing == "compact":
         tool_defs = [
             definition.model_copy(
-                update={"inputSchema": strip_argument_descriptions(definition.inputSchema)}
+                update={"input_schema": strip_argument_descriptions(definition.input_schema)}
             )
             for definition in tool_defs
         ]

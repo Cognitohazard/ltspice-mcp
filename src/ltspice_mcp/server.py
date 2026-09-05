@@ -1,19 +1,21 @@
 """MCP server instance with lifespan management and tool dispatch."""
 
 import asyncio
-import base64
 import logging
 import os
 import sys
-from collections.abc import AsyncIterator, Iterable
+import warnings
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from contextvars import ContextVar
 from typing import Any
 
 from mcp import types
+from mcp.server.caching import CacheHint
+from mcp.server.context import ServerRequestContext
 from mcp.server.lowlevel import Server
-from mcp.server.lowlevel.helper_types import ReadResourceContents
-from mcp.server.models import InitializationOptions
-from pydantic import AnyUrl, ValidationError
+from mcp.shared.exceptions import MCPDeprecationWarning, MCPError
+from pydantic import ValidationError
 
 from ltspice_mcp import __version__, prompts
 from ltspice_mcp import errors as _err
@@ -37,22 +39,25 @@ _CIRCUIT_PATH_KEYS: tuple[str, ...] = ("path", "netlist")
 
 logger = logging.getLogger(__name__)
 
-# Set by main.py to the InitializationOptions passed to server.run(), so the
-# lifespan can rewrite its instructions once simulators are detected.
-_dynamic_init_options: InitializationOptions | None = None
+# The 2026-07-28 revision deprecates the logging capability, so the SDK warns
+# both when a `logging/setLevel` handler is registered and on every log
+# notification sent. We keep serving it: clients that negotiate an earlier
+# revision still ask for it, and it is the only channel a tool has for progress
+# text. The SDK drops a notification the peer never opted into either way, so
+# the warning has nothing left to tell us — silence it once, by its message,
+# rather than at every call site.
+warnings.filterwarnings(
+    "ignore",
+    message="The logging capability is deprecated",
+    category=MCPDeprecationWarning,
+)
 
 
-def register_init_options(opts: InitializationOptions) -> None:
-    """Hand the live initialize options to the lifespan for instruction rewrite."""
-    global _dynamic_init_options
-    _dynamic_init_options = opts
-
-
-def _get_state(server_: Server) -> SessionState:
-    """Extract session state from the lifespan context."""
+def _get_state(ctx: ServerRequestContext) -> SessionState:
+    """Extract session state from the request's lifespan context."""
     try:
-        return server_.request_context.lifespan_context["state"]
-    except (AttributeError, KeyError) as e:
+        return ctx.lifespan_context["state"]
+    except (AttributeError, KeyError, TypeError) as e:
         raise RuntimeError(f"Session state not available: {e}") from e
 
 
@@ -197,15 +202,13 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
             # server doesn't litter directories where its tools are never used.
             config_source = f"{config_file} (defaults; written on first tool use)"
 
-        # Rewrite the initialize instructions to name the actually-detected
-        # simulators. main.py stashes the InitializationOptions it passed to
-        # server.run() here; lifespan startup completes before the initialize
-        # request is answered, and that request reads the same object, so the
-        # client sees the dynamic line. Falls back to the static text if unset.
-        if _dynamic_init_options is not None:
-            _dynamic_init_options.instructions = build_instructions(
-                available, state.default_simulator
-            )
+        # Name the actually-detected simulators in the server instructions.
+        # Both routes that publish them read this attribute per request — the
+        # 2026-07-28 `server/discover` handler directly, and the older
+        # `initialize` handshake through the initialization options the runner
+        # builds when it answers — so setting it here, before the first request
+        # is served, is what a client of either era reads.
+        server.instructions = build_instructions(available, state.default_simulator)
 
         logger.info("=== LTSpice MCP Server Starting ===")
         logger.info(f"Server name: {server.name}")
@@ -328,44 +331,56 @@ def build_instructions(available: dict[str, type], default: type | None) -> str:
     return f"{active}\n\n{instructions}"
 
 
-# The name is overridable so the thin alias packages (circuit-mcp, ngspice-mcp)
-# can self-identify in the handshake; it defaults to the canonical id. The env
-# var must be set before this module is imported. See packaging/aliases/.
-_SERVER_NAME = os.environ.get("LTSPICE_MCP_SERVER_NAME", "ltspice-mcp")
-server = Server(_SERVER_NAME, version=__version__, instructions=CONSOLIDATED_INSTRUCTIONS)
-server.lifespan = server_lifespan
+_client_capabilities: ContextVar[types.ClientCapabilities | None] = ContextVar(
+    "mcp_client_capabilities", default=None
+)
+"""The calling client's capabilities, bound per tool call by ``call_tool``."""
 
 
 def get_client_capabilities() -> types.ClientCapabilities | None:
-    """The connected client's capabilities, or ``None`` if unavailable.
+    """The calling client's capabilities, or ``None`` if unavailable.
 
-    Reads the live MCP session's ``initialize`` params. Returns ``None`` outside a
-    request (``LookupError``) or in stateless mode (no ``client_params``). Call
-    this from a handler coroutine — the request context is a ``ContextVar`` bound
-    to the current task and is NOT propagated into ``asyncio.to_thread`` workers.
-    Used to pick the plot delivery channel (in-chat ``ui://`` widget vs local open).
+    Bound from the live request before the tool handler runs, so it reads the
+    same value whether the client declared its capabilities in the ``initialize``
+    handshake or in a 2026-07-28 per-request envelope. ``None`` outside a tool
+    call, and when the client declared none. Used to pick the plot delivery
+    channel (in-chat ``ui://`` widget vs local open).
     """
-    try:
-        params = server.request_context.session.client_params
-    except LookupError:
-        return None
-    return params.capabilities if params is not None else None
+    return _client_capabilities.get()
 
 
-@server.list_tools()
-async def list_tools() -> list[types.Tool]:
-    """Return MCP tools filtered by the active tool profile."""
-    return _get_state(server).tool_defs
+def _tool_error(text: str) -> types.CallToolResult:
+    """A failed tool call: the message on the text channel, ``is_error`` set.
+
+    A tool that fails reports it in its result rather than as a JSON-RPC error,
+    which is what lets the calling model read the message and correct itself.
+    The SDK turned an exception into this shape for us until MCP SDK 2, which
+    raises handler exceptions to the wire instead, so we build it here.
+    """
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=text)],
+        is_error=True,
+    )
 
 
-@server.call_tool()
-async def call_tool(name: str, arguments: dict | None):
+async def list_tools(
+    ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
+) -> types.ListToolsResult:
+    """Return the advertised tool definitions."""
+    return types.ListToolsResult(tools=_get_state(ctx).tool_defs)
+
+
+async def call_tool(
+    ctx: ServerRequestContext, params: types.CallToolRequestParams
+) -> types.CallToolResult:
     """Dispatch tool calls to registered handlers.
 
     All handlers return types.CallToolResult (the MCP protocol's canonical
     response type). Data-returning tools populate structuredContent.
     """
-    state = _get_state(server)
+    state = _get_state(ctx)
+    name = params.name
+    arguments = params.arguments
 
     # Write a default config the first time a tool is actually used in this
     # directory — not at startup, which would litter every unrelated project
@@ -382,13 +397,14 @@ async def call_tool(name: str, arguments: dict | None):
 
     registered = state.tool_dispatch.get(name)
     if registered is None:
-        raise ValueError(f"Unknown tool: {name}")
+        return _tool_error(f"Unknown tool: {name}")
 
     # Set up MCP protocol logging for this request.
     # Handlers and services call mcp_log() which reads this ContextVar —
     # no server/session reference needed downstream. Messages below the
     # client's requested minimum level (logging/setLevel) are not sent.
-    session = server.request_context.session
+    session = ctx.session
+    _client_capabilities.set(session.client_capabilities)
 
     async def _log(level: str, msg: str) -> None:
         if _below_client_log_level(level, state.client_log_level):
@@ -402,8 +418,9 @@ async def call_tool(name: str, arguments: dict | None):
     # the index write runs as a background task so it never gates dispatch.
     await _notice_circuit(arguments, state)
 
-    # Invoke handler — enrich known errors with actionable guidance.
-    # Exceptions propagate to the MCP SDK which sets isError=True.
+    # Invoke handler — enrich known errors with actionable guidance, and report
+    # every failure as an is_error result rather than a JSON-RPC error, so the
+    # calling model reads the message and can act on it.
     # Input validation (Pydantic model_validate) is handled by the registry
     # wrapper in _base.py — no need to validate here.
     try:
@@ -413,17 +430,17 @@ async def call_tool(name: str, arguments: dict | None):
             e,
             field_owners=state.field_owners,
         )
-        raise ValueError(f"Invalid arguments for {name}: {detail}") from None
+        return _tool_error(f"Invalid arguments for {name}: {detail}")
     except PathSecurityError as e:
         await mcp_log("warning", f"Path security violation in {name}: {e}")
-        raise PathSecurityError(f"{e}\n\n{_path_reject_guidance(state)}") from None
+        return _tool_error(f"{e}\n\n{_path_reject_guidance(state)}")
     except LTSpiceMCPError as e:
         # Errors that already carry precise guidance opt out of the generic
         # per-type hint (show_hint=False) so it doesn't misdirect.
         hint = _get_error_hint(type(e)) if e.show_hint else None
         text = f"{e}\n\n{hint}" if hint else str(e)
         # When the error carries structured suggestions (e.g. fuzzy model
-        # matches), return them as structuredContent with isError=True so
+        # matches), return them as structuredContent with is_error=True so
         # clients can parse them without regex'ing the text message.
         if e.suggestions:
             # Mirror the hint into structuredContent (self-sufficiency
@@ -434,12 +451,10 @@ async def call_tool(name: str, arguments: dict | None):
                 structured["hint"] = hint
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=text)],
-                structuredContent=structured,
-                isError=True,
+                structured_content=structured,
+                is_error=True,
             )
-        if hint:
-            raise type(e)(f"{e}\n\n{hint}") from None
-        raise
+        return _tool_error(text)
     except Exception as e:
         # Surface the actual exception type + message in the response. A bare
         # "check server logs" is a dead end for an MCP client: the traceback
@@ -447,7 +462,7 @@ async def call_tool(name: str, arguments: dict | None):
         # reach. The concrete cause (e.g. "KeyError: 'PinName'") is what makes
         # an unexpected failure diagnosable. Full traceback still goes to logs.
         logger.exception(f"Unexpected error in tool {name}")
-        raise RuntimeError(f"Internal error in {name}: {type(e).__name__}: {e}") from e
+        return _tool_error(f"Internal error in {name}: {type(e).__name__}: {e}")
 
 
 # MCP log severities, ascending RFC-5424 rank (the protocol's LoggingLevel).
@@ -479,45 +494,43 @@ def _below_client_log_level(level: str, client_min: str | None) -> bool:
     return rank < floor
 
 
-@server.set_logging_level()
-async def set_logging_level(level: types.LoggingLevel) -> None:
+async def set_logging_level(
+    ctx: ServerRequestContext, params: types.SetLevelRequestParams
+) -> types.EmptyResult:
     """Store the client's minimum log level; also declares the logging
     capability (the SDK only advertises it when this handler exists, and
     without it spec-conforming clients drop our notifications/message)."""
-    state = _get_state(server)
-    state.client_log_level = level
+    _get_state(ctx).client_log_level = params.level
+    return types.EmptyResult()
 
 
-@server.list_resources()
-async def list_resources() -> list[types.Resource]:
+async def list_resources(
+    ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
+) -> types.ListResourcesResult:
     """Return all static MCP resources."""
-    return get_static_resources()
+    return types.ListResourcesResult(resources=get_static_resources())
 
 
-@server.list_resource_templates()
-async def list_resource_templates() -> list[types.ResourceTemplate]:
+async def list_resource_templates(
+    ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
+) -> types.ListResourceTemplatesResult:
     """Return all dynamic MCP resource templates."""
-    return get_resource_templates()
+    return types.ListResourceTemplatesResult(resource_templates=get_resource_templates())
 
 
-@server.read_resource()
-async def read_resource(uri: AnyUrl) -> Iterable[ReadResourceContents]:
+async def read_resource(
+    ctx: ServerRequestContext, params: types.ReadResourceRequestParams
+) -> types.ReadResourceResult:
     """Read a specific resource by URI.
 
-    Dispatches to appropriate handler based on URI scheme and path.
-    Converts internal TextResourceContents/BlobResourceContents to the
-    SDK's ReadResourceContents format (which uses .content instead of .text).
-
-    Args:
-        uri: Resource URI to read (spice://...)
-
-    Returns:
-        Iterable of ReadResourceContents entries
+    Dispatches to the appropriate handler based on URI scheme and path.
 
     Raises:
-        ValueError: If URI is unknown or resource not found
+        MCPError: With the invalid-params code when the URI names no resource
+            this server serves, or the resource cannot be read.
     """
-    state = _get_state(server)
+    state = _get_state(ctx)
+    uri = params.uri
 
     try:
         # Resource reads are synchronous and read-only but not cheap: the
@@ -525,49 +538,75 @@ async def read_resource(uri: AnyUrl) -> Iterable[ReadResourceContents]:
         # recent route polls a cross-process file lock (time.sleep), so the
         # whole router runs off the loop. It never touches loop-owned
         # mutable state (the editor cache and library sessions stay untouched).
-        result = await asyncio.to_thread(handle_read_resource, str(uri), state)
+        return await asyncio.to_thread(handle_read_resource, uri, state)
     except PathSecurityError as e:
         # Same sandbox wall as the tool path (e.g. spice://netlists/{outside});
         # enrich it here so every resource route gets the recovery guidance.
-        raise ValueError(f"{e}\n\n{_path_reject_guidance(state)}") from None
-    except LTSpiceMCPError as e:
-        raise ValueError(str(e)) from None
+        raise _resource_error(f"{e}\n\n{_path_reject_guidance(state)}") from None
+    except (LTSpiceMCPError, ValueError) as e:
+        raise _resource_error(str(e)) from None
     except Exception as e:
         logger.exception(f"Unexpected error reading resource {uri}")
-        raise ValueError(f"Internal error reading resource: {type(e).__name__}: {e}") from e
-
-    # Convert from types.TextResourceContents/BlobResourceContents
-    # to the SDK's ReadResourceContents (which has .content not .text)
-    converted = []
-    for item in result.contents:
-        if isinstance(item, types.TextResourceContents):
-            converted.append(
-                ReadResourceContents(
-                    content=item.text,
-                    mime_type=item.mimeType,
-                )
-            )
-        elif isinstance(item, types.BlobResourceContents):
-            # Decode to bytes: the SDK's create_content dispatches on type —
-            # bytes are re-encoded into a proper BlobResourceContents, while a
-            # base64 *str* would be emitted as TextResourceContents whose text
-            # is raw base64 tagged with a binary mime type.
-            converted.append(
-                ReadResourceContents(
-                    content=base64.b64decode(item.blob),
-                    mime_type=item.mimeType,
-                )
-            )
-    return converted
+        raise _resource_error(f"Internal error reading resource: {type(e).__name__}: {e}") from e
 
 
-@server.list_prompts()
-async def list_prompts() -> list[types.Prompt]:
+def _resource_error(message: str) -> MCPError:
+    """The JSON-RPC error a failed resource read answers with.
+
+    The 2026-07-28 revision dropped the separate resource-not-found code that
+    earlier revisions used, so a URI that names nothing this server serves is
+    an invalid parameter like any other.
+    """
+    return MCPError(types.INVALID_PARAMS, message)
+
+
+async def list_prompts(
+    ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
+) -> types.ListPromptsResult:
     """Return the workflow-starter prompts (registering this advertises the capability)."""
-    return prompts.list_prompts(_get_state(server).config.tool_profile)
+    return types.ListPromptsResult(
+        prompts=prompts.list_prompts(_get_state(ctx).config.tool_profile)
+    )
 
 
-@server.get_prompt()
-async def get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptResult:
+async def get_prompt(
+    ctx: ServerRequestContext, params: types.GetPromptRequestParams
+) -> types.GetPromptResult:
     """Return a prompt's messages with its arguments interpolated."""
-    return prompts.get_prompt(name, arguments, _get_state(server).config.tool_profile)
+    return prompts.get_prompt(params.name, params.arguments, _get_state(ctx).config.tool_profile)
+
+
+# The tool, resource and prompt listings are all built once, during lifespan
+# startup, and never change while the process runs — so a client may hold onto
+# one instead of re-listing every turn. The scope is private: each listing is
+# shaped by this server's own configuration and sandbox, so it must not be
+# served from a cache shared with another authorization context. An hour is
+# well inside a session and well under any route by which the listings could
+# change, since that needs a new server process and therefore a new connection.
+_LISTING_CACHE_HINT = CacheHint(ttl_ms=3_600_000, scope="private")
+
+# The name is overridable so the thin alias packages (circuit-mcp, ngspice-mcp)
+# can self-identify in the handshake; it defaults to the canonical id. The env
+# var must be set before this module is imported. See packaging/aliases/.
+_SERVER_NAME = os.environ.get("LTSPICE_MCP_SERVER_NAME", "ltspice-mcp")
+
+server: Server[dict] = Server(
+    _SERVER_NAME,
+    version=__version__,
+    instructions=CONSOLIDATED_INSTRUCTIONS,
+    lifespan=server_lifespan,
+    cache_hints={
+        "tools/list": _LISTING_CACHE_HINT,
+        "resources/list": _LISTING_CACHE_HINT,
+        "resources/templates/list": _LISTING_CACHE_HINT,
+        "prompts/list": _LISTING_CACHE_HINT,
+    },
+    on_list_tools=list_tools,
+    on_call_tool=call_tool,
+    on_list_resources=list_resources,
+    on_list_resource_templates=list_resource_templates,
+    on_read_resource=read_resource,
+    on_list_prompts=list_prompts,
+    on_get_prompt=get_prompt,
+    on_set_logging_level=set_logging_level,
+)

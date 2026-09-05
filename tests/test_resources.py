@@ -82,7 +82,7 @@ class TestReadResource:
         assert result.contents
         contents = result.contents[0]
         assert isinstance(contents, TextResourceContents)
-        assert contents.mimeType == "text/markdown"
+        assert contents.mime_type == "text/markdown"
         text = contents.text
         # Both strings come from the real SKILL.md body, proving the packaged
         # guide is served (not a placeholder).

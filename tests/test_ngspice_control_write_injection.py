@@ -226,7 +226,7 @@ class TestControlWriteThroughRunExperiments:
         )
         result = await handle_run_experiments(args, state_with_sim)
 
-        data = result.structuredContent
+        data = result.structured_content
         assert data is not None
         assert data["status"] == "completed"
         assert len(decks) == 1
@@ -242,7 +242,7 @@ class TestControlWriteThroughRunExperiments:
         )
         result = await handle_run_experiments(args, state_with_sim)
 
-        data = result.structuredContent
+        data = result.structured_content
         assert data is not None
         assert len(decks) == 1
         assert decks[0].count("write ") == 1

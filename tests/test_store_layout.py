@@ -86,7 +86,7 @@ async def test_a_finished_run_creates_only_declared_roots(
         ),
         state_with_sim,
     )
-    receipt = submitted.structuredContent
+    receipt = submitted.structured_content
     assert receipt is not None, submitted.content[0].text
     job_id = receipt["job_id"]
 
@@ -99,7 +99,7 @@ async def test_a_finished_run_creates_only_declared_roots(
         ),
         state_with_sim,
     )
-    assert analyzed.structuredContent is not None
+    assert analyzed.structured_content is not None
 
     tree = _tree(Store(work_dir), job_id)
     top_level = {entry.split("/")[0] for entry in tree}

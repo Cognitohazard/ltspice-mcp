@@ -868,10 +868,10 @@ class PlotWaveformInput(ToolInput):
     ),
     input_model=PlotWaveformInput,
     annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=True,
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=True,
     ),
     # MCP Apps (SEP-1865): declare the in-chat renderer so an apps-capable host
     # fetches it via resources/read and pipes the chart spec into it.

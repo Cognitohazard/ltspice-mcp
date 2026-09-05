@@ -65,8 +65,8 @@ class TestCompactListing:
     def test_every_argument_description_is_gone(self, name: str):
         full = {d.name: d for d in get_tools("full")[0]}[name]
         compact = {d.name: d for d in get_tools("compact")[0]}[name]
-        assert _descriptions(full.inputSchema), f"{name} advertises no descriptions to strip"
-        assert _descriptions(compact.inputSchema) == {}
+        assert _descriptions(full.input_schema), f"{name} advertises no descriptions to strip"
+        assert _descriptions(compact.input_schema) == {}
 
     @pytest.mark.parametrize("name", REGISTERED_TOOLS)
     def test_nothing_but_the_descriptions_changes(self, name: str):
@@ -74,8 +74,10 @@ class TestCompactListing:
         defaults, required and $defs must all survive."""
         full = {d.name: d for d in get_tools("full")[0]}[name]
         compact = {d.name: d for d in get_tools("compact")[0]}[name]
-        assert compact.inputSchema == strip_argument_descriptions(full.inputSchema)
-        assert set(compact.inputSchema.get("$defs", {})) == set(full.inputSchema.get("$defs", {}))
+        assert compact.input_schema == strip_argument_descriptions(full.input_schema)
+        assert set(compact.input_schema.get("$defs", {})) == set(
+            full.input_schema.get("$defs", {})
+        )
 
     def test_compact_is_materially_smaller_than_full(self):
         """What the mode is for. docs/design/mcp_surface.md claims roughly 40%
@@ -101,7 +103,7 @@ class TestCompactListing:
 
     def test_the_registry_schema_is_not_mutated_by_compaction(self):
         get_tools("compact")
-        assert _descriptions(get_tools("full")[0][0].inputSchema)
+        assert _descriptions(get_tools("full")[0][0].input_schema)
 
     def test_an_argument_literally_named_description_survives(self):
         """The filter descends structurally: inside ``properties`` the keys are
@@ -144,4 +146,4 @@ class TestSessionStateHonoursTheListing:
     def test_compact_state_serves_no_argument_prose(self, work_dir):
         state = _state(work_dir, "compact")
         for definition in state.tool_defs:
-            assert _descriptions(definition.inputSchema) == {}
+            assert _descriptions(definition.input_schema) == {}

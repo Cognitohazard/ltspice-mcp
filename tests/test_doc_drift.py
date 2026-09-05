@@ -114,7 +114,7 @@ def _live_surface_vocabulary() -> set[str]:
                 walk(child)
 
     for reg in registry._registered:
-        walk(reg.definition.inputSchema)
+        walk(reg.definition.input_schema)
     return vocab
 
 

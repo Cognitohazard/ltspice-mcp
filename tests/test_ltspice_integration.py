@@ -154,7 +154,7 @@ async def _recipe(state: SessionState, job_id: str, recipe: dict, **kw) -> dict:
         ),
         state,
     )
-    data = result.structuredContent
+    data = result.structured_content
     assert data is not None, result.content[0].text
     return data
 
@@ -197,7 +197,7 @@ class TestJobTracking:
             JobsInput.model_validate({"action": "status", "job_id": receipt["job_id"]}),
             ltspice_state,
         )
-        data = result.structuredContent
+        data = result.structured_content
         assert data is not None
         assert data["job_id"] == receipt["job_id"]
         assert data["status"] == "completed"
@@ -217,7 +217,7 @@ class TestJobTracking:
             JobsInput.model_validate({"action": "status", "request_id": "lt-request-id"}),
             ltspice_state,
         )
-        data = result.structuredContent
+        data = result.structured_content
         assert data is not None
         assert data["job_id"] == receipt["job_id"]
 
@@ -316,7 +316,7 @@ class TestManagedExport:
             VerifyCircuitInput.model_validate({"path": path.name, "checks": ["export"], **kw}),
             state,
         )
-        data = result.structuredContent
+        data = result.structured_content
         assert data is not None, result.content[0].text
         return data
 

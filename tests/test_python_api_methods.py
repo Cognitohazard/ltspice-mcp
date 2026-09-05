@@ -36,8 +36,8 @@ from tests.conftest import SyncApi, make_experiment_job, stage_recorded_fixture
 def _result(payload: Mapping[str, Any], *, is_error: bool = False) -> types.CallToolResult:
     return types.CallToolResult(
         content=[types.TextContent(type="text", text="handler result")],
-        structuredContent=copy.deepcopy(dict(payload)),
-        isError=is_error,
+        structured_content=copy.deepcopy(dict(payload)),
+        is_error=is_error,
     )
 
 

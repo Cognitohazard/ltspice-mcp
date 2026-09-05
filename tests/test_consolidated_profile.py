@@ -86,10 +86,10 @@ class TestAnnotationsTable:
         annotations = by_name[name].annotations
         assert annotations is not None
         actual = (
-            annotations.readOnlyHint,
-            annotations.destructiveHint,
-            annotations.idempotentHint,
-            annotations.openWorldHint,
+            annotations.read_only_hint,
+            annotations.destructive_hint,
+            annotations.idempotent_hint,
+            annotations.open_world_hint,
         )
         assert actual == ANNOTATIONS_TABLE[name]
 
@@ -98,7 +98,7 @@ class TestAnnotationsTable:
         read_only = {
             tool_def.name
             for tool_def in defs
-            if tool_def.annotations and tool_def.annotations.readOnlyHint
+            if tool_def.annotations and tool_def.annotations.read_only_hint
         }
         assert read_only == {"inspect"}
 
@@ -110,7 +110,7 @@ class TestAnnotationsTable:
         open_world = {
             tool_def.name
             for tool_def in defs
-            if tool_def.annotations and tool_def.annotations.openWorldHint
+            if tool_def.annotations and tool_def.annotations.open_world_hint
         }
         assert open_world == {"run_experiments", "plot_waveform"}
 

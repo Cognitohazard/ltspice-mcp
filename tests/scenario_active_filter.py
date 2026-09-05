@@ -24,14 +24,13 @@ import os
 import sys
 import textwrap
 import time
-from datetime import timedelta
 from pathlib import Path
 
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
-TIMEOUT = timedelta(seconds=30)
-SIM_TIMEOUT = timedelta(seconds=180)
+TIMEOUT = 30.0
+SIM_TIMEOUT = 180.0
 
 # Where to run — use the project workspace dir
 WORKSPACE = Path(__file__).resolve().parent.parent / "workspace"
@@ -85,11 +84,11 @@ def text(result) -> str:
 
 
 def structured(result) -> dict:
-    return result.structuredContent or {}
+    return result.structured_content or {}
 
 
 def ok(result) -> bool:
-    return not result.isError and not text(result).startswith("ERROR:")
+    return not result.is_error and not text(result).startswith("ERROR:")
 
 
 # Steps that produced a tool error despite being expected to succeed; the
@@ -176,7 +175,7 @@ async def run():
     stamp = int(time.time())
     async with stdio_client(params) as (rs, ws), ClientSession(rs, ws) as session:
         init = await session.initialize()
-        heading(f"Connected to {init.serverInfo.name}")
+        heading(f"Connected to {init.server_info.name}")
 
         # ----------------------------------------------------------
         # Step 1: Ask the server what it can do
@@ -342,20 +341,19 @@ async def run():
         # Step 9: Check resources
         # ----------------------------------------------------------
         step(9, "Browse resources")
-        from pydantic import AnyUrl
 
-        r = await session.read_resource(AnyUrl("spice://config"))
+        r = await session.read_resource("spice://config")
         config = json.loads(r.contents[0].text)  # type: ignore[union-attr]
         print(
             f"  Config: working_dir={config['working_dir']}, "
             f"simulators={config['detected_simulators']}"
         )
 
-        r = await session.read_resource(AnyUrl("spice://netlists/"))
+        r = await session.read_resource("spice://netlists/")
         netlists = json.loads(r.contents[0].text)  # type: ignore[union-attr]
         print(f"  Netlists: {[n['name'] for n in netlists['netlists']]}")
 
-        r = await session.read_resource(AnyUrl("spice://results/"))
+        r = await session.read_resource("spice://results/")
         results = json.loads(r.contents[0].text)  # type: ignore[union-attr]
         print(f"  Jobs: {results['count']}")
 

@@ -51,7 +51,7 @@ def _real(p: str | Path) -> Path:
 
 
 def _schema(result) -> dict:
-    sc = result.structuredContent
+    sc = result.structured_content
     assert sc is not None
     jsonschema.Draft202012Validator(insp._OUTPUT_SCHEMA).validate(sc)
     return sc
@@ -68,7 +68,7 @@ async def _run(state: SessionState, queries: list[dict]) -> list[dict]:
     # failure is never a call-level failure, so isError stays false throughout.
     any_failed = any(not item["ok"] for item in data["results"])
     assert data["outcome"] == ("partial" if any_failed else "complete")
-    assert result.isError is False
+    assert result.is_error is False
     return data["results"]
 
 
