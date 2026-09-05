@@ -146,7 +146,7 @@ class SessionState:
         from ltspice_mcp.tools import get_tools
         from ltspice_mcp.tools._base import registry as tool_registry
 
-        defs, dispatch = get_tools()
+        defs, dispatch = get_tools(self.config.tool_listing)
         owners = tool_registry.field_owners()
         return (defs, dispatch, owners)
 

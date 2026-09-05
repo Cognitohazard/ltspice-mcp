@@ -9,13 +9,16 @@ tool *does*:
 * ``schema_from_typeddict`` — the output-schema generator, so a tool's
   ``structuredContent`` contract is derived from the TypedDict the lib already
   returns instead of being hand-written twice.
+* ``strip_argument_descriptions`` — the one deliberate prose filter, applied
+  only when the ``compact`` tool listing is configured.
 
-Every pass here is structural: it changes how a schema is spelled, never what
-it says. The prose is not filtered — every description on a model is a
-description a client is shown — so the way the surface stays small is that
-each description is written short. ``tests/test_consolidated_contracts.py``
-pins both halves: the advertised descriptions equal the source ones, and each
-tool's serialized definition stays under its size bound.
+Every other pass here is structural: it changes how a schema is spelled, never
+what it says. On the default listing the prose is not filtered — every
+description on a model is a description a client is shown — so the way the
+surface stays small is that each description is written short.
+``tests/test_consolidated_contracts.py`` pins both halves: the advertised
+descriptions equal the source ones, and each tool's serialized definition stays
+under its size bound.
 
 Split out of ``tools/_base`` so a change to how schemas are shrunk stops being
 a change to the module every tool imports. ``tools/_base`` re-exports what the
@@ -74,6 +77,33 @@ def _strip_titles(node: Any, *, in_name_map: bool = False) -> Any:
         }
     if isinstance(node, list):
         return [_strip_titles(item) for item in node]
+    return node
+
+
+def strip_argument_descriptions(node: Any, *, in_name_map: bool = False) -> Any:
+    """Return the schema with every ``description`` annotation removed.
+
+    The transform behind the ``compact`` tool listing: structure, enums,
+    defaults, ``required`` and ``$defs`` come through untouched, so a client
+    can still build a valid call — it just is not told in prose what each
+    argument means. It is a filter over the published copy only; the Pydantic
+    models keep their descriptions and accept exactly what they did.
+
+    Descends structurally for the same reason ``_strip_titles`` does: inside a
+    ``properties`` or ``$defs`` map the keys are argument names, so an argument
+    that happens to be called ``description`` is a real, accepted field and
+    must survive.
+    """
+    if isinstance(node, dict):
+        if in_name_map:
+            return {key: strip_argument_descriptions(value) for key, value in node.items()}
+        return {
+            key: strip_argument_descriptions(value, in_name_map=key in _SCHEMA_NAME_MAPS)
+            for key, value in node.items()
+            if key != "description"
+        }
+    if isinstance(node, list):
+        return [strip_argument_descriptions(item) for item in node]
     return node
 
 
