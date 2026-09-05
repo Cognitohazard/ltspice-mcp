@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import secrets
+import shutil
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
@@ -66,6 +67,31 @@ _DRIFT_REASONS = {
     "source_modified_after_staging": "content changed",
     "source_unavailable_after_staging": "no longer readable",
 }
+
+
+def _discard_unclaimed_run_dir(job_id: str, run_dir: Path, working_dir: Path) -> None:
+    """Remove the run tree of a submission that staged and then failed.
+
+    Called only from inside the request gate, only for a job id this
+    submission minted, and only while no record claims it. Provenance comes
+    from the record that claims an artifact, so a tree nothing claims in the
+    box-wide runs root is what a later inventory of that folder mistakes for
+    its own work.
+
+    The record check is the refusal: a claimed tree belongs to its job, even
+    when this submission failed under the same id. The name check keeps a
+    malformed run directory from turning this into a delete of the shared runs
+    root. A failure here is logged, not raised — leaving a directory behind
+    must not replace the error the caller came for.
+    """
+    if run_dir.name != job_id or Store(working_dir).job_record(job_id).exists():
+        return
+    try:
+        shutil.rmtree(run_dir)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        logger.warning("could not discard the unclaimed run directory %s: %s", run_dir, exc)
 
 
 class IdempotencyConflictError(SimulationError):
@@ -513,23 +539,30 @@ class ExperimentRunner(RunnerBase):
             lookup = await asyncio.to_thread(self._read_request_index, request)
             if lookup.existing is not None:
                 return _BarrierResult(lookup.existing, replayed=True)
-            if request.stage is not None:
-                staged = await request.stage()
-                request.cases = staged.cases
-                request.sources = staged.sources
-            candidate = self._materialize_job(request)
-            if lookup.dangling:
-                candidate.observations.append(
-                    {
-                        "code": "dangling_request_index_replaced",
-                        "kind": "persistence",
-                        "detail": (
-                            "The request index named a missing coordinator record; "
-                            "the durable submission was recreated."
-                        ),
-                    }
-                )
-            await asyncio.to_thread(self._claim_request_id, request, candidate)
+            try:
+                if request.stage is not None:
+                    staged = await request.stage()
+                    request.cases = staged.cases
+                    request.sources = staged.sources
+                candidate = self._materialize_job(request)
+                if lookup.dangling:
+                    candidate.observations.append(
+                        {
+                            "code": "dangling_request_index_replaced",
+                            "kind": "persistence",
+                            "detail": (
+                                "The request index named a missing coordinator record; "
+                                "the durable submission was recreated."
+                            ),
+                        }
+                    )
+                await asyncio.to_thread(self._claim_request_id, request, candidate)
+            except Exception:
+                # Staged, then refused. The decks are already copied and the
+                # claim never landed, so this is the one window in which a run
+                # tree exists that no record will ever name.
+                await asyncio.to_thread(self._discard_staged_run_dir, request, working_dir)
+                raise
         # Outside the gate: the per-circuit index is discovery, not identity,
         # so a slow directory here holds up nothing but this submission.
         try:
@@ -537,6 +570,13 @@ class ExperimentRunner(RunnerBase):
         except Exception as exc:
             raise SubmissionCommitted(request.request_id, exc) from exc
         return _BarrierResult(candidate, replayed=False)
+
+    def _discard_staged_run_dir(self, request: ExperimentRunRequest, working_dir: Path) -> None:
+        """This submission's own run directory, if the claim never recorded it."""
+        job_id = request.job_id
+        if not job_id:
+            return
+        _discard_unclaimed_run_dir(job_id, run_dir_in(self.output_folder, job_id), working_dir)
 
     @staticmethod
     def _read_request_index(request: ExperimentRunRequest) -> _IndexLookup:
