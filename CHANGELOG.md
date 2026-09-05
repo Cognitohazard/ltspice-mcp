@@ -90,6 +90,17 @@ Error codes that only those handlers emitted are gone with them:
 
 ### Changed
 
+- Moved to the MCP Python SDK 2, which serves protocol revision 2026-07-28
+  alongside the older initialize handshake. Clients on either revision are
+  served the same seven tools.
+- A tool that rejects its arguments now says `Invalid arguments for <tool>: ...`
+  where it said `Input validation error: ...`. The SDK stopped validating a call
+  against the published schema, so the tool's own model reports it; both are
+  generated from that model, so nothing is checked less strictly.
+- Reading a resource URI the server does not serve now answers the JSON-RPC
+  invalid-params code (-32602). The 2026-07-28 revision dropped the separate
+  resource-not-found code earlier revisions used.
+
 - `analyze_results`' description names every recipe with the plain words a
   caller searches for, so a host matching a request against tool descriptions
   can route "phase margin", "distortion" or "bias point" to this tool. The
@@ -158,6 +169,16 @@ and `"agentic"` log a warning and serve the consolidated surface until the
 key is deleted in 0.7.0. Serving zero tools is still a hard error.
 
 ### Added
+
+- Every tool carries a display title, the short label a client shows a person
+  in place of the wire name (Run Simulations, Analyze Results, Edit Schematic,
+  and so on).
+- The tool, resource, template and prompt listings tell a client how long they
+  stay fresh (`ttlMs` / `cacheScope`: one hour, private). They are built once
+  at startup and cannot change while the process runs, so a client no longer
+  has to re-list them every turn. Clients on earlier revisions are unaffected.
+- `server/discover` answers with instructions naming the simulators actually
+  detected, the same as the initialize handshake.
 
 - `[tools] listing` (env `LTSPICE_MCP_TOOL_LISTING`) selects how much of each
   tool definition the tool list carries. `full`, the default, is unchanged.
