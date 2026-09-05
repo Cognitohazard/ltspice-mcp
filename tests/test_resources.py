@@ -87,7 +87,7 @@ class TestReadResource:
         # Both strings come from the real SKILL.md body, proving the packaged
         # guide is served (not a placeholder).
         assert "Schematic layout best practices" in text
-        assert "means MILLI" in text
+        assert "means milli" in text
 
     def test_unknown_uri_raises(self, state_no_sim: SessionState):
         with pytest.raises(ValueError, match="Unknown resource URI"):
