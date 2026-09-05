@@ -298,9 +298,8 @@ class RunExperimentsInput(ToolInput):
     # canonical_fingerprint excludes them, so re-asking for the same experiment
     # at a different verbosity replays instead of conflicting. execution.wait_s
     # is excluded the same way: it bounds only this response's dwell (the job
-    # is durable either way), so a different dwell is the same experiment —
-    # which is what lets the CLI on-ramp submit with wait_s=0 and still hand
-    # back a receipt an explicit run-experiments call can replay. A version
+    # is durable either way), so a different dwell is the same experiment and
+    # a wait_s=0 submission hands back a receipt a later call can replay. A version
     # bump is required only when a previously valid request's canonical bytes
     # change; a presentation field excluded from its first valid day changes no
     # old bytes and does not bump the canonicalizer.
@@ -736,19 +735,20 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         "Run SPICE and get the numbers back in one call: point it at your deck(s), "
         "attach an 'analyze' block, and the measured values return with the "
         "results — from a one-off spot check to a full sweep or Monte Carlo grid. "
-        "Cases run in parallel, so express the whole sweep as one 'variations' "
-        "grid rather than a call per point; a large grid costs about what one "
-        "case costs. When unsure about a behavior, assumption, or sizing, run a "
-        "small experiment and read the numbers rather than reasoning it out. "
-        "Quick runs return results inline; longer ones return a receipt to follow "
-        "with 'jobs', and passing a request_id makes the submission durable and "
-        "idempotent across retries."
+        "Express the whole sweep as one 'variations' grid rather than a call per "
+        "point: cases run in parallel up to the server's cap, so a grid costs one "
+        "call and one receipt, not one of each per case. When unsure about a "
+        "behavior, assumption, or sizing, run a small experiment and read the "
+        "numbers rather than reasoning it out. Quick runs return results inline; "
+        "longer ones return a receipt to follow with 'jobs'. Every job is recorded "
+        "on disk; pass your own request_id to make a retry replay the same job "
+        "instead of running a new one."
     ),
     input_model=RunExperimentsInput,
     annotations=types.ToolAnnotations(
         readOnlyHint=False,
         destructiveHint=False,
-        idempotentHint=True,
+        idempotentHint=False,
         openWorldHint=True,
     ),
     profiles=("consolidated",),
@@ -1145,8 +1145,9 @@ def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> None:
 
     Validated only at the analysis stage, a typo'd recipe burns the whole
     simulation cycle — and the corrected block then changes the canonical
-    fingerprint, so the retry re-runs every case. The probe job id never
-    resolves because shape validation does not touch the registry.
+    fingerprint, so the retry re-runs every case. The placeholder job id used
+    for this shape check never resolves, because validation does not touch the
+    registry.
     """
     request = analyze_block.model_dump(mode="json", exclude_unset=False)
     try:
@@ -1399,7 +1400,7 @@ def progress_from_completeness(completeness: Completeness) -> dict[str, int]:
     unchanged and always — this block used to restate every one of them beside
     its own projection, so the same accounting arrived twice in one receipt and
     a third time in the hint. Dropping the copy removes no fact: each counter is
-    one key away, in the block the completeness doctrine names.
+    one key away, in the ``completeness`` block itself.
     """
     return {
         "expanded": completeness.expanded,
@@ -1735,9 +1736,9 @@ def _runs_page(
     )
     # Same "o:<offset>" grammar jobs(action="runs") decodes; the shared
     # receipt assembly reads this key to build the continuation hint.
-    # Nullable-key-always-present is the ruled cursor convention: readers may
-    # do an unconditional ``page["next_cursor"]`` — the omit form is what
-    # produced the KeyError fixed in 2fa1bc6.
+    # The cursor key is always present and nullable, so readers may do an
+    # unconditional ``page["next_cursor"]``. Omitting the key on the last page
+    # instead makes those readers raise KeyError.
     data: dict[str, Any] = {
         "items": [],
         "total": total,
@@ -1793,7 +1794,8 @@ def _terminal_outcome(
 
 # Case count at which a terminal receipt starts pointing at the in-process
 # door. Ten is past any spot-check and squarely in sweep/corner territory —
-# the workload class the paired-bench pricing measured the wire overhead on.
+# the workload class where the per-call cost of going through the tool surface
+# is large enough to be worth avoiding.
 _API_POINTER_MIN_CASES = 10
 
 
@@ -2009,11 +2011,12 @@ async def _post_submit_error_response(
     """Envelope for a failure that escaped AFTER the cases were submitted.
 
     Submission is the irreversible step: once the receipt exists the simulator
-    fleet is running, and the job_id plus its control_token are the only handles
-    that reach it. Reporting ``not_started`` here — or letting the exception out,
-    which returns no structuredContent at all — strands running cases with no way
-    to poll or cancel them. That orphaned fleet is precisely what commit_state
-    exists to prevent, so a post-submit escape is always reported as committed.
+    runs are under way, and the job_id plus its control_token are the only
+    handles that reach them. Reporting ``not_started`` here — or letting the
+    exception out, which returns no structuredContent at all — strands running
+    cases with no way to poll or cancel them. Those orphaned runs are precisely
+    what commit_state exists to prevent, so a post-submit escape is always
+    reported as committed.
     """
     job = receipt.job
 
@@ -2516,9 +2519,9 @@ def _jobs_page(
     offset = min(_decode_jobs_cursor(cursor), len(items))
     page = items[offset : offset + limit]
     truncated = offset + len(page) < len(items)
-    # Nullable-key-always-present, the ruled cursor convention: readers may do
-    # an unconditional ``page["next_cursor"]`` — the omit form is what produced
-    # the KeyError fixed in 2fa1bc6.
+    # The cursor key is always present and nullable, so readers may do an
+    # unconditional ``page["next_cursor"]``. Omitting the key on the last page
+    # instead makes those readers raise KeyError.
     data: dict[str, Any] = {
         "items": page,
         "total": len(items),

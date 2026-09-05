@@ -129,7 +129,7 @@ def sanitize_payload(data: dict[str, Any]) -> dict[str, Any]:
     NaN/Inf are not JSON: pydantic silently serializes them as null on the
     wire while the text channel prints "nan" — the two channels contradict
     each other exactly on degenerate results. Per the emit-a-null-over-a-
-    meaningless-number doctrine (lib/result_observations.py), substitute null
+    meaningless-number rule (lib/result_observations.py), substitute null
     OURSELVES and say so, naming the affected keys, so the substitution is a
     surfaced fact instead of a serializer accident.
     """
@@ -252,7 +252,7 @@ FORMAT_DESCRIPTION = (
 # contract). Sites needing a custom description inline their own dict.
 HINT_SCHEMA: dict[str, str] = {"type": "string"}
 
-# Free-text measurement caveats (see the observations-vs-warnings doctrine in
+# Free-text measurement caveats (see the observations-vs-warnings rule in
 # lib/result_observations.py).
 WARNINGS_SCHEMA: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
 
@@ -743,7 +743,7 @@ def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
 
     ``$defs`` are kept as Pydantic emits them, not inlined: a shared submodel
     appears once and every use site is a ``$ref``, which measured 21% smaller
-    on the consolidated surface (followups item 30). Every ref is internal to
+    on the consolidated surface. Every ref is internal to
     the one schema document, so any conformant client resolves it locally.
 
     Two further passes shrink the *advertised* shape only — the Pydantic model
@@ -773,7 +773,7 @@ def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
 # class: the lean wire lost nothing and cost 15% less. Names, structure,
 # enums, and defaults always stay; the full text remains on the registered
 # definition and the models, so api.reference() and spice://guide carry the
-# depth. The fleet harness's schema-prune tooling mirrors this pattern —
+# depth. The benchmark harness's schema-prune tooling mirrors this pattern —
 # keep them in step if either changes.
 _WIRE_PROSE_KEEP = re.compile(
     r"(dB|degrees?|unwrapp?ed|percent|fraction|volts?|seconds?|hertz|Hz|µm|"
@@ -989,7 +989,7 @@ def _declare_warnings_key(schema: dict[str, Any]) -> dict[str, Any]:
 def _stamp_output_schema(fn: Callable, schema: dict[str, Any]) -> None:
     """Stamp a handler's structuredContent contract onto the handler itself.
 
-    The single choke point for the "contract belongs to the handler" doctrine:
+    The single choke point for the "contract belongs to the handler" rule:
     both ``@registry.tool`` and ``declare_output_schema`` stamp through here.
     Written via ``__dict__`` because a plain attribute assignment on a function
     is a pyright error, and ruff auto-rewrites ``setattr()`` back into one.
@@ -1104,20 +1104,21 @@ class ToolRegistry:
         tool_dispatch: dict[str, RegisteredTool] = {}
         for registered in self._registered:
             if effective_profile in registered.profiles:
-                # The ADVERTISED definition serves semantics-only prose (any
-                # description string carrying no load-bearing marker — see
-                # _WIRE_PROSE_KEEP — is dropped from the wire copy) and no
+                # The ADVERTISED definition keeps the tool's own description
+                # verbatim — it is the only prose a client that does not show
+                # server instructions ever sees for the tool — but serves
+                # semantics-only FIELD prose (a property description with no
+                # load-bearing marker, see _WIRE_PROSE_KEEP, is dropped) and no
                 # outputSchema (it was the single largest schema block, 84% of
                 # `jobs`, -35% across the consolidated surface; return shapes
                 # are learned from responses instead). The registered
                 # definition — the dispatch side, what the doc gates scan and
                 # the conformance hook validates emissions against — keeps the
-                # full text and the schema, and so do the models behind
-                # api.reference() and spice://guide, which is where a caller
-                # reads the depth.
+                # full schema, and so do the models behind api.reference() and
+                # spice://guide, which is where a caller reads the depth.
                 definition = registered.definition.model_copy(
                     update={
-                        "description": _keep_wire_prose(registered.definition.description),
+                        "description": registered.definition.description,
                         "inputSchema": _strip_wire_prose(registered.definition.inputSchema),
                         "outputSchema": None,
                     }
@@ -1251,7 +1252,7 @@ def resolve_response_budget(explicit: int | None, state: SessionState) -> Respon
     — doing that unasked would silently answer a different question.
 
     Only the four consolidated tools that advertise ``budget`` consult this, so
-    the default reaches exactly the surface it was ruled for; ``0`` disables it
+    the default reaches exactly the surface it was designed for; ``0`` disables it
     and restores the fully undegraded default response.
 
     The API's automatic door gets no default at all. That door promises complete
@@ -1294,8 +1295,8 @@ def resolve_run_simulator(requested: str | None, state: SessionState) -> type:
         if sim_cls is None:
             raise SimulationError(
                 f"Simulator '{requested}' is not available on this server "
-                f"(detected: {list(state.available_simulators)}). server_status "
-                "lists the detected simulators.",
+                f"(detected: {list(state.available_simulators)}). "
+                "inspect(kind='capabilities') lists the detected simulators.",
                 show_hint=False,
             )
         return sim_cls
