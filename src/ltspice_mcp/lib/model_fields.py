@@ -5,7 +5,7 @@ Python API's ``api.reference()`` catalogue and the MCP ``inspect(kind="reference
 lookup. They render differently — one a nested tree, the other a flat per-branch
 table — but they must spell a *type*, a *default*, a *field name* and a
 *constraint* identically, or the same argument reads as two different arguments
-depending on which door was used.
+depending on which interface was used.
 
 So the reading lives here, once, and both renderers import it. Everything in
 this module is a pure function of a model or a ``FieldInfo``: no rendering
