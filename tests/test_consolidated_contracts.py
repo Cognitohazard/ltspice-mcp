@@ -31,14 +31,14 @@ from ltspice_mcp.errors import NetlistError, ResultError, SimulationError
 from ltspice_mcp.lib import result_store
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_view
 from ltspice_mcp.lib.recipes import DISCRIMINANTS
-from ltspice_mcp.tools import get_tools
+from ltspice_mcp.tools import _base, get_tools
 from ltspice_mcp.tools.experiments import (
     AttachedAnalysis,
     RunExperimentsInput,
-    _decode_jobs_cursor,
     _validate_attached_analysis,
 )
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
+from ltspice_mcp.tools.jobs import _decode_jobs_cursor
 from ltspice_mcp.tools.schematic_edit import EditViewCursors, _validate_view_cursors
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 
@@ -261,20 +261,113 @@ class TestFindingsShape:
 
 
 class TestChannelSeparation:
-    """observations / warnings / failures are distinct arrays, never merged."""
+    """observations / warnings / failures are distinct arrays, never merged.
+
+    The channel list comes from ``_base.ENVELOPE_CHANNELS`` rather than being
+    restated here, so the type that declares the envelope is what this checks.
+    """
 
     @pytest.mark.parametrize("name", CONSOLIDATED_TOOLS)
     def test_each_channel_is_a_separate_array(self, name: str):
         schema = _output_schemas()[name]
         for obj in _property_objects(schema):
             props = obj["properties"]
-            for channel in ("observations", "warnings", "failures"):
+            for channel in _base.ENVELOPE_CHANNELS:
                 if channel not in props:
                     continue
                 assert "array" in _as_type_set(props[channel]), (
                     f"{name}: channel {channel!r} is not an array — a merged or "
                     "retyped channel violates the three-channel contract"
                 )
+
+
+class TestSharedOutcomeRule:
+    """One rule decides every call-level outcome, and every tool routes through it.
+
+    The vocabulary test below pins what a tool may SAY; this pins how it
+    decides. Six hand-written ladders agreeing today is not the same as one
+    rule they all call, and the ladders are where a dialect creeps in.
+    """
+
+    def test_base_owns_the_vocabulary_the_contract_pins(self):
+        assert set(_base.CONTRACT_OUTCOMES) == CONTRACT_OUTCOMES
+
+    def test_the_envelope_type_declares_the_five_shared_keys(self):
+        assert set(_base.ENVELOPE_KEYS) == {
+            "outcome",
+            "failures",
+            "observations",
+            "warnings",
+            "hint",
+        }
+        assert set(_base.ENVELOPE_CHANNELS) < set(_base.ENVELOPE_KEYS)
+
+    def test_outcome_schema_refuses_a_value_outside_the_vocabulary(self):
+        with pytest.raises(ValueError, match="ratified vocabulary"):
+            _base.outcome_schema("complete", "mostly_fine")
+
+    @pytest.mark.parametrize(
+        ("kwargs", "expected"),
+        [
+            ({}, "complete"),
+            ({"partial": True}, "partial"),
+            ({"failures": [1]}, "partial"),
+            ({"failures": [1], "delivered": False}, "failed"),
+            ({"failures": [1], "in_progress": True}, "in_progress"),
+            ({"partial": True, "in_progress": True}, "in_progress"),
+        ],
+    )
+    def test_the_rule_ranks_in_progress_over_failure_over_shortfall(
+        self, kwargs: dict[str, Any], expected: str
+    ):
+        failures = kwargs.pop("failures", [])
+        assert _base.outcome_of(failures, **kwargs) == expected
+
+    @pytest.mark.parametrize(
+        ("module", "function"),
+        [
+            ("verify", "_outcome"),
+            ("receipts", "_terminal_outcome"),
+            ("receipts", "_jobs_outcome"),
+            ("inspect_tools", "inspect_envelope"),
+        ],
+    )
+    def test_every_tool_outcome_is_decided_by_the_shared_rule(self, module: str, function: str):
+        # Source-level, because the point is that no tool re-derives the
+        # vocabulary: a re-added ``return "partial"`` ladder fails here even
+        # while it happens to agree with the rule it replaced.
+        _, source = _module_source(module)
+        tree = ast.parse(source)
+        target = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == function
+        )
+        called = {_call_name(node) for node in ast.walk(target) if isinstance(node, ast.Call)}
+        assert "outcome_of" in called, f"{module}.{function} does not call outcome_of"
+
+        # A returned outcome literal is the ladder this replaced. A literal
+        # elsewhere is a status name that happens to share a spelling
+        # ("failed" is both a job status and an outcome), so only the direct
+        # return position counts.
+        returned: set[str] = set()
+        for node in ast.walk(target):
+            if not isinstance(node, ast.Return) or node.value is None:
+                continue
+            branches = (
+                [node.value.body, node.value.orelse]
+                if isinstance(node.value, ast.IfExp)
+                else [node.value]
+            )
+            returned |= {
+                branch.value
+                for branch in branches
+                if isinstance(branch, ast.Constant) and branch.value in CONTRACT_OUTCOMES
+            }
+        assert not returned, (
+            f"{module}.{function} still returns outcome literals {sorted(returned)} — "
+            "the shared rule decides them"
+        )
 
 
 class TestOutcomeEnvelope:
@@ -385,7 +478,7 @@ class TestOutputSchemaCoverage:
 # What the wire carries: each tool's own description verbatim (a client that
 # does not show server instructions has nothing else to route on), field
 # descriptions only when they carry a unit/convention/inversion/pointer marker
-# (_WIRE_PROSE_KEEP in tools/_base.py), and no outputSchema. The full prose
+# (_WIRE_PROSE_KEEP in tools/_schema.py), and no outputSchema. The full prose
 # stays on the registered definition, api.reference(), and spice://guide.
 _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Variations, attached analysis, and the receipt row shape. The attached
@@ -404,10 +497,16 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     "inspect": 4991,
     # The typed op union plus render/compare views. Re-pinned 6760 -> 6733 when
     # the op models' $defs keys lost their leading underscore with the move
-    # into lib/schematic_ops.py; the shapes themselves are unchanged.
-    "edit_schematic": 6733,
-    # Checks, the render policy object, and the boolean render shorthand.
-    "verify_circuit": 2535,
+    # into lib/schematic_ops.py, then 6733 -> 7491 when render and compare
+    # became the same two objects verify_circuit takes. Both tools now
+    # advertise BOTH spellings — the objects, and the flat fields retained as
+    # aliases for 0.6 — which is what the compatibility window costs; the
+    # growth comes back when the aliases go.
+    "edit_schematic": 7491,
+    # Checks, the shared render policy and compare spec (each with the
+    # verify-only fields on a subclass), and the flat compare fields retained
+    # as aliases. Re-pinned 2535 -> 3009 for that same second spelling.
+    "verify_circuit": 3009,
     # Job/case addressing, windowing, and delivery flags.
     "plot_waveform": 2174,
 }
@@ -532,7 +631,7 @@ class TestSemanticsOnlyWire:
 
     @pytest.mark.parametrize("name", REGISTERED_TOOLS)
     def test_every_advertised_description_carries_a_keep_marker(self, name: str):
-        from ltspice_mcp.tools._base import _WIRE_PROSE_KEEP
+        from ltspice_mcp.tools._schema import _WIRE_PROSE_KEEP
 
         tool_def = _registered()[name]
         # The tool's own description ships verbatim: a client that does not
@@ -558,7 +657,7 @@ class TestSemanticsOnlyWire:
     @pytest.mark.parametrize("name", REGISTERED_TOOLS)
     def test_structure_survives_the_strip(self, name: str):
         """Names, enums, and defaults are untouchable — only prose moves."""
-        from ltspice_mcp.tools._base import _strip_wire_prose
+        from ltspice_mcp.tools._schema import _strip_wire_prose
 
         source = _source_definitions()[name].inputSchema
         advertised = _registered()[name].inputSchema
@@ -641,7 +740,7 @@ class TestCursorTamperOnEveryPaginatedInput:
     through its own decode path rather than crashing."""
 
     def test_jobs_cursor_rejects_garbage(self):
-        from ltspice_mcp.tools.experiments import _JobsActionError
+        from ltspice_mcp.tools.jobs import _JobsActionError
 
         with pytest.raises(_JobsActionError) as exc:
             _decode_jobs_cursor("not-a-cursor")

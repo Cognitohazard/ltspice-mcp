@@ -29,6 +29,7 @@ from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.lib import recent, services
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edit, verify
+from ltspice_mcp.tools import jobs as jobs_mod
 from tests.conftest import SyncApi, make_experiment_job, stage_recorded_fixture
 
 
@@ -52,7 +53,7 @@ def test_raw_page_returns_each_handler_payload_verbatim(
             api.run_experiments,
             {"circuits": [{"path": "deck.cir"}], "execution": {"wait_s": 17}},
         ),
-        (experiments, "handle_jobs", api.jobs, {"action": "list"}),
+        (jobs_mod, "handle_jobs", api.jobs, {"action": "list"}),
         (
             analyze,
             "handle_analyze_results",
@@ -130,7 +131,7 @@ def test_validation_uses_the_server_renderer_and_field_owners(
     api = SyncApi(state_no_sim)
     raw = {"action": "status"}
     with pytest.raises(ValidationError) as model_error:
-        experiments.JobsInput.model_validate(raw)
+        jobs_mod.JobsInput.model_validate(raw)
     expected = compact_validation_error(
         model_error.value,
         field_owners=state_no_sim.field_owners,
@@ -735,7 +736,7 @@ _DOOR_ALLOWLIST: dict[tuple[str, ...], str] = {}
 
 _DOOR_MODELS = (
     experiments.RunExperimentsInput,
-    experiments.JobsInput,
+    jobs_mod.JobsInput,
     analyze.AnalyzeResultsInput,
     inspect_tools.InspectInput,
     schematic_edit.EditSchematicInput,

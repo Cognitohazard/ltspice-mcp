@@ -17,6 +17,7 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.runner_manager import RunnerManager
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import get_tools
 from tests.conftest import make_legacy_record
@@ -46,7 +47,7 @@ def _experiment(
         fingerprint="f" * 64,
         canonicalizer_version=1,
         control_token="control-secret",
-        store_path=experiment_store.record_path(job_id, working_dir),
+        store_path=Store(working_dir).job_record(job_id),
         cases=[case],
         sources=[
             SourceRecord(

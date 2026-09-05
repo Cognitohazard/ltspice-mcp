@@ -18,25 +18,30 @@ import jsonschema
 import pytest
 from pydantic import ValidationError
 
-from ltspice_mcp.lib import experiment_store, response_budget, result_store, wsl
+from ltspice_mcp.lib import experiment_store, response_budget, result_store, store, wsl
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
 from ltspice_mcp.lib.runner_base import RunOutcome, collect_run_outcome
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments as experiments_mod
-from ltspice_mcp.tools._base import _build_input_schema
+from ltspice_mcp.tools import receipts as receipts_mod
+from ltspice_mcp.tools._schema import _build_input_schema
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput
 from ltspice_mcp.tools.experiments import (
-    RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     AnalysisPerRun,
-    JobsInput,
     RunExperimentsInput,
-    handle_jobs,
     handle_run_experiments,
 )
+from ltspice_mcp.tools.jobs import (
+    JobsInput,
+    handle_jobs,
+)
+from ltspice_mcp.tools.receipts import RUN_EXPERIMENTS_OUTPUT_SCHEMA
 from tests.conftest import (
+    fake_artifact_paths,
     fake_simulator,
     recorded_fixture_simulator,
     resolve_local_ref,
@@ -620,10 +625,10 @@ class TestLeanReceipt:
     ):
         fake_simulator(monkeypatch)
         deck = _deck(work_dir / f"{request_id}.cir")
-        captured: list[experiments_mod.ReceiptSnapshot] = []
+        captured: list[receipts_mod.ReceiptSnapshot] = []
         snapshot_receipt = experiments_mod.snapshot_receipt
 
-        def capture_snapshot(*args: Any, **kwargs: Any) -> experiments_mod.ReceiptSnapshot:
+        def capture_snapshot(*args: Any, **kwargs: Any) -> receipts_mod.ReceiptSnapshot:
             snapshot = snapshot_receipt(*args, **kwargs)
             captured.append(snapshot)
             return snapshot
@@ -643,7 +648,7 @@ class TestLeanReceipt:
         )
 
         (snapshot,) = captured
-        expected = experiments_mod.project_receipt_runs(
+        expected = receipts_mod.project_receipt_runs(
             snapshot,
             run_fields,
             lean_default=True,
@@ -1112,7 +1117,7 @@ class TestReplayRejectsChangedSources:
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
         await state_with_sim.job_registry.drain_pending()
 
-        record = experiment_store.record_path(first["job_id"], work_dir)
+        record = Store(work_dir).job_record(first["job_id"])
         stored = json.loads(record.read_text())
         for source in stored["sources"]:
             source["sha256"] = ""
@@ -1342,8 +1347,7 @@ class TestPerCircuitFailuresAndAccounting:
 
         def submit(self, netlist: Path, run_filename: str, callback):
             submitted.append(netlist)
-            raw = self.output_folder / f"{Path(run_filename).stem}.raw"
-            log = self.output_folder / f"{Path(run_filename).stem}.log"
+            raw, log = fake_artifact_paths(self.output_folder, run_filename)
             raw.write_bytes(b"Title: mock")
             log.write_text("ok")
             outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
@@ -1441,7 +1445,7 @@ def _failing_simulator(monkeypatch: pytest.MonkeyPatch, log_text: str) -> None:
     """Every case aborts the way the simulator aborts: non-zero exit, .fail log."""
 
     def submit(self, _netlist: Path, run_filename: str, callback):
-        log = self.output_folder / f"{Path(run_filename).stem}.fail"
+        log = fake_artifact_paths(self.output_folder, run_filename)[1].with_suffix(".fail")
         log.write_text(log_text)
         self.loop.call_soon_threadsafe(callback, collect_run_outcome(".", str(log)))
         return object()
@@ -1468,7 +1472,7 @@ def _per_case_failing_simulator(
     def submit(self, _netlist: Path, run_filename: str, callback):
         stem = Path(run_filename).stem
         match = re.search(r"_case_(\d+)", stem)
-        log = self.output_folder / f"{stem}.fail"
+        log = fake_artifact_paths(self.output_folder, run_filename)[1].with_suffix(".fail")
         log.write_text(log_for(int(match.group(1)) if match else next(counter)))
         self.loop.call_soon_threadsafe(callback, collect_run_outcome(".", str(log)))
         return object()
@@ -1761,7 +1765,7 @@ class TestAttachedAnalysis:
         assert "keys present" in warning
         job = state_with_sim.experiment_jobs[lean["job_id"]]
         assert job.analysis.result is not None
-        assert job.analysis.result["schema"] == "ltspice-mcp/attached-analysis-snapshot"
+        assert job.analysis.result["kind"] == store.KIND_ANALYSIS_SNAPSHOT
         assert job.analysis.request is not None
         assert job.analysis.request["include"] is None
 
@@ -1892,7 +1896,7 @@ class TestAttachedAnalysis:
             response_budget.RUNG_TRIM,
             budget=10_000,
             measured=0,
-            reserve=experiments_mod._RUN_BUDGET_NOTES.reserve,
+            reserve=receipts_mod._RUN_BUDGET_NOTES.reserve,
         )
         answer_rung = dataclasses.replace(trim_rung, level=response_budget.RUNG_ANSWER)
         manual_snapshot = experiments_mod.snapshot_receipt(
@@ -1906,7 +1910,7 @@ class TestAttachedAnalysis:
                 control_token=job.control_token,
             )
         )
-        experiments_mod._degrade_receipt(trim_view, trim_rung)
+        receipts_mod._degrade_receipt(trim_view, trim_rung)
         answer_view = experiments_mod.finalize_receipt(
             experiments_mod.render_receipt_snapshot(
                 manual_snapshot,
@@ -1914,7 +1918,7 @@ class TestAttachedAnalysis:
                 analysis_answer_channel=True,
             )
         )
-        experiments_mod._degrade_receipt(answer_view, answer_rung)
+        receipts_mod._degrade_receipt(answer_view, answer_rung)
         trim_size = response_budget.estimate_tokens(trim_view)
         answer_size = response_budget.estimate_tokens(answer_view)
         assert answer_size < trim_size
@@ -1923,11 +1927,9 @@ class TestAttachedAnalysis:
         # budget a third of the rung gap above the measured answer size —
         # still below trim — instead of exactly at it.
         budget = (
-            answer_size
-            + (trim_size - answer_size) // 3
-            + experiments_mod._RUN_BUDGET_NOTES.reserve
+            answer_size + (trim_size - answer_size) // 3 + receipts_mod._RUN_BUDGET_NOTES.reserve
         )
-        assert trim_size > budget - experiments_mod._RUN_BUDGET_NOTES.reserve
+        assert trim_size > budget - receipts_mod._RUN_BUDGET_NOTES.reserve
         answer = _assert_schema(
             await handle_run_experiments(
                 request.model_copy(update={"budget": budget}),
@@ -2063,8 +2065,7 @@ def _recording_simulator(monkeypatch: pytest.MonkeyPatch, submitted: list[Path])
 
     def submit(self, netlist: Path, run_filename: str, callback):
         submitted.append(Path(netlist))
-        raw = self.output_folder / f"{Path(run_filename).stem}.raw"
-        log = self.output_folder / f"{Path(run_filename).stem}.log"
+        raw, log = fake_artifact_paths(self.output_folder, run_filename)
         raw.write_bytes(b"Title: mock")
         log.write_text("ok")
         outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
@@ -2678,7 +2679,7 @@ class TestReceiptWeight:
             manifest=[ordinary, anomalous],
         )
 
-        lean = experiments_mod._source_payload(record, provenance=False)
+        lean = receipts_mod._source_payload(record, provenance=False)
 
         kept = [entry["path"] for entry in lean.get("manifest", [])]
         assert str(anomalous.path) in kept, "an unexplained un-staged entry must survive"

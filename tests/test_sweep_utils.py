@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from ltspice_mcp.lib.experiment_store import validate_job_id
+from ltspice_mcp.lib.store import validate_job_id
 from ltspice_mcp.lib.sweep_utils import (
     generate_id,
     generate_sweep_range,
