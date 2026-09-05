@@ -42,7 +42,7 @@ _DOC_COUNT_CHECKS = (
 class TestToolCountInDocs:
     @pytest.mark.parametrize(("rel", "template"), _DOC_COUNT_CHECKS)
     def test_doc_count_matches_registry(self, rel: str, template: str) -> None:
-        n = len(registry.get_for_profile("consolidated")[0])
+        n = len(registry.get_tools()[0])
         text = (ROOT / rel).read_text()
         assert re.search(template.format(n=n), text), (
             f"{rel} must state the registered tool count {n} "
@@ -182,7 +182,7 @@ class TestConsolidatedSkillDocCoverage:
         # Derived from the registry, not hand-copied: adding a tool to the
         # consolidated profile fails here until the skill doc teaches it (or
         # this pin is deliberately revisited).
-        tool_defs, _ = registry.get_for_profile("consolidated")
+        tool_defs, _ = registry.get_tools()
         names = sorted(t.name for t in tool_defs)
         assert names, "consolidated profile registered no tools"
         text = (ROOT / "skills/spice-experiments/SKILL.md").read_text()

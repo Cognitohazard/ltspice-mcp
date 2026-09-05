@@ -1989,7 +1989,6 @@ def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallTool
         idempotentHint=True,
         openWorldHint=False,
     ),
-    profiles=("consolidated",),
     output_schema=_OUTPUT_SCHEMA,
 )
 async def handle_verify_circuit(

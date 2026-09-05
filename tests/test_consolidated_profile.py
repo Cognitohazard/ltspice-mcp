@@ -14,7 +14,7 @@ import pytest
 
 from ltspice_mcp.config import VALID_PROFILES, ServerConfig
 from ltspice_mcp.server import _ERROR_HINTS, _get_error_hint
-from ltspice_mcp.tools import get_tools_for_profile
+from ltspice_mcp.tools import get_tools
 from tests.conftest import TOOLS_REMOVED_IN_0_6 as _TOOLS_REMOVED_TUPLE
 
 # Single-homed in conftest; frozen view under the name this file always used.
@@ -57,7 +57,7 @@ ANNOTATIONS_TABLE: dict[str, tuple[bool, bool, bool, bool]] = {
 
 
 def _names(profile: str) -> set[str]:
-    defs, _ = get_tools_for_profile(profile)
+    defs, _ = get_tools()
     return {tool_def.name for tool_def in defs}
 
 
@@ -81,7 +81,7 @@ class TestAnnotationsTable:
 
     @pytest.mark.parametrize("name", sorted(CONSOLIDATED_TOOLS))
     def test_annotations_match_design_table(self, name: str):
-        defs, _ = get_tools_for_profile("consolidated")
+        defs, _ = get_tools()
         by_name = {tool_def.name: tool_def for tool_def in defs}
         annotations = by_name[name].annotations
         assert annotations is not None
@@ -94,7 +94,7 @@ class TestAnnotationsTable:
         assert actual == ANNOTATIONS_TABLE[name]
 
     def test_inspect_is_the_only_read_only_tool(self):
-        defs, _ = get_tools_for_profile("consolidated")
+        defs, _ = get_tools()
         read_only = {
             tool_def.name
             for tool_def in defs
@@ -106,7 +106,7 @@ class TestAnnotationsTable:
         """run_experiments launches a simulator; plot_waveform opens a browser.
         Nothing else reaches outside, and a tool that claims to is telling the
         client to gate a call that never leaves the box."""
-        defs, _ = get_tools_for_profile("consolidated")
+        defs, _ = get_tools()
         open_world = {
             tool_def.name
             for tool_def in defs

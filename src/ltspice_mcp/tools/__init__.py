@@ -16,6 +16,6 @@ from . import (  # noqa: F401
 )
 
 
-def get_tools_for_profile(profile: str):
-    """Return tool definitions and dispatch metadata for a profile."""
-    return registry.get_for_profile(profile)
+def get_tools():
+    """Return the advertised tool definitions and their dispatch metadata."""
+    return registry.get_tools()

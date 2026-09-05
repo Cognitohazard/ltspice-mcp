@@ -29,9 +29,6 @@ from ltspice_mcp.config import (
 from ltspice_mcp.config import (
     SIM_SECTION as _SIM_SECTION,
 )
-from ltspice_mcp.config import (
-    VALID_PROFILES,
-)
 from ltspice_mcp.errors import NetlistError, PathSecurityError, SimulationError
 from ltspice_mcp.lib import atomic_write_bytes, response_budget
 from ltspice_mcp.lib.filelock import DEFAULT_TIMEOUT, file_lock
@@ -492,7 +489,6 @@ class RegisteredTool:
     definition: types.Tool
     handler: Callable
     input_model: type[ToolInput] | None
-    profiles: frozenset[str]
 
 
 # JSON Schema keywords whose value is a map from caller-visible NAMES to
@@ -1010,7 +1006,6 @@ class ToolRegistry:
         description: str,
         input_model: type[ToolInput] | None,
         annotations: types.ToolAnnotations,
-        profiles: tuple[str, ...] = ("full",),
         output_schema: dict[str, Any] | None = None,
         output_model: type | None = None,
         meta: dict[str, Any] | None = None,
@@ -1078,60 +1073,53 @@ class ToolRegistry:
                     definition=definition,
                     handler=wrapped,
                     input_model=input_model,
-                    profiles=frozenset(profiles),
                 )
             )
             return wrapped
 
         return decorator
 
-    def field_owners_for_profile(self, profile: str) -> dict[str, tuple[str, ...]]:
-        """Map advertised top-level wire fields to tools in one profile."""
-        effective_profile = profile if profile in VALID_PROFILES else "consolidated"
+    def field_owners(self) -> dict[str, tuple[str, ...]]:
+        """Map each advertised top-level wire field to the tools that take it."""
         owners: dict[str, list[str]] = {}
         for registered in self._registered:
-            if effective_profile not in registered.profiles:
-                continue
             properties = registered.definition.inputSchema.get("properties", {})
             for field in properties:
                 owners.setdefault(field, []).append(registered.definition.name)
         return {field: tuple(sorted(set(names))) for field, names in owners.items()}
 
-    def get_for_profile(self, profile: str) -> tuple[list[types.Tool], dict[str, RegisteredTool]]:
-        """Return the tool list and dispatch map for a profile."""
-        effective_profile = profile if profile in VALID_PROFILES else "consolidated"
+    def get_tools(self) -> tuple[list[types.Tool], dict[str, RegisteredTool]]:
+        """Return the advertised tool list and the dispatch map behind it."""
         tool_defs: list[types.Tool] = []
         tool_dispatch: dict[str, RegisteredTool] = {}
         for registered in self._registered:
-            if effective_profile in registered.profiles:
-                # The ADVERTISED definition serves semantics-only prose (any
-                # description string carrying no load-bearing marker — see
-                # _WIRE_PROSE_KEEP — is dropped from the wire copy) and no
-                # outputSchema (it was the single largest schema block, 84% of
-                # `jobs`, -35% across the consolidated surface; return shapes
-                # are learned from responses instead). The registered
-                # definition — the dispatch side, what the doc gates scan and
-                # the conformance hook validates emissions against — keeps the
-                # full text and the schema, and so do the models behind
-                # api.reference() and spice://guide, which is where a caller
-                # reads the depth.
-                definition = registered.definition.model_copy(
-                    update={
-                        "description": _keep_wire_prose(registered.definition.description),
-                        "inputSchema": _strip_wire_prose(registered.definition.inputSchema),
-                        "outputSchema": None,
-                    }
-                )
-                tool_defs.append(definition)
-                tool_dispatch[registered.definition.name] = registered
+            # The ADVERTISED definition serves semantics-only prose (any
+            # description string carrying no load-bearing marker — see
+            # _WIRE_PROSE_KEEP — is dropped from the wire copy) and no
+            # outputSchema (it was the single largest schema block, 84% of
+            # `jobs`, -35% across the surface; return shapes are learned from
+            # responses instead). The registered definition — the dispatch
+            # side, what the doc gates scan and the conformance hook validates
+            # emissions against — keeps the full text and the schema, and so do
+            # the models behind api.reference() and spice://guide, which is
+            # where a caller reads the depth.
+            definition = registered.definition.model_copy(
+                update={
+                    "description": _keep_wire_prose(registered.definition.description),
+                    "inputSchema": _strip_wire_prose(registered.definition.inputSchema),
+                    "outputSchema": None,
+                }
+            )
+            tool_defs.append(definition)
+            tool_dispatch[registered.definition.name] = registered
         if not tool_defs:
-            # A resolved profile with zero tools would complete the MCP
-            # handshake while advertising nothing — a working connection to an
-            # empty server, which every client reads as "no capabilities"
-            # rather than "misconfigured". Fail loudly instead.
+            # Zero tools would complete the MCP handshake while advertising
+            # nothing — a working connection to an empty server, which every
+            # client reads as "no capabilities" rather than "misconfigured".
+            # Fail loudly instead.
             raise RuntimeError(
-                f"Tool profile {effective_profile!r} resolved to zero tools — "
-                "registration is broken or the profile name no longer exists"
+                "The tool registry resolved to zero tools — a module that "
+                "registers one is no longer imported"
             )
         return tool_defs, tool_dispatch
 

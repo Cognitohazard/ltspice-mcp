@@ -752,7 +752,6 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         idempotentHint=True,
         openWorldHint=True,
     ),
-    profiles=("consolidated",),
     output_schema=RUN_EXPERIMENTS_OUTPUT_SCHEMA,
 )
 async def handle_run_experiments(
@@ -3176,7 +3175,6 @@ def _jobs_error_details(exc: Exception) -> tuple[str, str, bool]:
         idempotentHint=True,
         openWorldHint=False,
     ),
-    profiles=("consolidated",),
     output_schema=JOBS_OUTPUT_SCHEMA,
 )
 async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolResult:

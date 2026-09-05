@@ -1196,7 +1196,6 @@ def complete_edit_schematic_data(
         idempotentHint=False,
         openWorldHint=False,
     ),
-    profiles=("consolidated",),
     output_schema=_OUTPUT_SCHEMA,
 )
 async def handle_edit_schematic(

@@ -34,7 +34,7 @@ from ltspice_mcp.lib.signal_analysis import (
     analyze_timing_between,
     window_and_clean,
 )
-from ltspice_mcp.tools import get_tools_for_profile
+from ltspice_mcp.tools import get_tools
 from ltspice_mcp.tools._base import _schema_for_type, schema_from_typeddict
 
 
@@ -328,10 +328,10 @@ class TestRegisteredOutputSchemas:
                 for i, value in enumerate(node):
                     check(value, f"{path}[{i}]")
 
-        # get_tools_for_profile imports the tool modules (triggering
+        # get_tools imports the tool modules (triggering
         # registration). The wire defs no longer carry outputSchema, so the
         # declared shapes are read from the dispatch-side definitions.
-        _, dispatch = get_tools_for_profile("full")
+        _, dispatch = get_tools()
         checked = 0
         for registered in dispatch.values():
             tool = registered.definition

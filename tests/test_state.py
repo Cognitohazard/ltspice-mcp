@@ -18,7 +18,7 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools import get_tools_for_profile
+from ltspice_mcp.tools import get_tools
 from tests.conftest import make_legacy_record
 
 
@@ -94,7 +94,7 @@ class TestSessionStateCreate:
         def_names = {t.name for t in state.tool_defs}
         assert def_names == set(state.tool_dispatch)
         # The consolidated profile is the only one; state mirrors it exactly.
-        consolidated_defs, _ = get_tools_for_profile("consolidated")
+        consolidated_defs, _ = get_tools()
         assert def_names == {tool_def.name for tool_def in consolidated_defs}
 
 

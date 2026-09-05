@@ -1482,7 +1482,6 @@ INSPECT_DESCRIPTION = (
     description=INSPECT_DESCRIPTION,
     input_model=InspectInput,
     annotations=RO_ANNOTATIONS,
-    profiles=("consolidated",),
     output_schema=_OUTPUT_SCHEMA,
 )
 async def handle_inspect(args: InspectInput, state: SessionState) -> types.CallToolResult:

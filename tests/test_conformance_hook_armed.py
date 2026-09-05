@@ -25,7 +25,7 @@ import pytest
 
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
-from ltspice_mcp.tools import get_tools_for_profile
+from ltspice_mcp.tools import get_tools
 from ltspice_mcp.tools.analysis import SignalStatsInput, handle_signal_stats
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from ltspice_mcp.tools.experiments import JobsInput, handle_jobs
@@ -65,7 +65,7 @@ def _scenario_tool_names() -> set[str]:
 def test_scenario_calls_only_registered_tools():
     """Every tool the scenario script drives must exist in the live registry
     (aliases included), so a rename can't leave the script calling a dead name."""
-    _, dispatch = get_tools_for_profile("consolidated")
+    _, dispatch = get_tools()
     called = _scenario_tool_names()
     assert called, "parsed no call_tool names from the scenario — the regex has rotted"
     unknown = sorted(called - set(dispatch))

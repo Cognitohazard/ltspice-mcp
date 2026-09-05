@@ -29,7 +29,7 @@ import pytest
 from ltspice_mcp.errors import NetlistError, ResultError
 from ltspice_mcp.lib import result_store
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_view
-from ltspice_mcp.tools import get_tools_for_profile
+from ltspice_mcp.tools import get_tools
 from ltspice_mcp.tools.experiments import _decode_jobs_cursor
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.schematic_edit import EditViewCursors, _validate_view_cursors
@@ -48,13 +48,13 @@ CONTRACT_OUTCOMES = frozenset({"complete", "partial", "failed", "in_progress"})
 
 
 def _registered() -> dict[str, Any]:
-    defs, _ = get_tools_for_profile("consolidated")
+    defs, _ = get_tools()
     return {tool_def.name: tool_def for tool_def in defs}
 
 
 def _source_definitions() -> dict[str, Any]:
     """The dispatch-side definitions — full prose and outputSchema intact."""
-    _, dispatch = get_tools_for_profile("consolidated")
+    _, dispatch = get_tools()
     return {name: rt.definition for name, rt in dispatch.items()}
 
 
@@ -63,7 +63,7 @@ def _output_schemas() -> dict[str, dict[str, Any]]:
     # dispatch-side definitions (keyed here by wire names so deprecated
     # aliases can't double-count). Non-None is asserted so every consumer
     # gets a plain dict; the named per-tool pin is TestOutputSchemaCoverage.
-    _, dispatch = get_tools_for_profile("consolidated")
+    _, dispatch = get_tools()
     schemas: dict[str, dict[str, Any]] = {}
     for name in _registered():
         schema = dispatch[name].definition.outputSchema
