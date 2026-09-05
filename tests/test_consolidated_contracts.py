@@ -35,10 +35,10 @@ from ltspice_mcp.tools import get_tools
 from ltspice_mcp.tools.experiments import (
     AttachedAnalysis,
     RunExperimentsInput,
-    _decode_jobs_cursor,
     _validate_attached_analysis,
 )
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
+from ltspice_mcp.tools.jobs import _decode_jobs_cursor
 from ltspice_mcp.tools.schematic_edit import EditViewCursors, _validate_view_cursors
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 
@@ -641,7 +641,7 @@ class TestCursorTamperOnEveryPaginatedInput:
     through its own decode path rather than crashing."""
 
     def test_jobs_cursor_rejects_garbage(self):
-        from ltspice_mcp.tools.experiments import _JobsActionError
+        from ltspice_mcp.tools.jobs import _JobsActionError
 
         with pytest.raises(_JobsActionError) as exc:
             _decode_jobs_cursor("not-a-cursor")

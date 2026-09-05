@@ -1175,7 +1175,10 @@ class TestLegacyJobRecords:
     async def test_status_reports_the_record_and_its_one_observation(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        from ltspice_mcp.tools.experiments import JobsInput, handle_jobs
+        from ltspice_mcp.tools.jobs import (
+            JobsInput,
+            handle_jobs,
+        )
 
         circuit = work_dir / "old.cir"
         circuit.write_text(".op\n.end\n")

@@ -187,7 +187,10 @@ class TestJobTracking:
     async def test_status_reports_a_completed_job(
         self, ltspice_state: SessionState, rc_netlist: Path
     ):
-        from ltspice_mcp.tools.experiments import JobsInput, handle_jobs
+        from ltspice_mcp.tools.jobs import (
+            JobsInput,
+            handle_jobs,
+        )
 
         receipt = await _run_deck(ltspice_state, "lt-job-status", rc_netlist.name)
         result = await handle_jobs(
@@ -204,7 +207,10 @@ class TestJobTracking:
     ):
         # A durable request_id is the client's re-entry point after a dropped
         # connection: it must resolve to the job the first call created.
-        from ltspice_mcp.tools.experiments import JobsInput, handle_jobs
+        from ltspice_mcp.tools.jobs import (
+            JobsInput,
+            handle_jobs,
+        )
 
         receipt = await _run_deck(ltspice_state, "lt-request-id", rc_netlist.name)
         result = await handle_jobs(

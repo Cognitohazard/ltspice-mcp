@@ -116,7 +116,7 @@ class TestPerOperationTree:
         """jobs' arguments ARE the union, so the branches carry nearly every
         field: a catalogue that rendered only the shared half would leave a
         caller with no way to learn how to address, dwell on, or cancel a job."""
-        from ltspice_mcp.tools.experiments import JOBS_ACTIONS
+        from ltspice_mcp.tools.jobs import JOBS_ACTIONS
 
         text = _reference.reference("jobs")
         for action in JOBS_ACTIONS:
@@ -303,7 +303,7 @@ class TestCatalogueDelivery:
             "from ltspice_mcp.api import _methods\n"
             "cold = inspect.getdoc(_methods.ApiMethodsMixin.run_experiments)\n"
             "print('COLD-BARE', not cold or 'wait=False' not in cold)\n"
-            "_methods.experiments.JobsInput\n"
+            "_methods.experiments.RunExperimentsInput\n"
             "doc = inspect.getdoc(_methods.ApiMethodsMixin.run_experiments)\n"
             "print('WARM-FULL', bool(doc) and 'wait=False' in doc)\n"
         )

@@ -151,10 +151,12 @@ async def terminal_experiment(state, payload: dict, *, wait_timeout_s: int = 120
     Shared by the live ngspice/LTspice end-to-end files.
     """
     from ltspice_mcp.tools.experiments import (
-        JobsInput,
         RunExperimentsInput,
-        handle_jobs,
         handle_run_experiments,
+    )
+    from ltspice_mcp.tools.jobs import (
+        JobsInput,
+        handle_jobs,
     )
 
     result = await handle_run_experiments(RunExperimentsInput.model_validate(payload), state)
