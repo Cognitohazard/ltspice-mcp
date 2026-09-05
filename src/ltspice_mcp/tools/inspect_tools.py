@@ -4,7 +4,8 @@ One tool answers a batch of independent read-only ``queries`` about the server
 and the circuits it can reach. Each query is one of seven kinds:
 
 * ``capabilities`` — detected simulators + dialects, exporter presence, job
-  persistence, allowed roots, active profile, the configured limits, the
+  persistence, allowed roots, the active profile and which of the two tool
+  listings this session was served, the configured limits, the
   linter version, and ``diagnostics``: the startup notes (bad configured
   simulator path, a requested engine that fell back, WSL auto-detection) that
   say whether this server started degraded. Pulled from
@@ -821,6 +822,11 @@ def _do_capabilities(state: SessionState) -> dict[str, Any]:
         "persist_jobs": state.config.persist_jobs,
         "allowed_paths": [str(p) for p in state.config.allowed_paths],
         "tool_profile": state.config.tool_profile,
+        # Which of the two tool listings this session was served. The guide
+        # tells a caller to reach for inspect(kind="reference") whenever the
+        # listing is compact, because the per-argument descriptions are then
+        # not on the wire — and this is the only place that fact is readable.
+        "tool_listing": state.config.tool_listing,
         "limits": {
             "max_experiment_cases": state.config.max_experiment_cases,
             "analysis_budget_s": state.config.analysis_budget_s,
