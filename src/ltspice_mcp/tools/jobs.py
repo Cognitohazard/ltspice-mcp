@@ -271,15 +271,17 @@ def jobs_input_schema() -> dict[str, Any]:
     declares them itself, so hoisting constrains nothing new.
 
     The branches are then applied through ``if``/``then`` on the discriminant
-    rather than pydantic's ``oneOf``, because the server SDK validates
-    arguments against this schema before the tool is dispatched and reports the
-    single best error. Under ``oneOf`` that error is always the root
-    "is not valid under any of the given schemas", which names neither the
-    legal actions nor the offending field; under ``if``/``then`` only the
-    matching action's constraints fail, so the caller is told that 'frobnicate'
-    is not one of the five, or exactly which field this action does not take.
-    ``discriminator.propertyName`` is kept beside them, saying that the
-    branches are alternatives chosen by ``action``; the branch table itself is
+    rather than pydantic's ``oneOf`` so that a client reading the published
+    schema can see which action takes which field: each pair names one action
+    and the constraints that come with it, where a ``oneOf`` list says only
+    that one of five shapes has to match and leaves the reader to work out
+    which fields belong to which. The error a bad call gets does not depend on
+    the choice — nothing validates a call against the published schema; the
+    message comes from ``JobsInput`` itself, through
+    ``errors.compact_validation_error`` over pydantic's report, and pydantic
+    enumerates the five actions from the model either way.
+    ``discriminator.propertyName`` is kept beside the branches, saying that
+    they are alternatives chosen by ``action``; the branch table itself is
     not, because each ``if``/``then`` pair already names an action and the
     ``$defs`` entry it selects.
     """
