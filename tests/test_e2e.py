@@ -21,8 +21,12 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import pytest
+from mcp import types as mcp_types
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.shared.exceptions import MCPError
+from mcp.types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_MODERN_VERSION
 
 from tests.conftest import FIXTURES_DIR
 
@@ -186,6 +190,25 @@ class TestServerLifecycle:
             assert init.instructions is not None
             assert "No SPICE simulator detected" in init.instructions
 
+    async def test_discover_reports_capabilities_and_active_simulator(self, tmp_path):
+        # The 2026-07-28 revision has no initialize handshake: a client asks
+        # server/discover instead, and the instructions must be built from the
+        # same live state the handshake reads — not from a snapshot taken
+        # before the server detected its simulators.
+        params = _server_params(tmp_path)
+        async with (
+            stdio_client(params) as (read_stream, write_stream),
+            ClientSession(read_stream, write_stream) as session,
+        ):
+            result = await session.discover()
+            assert LATEST_MODERN_VERSION in result.supported_versions
+            assert result.capabilities.tools is not None
+            assert result.capabilities.resources is not None
+            assert result.capabilities.prompts is not None
+            assert result.instructions is not None
+            # Detection is disabled in this harness -> the no-simulator line.
+            assert "No SPICE simulator detected" in result.instructions
+
     async def test_server_name_override_via_env(self, tmp_path):
         # The alias packages (circuit-mcp/ngspice-mcp) set LTSPICE_MCP_SERVER_NAME
         # so the handshake identifies as the alias, not the canonical name.
@@ -248,6 +271,55 @@ class TestServerLifecycle:
             result = await session.list_tools()
             names = {t.name for t in result.tools}
             assert names == CONSOLIDATED_TOOLS
+            # Each carries a display title, and none of them is the wire name.
+            for tool in result.tools:
+                assert tool.title and tool.title != tool.name
+
+    async def test_listings_advertise_how_long_they_stay_fresh(self, tmp_path):
+        """The tool, resource and prompt listings are built once at startup and
+        never change while the process runs, so the server tells the client how
+        long it may hold onto one instead of re-listing every turn.
+
+        Sent on a 2026-07-28 connection, where the freshness fields exist. The
+        older handshake has nowhere to carry them, so it is unaffected.
+        """
+        params = _server_params(tmp_path)
+        async with (
+            stdio_client(params) as (read_stream, write_stream),
+            ClientSession(read_stream, write_stream) as session,
+        ):
+            await session.discover()
+            for result in (
+                await session.list_tools(),
+                await session.list_resources(),
+                await session.list_resource_templates(),
+                await session.list_prompts(),
+            ):
+                assert result.ttl_ms > 0, f"{type(result).__name__} is advertised as never fresh"
+                # Every listing is shaped by this server's own sandbox and
+                # configuration, so it must not be served from a shared cache.
+                assert result.cache_scope == "private"
+
+    async def test_the_freshness_hint_stays_off_a_handshake_connection(self, tmp_path):
+        """A client on an older revision has no field to read it from, so the
+        hint must not reach the wire there — it comes back at the model's
+        default, which is what an absent field parses as."""
+        async with mcp_session(tmp_path) as session:
+            assert session.protocol_version in HANDSHAKE_PROTOCOL_VERSIONS
+            assert (await session.list_tools()).ttl_ms == 0
+
+    async def test_reading_a_resource_is_not_advertised_as_cacheable(self, tmp_path):
+        """A resource's content changes under the client — a netlist is edited,
+        a job finishes — so a read is stale the moment it is answered."""
+        (tmp_path / "circuit.cir").write_text("* Test\nR1 a b 1k\n.END\n")
+        params = _server_params(tmp_path)
+        async with (
+            stdio_client(params) as (read_stream, write_stream),
+            ClientSession(read_stream, write_stream) as session,
+        ):
+            await session.discover()
+            result = await session.read_resource("spice://netlists/circuit.cir")
+            assert result.ttl_ms == 0
 
     async def test_plot_waveform_declares_ui_resource_over_protocol(self, tmp_path):
         # The MCP Apps UI link must survive the wire as _meta on the tool
@@ -676,6 +748,25 @@ class TestResources:
             result = await session.read_resource("spice://models/")
             data = json.loads(result.contents[0].text)  # type: ignore[union-attr]
             assert data["libraries"] == []
+
+    async def test_unknown_resource_uri_is_an_invalid_parameter(self, tmp_path):
+        # A URI naming no resource this server serves is a protocol error, not
+        # empty contents. 2026-07-28 dropped the separate resource-not-found
+        # code that earlier revisions used, so it is an invalid parameter.
+        async with mcp_session(tmp_path) as session:
+            with pytest.raises(MCPError) as excinfo:
+                await session.read_resource("spice://no-such-resource")
+            assert excinfo.value.code == mcp_types.INVALID_PARAMS
+            assert "Unknown resource URI" in excinfo.value.message
+
+    async def test_reading_a_netlist_outside_the_sandbox_is_refused(self, tmp_path):
+        # The sandbox wall applies to resource reads too, and the refusal must
+        # carry the same recovery guidance the tool path gives.
+        async with mcp_session(tmp_path) as session:
+            with pytest.raises(MCPError) as excinfo:
+                await session.read_resource("spice://netlists/..%2F..%2Fetc%2Fpasswd")
+            assert excinfo.value.code == mcp_types.INVALID_PARAMS
+            assert "LTSPICE_MCP_ALLOWED_PATHS" in excinfo.value.message
 
 
 # ---------------------------------------------------------------------------
