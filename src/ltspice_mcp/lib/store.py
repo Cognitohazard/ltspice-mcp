@@ -20,6 +20,10 @@ The layout, rooted at the working directory::
     |-- results/
     |   |-- {result_set_id}.json            an immutable analyze_results set
     |   `-- artifacts/{result_set_id}/      files those results point at
+    |-- detached/                           per-job detached owner hand-off
+    |   |-- {digest}.request.json           the request one owner was spawned for
+    |   |-- {digest}.receipt.json           the receipt that owner reported back
+    |   `-- {digest}.log                    that owner's stdout and stderr
     |-- renders/                            schematic images
     |-- verify/                             verify_circuit exports
     |-- edit-exports/{build_id}/            edit_schematic exports
@@ -104,6 +108,12 @@ KIND_CANCELLATION = "cancellation"
 KIND_RESULT_SET = "result-set"
 KIND_ANALYSIS_SNAPSHOT = "attached-analysis"
 KIND_RECENT = "recent-circuits"
+# The two sides of the detached-owner hand-off. Transient rather than durable —
+# both are consumed by the call that created them — but they live in the store
+# tree and carry the same envelope, so a file that is not one of ours is
+# refused rather than interpreted.
+KIND_DETACHED_REQUEST = "detached-request"
+KIND_DETACHED_RECEIPT = "detached-receipt"
 
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -424,6 +434,32 @@ class Store:
         """The durable "someone asked for this to stop" marker."""
         validate_job_id(job_id)
         return self.experiments_dir / "cancellations" / f"{job_id}.json"
+
+    # -- detached owners ----------------------------------------------------
+
+    @property
+    def detached_dir(self) -> Path:
+        """Hand-off files and console logs for per-job detached owner processes.
+
+        A ``run_experiments(detach=True)`` call writes its request here, the
+        owner it spawns writes the receipt back here, and the owner's stdout
+        and stderr are appended to a log here. All three are named from the
+        ``request_id``, so a replay of the same request reuses the same files
+        instead of leaving a new set behind.
+        """
+        return self.root / "detached"
+
+    def detached_request(self, request_id: str) -> Path:
+        """The request a detached owner is spawned to run. Deleted once read."""
+        return self.detached_dir / f"{path_digest(request_id)}.request.json"
+
+    def detached_receipt(self, request_id: str) -> Path:
+        """Where a detached owner reports its durable receipt, or its failure."""
+        return self.detached_dir / f"{path_digest(request_id)}.receipt.json"
+
+    def detached_log(self, request_id: str) -> Path:
+        """A detached owner's console output, appended across replays."""
+        return self.detached_dir / f"{path_digest(request_id)}.log"
 
     # -- locks --------------------------------------------------------------
 
