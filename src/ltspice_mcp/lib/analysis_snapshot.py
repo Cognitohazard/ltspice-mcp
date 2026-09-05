@@ -32,10 +32,11 @@ def classify(value: Any) -> Literal["snapshot", "unsupported", "legacy"]:
     """Say what a stored attached-analysis value is.
 
     ``legacy`` means the slot holds something that was never a snapshot — a
-    public analysis result written before the envelope existed — and the caller
-    re-renders it. ``unsupported`` means it IS a snapshot, from a store version
-    this build does not read, which is the one case where guessing at the shape
-    would be wrong.
+    public analysis result written before the envelope existed. ``unsupported``
+    means it IS a snapshot, from a store version this build does not read.
+    Either way the renderer refuses and points at re-running the analysis:
+    guessing at a shape this build did not write is what the envelope exists to
+    prevent.
     """
     if not isinstance(value, dict) or value.get("kind") != KIND_ANALYSIS_SNAPSHOT:
         return "legacy"
