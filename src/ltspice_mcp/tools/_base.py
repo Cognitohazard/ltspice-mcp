@@ -366,7 +366,7 @@ MEAS_ERRORS_SCHEMA: dict[str, Any] = {
 }
 
 # Surfaced result observations — see lib/result_observations.py and the
-# "Result-trust: surface, don't judge" in CLAUDE.md. A "surfacer"
+# "Result trust: report facts, do not rate them" in CLAUDE.md. A surfacing
 # layer: facts lifted into view for the consuming agent to judge, never a trust
 # verdict. ``severity`` is present only on ``relay`` items (the simulator's own
 # classification); ``value``/``reconciliation``/``coverage`` items omit it.

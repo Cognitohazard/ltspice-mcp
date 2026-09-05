@@ -1120,7 +1120,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
                 "code": "widget_delivered",
                 "kind": "coverage",
                 "detail": (
-                    "Client advertises MCP Apps (ui://) support; the chart spec is carried in "
+                    "Client advertises MCP Apps (ui://) support; the chart spec is in "
                     "this result's _meta for the host to render in-chat (not shown to the "
                     "model; local open skipped). The full-fidelity HTML was still written "
                     "to the returned path."

@@ -267,11 +267,11 @@ def not_met_observation(rung: Rung, estimate: int) -> dict[str, Any]:
         "kind": OBSERVATION_KIND,
         "detail": (
             f"budget={rung.budget} est. tokens could not be met: the fully degraded "
-            f"response is an estimated {estimate} tokens, and what remains is the "
-            "fact floor (failures, observations, warnings, completeness, verdicts) "
-            "plus the handles to reach the rest. Facts are never cut to fit a "
-            "budget, so this response is over the budget instead. Narrow the "
-            "request itself — fewer sources, recipes or queries per call."
+            f"response is an estimated {estimate} tokens. What remains is failures, "
+            "observations, warnings, completeness and verdicts, plus the cursors and "
+            "ids that reach the rest. Facts are not removed to fit a budget, so this "
+            "response is over the budget instead. Narrow the request itself — fewer "
+            "sources, recipes or queries per call."
         ),
     }
 

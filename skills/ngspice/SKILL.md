@@ -5,7 +5,7 @@ description: >
   working with ngspice scripting (.control blocks), or interpreting simulation
   results. Covers ngspice-specific SPICE syntax, behavioral sources, .control
   scripting, Monte Carlo via control loops, parameters, XSPICE, .save, .MEAS,
-  convergence, and common gotchas that cause silent errors. Use this skill
+  convergence, and the conditions that cause silent errors. Use this skill
   whenever the user mentions ngspice, or is writing SPICE netlists targeting
   ngspice rather than LTspice.
 ---
@@ -102,13 +102,13 @@ PWL(t1 v1 t2 v2 ...)
 - `par('expression')` — inline algebraic expression on any output variable (uses B source syntax internally).
 - `SP` analysis type for spectrum (fft) measurements (via `meas` command, not `.meas` line).
 
-**Gotchas:**
+**Important behavior:**
 - RISE/FALL/CROSS numbering starts at **1**, not 0.
 - If TRIG event never occurs, measurement silently fails.
 - `.meas` is refused when batch mode (`-b`) is combined with `-r rawfile`, which is how `run_experiments` invokes ngspice. ngspice prints `No .measure possible in batch mode (-b) with -r rawfile set!` and computes nothing. Recovery: move the measurement into a `.control ... run ... .endc` block as the dot-less `meas` command, e.g. `meas tran vmax MAX V(out)`. A dotted `.meas` inside `.control` is not a valid command and silently does nothing. The result prints to the run's log.
 - `param` and `par` are not available inside `.control` blocks — use `let` instead.
 
-### General Pitfalls
+### General notes
 
 - **Node "0" is ground**. Using `GND` without `.global GND` or tying it to 0 creates a floating node — no error, wrong results.
 - **MOSFET requires 4 terminals**: `M1 d g s b` — ngspice does not auto-connect bulk to source (LTspice does).
@@ -191,7 +191,7 @@ Blimit b 0 V = pwl(v(1), -4,0, -2,2, 2,4, 4,5, 6,5)
 ```
 x values must be monotonically increasing — non-monotonic stops execution. Can use `time` or expressions as the independent variable.
 
-**Gotchas:**
+**Important behavior:**
 - `exp()` is internally capped at argument=14 — beyond that it becomes linear (for convergence).
 - `log`/`ln`/`sqrt` of negative values use `fabs()` automatically — no error, may give unexpected results.
 - Division by zero or `log(0)` causes an error.
@@ -222,7 +222,7 @@ X1 input output myfilter rval=1k cval=1n
 ```spice
 .save V(out) I(Vin)               $ save only these signals
 .save @m1[id] @m1[gm]             $ save internal device parameters
-.save all @m2[vdsat]               $ save defaults PLUS extras
+.save all @m2[vdsat]               $ save defaults plus extras
 ```
 
 - Without `.save`, all node voltages and source currents are saved (can create huge files).

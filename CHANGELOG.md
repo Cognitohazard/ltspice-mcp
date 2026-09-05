@@ -118,7 +118,7 @@ Error codes that only those handlers emitted are gone with them:
   find working-directory jobs are gone; the store's own index does that. A
   job sidecar written by 0.5 still loads as an inert record.
 
-### Changed — a job record from an earlier release is inert, not broken
+### Changed — how a job record from an earlier release loads
 
 A job sidecar written by a pre-0.6 release still loads, and loading one
 never breaks the registry or the startup preload. It comes back as a record

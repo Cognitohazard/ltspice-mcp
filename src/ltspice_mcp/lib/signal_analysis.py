@@ -54,7 +54,7 @@ class PulseResponseOutput(TypedDict):
     parsing the free-text ``warnings`` (e.g. ``net_step_small_vs_swing``,
     ``levels_bootstrapped_from_boundary``). Each code names an *input condition or
     computation-provenance fact*, never a result verdict — see the repo-wide
-    "Result-trust: surface, don't judge" in CLAUDE.md.
+    "Result trust: report facts, do not rate them" in CLAUDE.md.
     """
 
     direction: CrossingDirection
