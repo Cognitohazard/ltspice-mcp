@@ -1213,10 +1213,10 @@ def complete_jobs_data(evaluation: JobsEvaluation) -> dict[str, Any]:
     ),
     input_model=JobsInput,
     annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=True,
-        idempotentHint=True,
-        openWorldHint=False,
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=True,
+        open_world_hint=False,
     ),
     output_schema=JOBS_OUTPUT_SCHEMA,
 )
@@ -1252,5 +1252,5 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
 
     data, text = built
     result = format_response(text, data)
-    result.isError = evaluation.is_error
+    result.is_error = evaluation.is_error
     return result

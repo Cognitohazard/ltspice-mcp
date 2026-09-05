@@ -508,10 +508,10 @@ class RunExperimentsInput(ToolInput):
     ),
     input_model=RunExperimentsInput,
     annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=True,
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=True,
     ),
     output_schema=RUN_EXPERIMENTS_OUTPUT_SCHEMA,
 )
@@ -1365,7 +1365,7 @@ async def _post_submit_error_response(
         )
         finalize_receipt(minimal)
         result = format_response(text, minimal)
-        result.isError = True
+        result.is_error = True
         return result
 
 

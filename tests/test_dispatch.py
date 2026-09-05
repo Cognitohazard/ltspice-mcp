@@ -59,7 +59,7 @@ class TestDispatchTable:
         for name, registered in handlers.items():
             if registered.input_model is None:
                 continue
-            required = registered.definition.inputSchema.get("required", [])
+            required = registered.definition.input_schema.get("required", [])
             if not required:
                 continue
             try:
@@ -73,7 +73,7 @@ class TestToolSchemas:
     def test_all_schemas_valid(self):
         defs, _ = get_tools()
         for tool_def in defs:
-            schema = tool_def.inputSchema
+            schema = tool_def.input_schema
             assert schema, f"{tool_def.name}: no inputSchema"
             assert schema.get("type") == "object", f"{tool_def.name}: schema type is not 'object'"
             assert "properties" in schema, f"{tool_def.name}: no properties"
@@ -81,7 +81,7 @@ class TestToolSchemas:
     def test_required_fields_in_properties(self):
         defs, _ = get_tools()
         for tool_def in defs:
-            schema = tool_def.inputSchema
+            schema = tool_def.input_schema
             required = schema.get("required", [])
             props = schema.get("properties", {})
             for req in required:
@@ -101,7 +101,7 @@ class TestConsolidatedInputDocumentation:
         assert registered, "no tools registered"
         undocumented: list[str] = []
         for tool_def in registered:
-            for field, prop in (tool_def.inputSchema.get("properties") or {}).items():
+            for field, prop in (tool_def.input_schema.get("properties") or {}).items():
                 if not (prop.get("description") or "").strip():
                     undocumented.append(f"{tool_def.name}.{field}")
         assert not undocumented, (
@@ -136,12 +136,12 @@ class TestDestructiveAnnotations:
         by_name = {d.name: d for d in defs}
         tool = by_name["edit_schematic"]
         assert tool.annotations is not None
-        assert tool.annotations.destructiveHint is True, "edit_schematic not marked destructive"
+        assert tool.annotations.destructive_hint is True, "edit_schematic not marked destructive"
         # edit_schematic earns the hint because its batch can run the
         # remove_component op (and commit a whole-file rewrite); keep the two
         # tied so the hint can't silently rot if that op is ever dropped. The
         # tie is the op union itself, which names every op it accepts.
-        ops = tool.inputSchema["properties"]["ops"]["items"]
+        ops = tool.input_schema["properties"]["ops"]["items"]
         assert "remove_component" in ops["discriminator"]["mapping"]
 
 
@@ -306,7 +306,7 @@ class TestMutatingToolsAreReversible:
 
     def test_every_mutating_tool_declares_a_reversal(self):
         defs = _all_profile_defs()
-        mutating = {d.name for d in defs if not (d.annotations and d.annotations.readOnlyHint)}
+        mutating = {d.name for d in defs if not (d.annotations and d.annotations.read_only_hint)}
         undeclared = mutating - _TOOL_REVERSAL.keys()
         assert not undeclared, (
             f"Mutating tools with no declared reversal: {sorted(undeclared)}. "
@@ -367,7 +367,7 @@ class TestSchemaPostProcessing:
         silent return to inlining fails here instead of quietly re-bloating."""
         any_defs = False
         for tool_def in _all_profile_defs():
-            schema = tool_def.inputSchema
+            schema = tool_def.input_schema
             defs = schema.get("$defs", {})
             any_defs = any_defs or bool(defs)
 
@@ -395,7 +395,7 @@ class TestSchemaPostProcessing:
         schema slimmer mints definitions of its own, so a rule that stopped
         earning its keep would otherwise leave an orphan behind silently."""
         for tool_def in _all_profile_defs():
-            schema = tool_def.inputSchema
+            schema = tool_def.input_schema
             text = json.dumps(schema)
             orphans = [name for name in schema.get("$defs", {}) if f'"#/$defs/{name}"' not in text]
             assert not orphans, f"{tool_def.name}: unreferenced $defs entries {orphans}"
@@ -420,7 +420,7 @@ class TestSchemaPostProcessing:
                     for i, item in enumerate(node):
                         walk(item, f"{path}[{i}]")
 
-            walk(tool_def.inputSchema, "root")
+            walk(tool_def.input_schema, "root")
 
     def test_const_carries_no_redundant_type(self):
         """A literal already pins its own type, so the ``type`` beside a
@@ -440,7 +440,7 @@ class TestSchemaPostProcessing:
                     for i, item in enumerate(node):
                         walk(item, f"{path}[{i}]")
 
-            walk(tool_def.inputSchema, "root")
+            walk(tool_def.input_schema, "root")
 
     def test_no_title_annotation_survives_in_any_profile(self):
         """Pydantic's 'title' metadata is stripped wherever it is a keyword.
@@ -448,7 +448,7 @@ class TestSchemaPostProcessing:
         Structural, not by key name: inside a properties/$defs map the keys are
         argument names, and one of them really is called 'title'."""
         for tool_def in _all_profile_defs():
-            _assert_no_title_annotation(tool_def.inputSchema, tool_def.name, "root")
+            _assert_no_title_annotation(tool_def.input_schema, tool_def.name, "root")
 
     def test_a_property_actually_named_title_is_advertised(self):
         """The plot recipe takes a 'title'; the handler reads it. Stripping the
@@ -461,7 +461,7 @@ class TestSchemaPostProcessing:
         for tool_def in _all_profile_defs():
             if tool_def.name != "analyze_results":
                 continue
-            advertised = json.dumps(tool_def.inputSchema)
+            advertised = json.dumps(tool_def.input_schema)
             assert '"title"' in advertised, (
                 "analyze_results advertises no 'title' property — the plot "
                 "recipe's title argument is undiscoverable again"
@@ -478,10 +478,10 @@ class TestSchemaPostProcessing:
         declared = {t.name: t for t in _all_profile_declared_defs()}
         stripped = 0
         for tool_def in _all_profile_defs():
-            assert tool_def.outputSchema is None, (
+            assert tool_def.output_schema is None, (
                 f"{tool_def.name}: wire definition still advertises outputSchema"
             )
-            if declared[tool_def.name].outputSchema is not None:
+            if declared[tool_def.name].output_schema is not None:
                 stripped += 1
         assert stripped > 0, "no tool declares an output schema — hook is vacuous"
 
@@ -494,7 +494,7 @@ class TestSchemaPostProcessing:
         outputSchema, but the pin stays on the declared side against the day
         it is re-exposed."""
         for tool_def in _all_profile_declared_defs():
-            schema = tool_def.outputSchema
+            schema = tool_def.output_schema
             if schema is None:
                 continue
             assert schema.get("type") == "object", (
@@ -512,7 +512,7 @@ class TestSchemaPostProcessing:
         key so no individual tool has to remember; this pins that it reached
         every one of them, in every profile."""
         for tool_def in _all_profile_declared_defs():
-            schema = tool_def.outputSchema
+            schema = tool_def.output_schema
             if schema is None:
                 continue
             declared = (schema.get("properties") or {}).get("warnings")
@@ -535,7 +535,7 @@ class TestSchemaPostProcessing:
         defs, _ = get_tools()
         experiment_tools = [d for d in defs if d.name == "run_experiments"]
         assert experiment_tools, "run_experiments not found"
-        schema = experiment_tools[0].inputSchema
+        schema = experiment_tools[0].input_schema
         circuits_prop = schema["properties"]["circuits"]
         assert "items" in circuits_prop, "circuits should have items schema"
         resolved = resolve_local_ref(schema, circuits_prop["items"])

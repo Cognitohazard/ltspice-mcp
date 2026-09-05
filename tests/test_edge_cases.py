@@ -279,7 +279,7 @@ class TestWirePinsZeroLength:
             ),
             asc_state,
         )
-        data = result.structuredContent
+        data = result.structured_content
         assert data is not None
         assert len(data["failures"]) == 1
         assert "same coordinate" in data["failures"][0]["error"]
@@ -714,9 +714,9 @@ class TestSanitizePayloadNonFinite:
         from ltspice_mcp.tools._base import format_response
 
         res = format_response("Value: nan", {"value": float("nan")})
-        assert res.structuredContent is not None
-        assert res.structuredContent["value"] is None
-        assert "warnings" in res.structuredContent
+        assert res.structured_content is not None
+        assert res.structured_content["value"] is None
+        assert "warnings" in res.structured_content
 
 
 # ---------------------------------------------------------------------------

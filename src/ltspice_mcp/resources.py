@@ -16,7 +16,6 @@ from typing import Any
 from urllib.parse import quote, unquote
 
 from mcp import types
-from pydantic import AnyUrl
 
 from ltspice_mcp.config import VALID_PROFILES
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, services
@@ -61,10 +60,11 @@ class ResourceRouter:
     def dispatch(self, uri_str: str, state: SessionState) -> types.ReadResourceResult:
         """Dispatch a URI to the first matching route.
 
-        Captured template params are percent-decoded: the SDK validates
-        resources/read URIs as AnyUrl, which percent-encodes spaces and
-        non-ASCII on ingest ("rc filter.cir" arrives as "rc%20filter.cir"),
-        so the raw capture would never match a real filename on disk.
+        Captured template params are percent-decoded: a client that encodes
+        spaces and non-ASCII sends "rc filter.cir" as "rc%20filter.cir", and
+        the raw capture would never match a real filename on disk. A client
+        that sends the name unencoded is unaffected — decoding a string with
+        nothing to decode returns it unchanged.
         """
         for route in self._routes:
             match = route.pattern.fullmatch(uri_str)
@@ -100,51 +100,51 @@ def get_static_resources() -> list[types.Resource]:
     return [
         types.Resource(
             name="netlists",
-            uri=AnyUrl("spice://netlists/"),
+            uri="spice://netlists/",
             description="List of netlist files in the working directory",
-            mimeType="application/json",
+            mime_type="application/json",
         ),
         types.Resource(
             name="results",
-            uri=AnyUrl("spice://results/"),
+            uri="spice://results/",
             description="List of all simulation jobs and their status",
-            mimeType="application/json",
+            mime_type="application/json",
         ),
         types.Resource(
             name="models",
-            uri=AnyUrl("spice://models/"),
+            uri="spice://models/",
             description="User-loaded SPICE model libraries and their models",
-            mimeType="application/json",
+            mime_type="application/json",
         ),
         types.Resource(
             name="config",
-            uri=AnyUrl("spice://config"),
+            uri="spice://config",
             description="Server configuration and detected simulators",
-            mimeType="application/json",
+            mime_type="application/json",
         ),
         types.Resource(
             name="plot_widget",
-            uri=AnyUrl(WIDGET_RESOURCE_URI),
+            uri=WIDGET_RESOURCE_URI,
             description=(
                 "Interactive chart renderer (MCP Apps / SEP-1865). plot_waveform "
                 "references this via _meta.ui.resourceUri; an apps-capable host "
                 "fetches it and renders the chart inline."
             ),
-            mimeType=WIDGET_MIME_TYPE,
+            mime_type=WIDGET_MIME_TYPE,
         ),
         types.Resource(
             name="recent",
-            uri=AnyUrl("spice://recent"),
+            uri="spice://recent",
             description=(
                 "Recently-edited circuit files with persisted-job summary counts. "
                 "Surfaces work from prior sessions, including interrupted jobs."
             ),
-            mimeType="application/json",
+            mime_type="application/json",
         ),
         types.Resource(
             name="guide",
-            uri=AnyUrl("spice://guide"),
-            mimeType="text/markdown",
+            uri="spice://guide",
+            mime_type="text/markdown",
             description=(
                 "SPICE authoring & schematic guide (LTspice + ngspice): syntax, value "
                 "notation (M=milli), waveform sources, .meas, behavioral sources, "
@@ -161,21 +161,21 @@ def get_resource_templates() -> list[types.ResourceTemplate]:
     return [
         types.ResourceTemplate(
             name="netlist_content",
-            uriTemplate="spice://netlists/{filename}",
+            uri_template="spice://netlists/{filename}",
             description="Full text content of a specific netlist file",
-            mimeType="text/plain",
+            mime_type="text/plain",
         ),
         types.ResourceTemplate(
             name="job_signals",
-            uriTemplate="spice://results/{job_id}/signals",
+            uri_template="spice://results/{job_id}/signals",
             description="List of signal/trace names in a simulation result",
-            mimeType="application/json",
+            mime_type="application/json",
         ),
         types.ResourceTemplate(
             name="job_measurements",
-            uriTemplate="spice://results/{job_id}/measurements",
+            uri_template="spice://results/{job_id}/measurements",
             description="SPICE .MEAS measurement results for a simulation",
-            mimeType="application/json",
+            mime_type="application/json",
         ),
     ]
 
@@ -203,9 +203,9 @@ def _make_result(
     return types.ReadResourceResult(
         contents=[
             types.TextResourceContents(
-                uri=AnyUrl(uri_str),
+                uri=uri_str,
                 text=text,
-                mimeType=mime,
+                mime_type=mime,
             )
         ]
     )
@@ -362,9 +362,9 @@ def _read_netlists_list(
     """List all netlist files in the working directory."""
     del params
     working_dir = state.working_dir
-    # quote(): a listed URI must round-trip through the client's AnyUrl
-    # normalization and back through dispatch's unquote — a raw space or 'µ'
-    # here would list a resource the read path can never serve.
+    # quote(): a listed URI must survive whatever normalization a client
+    # applies to it and come back through dispatch's unquote — a raw space or
+    # 'µ' here would list a resource the read path can never serve.
     netlists = [
         {"name": f.name, "uri": f"spice://netlists/{quote(f.name)}"}
         for f in working_dir.iterdir()

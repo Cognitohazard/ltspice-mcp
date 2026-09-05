@@ -210,11 +210,11 @@ def _message_for_error(payload: Mapping[str, Any], result: types.CallToolResult)
 
 
 def _unwrap(result: types.CallToolResult) -> dict[str, Any]:
-    structured = result.structuredContent
+    structured = result.structured_content
     if not isinstance(structured, Mapping):
         raise ApiInternalError("The engine response did not contain structuredContent")
     payload = copy.deepcopy(dict(structured))
-    if result.isError:
+    if result.is_error:
         raise ApiCallError(_message_for_error(payload, result), payload=payload)
     return payload
 

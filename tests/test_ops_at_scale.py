@@ -83,7 +83,7 @@ async def _build(state: SessionState, name: str, ops: list[dict]) -> dict:
         ),
         state,
     )
-    data = result.structuredContent
+    data = result.structured_content
     assert data is not None
     return data
 

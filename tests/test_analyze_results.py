@@ -63,8 +63,8 @@ async def _analyze(
     **extra: Any,
 ) -> dict[str, Any]:
     result = await handle_analyze_results(_args(raw, recipes, **extra), state)
-    assert result.structuredContent is not None
-    return result.structuredContent
+    assert result.structured_content is not None
+    return result.structured_content
 
 
 EXECUTION_CASES = [
@@ -221,7 +221,7 @@ async def test_spec_verdict_incomplete_matrix(
         }
     )
     result = await handle_analyze_results(args, state_no_sim)
-    data = result.structuredContent
+    data = result.structured_content
     assert data is not None
     verdict = data["results"]["vout"]["spec"]
     assert verdict["verdict"] == expected
@@ -287,13 +287,13 @@ async def test_oversized_artifact_defers_whole_after_progress_then_continues(
 
     continuation = AnalyzeResultsInput.model_validate({"continue": first["next"]})
     resumed = await handle_analyze_results(continuation, state_no_sim)
-    assert resumed.structuredContent is not None
-    assert "csv" in resumed.structuredContent["results"]
-    artifact = resumed.structuredContent["results"]["csv"]["values"][0]["value"]["artifact"]
+    assert resumed.structured_content is not None
+    assert "csv" in resumed.structured_content["results"]
+    artifact = resumed.structured_content["results"]["csv"]["values"][0]["value"]["artifact"]
     assert artifact["sha256"]
     artifact_size = await asyncio.to_thread(lambda: Path(artifact["path"]).stat().st_size)
     assert artifact["bytes"] == artifact_size
-    assert resumed.structuredContent["next"] is None
+    assert resumed.structured_content["next"] is None
 
 
 class _NeutralWork(NamedTuple):
@@ -427,8 +427,8 @@ async def test_neutral_failures_are_uncapped_while_mcp_keeps_its_cap(
     assert list(_neutral_work(neutral)[0].failures) == failures
 
     mcp = await handle_analyze_results(args, state_no_sim)
-    assert mcp.structuredContent is not None
-    presented = mcp.structuredContent
+    assert mcp.structured_content is not None
+    presented = mcp.structured_content
     assert presented["failures"] == [
         failure.wire() for failure in failures[: analyze_mod._FAILURE_CAP]
     ]
@@ -466,8 +466,8 @@ async def test_neutral_rows_are_unprojected_before_mcp_paging_and_fields(
     assert all("value" in row and "source" in row for row in rows)
 
     mcp = await handle_analyze_results(args, state_no_sim)
-    assert mcp.structuredContent is not None
-    page = mcp.structuredContent["results"]["values"]["per_run"]
+    assert mcp.structured_content is not None
+    page = mcp.structured_content["results"]["values"]["per_run"]
     assert page["items"] == [{"step_index": rows[0]["step_index"]}]
     assert (page["total"], page["returned"], page["truncated"]) == (3, 1, True)
     assert page["next_cursor"] is not None
@@ -567,7 +567,7 @@ async def test_continuation_is_pure_and_simultaneous_reads_match(
         handle_analyze_results(continuation, state_no_sim),
         handle_analyze_results(continuation, state_no_sim),
     )
-    assert left.structuredContent == right.structuredContent
+    assert left.structured_content == right.structured_content
 
 
 @pytest.mark.asyncio
@@ -591,8 +591,8 @@ async def test_per_run_page_cursor_replays_same_immutable_request(
     }
     first_args = AnalyzeResultsInput.model_validate(request)
     first = await handle_analyze_results(first_args, state_no_sim)
-    assert first.structuredContent is not None
-    cursor = first.structuredContent["results"]["values"]["per_run"]["next_cursor"]
+    assert first.structured_content is not None
+    cursor = first.structured_content["results"]["values"]["per_run"]["next_cursor"]
     assert cursor is not None
 
     second_args = AnalyzeResultsInput.model_validate(
@@ -602,8 +602,8 @@ async def test_per_run_page_cursor_replays_same_immutable_request(
         }
     )
     second = await handle_analyze_results(second_args, state_no_sim)
-    assert second.structuredContent is not None
-    assert second.structuredContent["results"]["values"]["per_run"]["items"][0]["step_index"] == 1
+    assert second.structured_content is not None
+    assert second.structured_content["results"]["values"]["per_run"]["items"][0]["step_index"] == 1
 
 
 @pytest.mark.asyncio
@@ -626,8 +626,8 @@ async def test_per_run_cursor_rejects_an_explicitly_different_fields_view(
         "include": {"per_run": {"limit": 1}, "fields": ["step_index"]},
     }
     first = await handle_analyze_results(AnalyzeResultsInput.model_validate(request), state_no_sim)
-    assert first.structuredContent is not None
-    cursor = first.structuredContent["results"]["values"]["per_run"]["next_cursor"]
+    assert first.structured_content is not None
+    cursor = first.structured_content["results"]["values"]["per_run"]["next_cursor"]
     assert cursor is not None
 
     with pytest.raises(ResultError, match="replay page 1"):
@@ -653,8 +653,8 @@ async def test_per_run_cursor_rejects_an_explicitly_different_fields_view(
         ),
         state_no_sim,
     )
-    assert inherited.structuredContent is not None
-    inherited_row = inherited.structuredContent["results"]["values"]["per_run"]["items"][0]
+    assert inherited.structured_content is not None
+    inherited_row = inherited.structured_content["results"]["values"]["per_run"]["items"][0]
     assert set(inherited_row) == {"step_index"}
 
 
@@ -679,10 +679,10 @@ async def test_viewless_legacy_cursor_falls_back_to_the_stored_fields_view(
     }
     validated = AnalyzeResultsInput.model_validate(request)
     first = await handle_analyze_results(validated, state_no_sim)
-    assert first.structuredContent is not None
-    cursor = first.structuredContent["results"]["values"]["per_run"]["next_cursor"]
+    assert first.structured_content is not None
+    cursor = first.structured_content["results"]["values"]["per_run"]["next_cursor"]
     assert cursor is not None
-    result_set_id = first.structuredContent["result_set_id"]
+    result_set_id = first.structured_content["result_set_id"]
 
     record = result_store.result_path(result_set_id, work_dir)
     stored = json.loads(record.read_text())
@@ -718,8 +718,8 @@ async def test_viewless_legacy_cursor_falls_back_to_the_stored_fields_view(
         ),
         state_no_sim,
     )
-    assert resumed.structuredContent is not None
-    row = resumed.structuredContent["results"]["values"]["per_run"]["items"][0]
+    assert resumed.structured_content is not None
+    row = resumed.structured_content["results"]["values"]["per_run"]["items"][0]
     assert set(row) == {"step_index"}
 
 
@@ -782,9 +782,9 @@ async def test_continuation_detects_raw_or_log_only_drift(
     target.write_bytes(target.read_bytes() + b"\nchanged")
     continuation = AnalyzeResultsInput.model_validate({"continue": first["next"]})
     result = await handle_analyze_results(continuation, state_no_sim)
-    assert result.structuredContent is not None
+    assert result.structured_content is not None
     assert any(
-        failure["code"] == "source_drift" for failure in result.structuredContent["failures"]
+        failure["code"] == "source_drift" for failure in result.structured_content["failures"]
     )
 
 
@@ -993,10 +993,10 @@ async def test_one_cause_relays_once_though_each_run_logged_its_own_numbers(
         ),
         state_no_sim,
     )
-    assert result.structuredContent is not None
+    assert result.structured_content is not None
     relayed = [
         item
-        for item in result.structuredContent["observations"]
+        for item in result.structured_content["observations"]
         if item["code"] == "solve_failure"
     ]
 
@@ -1048,7 +1048,7 @@ async def test_completed_with_failures_experiment_analyzes_produced_cases(
         }
     )
     result = await handle_analyze_results(args, state_no_sim)
-    data = result.structuredContent
+    data = result.structured_content
     assert data is not None
     assert "v" in data["results"]
     assert data["results"]["v"]["groups"][0]["by"] == {"R": "1k"}
@@ -1077,7 +1077,7 @@ async def test_analyzing_experiment_reads_its_own_produced_cases(
         }
     )
     result = await handle_analyze_results(args, state_no_sim)
-    data = result.structuredContent
+    data = result.structured_content
     assert data is not None
     assert "v" in data["results"]
     assert data["results"]["v"]["groups"][0]["by"] == {"R": "1k"}
@@ -1122,8 +1122,8 @@ async def test_raw_path_run_selection_reports_nonzero_outer_runs_missing(
         }
     )
     result = await handle_analyze_results(args, state_no_sim)
-    assert result.structuredContent is not None
-    coverage = result.structuredContent["coverage"]
+    assert result.structured_content is not None
+    coverage = result.structured_content["coverage"]
     assert coverage["runs_requested"] == 2
     assert coverage["missing_cases"]["items"][0]["run_index"] == 3
 
@@ -1147,7 +1147,7 @@ async def test_noncompleted_experiment_keeps_the_terminal_only_gate(
         }
     )
     result = await handle_analyze_results(args, state_no_sim)
-    data = result.structuredContent
+    data = result.structured_content
     assert data is not None
     assert data["coverage"]["runs_analyzed"] == 0
     (missing,) = data["coverage"]["missing_cases"]["items"]
@@ -1339,8 +1339,8 @@ async def test_truncated_missing_cases_page_is_followable(
         }
     )
     first = await handle_analyze_results(args, state_no_sim)
-    assert first.structuredContent is not None
-    page = first.structuredContent["coverage"]["missing_cases"]
+    assert first.structured_content is not None
+    page = first.structured_content["coverage"]["missing_cases"]
     assert (page["total"], page["returned"], page["truncated"]) == (120, 100, True)
     assert page["next_cursor"] is not None
 
@@ -1348,15 +1348,15 @@ async def test_truncated_missing_cases_page_is_followable(
         AnalyzeResultsInput.model_validate(
             {
                 "continue": {
-                    "result_set_id": first.structuredContent["result_set_id"],
+                    "result_set_id": first.structured_content["result_set_id"],
                     "cursor": page["next_cursor"],
                 }
             }
         ),
         state_no_sim,
     )
-    assert resumed.structuredContent is not None
-    rest = resumed.structuredContent["coverage"]["missing_cases"]
+    assert resumed.structured_content is not None
+    rest = resumed.structured_content["coverage"]["missing_cases"]
     assert rest["returned"] == 20
     assert rest["items"][0]["run_index"] == 101
     assert rest["truncated"] is False
@@ -1390,11 +1390,11 @@ async def test_work_and_coverage_cursors_advance_independently(
         "include": {"per_run": {"limit": 1}},
     }
     first = await handle_analyze_results(AnalyzeResultsInput.model_validate(request), state_no_sim)
-    assert first.structuredContent is not None
-    coverage_cursor = first.structuredContent["coverage"]["missing_cases"]["next_cursor"]
+    assert first.structured_content is not None
+    coverage_cursor = first.structured_content["coverage"]["missing_cases"]["next_cursor"]
     assert coverage_cursor is not None
-    assert first.structuredContent["next"] is not None
-    result_set_id = first.structuredContent["result_set_id"]
+    assert first.structured_content["next"] is not None
+    result_set_id = first.structured_content["result_set_id"]
 
     # Following the coverage cursor advances the missing list AND keeps the
     # work resume point, so there is still a `next` to follow.
@@ -1404,19 +1404,19 @@ async def test_work_and_coverage_cursors_advance_independently(
         ),
         state_no_sim,
     )
-    assert by_coverage.structuredContent is not None
-    rest = by_coverage.structuredContent["coverage"]["missing_cases"]
+    assert by_coverage.structured_content is not None
+    rest = by_coverage.structured_content["coverage"]["missing_cases"]
     assert rest["items"][0]["run_index"] == 101
-    assert by_coverage.structuredContent["next"] is not None
+    assert by_coverage.structured_content["next"] is not None
 
     # Following the work cursor advances the work AND carries the coverage
     # offset, so the missing cases already served are not replayed.
     by_work = await handle_analyze_results(
-        AnalyzeResultsInput.model_validate({"continue": first.structuredContent["next"]}),
+        AnalyzeResultsInput.model_validate({"continue": first.structured_content["next"]}),
         state_no_sim,
     )
-    assert by_work.structuredContent is not None
-    carried = by_work.structuredContent["coverage"]["missing_cases"]
+    assert by_work.structured_content is not None
+    carried = by_work.structured_content["coverage"]["missing_cases"]
     assert carried["items"][0]["run_index"] == 101
     assert carried["truncated"] is False
 
@@ -1635,17 +1635,17 @@ async def test_projection_shrinks_a_wide_sweep_payload(
         _wide_args(raw, fields=["source", "step_values", "value.passband_gain_db"]),
         state_no_sim,
     )
-    assert full.structuredContent is not None and projected.structuredContent is not None
-    full_rows = full.structuredContent["results"]["loop"]["values"]
-    projected_rows = projected.structuredContent["results"]["loop"]["values"]
+    assert full.structured_content is not None and projected.structured_content is not None
+    full_rows = full.structured_content["results"]["loop"]["values"]
+    projected_rows = projected.structured_content["results"]["loop"]["values"]
     assert len(full_rows) == len(projected_rows) == 45
     full_chars = len(json.dumps(full_rows))
     projected_chars = len(json.dumps(projected_rows))
     with capsys.disabled():
         print(
             f"\n45-row table: {full_chars} chars whole, {projected_chars} projected; "
-            f"whole response {len(json.dumps(full.structuredContent))} -> "
-            f"{len(json.dumps(projected.structuredContent))}"
+            f"whole response {len(json.dumps(full.structured_content))} -> "
+            f"{len(json.dumps(projected.structured_content))}"
         )
     # The row table is what projection governs; the rest of the envelope
     # (source hashes, aggregated warnings) is fixed overhead it does not claim.
@@ -1899,8 +1899,8 @@ async def test_identical_record_warnings_collapse_but_keep_their_reach(
     45-of-45 and 3-of-45 are different facts."""
     raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
     result = await handle_analyze_results(_wide_args(raw), state_no_sim)
-    assert result.structuredContent is not None
-    entry = result.structuredContent["results"]["loop"]
+    assert result.structured_content is not None
+    entry = result.structured_content["results"]["loop"]
     assert len(entry["values"]) == 45
     assert len(entry["warnings"]) == 1
     assert entry["warnings"][0].endswith(" (45 of 45 records)")

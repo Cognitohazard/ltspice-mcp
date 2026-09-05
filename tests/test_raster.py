@@ -175,7 +175,7 @@ def test_raster_is_returned_as_an_image_block() -> None:
 
     images = _blocks(result, types.ImageContent)
     assert len(images) == 1
-    assert images[0].mimeType == "image/png"
+    assert images[0].mime_type == "image/png"
     assert base64.b64decode(images[0].data) == b"\x89PNG-ish"
 
 
@@ -201,8 +201,8 @@ def test_metadata_survives_for_structured_only_clients() -> None:
     )
     result = image_response(image, "rendered", {"path": "/tmp/rc.asc"})
 
-    assert result.structuredContent is not None
-    payload = result.structuredContent
+    assert result.structured_content is not None
+    payload = result.structured_content
     assert payload["path"] == "/tmp/rc.asc"
     assert payload["image"]["image_format"] == SVG
     assert payload["image"]["scale"] is None
@@ -228,8 +228,8 @@ def test_raster_response_carries_caller_text_and_full_metadata() -> None:
     assert [type(c).__name__ for c in result.content] == ["ImageContent", "TextContent"]
     assert _blocks(result, types.TextContent)[0].text == "rendered rc.asc"
 
-    assert result.structuredContent is not None
-    meta = result.structuredContent["image"]
+    assert result.structured_content is not None
+    meta = result.structured_content["image"]
     assert meta["scale"] == 3.0
     assert (meta["width"], meta["height"]) == (60, 30)
     assert meta["bytes"] == len(b"\x89PNG-ish")
@@ -248,5 +248,5 @@ def test_end_to_end_svg_to_image_block() -> None:
     images = _blocks(result, types.ImageContent)
     assert len(images) == 1
     assert base64.b64decode(images[0].data).startswith(_PNG_MAGIC)
-    assert result.structuredContent is not None
-    assert result.structuredContent["image"]["image_format"] == PNG
+    assert result.structured_content is not None
+    assert result.structured_content["image"]["image_format"] == PNG

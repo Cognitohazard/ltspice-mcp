@@ -73,14 +73,14 @@ def _output_schemas() -> dict[str, dict[str, Any]]:
     _, dispatch = get_tools()
     schemas: dict[str, dict[str, Any]] = {}
     for name in _registered():
-        schema = dispatch[name].definition.outputSchema
+        schema = dispatch[name].definition.output_schema
         assert schema is not None, f"{name}: consolidated tool must declare an outputSchema"
         schemas[name] = schema
     return schemas
 
 
 def _input_schemas() -> dict[str, dict[str, Any]]:
-    return {name: tool_def.inputSchema for name, tool_def in _registered().items()}
+    return {name: tool_def.input_schema for name, tool_def in _registered().items()}
 
 
 class TestAttachedRecipeGrammar:
@@ -109,15 +109,15 @@ class TestAttachedRecipeGrammar:
         """Derived from the union on both sides, so a new recipe metric that
         never reaches this enum fails here instead of being unmentionable in
         an attached block."""
-        items = self._attached_recipe_items(_registered()["run_experiments"].inputSchema)
+        items = self._attached_recipe_items(_registered()["run_experiments"].input_schema)
         assert set(items["properties"]["metric"]["enum"]) == set(DISCRIMINANTS)
 
-        analyze = _registered()["analyze_results"].inputSchema
+        analyze = _registered()["analyze_results"].input_schema
         standalone = analyze["properties"]["recipes"]["items"]
         assert set(standalone["discriminator"]["mapping"]) == set(DISCRIMINANTS)
 
     def test_the_stub_points_at_the_channels_that_carry_the_fields(self):
-        items = self._attached_recipe_items(_registered()["run_experiments"].inputSchema)
+        items = self._attached_recipe_items(_registered()["run_experiments"].input_schema)
         description = items.get("description") or ""
         assert "analyze_results.recipes" in description
         assert "api.reference('analyze_results')" in description
@@ -152,7 +152,7 @@ class TestAttachedRecipeGrammar:
         }
         jsonschema.validate(
             instance=payload,
-            schema=_registered()["run_experiments"].inputSchema,
+            schema=_registered()["run_experiments"].input_schema,
         )
         args = RunExperimentsInput.model_validate(payload)
         assert args.analyze is not None
@@ -635,7 +635,7 @@ class TestDormantRecipeWireStubs:
 
     @staticmethod
     def _analyze_defs() -> dict[str, Any]:
-        return _registered()["analyze_results"].inputSchema["$defs"]
+        return _registered()["analyze_results"].input_schema["$defs"]
 
     @pytest.mark.parametrize("metric", DORMANT_WIRE_STUBS)
     def test_stubbed_branch_advertises_only_discriminant_and_pointer(self, metric: str):
@@ -747,8 +747,8 @@ class TestAdvertisedProseIsTheSource:
         source = _source_definitions()[name]
         advertised = _registered()[name]
         assert advertised.description == source.description
-        source_fields = self._descriptions(source.inputSchema)
-        advertised_fields = self._descriptions(advertised.inputSchema)
+        source_fields = self._descriptions(source.input_schema)
+        advertised_fields = self._descriptions(advertised.input_schema)
         assert set(advertised_fields) == set(source_fields), (
             f"{name}: the advertised schema documents different places than the "
             "source does — the two definitions must carry the same descriptions"
@@ -792,8 +792,8 @@ class TestStableErrorCodesAndIsError:
         result = await handle_verify_circuit(
             VerifyCircuitInput(path="/etc/definitely_denied.cir"), state_no_sim
         )
-        assert result.isError is True
-        data = result.structuredContent
+        assert result.is_error is True
+        data = result.structured_content
         assert data is not None
         codes = {finding["rule_id"] for finding in data["findings"]}
         assert "path_denied" in codes
@@ -807,8 +807,8 @@ class TestStableErrorCodesAndIsError:
             state_no_sim,
         )
         # A per-item failure is NOT a call-level failure.
-        assert not result.isError
-        data = result.structuredContent
+        assert not result.is_error
+        data = result.structured_content
         assert data is not None
         # ...but it does move the call-level outcome to partial.
         assert data["outcome"] == "partial"

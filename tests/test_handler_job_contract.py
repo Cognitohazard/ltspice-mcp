@@ -86,7 +86,7 @@ class TestTerminalStatusCompleteness:
             JobsInput.model_validate({"action": "status", "job_id": "exp_status"}),
             state_no_sim,
         )
-        data = result.structuredContent
+        data = result.structured_content
         assert data is not None
         text = result.content[0].text  # type: ignore[union-attr]
         assert "unexpected status" not in text.lower()

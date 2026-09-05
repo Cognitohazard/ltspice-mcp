@@ -389,7 +389,7 @@ class TestAdvertisedActionBranches:
 
 
 def _assert_jobs_schema(result) -> dict:
-    data = result.structuredContent
+    data = result.structured_content
     assert data is not None
     jsonschema.Draft202012Validator(JOBS_OUTPUT_SCHEMA).validate(data)
     return data
@@ -1192,7 +1192,7 @@ class TestCancellationAuthority:
         result = await handle_jobs(_args("cancel", job_id=job.job_id), state_no_sim)
         data = _assert_jobs_schema(result)
 
-        assert result.isError
+        assert result.is_error
         assert data["error"]["code"] == "cancel_not_authorized"
         assert job.status == "running"
 
@@ -1376,7 +1376,7 @@ class TestLegacyRecordCancel:
         result = await handle_jobs(_args("cancel", job_id="legacy_owned"), state_no_sim)
         data = _assert_jobs_schema(result)
 
-        assert not result.isError
+        assert not result.is_error
         assert data["status"] == "interrupted"
         assert "already terminal" in data["hint"]
 
