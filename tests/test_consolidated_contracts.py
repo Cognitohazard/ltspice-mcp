@@ -599,7 +599,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # The .step selection hoisted off the recipes lands here too, so an
     # attached analysis and a standalone one read the same steps: two more
     # arguments and one shared StepSelector definition.
-    "run_experiments": 13450,
+    # Raised deliberately by about 120 characters to give 'combine' its own
+    # description and to say what a random variation's 'rules' list holds:
+    # 'combine' had none at all, so 'zip' was an enum member no channel
+    # defined, and 'rules' claimed a one-entry-per-kind rule that does not
+    # exist.
+    "run_experiments": 13580,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.

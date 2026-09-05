@@ -109,15 +109,21 @@ class AssignVariation(VariationModel):
             "the assigned target names instead."
         ),
     )
-    combine: Literal["grid", "zip"] = "grid"
+    combine: Literal["grid", "zip"] = Field(
+        default="grid",
+        description=(
+            "How the value lists combine: 'grid' runs every combination (the "
+            "cartesian product), 'zip' runs the i-th value of every target "
+            "together as case i."
+        ),
+    )
     applies_to: list[str] | None = Field(default=None, description=_APPLIES_TO_DESCRIPTION)
     assign: dict[str, list[ScalarValue]] = Field(
         description=(
             "Target → value list, resolved in order as a 'REF@model' (glob "
             "allowed) model swap, an 'X1:delvto'/'X1:mulu0' per-instance "
             "mismatch delta, a declared .param, then a component reference — "
-            "forms in spice://guide. With combine:'zip' the i-th value of "
-            "every target runs together as case i."
+            "forms in spice://guide."
         )
     )
 
@@ -244,9 +250,10 @@ class RandomVariation(VariationModel):
     applies_to: list[str] | None = Field(default=None, description=_APPLIES_TO_DESCRIPTION)
     rules: list[RandomRule] = Field(
         description=(
-            "What varies, one entry per kind: 'component' perturbs a part's "
-            "value (resistor tolerance), 'param' a declared .param, 'model' one "
-            "model parameter (process spread), 'mismatch' the Pelgrom "
+            "What varies — one entry per thing that varies, each naming its "
+            "kind in 'rule': 'component' perturbs a part's value (resistor "
+            "tolerance), 'param' a declared .param, 'model' one model "
+            "parameter (process spread), 'mismatch' the Pelgrom "
             "device-to-device spread of matched transistors."
         )
     )
