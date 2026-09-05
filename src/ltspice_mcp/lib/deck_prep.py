@@ -11,9 +11,6 @@ does it write" — the questions that sit between a caller's path argument and
 * ``_stage_deck_snapshot`` — a content-addressed copy of the exported deck, so
   a parallel session re-exporting the same schematic cannot swap the bytes out
   from under a run that already claimed them.
-* ``resolve_output_folder`` — where a run's artifacts land, with the two
-  overrides (relative-include decks, WSL + LTspice on a Linux-fs source) that
-  the stable ``.ltspice-mcp/runs`` sidecar has to yield to.
 
 Split out of ``tools/_base`` so the run path stops being part of the module
 every tool imports; it lives in ``lib`` because nothing here is MCP-shaped.
@@ -203,9 +200,7 @@ def _stage_deck_snapshot(net_path: Path) -> Path:
     ``<name>.run-<hash>.net`` per distinct edit accumulates in the author's
     tree forever. A deck carrying a RELATIVE include stays a sibling — the
     simulator resolves that include against the deck's own directory, so
-    moving the deck breaks it. That is the same question ``resolve_output_folder``
-    asks about relocating a run, answered by the same predicate so the two
-    cannot disagree about which decks may move.
+    moving the deck breaks it.
     """
     from ltspice_mcp.lib import atomic_write_bytes
 
@@ -274,68 +269,3 @@ def _netlist_has_local_dependency(netlist_path: Path) -> bool:
         if (base / tok).exists():
             return True
     return False
-
-
-async def resolve_output_folder(
-    state: SessionState,
-    netlist_path: Path | None = None,
-    simulator: type | None = None,
-) -> Path:
-    """Determine the output folder for the simulation runner.
-
-    Kept **stable** — one ``{working_dir}/.ltspice-mcp/runs`` sidecar — so the
-    single cached runner, ``cancel_job``, and the global ``max_parallel`` cap stay
-    valid across runs. A per-deck output dir would change the folder on every run
-    in a different directory, and ``RunnerManager`` invalidates the whole runner
-    cache when the folder changes (losing in-flight process handles and splitting
-    the concurrency semaphore per directory). Each run's artifacts are uniquely
-    named (``{job_id}.*``), so they stay isolated within this shared folder; a
-    caller finds them through the result path ``check_job`` reports.
-
-    Two overrides:
-
-    - **Relative ``.include``/``.lib`` deck:** the deck's own dir — the simulator
-      resolves the relative path against the staged netlist's directory, so it
-      can't be relocated (applies to single runs and sweeps/MC alike).
-    - **WSL + LTspice + Linux-fs source:** a Windows-native temp dir. LTspice (a
-      Windows process reaching the Linux fs over a ``wsl.localhost`` UNC share)
-      can't write the SQLite ``.db`` behind ``.MEAS`` over UNC.
-
-    Adds the chosen dir to allowed_paths so analysis tools can read results via
-    safe_path(). The Windows temp-dir resolution spawns a cmd.exe interop
-    subprocess on first call (memoized), so it runs via ``asyncio.to_thread`` — a
-    wedged interop must not freeze the loop; the allowed_paths mutation stays on
-    the loop after the await.
-    """
-    from spicelib.simulators.ltspice_simulator import LTspice
-
-    from ltspice_mcp.lib.wsl import get_windows_output_dir, is_windows_native_path, is_wsl
-
-    source_dir = netlist_path.parent if netlist_path is not None else state.working_dir
-    has_local_dep = netlist_path is not None and _netlist_has_local_dependency(netlist_path)
-
-    # Override: WSL + LTspice + Linux-fs source → Windows temp (UNC .db failure).
-    if is_wsl() and not is_windows_native_path(source_dir) and not has_local_dep:
-        sim_cls = simulator or state.default_simulator
-        if sim_cls is not None and issubclass(sim_cls, LTspice):
-            out = await asyncio.to_thread(get_windows_output_dir)
-            if out is not None:
-                if out not in state.config.allowed_paths:
-                    logger.info(
-                        f"WSL: routing LTspice output to {out} (source dir "
-                        f"{source_dir} is on the Linux filesystem; .db/.MEAS "
-                        "cannot write over UNC)"
-                    )
-                    state.config.allowed_paths.append(out)
-                return out
-
-    # Override: relative-include deck runs in its own dir so the include resolves.
-    if has_local_dep:
-        return source_dir
-
-    # Default: one stable sidecar; per-job {job_id} naming isolates each run.
-    runs = state.working_dir / ".ltspice-mcp" / "runs"
-    runs.mkdir(parents=True, exist_ok=True)
-    if runs not in state.config.allowed_paths:
-        state.config.allowed_paths.append(runs)
-    return runs
