@@ -14,7 +14,11 @@ from typing import Any, NamedTuple
 import pytest
 from pydantic import ValidationError
 
-from ltspice_mcp.errors import ResultError, compact_validation_error
+from ltspice_mcp.errors import (
+    AnalysisDeadlineExceeded,
+    ResultError,
+    compact_validation_error,
+)
 from ltspice_mcp.lib import atomic_write, cursor_codec, experiment_store, now, result_store
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
@@ -483,7 +487,9 @@ async def test_slow_csv_deadline_advances_cursor_and_removes_temp(
             handle.write("partial\n")
             while not should_abort():
                 time.sleep(0.002)
-            raise ResultError("CSV artifact exceeded its analysis item deadline")
+            # What the real writer raises when its abort callback fires: the
+            # deadline is carried by the exception type, not its wording.
+            raise AnalysisDeadlineExceeded("CSV artifact exceeded its analysis item deadline")
 
     monkeypatch.setattr(analysis, "_build_and_write", slow_writer)
     data = await _analyze(

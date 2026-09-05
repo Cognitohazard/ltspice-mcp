@@ -40,7 +40,7 @@ import numpy as np
 from mcp import types
 from pydantic import Field
 
-from ltspice_mcp.errors import ResultError
+from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError
 from ltspice_mcp.lib import atomic_write, desktop, services
 from ltspice_mcp.lib.ac_analysis import (
     CrossingWithQuantity,
@@ -1320,7 +1320,7 @@ def _build_and_write(
                 chunk.append(row)
                 if len(chunk) >= 4096:
                     if should_abort is not None and should_abort():
-                        raise ResultError(
+                        raise AnalysisDeadlineExceeded(
                             "CSV artifact exceeded its analysis item deadline; "
                             "narrow the window or export fewer signals."
                         )
@@ -1328,7 +1328,7 @@ def _build_and_write(
                     chunk.clear()
             if chunk:
                 if should_abort is not None and should_abort():
-                    raise ResultError(
+                    raise AnalysisDeadlineExceeded(
                         "CSV artifact exceeded its analysis item deadline; "
                         "narrow the window or export fewer signals."
                     )

@@ -99,6 +99,17 @@ class JobNotFoundError(ResultError):
     """No job with the requested id exists in the job store."""
 
 
+class AnalysisDeadlineExceeded(ResultError):
+    """A read of a result artifact ran past the deadline it was given.
+
+    Its own type, not its wording, is what marks a result read as having run
+    out of time: callers classify the failure with ``except
+    AnalysisDeadlineExceeded``. Matching on the message instead would catch any
+    other error that happens to say "exceeded" — a size cap, a case cap, or a
+    path that merely contains the word.
+    """
+
+
 class LibraryError(LTSpiceMCPError):
     """Component library error (load, parse, or lookup failure)."""
 
