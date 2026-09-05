@@ -700,8 +700,14 @@ def collect_recent_circuits(working_dir: Path) -> list[dict[str, Any]]:
     """List recently-touched circuits with their persisted-job summaries.
 
     A circuit's jobs come from this working directory's store, through the
-    same per-circuit index ``jobs(list)`` reads, so a circuit last run by
-    another session in the same directory still reports its jobs here.
+    per-circuit index, so a circuit last run by another session in the same
+    directory still reports its jobs here — and one last run from a different
+    working directory reports none.
+
+    ``jobs(list)`` reads that same index but prefers this process's live
+    registry over the records on disk. This runs on a worker thread and cannot
+    snapshot the registry, so a job this session is running can read as fresher
+    there than it does here.
 
     Blocking — ``recent.load`` polls a cross-process file lock (up to 10 s)
     and each summary reads the store's JSON records; all reads (the prune
