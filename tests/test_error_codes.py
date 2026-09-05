@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 import ltspice_mcp
+import ltspice_mcp.lib.metrics
 from ltspice_mcp import tools
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
@@ -315,7 +316,8 @@ def _codes_in_tool_sources() -> dict[str, set[str]]:
     """Read the emitted codes out of ``tools/*.py`` rather than listing them."""
     found: dict[str, set[str]] = {}
     tools_dir = Path(tools.__file__).parent
-    for path in sorted(tools_dir.glob("*.py")):
+    metrics_path = Path(ltspice_mcp.lib.metrics.__file__)
+    for path in [*sorted(tools_dir.glob("*.py")), metrics_path]:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         classifier_returns = _classifier_returns(tree)
         for node in ast.walk(tree):
@@ -365,11 +367,12 @@ def _error_classes() -> list[type[LTSpiceMCPError]]:
 
 
 # Every error code the server can emit: the `code` on each error class, plus the
-# codes built into the failure and observation records in `tools/*.py`. Codes
-# constructed inside `lib/*.py` (variation, staging and mismatch codes, and the
-# observation codes) reach the wire through those two routes or through
-# `exc.code`, and are not scanned here; widening `_codes_in_tool_sources` to a
-# second directory is the change that would bring them in.
+# codes built into the failure and observation records in `tools/*.py` and in
+# `lib/metrics.py`, which is where a metric value's own observations are built.
+# Other codes constructed inside `lib/*.py` (variation, staging and mismatch
+# codes) reach the wire through those routes or through `exc.code`, and are not
+# scanned here; naming another module in `_codes_in_tool_sources` is the change
+# that would bring them in.
 #
 # ADDING a code is fine — add it here in the same commit and the test passes.
 # RENAMING or REMOVING one is a public, client-visible change: a caller that

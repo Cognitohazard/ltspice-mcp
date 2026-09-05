@@ -13,12 +13,16 @@ from pathlib import Path
 from spicelib.simulators.ltspice_simulator import LTspice
 
 from ltspice_mcp.lib.log_parser import read_device_op_points
-from ltspice_mcp.tools._base import inject_logopinfo
-from ltspice_mcp.tools.analysis import (
-    _dev_instance,
-    _device_matches,
-    _filter_operating_point,
+from ltspice_mcp.lib.metrics import (
+    dev_instance as _dev_instance,
 )
+from ltspice_mcp.lib.metrics import (
+    device_matches as _device_matches,
+)
+from ltspice_mcp.lib.metrics import (
+    filter_operating_point as _filter_operating_point,
+)
+from ltspice_mcp.tools._base import inject_logopinfo
 
 # A trimmed real LTspice .op log (LTspice 26.x) with the logopinfo block.
 _LOG_WITH_BLOCK = """\

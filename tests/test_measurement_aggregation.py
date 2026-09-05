@@ -13,10 +13,12 @@ from pathlib import Path
 
 import pytest
 
+from ltspice_mcp.lib.metrics import (
+    aggregate_log_measurements as _aggregate_log_measurements,
+)
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import (
     MeasurementStatsInput,
-    _aggregate_log_measurements,
     handle_measurement_stats,
 )
 from tests.conftest import (
