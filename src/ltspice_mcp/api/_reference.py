@@ -23,14 +23,25 @@ from __future__ import annotations
 
 import functools
 import textwrap
-import types as pytypes
-from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal, Union, get_args, get_origin
+from typing import Any
 
 from pydantic import BaseModel
-from pydantic.fields import FieldInfo
-from pydantic_core import PydanticUndefined
+
+from ltspice_mcp.lib.model_fields import (
+    accepted_annotation,
+    default_label,
+    describe_field,
+    field_name,
+    first_sentence,
+    item_model,
+    literal_values,
+    model_of,
+    non_null,
+    strip_annotated,
+    type_label,
+    union_members,
+)
 
 _INDENT = "  "
 _WRAP = 88
@@ -52,186 +63,13 @@ class _Operation:
     note: str = ""
 
 
-# ---------------------------------------------------------------------------
-# Type rendering
-# ---------------------------------------------------------------------------
-
-
-def _strip_annotated(annotation: Any) -> Any:
-    while get_origin(annotation) is Annotated:
-        annotation = get_args(annotation)[0]
-    return annotation
-
-
-def _union_members(annotation: Any) -> tuple[Any, ...] | None:
-    origin = get_origin(annotation)
-    if origin is Union or origin is pytypes.UnionType:
-        return get_args(annotation)
-    return None
-
-
-def _model_of(annotation: Any) -> type[BaseModel] | None:
-    annotation = _strip_annotated(annotation)
-    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-        return annotation
-    return None
-
-
-def _scalar_name(annotation: Any) -> str:
-    simple = {
-        str: "string",
-        int: "integer",
-        float: "number",
-        bool: "boolean",
-        type(None): "null",
-        Any: "any",
-    }
-    if annotation in simple:
-        return simple[annotation]
-    if isinstance(annotation, type):
-        if issubclass(annotation, BaseModel):
-            return "object"
-        return annotation.__name__
-    return str(annotation).replace("typing.", "")
-
-
-def _type_label(annotation: Any) -> str:
-    """A one-line type, with enum members and union branches written out."""
-    annotation = _strip_annotated(annotation)
-
-    if get_origin(annotation) is Literal:
-        return "one of: " + " | ".join(repr(value) for value in get_args(annotation))
-
-    members = _union_members(annotation)
-    if members is not None:
-        rendered = [_type_label(member) for member in members if member is not type(None)]
-        label = " or ".join(dict.fromkeys(rendered))
-        return f"{label} or null" if type(None) in members else label
-
-    origin = get_origin(annotation)
-    if origin in (list, Sequence):
-        args = get_args(annotation)
-        return f"list of {_type_label(args[0])}" if args else "list"
-    if origin is dict:
-        args = get_args(annotation)
-        return f"map of {_type_label(args[1])}" if len(args) == 2 else "object"
-    if origin is tuple:
-        return "list"
-    return _scalar_name(annotation)
-
-
-def _accepted_annotation(field: FieldInfo) -> Any:
-    """What the field accepts, which a coercing validator can widen.
-
-    A ``BeforeValidator`` that takes ``True`` for a default policy declares that
-    wider input for the JSON Schema; the catalogue reads the same declaration,
-    so MCP and the Python API advertise one answer.
-    """
-    for meta in field.metadata:
-        declared = getattr(meta, "json_schema_input_type", PydanticUndefined)
-        if declared is not PydanticUndefined:
-            return declared
-    return field.annotation
-
-
-def _default_label(field: FieldInfo) -> str:
-    if field.default_factory is not None:
-        try:
-            produced = field.default_factory()  # pyright: ignore[reportCallIssue]
-        except TypeError:  # pragma: no cover - validated-data factories take an argument
-            return "computed"
-        if isinstance(produced, BaseModel):
-            return "all defaults"
-        if isinstance(produced, (list, dict, set)) and not produced:
-            return "empty"
-        return repr(produced)
-    if field.default is PydanticUndefined:
-        return "REQUIRED"
-    return repr(field.default)
-
-
-def _field_name(model: type[BaseModel], name: str, field: FieldInfo) -> str:
-    """The name a caller writes, which an alias may make different from the attribute."""
-    alias = field.validation_alias
-    if isinstance(alias, str):
-        return alias
-    choices = getattr(alias, "choices", None)
-    if choices:
-        first = choices[0]
-        if isinstance(first, str):
-            return first
-    return field.alias if isinstance(field.alias, str) else name
-
-
-# ---------------------------------------------------------------------------
-# Model rendering
-# ---------------------------------------------------------------------------
-
-
-def _describe(field: FieldInfo) -> str:
-    if field.description:
-        return field.description
-    # A leaf model documents itself in its docstring more often than in a
-    # per-field description; use it rather than emit a bare line.
-    nested = _model_of(_non_null(field.annotation))
-    if nested is not None and nested.__doc__:
-        return " ".join(nested.__doc__.split())
-    return ""
-
-
-#: Abbreviations that end in a period without ending a sentence. Without them a
-#: description gets cut at "e.g." and the example — the useful half — is lost.
-_ABBREVIATIONS = ("e.g", "i.e", "etc", "cf", "vs", "approx", "Fig")
-
-
-def _first_sentence(description: str, *, limit: int = 220) -> str:
-    """Enough of a description to act on, inside a union's per-branch listing."""
-    text = " ".join(description.split())
-    if not text:
-        return ""
-    sentence = text
-    start = 0
-    while True:
-        index = text.find(". ", start)
-        if index == -1:
-            break
-        head = text[:index]
-        if any(head.endswith(abbreviation) for abbreviation in _ABBREVIATIONS):
-            start = index + 2
-            continue
-        sentence = head + "."
-        break
-    return sentence if len(sentence) <= limit else sentence[: limit - 1].rstrip() + "…"
-
-
-def _non_null(annotation: Any) -> Any:
-    """The annotation with its ``| None`` branch dropped."""
-    annotation = _strip_annotated(annotation)
-    members = _union_members(annotation)
-    if members is None:
-        return annotation
-    remaining = [member for member in members if member is not type(None)]
-    if len(remaining) == 1:
-        return _strip_annotated(remaining[0])
-    return annotation
-
-
-def _item_model(annotation: Any) -> Any:
-    """What a ``list[...]`` field holds, or None when it is not a list."""
-    annotation = _non_null(annotation)
-    if get_origin(annotation) in (list, Sequence):
-        args = get_args(annotation)
-        return _strip_annotated(args[0]) if args else None
-    return None
-
-
 def _model_union(annotation: Any) -> tuple[type[BaseModel], ...] | None:
     """The model branches of a union, when every branch is a model."""
-    annotation = _strip_annotated(annotation)
-    members = _union_members(annotation)
+    annotation = strip_annotated(annotation)
+    members = union_members(annotation)
     if members is None:
         return None
-    models = [_model_of(member) for member in members if member is not type(None)]
+    models = [model_of(member) for member in members if member is not type(None)]
     if len(models) < 2 or any(model is None for model in models):
         return None
     return tuple(model for model in models if model is not None)
@@ -273,34 +111,34 @@ def _render_model(
     seen = seen | {model}
     lines: list[str] = []
     for name, field in model.model_fields.items():
-        spelled = _field_name(model, name, field)
+        spelled = field_name(model, name, field)
         path = f"{prefix}{spelled}"
         annotation = field.annotation
         lines.extend(
             _lines_for_field(
                 path,
-                _type_label(_accepted_annotation(field)),
-                _default_label(field),
-                _describe(field),
+                type_label(accepted_annotation(field)),
+                default_label(field),
+                describe_field(field),
                 indent,
             )
         )
 
         deeper = {"seen": seen, "depth": depth + 1, "indent": indent}
-        nested = _model_of(_non_null(annotation))
+        nested = model_of(non_null(annotation))
         if nested is not None:
             lines.extend(_render_model(nested, prefix=f"{path}.", **deeper))
             continue
 
-        branches = _model_union(_non_null(annotation))
+        branches = _model_union(non_null(annotation))
         if branches is not None:
             lines.extend(_render_union(branches, path, seen=seen, depth=depth + 1, indent=indent))
             continue
 
-        item = _item_model(annotation)
-        item_model = _model_of(item) if item is not None else None
-        if item_model is not None:
-            lines.extend(_render_model(item_model, prefix=f"{path}[].", **deeper))
+        item = item_model(annotation)
+        nested_item = model_of(item) if item is not None else None
+        if nested_item is not None:
+            lines.extend(_render_model(nested_item, prefix=f"{path}[].", **deeper))
             continue
         item_branches = _model_union(item) if item is not None else None
         if item_branches is not None:
@@ -312,19 +150,6 @@ def _render_model(
     return lines
 
 
-def _literal_values(model: type[BaseModel], name: str) -> tuple[str, ...] | None:
-    field = model.model_fields.get(name)
-    if field is None:
-        return None
-    annotation = _strip_annotated(field.annotation)
-    if get_origin(annotation) is not Literal:
-        return None
-    values = get_args(annotation)
-    if not values or not all(isinstance(value, str) for value in values):
-        return None
-    return tuple(str(value) for value in values)
-
-
 def _tag_field(branches: tuple[type[BaseModel], ...]) -> str | None:
     """The shared literal field whose values tell the branches apart.
 
@@ -334,7 +159,7 @@ def _tag_field(branches: tuple[type[BaseModel], ...]) -> str | None:
     """
     common = set.intersection(*(set(model.model_fields) for model in branches))
     for name in sorted(common):
-        per_branch = [_literal_values(model, name) for model in branches]
+        per_branch = [literal_values(model, name) for model in branches]
         if any(values is None for values in per_branch):
             continue
         flat = [value for values in per_branch if values for value in values]
@@ -379,7 +204,7 @@ def _render_union(
     # a schema dump does and is why nobody reads one.
     described: set[tuple[str, str]] = set()
     for model in branches:
-        values = _literal_values(model, tag_name) if tag_name else None
+        values = literal_values(model, tag_name) if tag_name else None
         title = (
             f"{tag_name}={' | '.join(repr(value) for value in values)}"
             if values
@@ -395,12 +220,12 @@ def _render_union(
             lines.append(f"{_INDENT * (head + 2)}(no further fields)")
             continue
         for name, field in own.items():
-            spelled = _field_name(model, name, field)
-            default = _default_label(field)
+            spelled = field_name(model, name, field)
+            default = default_label(field)
             bracket = "required" if default == "REQUIRED" else f"default {default}"
-            label = _type_label(_accepted_annotation(field))
+            label = type_label(accepted_annotation(field))
             lines.append(f"{_INDENT * (head + 2)}{spelled}: {label}  [{bracket}]")
-            summary = _first_sentence(_describe(field))
+            summary = first_sentence(describe_field(field))
             if summary and (spelled, summary) not in described:
                 described.add((spelled, summary))
                 lines.extend(
@@ -413,9 +238,7 @@ def _render_union(
                 )
             if depth >= _MAX_DEPTH:
                 continue
-            nested = _model_of(_non_null(field.annotation)) or _model_of(
-                _item_model(field.annotation)
-            )
+            nested = model_of(non_null(field.annotation)) or model_of(item_model(field.annotation))
             if nested is not None and nested in expanded:
                 lines[-1] = f"{_INDENT * (head + 2)}{spelled}: {label}  [{bracket}] (as above)"
                 continue
@@ -431,8 +254,8 @@ def _render_union(
                     )
                 )
                 continue
-            inner = _model_union(_non_null(field.annotation)) or _model_union(
-                _item_model(field.annotation)
+            inner = _model_union(non_null(field.annotation)) or _model_union(
+                item_model(field.annotation)
             )
             if inner is not None:
                 lines.extend(

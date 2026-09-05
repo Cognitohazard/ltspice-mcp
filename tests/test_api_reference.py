@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from ltspice_mcp.api import _reference
 from ltspice_mcp.api._methods import ApiMethodsMixin
 from ltspice_mcp.errors import compact_validation_error
+from ltspice_mcp.lib.model_fields import field_name
 from ltspice_mcp.lib.recipes import DISCRIMINANTS
 from ltspice_mcp.tools.inspect_tools import SUPPORTED_KINDS
 from ltspice_mcp.tools.schematic_edit import EditSchematicInput
@@ -22,9 +23,7 @@ OPS = ("run_experiments", "jobs", "analyze_results", "inspect", "edit_schematic"
 
 def _spelled_fields(model) -> list[str]:
     """The names a caller writes — an alias makes some differ from the attribute."""
-    return [
-        _reference._field_name(model, name, field) for name, field in model.model_fields.items()
-    ]
+    return [field_name(model, name, field) for name, field in model.model_fields.items()]
 
 
 def _op_kinds() -> set[str]:
