@@ -23,18 +23,20 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import hashlib
 import io
 import os
 import shutil
 import stat
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Annotated, Any, Literal, NamedTuple, cast
+from typing import Annotated, Any, Literal, NamedTuple, Self, TypeAlias, cast
 
 from mcp import types
-from pydantic import Field
+from pydantic import BeforeValidator, Field, model_validator
 from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError
@@ -81,10 +83,14 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
     OUTCOME_SCHEMA,
+    CompareSpec,
+    RenderPolicy,
     StrictModel,
     ToolInput,
+    coerce_render_policy,
     format_response,
     make_include_resolver,
+    one_spelling,
     page_schema,
     registry,
     render_scene_artifact,
@@ -151,6 +157,16 @@ class EditViewCursors(StrictModel):
     )
 
 
+RenderArgument: TypeAlias = Annotated[
+    RenderPolicy | None,
+    BeforeValidator(
+        functools.partial(coerce_render_policy, policy=RenderPolicy),
+        json_schema_input_type=RenderPolicy | bool | None,
+    ),
+]
+"""``RenderPolicy | None`` that also takes ``True``/``False``."""
+
+
 class EditSchematicInput(ToolInput):
     target: str = Field(description="Path to the .asc schematic (created if absent).")
     base: Literal["existing", "blank"] = Field(
@@ -181,15 +197,19 @@ class EditSchematicInput(ToolInput):
             "aborts the transaction and nothing is written. " + COORDINATE_DESCRIPTION
         )
     )
-    reference: str | None = Field(
+    compare: CompareSpec | None = Field(
         default=None,
         description=(
-            "Optional netlist (.cir/.net) to verify the committed sheet against: the "
+            "Verify the committed sheet against a reference netlist (.cir/.net): the "
             "sheet is exported on a copy and compared for connectivity equivalence. "
             "Runs AFTER commit — a mismatch is reported but does not un-commit. The "
-            "path itself is checked up front, so one outside the allowed roots is "
-            "refused before the sheet is written, not after."
+            "reference path itself is checked up front, so one outside the allowed "
+            "roots is refused before the sheet is written, not after."
         ),
+    )
+    reference: str | None = Field(
+        default=None,
+        description=("Retained alias for compare.reference. Pass compare or this, not both."),
     )
     dry_run: bool = Field(
         default=False,
@@ -230,18 +250,78 @@ class EditSchematicInput(ToolInput):
             "Page size for both paginated views — views.pin_legend and wiring.label_only_pins."
         ),
     )
-    render_format: Literal["png", "svg"] = Field(
-        default="png",
+    render: RenderArgument = Field(
+        default=None,
         description=(
-            "Format for the 'render' view. PNG needs the optional 'raster' extra; "
-            "without it the render is returned as SVG with a note naming the extra."
+            "How to draw the sheet: true for the defaults, false to draw nothing "
+            "even if return_views asks for it, or an object. Passing it also asks "
+            "for the render view, so return_views need not name it."
         ),
     )
-    render_scale: float = Field(
-        default=1.5,
-        description="Raster scale for a PNG render (ignored for SVG).",
+    render_format: Literal["png", "svg"] | None = Field(
+        default=None,
+        description="Retained alias for render.format. Pass render or this, not both.",
+    )
+    render_scale: float | None = Field(
+        default=None,
+        description="Retained alias for render.scale.",
     )
     format: Literal["json", "text"] | None = Field(default=None, description=FORMAT_DESCRIPTION)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _render_false_withdraws_the_view(cls, data: Any) -> Any:
+        """``render: false`` means draw nothing, even if return_views asked.
+
+        It is the more specific of the two spellings, so it wins — and it wins
+        by taking the view out of ``return_views``, where the effect is visible
+        on the validated arguments rather than hidden in a second flag.
+        """
+        if isinstance(data, Mapping) and data.get("render") is False and "return_views" in data:
+            views = data["return_views"]
+            if isinstance(views, list) and "render" in views:
+                return {**data, "return_views": [view for view in views if view != "render"]}
+        return data
+
+    @model_validator(mode="after")
+    def _one_render_and_compare_spelling(self) -> Self:
+        one_spelling(
+            self.render,
+            {"render_format": self.render_format, "render_scale": self.render_scale},
+            argument="render",
+        )
+        one_spelling(self.compare, {"reference": self.reference}, argument="compare")
+        return self
+
+    @property
+    def render_policy(self) -> RenderPolicy:
+        """How to draw, however it was spelled — the defaults when it was not.
+
+        Always a policy, because ``return_views`` can ask for the render without
+        naming one; ``wants_render`` is what decides whether it is used.
+        """
+        if self.render is not None:
+            return self.render
+        fields: dict[str, Any] = {}
+        if self.render_format is not None:
+            fields["format"] = self.render_format
+        if self.render_scale is not None:
+            fields["scale"] = self.render_scale
+        return RenderPolicy(**fields)
+
+    @property
+    def wants_render(self) -> bool:
+        """Whether to draw at all: naming the view, or passing a policy."""
+        return self.render is not None or "render" in self.return_views
+
+    @property
+    def compare_spec(self) -> CompareSpec | None:
+        """One comparison, however it was spelled; None when none was asked for."""
+        if self.compare is not None:
+            return self.compare
+        if self.reference is None:
+            return None
+        return CompareSpec(reference=self.reference)
 
 
 # ---------------------------------------------------------------------------
@@ -540,7 +620,8 @@ async def _build_edit_views(
     """
     rendered: dict[str, Any] | None = None
     failures: list[dict[str, Any]] = []
-    if "render" in args.return_views:
+    policy = args.render_policy
+    if args.wants_render:
         if args.dry_run:
             rendered = {
                 "status": "dry_run",
@@ -556,8 +637,8 @@ async def _build_edit_views(
                     committed_text,
                     encoding,
                     target,
-                    args.render_format,
-                    args.render_scale,
+                    policy.format,
+                    policy.scale,
                     artifacts_dir,
                 )
             except Exception as exc:  # broad by design — one view may fail independently
@@ -657,17 +738,20 @@ def _write_export_copy(
     atomic_write_bytes(copy_asc, committed_text.encode(encoding), durable=False)
 
 
-def _compare_reference(ref_path: Path, netlist_text: str, resolver: IncludeResolver):
+def _compare_reference(
+    ref_path: Path, netlist_text: str, resolver: IncludeResolver, spec: CompareSpec
+):
     """Parse both sides and compare their connectivity graphs (blocking CPU/IO)."""
     ref_graph = parse_netlist_graph(ref_path, include_resolver=resolver)
     cand_graph = parse_netlist_graph(netlist_text, include_resolver=resolver)
-    return compare_graphs(ref_graph, cand_graph)
+    return compare_graphs(ref_graph, cand_graph, anchors=spec.anchors, rtol=spec.rtol)
 
 
 async def _run_reference_stage(
     committed_text: str,
     encoding: str,
     ref_path: Path,
+    spec: CompareSpec,
     build_id: str,
     state: SessionState,
 ) -> dict:
@@ -695,7 +779,9 @@ async def _run_reference_stage(
             verification["equivalent"] = None
             return verification
         resolver = make_include_resolver(state)
-        comparison = await asyncio.to_thread(_compare_reference, ref_path, netlist_text, resolver)
+        comparison = await asyncio.to_thread(
+            _compare_reference, ref_path, netlist_text, resolver, spec
+        )
         verification["equivalent"] = comparison.equivalent
         verification["structurally_equivalent"] = comparison.structurally_equivalent
         verification["comparison"] = comparison.as_dict()
@@ -865,7 +951,8 @@ async def _evaluate_edit_schematic(
     # a path outside allowed_paths is an argument fault the caller fixes by
     # resending, not a property of the sheet. Resolving it in the post-commit
     # stage instead would reject the call after the target was already written.
-    reference_path = safe_path(args.reference, state) if args.reference is not None else None
+    compare = args.compare_spec
+    reference_path = safe_path(compare.reference, state) if compare is not None else None
 
     build_id = generate_id("build")
     stages: list[dict] = []
@@ -1137,8 +1224,9 @@ async def _evaluate_edit_schematic(
             netlist = None
             if reference_path is not None:
                 post_commit_stage = "reference"
+                assert compare is not None  # reference_path implies it
                 verification = await _run_reference_stage(
-                    committed_text, encoding, reference_path, build_id, state
+                    committed_text, encoding, reference_path, compare, build_id, state
                 )
                 netlist = verification.pop("_netlist", None)
                 ok = verification.get("export_error") is None and verification.get("equivalent")

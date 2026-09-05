@@ -497,10 +497,16 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     "inspect": 4991,
     # The typed op union plus render/compare views. Re-pinned 6760 -> 6733 when
     # the op models' $defs keys lost their leading underscore with the move
-    # into lib/schematic_ops.py; the shapes themselves are unchanged.
-    "edit_schematic": 6733,
-    # Checks, the render policy object, and the boolean render shorthand.
-    "verify_circuit": 2535,
+    # into lib/schematic_ops.py, then 6733 -> 7491 when render and compare
+    # became the same two objects verify_circuit takes. Both tools now
+    # advertise BOTH spellings — the objects, and the flat fields retained as
+    # aliases for 0.6 — which is what the compatibility window costs; the
+    # growth comes back when the aliases go.
+    "edit_schematic": 7491,
+    # Checks, the shared render policy and compare spec (each with the
+    # verify-only fields on a subclass), and the flat compare fields retained
+    # as aliases. Re-pinned 2535 -> 3009 for that same second spelling.
+    "verify_circuit": 3009,
     # Job/case addressing, windowing, and delivery flags.
     "plot_waveform": 2174,
 }
