@@ -356,10 +356,10 @@ class TestCatalogueMatchesTheRegistry:
     already maps them; this pin is what turns a drift into a failure."""
 
     def test_operation_names_equal_the_consolidated_profile(self):
-        from ltspice_mcp.tools import get_tools_for_profile
+        from ltspice_mcp.tools import get_tools
         from tests.conftest import CONSOLIDATED_TOOLS
 
-        tool_defs, _dispatch = get_tools_for_profile("consolidated")
+        tool_defs, _dispatch = get_tools()
         # The API exposes exactly the envelope six. plot_waveform is MCP-only
         # by design: it renders an interactive client-side widget (an iframe
         # resource), which has no meaning in-process — the Python door's

@@ -204,7 +204,7 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
         # client sees the dynamic line. Falls back to the static text if unset.
         if _dynamic_init_options is not None:
             _dynamic_init_options.instructions = build_instructions(
-                available, state.default_simulator, config.tool_profile
+                available, state.default_simulator
             )
 
         logger.info("=== LTSpice MCP Server Starting ===")
@@ -298,25 +298,14 @@ _INSTRUCTIONS_BUDGET = 2048
 _SIM_DISPLAY = {"ltspice": "LTspice", "ngspice": "ngspice", "qspice": "QSPICE", "xyce": "Xyce"}
 
 
-# Profile -> instruction edition. Total over the valid profiles, not a
-# default with one exception: a profile added to the config without a line
-# here fails loudly instead of silently inheriting instructions that name
-# tools it does not expose. Pinned by tests/test_server.py.
-_PROFILE_GUIDANCE: dict[str, str] = {
-    "consolidated": CONSOLIDATED_INSTRUCTIONS,
-}
-
-
-def build_instructions(
-    available: dict[str, type], default: type | None, profile: str = "consolidated"
-) -> str:
+def build_instructions(available: dict[str, type], default: type | None) -> str:
     """Prepend a line naming the actually-detected simulators to the static guide.
 
     The server is named for LTspice, so a client that only has ngspice would
     otherwise read the LTspice-centric name and the "symbols disabled" log as
     degradation. Stating the active engine up front removes that ambiguity.
     """
-    instructions = _PROFILE_GUIDANCE[profile]
+    instructions = CONSOLIDATED_INSTRUCTIONS
     if not available:
         # The short no-simulator form: the long one plus the guide would
         # overflow the client's 2 KB instruction truncation.

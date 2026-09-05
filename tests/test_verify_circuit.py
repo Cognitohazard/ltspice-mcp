@@ -709,7 +709,7 @@ def test_advertised_delivery_states_the_inline_cost():
     """
     from ltspice_mcp.tools import registry
 
-    defs, _ = registry.get_for_profile("consolidated")
+    defs, _ = registry.get_tools()
     schema = next(d for d in defs if d.name == "verify_circuit").inputSchema
     delivery = schema["$defs"]["RenderPolicy"]["properties"]["delivery"]
     text = delivery.get("description") or ""
