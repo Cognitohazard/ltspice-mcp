@@ -382,7 +382,7 @@ Use `rshunt` for "no DC path to ground" errors. Use `rseries` when inductors par
 
 ### XSPICE
 
-Mixed-signal simulation with code models. A-devices (the `A` prefix) ARE the XSPICE code-model primitives, and XSPICE is enabled by default in the official/stock ngspice builds — no custom build needed. Only the experimental `XSPICE_EXP` extras (e.g. the capacitor/inductor code models) require a custom build.
+Mixed-signal simulation with code models. A-devices (the `A` prefix) are the XSPICE code-model primitives, and XSPICE is enabled by default in the official/stock ngspice builds — no custom build needed. Only the experimental `XSPICE_EXP` extras (e.g. the capacitor/inductor code models) require a custom build.
 
 ```spice
 A1 [in] [out] lut1
@@ -401,7 +401,7 @@ Digital nodes use `[name]` bracket syntax for buses.
 - **MOSFET bulk terminal**: required (4 pins), not auto-connected
 - **GND node**: must explicitly tie to 0 or use `.global`
 - No `startup` keyword in `.tran`
-- A-devices ARE the XSPICE code-model primitives (the `A` prefix) — available in stock/official builds (XSPICE enabled by default); only `XSPICE_EXP` extras need a custom build
+- A-devices are the XSPICE code-model primitives (the `A` prefix) — available in stock/official builds (XSPICE enabled by default); only `XSPICE_EXP` extras need a custom build
 - No Unicode mu issue — ngspice preserves `u` as-is
 - `.func` definitions cannot be recursive — causes hang, not error
 - Different `.raw` file format (all doubles vs LTspice mixed precision)

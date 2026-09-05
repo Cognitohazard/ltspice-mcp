@@ -179,7 +179,7 @@ batch mode — on ngspice, read the trace with an `analyze_results` recipe or us
 dot-less `meas` inside a `.control` block (see the `.meas`-under-batch note in
 the ngspice section below; also the ngspice skill).
 
-**Finding the frequency/time OF a maximum (argmax):** a single `.meas` cannot
+**Finding the frequency/time of a maximum (argmax):** a single `.meas` cannot
 return the x-location of a peak — `.meas AC fpeak MAX mag(V(out))` gives the
 peak *value*, not its frequency. Use two directives (capture the peak, then
 find where the signal equals it):
@@ -1134,7 +1134,7 @@ Digital device types: `d_and`, `d_or`, `d_nand`, `d_nor`, `d_xor`,
 | `.raw` format | mixed precision | all doubles |
 | Unicode mu | replaces `u` with µ | preserves `u` |
 
-Other ngspice notes: A-devices ARE the XSPICE code-model primitives (the `A`
+Other ngspice notes: A-devices are the XSPICE code-model primitives (the `A`
 prefix — available in stock builds, above); `.func` cannot be recursive
 (textual expansion, so a self-reference expands without bound). `.backanno` is
 an LTspice-only directive — ngspice rejects it ("unimplemented dot command
