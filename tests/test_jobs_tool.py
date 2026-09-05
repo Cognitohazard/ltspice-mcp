@@ -543,7 +543,11 @@ class TestActionShapesAndTokenSecrecy:
             assert runs["total"] == 60
             assert runs["next_cursor"] == "o:50"
             assert runs["next_cursor"] in data["hint"]
-            assert "Progress: 60/60 terminal; 0 remaining." in data["hint"]
+            # The counts the hint must carry, read off the structured payload
+            # it summarises — not the sentence it wraps them in.
+            progress = data["progress"]
+            assert f"{progress['terminal']}/{progress['expanded']}" in data["hint"]
+            assert f"{progress['remaining']} remaining" in data["hint"]
 
         follow = _assert_jobs_schema(
             await handle_jobs(
@@ -896,7 +900,9 @@ class TestDurableProgress:
         assert final["progress"]["terminal"] == final["progress"]["expanded"]
         assert "cases_failed" not in middle["progress"]
         assert "jobs(action='wait'" in middle["hint"]
-        assert "Progress: 1/3 terminal; 2 remaining." in middle["hint"]
+        counts = middle["progress"]
+        assert f"{counts['terminal']}/{counts['expanded']}" in middle["hint"]
+        assert f"{counts['remaining']} remaining" in middle["hint"]
 
     async def test_foreign_status_uses_the_persisted_completeness_snapshot(
         self,

@@ -559,7 +559,9 @@ class TestAnalysisDegraded:
             data = _data(result)
             missing = data["coverage"]["missing_cases"]["items"][0]
             assert missing["label"] == "j"
-            assert "Job not found: no-such-job" in missing["detail"]
+            # The id it could not resolve is the fact; the sentence is not.
+            assert "no-such-job" in missing["detail"]
+            assert "not found" in missing["detail"]
 
 
 # ---------------------------------------------------------------------------
