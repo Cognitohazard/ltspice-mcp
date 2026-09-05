@@ -93,7 +93,7 @@ class TestConsolidatedInputDocumentation:
     registered definition, which is what api.reference() and spice://guide
     render from. The ADVERTISED wire deliberately serves semantics-only prose
     (only unit/convention/inversion/pointer sentences survive — see
-    _WIRE_PROSE_KEEP), so the wire copy is allowed to carry bare names; the
+    WIRE_PROSE_KEEP), so the wire copy is allowed to carry bare names; the
     documentation obligation moved to the depth channels, not away."""
 
     def test_every_consolidated_top_level_field_is_documented(self):

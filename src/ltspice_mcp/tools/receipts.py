@@ -52,9 +52,9 @@ from ltspice_mcp.tools._base import (
 
 _RUN_PAGE_LIMIT = 50
 
-_JOBS_PAGE_LIMIT = 50
+JOBS_PAGE_LIMIT = 50
 
-_TERMINAL_EXPERIMENT_STATUSES = frozenset(
+TERMINAL_EXPERIMENT_STATUSES = frozenset(
     {
         "completed",
         "completed_with_failures",
@@ -88,7 +88,7 @@ _MANIFEST_SCHEMA: dict[str, Any] = {
     ],
 }
 
-_OBSERVATION_SCHEMA: dict[str, Any] = {
+OBSERVATION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "code": {"type": "string"},
@@ -100,7 +100,7 @@ _OBSERVATION_SCHEMA: dict[str, Any] = {
 }
 
 #: A receipt failure names the case that failed, not a stage (see Envelope).
-_CASE_FAILURE_SCHEMA: dict[str, Any] = {
+CASE_FAILURE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "case_id": {"type": "string"},
@@ -147,7 +147,7 @@ _ARTIFACT_SCHEMA: dict[str, Any] = {
     "required": ["path", "content_type", "sha256", "bytes"],
 }
 
-_RUN_RECORD_SCHEMA: dict[str, Any] = {
+RUN_RECORD_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "case_id": {"type": "string"},
@@ -162,9 +162,9 @@ _RUN_RECORD_SCHEMA: dict[str, Any] = {
     # fragment deliberately requires none of them.
 }
 
-_RUNS_PAGE_SCHEMA: dict[str, Any] = response_budget.row_page_schema(
-    page_schema({"type": "array", "items": _RUN_RECORD_SCHEMA}),
-    item_schema=_RUN_RECORD_SCHEMA,
+RUNS_PAGE_SCHEMA: dict[str, Any] = response_budget.row_page_schema(
+    page_schema({"type": "array", "items": RUN_RECORD_SCHEMA}),
+    item_schema=RUN_RECORD_SCHEMA,
 )
 
 _COMPLETENESS_SCHEMA: dict[str, Any] = {
@@ -250,7 +250,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                 "required": ["circuit", "findings"],
             },
         },
-        "runs": _RUNS_PAGE_SCHEMA,
+        "runs": RUNS_PAGE_SCHEMA,
         "analysis": {
             "type": "object",
             "properties": {
@@ -260,7 +260,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                 "error": {"type": ["string", "null"]},
                 "observations": {
                     "type": "array",
-                    "items": _OBSERVATION_SCHEMA,
+                    "items": OBSERVATION_SCHEMA,
                 },
             },
             # "request" is the caller's own input replayed back — emitted
@@ -272,8 +272,8 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                 "observations",
             ],
         },
-        "failures": failures_schema(_CASE_FAILURE_SCHEMA),
-        "observations": {"type": "array", "items": _OBSERVATION_SCHEMA},
+        "failures": failures_schema(CASE_FAILURE_SCHEMA),
+        "observations": {"type": "array", "items": OBSERVATION_SCHEMA},
         "warnings": {"type": "array", "items": {"type": "string"}},
         "artifacts": {"type": "array", "items": _ARTIFACT_SCHEMA},
         "hint": {"type": "string"},
@@ -311,8 +311,8 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
     ],
 }
 
-_ReceiptBuilt = tuple[dict[str, Any], str]
-_ReceiptBuild = Callable[[int, response_budget.Rung | None], _ReceiptBuilt]
+ReceiptBuilt = tuple[dict[str, Any], str]
+ReceiptBuild = Callable[[int, response_budget.Rung | None], ReceiptBuilt]
 _ReceiptRows = Callable[[dict[str, Any]], list[Any]]
 
 # Rung 0's allowlist, shared by run_experiments and jobs status/wait because
@@ -344,12 +344,12 @@ def _receipt_row_pages(data: dict[str, Any]) -> list[dict[str, Any]]:
     return pages
 
 
-def _jobs_rows(data: dict[str, Any]) -> list[Any]:
+def jobs_rows(data: dict[str, Any]) -> list[Any]:
     return [row for page in _receipt_row_pages(data) for row in page["items"]]
 
 
 def _run_receipt_rows(data: dict[str, Any]) -> list[Any]:
-    rows = _jobs_rows(data)
+    rows = jobs_rows(data)
     analysis_block = data.get("analysis")
     if isinstance(analysis_block, dict):
         result = analysis_block.get("result")
@@ -376,14 +376,14 @@ def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> None:
             analyze.columnarize_analysis_view(analysis_block["result"])
 
 
-async def _negotiate_receipt(
+async def negotiate_receipt(
     budget: ResponseBudget,
-    build: _ReceiptBuild,
+    build: ReceiptBuild,
     page_limit: int,
     *,
     rows: _ReceiptRows,
     notes: response_budget.Notes,
-) -> _ReceiptBuilt:
+) -> ReceiptBuilt:
     """Render a receipt at the mildest shared budget rung that fits."""
     text = ""
     rendered: dict[str, Any] = {}
@@ -409,16 +409,16 @@ async def _negotiate_receipt(
     return result.data, text
 
 
-async def _render_run_receipt(
+async def render_run_receipt(
     budget: ResponseBudget,
-    build: _ReceiptBuild,
+    build: ReceiptBuild,
     *,
     is_error: bool = False,
 ) -> types.CallToolResult:
     if budget.tokens is None:
         data, text = build(_RUN_PAGE_LIMIT, None)
     else:
-        data, text = await _negotiate_receipt(
+        data, text = await negotiate_receipt(
             budget,
             build,
             _RUN_PAGE_LIMIT,
@@ -544,7 +544,7 @@ def render_receipt_snapshot(
             f"Experiment {snapshot.job_id} is still running; use jobs(wait) with this "
             "job_id to continue waiting."
             if snapshot.job_type == "experiment"
-            and snapshot.status not in _TERMINAL_EXPERIMENT_STATUSES
+            and snapshot.status not in TERMINAL_EXPERIMENT_STATUSES
             else _terminal_hint(snapshot, runs["truncated"])
         ),
     }
@@ -552,7 +552,7 @@ def render_receipt_snapshot(
     # job has nothing left to stop, so the token there is bytes on every receipt
     # buying an action the lifecycle already refuses.
     emitted_control_token = control_token if control_token is not None else snapshot.control_token
-    if emitted_control_token is not None and snapshot.status not in _TERMINAL_EXPERIMENT_STATUSES:
+    if emitted_control_token is not None and snapshot.status not in TERMINAL_EXPERIMENT_STATUSES:
         data["control_token"] = emitted_control_token
     if snapshot.analysis_status != "not_requested":
         rendered_result: dict[str, Any] | None = None
@@ -701,7 +701,7 @@ def _project_run_rows(
     return rows
 
 
-def _runs_page(
+def runs_page(
     cases: list[ExperimentCase],
     run_fields: list[str] | None = None,
     *,
@@ -758,7 +758,7 @@ def _terminal_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
     return outcome_of(
         snapshot.status == "failed",
         partial=snapshot.status == "cancelled" or snapshot.completeness.fell_short,
-        in_progress=snapshot.status not in _TERMINAL_EXPERIMENT_STATUSES,
+        in_progress=snapshot.status not in TERMINAL_EXPERIMENT_STATUSES,
         delivered=False,
     )
 
@@ -957,7 +957,7 @@ def render_jobs_receipt_snapshot(
     snapshot: ReceiptSnapshot,
     *,
     timed_out: bool | None = None,
-    runs_cap: int = _JOBS_PAGE_LIMIT,
+    runs_cap: int = JOBS_PAGE_LIMIT,
     analysis_answer_channel: bool = False,
     analysis_rows_cap: int | None = None,
 ) -> dict[str, Any]:

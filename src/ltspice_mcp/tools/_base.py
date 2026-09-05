@@ -39,9 +39,9 @@ from ltspice_mcp.lib.simulator import no_simulator_message, simulator_library_ro
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._schema import (
     ToolInput,
-    _build_input_schema,
-    _strip_wire_prose,
+    build_input_schema,
     schema_from_typeddict,
+    strip_wire_prose,
 )
 
 # isort: split
@@ -63,9 +63,9 @@ from ltspice_mcp.lib.projection import (  # noqa: F401
     split_field_path,
 )
 from ltspice_mcp.tools._schema import (  # noqa: F401
-    _WIRE_PROSE_KEEP,
-    _schema_for_type,
+    WIRE_PROSE_KEEP,
     prune_unreferenced_defs,
+    schema_for_type,
 )
 
 logger = logging.getLogger(__name__)
@@ -883,7 +883,7 @@ class ToolRegistry:
                 "name": name,
                 "description": description,
                 "inputSchema": (
-                    _build_input_schema(input_model)
+                    build_input_schema(input_model)
                     if input_model is not None
                     else {"type": "object", "properties": {}, "additionalProperties": False}
                 ),
@@ -941,7 +941,7 @@ class ToolRegistry:
             # verbatim — it is the only prose a client that does not show
             # server instructions ever sees for the tool — but serves
             # semantics-only FIELD prose (a property description with no
-            # load-bearing marker, see _WIRE_PROSE_KEEP, is dropped) and no
+            # load-bearing marker, see WIRE_PROSE_KEEP, is dropped) and no
             # outputSchema (it was the single largest schema block, 84% of
             # `jobs`, -35% across the surface; return shapes are learned from
             # responses instead). The registered definition — the dispatch
@@ -952,7 +952,7 @@ class ToolRegistry:
             definition = registered.definition.model_copy(
                 update={
                     "description": registered.definition.description,
-                    "inputSchema": _strip_wire_prose(registered.definition.inputSchema),
+                    "inputSchema": strip_wire_prose(registered.definition.inputSchema),
                     "outputSchema": None,
                 }
             )

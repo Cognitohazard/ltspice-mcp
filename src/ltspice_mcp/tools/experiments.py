@@ -89,13 +89,13 @@ from ltspice_mcp.tools.analyze import (
     include_flag_coercer,
 )
 from ltspice_mcp.tools.receipts import (
-    _TERMINAL_EXPERIMENT_STATUSES,
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
-    _ReceiptBuilt,
-    _render_run_receipt,
-    _runs_page,
+    TERMINAL_EXPERIMENT_STATUSES,
+    ReceiptBuilt,
     finalize_receipt,
     render_receipt_snapshot,
+    render_run_receipt,
+    runs_page,
     snapshot_receipt,
 )
 
@@ -722,7 +722,7 @@ async def _render_static_run_receipt(
     *,
     is_error: bool = False,
 ) -> types.CallToolResult:
-    return await _render_run_receipt(
+    return await render_run_receipt(
         budget,
         lambda _limit, _rung: (copy.deepcopy(data), text),
         is_error=is_error,
@@ -1064,7 +1064,7 @@ async def _dwell_and_respond(
     budget: ResponseBudget,
 ) -> types.CallToolResult:
     job = receipt.job
-    if job.status not in _TERMINAL_EXPERIMENT_STATUSES and wait_s > 0:
+    if job.status not in TERMINAL_EXPERIMENT_STATUSES and wait_s > 0:
         runner = state.runners.get_experiment_runner_for(job)
         if runner is not None:
             await runner.wait(job, wait_s, wait_for="all")
@@ -1082,7 +1082,7 @@ async def _dwell_and_respond(
         f"({snapshot.completeness.terminal}/{snapshot.completeness.expanded} terminal cases)"
     )
 
-    def build(limit: int, rung: response_budget.Rung | None) -> _ReceiptBuilt:
+    def build(limit: int, rung: response_budget.Rung | None) -> ReceiptBuilt:
         data = render_receipt_snapshot(
             snapshot,
             control_token=receipt.control_token,
@@ -1095,7 +1095,7 @@ async def _dwell_and_respond(
         )
         return finalize_receipt(data), text
 
-    return await _render_run_receipt(budget, build)
+    return await render_run_receipt(budget, build)
 
 
 def _append_terminal_cases(
@@ -1216,12 +1216,12 @@ async def _routing_failure_response(
     )
     finalize_receipt(data)
 
-    def build(limit: int, _rung: response_budget.Rung | None) -> _ReceiptBuilt:
+    def build(limit: int, _rung: response_budget.Rung | None) -> ReceiptBuilt:
         rendered = copy.deepcopy(data)
-        rendered["runs"] = _runs_page(cases, args.run_fields, cap=limit)
+        rendered["runs"] = runs_page(cases, args.run_fields, cap=limit)
         return rendered, str(exc)
 
-    return await _render_run_receipt(budget, build)
+    return await render_run_receipt(budget, build)
 
 
 async def _error_response(
@@ -1373,7 +1373,7 @@ def _empty_payload(request_id: str) -> dict[str, Any]:
         "source": [],
         "completeness": Completeness(),
         "lint": [],
-        "runs": _runs_page([]),
+        "runs": runs_page([]),
         "failures": [],
         "observations": [],
         "warnings": [],
