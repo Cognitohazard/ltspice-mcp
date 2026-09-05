@@ -1998,11 +1998,7 @@ class TestAttachedAnalysis:
         assert "(answer)" in note["detail"]
         answer_result = answer["analysis"]["result"]
         entry = answer_result["results"]["vout"]
-        values = entry["values"]
-        columns = entry.get("values_columns")
-        if columns is not None:
-            values = [dict(zip(columns, row, strict=True)) for row in values]
-        assert values == expected
+        assert entry["values"] == expected
         assert answer_result["outcome"] == expected_result["outcome"]
         assert answer_result["coverage"] == expected_result["coverage"]
         assert answer_result["next"] is None

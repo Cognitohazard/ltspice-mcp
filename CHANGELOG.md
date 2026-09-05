@@ -50,6 +50,22 @@ CSV waveform export is the `waveform` recipe with `format: "csv"`, which writes
 every sample to a file and returns its path.
 
 
+### Removed — the columns form of budget-limited rows
+
+A response cap (`budget`) used to re-render row surfaces once it got tight
+enough: rows became arrays of bare values, with a sibling `*_columns` list
+naming what each position meant. It was lossless, but it made a row's shape
+depend on how small the cap was, so reading a row meant first working out
+which form had come back.
+
+Rows now keep their shape at every budget: a row is always an object with
+the same keys, and a tight budget returns fewer of them rather than
+differently shaped ones. The reduction ladder is trim, then answer, then
+shrink. If you read the columns form — `items_columns`, `values_columns`,
+`reduced_columns`, or any other `*_columns` sibling — those keys are gone
+from every response and output schema; read the rows from `items`,
+`values`, or `reduced` and page on with the cursor the response carries.
+
 ### Removed — the pre-0.6 tool handlers and job machinery
 
 The handlers behind the removed 0.5 tools were kept in place through 0.6

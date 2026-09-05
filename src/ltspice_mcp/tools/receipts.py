@@ -171,14 +171,11 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
         "raw": {"type": ["string", "null"]},
         "log": {"type": ["string", "null"]},
     },
-    # run_fields may project away any key, so the shared object/columnar row
-    # fragment deliberately requires none of them.
+    # run_fields may project away any key, so the shared row fragment
+    # deliberately requires none of them.
 }
 
-RUNS_PAGE_SCHEMA: dict[str, Any] = response_budget.row_page_schema(
-    page_schema({"type": "array", "items": RUN_RECORD_SCHEMA}),
-    item_schema=RUN_RECORD_SCHEMA,
-)
+RUNS_PAGE_SCHEMA: dict[str, Any] = page_schema({"type": "array", "items": RUN_RECORD_SCHEMA})
 
 _COMPLETENESS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -381,12 +378,6 @@ def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> None:
                 if isinstance(row, dict) and row.get("status") == "produced":
                     row.pop("raw", None)
                     row.pop("log", None)
-    if rung.columnar:
-        for page in _receipt_row_pages(data):
-            response_budget.columnarize(page, "items")
-        analysis_block = data.get("analysis")
-        if isinstance(analysis_block, dict) and isinstance(analysis_block.get("result"), dict):
-            analyze.columnarize_analysis_view(analysis_block["result"])
 
 
 async def negotiate_receipt(
