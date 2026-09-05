@@ -394,6 +394,7 @@ FROZEN_ERROR_CODES = (
     "device_op_points_absent",
     "downsampled",
     "error",
+    "expected_sha256_required",
     "export_written",
     "failures_truncated",
     "idempotency_conflict",
