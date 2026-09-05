@@ -33,7 +33,7 @@ nested inside ``comparison`` they were invisible to the schema, so a structured-
 client read the bogus delta as fact.
 
 An unparsed deck sits in ``warnings`` rather than ``observations`` deliberately. The
-doctrine in ``lib/result_observations.py`` routes a *run-level solve failure* to
+rules in ``lib/result_observations.py`` route a *run-level solve failure* to
 ``observations`` where a tool has that channel, but that rule is about a fact the
 simulator produced about a solve; verify_circuit never solves. What it reports here
 is its own substitution — it could not read a deck, so it stood an empty circuit in
@@ -721,7 +721,9 @@ class VerifyCircuitInput(ToolInput):
 
 
 VERIFY_DESCRIPTION = (
-    "Check a circuit file without changing it, and optionally render it. For a "
+    "Check a circuit file, and optionally render it. It does not change the file "
+    "it checks; with export_to='sidecar' the export check rewrites the .net next "
+    "to an .asc. For a "
     ".cir/.net/.sp: SPICE syntax, directive and element arity. For an .asc: symbol "
     "and pin resolution, the authoritative LTspice netlist export (which silently "
     "drops wires the file appears to contain), geometric layout facts (overlapping "
@@ -729,8 +731,8 @@ VERIFY_DESCRIPTION = (
     "facts (net connected only by label stubs with no drawn wire; text anchored "
     "inside a symbol). Supply 'reference' to graph-compare against a known-good "
     "netlist (equivalence) or take an added/removed/changed delta (structural_diff). "
-    "Every fixable finding carries its location and subject. By default nothing is "
-    "written outside the server's scratch directory."
+    "Every fixable finding carries its location and subject. Apart from that "
+    "sidecar, nothing is written outside the server's scratch directory."
 )
 
 
