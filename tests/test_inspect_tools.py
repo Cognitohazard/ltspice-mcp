@@ -125,6 +125,7 @@ async def test_capabilities_keys_present(cap_state: SessionState):
         "persist_jobs",
         "allowed_paths",
         "tool_profile",
+        "tool_listing",
         "limits",
         "linter_version",
         "config_path",
