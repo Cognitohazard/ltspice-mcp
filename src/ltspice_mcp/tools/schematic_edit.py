@@ -9,9 +9,8 @@ first turns a stale ``expected_sha256`` into a ``revision_conflict`` with nothin
 written.
 
 The op models and their in-place applier are reused verbatim from
-``lib/schematic_ops.py`` (the shipped ``apply_schematic_ops`` machinery); the only
-narrowing is that the wire op accepts ``wire_pins`` only — the deprecated
-``connect`` alias is excluded from this surface. Post-commit, an optional
+``lib/schematic_ops.py`` (the shipped ``apply_schematic_ops`` machinery).
+Post-commit, an optional
 ``reference`` stage exports the committed sheet on a COPY and compares it to a
 reference netlist through the connectivity graph engine; a mismatch or an export
 failure there is reported but never un-commits the sheet.
@@ -97,21 +96,7 @@ _BLANK_TEMPLATE = blank_sheet()
 _DEFAULT_VIEW_LIMIT = 100
 
 
-# ``OpWirePins`` still accepts the deprecated ``connect`` alias; this surface
-# drops it. The parent's applier dispatches on ``isinstance(op, OpWirePins)``
-# and reads ``op.op``, so narrowing the literal is all that is needed — a
-# ``connect`` payload no longer validates and never reaches the applier. The
-# payload fields (and their descriptions) are the parent's; only the
-# discriminator is narrowed, and this class's own docstring is what the schema
-# shows for the op.
-class OpWirePinsStrict(OpWirePins):
-    """Draw an orthogonal wire between two pins, refusing a diagonal run, a pin
-    collision, or an overlapping wire junction rather than drawing them."""
-
-    op: Literal["wire_pins"] = "wire_pins"  # pyright: ignore[reportIncompatibleVariableOverride]
-
-
-# The op union for this surface: the shipped models, with the wire op narrowed.
+# The op union for this surface.
 #
 # Discriminated on ``op``. Without the discriminator pydantic tries every branch
 # and reports each one's complaint, so a single mistyped op produced 30-odd
@@ -128,7 +113,7 @@ ConsolidatedOp = Annotated[
     | OpAddNetLabel
     | OpRemoveNetLabel
     | OpRemoveWire
-    | OpWirePinsStrict
+    | OpWirePins
     | OpAddDirective
     | OpRemoveDirective,
     Field(discriminator="op"),

@@ -443,7 +443,7 @@ async def test_crash_after_rename_stays_committed(asc_state, work_dir, monkeypat
 
 
 # ---------------------------------------------------------------------------
-# connect exclusion (ID-15)
+# The former "connect" spelling of wire_pins is not accepted
 # ---------------------------------------------------------------------------
 
 

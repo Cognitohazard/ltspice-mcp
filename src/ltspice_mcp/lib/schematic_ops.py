@@ -1889,8 +1889,7 @@ class OpWirePins(StrictModel):
     """Draw an orthogonal wire between two pins, refusing a diagonal run, a pin
     collision, or an overlapping wire junction rather than drawing them."""
 
-    # "connect" is the deprecated former name, still accepted.
-    op: Literal["wire_pins", "connect"]
+    op: Literal["wire_pins"]
     from_pin: str = Field(
         description="Source pin as 'Reference.Pin', e.g. 'M1.D', or 'net:NAME' for a label."
     )

@@ -426,9 +426,8 @@ def _members(union: Any) -> tuple[type[BaseModel], ...]:
 def _union_branches(union: Any, discriminator: str) -> tuple[Any, ...]:
     """``(discriminant, model, "")`` for every member of a discriminated union.
 
-    A member declaring several literals (``wire_pins`` also answers to the
-    retained ``connect``) is listed under the first, which is the spelling the
-    surface advertises.
+    A member declaring several literals is listed under the first, which is the
+    spelling the surface advertises.
     """
     branches = []
     for model in _members(union):
