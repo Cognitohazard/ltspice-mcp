@@ -25,7 +25,9 @@ classifiers = [
 ]
 dependencies = [
     "anyio>=4.0,<5.0",
-    "mcp[cli]>=1.27.0,<2.0",
+    # No [cli] extra: nothing here imports typer or rich, and that extra pulls
+    # both into every install for the `mcp` command-line tool we never invoke.
+    "mcp>=1.27.0,<2.0",
     "numpy>=1.26,<3.0",
     # Direct use (scoped simulator kill, job owner-pid liveness); also a
     # spicelib transitive, so this adds no new install weight.
