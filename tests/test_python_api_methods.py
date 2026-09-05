@@ -185,7 +185,7 @@ def test_jobs_list_returns_every_circuit_group_the_wire_would_page(
     paged = api.jobs(raw_page=True, action="list", limit=2)
     collected = api.jobs(action="list", limit=2)
 
-    # The wire pages at the limit it was given; the in-process door renders the
+    # The wire pages at the limit it was given; the Python API renders the
     # same evaluation complete.
     assert paged["returned"] == 2
     assert paged["truncated"] is True
@@ -203,7 +203,7 @@ def test_jobs_receipt_is_rendered_from_a_single_read_of_the_job(
 ) -> None:
     """Both doors render one evaluation, so a receipt describes one read.
 
-    The in-process door used to invoke the wire handler and then resolve and
+    The Python API used to invoke the wire handler and then resolve and
     snapshot the job a second time to render the complete result, keeping
     `timed_out` from the first read and the receipt from the second — two reads
     reported as one answer, with a window in between for the job to move.
@@ -717,7 +717,7 @@ def test_verify_and_edit_return_uncapped_neutral_data(
 
 
 # ---------------------------------------------------------------------------
-# The automatic door's denylist, pinned fail-closed
+# The automatic mode's denylist, pinned fail-closed
 # ---------------------------------------------------------------------------
 
 #: A field name that reads like a wire-only paging or budget control. The door
@@ -726,11 +726,11 @@ _WIRE_ONLY_NAME = re.compile(
     r"^(budget|continue|continuation|cursor|view_cursors|wait_s)$|_cursors?$"
 )
 
-#: Wire-only-looking fields the automatic door deliberately ACCEPTS, each with
+#: Wire-only-looking fields the automatic mode deliberately ACCEPTS, each with
 #: the reason it is not a paging or budget control. Empty today: every such
 #: field on the five input models is rejected. A new one must be added here
-#: with its justification, or the door must reject it — this test fails until
-#: one of the two happens, so a paging knob cannot reach the automatic door by
+#: with its justification, or the interface must reject it — this test fails until
+#: one of the two happens, so a paging knob cannot reach the automatic mode by
 #: nobody having classified it.
 _DOOR_ALLOWLIST: dict[tuple[str, ...], str] = {}
 
@@ -800,11 +800,11 @@ def test_every_wire_only_field_is_rejected_or_explicitly_allowlisted() -> None:
         elif dotted not in rejection:
             unnamed.append(dotted)
     assert not unclassified, (
-        "wire-only field(s) reach the automatic door unclassified: "
+        "wire-only field(s) reach the automatic mode unclassified: "
         + ", ".join(unclassified)
         + " — reject them in _enforce_auto_door or allowlist them with a reason"
     )
-    assert not unnamed, "the door rejected but did not name: " + ", ".join(unnamed)
+    assert not unnamed, "the interface rejected but did not name: " + ", ".join(unnamed)
 
 
 class TestAutoDoorRefusalsAreActionable:
@@ -906,7 +906,7 @@ def test_dict_shaped_inspect_queries_serialize_without_warning(
     state_no_sim: SessionState,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A dict query is the documented shape on both doors, so the successful
+    """A dict query is the documented shape on MCP and the Python API, so the successful
     call must be silent. Dumping the whole request serialized each dict against
     the union member it was declared as and wrote a pydantic serializer warning
     to stderr per query — noise that reads as a malformed call."""
@@ -1020,7 +1020,7 @@ def test_the_mcp_door_still_resolves_against_the_process_cwd(
     state_relative_sandbox: SessionState,
     elsewhere: Path,
 ) -> None:
-    """The base is the in-process door's opt-in. A server request carries none,
+    """The base is the Python API's opt-in. A server request carries none,
     so the same relative sandbox resolves exactly where it always did."""
     from ltspice_mcp.tools._base import safe_path
 

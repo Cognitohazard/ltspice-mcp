@@ -22,7 +22,7 @@ Three entry points, differing in who did the slicing: :func:`page` takes the
 whole list and slices it, with the guards a caller-supplied offset and limit
 need; :func:`page_of` takes a window a caller already cut, for the surfaces
 that project rows AFTER paging so the projection runs only over the rows the
-page carries; :func:`unpaged` is the whole-result form the in-process door
+page carries; :func:`unpaged` is the whole-result form the Python API
 returns.
 """
 

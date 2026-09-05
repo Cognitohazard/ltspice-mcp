@@ -428,10 +428,10 @@ class TestReceiptThenDwell:
 
 @pytest.mark.asyncio
 class TestApiDoorPointer:
-    """A many-case terminal receipt points at the in-process door; a
+    """A many-case terminal receipt points at the Python API; a
     spot-check receipt does not. The pointer is aimed at the loop shape,
     where per-call wire overhead compounds — pointing every receipt at the
-    Python door would be noise on exactly the calls it cannot help."""
+    Python API would be noise on exactly the calls it cannot help."""
 
     async def test_sweep_receipt_points_at_the_python_door(
         self,

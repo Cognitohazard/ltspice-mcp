@@ -123,10 +123,10 @@ class TestBuildInstructions:
             assert len(text) <= _INSTRUCTIONS_BUDGET, (
                 f"instructions {len(text)} chars > {_INSTRUCTIONS_BUDGET} client truncation budget"
             )
-            # The Python-door discovery pointer must ride every shape: the
+            # The Python API discovery pointer must ride every shape: the
             # instructions are the one surface an agent sees without asking,
             # and an agent that never learns the API exists can never choose it
-            # (the in-process door has no other billboard at handshake time).
+            # (the Python API has no other advertised definition at handshake time).
             assert "from ltspice_mcp.api import Api" in text, (
                 "an instruction shape lost the Python API discovery line"
             )

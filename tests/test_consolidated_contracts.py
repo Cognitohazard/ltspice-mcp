@@ -609,7 +609,7 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477
-# campaign transcripts, both doors — .claude/plans/u3_recipe_census.md). Their
+# campaign transcripts, MCP and the Python API — .claude/plans/u3_recipe_census.md). Their
 # advertised schema is a discriminant-plus-pointer stub; the branch itself
 # stays fully callable. A metric may join this tuple only with a fresh census
 # showing zero use; a metric the census showed used may never be stubbed.
