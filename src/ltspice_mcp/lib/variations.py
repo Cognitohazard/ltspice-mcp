@@ -242,7 +242,14 @@ class RandomVariation(VariationModel):
     runs: int = Field(ge=1)
     seed: int | None = None
     applies_to: list[str] | None = Field(default=None, description=_APPLIES_TO_DESCRIPTION)
-    rules: list[RandomRule]
+    rules: list[RandomRule] = Field(
+        description=(
+            "What varies, one entry per kind: 'component' perturbs a part's "
+            "value (resistor tolerance), 'param' a declared .param, 'model' one "
+            "model parameter (process spread), 'mismatch' the Pelgrom "
+            "device-to-device spread of matched transistors."
+        )
+    )
 
     @field_validator("rules")
     @classmethod

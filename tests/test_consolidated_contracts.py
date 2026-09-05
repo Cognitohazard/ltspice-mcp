@@ -599,7 +599,7 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # The .step selection hoisted off the recipes lands here too, so an
     # attached analysis and a standalone one read the same steps: two more
     # arguments and one shared StepSelector definition.
-    "run_experiments": 13230,
+    "run_experiments": 13450,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
@@ -612,7 +612,7 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Seven query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
-    "inspect": 7000,
+    "inspect": 7150,
     # The typed op union — eleven ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.
