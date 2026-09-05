@@ -600,8 +600,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     "edit_schematic": 7491,
     # Checks, the shared render policy and compare spec (each with the
     # verify-only fields on a subclass), and the flat compare fields retained
-    # as aliases. Re-pinned 2535 -> 3009 for that same second spelling.
-    "verify_circuit": 3009,
+    # as aliases. Re-pinned 2535 -> 3009 for that same second spelling, then
+    # 3009 -> 3142 when the netlist path gained the connectivity checks: a
+    # caller cannot ask for what the description does not say it looks at.
+    "verify_circuit": 3142,
     # Job/case addressing, windowing, and delivery flags.
     "plot_waveform": 2174,
 }

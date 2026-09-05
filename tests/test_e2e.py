@@ -408,7 +408,7 @@ class TestSchematicTools:
             assert not result.isError, _text(result)
             data = _data(result)
             assert data["kind"] == "netlist"
-            assert data["checks_run"] == ["syntax"]
+            assert data["checks_run"] == ["syntax", "quality"]
             assert data["outcome"] == "complete"
 
 

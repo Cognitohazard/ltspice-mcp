@@ -13,9 +13,10 @@ Checks by file kind:
   paths), ``export`` (the authoritative LTspice netlist export, plus the wires
   LTspice silently drops), ``layout`` (geometric placement facts), ``quality``
   (label-island and text-in-body hygiene), and ``compare``.
-* netlist — ``syntax`` (directive + element arity) and ``compare``. No layout,
-  symbol, or export claim is made on a text deck: it carries no geometry and no
-  symbol library.
+* netlist — ``syntax`` (directive + element arity), ``quality`` (nodes wired to
+  a single terminal, directives naming something no element declares, nets with
+  no DC path to ground), and ``compare``. No layout, symbol, or export claim is
+  made on a text deck: it carries no geometry and no symbol library.
 
 ``compare`` runs in one of two modes: ``equivalence`` graph-compares through the
 connectivity engine (every include/lib open gated by ``safe_path`` so an in-deck
@@ -91,11 +92,14 @@ from ltspice_mcp.lib.schematic_scene import (
     layout_issues,
 )
 from ltspice_mcp.lib.schematic_scene import point_on_segment as point_on_segment
-from ltspice_mcp.lib.spice_lex import SpiceLexError, lex
+from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex
 from ltspice_mcp.lib.spice_validator import (
     drop_title_card,
     validate_directive,
     validate_netlist_arity,
+    validate_netlist_bias_topology,
+    validate_netlist_dangling_nodes,
+    validate_netlist_directive_refs,
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
@@ -251,8 +255,10 @@ CHECK_ORDER = ("syntax", "symbols", "export", "layout", "quality", "compare")
 # Applicable checks per file kind. A netlist carries no geometry and no symbol
 # library, so it gets only the text-deck checks — claiming a layout/symbol/export
 # result for it would be manufacturing a finding out of an absent capability.
+# ``quality`` means different things on the two kinds because the two files hold
+# different evidence: geometry hygiene on a sheet, connectivity on a deck.
 _ASC_CHECKS = frozenset({"symbols", "export", "layout", "quality", "compare"})
-_NETLIST_CHECKS = frozenset({"syntax", "compare"})
+_NETLIST_CHECKS = frozenset({"syntax", "quality", "compare"})
 
 # Project-local dependencies staged alongside a schematic for a managed export.
 # Symbol resolution privileges the schematic's own directory, so exporting a lone
@@ -753,9 +759,9 @@ class VerifyCircuitInput(ToolInput):
             default=None,
             description=(
                 "Narrow the checks. Default is every check applicable to this file "
-                "type: syntax for netlists; symbols, export, layout and quality for "
-                "schematics; compare whenever 'reference' is given. Use this only to "
-                "skip something expensive — 'export' runs LTspice."
+                "type: syntax and quality for netlists; symbols, export, layout and "
+                "quality for schematics; compare whenever 'reference' is given. Use "
+                "this only to skip something expensive — 'export' runs LTspice."
             ),
         )
     )
@@ -845,7 +851,9 @@ VERIFY_DESCRIPTION = (
     "Check a circuit file, and optionally render it. It does not change the file "
     "it checks; with export_to='sidecar' the export check rewrites the .net next "
     "to an .asc. For a "
-    ".cir/.net/.sp: SPICE syntax, directive and element arity. For an .asc: symbol "
+    ".cir/.net/.sp: SPICE syntax, directive and element arity, plus connectivity "
+    "facts — nodes wired to one terminal, V()/I() naming something no element "
+    "declares, nets with no DC path to ground. For an .asc: symbol "
     "and pin resolution, the authoritative LTspice netlist export (which silently "
     "drops wires the file appears to contain), geometric layout facts (overlapping "
     "bodies, wires through a body, floating pins, dangling wire ends), and quality "
@@ -910,19 +918,74 @@ def _scratch_dir(state: SessionState, name: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _syntax_findings(text: str, path: Path) -> tuple[list[dict[str, Any]], list[str]]:
-    """Directive and element-arity findings in a netlist, in the shared shape,
-    plus the lexer's own notes about what it had to guess.
+@dataclass(frozen=True)
+class _LexedDeck:
+    """One lex of a netlist, shared by the syntax and quality checks.
 
-    Those notes are facts about the read, not rule violations: an unclosed
-    ``.SUBCKT``, an ``.ENDS`` that matches nothing, a continuation with no card
-    to continue. The lexer assigns them no severity, so they are relayed as
-    observations rather than promoted to findings — but relayed they must be,
-    since the deck they describe parsed into cards that mean something other
-    than what the file says.
+    ``cards`` already has the title card dropped: line 1 is free text by SPICE
+    convention and the lexer has no title concept, so a title beginning with an
+    element letter parses as an element whose words the instance-level rules
+    would otherwise count as circuit nodes.
+
+    ``notes`` are the lexer's own remarks about what it had to guess — an
+    unclosed ``.SUBCKT``, an ``.ENDS`` that matches nothing, a continuation with
+    no card to continue. They are facts about the read, not rule violations, and
+    the lexer assigns them no severity, so they are relayed as observations
+    rather than promoted to findings — but relayed they must be, since the deck
+    they describe parsed into cards that mean something other than what the file
+    says. ``error`` is set when the deck did not lex at all.
+    """
+
+    cards: list[SpiceCard]
+    notes: list[str]
+    error: str | None = None
+
+
+def _lex_deck(text: str) -> _LexedDeck:
+    """Lex a netlist once for every check that reads its cards."""
+    try:
+        result = lex(text)
+    except SpiceLexError as exc:
+        return _LexedDeck(cards=[], notes=[], error=str(exc))
+    return _LexedDeck(
+        cards=drop_title_card(result.cards),
+        notes=[f"netlist lexer: {note}" for note in result.warnings],
+    )
+
+
+def _rule_finding(
+    issue: dict[str, object], path: Path, *, rule_id: str, severity: str
+) -> dict[str, Any]:
+    """A netlist-validator issue in the shared finding shape.
+
+    Every netlist rule reports ``{line, directive, message, suggestion}``, so the
+    conversion is one function rather than one per rule.
+    """
+    detail = str(issue.get("message", ""))
+    suggestion = issue.get("suggestion")
+    if suggestion:
+        detail = f"{detail} {suggestion}"
+    card = str(issue.get("directive", ""))
+    at: dict[str, Any] = {"file": str(path)}
+    line_no = issue.get("line")
+    if isinstance(line_no, int):
+        at["line"] = line_no
+    return _finding(
+        rule_id=rule_id,
+        severity=severity,
+        at=at,
+        subject=card or str(path.name),
+        evidence={"detail": detail, "card": card},
+    )
+
+
+def _syntax_findings(text: str, path: Path, deck: _LexedDeck) -> list[dict[str, Any]]:
+    """Directive, lex, and element-arity findings in a netlist.
+
+    Everything here breaks the deck for the simulator, so every finding is an
+    error. The facts that are legal-but-notable live in the quality check.
     """
     findings: list[dict[str, Any]] = []
-    lex_notes: list[str] = []
     for lineno, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line.startswith("."):
@@ -941,43 +1004,52 @@ def _syntax_findings(text: str, path: Path) -> tuple[list[dict[str, Any]], list[
             )
         )
 
-    try:
-        result = lex(text)
-        cards = result.cards
-        lex_notes.extend(f"netlist lexer: {note}" for note in result.warnings)
-    except SpiceLexError as exc:
+    if deck.error is not None:
         findings.append(
             _finding(
                 rule_id="lex_error",
                 severity="error",
                 at={"file": str(path)},
                 subject=str(path.name),
-                evidence={"detail": str(exc)},
+                evidence={"detail": deck.error},
             )
         )
-        cards = []
-    # Line 1 is a free-text title by SPICE convention; the lexer has no title
-    # concept, so a title beginning with an element letter parses as an element.
-    for issue in validate_netlist_arity(drop_title_card(cards)):
-        detail = str(issue.get("message", ""))
-        suggestion = issue.get("suggestion")
-        if suggestion:
-            detail = f"{detail} {suggestion}"
-        card = str(issue.get("directive", ""))
-        at: dict[str, Any] = {"file": str(path)}
-        line_no = issue.get("line")
-        if isinstance(line_no, int):
-            at["line"] = line_no
-        findings.append(
-            _finding(
-                rule_id="element_arity",
-                severity="error",
-                at=at,
-                subject=card or str(path.name),
-                evidence={"detail": detail, "card": card},
-            )
+    findings.extend(
+        _rule_finding(issue, path, rule_id="element_arity", severity="error")
+        for issue in validate_netlist_arity(deck.cards)
+    )
+    return findings
+
+
+# The connectivity rules the netlist quality check runs, with the severity this
+# tool attaches to each. Severity names an input condition, never a verdict:
+#
+# ``dangling_node`` is legal SPICE — bias fragments and deliberately
+# unterminated test decks leave nodes open on purpose — so it is a fact the
+# model weighs, matching the ``floating_pin`` observation its .asc sibling
+# reports for the same geometry.
+#
+# The other two are real discrepancies between what the deck says and what it
+# can compute: a directive naming something no element declares resolves to
+# nothing, and a net with no DC path to ground has no defined operating point.
+_NETLIST_QUALITY_RULES: tuple[tuple[str, str, Any], ...] = (
+    ("dangling_node", "observation", validate_netlist_dangling_nodes),
+    ("undefined_reference", "warning", validate_netlist_directive_refs),
+    ("floating_net", "warning", validate_netlist_bias_topology),
+)
+
+
+def _netlist_quality_findings(path: Path, deck: _LexedDeck) -> list[dict[str, Any]]:
+    """Connectivity findings over a lexed netlist: nodes wired to one terminal,
+    directives naming something that exists nowhere, and nets with no DC path
+    to ground."""
+    findings: list[dict[str, Any]] = []
+    for rule_id, severity, validate in _NETLIST_QUALITY_RULES:
+        findings.extend(
+            _rule_finding(issue, path, rule_id=rule_id, severity=severity)
+            for issue in validate(deck.cards)
         )
-    return findings, lex_notes
+    return findings
 
 
 # ---------------------------------------------------------------------------
@@ -1798,19 +1870,30 @@ async def evaluate_verify_circuit(
             continue
         wanted[check] = True
 
-    # --- netlist text (syntax) ---------------------------------------------
+    # --- netlist text (syntax, quality) -------------------------------------
     text: str | None = None
-    if kind == "netlist" and (wanted.get("syntax") or wanted.get("compare")):
+    if kind == "netlist" and (
+        wanted.get("syntax") or wanted.get("quality") or wanted.get("compare")
+    ):
         try:
             text = await asyncio.to_thread(read_spice_text, path)
         except OSError as exc:
             failures.append(_failure("read", str(exc), where=str(path)))
 
-    if wanted.get("syntax") and text is not None:
-        syntax_findings, lex_notes = await asyncio.to_thread(_syntax_findings, text, path)
-        findings.extend(syntax_findings)
-        observation_events.extend(lex_notes)
+    # One lex serves both text-deck checks, and its notes are relayed once
+    # whichever of the two asked for it.
+    deck: _LexedDeck | None = None
+    if text is not None and (wanted.get("syntax") or wanted.get("quality")):
+        deck = await asyncio.to_thread(_lex_deck, text)
+        observation_events.extend(deck.notes)
+
+    if wanted.get("syntax") and text is not None and deck is not None:
+        findings.extend(await asyncio.to_thread(_syntax_findings, text, path, deck))
         checks_run.append("syntax")
+
+    if wanted.get("quality") and deck is not None and kind == "netlist":
+        findings.extend(await asyncio.to_thread(_netlist_quality_findings, path, deck))
+        checks_run.append("quality")
 
     # --- scene-derived checks (symbols, layout, quality, dropped wires) -----
     scene: Scene | None = None
