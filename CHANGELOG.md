@@ -52,6 +52,25 @@ every sample to a file and returns its path.
 
 ### Removed
 
+- `analyze_results` recipes no longer accept `step` or `all_steps`; pass them on
+  the call (see Changed).
+- `analyze_results` recipes no longer accept `reduce_field`, and `spec` no longer
+  accepts `field`; pass `field` on the recipe (see Changed).
+- `verify_circuit` no longer accepts the flat `reference`, `compare_mode`,
+  `anchors` or `rtol`; pass the `compare` object, which carries all four.
+- `edit_schematic` no longer accepts the flat `reference`; pass `compare`.
+- `edit_schematic` no longer accepts `render`, `render_format`, `render_scale`,
+  or `render` in `return_views`, and its response carries no `views.render`.
+  Rendering is `verify_circuit`'s, whose policy adds a pixel cap, inline
+  delivery and a render-only mode.
+- `edit_schematic` no longer accepts `write_failed_draft`. A failed batch writes
+  nothing by design and the response names the stage that failed, so there was
+  no draft to quarantine that the caller's own ops did not already describe.
+- `edit_schematic` no longer accepts `format`; structured-aware clients render
+  only `structuredContent`, and the other six tools had already dropped it.
+
+### Removed
+
 - The MCP logging capability. The 2026-07-28 revision deprecates it whole
   (SEP-2577): the `logging` server capability, the server-to-client
   `notifications/message` delivery and the per-request log-level opt-in that
@@ -101,6 +120,25 @@ Error codes that only those handlers emitted are gone with them:
 `max_pk_pk_bucket`, and `export_written`.
 
 ### Changed
+
+- `analyze_results` takes `step` and `all_steps` as call-level arguments instead
+  of per-recipe ones, and `run_experiments`' attached `analyze` block takes the
+  same two, so an attached measurement and a standalone one read the same
+  `.step` iterations. A run's step axis belongs to the run, not to each
+  measurement taken on it, so the choice is made once and every recipe in the
+  call reads it. The selection travels in the stored result set, so a
+  continuation replays it. Because the attached block now hashes two more keys,
+  the request canonicalizer moves to version 4: a `request_id` stored under
+  version 3 raises an idempotency conflict instead of replaying.
+- A recipe names the number a reduction or a spec reads once, as `field`. It
+  replaces `reduce_field` and `spec.field`, which said the same thing and had to
+  agree; `spec` keeps `min`, `max` and `allow_incomplete`. A multi-field recipe
+  requires `field` as soon as `reduce` or `spec` is given; a keyed recipe
+  requires it for `spec`; a scalar recipe takes none.
+- The published JSON Schema no longer carries `"default": null` annotations or
+  `discriminator.mapping` tables: `required` and each branch's own `const`
+  already say both. Nothing a call may send changed. With the removals below,
+  the full tool listing is about 8% smaller and the compact one about 14%.
 
 - Calling a tool name the server does not have now answers a JSON-RPC
   invalid-params error (-32602) naming the unknown tool and listing the seven
