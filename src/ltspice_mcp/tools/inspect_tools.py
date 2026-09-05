@@ -33,7 +33,7 @@ refused with the current digest attached, so that path costs one retry rather
 than a hunt.
 * ``model`` — model/subcircuit lookup: ``search`` fuzzy-matches a ``query``;
   ``enumerate`` lists every model defined in the given ``libs``.
-* ``reference`` — the tools' own branch vocabulary (``lib/reference_index.py``):
+* ``reference`` — the tools' own branch vocabulary (``tools/reference_index.py``):
   a plain-words ``query`` returns the closest analysis recipes, schematic ops,
   variation kinds, checks and job actions with their full field tables, and no
   ``query`` returns the table of contents. It is the answer to "which recipe
@@ -75,7 +75,7 @@ from ltspice_mcp.errors import (
     PathSecurityError,
     compact_validation_error,
 )
-from ltspice_mcp.lib import reference_index, response_budget, services
+from ltspice_mcp.lib import response_budget, services
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_staging import sha256_file
@@ -121,6 +121,7 @@ from ltspice_mcp.tools._base import (
     safe_path,
     symbol_resolver_for,
 )
+from ltspice_mcp.tools.reference_index import build_index, search_branches, table_of_contents
 
 
 class TraceNetInput(ToolInput):
@@ -1427,13 +1428,13 @@ def _do_reference(q: ReferenceQuery) -> dict[str, Any]:
     if q.query is None:
         return {
             "data": {
-                "contents": reference_index.table_of_contents(),
-                "total_branches": len(reference_index.build_index()),
+                "contents": table_of_contents(),
+                "total_branches": len(build_index()),
                 "hint": _REFERENCE_CONTENTS_HINT,
             }
         }
 
-    matches, total = reference_index.search(q.query, limit=q.limit)
+    matches, total = search_branches(q.query, limit=q.limit)
     data: dict[str, Any] = {
         "query": q.query,
         "matches": [entry.as_dict() for entry in matches],
