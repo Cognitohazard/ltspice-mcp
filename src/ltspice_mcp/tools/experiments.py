@@ -28,6 +28,7 @@ from ltspice_mcp.errors import (
     ResultError,
     SimulationError,
     compact_validation_error,
+    raise_site_code,
 )
 from ltspice_mcp.lib import experiment_store, job_store, recent, response_budget, services
 from ltspice_mcp.lib.deck_staging import (
@@ -898,7 +899,7 @@ async def handle_run_experiments(
     except IdempotencyConflictError as exc:
         return await _error_response(
             args.request_id,
-            code="idempotency_conflict",
+            code=exc.code,
             message=str(exc),
             stage="submission",
             retryable=False,
@@ -918,7 +919,7 @@ async def handle_run_experiments(
     except PathSecurityError as exc:
         return await _error_response(
             args.request_id,
-            code="path_denied",
+            code=exc.code,
             message=str(exc),
             stage="resolution",
             retryable=False,
@@ -928,7 +929,7 @@ async def handle_run_experiments(
     except (SimulationError, ResultError, DeckStagingError, OSError, ValueError) as exc:
         return await _error_response(
             args.request_id,
-            code=getattr(exc, "code", "submission_failed"),
+            code=raise_site_code(exc) or "submission_failed",
             message=str(exc),
             stage="submission",
             retryable=True,
@@ -1895,7 +1896,7 @@ def _append_terminal_cases(
 
 def _circuit_error(exc: Exception, source_path: Path | None) -> tuple[str, str]:
     if isinstance(exc, PathSecurityError):
-        return "path_denied", str(exc)
+        return exc.code, str(exc)
     if isinstance(exc, VariationError):
         return exc.code, str(exc)
     if isinstance(exc, DeckStagingError):
@@ -2066,7 +2067,7 @@ async def _post_submit_error_response(
     )
     data["hint"] = route
     data["error"] = {
-        "code": getattr(exc, "code", "receipt_failed"),
+        "code": raise_site_code(exc) or "receipt_failed",
         "message": error_message(exc, build_error),
         "stage": "receipt",
         "retryable": True,
@@ -3320,12 +3321,11 @@ def _jobs_error_details(exc: Exception) -> tuple[str, str, bool]:
     if isinstance(exc, _JobsActionError):
         return exc.code, exc.stage, exc.retryable
     if isinstance(exc, JobNotFoundError):
-        return "job_not_found", "resolution", False
+        return exc.code, "resolution", False
     if isinstance(exc, PathSecurityError):
-        return "path_denied", "resolution", False
+        return exc.code, "resolution", False
     if isinstance(exc, ExperimentCancellationError):
-        code = "cancel_not_authorized" if "not authorized" in str(exc).lower() else "cancel_failed"
-        return code, "cancellation", False
+        return exc.code, "cancellation", False
     if isinstance(exc, PermissionError):
         return "cancel_not_authorized", "authorization", False
     if isinstance(exc, LTSpiceMCPError):

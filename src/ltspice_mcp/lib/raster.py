@@ -115,6 +115,8 @@ class RasterUnavailableError(LTSpiceMCPError):
     rather than an exception that escapes to the protocol layer.
     """
 
+    code = "raster_unavailable"
+
 
 def _check_scale(scale: float) -> None:
     if scale <= 0:
