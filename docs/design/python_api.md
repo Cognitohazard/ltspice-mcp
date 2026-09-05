@@ -524,6 +524,11 @@ detail:   names the owning pid, says this process does not own the job and
 evidence: {"owner_pid": <int>, "log_file": "<path>"}
 ```
 
+On a replay of a job that is already terminal the detail says instead that the
+pid is the process the record names as having run it, that nothing is
+supervising it now and there is nothing to cancel — the sentence about a live
+supervisor would be an instruction to act on a process that has exited.
+
 **Refused when nothing is persisted.** A session with `[state] persist_jobs`
 off keeps its jobs in memory, so an owner's job would be invisible to the
 caller that asked for it. `detach=True` is an `ApiValidationError` there rather

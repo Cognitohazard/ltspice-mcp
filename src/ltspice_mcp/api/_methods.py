@@ -306,6 +306,12 @@ def _note_detached_owner(
     process's ``process_owned_job`` note — true there and misleading here,
     where "the current process" is the caller's and does not own the job. One
     fact replaces the other rather than sitting beside it.
+
+    A detached call carrying a ``request_id`` that already ran to completion
+    replays that job, and the pid on its record is a process that exited when
+    the job did. Telling the caller that pid is supervising the job and can be
+    cancelled is an instruction it may act on — worse still if the pid has
+    since been recycled — so the terminal case says what is actually true.
     """
     observations = receipt.get("observations")
     if not isinstance(observations, list):
@@ -316,18 +322,29 @@ def _note_detached_owner(
         for item in observations
         if not (isinstance(item, Mapping) and item.get("code") == "process_owned_job")
     ]
+    if receipt.get("status") in experiments.TERMINAL_EXPERIMENT_STATUSES:
+        detail = (
+            f"This job is already terminal. Pid {owner_pid} is the process its "
+            "record names as having run it; nothing is supervising it now and "
+            "there is nothing to cancel. Read its results with "
+            "jobs(action='status'|'runs') or analyze_results by job_id. The "
+            "process this call spawned to look the job up wrote its console "
+            f"output to {log_file}."
+        )
+    else:
+        detail = (
+            f"This job is owned by a detached process (pid {owner_pid}) that "
+            "supervises it until it is terminal. The current process does not "
+            "own it, so closing the Api or exiting the interpreter will not "
+            "cancel it. Read it back with jobs(action='status'|'wait') by "
+            "job_id, and stop it with jobs(action='cancel') and this receipt's "
+            f"control_token. The owner's console output is at {log_file}."
+        )
     observations.append(
         {
             "code": "detached_owner",
             "kind": "lifecycle",
-            "detail": (
-                f"This job is owned by a detached process (pid {owner_pid}) that "
-                "supervises it until it is terminal. The current process does not "
-                "own it, so closing the Api or exiting the interpreter will not "
-                "cancel it. Read it back with jobs(action='status'|'wait') by "
-                "job_id, and stop it with jobs(action='cancel') and this receipt's "
-                f"control_token. The owner's console output is at {log_file}."
-            ),
+            "detail": detail,
             "evidence": {"owner_pid": owner_pid, "log_file": str(log_file)},
         }
     )
