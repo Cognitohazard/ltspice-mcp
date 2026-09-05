@@ -1,4 +1,4 @@
-"""Caller-set response budget — a deterministic four-rung degradation ladder.
+"""Caller-set response budget — a deterministic three-rung degradation ladder.
 
 A read tool may carry an optional ``budget`` in estimated tokens. Absent, none
 of this runs and the response is byte-for-byte what it has always been. Present,
@@ -11,23 +11,25 @@ the tool re-renders one rung further down a fixed ladder:
    content is the one place a checker silently loses coverage.
 1. ``answer`` — revoke the caller's payload-growing opt-ins so the response
    falls back to the answer channel it would have had by default.
-2. ``columnar`` — render row surfaces as a column list plus rows of values,
-   dropping the per-row key repetition. Lossless, so it applies to the answer
-   rows too.
-3. ``shrink`` — shrink the effective list limits BEFORE assembly, so a cursor
+2. ``shrink`` — shrink the effective list limits BEFORE assembly, so a cursor
    is minted against what was actually returned. Never post-hoc truncation of
    an assembled page: a per_run cursor commits during evaluation, and trimming
    rows afterwards would point it past rows the caller never saw.
 
-Three rules hold at every rung:
+Four rules hold at every rung:
 
 - **Facts survive any budget.** failures, observations, warnings, completeness
   and spec verdicts are never trimmed, empty or not — an empty ``failures`` IS
   the answer to "did anything fail". A budget squeezes presentation only.
+- **Rows keep their shape.** A row is an object at every rung, keyed the same
+  way whatever the budget: a tight budget returns fewer rows, never differently
+  shaped ones. A rung that re-rendered rows as a column list plus arrays of
+  values was removed for that reason — it made a caller branch on the shape of
+  what came back.
 - **Schema-safe by construction.** No rung deletes a required key; a required
   presentation block is emptied, never removed, so every emission still
   validates against the tool's declared output schema.
-- **Termination rests on rung finiteness.** The ladder ends after rung 3
+- **Termination rests on rung finiteness.** The ladder ends after rung 2
   whether or not the budget was met. A budget smaller than the facts floor
   returns the floor plus an observation saying so — over budget by honesty.
 """
@@ -56,18 +58,18 @@ BUDGET_MIN_TOKENS = 500
 RUNG_NONE = -1
 RUNG_TRIM = 0
 RUNG_ANSWER = 1
-RUNG_COLUMNAR = 2
-RUNG_SHRINK = 3
-
-LADDER: tuple[int, ...] = (RUNG_NONE, RUNG_TRIM, RUNG_ANSWER, RUNG_COLUMNAR, RUNG_SHRINK)
+RUNG_SHRINK = 2
 
 _RUNG_NAMES: dict[int, str] = {
     RUNG_NONE: "none",
     RUNG_TRIM: "trim",
     RUNG_ANSWER: "answer",
-    RUNG_COLUMNAR: "columnar",
     RUNG_SHRINK: "shrink",
 }
+
+# The walk order, derived rather than restated: a rung the driver climbs but
+# cannot name would raise from inside the note it is writing.
+LADDER: tuple[int, ...] = tuple(sorted(_RUNG_NAMES))
 
 # One sentence per fact a caller needs to decide whether to set this: the unit,
 # that presentation is all it touches, and that omitting it is not "no budget".
@@ -105,10 +107,6 @@ class Rung:
     @property
     def answer_channel(self) -> bool:
         return self.level >= RUNG_ANSWER
-
-    @property
-    def columnar(self) -> bool:
-        return self.level >= RUNG_COLUMNAR
 
     @property
     def shrink(self) -> bool:
@@ -192,82 +190,7 @@ def apply_trim(
 
 
 # --------------------------------------------------------------------------
-# Rung 2 primitives — columnar row surfaces
-# --------------------------------------------------------------------------
-
-COLUMNS_SUFFIX = "_columns"
-
-
-def columnar_key(rows_key: str) -> str:
-    """The sibling key naming the columns of ``rows_key``."""
-    return f"{rows_key}{COLUMNS_SUFFIX}"
-
-
-def columnarize(container: dict[str, Any], rows_key: str) -> bool:
-    """Render ``container[rows_key]`` as columns + rows of values, in place.
-
-    Returns whether the rendering happened. It is skipped unless every row is a
-    dict with the SAME key set: a null-filled column cannot distinguish a key
-    that was absent from one whose value was null, and the columnar form has to
-    be lossless to be a presentation change rather than a data change.
-    """
-    rows = container.get(rows_key)
-    if not isinstance(rows, list) or len(rows) < 2:
-        # One row saves nothing (a column list the same size as the row it
-        # describes) and zero rows have no keys to name.
-        return False
-    if not all(isinstance(row, dict) for row in rows):
-        return False
-    columns = list(rows[0])
-    key_set = set(columns)
-    if any(set(row) != key_set for row in rows[1:]):
-        return False
-    container[rows_key] = [[row[column] for column in columns] for row in rows]
-    container[columnar_key(rows_key)] = columns
-    return True
-
-
-COLUMNAR_ROWS_SCHEMA: dict[str, Any] = {
-    "type": "array",
-    "description": (
-        "Column names for this response's columnar rows, in row order. Present "
-        "only when a 'budget' argument made the rows render columnar; each row "
-        "is then an array of values positionally matching this list."
-    ),
-    "items": {"type": "string"},
-}
-
-
-def row_items_schema(item_schema: dict[str, Any]) -> dict[str, Any]:
-    """A row surface's two forms, as one schema.
-
-    Rows are objects at every rung but the columnar one, where a caller-set
-    budget renders them as arrays of values with a sibling ``*_columns`` list
-    naming the positions. Both are declared so no rung can emit something the
-    tool's own schema rejects.
-    """
-    return {"type": "array", "items": {"anyOf": [item_schema, {"type": "array"}]}}
-
-
-def row_page_schema(
-    page_schema: dict[str, Any], *, item_schema: dict[str, Any] | None = None
-) -> dict[str, Any]:
-    """A copy of ``page_schema`` that also admits the columnar row form.
-
-    A copy, not a mutation: a page schema is often shared with a tool that takes
-    no budget and must keep exactly the shape it declares today. ``item_schema``
-    narrows the row type at the same time, for a page reused with a more
-    specific row than the one it was declared with.
-    """
-    properties = dict(page_schema["properties"])
-    rows = item_schema if item_schema is not None else properties["items"]["items"]
-    properties["items"] = row_items_schema(rows)
-    properties["items_columns"] = COLUMNAR_ROWS_SCHEMA
-    return {**page_schema, "properties": properties}
-
-
-# --------------------------------------------------------------------------
-# Rung 3 primitive — size a page against a measurement
+# Rung 2 primitive — size a page against a measurement
 # --------------------------------------------------------------------------
 
 
