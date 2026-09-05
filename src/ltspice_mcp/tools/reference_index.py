@@ -500,9 +500,12 @@ def _sources() -> tuple[_Source, ...]:
             family="check",
             call='verify_circuit(path="circuit.asc", checks=["{name}"])',
             # A check is a name in a list, not a model, so it has no fields of
-            # its own — except `compare`, whose arguments are the compare spec.
+            # its own — except `compare`, which is asked for by filling in the
+            # `compare` object, so that object's fields are the check's.
             branches=tuple(
-                (name, verify.VerifyCompareSpec if name == "compare" else None, "compare.")
+                (name, verify.VerifyCompareSpec, "compare.")
+                if name == "compare"
+                else (name, None, "")
                 for name in verify.CHECK_ORDER
             ),
             discriminator=None,
