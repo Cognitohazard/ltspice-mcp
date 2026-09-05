@@ -136,7 +136,10 @@ def get_static_resources() -> list[types.Resource]:
             uri="spice://recent",
             description=(
                 "Recently-edited circuit files with persisted-job summary counts. "
-                "Surfaces work from prior sessions, including interrupted jobs."
+                "The file list spans every directory worked in; the counts come "
+                "from this working directory's store, so a circuit last run "
+                "elsewhere reports none. Surfaces work from prior sessions, "
+                "including interrupted jobs."
             ),
             mime_type="application/json",
         ),
