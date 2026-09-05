@@ -295,8 +295,8 @@ so zoom / pan / hover does nothing for it.
   step whose axis misses the window is skipped and reported rather than
   failing the whole export.
 - **`plot_waveform` — one chart core, two delivery paths.** One interactive
-  chart, delivered one of two ways depending on the client detected at
-  `initialize`: an in-chat `ui://` widget for an apps-capable GUI host (in
+  chart, delivered one of two ways depending on the capabilities the calling
+  client declared: an in-chat `ui://` widget for an apps-capable GUI host (in
   practice Claude Desktop for a local stdio server), or a self-contained HTML
   file opened on the local desktop for a terminal client (on WSL,
   `explorer.exe` / `cmd.exe /c start` via a `wslpath -w` conversion;
@@ -319,8 +319,11 @@ so zoom / pan / hover does nothing for it.
   vectors are null-padded onto a union x; AC Bode phase is unwrapped;
   non-finite samples become JSON `null` gaps. A global per-panel cell cap
   refuses, before allocating, a plot whose union-padded size would be too
-  large. Delivery is chosen by the client detected at `initialize`
-  (`capabilities.extensions["io.modelcontextprotocol/ui"]`):
+  large. Delivery is chosen by the capabilities the calling client declared
+  (`capabilities.extensions["io.modelcontextprotocol/ui"]`) — in the
+  `initialize` handshake, or in the per-request envelope on a 2026-07-28
+  connection, which has no handshake; `server.py:get_client_capabilities`
+  reads whichever the connection carries:
   - **MCP Apps host (SEP-1865, Final 2026-01-26)** → an in-chat `ui://`
     widget, wired the standard way rather than by inline embedding: the
     `plot_waveform` tool declares `_meta.ui.resourceUri`; one stable,

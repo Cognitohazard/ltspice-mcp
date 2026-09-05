@@ -151,7 +151,8 @@ conflicting. On `run_experiments` these are `provenance`, `run_fields`,
 **What the tool listing carries.** The definitions a client loads are the
 registered ones with `outputSchema` dropped — that block was the largest on
 the surface and a response teaches its own shape. Everything else ships
-verbatim, including every field description: there is no filter between the
+verbatim, including each tool's `title` (the short label a client shows a
+person in place of the wire name) and every field description: there is no filter between the
 models and the wire, so the source is a truthful record of what a client is
 shown. The listing is paid for once per session whether or not a tool is
 called, so each description is written short — one or two sentences carrying
@@ -175,8 +176,20 @@ it did. It is an explicit transform (`strip_argument_descriptions` in
 current surface it takes roughly 40% off what a session loads. Both modes are
 *static* listings: the same for every connection and unchanged by anything
 called on one, which is what the 2026-07-28 specification requires of
-`tools/list` and what lets a client cache it. Nothing keys on the mode below
-the listing — dispatch, validation and every response are identical either way.
+`tools/list`. Nothing keys on the mode below the listing — dispatch,
+validation and every response are identical either way.
+
+**How long a listing stays fresh.** Because they are static, the server tells
+the client so rather than making it re-list every turn: `tools/list`,
+`resources/list`, `resources/templates/list` and `prompts/list` are advertised
+as fresh for an hour and `private` (`ttlMs` / `cacheScope`, SEP-2549). Private
+because each listing is shaped by this server's own configuration and sandbox,
+so it must not come out of a cache shared with another authorization context;
+an hour because the only route by which any of them could change is a new
+server process, and therefore a new connection. The hint lives in one place,
+`server.py:_LISTING_CACHE_HINT`. `resources/read` is deliberately left out —
+its content changes under the client. The fields exist only from 2026-07-28,
+so a client on an older revision is served exactly what it was before.
 
 `compact` and `inspect(kind: "reference")` are one design, not two: together
 they let a session pay for depth only where it needs it. The compact listing
