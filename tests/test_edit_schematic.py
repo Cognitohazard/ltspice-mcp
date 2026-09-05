@@ -104,6 +104,28 @@ async def test_blank_build_parity_with_create_plus_apply(asc_state, work_dir):
     assert edit_text == apply_text
 
 
+async def test_repeated_op_warnings_arrive_once_with_a_count(asc_state):
+    """A batch is where the same advisory repeats.
+
+    Every add_net_label of an already-labelled net reports the same duplicate
+    advisory, so a converter-scale build would spend hundreds of identical
+    lines saying one thing — and dropping them all instead (what this surface
+    did) means the caller never learns the ops warned at all. One entry, with
+    how many ops it covers.
+    """
+    ops = [
+        {"op": "add_net_label", "net": "vout", "x": 400 + 64 * index, "y": 300}
+        for index in range(4)
+    ]
+
+    data = await _build_blank(asc_state, "dupwarn", ops)
+
+    duplicates = [w for w in data["warnings"] if "already labels a net" in w]
+    assert len(duplicates) == 1, duplicates
+    assert "3 ops" in duplicates[0]
+    assert "collapsed" in duplicates[0]
+
+
 async def test_committed_sha_matches_file(asc_state, work_dir):
     data = await _build_blank(asc_state, "shacheck", _DIVIDER_OPS)
     assert data["sha256"] == _sha(work_dir / "shacheck.asc")

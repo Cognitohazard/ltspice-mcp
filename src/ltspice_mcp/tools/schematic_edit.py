@@ -68,6 +68,7 @@ from ltspice_mcp.tools._base import (
 from ltspice_mcp.tools.circuit import (
     _COORDINATE_DESCRIPTION,
     _build_on_wire_predicate,
+    _collapse_result_warnings,
     _collect_component_geometry,
     _edit_guard,
     _get_asc_editor,
@@ -744,14 +745,34 @@ def _apply_ops(
 
     Delegates the loop to the shared ``_run_op_batch`` runner (abort-on-first-
     failure unless ``dry_run``), then splits its unified entries into this
-    surface's separate success/failure lists.
+    surface's separate success/failure lists. Identical advisories across the
+    batch are collapsed on the way out — see ``_op_warnings``.
     """
     entries, abort_reason = _run_op_batch(editor, ops, target, stop_on_error=not dry_run)
+    _collapse_result_warnings(entries)
     results = [e for e in entries if e["ok"]]
     failures = [
         {"index": e["index"], "op": e["op"], "error": e["error"]} for e in entries if not e["ok"]
     ]
     return results, failures, abort_reason
+
+
+def _op_warnings(results: list[dict]) -> list[str]:
+    """The batch's per-op advisories, attributed to the op that raised them.
+
+    An op can succeed and still have something to say — a duplicate net label,
+    a bbox-crossing wire, orphaned wires left behind by a removal. The envelope
+    carries one flat ``warnings`` list, so each is prefixed with its op; the
+    repeats are already collapsed by ``_collapse_result_warnings``, which keeps
+    the first occurrence and annotates it with how many ops it covers (the
+    documented per-pin-label style repeats one advisory on every label op, and
+    a converter-scale batch would otherwise spend hundreds of lines on it).
+    """
+    return [
+        f"op {entry['index']} ({entry['op']}): {message}"
+        for entry in results
+        for message in entry.get("warnings", ())
+    ]
 
 
 def _mirror_commit_state(commit_state: str) -> Literal["not_started", "committed", "unknown"]:
@@ -973,7 +994,9 @@ async def _evaluate_edit_schematic(
             profile, legend, label_only = _wiring_and_legend(
                 editor, include_legend=bool({"pin_legend", "touched"} & set(args.return_views))
             )
-            warnings = [w["message"] for w in _post_op_warnings(editor)]
+            # Two sources, one channel: what the ops themselves reported, then
+            # what the finished sheet reports about itself.
+            warnings = _op_warnings(results) + [w["message"] for w in _post_op_warnings(editor)]
             encoding = getattr(editor, "encoding", "utf-8") or "utf-8"
             committed_text = _render_editor_text(editor)
 
