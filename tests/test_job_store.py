@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from ltspice_mcp.lib import experiment_store, job_store, now
+from ltspice_mcp.lib import experiment_store, job_store, now, store_common
 from ltspice_mcp.state import (
     BatchJob,
     MonteCarloConfig,
@@ -686,3 +686,67 @@ class TestSchemaMigration:
         rdim = batch_jobs[0].sweep_config.dimensions[0]
         assert rdim.start == 1.0 and rdim.stop == 10.0
         assert rdim.values is None
+
+
+# Positive so the record round-trips it (pid_of drops pid <= 0) and not this
+# process, so the probe actually runs instead of short-circuiting on own pid.
+_FOREIGN_PID = 999_999_999
+
+
+class TestOwnerLivenessUnknown:
+    """A probe that could not reach an answer must not read as "owner dead".
+
+    Sessions share a working directory, and "the owner is gone" is exactly the
+    reading that licenses one session to rewrite another's running job as
+    interrupted. A psutil call that raises is not evidence of anything, so the
+    record stands as the owning server wrote it.
+    """
+
+    @staticmethod
+    def _break_the_probe(monkeypatch: Any) -> None:
+        def boom(pid: int) -> bool:
+            raise OSError("process table unavailable")
+
+        monkeypatch.setattr(store_common.psutil, "pid_exists", boom)
+
+    def test_probe_reports_unknown_rather_than_dead(self, monkeypatch: Any) -> None:
+        self._break_the_probe(monkeypatch)
+        liveness = store_common.owner_liveness(_FOREIGN_PID)
+        assert liveness is store_common.OwnerLiveness.UNKNOWN
+        assert liveness.is_dead is False
+
+    def test_probe_still_answers_dead_and_alive(self, monkeypatch: Any) -> None:
+        """The two real answers must survive the third one being added."""
+        monkeypatch.setattr(store_common.psutil, "pid_exists", lambda pid: False)
+        assert store_common.owner_liveness(_FOREIGN_PID) is store_common.OwnerLiveness.DEAD
+        monkeypatch.setattr(store_common.psutil, "pid_exists", lambda pid: True)
+        assert store_common.owner_liveness(_FOREIGN_PID) is store_common.OwnerLiveness.ALIVE
+        # A record with no pid predates pid tracking; recovering those jobs is
+        # the behaviour this probe was added to, not something it takes away.
+        assert store_common.owner_liveness(None) is store_common.OwnerLiveness.DEAD
+
+    def test_running_job_keeps_its_status_when_the_probe_fails(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        running = _sim_job(circuit, status="running", completed_at=None)
+        running.owner_pid = _FOREIGN_PID
+        job_store.save_job(running)
+
+        self._break_the_probe(monkeypatch)
+        sim_jobs, _ = job_store.load_jobs_for_circuit(circuit)
+        assert sim_jobs[0].status == "running"
+        assert sim_jobs[0].error is None
+
+    def test_a_dead_owner_is_still_reconciled(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """The complement: a probe that DOES answer keeps recovering the job."""
+        circuit = tmp_path / "rc.cir"
+        circuit.write_text("")
+        running = _sim_job(circuit, status="running", completed_at=None)
+        running.owner_pid = _FOREIGN_PID
+        job_store.save_job(running)
+
+        monkeypatch.setattr(store_common.psutil, "pid_exists", lambda pid: False)
+        sim_jobs, _ = job_store.load_jobs_for_circuit(circuit)
+        assert sim_jobs[0].status == "interrupted"

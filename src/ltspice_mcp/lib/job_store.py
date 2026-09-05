@@ -34,7 +34,7 @@ from ltspice_mcp.lib.store_common import (
     JOB_SCHEMA,
     accept_schema,
     atomic_write_json,
-    owner_alive,
+    owner_liveness,
     pid_of,
 )
 
@@ -173,13 +173,15 @@ def _finalize_loaded_status(
     """Translate a loaded status.
 
     Returns (effective_status, was_interrupted). Running/queued jobs whose
-    owning process is gone come back as ``interrupted``; if the owner is
-    still alive (a parallel server session's live job), the status stands
-    as written. ``own_is_alive`` is forwarded to ``owner_alive`` — see its
-    docstring for which callers pass True.
+    owning process is known to be gone come back as ``interrupted``; if the
+    owner is still alive (a parallel server session's live job), or the probe
+    could not tell, the status stands as written. ``own_is_alive`` is
+    forwarded to ``owner_liveness`` — see its docstring for which callers
+    pass True.
     """
-    if raw_status in NON_TERMINAL_LIVE_STATUSES and not owner_alive(
-        owner_pid, own_is_alive=own_is_alive
+    if (
+        raw_status in NON_TERMINAL_LIVE_STATUSES
+        and owner_liveness(owner_pid, own_is_alive=own_is_alive).is_dead
     ):
         return INTERRUPTED_STATUS, True
     return raw_status, False

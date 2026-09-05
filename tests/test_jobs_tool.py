@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 import jsonschema
 import pytest
 
-from ltspice_mcp.lib import experiment_store, now, recent
+from ltspice_mcp.lib import experiment_store, now, recent, store_common
 from ltspice_mcp.lib.experiment_runner import ExperimentRunRequest
 from ltspice_mcp.lib.experiment_types import (
     AnalysisStage,
@@ -658,7 +658,11 @@ class TestDurableProgress:
         stale = _experiment(work_dir, circuit, count=3, status="running")
         stale.owner_pid = _FOREIGN_PID
         state_no_sim.all_jobs[stale.job_id] = stale
-        monkeypatch.setattr(experiment_store, "owner_alive", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(
+            experiment_store,
+            "owner_liveness",
+            lambda *_args, **_kwargs: store_common.OwnerLiveness.ALIVE,
+        )
 
         data = _assert_jobs_schema(
             await handle_jobs(_args("status", job_id=stale.job_id), state_no_sim)
@@ -814,7 +818,11 @@ class TestWait:
         # Patch liveness BEFORE the first load: an owner presumed dead would
         # reconcile the record to interrupted (terminal), and a terminal job
         # correctly returns from wait immediately.
-        monkeypatch.setattr(experiment_store, "owner_alive", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(
+            experiment_store,
+            "owner_liveness",
+            lambda *_args, **_kwargs: store_common.OwnerLiveness.ALIVE,
+        )
         stale = experiment_store.load_job(owner_job.job_id, work_dir, own_is_alive=True)
         assert stale is not None
         foreign_state.all_jobs[stale.job_id] = stale
@@ -955,7 +963,11 @@ class TestCancellationAuthority:
         receipt.job.owner_pid = _FOREIGN_PID
         await asyncio.to_thread(experiment_store.save_job, receipt.job)
         foreign_state = SessionState.create(state_no_sim.config, available={})
-        monkeypatch.setattr(experiment_store, "owner_alive", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(
+            experiment_store,
+            "owner_liveness",
+            lambda *_args, **_kwargs: store_common.OwnerLiveness.ALIVE,
+        )
 
         data = _assert_jobs_schema(
             await asyncio.wait_for(
