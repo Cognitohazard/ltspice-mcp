@@ -374,9 +374,8 @@ def _produced_artifacts(job: ExperimentJob, case: ExperimentCase) -> tuple[Path,
     happened and its artifacts are still there. The path is deterministic —
     the runner names every artifact ``{run_token}.{ext}`` inside the job's
     output folder, the same reconstruction ``_remove_case_artifacts`` uses to
-    DELETE them — and the raw's header magic is what keeps a truncated or
-    unrelated file from being promoted. Mirrors the legacy registry's
-    ``has_valid_raw_header`` promotion for single-run jobs.
+    DELETE them — and the raw's header magic (``has_valid_raw_header``) is what
+    keeps a truncated or unrelated file from being promoted.
 
     Returns None (and the case stays a failure) for a record written before the
     output folder was persisted: the honest direction when the artifacts cannot
