@@ -337,6 +337,7 @@ _RENDER_SCHEMA: dict[str, Any] = {
     "properties": {
         "path": {"type": ["string", "null"]},
         "sha256": {"type": ["string", "null"]},
+        "source_sha256": {"type": ["string", "null"]},
         "width": {"type": ["integer", "null"]},
         "height": {"type": ["integer", "null"]},
         "downscaled": {"type": "boolean"},
@@ -348,7 +349,7 @@ _RENDER_SCHEMA: dict[str, Any] = {
         "delivery": {"type": "string"},
         "note": {"type": ["string", "null"]},
     },
-    "required": ["path", "sha256", "width", "height", "downscaled"],
+    "required": ["path", "sha256", "source_sha256", "width", "height", "downscaled"],
 }
 
 _SCENE_SCHEMA: dict[str, Any] = {
@@ -1592,16 +1593,29 @@ async def _do_render(
         downscaled=downscaled,
         delivery=policy.delivery,
         returned_inline=want_inline,
+        source_sha256=_file_digest(path),
     )
     return payload, (image if want_inline else None), failures, []
 
 
 def _render_payload(
-    image: RenderedImage, path: Path, *, downscaled: bool, delivery: str, returned_inline: bool
+    image: RenderedImage,
+    path: Path,
+    *,
+    downscaled: bool,
+    delivery: str,
+    returned_inline: bool,
+    source_sha256: str | None,
 ) -> dict[str, Any]:
     return {
         "path": str(path),
         "sha256": hashlib.sha256(image.data).hexdigest(),
+        # The digest of the SHEET this drew, not of the image and not of any
+        # exported netlist. Rendering reads the file on disk, so a peer that
+        # committed since the caller's own edit would otherwise be invisible:
+        # comparing this with the sha256 edit_schematic returned is how a
+        # caller knows the picture is of the revision it wrote.
+        "source_sha256": source_sha256,
         "width": image.width,
         "height": image.height,
         "downscaled": downscaled,
