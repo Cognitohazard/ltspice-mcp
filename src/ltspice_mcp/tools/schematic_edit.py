@@ -80,10 +80,12 @@ from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     FORMAT_DESCRIPTION,
+    OUTCOME_SCHEMA,
     StrictModel,
     ToolInput,
     format_response,
     make_include_resolver,
+    page_schema,
     registry,
     render_scene_artifact,
     safe_path,
@@ -246,32 +248,20 @@ class EditSchematicInput(ToolInput):
 # Output schema
 # ---------------------------------------------------------------------------
 
-_PAGE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "items": {"type": "array", "items": {"type": "object"}},
-        "total": {"type": "integer"},
-        "returned": {"type": "integer"},
-        "truncated": {"type": "boolean"},
-        "primary_truncated": {
-            "type": "boolean",
-            "description": (
-                "Whether THIS collection has more rows. Equal to 'truncated' here; the "
-                "two differ only on a page that carries a second collection."
-            ),
-        },
-        "next_cursor": {"type": ["string", "null"]},
+_PAGE_SCHEMA: dict[str, Any] = page_schema(
+    primary_truncated={
+        "type": "boolean",
+        "description": (
+            "Whether THIS collection has more rows. Equal to 'truncated' here; the "
+            "two differ only on a page that carries a second collection."
+        ),
     },
-    "required": ["items", "total", "returned", "truncated", "next_cursor"],
-}
+)
 
 _OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "outcome": {
-            "type": "string",
-            "enum": ["complete", "partial", "failed", "in_progress"],
-        },
+        "outcome": OUTCOME_SCHEMA,
         # Edit-specific: the write state of the target sheet, kept at the top
         # level (and mirrored into error.commit_state on failure envelopes).
         "commit_state": {"type": "string", "enum": ["committed", "not_committed"]},

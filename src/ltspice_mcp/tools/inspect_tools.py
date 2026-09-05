@@ -107,6 +107,8 @@ from ltspice_mcp.tools._base import (
     ToolInput,
     declare_output_schema,
     format_response,
+    outcome_of,
+    outcome_schema,
     registry,
     resolve_response_budget,
     safe_path,
@@ -1421,7 +1423,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         # isolation turns every query fault into that item's error, and a
         # call-level fault raises — the SDK then answers with isError and no
         # structuredContent, so it is never carried by this envelope.
-        "outcome": {"type": "string", "enum": ["complete", "partial"]},
+        "outcome": outcome_schema("complete", "partial"),
         "results": {
             "type": "array",
             "items": {
@@ -1588,7 +1590,7 @@ def inspect_envelope(results: list[dict[str, Any]]) -> dict[str, Any]:
     data: dict[str, Any] = {
         # Per-item failures isolate to their result and never fail the call, so
         # the batch is "partial" when any query failed and "complete" otherwise.
-        "outcome": "partial" if error_count else "complete",
+        "outcome": outcome_of(error_count),
         "results": results,
         "count": len(results),
         "ok_count": len(results) - error_count,

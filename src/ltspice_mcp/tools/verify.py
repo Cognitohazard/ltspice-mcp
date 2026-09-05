@@ -98,11 +98,16 @@ from ltspice_mcp.lib.spice_validator import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    FINDING_SCHEMA,
+    HINT_SCHEMA,
     WARNINGS_SCHEMA,
     StrictModel,
     ToolInput,
+    failures_schema,
     format_response,
     make_include_resolver,
+    outcome_of,
+    outcome_schema,
     registry,
     render_scene_artifact,
     safe_path,
@@ -276,35 +281,14 @@ LAYOUT_COVERAGE = "Layout scan excludes WINDOW attribute text."
 # Response fragments
 # ---------------------------------------------------------------------------
 
-_FINDING_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "rule_id": {"type": "string"},
-        "severity": {"type": "string"},
-        "ok": {"type": "boolean"},
-        "evidence": {},
-        "at": {
-            "type": "object",
-            "properties": {
-                "file": {"type": "string"},
-                "line": {"type": "integer"},
-                "x": {"type": "integer"},
-                "y": {"type": "integer"},
-            },
-            "required": ["file"],
-        },
-        "subject": {"type": "string"},
-    },
-    "required": ["rule_id", "severity", "ok", "evidence", "at", "subject"],
-}
-
 _CHECK_SKIPPED_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {"check": {"type": "string"}, "reason": {"type": "string"}},
     "required": ["check", "reason"],
 }
 
-_FAILURE_SCHEMA: dict[str, Any] = {
+#: A verify failure names the stage that failed, not a case (see Envelope).
+_STAGE_FAILURE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "stage": {"type": "string"},
@@ -623,10 +607,10 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "path": {"type": "string"},
         "kind": {"type": "string"},
-        "outcome": {"type": "string", "enum": ["complete", "partial", "failed"]},
+        "outcome": outcome_schema("complete", "partial", "failed"),
         "checks_run": {"type": "array", "items": {"type": "string"}},
         "checks_skipped": {"type": "array", "items": _CHECK_SKIPPED_SCHEMA},
-        "findings": {"type": "array", "items": _FINDING_SCHEMA},
+        "findings": {"type": "array", "items": FINDING_SCHEMA},
         "comparison": _COMPARISON_SCHEMA,
         "export": _EXPORT_SCHEMA,
         "render": _RENDER_SCHEMA,
@@ -649,8 +633,8 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 "these before trusting 'comparison' or 'export.diff_vs_prior'."
             ),
         },
-        "failures": {"type": "array", "items": _FAILURE_SCHEMA},
-        "hint": {"type": "string"},
+        "failures": failures_schema(_STAGE_FAILURE_SCHEMA),
+        "hint": HINT_SCHEMA,
     },
     "required": ["path", "kind", "outcome", "checks_run", "findings", "failures"],
 }
@@ -1612,13 +1596,19 @@ def _outcome(
     failures: list[dict[str, Any]],
     comparison: dict[str, Any] | None,
 ) -> str:
-    if failures:
-        return "partial"
-    if any(f["severity"] in ("error", "warning") for f in findings):
-        return "partial"
-    if _comparison_mismatch(comparison):
-        return "partial"
-    return "complete"
+    """This tool's shortfalls, handed to the shared outcome rule.
+
+    A check that failed to run, a finding at error or warning severity, and a
+    comparison that came back non-equivalent are each a reason the caller did
+    not get the clean answer they asked for. None of them fails the whole call
+    — the checks that did run still reported — so this surface never returns
+    ``failed`` from here.
+    """
+    return outcome_of(
+        failures,
+        partial=any(f["severity"] in ("error", "warning") for f in findings)
+        or _comparison_mismatch(comparison),
+    )
 
 
 def _hint(data: dict[str, Any]) -> str:
