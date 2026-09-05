@@ -337,7 +337,10 @@ the literal typing surface:
   `AcStructureResult`, `Corner`, `Observation`.
 
 A separate module, **`ltspice_mcp.api.types`**, re-exports the *argument* models
-the six operations validate against: `RenderPolicy`, the recipe union and its
+the six operations validate against: the render and compare policies
+(`RenderPolicy` and `CompareSpec`, which `edit_schematic` takes, plus
+`VerifyRenderPolicy` and `VerifyCompareSpec`, the subclasses `verify_circuit`
+takes), the recipe union and its
 members, the inspect query kinds, the variation rules, and public aliases for
 the schematic op models (`AddComponentOp`, `WirePinsOp`, ...) that the applier
 keeps private. A validation error names one of these types; without the module
