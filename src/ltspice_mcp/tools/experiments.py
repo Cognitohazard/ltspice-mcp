@@ -493,6 +493,7 @@ class RunExperimentsInput(ToolInput):
 
 @registry.tool(
     name="run_experiments",
+    title="Run Simulations",
     description=(
         "Run SPICE and get the numbers back in one call: point it at your deck(s), "
         "attach an 'analyze' block, and the measured values return with the "

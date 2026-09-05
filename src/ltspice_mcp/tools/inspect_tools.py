@@ -1690,6 +1690,7 @@ INSPECT_DESCRIPTION = (
 
 @registry.tool(
     name="inspect",
+    title="Inspect Circuit",
     description=INSPECT_DESCRIPTION,
     input_model=InspectInput,
     annotations=RO_ANNOTATIONS,

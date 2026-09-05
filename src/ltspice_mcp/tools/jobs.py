@@ -1202,6 +1202,7 @@ def complete_jobs_data(evaluation: JobsEvaluation) -> dict[str, Any]:
 
 @registry.tool(
     name="jobs",
+    title="Simulation Jobs",
     description=(
         "Check on, wait for, or stop a run you started, by job_id or the "
         "request_id it was submitted under. 'wait' blocks server-side until the "

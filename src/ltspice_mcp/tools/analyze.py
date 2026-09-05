@@ -3576,6 +3576,7 @@ async def capture_attached_analysis(
 
 @registry.tool(
     name="analyze_results",
+    title="Analyze Results",
     description=(
         "Measure finished simulation results: apply typed recipes to completed "
         "jobs and/or .raw files and get values, reductions, group splits and spec "

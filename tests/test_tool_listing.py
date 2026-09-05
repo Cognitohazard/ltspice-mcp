@@ -61,6 +61,26 @@ class TestCompactListing:
         for name, definition in compact.items():
             assert definition.description == full[name].description
 
+
+class TestEveryToolCarriesADisplayTitle:
+    """The label a client shows a person in place of the wire name.
+
+    A title is not an argument description, so the compact listing keeps it:
+    the mode drops what an argument means, never how the tool is named.
+    """
+
+    @pytest.mark.parametrize("listing", ["full", "compact"])
+    @pytest.mark.parametrize("name", REGISTERED_TOOLS)
+    def test_title_is_present_and_readable(self, listing: str, name: str):
+        definition = {d.name: d for d in get_tools(listing)[0]}[name]
+        assert definition.title, f"{name} advertises no display title"
+        assert definition.title != name, (
+            f"{name}: the title repeats the wire name, so it tells a reader nothing new"
+        )
+        # A label, not a sentence: a client renders it inline in a tool list.
+        assert len(definition.title) <= 40
+        assert not definition.title.endswith(".")
+
     @pytest.mark.parametrize("name", REGISTERED_TOOLS)
     def test_every_argument_description_is_gone(self, name: str):
         full = {d.name: d for d in get_tools("full")[0]}[name]

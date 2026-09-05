@@ -852,6 +852,7 @@ class PlotWaveformInput(ToolInput):
 
 @registry.tool(
     name="plot_waveform",
+    title="Plot Waveforms",
     description=(
         "Render an interactive chart (zoom/pan/hover) of one or more signals for "
         "a person to look at. It returns a picture, not data values: the chart "
