@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 ToolProfile = Literal["consolidated"]
 VALID_PROFILES: frozenset[str] = frozenset({"consolidated"})
 
-ToolListing = Literal["full", "compact", "discover"]
-VALID_TOOL_LISTINGS: frozenset[str] = frozenset({"full", "compact", "discover"})
+ToolListing = Literal["full", "compact"]
+VALID_TOOL_LISTINGS: frozenset[str] = frozenset({"full", "compact"})
 
 # Profiles removed in 0.6.0. The [tools] profile key stays RECOGNIZED for one
 # release so the removal is loud through auto-updating install channels (PyPI,
@@ -586,17 +586,14 @@ class ServerConfig:
     config so the removal warns instead of silently changing the surface."""
 
     tool_listing: ToolListing = "full"
-    """How the tool list is served to the client (experimental).
+    """How much of each tool definition the tool list carries.
 
     ``"full"`` (the default) advertises the seven tools exactly as they are
     registered. ``"compact"`` advertises the same seven with every per-argument
     description removed from the published schema; structure, enums, defaults
     and ``$defs`` are untouched, and the tools accept exactly what they did.
-    ``"discover"`` advertises two meta-tools instead — ``find_tools`` searches a
-    catalogue and returns matching tools with their full input schema inline,
-    and ``invoke_tool`` calls any catalogue tool by name — so a session loads
-    tool definitions only for the work it actually does. Only the shape of the
-    advertised list changes; no tool gains or loses a capability."""
+    Both listings are static — the same for every connection, and unchanged by
+    anything called on it — so a client may cache either one."""
 
     persist_jobs: bool = True
     """Persist simulation/batch job metadata to ``.ltspice-mcp/jobs/`` next
@@ -788,11 +785,10 @@ def generate_default_config(path: Path) -> None:
     )
     tools_tbl.add("profile", "consolidated")
     tools_tbl.add(nl())
-    tools_tbl.add(comment('How the tool list is served (experimental). "full" (the default)'))
-    tools_tbl.add(comment('advertises the seven tools as registered; "compact" advertises the'))
-    tools_tbl.add(comment('same seven with the per-argument descriptions removed; "discover"'))
-    tools_tbl.add(comment("advertises find_tools/invoke_tool and reveals a tool once find_tools"))
-    tools_tbl.add(comment("has returned it. No tool gains or loses a capability."))
+    tools_tbl.add(comment('How much of each tool definition the tool list carries. "full"'))
+    tools_tbl.add(comment('(the default) advertises the seven tools as registered; "compact"'))
+    tools_tbl.add(comment("advertises the same seven with the per-argument descriptions"))
+    tools_tbl.add(comment("removed. No tool gains or loses a capability either way."))
     tools_tbl.add("listing", "full")
     doc.add("tools", tools_tbl)
     doc.add(nl())
