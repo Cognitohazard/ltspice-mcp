@@ -659,10 +659,12 @@ async def test_per_run_cursor_rejects_an_explicitly_different_fields_view(
 
 
 @pytest.mark.asyncio
-async def test_viewless_legacy_cursor_falls_back_to_the_stored_fields_view(
+async def test_a_cursor_without_a_row_view_is_rejected(
     state_no_sim: SessionState,
     work_dir: Path,
 ):
+    """Every cursor this build mints names the row view it was paged under, so
+    one that carries no view is malformed and is refused like any other."""
     raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
     request = {
         "sources": [_source(raw)],
@@ -677,50 +679,25 @@ async def test_viewless_legacy_cursor_falls_back_to_the_stored_fields_view(
         "all_steps": True,
         "include": {"per_run": {"limit": 1}, "fields": ["step_index"]},
     }
-    validated = AnalyzeResultsInput.model_validate(request)
-    first = await handle_analyze_results(validated, state_no_sim)
+    first = await handle_analyze_results(AnalyzeResultsInput.model_validate(request), state_no_sim)
     assert first.structured_content is not None
     cursor = first.structured_content["results"]["values"]["per_run"]["next_cursor"]
     assert cursor is not None
-    result_set_id = first.structured_content["result_set_id"]
-
-    record = result_store.result_path(result_set_id, work_dir)
-    stored = json.loads(record.read_text())
-    stored["inputs"]["request_hash"] = analyze_mod._request_hash(
-        validated,
-        include_fields=True,
-    )
-    snapshot = {
-        key: stored[key]
-        for key in (
-            "result_set_id",
-            "created_at",
-            "expires_at",
-            "inputs",
-            "work",
-            "source_manifests",
-            "source_jobs",
-        )
-    }
-    stored["snapshot_hash"] = result_store.canonical_hash(snapshot)
-    record.write_text(json.dumps(stored))
 
     body = cursor_codec.decode_cursor(cursor)
     body.pop("view")
-    legacy_cursor = cursor_codec.encode_cursor(body)
+    viewless = cursor_codec.encode_cursor(body)
 
-    resumed = await handle_analyze_results(
-        AnalyzeResultsInput.model_validate(
-            {
-                **request,
-                "include": {"per_run": {"limit": 1, "cursor": legacy_cursor}},
-            }
-        ),
-        state_no_sim,
-    )
-    assert resumed.structured_content is not None
-    row = resumed.structured_content["results"]["values"]["per_run"]["items"][0]
-    assert set(row) == {"step_index"}
+    with pytest.raises(ResultError, match="Invalid analyze_results cursor"):
+        await handle_analyze_results(
+            AnalyzeResultsInput.model_validate(
+                {
+                    **request,
+                    "include": {"per_run": {"limit": 1, "cursor": viewless}},
+                }
+            ),
+            state_no_sim,
+        )
 
 
 def test_invalid_and_expired_cursor_errors(work_dir: Path):
