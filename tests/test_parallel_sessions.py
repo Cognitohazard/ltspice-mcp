@@ -44,6 +44,7 @@ from ltspice_mcp.lib.schematic_ops import (
     get_asc_editor,
     resolve_pin,
 )
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
 from tests._asc_ops import apply_ops, sha_of
@@ -223,7 +224,7 @@ def _running_experiment(work_dir: Path, job_id: str, pid: int) -> ExperimentJob:
         fingerprint="f" * 64,
         canonicalizer_version=1,
         control_token="control-secret",
-        store_path=experiment_store.record_path(job_id, work_dir),
+        store_path=Store(work_dir).job_record(job_id),
         cases=[
             ExperimentCase(
                 case_id="case_0000",

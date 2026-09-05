@@ -113,31 +113,29 @@ def resolve_experiment_paths(
     circuit_id: str,
     simulator: type,
 ) -> ExperimentPaths:
-    """Route experiment staging and output to simulator-safe filesystems."""
-    from spicelib.simulators.ltspice_simulator import LTspice
+    """Ask the store where this simulator's staged decks and output may go.
 
-    from ltspice_mcp.lib import wsl
+    The routing rule itself (WSL + LTspice needs a Windows-native tree, because
+    the SQLite ``.db`` behind ``.MEAS`` cannot be written over the UNC share)
+    lives in ``Store.artifact_base`` so every writer applies one decision. This
+    wrapper exists to translate its refusal into the staging error code callers
+    already handle.
+    """
+    from ltspice_mcp.lib.store import Store, WindowsNativeStorageUnavailable
 
-    is_ltspice = isinstance(simulator, type) and issubclass(simulator, LTspice)
-    if wsl.is_wsl() and is_ltspice:
-        windows_root = wsl.get_windows_output_dir()
-        if windows_root is None:
-            raise DeckStagingError(
-                "windows_native_storage_unavailable",
-                "WSL LTspice experiments require a Windows-native directory for both "
-                "staged decks and simulator output, but no Windows temp directory "
-                "is available",
-            )
-        base = windows_root / "experiments"
-        return ExperimentPaths(
-            staging_root=base / "jobs" / job_id / "staged" / circuit_id,
-            output_folder=base / "runs",
-            windows_native=True,
-        )
-
+    store = Store(working_dir)
+    try:
+        base = store.artifact_base(simulator)
+    except WindowsNativeStorageUnavailable as exc:
+        raise DeckStagingError("windows_native_storage_unavailable", str(exc)) from exc
     return ExperimentPaths(
-        staging_root=(working_dir / ".ltspice-mcp" / "jobs" / job_id / "staged" / circuit_id),
-        output_folder=working_dir / ".ltspice-mcp" / "runs",
+        # Staged decks live inside the job's own run directory: they are part of
+        # what that run produced, they must sit on the same filesystem as the
+        # output for the WSL case, and grouping them there is what makes a job's
+        # files enumerable as a set.
+        staging_root=base.runs / job_id / "staged" / circuit_id,
+        output_folder=base.runs,
+        windows_native=base.windows_native,
     )
 
 

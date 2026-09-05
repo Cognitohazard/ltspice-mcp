@@ -187,6 +187,20 @@ def stage_recorded_fixture(work_dir: Path, name: str) -> Path:
     return raw
 
 
+def fake_artifact_paths(output_folder: Path, run_filename: str) -> tuple[Path, Path]:
+    """Where a real run's raw and log would land, given a ``run_filename``.
+
+    spicelib copies the deck to ``output_folder / run_filename`` and derives
+    both artifacts from that copy's own path, so a ``run_filename`` carrying a
+    job sub-directory puts them in that sub-directory. A fake that took only
+    the stem would write them one level up and quietly test a layout the
+    simulator never produces.
+    """
+    staged = output_folder / run_filename
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    return staged.with_suffix(".raw"), staged.with_suffix(".log")
+
+
 def fake_simulator(
     monkeypatch: pytest.MonkeyPatch,
     submissions: list[str] | None = None,
@@ -213,8 +227,7 @@ def fake_simulator(
         recorded.append(run_filename)
         if delay_s is None:
             return object()
-        raw = self.output_folder / f"{Path(run_filename).stem}.raw"
-        log = self.output_folder / f"{Path(run_filename).stem}.log"
+        raw, log = fake_artifact_paths(self.output_folder, run_filename)
 
         def finish() -> None:
             raw.write_bytes(b"Title: mock")
@@ -240,9 +253,7 @@ def recorded_fixture_simulator(monkeypatch: pytest.MonkeyPatch) -> None:
     stages parse genuine simulator artifacts rather than a mock byte string."""
 
     def submit(self, _netlist: Path, run_filename: str, callback):
-        stem = Path(run_filename).stem
-        raw = self.output_folder / f"{stem}.raw"
-        log = self.output_folder / f"{stem}.log"
+        raw, log = fake_artifact_paths(self.output_folder, run_filename)
         shutil.copy(FIXTURES_DIR / "ltspice_tran_rc.raw", raw)
         shutil.copy(FIXTURES_DIR / "ltspice_tran_rc.log", log)
         outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
@@ -286,7 +297,7 @@ def write_legacy_sidecar(
 
     record: dict = {
         "schema": job_store.SCHEMA,
-        "schema_version": job_store.SCHEMA_VERSION,
+        "schema_version": max(job_store.SUPPORTED_VERSIONS),
         "job_id": job_id,
         "kind": kind,
         "netlist": str(circuit.resolve()),
