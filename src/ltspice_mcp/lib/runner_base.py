@@ -610,10 +610,10 @@ class RunnerBase:
     ) -> SimRunner:
         """Submit one deck and bridge its filesystem-derived outcome to the loop.
 
-        This is the job-agnostic single-run primitive shared by legacy
-        ``SimulationRunner`` jobs and experiment cases. It knows only the deck,
-        the simulator-facing filename, and an event-loop callback; registration,
-        lifecycle, persistence, and concurrency remain with its callers.
+        This is the job-agnostic single-run primitive every experiment case
+        runs on. It knows only the deck, the simulator-facing filename, and an
+        event-loop callback; registration, lifecycle, persistence, and
+        concurrency remain with its callers.
 
         Call from a worker thread. The requirements snapshot and completion
         artifact reads intentionally happen on spicelib's worker threads.
