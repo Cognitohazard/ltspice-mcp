@@ -457,12 +457,20 @@ class TestSchemaPostProcessing:
         The useful half is ``propertyName``, which names the field that picks
         the branch; the mapping restates, once per branch, the discriminant
         value the branch already declares plus the ``$ref`` the ``oneOf`` list
-        already carries."""
-        seen = 0
-        for tool_def in _all_profile_defs():
+        already carries.
 
-            def walk(node, path, tool=tool_def.name):
-                nonlocal seen
+        So the branch ``const`` is the whole justification for dropping the
+        table, and it is asserted here rather than left to two spot checks
+        elsewhere: a branch that stopped declaring its own discriminant would
+        leave a client with no way to pick one at all.
+        """
+        seen = 0
+        branches = 0
+        for tool_def in _all_profile_defs():
+            schema = tool_def.input_schema
+
+            def walk(node, path, tool=tool_def.name, schema=schema):
+                nonlocal seen, branches
                 if isinstance(node, dict):
                     block = node.get("discriminator")
                     if isinstance(block, dict):
@@ -471,14 +479,24 @@ class TestSchemaPostProcessing:
                         assert "propertyName" in block, (
                             f"{tool}: discriminator without propertyName at {path}"
                         )
+                        tag = block["propertyName"]
+                        for index, member in enumerate(node.get("oneOf", [])):
+                            branches += 1
+                            resolved = resolve_local_ref(schema, member)
+                            tagged = resolved.get("properties", {}).get(tag)
+                            assert isinstance(tagged, dict) and "const" in tagged, (
+                                f"{tool}: {path}.oneOf[{index}] declares no {tag!r} const, "
+                                "so nothing tells a client which branch it is"
+                            )
                     for key, value in node.items():
                         walk(value, f"{path}.{key}")
                 elif isinstance(node, list):
                     for index, item in enumerate(node):
                         walk(item, f"{path}[{index}]")
 
-            walk(tool_def.input_schema, "root")
+            walk(schema, "root")
         assert seen, "no discriminator survives — the tagged unions stopped being advertised"
+        assert branches > seen, "a tagged union with no branches is not a union"
 
     def test_a_property_actually_named_default_would_survive(self):
         """Both new passes descend structurally, like the title stripper.
