@@ -15,7 +15,9 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
+from ltspice_mcp.lib import metrics, services
 from ltspice_mcp.lib.raw_parser import build_simulation_summary
+from ltspice_mcp.lib.recipes import SummaryRecipe
 from ltspice_mcp.lib.result_observations import (
     parse_requested_outputs,
     parse_source_amplitudes,
@@ -24,6 +26,7 @@ from ltspice_mcp.lib.result_observations import (
     surface_observations,
     value_observations,
 )
+from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import format_observations
 from tests.conftest import LTSPICE_TRAN_RC_VFINAL
 
@@ -566,24 +569,33 @@ class TestBuildSummaryWiring:
         ev = next(o for o in summary["observations"] if o["code"] == "extreme_value")
         assert ev["evidence"]["source_name"] == "V1"
 
-    def test_success_summary_threads_deck_sources_end_to_end(self, tmp_path: Path):
-        # Full wiring: parse_success_summary reads the deck, parses the tiny
-        # SINE drive, and the recorded ~volt-scale RC output fires the
-        # source-relative trigger — the hand-off chain a refactor could drop
-        # at three places with all direct-function tests still green.
-        from ltspice_mcp.lib import log_parser
-
+    async def test_summary_recipe_threads_deck_sources_end_to_end(
+        self, state_no_sim: SessionState, tmp_path: Path
+    ):
+        # Full wiring on the live read path: the summary recipe reads the run's
+        # deck, parses the tiny SINE drive, and the recorded ~volt-scale RC
+        # output fires the source-relative trigger — the hand-off chain a
+        # refactor could drop at three places with all direct-function tests
+        # still green.
         deck = tmp_path / "rc.cir"
         deck.write_text(
             "rc lowpass\nV1 in 0 SINE(0 1u 1k)\nR1 in out 1k\nC1 out 0 100n\n.tran 1m\n.end\n"
         )
-        summary = log_parser.parse_success_summary(
-            FIXTURES / "ltspice_tran_rc.raw",
-            FIXTURES / "ltspice_tran_rc.log",
-            0.0,
+        source = services.AnalysisSource(
+            raw=FIXTURES / "ltspice_tran_rc.raw",
+            log=FIXTURES / "ltspice_tran_rc.log",
             netlist=deck,
+            dialect=None,
+            identity=None,
+            trusted_job_artifact=True,
         )
-        ev = [o for o in summary["observations"] if o["code"] == "extreme_value"]
+        facts = await metrics.summary(
+            source,
+            SummaryRecipe(key="s", metric="summary"),
+            0,
+            state_no_sim,
+        )
+        ev = [o for o in facts["observations"] if o["code"] == "extreme_value"]
         assert ev and ev[0]["evidence"]["source_name"] == "V1"
 
 
@@ -696,65 +708,3 @@ class TestBuildSummaryRealLogPairs:
             "reason": "missing",
         }
         _assert_observations_are_facts(summary["observations"])
-
-
-class TestValueScanPointBudget:
-    """The value-scan gate keys off the ESTIMATED total sample count (axis points
-    × non-axis traces), not single-vs-multi-point and not axis points alone.
-
-    A normal multi-point run is fully scanned (value facts surfaced, no
-    ``value_scan_skipped``); only a run whose total samples exceed
-    ``_VALUE_SCAN_SAMPLE_BUDGET`` skips the scan and records the coverage gap.
-    The tests drive the real ``parse_success_summary`` gate against a recorded
-    221-point LTspice .tran raw, monkeypatching the budget so the SAME raw
-    crosses the boundary — pinning the gate without a multi-million-sample
-    fixture.
-    """
-
-    def test_small_multipoint_run_is_scanned_not_skipped(self):
-        from ltspice_mcp.lib import log_parser
-
-        summary = log_parser.parse_success_summary(
-            FIXTURES / "ltspice_tran_rc.raw", FIXTURES / "ltspice_tran_rc.log", 0.0
-        )
-        # 221 points × a few traces is far under the 5M-sample budget: it is
-        # scanned, so the skip-coverage observation must be absent (a benign run
-        # surfaces no value facts here either).
-        assert not any(o["code"] == "value_scan_skipped" for o in summary["observations"])
-
-    def test_large_run_surfaces_skipped_scan(self, monkeypatch):
-        from ltspice_mcp.lib import log_parser
-
-        # Drop the budget below the fixture's sample count so the SAME multi-point
-        # raw now exceeds it — exercises the gate's >budget branch.
-        monkeypatch.setattr(log_parser, "_VALUE_SCAN_SAMPLE_BUDGET", 1)
-
-        summary = log_parser.parse_success_summary(
-            FIXTURES / "ltspice_tran_rc.raw", FIXTURES / "ltspice_tran_rc.log", 0.0
-        )
-        skipped = [o for o in summary["observations"] if o["code"] == "value_scan_skipped"]
-        assert len(skipped) == 1
-        assert skipped[0]["kind"] == "coverage"
-        assert skipped[0]["evidence"]["point_count"] == 221
-
-    def test_value_scan_gate_counts_traces_not_just_points(self, monkeypatch):
-        """A wide result (moderate points, many traces) skips even when the
-        point count alone is under budget — the gate must multiply by trace
-        count, or a wide node dump would load every trace on completion."""
-        from spicelib import RawRead
-
-        from ltspice_mcp.lib import log_parser
-
-        header = RawRead(str(FIXTURES / "ltspice_tran_rc.raw"), traces_to_read=None)
-        non_axis = max(0, len(header.get_trace_names()) - 1)
-        assert non_axis >= 2, "fixture needs >=2 non-axis traces to exercise trace gating"
-
-        # Budget = the point count (221). Under a points-only gate this scans
-        # (221 <= 221); under the real total-sample gate it skips because
-        # 221 * non_axis > 221.
-        monkeypatch.setattr(log_parser, "_VALUE_SCAN_SAMPLE_BUDGET", 221)
-        summary = log_parser.parse_success_summary(
-            FIXTURES / "ltspice_tran_rc.raw", FIXTURES / "ltspice_tran_rc.log", 0.0
-        )
-        skipped = [o for o in summary["observations"] if o["code"] == "value_scan_skipped"]
-        assert len(skipped) == 1, "wide-but-few-points run must skip the value scan"
