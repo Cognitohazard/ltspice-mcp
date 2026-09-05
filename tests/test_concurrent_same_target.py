@@ -53,8 +53,8 @@ async def _call(state: SessionState, tool: str, payload: dict[str, Any]) -> dict
     """Invoke one tool through the dispatch map the server itself uses."""
     registered = state.tool_dispatch[tool]
     result = await registered.handler(payload, state)
-    assert result.structuredContent is not None, result.content
-    return result.structuredContent
+    assert result.structured_content is not None, result.content
+    return result.structured_content
 
 
 def _deck(path: Path) -> Path:
