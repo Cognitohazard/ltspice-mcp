@@ -52,8 +52,8 @@ async def _analyze(
         {"sources": [{"raw_path": str(raw), "label": "dut"}], "recipes": recipes}
     )
     result = await handle_analyze_results(args, state)
-    assert result.structuredContent is not None
-    return result.structuredContent
+    assert result.structured_content is not None
+    return result.structured_content
 
 
 def _out_of_quota(path: Path) -> str:

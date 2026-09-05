@@ -1176,7 +1176,7 @@ class TestLegacyJobRecords:
             JobsInput.model_validate({"action": "status", "job_id": "sim_legacy_1"}),
             state_no_sim,
         )
-        data = result.structuredContent
+        data = result.structured_content
         assert data is not None
         assert data["job_id"] == "sim_legacy_1"
         assert data["job_type"] == "legacy"
@@ -1210,7 +1210,7 @@ class TestLegacyJobRecords:
             ),
             state_no_sim,
         )
-        data = result.structuredContent
+        data = result.structured_content
         assert data is not None
         assert data["coverage"]["runs_analyzed"] == 0
         details = [

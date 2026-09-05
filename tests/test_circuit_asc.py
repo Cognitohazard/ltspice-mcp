@@ -1822,7 +1822,7 @@ class TestTraceNet:
         # coordinates connected only by the shared label name.
         path = await _build_name_wired_rc("trace_rc", asc_state, work_dir)
         res = await handle_trace_net(TraceNetInput(path=path, pin="R1.1"), asc_state)
-        sc = res.structuredContent
+        sc = res.structured_content
         assert sc is not None
         assert sc is not None
         assert sc["labels"] == ["in"]
@@ -1835,7 +1835,7 @@ class TestTraceNet:
         # refuse the ambiguity, but trace_net seeds from a match and name-merges.
         path = await _build_name_wired_rc("trace_byname", asc_state, work_dir)
         res = await handle_trace_net(TraceNetInput(path=path, pin="net:in"), asc_state)
-        sc = res.structuredContent
+        sc = res.structured_content
         assert sc is not None
         assert sc is not None
         assert sc["labels"] == ["in"]
@@ -1850,7 +1850,7 @@ class TestTraceNet:
         asc = work_dir / "short.asc"
         asc.write_text("Version 4\nSHEET 1 880 680\nWIRE 0 0 100 0\nFLAG 0 0 a\nFLAG 100 0 b\n")
         res = await handle_trace_net(TraceNetInput(path="short.asc", x=0, y=0), asc_state)
-        sc = res.structuredContent
+        sc = res.structured_content
         assert sc is not None
         assert sc is not None
         assert sc["is_shorted"] is True
@@ -1880,7 +1880,7 @@ class TestTraceNet:
         res = await handle_trace_net(
             TraceNetInput(path="self_tie_trace.asc", pin="R1.1"), asc_state
         )
-        sc = res.structuredContent
+        sc = res.structured_content
         assert sc is not None
         warnings = sc.get("warnings", [])
         assert len(warnings) == 1, sc
@@ -1909,7 +1909,7 @@ class TestTraceNet:
         res = await handle_trace_net(
             TraceNetInput(path="collinear_trace.asc", pin="R1.1"), asc_state
         )
-        sc = res.structuredContent
+        sc = res.structured_content
         assert sc is not None
         warnings = sc.get("warnings", [])
         assert len(warnings) == 1, sc
@@ -1927,7 +1927,7 @@ class TestTraceNet:
             "SYMATTR Value 1k\n"
         )
         res = await handle_trace_net(TraceNetInput(path="zero_len.asc", pin="R1.1"), asc_state)
-        sc = res.structuredContent
+        sc = res.structured_content
         assert sc is not None
         assert sc is not None
         assert sc.get("warnings", []) == []
@@ -1953,7 +1953,7 @@ class TestTraceNet:
         res = await handle_trace_net(
             TraceNetInput(path="interior_self_tie.asc", pin="R1.1"), asc_state
         )
-        sc = res.structuredContent
+        sc = res.structured_content
         assert sc is not None
         warnings = sc.get("warnings", [])
         assert len(warnings) == 1, sc
@@ -1983,7 +1983,7 @@ class TestTraceNet:
         res = await handle_trace_net(
             TraceNetInput(path="foreign_interior.asc", pin="R1.1"), asc_state
         )
-        sc = res.structuredContent
+        sc = res.structured_content
         assert sc is not None
         assert sc.get("warnings", []) == []
 

@@ -73,7 +73,7 @@ _CLOSED_OUTPUT_SCHEMA = _closed(vc._OUTPUT_SCHEMA)
 
 
 def _assert_schema(result) -> dict:
-    data = result.structuredContent
+    data = result.structured_content
     assert data is not None
     jsonschema.Draft202012Validator(_CLOSED_OUTPUT_SCHEMA).validate(data)
     return data
@@ -164,14 +164,14 @@ async def test_unsupported_kind_is_error(state_no_sim, work_dir):
     bad = _write(work_dir, "notes.txt", "hello")
     result = await handle_verify_circuit(VerifyCircuitInput(path=str(bad)), state_no_sim)
     data = _assert_schema(result)
-    assert result.isError is True
+    assert result.is_error is True
     assert data["outcome"] == "failed"
 
 
 async def test_path_denied_is_error(state_no_sim):
     result = await handle_verify_circuit(VerifyCircuitInput(path="/etc/passwd"), state_no_sim)
     data = _assert_schema(result)
-    assert result.isError is True
+    assert result.is_error is True
     assert data["findings"][0]["rule_id"] == "path_denied"
 
 
@@ -791,7 +791,7 @@ def test_advertised_delivery_states_the_inline_cost():
     from ltspice_mcp.tools import registry
 
     defs, _ = registry.get_tools()
-    schema = next(d for d in defs if d.name == "verify_circuit").inputSchema
+    schema = next(d for d in defs if d.name == "verify_circuit").input_schema
     delivery = schema["$defs"]["VerifyRenderPolicy"]["properties"]["delivery"]
     text = delivery.get("description") or ""
     assert "tokens" in text and "artifact" in text, text

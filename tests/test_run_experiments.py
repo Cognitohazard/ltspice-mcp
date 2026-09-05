@@ -195,7 +195,7 @@ def _observation_code(data: dict, code: str) -> dict | None:
 
 
 def _assert_schema(result) -> dict:
-    data = result.structuredContent
+    data = result.structured_content
     assert data is not None
     jsonschema.Draft202012Validator(RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
     return data
@@ -246,8 +246,8 @@ async def _jobs_wait(
         ),
         state,
     )
-    assert result.structuredContent is not None
-    return result.structuredContent
+    assert result.structured_content is not None
+    return result.structured_content
 
 
 @pytest.mark.asyncio
@@ -419,7 +419,7 @@ class TestReceiptThenDwell:
         )
         data = _assert_schema(result)
 
-        assert result.isError
+        assert result.is_error
         assert data["error"]["commit_state"] == "committed"
         assert "budget renderer exploded" in data["error"]["message"]
         assert data["job_id"] in state_with_sim.experiment_jobs
@@ -545,7 +545,7 @@ class TestIdempotency:
         )
         data = _assert_schema(result)
 
-        assert result.isError
+        assert result.is_error
         assert set(data["error"]) == {
             "code",
             "message",
@@ -751,8 +751,8 @@ class TestAttachedBlockPreflight:
             _args(deck, "attached-bad", analyze=bad), state_with_sim
         )
 
-        assert result.isError
-        assert "attached analyze block" in json.dumps(result.structuredContent)
+        assert result.is_error
+        assert "attached analyze block" in json.dumps(result.structured_content)
         assert submissions == []
 
         # The refusal left no durable record: the same id retries the same
@@ -760,7 +760,7 @@ class TestAttachedBlockPreflight:
         again = await handle_run_experiments(
             _args(deck, "attached-bad", analyze=bad), state_with_sim
         )
-        assert again.isError
+        assert again.is_error
         assert submissions == []
 
     async def test_model_level_analyze_fault_also_refused_at_the_door(
@@ -787,8 +787,8 @@ class TestAttachedBlockPreflight:
             state_with_sim,
         )
 
-        assert result.isError
-        assert "attached analyze block" in json.dumps(result.structuredContent)
+        assert result.is_error
+        assert "attached analyze block" in json.dumps(result.structured_content)
         assert submissions == []
 
 
@@ -929,7 +929,7 @@ class TestReplayRejectsChangedSources:
         result = await handle_run_experiments(args, state_with_sim)
         data = _assert_schema(result)
 
-        assert result.isError
+        assert result.is_error
         assert data["error"]["code"] == "idempotency_conflict"
         assert str(deck) in data["error"]["message"]
         assert "control_token" not in data
@@ -1860,8 +1860,8 @@ class TestAttachedAnalysis:
             }
         )
         continued = await analyze_mod.handle_analyze_results(continuation, state_with_sim)
-        assert continued.structuredContent is not None
-        continued_page = continued.structuredContent["results"]["summary"]["per_run"]
+        assert continued.structured_content is not None
+        continued_page = continued.structured_content["results"]["summary"]["per_run"]
         assert set(continued_page["items"][0]) == {"value"}
         assert continued_page["items"][0] == page["items"][0]
         assert any(

@@ -1639,7 +1639,7 @@ def _image_content(image: RenderedImage) -> types.ImageContent:
     return types.ImageContent(
         type="image",
         data=base64.b64encode(image.data).decode("ascii"),
-        mimeType=image.mime_type,
+        mime_type=image.mime_type,
     )
 
 
@@ -2058,7 +2058,7 @@ def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallTool
 
     result = format_response(data["hint"], data)
     if evaluation.is_error:
-        result.isError = True
+        result.is_error = True
     if evaluation.inline_image is not None:
         result.content.insert(0, _image_content(evaluation.inline_image))
     return result
@@ -2072,10 +2072,10 @@ def render_verify_circuit(evaluation: VerifyCircuitEvaluation) -> types.CallTool
     # default), and export_to:sidecar overwrites the deck's .net. The annotation
     # states the worst case; the description carries the conditional nuance.
     annotations=types.ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=True,
-        idempotentHint=True,
-        openWorldHint=False,
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=True,
+        open_world_hint=False,
     ),
     output_schema=_OUTPUT_SCHEMA,
 )

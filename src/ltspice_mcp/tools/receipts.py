@@ -430,7 +430,7 @@ async def render_run_receipt(
             notes=_RUN_BUDGET_NOTES,
         )
     result = format_response(text, data)
-    result.isError = is_error
+    result.is_error = is_error
     return result
 
 

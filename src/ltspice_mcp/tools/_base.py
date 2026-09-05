@@ -171,7 +171,7 @@ def json_response(data: Any) -> types.CallToolResult:
         data = sanitize_payload(data)
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=json.dumps(data, indent=2, allow_nan=False))],
-        structuredContent=data,
+        structured_content=data,
     )
 
 
@@ -205,7 +205,7 @@ def format_response(
     payload = sanitize_payload(payload)
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=text)],
-        structuredContent=payload,
+        structured_content=payload,
     )
 
 
@@ -242,14 +242,14 @@ def image_response(
             types.ImageContent(
                 type="image",
                 data=base64.b64encode(image.data).decode("ascii"),
-                mimeType=image.mime_type,
+                mime_type=image.mime_type,
             )
         )
     else:
         content.append(types.TextContent(type="text", text=image.data.decode("utf-8")))
     content.append(types.TextContent(type="text", text=text))
 
-    return types.CallToolResult(content=content, structuredContent=payload)
+    return types.CallToolResult(content=content, structured_content=payload)
 
 
 # ---------------------------------------------------------------------------
@@ -778,10 +778,10 @@ def one_spelling(chosen: Any, aliases: Mapping[str, Any], *, argument: str) -> N
 
 
 RO_ANNOTATIONS = types.ToolAnnotations(
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=False,
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
 )
 
 
@@ -877,7 +877,7 @@ class ToolRegistry:
             definition_kwargs: dict[str, Any] = {
                 "name": name,
                 "description": description,
-                "inputSchema": (
+                "input_schema": (
                     build_input_schema(input_model)
                     if input_model is not None
                     else {"type": "object", "properties": {}, "additionalProperties": False}
@@ -885,11 +885,11 @@ class ToolRegistry:
                 "annotations": annotations,
             }
             if output_model is not None:
-                definition_kwargs["outputSchema"] = _declare_warnings_key(
+                definition_kwargs["output_schema"] = _declare_warnings_key(
                     schema_from_typeddict(output_model)
                 )
             elif output_schema is not None:
-                definition_kwargs["outputSchema"] = _declare_warnings_key(output_schema)
+                definition_kwargs["output_schema"] = _declare_warnings_key(output_schema)
 
             definition = types.Tool(**definition_kwargs)
             if meta is not None:
@@ -903,9 +903,9 @@ class ToolRegistry:
             # conformance hook attributes emissions uniformly for registered
             # tools and unregistered adapters alike (see
             # declare_output_schema).
-            if definition.outputSchema is not None:
-                _stamp_output_schema(handler, definition.outputSchema)
-                _stamp_output_schema(wrapped, definition.outputSchema)
+            if definition.output_schema is not None:
+                _stamp_output_schema(handler, definition.output_schema)
+                _stamp_output_schema(wrapped, definition.output_schema)
 
             self._registered.append(
                 RegisteredTool(
@@ -922,7 +922,7 @@ class ToolRegistry:
         """Map each advertised top-level wire field to the tools that take it."""
         owners: dict[str, list[str]] = {}
         for registered in self._registered:
-            properties = registered.definition.inputSchema.get("properties", {})
+            properties = registered.definition.input_schema.get("properties", {})
             for field in properties:
                 owners.setdefault(field, []).append(registered.definition.name)
         return {field: tuple(sorted(set(names))) for field, names in owners.items()}
@@ -944,7 +944,7 @@ class ToolRegistry:
             # its own shape, so it stays on the registered definition — the
             # dispatch side, which the doc gates scan and the conformance hook
             # validates emissions against.
-            definition = registered.definition.model_copy(update={"outputSchema": None})
+            definition = registered.definition.model_copy(update={"output_schema": None})
             tool_defs.append(definition)
             tool_dispatch[registered.definition.name] = registered
         if not tool_defs:
