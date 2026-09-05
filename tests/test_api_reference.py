@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
+import importlib
 import inspect as inspect_mod
 import subprocess
 import sys
@@ -10,7 +10,6 @@ import sys
 import pytest
 from pydantic import ValidationError
 
-from ltspice_mcp import cli
 from ltspice_mcp.api import _reference
 from ltspice_mcp.api._methods import ApiMethodsMixin
 from ltspice_mcp.errors import compact_validation_error
@@ -174,69 +173,69 @@ class TestMethodDocstrings:
         assert "run_experiments" in ApiMethodsMixin.reference()
 
 
-class TestCliDelivery:
-    """`spice-mcp reference` is the same renderer behind a print."""
+class TestCatalogueDelivery:
+    """`python -m ltspice_mcp.api reference` is the same renderer behind a print,
+    and reading it must stay a documentation read: no engine, no heavy imports."""
 
     @staticmethod
-    def _run(argv: list[str], capsys) -> tuple[int, str]:
-        namespace = cli.parse_args(argv)
-        code = asyncio.run(cli.execute(namespace))
-        return code, capsys.readouterr().out
-
-    def test_index_prints_the_six(self, capsys):
-        code, out = self._run(["reference"], capsys)
-        assert code == 0
-        for name in OPS:
-            assert name in out
-
-    def test_hyphenated_and_underscored_names_both_work(self, capsys):
-        _, hyphenated = self._run(["reference", "edit-schematic"], capsys)
-        _, underscored = self._run(["reference", "edit_schematic"], capsys)
-        assert hyphenated == underscored
-        assert hyphenated.rstrip("\n") == _reference.reference("edit_schematic")
-
-    def test_an_unknown_name_is_a_usage_refusal(self, capsys):
-        code, _ = self._run(["reference", "run-simulation"], capsys)
-        assert code == cli.EXIT_REFUSED
-
-    def test_printing_the_catalogue_starts_no_session(self, tmp_path):
-        """It is documentation, not a server start. Starting the engine writes
-        an ltspice-mcp.toml into the working directory; reading the catalogue
-        must leave the directory exactly as it found it."""
-        probe = (
-            "from ltspice_mcp.cli import main\n"
-            "try:\n"
-            "    main(['reference', 'verify-circuit'])\n"
-            "except SystemExit:\n"
-            "    pass\n"
-        )
-        proc = subprocess.run(
-            [sys.executable, "-c", probe],
+    def _probe(body: str, tmp_path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-c", body],
             capture_output=True,
             text=True,
             timeout=120,
             cwd=tmp_path,
         )
-        assert "render.mode" in proc.stdout
-        assert list(tmp_path.iterdir()) == []
 
     def test_module_entry_point_prints_the_catalogue(self, tmp_path):
         """`python -m ltspice_mcp.api reference [OP]` prints the catalogue and
-        exits 0, and an unknown op exits 2 naming the real operations."""
-        probe = (
+        exits 0. It is documentation, not a server start: starting the engine
+        writes an ltspice-mcp.toml into the working directory, so the read must
+        leave the directory exactly as it found it."""
+        proc = self._probe(
             "from ltspice_mcp.api.__main__ import main\n"
-            "print('RC', main(['reference', 'verify_circuit']))\n"
-        )
-        proc = subprocess.run(
-            [sys.executable, "-c", probe],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=tmp_path,
+            "print('RC', main(['reference', 'verify_circuit']))\n",
+            tmp_path,
         )
         assert "render.mode" in proc.stdout
         assert "RC 0" in proc.stdout
         assert list(tmp_path.iterdir()) == []
+
+    def test_module_entry_point_index_prints_the_six(self, tmp_path):
+        proc = self._probe(
+            "from ltspice_mcp.api.__main__ import main\nprint('RC', main(['reference']))\n",
+            tmp_path,
+        )
+        assert "RC 0" in proc.stdout
+        for name in OPS:
+            assert name in proc.stdout
+
+    def test_module_entry_point_refuses_an_unknown_operation(self, tmp_path):
+        """Exit 2, and the refusal names the real operations rather than
+        leaving the caller to guess."""
+        proc = self._probe(
+            "from ltspice_mcp.api.__main__ import main\n"
+            "print('RC', main(['reference', 'run_simulation']))\n",
+            tmp_path,
+        )
+        assert "RC 2" in proc.stdout
+        for name in OPS:
+            assert name in proc.stderr
+
+    def test_no_console_script_survives_the_removed_command_line(self):
+        """The `spice-mcp` command line was removed at 0.6.0; the package
+        publishes exactly one console script, and `ltspice_mcp.cli` is gone.
+        A reintroduced module or entry point fails here."""
+        from importlib.metadata import distribution
+
+        scripts = {
+            entry.name
+            for entry in distribution("ltspice-mcp").entry_points
+            if entry.group == "console_scripts"
+        }
+        assert scripts == {"ltspice-mcp"}
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module("ltspice_mcp.cli")
 
     def test_import_and_engine_boot_load_no_heavy_modules(self, tmp_path):
         """Neither ``import ltspice_mcp.api`` nor ``Api()`` itself may load
