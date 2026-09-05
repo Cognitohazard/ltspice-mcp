@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import shutil
 import typing
 from collections.abc import Coroutine, Iterator
@@ -543,6 +544,39 @@ def sample_netlist(work_dir: Path) -> Path:
         ".END\n"
     )
     return p
+
+
+# ---------------------------------------------------------------------------
+# Machine-global state isolation
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolated_state_home(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Point the global recently-touched-circuit index at this worker's own
+    directory.
+
+    Without it every test that touches a circuit reads and writes the machine's
+    real ``~/.local/state/ltspice-mcp/recent.json``: one file, contended by all
+    the xdist workers at once through a cross-process lock, and carrying entries
+    left by earlier runs. Anything that counts what the startup preload found
+    then depends on what a neighbouring worker happened to be doing. ``tmp_path``
+    is per-worker, so this gives each its own index and leaves the developer's
+    state directory alone.
+
+    Tests that need a specific home still set ``LTSPICE_MCP_HOME`` themselves;
+    function-scoped ``monkeypatch`` overrides this and restores it afterwards.
+    """
+    home = tmp_path_factory.mktemp("state-home")
+    previous = os.environ.get("LTSPICE_MCP_HOME")
+    os.environ["LTSPICE_MCP_HOME"] = str(home)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("LTSPICE_MCP_HOME", None)
+        else:
+            os.environ["LTSPICE_MCP_HOME"] = previous
 
 
 # ---------------------------------------------------------------------------

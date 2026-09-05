@@ -21,6 +21,22 @@ class TestIndexPath:
     def test_env_override_respected(self, recent_home: Path) -> None:
         assert recent.index_path() == recent_home / "recent.json"
 
+    def test_suite_never_resolves_the_machine_wide_index(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every worker runs against its own state home.
+
+        The index is machine-global by design, so a suite that leaves the
+        default in place writes the developer's real state directory and has
+        all its xdist workers contend on that one file — and any assertion
+        about what the startup preload found then depends on what a
+        neighbouring worker touched.
+        """
+        isolated = recent.index_path()
+        monkeypatch.delenv("LTSPICE_MCP_HOME", raising=False)
+        monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+        assert isolated != recent.index_path()
+
 
 class TestTouch:
     def test_touch_circuit_file(self, tmp_path: Path, recent_home: Path) -> None:
