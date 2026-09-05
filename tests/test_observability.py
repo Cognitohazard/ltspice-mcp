@@ -1,4 +1,9 @@
-"""Tests for structured job lifecycle event emission."""
+"""Tests for structured job lifecycle event emission.
+
+The process's stderr logger is the only channel these events have: the MCP
+logging capability that could once relay them to the client is deprecated as
+of the 2026-07-28 revision and is not served.
+"""
 
 from __future__ import annotations
 

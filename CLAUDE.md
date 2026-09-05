@@ -77,7 +77,7 @@ Key `lib/` modules:
 - `pathutil.py` — path security (`safe_path()`, `resolve_safe_path()`); `filelock.py` — cross-process advisory file locks
 - `recent.py` — global recently-touched-circuit index (`recent.json`); backs the startup job preload
 - `symbol_geometry.py`, `geometry.py` — .asy symbol parsing (pin positions, rotation transforms, bounding boxes) + shared 2D / bbox helpers
-- `mcp_logging.py`, `observability.py` — MCP protocol log notifications + structured job-lifecycle events
+- `observability.py` — structured job-lifecycle events on the `ltspice_mcp.events` stderr logger (the server's only log channel: the MCP logging capability is deprecated as of 2026-07-28 and is not served)
 
 Self-describing helpers not listed above (`format.py`, `sweep_utils.py`, `desktop.py`, `plot_html.py`) do what their names say — read them when you need them.
 

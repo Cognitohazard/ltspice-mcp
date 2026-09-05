@@ -816,8 +816,13 @@ spellings and the `mode` values inline.
 **Server logging.** The server's default stderr level is `WARNING`. A long INFO
 startup banner where the server's stderr is the caller's own stderr
 gets answered with a blanket `2>/dev/null`, which then hides real tracebacks.
-`[logging] level = "INFO"` or `LTSPICE_MCP_LOG_LEVEL` restores it; MCP protocol
-log notifications are a separate channel and are unaffected.
+`[logging] level = "INFO"` or `LTSPICE_MCP_LOG_LEVEL` restores it. Stderr is
+the only log channel the server has: the MCP logging capability — the
+`logging/setLevel` request, the `logging` capability and the server-to-client
+`notifications/message` delivery alike — is deprecated as of the 2026-07-28
+revision with no replacement, so this server neither advertises nor serves it,
+and `logging/setLevel` answers method-not-found. Everything a caller needs to
+act on rides the tool result instead.
 
 ---
 
