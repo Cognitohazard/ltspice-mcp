@@ -51,6 +51,11 @@ every sample to a file and returns its path.
 
 ### Added
 
+- `inspect(kind="capabilities")` reports `diagnostics`: the startup notes (a
+  bad configured simulator path, a requested engine that fell back, WSL
+  auto-detection) that say whether the server started degraded. They were
+  written only to the server's own log.
+
 - `run_experiments` runs one experiment across declared variations — strict
   assignments plus one random or Monte Carlo dimension — as a single durable
   job. `request_id` is optional: omit it and a fresh id is generated and echoed
@@ -318,6 +323,25 @@ every sample to a file and returns its path.
   refers to. Facts, code, and tested instructions are unchanged.
 
 ### Fixed
+
+- ngspice decks that drive their own analysis from a `.control` block now get
+  a rawfile through `run_experiments`. The write injection was wired only into
+  a path no registered tool reaches, so a scripted deck completed cleanly with
+  nothing for any recipe to read. The case reports `control_write_injected`
+  when the server supplied the write.
+- A `.step` directive on ngspice is reported by the deck lint
+  (`step-ngspice`): ngspice ignores the line in batch mode, so the deck ran
+  once at its base value and nothing said the sweep had not happened. The
+  lint rule set is versioned as `2`.
+- `verify_circuit` and `inspect` relay the netlist lexer's own notes (unclosed
+  `.SUBCKT`, unmatched `.ENDS`, stray continuation) instead of discarding
+  them — into `observations` and the netlist payload's `warnings`.
+- `edit_schematic` reports the warnings its ops raise. They were dropped
+  entirely; identical advisories across a batch now arrive once, with how
+  many ops they cover.
+- `edit_schematic`'s refusal of an existing target submitted without
+  `expected_sha256` carries that file's current sha256 (code
+  `expected_sha256_required`), so the retry is one call.
 
 - `plot_waveform` accepts a `run_experiments` job: pass its `job_id` with
   `run_index` (default 0), or the new `case_id`, and the chart is written next
