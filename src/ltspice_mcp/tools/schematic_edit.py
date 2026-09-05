@@ -298,7 +298,6 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "warnings": {"type": "array", "items": {"type": "string"}},
         "failures": {"type": "array", "items": {"type": "object"}},
         "observations": {"type": "array", "items": {"type": "string"}},
-        "artifacts": {"type": "array", "items": {"type": "object"}},
         "hint": {"type": "string"},
     },
     "required": ["outcome", "commit_state", "target", "build_id", "stages"],
@@ -679,7 +678,6 @@ def _envelope(
     warnings: list[str] | None = None,
     failures: list[dict] | None = None,
     observations: list[str] | None = None,
-    artifacts: list[dict] | None = None,
     hint: str | None = None,
 ) -> dict[str, Any]:
     """Build one response payload; the shared rule decides its outcome.
@@ -702,7 +700,6 @@ def _envelope(
         "warnings": warnings or [],
         "failures": failures or [],
         "observations": observations or [],
-        "artifacts": artifacts or [],
     }
     if error is not None:
         # Mirror the top-level commit_state into the error object so a failure
