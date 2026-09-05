@@ -22,7 +22,7 @@ from spicelib import AscEditor, SpiceEditor
 from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import AnalysisDeadlineExceeded, JobNotFoundError, ResultError
-from ltspice_mcp.lib import experiment_store, job_store, recent
+from ltspice_mcp.lib import job_store, recent
 from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.library_manager import LibraryManager
@@ -135,70 +135,37 @@ def attach_suggestions_to_failure(
 Job = LegacyJobRecord | ExperimentJob
 
 
-def _experiment_was_reconciled(job: ExperimentJob) -> bool:
-    return any(item.get("code") == "server_restarted" for item in job.observations)
+def resolve_job(job_id: str, state: SessionState) -> Job:
+    """Look up any job by id.
 
-
-def _load_experiment_direct(job_id: str, state: SessionState) -> ExperimentJob | None:
+    Discovery belongs to the registry, which asks the store when it does not
+    already hold the job; this function only turns the two ways of not having
+    one into the exceptions callers up the stack expect, so they don't re-wrap
+    them. Then a parallel session's live job is re-read from disk — only its
+    owner updates it, so a status check here would otherwise stay frozen at
+    "running" forever. No-op for this session's own jobs.
+    """
     try:
-        experiment_store.validate_job_id(job_id)
+        job = state.job_registry.get_or_load(job_id)
     except ValueError as exc:
         raise ResultError(str(exc)) from None
-    if not state.job_registry.persist_enabled:
-        return None
-    return experiment_store.load_job(job_id, state.working_dir, own_is_alive=True)
-
-
-def resolve_job(job_id: str, state: SessionState) -> Job:
-    """Look up any job by id in the union job store.
-
-    Raises ``JobNotFoundError`` for an unknown id — the one place that
-    translation happens, so callers up the stack don't re-wrap it.
-    """
-    job = state.all_jobs.get(job_id)
     if job is None:
-        job = _load_experiment_direct(job_id, state)
-        if job is None:
-            raise JobNotFoundError(f"Job not found: {job_id}")
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            pass
-        else:
-            state.job_registry.jobs[job.job_id] = job
-        if _experiment_was_reconciled(job):
-            state.persist_job(job)
-    # A parallel session's live job is only ever updated by its owner; pull
-    # the owner's latest persisted state so status checks and result reads
-    # here don't stay frozen at "running". No-op for this session's own jobs.
+        raise JobNotFoundError(f"Job not found: {job_id}")
     return state.job_registry.refresh_foreign_job(job)
 
 
 async def resolve_job_async(job_id: str, state: SessionState) -> Job:
-    """Loop-safe ``resolve_job``: offload the foreign-job sidecar re-read.
+    """Loop-safe ``resolve_job``: offload the store read and the foreign re-read.
 
-    Use from async handlers so the parallel-session refresh (a sidecar read
-    that stalls the loop on a wedged filesystem) runs in a worker thread. Same
-    semantics otherwise — raises ``JobNotFoundError`` for an unknown id.
+    Use from async handlers so neither disk read (either can stall the loop on
+    a wedged filesystem) runs on it. Same semantics otherwise.
     """
-    job = state.all_jobs.get(job_id)
+    try:
+        job = await state.job_registry.get_or_load_async(job_id)
+    except ValueError as exc:
+        raise ResultError(str(exc)) from None
     if job is None:
-        try:
-            experiment_store.validate_job_id(job_id)
-        except ValueError as exc:
-            raise ResultError(str(exc)) from None
-        if state.job_registry.persist_enabled:
-            job = await asyncio.to_thread(
-                experiment_store.load_job,
-                job_id,
-                state.working_dir,
-                own_is_alive=True,
-            )
-        if job is None:
-            raise JobNotFoundError(f"Job not found: {job_id}")
-        state.job_registry.jobs[job.job_id] = job
-        if _experiment_was_reconciled(job):
-            state.persist_job(job)
+        raise JobNotFoundError(f"Job not found: {job_id}")
     return await state.job_registry.refresh_foreign_job_async(job)
 
 

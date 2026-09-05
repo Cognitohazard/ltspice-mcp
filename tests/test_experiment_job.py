@@ -23,7 +23,7 @@ from ltspice_mcp.lib import (
     now,
     recent,
     services,
-    store_common,
+    store,
 )
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import (
@@ -44,6 +44,7 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.job_lifecycle import InvalidTransitionError, transition
 from ltspice_mcp.lib.job_registry import JobRegistry
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 
 
@@ -102,7 +103,7 @@ def _job(
         fingerprint="f" * 64,
         canonicalizer_version=CANONICALIZER_VERSION,
         control_token="control-secret",
-        store_path=experiment_store.record_path(job_id, working_dir),
+        store_path=Store(working_dir).job_record(job_id),
         cases=[case],
         sources=[_source(circuit)],
         simulator="FakeSim",
@@ -222,7 +223,10 @@ class TestExperimentTypesAndStore:
         assert loaded.analysis.status == "pending"
         assert loaded.store_path == job.store_path.resolve()
 
-    def test_v2_store_writes_a_self_describing_analysis_snapshot(self, work_dir: Path):
+    def test_the_record_and_its_analysis_snapshot_share_one_store_version(self, work_dir: Path):
+        # One version for the whole store, carried by every record it writes —
+        # including the snapshot nested inside this one, which used to be
+        # versioned separately from the record that held it.
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
         job = _job(work_dir, circuit)
@@ -233,64 +237,33 @@ class TestExperimentTypesAndStore:
 
         data = experiment_store.serialize_job(job)
 
-        assert data["schema_version"] == 2
-        assert data["analysis"]["result"]["schema"] == analysis_snapshot.SCHEMA
-        assert data["analysis"]["result"]["schema_version"] == analysis_snapshot.SNAPSHOT_VERSION
+        assert data["schema"] == store.STORE_SCHEMA
+        assert data["store_version"] == store.STORE_VERSION
+        assert data["kind"] == store.KIND_EXPERIMENT
+        snapshot = data["analysis"]["result"]
+        assert snapshot["schema"] == store.STORE_SCHEMA
+        assert snapshot["store_version"] == store.STORE_VERSION
+        assert snapshot["kind"] == store.KIND_ANALYSIS_SNAPSHOT
 
-    def test_v1_analysis_snapshot_migrates_to_the_single_assembly_shape(self):
-        stored = {
-            "kind": analysis_snapshot.SCHEMA,
-            "snapshot_version": 1,
-            "top": {},
-            "answer_top": {},
-            "answer_coverage_cursor_base": "old-answer-cursor",
-            "results": {
-                "summary": {
-                    "facts": {},
-                    "answer_facts": {},
-                    "answer_rows": [],
-                    "projection_presence": {
-                        "present": True,
-                        "children": {
-                            "value": {
-                                "present": True,
-                                "children": {"nested": {"present": True, "children": {}}},
-                            }
-                        },
-                    },
-                }
-            },
-        }
-
-        assert analysis_snapshot.classify(stored) == "snapshot"
-        assert stored["schema"] == analysis_snapshot.SCHEMA
-        assert stored["schema_version"] == analysis_snapshot.SNAPSHOT_VERSION
-        assert "answer_top" not in stored
-        assert "answer_coverage_cursor_base" not in stored
-        block = stored["results"]["summary"]
-        assert "answer_facts" not in block
-        assert block["projection_presence"] == {"value": {"nested": {}}}
-
-    def test_new_reader_admits_v1_public_analysis_results_without_rewriting_them(
-        self, work_dir: Path
-    ):
+    def test_an_untagged_analysis_result_is_kept_and_read_as_public_data(self, work_dir: Path):
+        # The slot can also hold a public analysis result rather than a
+        # snapshot. That is not a corrupt record: it round-trips untouched and
+        # classifies as something to re-render, not something to trust as this
+        # build's own neutral assembly.
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
         job = _job(work_dir, circuit, status="completed")
-        legacy_result = {"outcome": "complete", "results": {"summary": {"values": []}}}
-        job.analysis = AnalysisStage(status="completed", result=legacy_result)
+        public_result = {"outcome": "complete", "results": {"summary": {"values": []}}}
+        job.analysis = AnalysisStage(status="completed", result=public_result)
         experiment_store.save_job(job)
-        data = json.loads(job.store_path.read_text())
-        data["schema_version"] = 1
-        job.store_path.write_text(json.dumps(data))
 
         loaded = experiment_store.load_job(job.job_id, work_dir, own_is_alive=True)
 
         assert loaded is not None
-        assert loaded.analysis.result == legacy_result
-        assert json.loads(job.store_path.read_text())["schema_version"] == 1
+        assert loaded.analysis.result == public_result
+        assert analysis_snapshot.classify(public_result) == "legacy"
 
-    def test_old_reader_rejects_a_v2_snapshot_before_deserialization(
+    def test_a_record_from_an_unread_store_version_is_refused(
         self,
         work_dir: Path,
         caplog: pytest.LogCaptureFixture,
@@ -298,26 +271,16 @@ class TestExperimentTypesAndStore:
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
         job = _job(work_dir, circuit)
-        job.analysis = AnalysisStage(
-            status="completed",
-            result=analysis_snapshot.envelope({"top": {}, "results": {}}),
-        )
-        data = experiment_store.serialize_job(job)
+        experiment_store.save_job(job)
+        data = json.loads(job.store_path.read_text())
+        data["store_version"] = store.STORE_VERSION + 1
+        job.store_path.write_text(json.dumps(data))
 
-        with caplog.at_level(logging.WARNING, logger="old-experiment-reader"):
-            accepted = store_common.accept_schema(
-                data,
-                job.store_path,
-                schema=experiment_store.SCHEMA,
-                current_version=1,
-                supported_versions=frozenset({1}),
-                migrations={},
-                logger=logging.getLogger("old-experiment-reader"),
-            )
+        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.lib.experiment_store"):
+            loaded = experiment_store.load_job(job.job_id, work_dir, own_is_alive=True)
 
-        assert accepted is False
-        assert "unsupported schema_version 2" in caplog.text
-        assert data["analysis"]["result"]["schema"] == analysis_snapshot.SCHEMA
+        assert loaded is None
+        assert "store_version" in caplog.text
 
     @pytest.mark.asyncio
     async def test_pre_stem_job_id_still_loads_and_resolves(
@@ -341,25 +304,47 @@ class TestExperimentTypesAndStore:
         assert isinstance(resolved, ExperimentJob)
         assert resolved.job_id == legacy_id
 
-    def test_job_store_delegates_experiment_kind_without_misparsing(self, work_dir: Path):
+    def test_this_records_never_land_in_the_pre_0_6_sidecar_directory(self, work_dir: Path):
+        # The two formats used to share a directory name under different roots,
+        # which is why each reader had to know about the other's schema. They
+        # do not overlap any more, even when the circuit sits in the working
+        # directory: the legacy reader finds nothing to skip.
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
         job = _job(work_dir, circuit)
         experiment_store.save_job(job)
-        loaded = job_store._load_job_file(job.store_path)
-        assert isinstance(loaded, ExperimentJob)
 
-    def test_pointer_written_in_dedicated_subdirectory(self, work_dir: Path):
+        assert job.store_path.is_relative_to(store.Store(work_dir).experiments_dir)
+        assert not job.store_path.is_relative_to(job_store.sidecar_dir(circuit))
+        assert job_store.load_jobs_for_circuit(circuit) == []
+
+    def test_a_circuit_index_entry_finds_the_job_that_ran_it(self, work_dir: Path):
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
         job = _job(work_dir, circuit)
         experiment_store.save_job(job)
-        pointers = experiment_store.save_pointers(job)
-        assert pointers == [
-            circuit.parent / ".ltspice-mcp" / "jobs" / "experiments" / f"{job.job_id}.json"
-        ]
-        loaded, observations = experiment_store.load_pointer_jobs(circuit, work_dir)
+
+        entries = experiment_store.register_circuits(job, work_dir)
+
+        # The index lives in the store beside the records, not beside the
+        # circuit, and carries a job id rather than a path back into the store.
+        assert entries == [store.Store(work_dir).circuit_index(circuit, job.job_id)]
+        assert json.loads(entries[0].read_text())["job_id"] == job.job_id
+        loaded, observations = experiment_store.load_jobs_for_circuit(circuit, work_dir)
         assert [item.job_id for item in loaded] == [job.job_id]
+        assert observations == []
+
+    def test_an_index_entry_whose_record_is_gone_is_not_an_anomaly(self, work_dir: Path):
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        job = _job(work_dir, circuit)
+        experiment_store.save_job(job)
+        experiment_store.register_circuits(job, work_dir)
+        job.store_path.unlink()
+
+        loaded, observations = experiment_store.load_jobs_for_circuit(circuit, work_dir)
+
+        assert loaded == []
         assert observations == []
 
     @pytest.mark.parametrize(
@@ -382,13 +367,13 @@ class TestExperimentTypesAndStore:
             experiment_store.load_job(job_id, work_dir)
 
     def test_direct_lookup_rejects_symlinked_record_outside_store(self, work_dir: Path):
-        root = experiment_store.working_store_root(work_dir)
+        root = store.Store(work_dir).experiments_dir
         root.mkdir(parents=True)
         outside = work_dir / "outside.json"
         outside.write_text("{}")
         link = root / "exp_symlink.json"
         link.symlink_to(outside)
-        with pytest.raises(ValueError, match="escapes the working store"):
+        with pytest.raises(ValueError, match="escapes the store"):
             experiment_store.load_job("exp_symlink", work_dir)
 
     def test_canonical_fingerprint_is_sorted_and_includes_defaults(self):
@@ -803,14 +788,14 @@ class TestExperimentDiscovery:
         job.cases[0].status = "produced"
         job.completeness.produced = 1
         experiment_store.save_job(job)
-        experiment_store.save_pointers(job)
+        experiment_store.register_circuits(job, work_dir)
         recent.touch(circuit)
 
         registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
         assert registry.preload_recent() == 1
         assert registry.experiment_jobs[job.job_id].store_path == job.store_path
 
-    def test_tampered_pointer_outside_working_store_is_skipped_with_observation(
+    def test_an_unreadable_index_entry_is_skipped_with_an_observation(
         self,
         work_dir: Path,
     ):
@@ -819,41 +804,42 @@ class TestExperimentDiscovery:
         circuit.write_text(".op\n.end\n")
         job = _job(work_dir, circuit, status="completed")
         experiment_store.save_job(job)
-        pointer = experiment_store.save_pointers(job)[0]
-        payload = json.loads(pointer.read_text())
-        payload["target"] = str(work_dir / "outside.json")
-        pointer.write_text(json.dumps(payload))
+        entry = experiment_store.register_circuits(job, work_dir)[0]
+        payload = json.loads(entry.read_text())
+        payload["store_version"] = store.STORE_VERSION + 1
+        entry.write_text(json.dumps(payload))
 
         registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
         registry.ensure_loaded_for(circuit)
         assert job.job_id not in registry.experiment_jobs
-        assert any(item["code"] == "experiment_pointer_invalid" for item in registry.observations)
+        assert any(item["code"] == "experiment_index_invalid" for item in registry.observations)
 
-    def test_a_skipped_pointer_does_not_narrate_itself_at_startup(
+    def test_a_skipped_index_entry_does_not_narrate_itself_at_startup(
         self,
         work_dir: Path,
         caplog: pytest.LogCaptureFixture,
     ):
-        """The pointer index is global, so a brand-new working directory
-        reaches other projects' stale records: at warning level a library's
-        first call opened with a dozen lines about someone else's tempdirs.
-        The observation channel is what carries the fact to whoever asked."""
+        """At warning level a library's first call opened with a wall of lines
+        about records it had merely walked past. The observation channel is
+        what carries the fact to whoever asked."""
         circuit = work_dir / "subdir" / "deck.cir"
         circuit.parent.mkdir()
         circuit.write_text(".op\n.end\n")
         job = _job(work_dir, circuit, status="completed")
         experiment_store.save_job(job)
-        pointer = experiment_store.save_pointers(job)[0]
-        payload = json.loads(pointer.read_text())
-        payload["target"] = str(work_dir / "outside.json")
-        pointer.write_text(json.dumps(payload))
+        entry = experiment_store.register_circuits(job, work_dir)[0]
+        payload = json.loads(entry.read_text())
+        payload["store_version"] = store.STORE_VERSION + 1
+        entry.write_text(json.dumps(payload))
 
         registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
         with caplog.at_level(logging.DEBUG, logger="ltspice_mcp.lib.experiment_store"):
             registry.ensure_loaded_for(circuit)
 
         skipped = [
-            record for record in caplog.records if "Skipped experiment pointer" in record.message
+            record
+            for record in caplog.records
+            if "Skipped experiment index entry" in record.message
         ]
         assert skipped, "the fact must still be logged, just not shouted"
         assert [record.levelno for record in skipped] == [logging.DEBUG] * len(skipped)
@@ -1272,7 +1258,7 @@ class TestOwnerLivenessUnknownOnLoad:
         def boom(pid: int) -> bool:
             raise OSError("process table unavailable")
 
-        monkeypatch.setattr(store_common.psutil, "pid_exists", boom)
+        monkeypatch.setattr(store.psutil, "pid_exists", boom)
         loaded = experiment_store.load_job(job.job_id, work_dir)
         assert loaded is not None
         assert loaded.status == "running"
@@ -1284,7 +1270,7 @@ class TestOwnerLivenessUnknownOnLoad:
 
     def test_a_dead_owner_still_reconciles(self, work_dir: Path, monkeypatch: pytest.MonkeyPatch):
         job = self._persisted(work_dir)
-        monkeypatch.setattr(store_common.psutil, "pid_exists", lambda pid: False)
+        monkeypatch.setattr(store.psutil, "pid_exists", lambda pid: False)
         loaded = experiment_store.load_job(job.job_id, work_dir)
         assert loaded is not None
         codes = {item.get("code") for item in loaded.observations}

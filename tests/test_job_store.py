@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from ltspice_mcp.lib import experiment_store, job_store, now, store_common
+from ltspice_mcp.lib import job_store, now, store
 from ltspice_mcp.state import LegacyJobRecord
 
 
@@ -29,7 +29,7 @@ def _legacy_record(
     """One sidecar record in the shape a pre-0.6 release wrote."""
     record: dict[str, Any] = {
         "schema": job_store.SCHEMA,
-        "schema_version": job_store.SCHEMA_VERSION,
+        "schema_version": max(job_store.SUPPORTED_VERSIONS),
         "job_id": job_id,
         "kind": kind,
         "netlist": str(circuit.resolve()),
@@ -205,121 +205,59 @@ class TestSchemaVersion:
 
         assert job_store.load_jobs_for_circuit(circuit) == []
 
-    def test_v1_record_still_loads(self, tmp_path: Path) -> None:
-        # v1 differed only in fields this build no longer reads, so the
-        # migration re-stamps the version and the record still parses.
+    def test_both_written_versions_load(self, tmp_path: Path) -> None:
+        # The two versions differ only in fields this build no longer reads,
+        # so both parse into the same inert shape. Nothing will ever write a
+        # third, which is why there is no migration machinery left here.
         circuit = tmp_path / "rc.cir"
         circuit.write_text("")
-        _write(circuit, _legacy_record(circuit, job_id="sim_v1", schema_version=1))
+        for version in sorted(job_store.SUPPORTED_VERSIONS):
+            _write(
+                circuit,
+                _legacy_record(circuit, job_id=f"sim_v{version}", schema_version=version),
+            )
 
-        (record,) = job_store.load_jobs_for_circuit(circuit)
-        assert record.job_id == "sim_v1"
+        loaded = {record.job_id for record in job_store.load_jobs_for_circuit(circuit)}
+        assert loaded == {f"sim_v{v}" for v in job_store.SUPPORTED_VERSIONS}
 
 
-class TestSiblingSchemasAreSilent:
-    """Both stores write into ``.ltspice-mcp/jobs/``; meeting the other's
-    records is the layout, not corruption, so a scan must not warn about it —
-    while a genuinely unknown schema still must."""
+class TestTheLegacyDirectoryHoldsOnlyLegacyRecords:
+    """This build writes its records to the working-directory store instead,
+    so a file here that is not one of these is genuinely unexpected — including
+    one carrying the current store's schema, which nothing puts in this folder.
+    """
 
-    @staticmethod
-    def _experiment_record(circuit: Path, schema: str, job_id: str) -> dict[str, Any]:
-        return {
-            "schema": schema,
-            "schema_version": 2,
-            "job_id": job_id,
-            "kind": "experiment",
-            "netlist": str(circuit),
-            "status": "completed",
-        }
-
-    def test_experiment_records_scan_without_warnings(self, tmp_path: Path, caplog) -> None:
+    def test_a_store_record_here_is_reported_not_ignored(self, tmp_path: Path, caplog) -> None:
         circuit = tmp_path / "rc.cir"
         circuit.write_text("")
         _write(circuit, _legacy_record(circuit, job_id="sim_good"))
         sidecar = job_store.sidecar_dir(circuit)
-        for index in range(3):
-            record = self._experiment_record(circuit, experiment_store.SCHEMA, f"exp_{index}")
-            (sidecar / f"exp_{index}.json").write_text(json.dumps(record))
+        (sidecar / "exp_stray.json").write_text(
+            json.dumps(store.envelope(store.KIND_EXPERIMENT, job_id="exp_stray"))
+        )
 
-        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.lib.store_common"):
+        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.lib.job_store"):
             summary = job_store.summarize_circuit(circuit)
             records = job_store.load_jobs_for_circuit(circuit)
 
         assert summary["total_jobs"] == 1
         assert [record.job_id for record in records] == ["sim_good"]
-        assert caplog.records == []
+        assert any("unexpected schema" in item.message for item in caplog.records)
 
-    def test_alien_schema_still_warns(self, tmp_path: Path, caplog) -> None:
+    def test_alien_schema_warns(self, tmp_path: Path, caplog) -> None:
         circuit = tmp_path / "rc.cir"
         circuit.write_text("")
+        _write(circuit, _legacy_record(circuit, job_id="sim_alien"))
         sidecar = job_store.sidecar_dir(circuit)
-        sidecar.mkdir(parents=True)
-        record = self._experiment_record(circuit, "different-project/job", "sim_alien")
-        (sidecar / "sim_alien.json").write_text(json.dumps(record))
+        (sidecar / "sim_alien.json").write_text(
+            json.dumps({"schema": "different-project/job", "schema_version": 1})
+        )
 
-        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.lib.store_common"):
+        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.lib.job_store"):
             summary = job_store.summarize_circuit(circuit)
 
         assert summary["total_jobs"] == 0
         assert any("unexpected schema" in item.message for item in caplog.records)
-
-    def test_experiment_store_is_silent_about_legacy_job_records(
-        self, tmp_path: Path, caplog
-    ) -> None:
-        circuit = tmp_path / "rc.cir"
-        circuit.write_text("")
-        legacy = _write(circuit, _legacy_record(circuit, job_id="sim_good"))
-
-        with caplog.at_level(logging.WARNING, logger="ltspice_mcp.lib.store_common"):
-            loaded = experiment_store.load_job_from_path(legacy, tmp_path)
-
-        assert loaded is None
-        assert caplog.records == []
-
-
-class TestForgedMigrationChain:
-    def test_migration_chain_applies(self, tmp_path: Path, monkeypatch: Any) -> None:
-        """Forge a hypothetical v0 record + migration and verify it upgrades."""
-        circuit = tmp_path / "rc.cir"
-        circuit.write_text("")
-        sidecar = job_store.sidecar_dir(circuit)
-        sidecar.mkdir(parents=True)
-
-        # Pretend current schema is v2, v0 and v1 are readable.
-        monkeypatch.setattr(job_store, "SCHEMA_VERSION", 2)
-        monkeypatch.setattr(job_store, "SUPPORTED_VERSIONS", frozenset({0, 1, 2}))
-
-        def v0_to_v1(data: dict) -> dict:
-            # Fake migration: rename old_name -> netlist
-            if "old_name" in data:
-                data["netlist"] = data.pop("old_name")
-            return data
-
-        def v1_to_v2(data: dict) -> dict:
-            # Fake migration: add a missing field with a default
-            data.setdefault("error", None)
-            return data
-
-        monkeypatch.setitem(job_store._MIGRATIONS, 0, v0_to_v1)
-        monkeypatch.setitem(job_store._MIGRATIONS, 1, v1_to_v2)
-
-        (sidecar / "sim_legacy.json").write_text(
-            json.dumps(
-                {
-                    "schema": job_store.SCHEMA,
-                    "schema_version": 0,
-                    "job_id": "sim_legacy",
-                    "kind": "simulation",
-                    "status": "completed",
-                    "old_name": str(circuit),
-                    "simulator": "LTspice",
-                    "started_at": now().isoformat(),
-                }
-            )
-        )
-        records = job_store.load_jobs_for_circuit(circuit)
-        assert [record.job_id for record in records] == ["sim_legacy"]
-        assert str(records[0].netlist) == str(circuit)
 
 
 _FOREIGN_PID = 999_999_999
@@ -341,20 +279,20 @@ class TestOwnerLivenessUnknown:
         def boom(pid: int) -> bool:
             raise OSError("process table unavailable")
 
-        monkeypatch.setattr(store_common.psutil, "pid_exists", boom)
+        monkeypatch.setattr(store.psutil, "pid_exists", boom)
 
     def test_probe_reports_unknown_rather_than_dead(self, monkeypatch: Any) -> None:
         self._break_the_probe(monkeypatch)
-        liveness = store_common.owner_liveness(_FOREIGN_PID)
-        assert liveness is store_common.OwnerLiveness.UNKNOWN
+        liveness = store.owner_liveness(_FOREIGN_PID)
+        assert liveness is store.OwnerLiveness.UNKNOWN
         assert liveness.is_dead is False
 
     def test_probe_still_answers_dead_and_alive(self, monkeypatch: Any) -> None:
         """The two real answers must survive the third one being added."""
-        monkeypatch.setattr(store_common.psutil, "pid_exists", lambda pid: False)
-        assert store_common.owner_liveness(_FOREIGN_PID) is store_common.OwnerLiveness.DEAD
-        monkeypatch.setattr(store_common.psutil, "pid_exists", lambda pid: True)
-        assert store_common.owner_liveness(_FOREIGN_PID) is store_common.OwnerLiveness.ALIVE
+        monkeypatch.setattr(store.psutil, "pid_exists", lambda pid: False)
+        assert store.owner_liveness(_FOREIGN_PID) is store.OwnerLiveness.DEAD
+        monkeypatch.setattr(store.psutil, "pid_exists", lambda pid: True)
+        assert store.owner_liveness(_FOREIGN_PID) is store.OwnerLiveness.ALIVE
         # A record with no pid predates pid tracking; recovering those jobs is
         # the behaviour this probe was added to, not something it takes away.
-        assert store_common.owner_liveness(None) is store_common.OwnerLiveness.DEAD
+        assert store.owner_liveness(None) is store.OwnerLiveness.DEAD
