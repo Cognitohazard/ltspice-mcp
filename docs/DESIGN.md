@@ -416,9 +416,9 @@ agent with file access does it natively, and a wrapper added nothing.
 
 **What 0.6.0 removed.** The `full` (49-tool) and `agentic` (41-tool)
 profiles, and with them one tool per operation, the single-simulation and
-batch job types those tools ran, and the runners behind them. A job
-sidecar an earlier release wrote still loads, inert: reading one reports
-what it is and that it must be re-run. `[tools]
+batch job types those tools ran, and the runners behind them. The job
+sidecars those releases wrote beside a circuit are not read any more: a job
+id only that file knows is simply not found. `[tools]
 profile` and `LTSPICE_MCP_TOOL_PROFILE` are no longer read: a config that
 still sets one loads with the key ignored, like any other key the server
 does not read. A deployment that needs the old tools pins

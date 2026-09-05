@@ -11,7 +11,6 @@ from spicelib.raw.raw_read import RawRead
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import services
-from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.log_parser import parse_measurements, parse_step_iterations
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.raw_parser import (
@@ -21,7 +20,7 @@ from ltspice_mcp.lib.raw_parser import (
     is_dc_analysis,
     is_noise_analysis,
 )
-from ltspice_mcp.state import SessionState, legacy_record_message
+from ltspice_mcp.state import SessionState
 
 
 def _analysis_type(raw: RawRead) -> str:
@@ -154,14 +153,9 @@ async def load_raw_result(
     else:
         assert job_id is not None
         job = await services.resolve_job_async(job_id, state)
-        if isinstance(job, ExperimentJob):
-            context = services.experiment_run_context(
-                job, state, run_index=run_index, case_id=case_id
-            )
-            resolved = context.raw
-            dialect = context.dialect
-        else:
-            raise ResultError(legacy_record_message(job_id))
+        context = services.experiment_run_context(job, state, run_index=run_index, case_id=case_id)
+        resolved = context.raw
+        dialect = context.dialect
 
     raw = await services.load_raw(resolved, state)
     step_count, steps = await _aligned_steps(raw, resolved)
@@ -181,15 +175,12 @@ async def load_measurement_results(
     run_index: int,
     case_id: str | None,
 ) -> dict[str, Any]:
-    """Resolve and bounded-parse one legacy run or experiment-case log."""
+    """Resolve and bounded-parse one experiment case's log."""
     job = await services.resolve_job_async(job_id, state)
-    if isinstance(job, ExperimentJob):
-        context = services.experiment_run_context(job, state, run_index=run_index, case_id=case_id)
-        if context.log is None:
-            raise ResultError(f"Experiment case {context.identity['case_id']!r} has no log file")
-        log_path = context.log
-    else:
-        raise ResultError(legacy_record_message(job_id))
+    context = services.experiment_run_context(job, state, run_index=run_index, case_id=case_id)
+    if context.log is None:
+        raise ResultError(f"Experiment case {context.identity['case_id']!r} has no log file")
+    log_path = context.log
 
     parsed = await services.bounded_parse(
         log_path,

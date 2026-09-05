@@ -116,8 +116,8 @@ async def _experiment_case(
 
     Experiment runs are addressed by case, never through ``resolve_run`` — the
     same split ``Api.load_raw`` makes. ``case_id`` only means something here, so
-    it is refused beside a raw_file or a legacy job. raw_file together with
-    job_id is left to ``_direct_source``'s exclusivity error.
+    it is refused beside a raw_file. raw_file together with job_id is left to
+    ``_direct_source``'s exclusivity error.
     """
     job = await services.resolve_job_async(job_id, state) if job_id and not raw_file else None
     if isinstance(job, ExperimentJob):

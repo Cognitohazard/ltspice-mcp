@@ -20,7 +20,6 @@ from ltspice_mcp.lib.runner_manager import RunnerManager
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import get_tools
-from tests.conftest import make_legacy_record
 
 
 def _experiment(
@@ -111,55 +110,6 @@ class TestSessionStateShutdown:
         await state.shutdown()
         assert len(state.editors) == 0
         assert len(state.results) == 0
-
-    async def test_shutdown_leaves_a_legacy_record_alone(self, config: ServerConfig):
-        # Nothing in this process launched it, so there is no simulator to kill
-        # and no status of ours to write over the one its release persisted.
-        state = SessionState.create(config, {})
-        record = make_legacy_record("sim_old", status="interrupted")
-        state.job_registry.jobs["sim_old"] = record
-
-        await state.shutdown()
-        assert state.all_jobs["sim_old"].status == "interrupted"
-
-
-class TestUnionJobStoreViews:
-    """``state.legacy_records`` / ``state.experiment_jobs`` are type-filtered
-    writable views over the single union store (``state.all_jobs``): lookups
-    surface only the view's job type, writes go through to the union dict."""
-
-    def test_record_invisible_through_the_experiment_view(self, config: ServerConfig):
-        state = SessionState.create(config, {})
-        record = make_legacy_record("j1")
-        state.legacy_records["j1"] = record
-
-        other_view = state.experiment_jobs
-        assert other_view.get("j1") is None
-        assert "j1" not in other_view
-        assert len(other_view) == 0
-        assert list(other_view.values()) == []
-        # ...but it exists in the union store and its own view.
-        assert state.all_jobs["j1"] is record
-        assert state.legacy_records["j1"] is record
-
-    def test_views_write_through_to_union_store(self, config: ServerConfig):
-        state = SessionState.create(config, {})
-        record = make_legacy_record("j1")
-        state.legacy_records["j1"] = record
-
-        assert state.all_jobs == {"j1": record}
-        assert set(state.legacy_records) == {"j1"}
-        assert len(state.experiment_jobs) == 0
-
-    def test_view_write_rejects_wrong_job_type(self, config: ServerConfig):
-        """Writing a job of the wrong type through a typed view must fail
-        loudly: silently accepting it would store a job that is invisible
-        through the view that wrote it."""
-        state = SessionState.create(config, {})
-
-        with pytest.raises(TypeError, match=r"ExperimentJob view cannot store LegacyJobRecord"):
-            state.experiment_jobs["j1"] = make_legacy_record("j1")  # type: ignore[assignment]
-        assert state.all_jobs == {}
 
 
 class TestPersistDuringInterpreterTeardown:

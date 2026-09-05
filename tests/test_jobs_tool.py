@@ -45,7 +45,7 @@ from ltspice_mcp.tools.receipts import (
     render_receipt_snapshot,
     snapshot_receipt,
 )
-from tests.conftest import fake_simulator, write_legacy_sidecar
+from tests.conftest import fake_simulator
 
 
 class MockSimulator:
@@ -1365,46 +1365,3 @@ class TestListAndRunsPagination:
         assert first["items"][-1]["status"] == "queued"
         assert second["items"][0]["run_index"] == 50
         assert second["items"][0]["status"] == "produced"
-
-
-@pytest.mark.asyncio
-class TestLegacyRecordCancel:
-    """A record an earlier release wrote has nothing to cancel: this version
-    has no runner that could have launched it, so ``jobs(cancel)`` says what it
-    is rather than reporting a cancellation that never happened."""
-
-    async def test_a_running_record_loads_terminal_so_cancel_is_a_no_op(
-        self,
-        state_no_sim: SessionState,
-        work_dir: Path,
-    ):
-        # The sidecar still says "running" — the release that wrote it died
-        # mid-run. Nothing here can be executing it, so it loads interrupted
-        # and cancel reports that rather than acknowledging a kill that never
-        # happened.
-        circuit = _circuit(work_dir)
-        write_legacy_sidecar(circuit, "legacy_owned", status="running")
-        state_no_sim.job_registry.persist_enabled = True
-        state_no_sim.ensure_jobs_loaded_for(circuit)
-
-        result = await handle_jobs(_args("cancel", job_id="legacy_owned"), state_no_sim)
-        data = _assert_jobs_schema(result)
-
-        assert not result.is_error
-        assert data["status"] == "interrupted"
-        assert "already terminal" in data["hint"]
-
-    async def test_status_carries_the_records_own_observation(
-        self,
-        state_no_sim: SessionState,
-        work_dir: Path,
-    ):
-        circuit = _circuit(work_dir)
-        write_legacy_sidecar(circuit, "legacy_done", status="completed")
-        state_no_sim.job_registry.persist_enabled = True
-        state_no_sim.ensure_jobs_loaded_for(circuit)
-
-        data = _assert_jobs_schema(
-            await handle_jobs(_args("status", job_id="legacy_done"), state_no_sim)
-        )
-        assert [item["code"] for item in data["observations"]] == ["legacy_job_record"]

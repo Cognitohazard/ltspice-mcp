@@ -40,9 +40,8 @@ Three things live outside that root, each for a reason:
 * **Circuit-scoped sidecars** sit next to the user's file, because they belong
   to that file and not to whichever directory a session was started in: the
   export snapshots a receipt's provenance names
-  (:meth:`Store.circuit_exports`), the plots ``plot_waveform`` writes
-  (:meth:`Store.circuit_plots`), and the read-only job sidecars a pre-0.6
-  release wrote (:meth:`Store.legacy_jobs_dir`) — all under
+  (:meth:`Store.circuit_exports`) and the plots ``plot_waveform`` writes
+  (:meth:`Store.circuit_plots`), both under
   :meth:`Store.circuit_sidecar`. The per-circuit lock files parallel sessions
   coordinate on live in the same sidecar, but their path is built by
   ``lib/filelock.py``, which owns the locking protocol.
@@ -57,9 +56,6 @@ six independently-versioned schemas for a subsystem that had never shipped, and
 the version of a request index said nothing about the job record it pointed at.
 Bump :data:`STORE_VERSION` when any record's shape changes; a record from a
 version this build does not read is skipped with a warning, never guessed at.
-
-Records written by a pre-0.6 release are a different story and are read, never
-written, by ``lib/job_store.py``.
 """
 
 from __future__ import annotations
@@ -617,11 +613,6 @@ class Store:
         and it belongs to the schematic it was exported from.
         """
         return Store.circuit_sidecar(circuit_path) / "exports"
-
-    @staticmethod
-    def legacy_jobs_dir(circuit_path: Path) -> Path:
-        """Where a pre-0.6 release wrote its job sidecars. Read, never written."""
-        return Store.circuit_sidecar(circuit_path) / "jobs"
 
     @staticmethod
     def circuit_plots(anchor_dir: Path) -> Path:
