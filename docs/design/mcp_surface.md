@@ -1012,8 +1012,8 @@ all: the first op that fails aborts the transaction and nothing is written.
 
 Carried over from the pre-consolidation op models: exact-segment `remove_wire`,
 `cleanup_wires`, directive placement kinds, and literal-default removal
-matching with `regex:` as an opt-in prefix. The deprecated `connect` spelling of
-`wire_pins` is *excluded* from this union.
+matching with `regex:` as an opt-in prefix. `wire_pins` was once also spelled
+`connect`; that spelling is not accepted anywhere.
 
 ### A.4 Inspect queries
 
