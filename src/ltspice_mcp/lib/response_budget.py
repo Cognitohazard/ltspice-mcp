@@ -39,10 +39,10 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-# The pin convention for estimating tokens from a payload: compact-JSON
-# characters divided by four. It is the same arithmetic the fleet transcripts
-# were measured with (response chars, priced as model input), so a budget
-# quoted here means the same thing as the numbers those campaigns report.
+# The convention for estimating tokens from a payload: compact-JSON characters
+# divided by four. Response size is measured the same way everywhere in this
+# project (response characters, priced as model input), so a budget quoted here
+# means the same thing as any other response-size number.
 CHARS_PER_TOKEN = 4
 
 # Floor on a caller-set budget. Below it the ladder has nothing to negotiate:

@@ -194,7 +194,7 @@ class TestParseLibraryFile:
         assert m.params == {"gain": "10"}
 
     def test_subckt_with_more_than_five_ports_keeps_all(self, tmp_path: Path):
-        # Codex M4: an opamp with 7 pins must not have its port list
+        # An opamp with 7 pins must not have its port list
         # silently truncated to the first 5 — callers reading ports to
         # instantiate the part would otherwise drop pins.
         lib = tmp_path / "octal.lib"

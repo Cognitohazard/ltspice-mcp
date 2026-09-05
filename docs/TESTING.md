@@ -53,8 +53,7 @@ The mechanisms below exist to cover the third column.
 must be **closed under inversion**: for every op that mutates the `.asc`, an
 inverse op exists (or it is self-inverse). It checks that an undo capability
 exists, not that state round-trips byte-for-byte (e.g.
-`remove_component(cleanup_wires=true)` drops wires `add_component` won't restore;
-`reset_schematic` covers those). Each op in the `SchematicOp` union is either
+`remove_component(cleanup_wires=true)` drops wires `add_component` won't restore). Each op in the `SchematicOp` union is either
 paired with an inverse op that exists, or declared self-inverse (re-applying it
 with the prior arguments reverts it). The pairing table forces the decision: a
 new `add_*` / `wire_pins` / `create` op with no entry fails the test, so a
@@ -129,8 +128,7 @@ are not mistaken for the absence-class bug above:
 - File creation (`edit_schematic` with `base: "blank"`; formerly the
   `create_netlist` / `create_schematic` tools) has no delete pair; removing a
   file is a native filesystem operation, intentionally out of scope for a
-  circuit editor. `reset_schematic` semantics revert in-session edits but do
-  not remove a created file.
+  circuit editor.
 - The pre-0.6.0 `configure_sweep` / `configure_montecarlo` tools created a
   persisted config with no delete-config tool. A delete tool had low value (a
   stale config is inert). The question is moot now: sweeps are

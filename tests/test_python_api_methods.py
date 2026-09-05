@@ -776,7 +776,7 @@ class TestAutoDoorRefusalsAreActionable:
     """The refusal a caller who followed the skill actually hits.
 
     ``budget`` is taught as a first-class knob on four tools and advertised in
-    the MCP schema; this door rejects it. That is the ruled contract — but the
+    the MCP schema; this door rejects it. That is the intended contract — but the
     refusal has to name the fix for the field it refused, and be catchable by
     the exception the API's own documentation tells callers to catch.
     """

@@ -1891,8 +1891,8 @@ def test_single_record_warnings_carry_no_count():
 
 class TestSourceHashProvenance:
     """Artifact paths and digests prove what was analyzed; they are not how a
-    caller reaches it. On a real fleet run they were 1,174 chars of a 7,835-char
-    receipt, naming files the analysis tools resolve by manifest_id anyway."""
+    caller reaches it. In one measured response they were 1,174 of the 7,835
+    characters, naming files the analysis tools resolve by manifest_id anyway."""
 
     @pytest.mark.asyncio
     async def test_paths_and_digests_are_opt_in(self, state_no_sim: SessionState, work_dir: Path):
@@ -1998,8 +1998,8 @@ class TestHeadlineLeafPromotion:
         """ "Give me the UGBW and phase margin" is one question, not two.
 
         The margins shipped flat and the crossover frequency did not, so the
-        default row answered half of S1's first request and the other half cost
-        a second call for the whole nested value.
+        default row answered half the question and the other half cost a second
+        call for the whole nested value.
         """
         raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
         data = await _analyze(
@@ -2096,9 +2096,9 @@ async def test_every_metric_exposes_a_flat_numeric_headline(
 ):
     """The class pin behind headline promotion: a metric whose numbers live
     ONLY inside nested structure is invisible to ``include.fields`` projection
-    (dotted paths cannot reach into lists), which is the defect the fleet
-    measured at 13-22x shell cost. Every metric must expose at least one flat
-    numeric leaf on its row value — or sit on this explicit exemption list,
+    (dotted paths cannot reach into lists), which costs 13-22x the equivalent
+    shell output. Every metric must expose at least one flat numeric leaf on
+    its row value — or sit on this explicit exemption list,
     which fails CLOSED: removing a metric's flatness without adding it here
     breaks this test, and an exemption for a metric that IS flat is dead
     weight that also fails."""

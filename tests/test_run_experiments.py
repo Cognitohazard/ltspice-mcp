@@ -88,7 +88,7 @@ def test_wait_caps_keep_the_submission_and_control_plane_contracts():
 
 
 def test_variation_schema_keeps_discriminated_union_through_defs():
-    """Schemas keep $defs (followups item 30): the assign/random discriminated
+    """Schemas keep $defs instead of inlining: the assign/random discriminated
     union must stay fully resolvable through local refs, so a client sees the
     same composition contract inlining used to spell out."""
     schema = _build_input_schema(RunExperimentsInput)
@@ -316,9 +316,10 @@ class TestReceiptThenDwell:
     ):
         """Submission is irreversible, so a later failure cannot say nothing started.
 
-        The fleet is running by then and the job_id plus control_token are the
-        only handles that reach it; reporting not_started with a null job_id
-        leaves the caller no way to poll or cancel real simulator work.
+        The simulator runs are under way by then and the job_id plus
+        control_token are the only handles that reach them; reporting
+        not_started with a null job_id leaves the caller no way to poll or
+        cancel real simulator work.
         """
         callbacks = {}
 
@@ -2316,10 +2317,9 @@ class TestVariationsReachIntoIncludes:
 class TestReceiptWeight:
     """A receipt carries what the caller acts on; provenance is opt-in.
 
-    Provenance was measured at 29% of an experiment receipt's bytes on a real
-    fleet run — absolute paths repeated four ways and a digest per staged file,
-    none of which a caller opens, because the analysis tools address runs by
-    job_id.
+    Provenance was 29% of the bytes in one measured experiment receipt —
+    absolute paths repeated four ways and a digest per staged file, none of
+    which a caller opens, because the analysis tools address runs by job_id.
     """
 
     async def test_provenance_is_absent_by_default_and_returned_on_request(
