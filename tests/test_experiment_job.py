@@ -1092,7 +1092,7 @@ class TestLegacyCompatibility:
         assert context.raw == raw
         assert context.netlist == circuit
         assert context.identity["case_id"] == "case_0000"
-        source = services.resolve_analysis_source(None, state_no_sim, injected=context)
+        source = services.source_for_run(context)
         assert source.trusted_job_artifact
         assert source.identity == context.identity
 

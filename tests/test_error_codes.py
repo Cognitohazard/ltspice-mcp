@@ -9,7 +9,6 @@ import importlib
 import os
 import pkgutil
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -103,10 +102,7 @@ class TestAnalysisDeadlineIsTyped:
     ):
         raw = _copy_raw(work_dir, "probe.raw")
         loop = asyncio.get_running_loop()
-        source = services.resolve_analysis_source(
-            SimpleNamespace(raw_file=str(raw), job_id=None, run_index=0), state_no_sim
-        )
-        with services.analysis_source_context(source, deadline=loop.time() - 1.0):
+        with services.analysis_deadline(loop.time() - 1.0):
             failures = await analyze_mod._verify_direct_sources(
                 [
                     {
