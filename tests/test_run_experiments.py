@@ -8,6 +8,7 @@ import dataclasses
 import itertools
 import json
 import re
+import threading
 import warnings
 from collections.abc import Callable
 from pathlib import Path
@@ -19,9 +20,11 @@ import pytest
 from pydantic import ValidationError
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
+from ltspice_mcp.lib import experiment_runner as experiment_runner_mod
 from ltspice_mcp.lib import experiment_store, response_budget, result_store, store, wsl
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
+from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.raw_parser import OffsetAwareRawRead
 from ltspice_mcp.lib.runner_base import RunOutcome, collect_run_outcome
 from ltspice_mcp.lib.store import Store
@@ -538,6 +541,57 @@ class TestApiDoorPointer:
         assert data["runs"]["truncated"] is True
         assert "jobs(runs)" in data["hint"]
         assert "from ltspice_mcp.api import Api" in data["hint"]
+
+
+@pytest.mark.asyncio
+class TestRequestGateContention:
+    """Waiting out the gate says nothing about what the holder committed."""
+
+    async def test_gate_timeout_reports_an_unknown_commit_state(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The holder is very likely committing a job under this exact id.
+
+        ``not_started`` would license a resubmission under a fresh request_id,
+        which is how one experiment ends up running twice. The caller has to
+        be told the id is held and to ask again with the same one.
+        """
+        monkeypatch.setattr(experiment_runner_mod, "REQUEST_GATE_TIMEOUT_S", 0.2)
+        deck = _deck(work_dir / "gate-busy.cir")
+        store_for_dir = Store(work_dir)
+        store_for_dir.ensure_root()
+        gate = store_for_dir.request_lock("held-by-a-peer")
+        gate.parent.mkdir(parents=True, exist_ok=True)
+
+        holding = threading.Event()
+        release = threading.Event()
+
+        def hold_the_gate() -> None:
+            with file_lock(gate, timeout=5.0):
+                holding.set()
+                release.wait(20.0)
+
+        holder = threading.Thread(target=hold_the_gate, daemon=True)
+        holder.start()
+        try:
+            assert holding.wait(5.0), "the gate holder never acquired the lock"
+            result = await handle_run_experiments(
+                _args(deck, "held-by-a-peer"),
+                state_with_sim,
+            )
+        finally:
+            release.set()
+            holder.join(timeout=5.0)
+
+        data = _assert_schema(result)
+        assert result.is_error
+        assert data["error"]["code"] == "request_gate_busy"
+        assert data["error"]["commit_state"] == "unknown"
+        assert data["error"]["retryable"] is True
+        assert "held-by-a-peer" in data["error"]["message"]
 
 
 class TestIdempotency:

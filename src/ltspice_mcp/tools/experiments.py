@@ -42,6 +42,7 @@ from ltspice_mcp.lib.experiment_runner import (
     ExperimentReceipt,
     ExperimentRunRequest,
     IdempotencyConflictError,
+    RequestGateBusy,
     StagedDecks,
     canonical_fingerprint,
     verify_replay_sources,
@@ -691,6 +692,20 @@ async def handle_run_experiments(
                 lint_by_circuit or None,
                 budget=budget,
             )
+    except RequestGateBusy as exc:
+        return await _error_response(
+            args.request_id,
+            code=exc.code,
+            message=str(exc),
+            stage="submission",
+            retryable=True,
+            # The holder is the submission that claims this id, and it was
+            # still working when the wait ran out. Saying not_started here
+            # would license a resubmission under a fresh id, which is how one
+            # experiment ends up running twice.
+            commit_state="unknown",
+            budget=budget,
+        )
     except IdempotencyConflictError as exc:
         return await _error_response(
             args.request_id,
