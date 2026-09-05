@@ -281,6 +281,7 @@ def persist_experiment_record(
     *,
     status: str = "completed",
     owner_pid: int = 0,
+    expanded: int = 0,
 ) -> Path:
     """Write one experiment record for *circuit* into *working_dir*'s store.
 
@@ -309,7 +310,7 @@ def persist_experiment_record(
             )
         ],
         simulator="ltspice",
-        completeness=Completeness(),
+        completeness=Completeness(declared=1, expanded=expanded),
         status=typing.cast(typing.Any, status),
         owner_pid=owner_pid,
         completed_at=now() if status == "completed" else None,

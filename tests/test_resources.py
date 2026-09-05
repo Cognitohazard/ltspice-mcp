@@ -5,11 +5,13 @@ from pathlib import Path
 import pytest
 from mcp.types import TextResourceContents
 
+from ltspice_mcp.lib import recent
 from ltspice_mcp.resources import (
     get_static_resources,
     handle_read_resource,
 )
 from ltspice_mcp.state import SessionState
+from tests.conftest import persist_experiment_record
 
 
 def _text(contents) -> str:
@@ -96,6 +98,75 @@ class TestReadResource:
     def test_netlist_path_escape_blocked(self, state_no_sim: SessionState):
         with pytest.raises(ValueError, match="Unknown resource URI"):
             handle_read_resource("spice://netlists/../../etc/passwd", state_no_sim)
+
+
+class TestRecentResource:
+    """The job counts beside a recent circuit, and where they come from."""
+
+    @staticmethod
+    def _circuits(state: SessionState) -> list[dict]:
+        import json
+
+        result = handle_read_resource("spice://recent", state)
+        return json.loads(_text(result.contents[0]))["circuits"]
+
+    def test_counts_come_from_this_working_directorys_records(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        tmp_path_factory: pytest.TempPathFactory,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Nothing else pins these four fields.
+
+        They are read through a path digest shared with the per-circuit index;
+        a divergence between the two would report zeros for every circuit and
+        leave the suite green.
+        """
+        monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path_factory.mktemp("recent-home")))
+        circuit = work_dir / "counted.cir"
+        circuit.write_text(".op\n.end\n")
+        recent.touch(circuit)
+        persist_experiment_record(
+            work_dir, circuit, job_id="exp_done", status="completed", expanded=3
+        )
+        persist_experiment_record(
+            work_dir, circuit, job_id="exp_lost", status="interrupted", expanded=2
+        )
+
+        entry = self._circuits(state_no_sim)[0]
+
+        assert Path(entry["path"]) == circuit
+        assert entry["exists"] is True
+        assert entry["total_jobs"] == 2
+        assert entry["total_runs"] == 5
+        assert entry["status_counts"] == {"completed": 1, "interrupted": 1}
+        assert entry["interrupted_job_ids"] == ["exp_lost"]
+
+    def test_a_record_in_another_working_directory_is_not_counted(
+        self,
+        state_no_sim: SessionState,
+        work_dir: Path,
+        tmp_path_factory: pytest.TempPathFactory,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The index is user-global; the counts are one store's.
+
+        A circuit last run from elsewhere reports no jobs here, which is why
+        the resource description says which directory it is answering for.
+        """
+        monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path_factory.mktemp("recent-home")))
+        elsewhere = tmp_path_factory.mktemp("another-working-dir")
+        circuit = work_dir / "run-elsewhere.cir"
+        circuit.write_text(".op\n.end\n")
+        recent.touch(circuit)
+        persist_experiment_record(elsewhere, circuit, job_id="exp_far", expanded=4)
+
+        entry = self._circuits(state_no_sim)[0]
+
+        assert entry["total_jobs"] == 0
+        assert entry["total_runs"] == 0
+        assert entry["status_counts"] == {}
 
 
 class TestNetlistResourceHardening:
