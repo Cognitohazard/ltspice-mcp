@@ -1909,7 +1909,7 @@ class TestAttachedAnalysis:
         changed_cursor = changed["analysis"]["result"]["results"]["summary"]["per_run"][
             "next_cursor"
         ]
-        assert result_store.cursor_view(changed_cursor) == (True, ["case_id"])
+        assert result_store.cursor_view(changed_cursor) == ["case_id"]
 
     async def test_budget_answer_reconstructs_values_independent_of_requested_page(
         self,
