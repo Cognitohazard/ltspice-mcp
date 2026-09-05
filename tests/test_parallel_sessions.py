@@ -37,7 +37,7 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
     SourceRecord,
 )
-from ltspice_mcp.lib.filelock import file_lock
+from ltspice_mcp.lib.filelock import circuit_lock_target, file_lock
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.schematic_ops import (
@@ -46,7 +46,6 @@ from ltspice_mcp.lib.schematic_ops import (
 )
 from ltspice_mcp.lib.sweep_utils import generate_id
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import circuit_lock_target
 from tests._asc_ops import apply_ops, sha_of
 
 #: The line a peer session appends while holding the lock.
@@ -140,11 +139,11 @@ class TestCircuitFileLock:
     async def test_contended_lock_times_out_with_clear_error(
         self, asc_state: SessionState, asc_file: Path, monkeypatch
     ):
-        import ltspice_mcp.tools._base as base_mod
+        import ltspice_mcp.lib.filelock as lock_mod
 
         # Shrink the acquisition window so the test doesn't sit out the
         # full default timeout.
-        monkeypatch.setattr(base_mod, "file_lock", lambda target: file_lock(target, timeout=0.2))
+        monkeypatch.setattr(lock_mod, "file_lock", lambda target: file_lock(target, timeout=0.2))
         t, release = _hold_lock_until_released(asc_file)
         try:
             with pytest.raises(NetlistError, match="locked by another ltspice-mcp process"):
@@ -188,10 +187,10 @@ class TestCircuitFileLock:
         # LTspice's export overwrites the sibling .net; a peer session editing
         # that .net holds ITS file lock, so the export guard must contend on
         # the .net lock too — not just the .asc.
-        import ltspice_mcp.tools._base as base_mod
+        import ltspice_mcp.lib.filelock as lock_mod
         from ltspice_mcp.tools._base import asc_export_lock
 
-        monkeypatch.setattr(base_mod, "file_lock", lambda target: file_lock(target, timeout=0.2))
+        monkeypatch.setattr(lock_mod, "file_lock", lambda target: file_lock(target, timeout=0.2))
         t, release = _hold_lock_until_released(asc_file.with_suffix(".net"))
         try:
             with pytest.raises(NetlistError, match="locked by another ltspice-mcp process"):
