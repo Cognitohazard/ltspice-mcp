@@ -612,8 +612,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Twenty-odd recipe branches; the largest schema on the surface. The
     # description carries the recipe roster with plain synonyms, because a host
     # that matches a request against tool descriptions cannot otherwise route
-    # "phase margin" or "distortion" to this tool at all.
-    "analyze_results": 18500,
+    # "phase margin" or "distortion" to this tool at all. Each of the three
+    # dormant branches spends about 75 characters more than the rest: its
+    # pointer names the MCP reference lookup with the query that finds it, and
+    # it carries the marker that keeps that one sentence on the compact
+    # listing, where the branch has nothing else at all.
+    "analyze_results": 18700,
     # Seven query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
@@ -658,8 +662,11 @@ class TestDormantRecipeWireStubs:
         body = self._analyze_defs()[_recipe_def_name(metric)]
         assert set(body["properties"]) == {"metric"}
         assert body["properties"]["metric"]["const"] == metric
-        # Both discovery channels are named, and the stub must stay permissive
-        # so a client pre-validating a full call against the wire still sends it.
+        # All three discovery channels are named, the MCP lookup first because
+        # it is the one every client on this surface can call; and the stub
+        # must stay permissive so a client pre-validating a full call against
+        # the wire still sends it.
+        assert f"inspect(kind='reference', query='{metric}')" in body["description"]
         assert "api.reference('analyze_results')" in body["description"]
         assert "spice://guide" in body["description"]
         assert "additionalProperties" not in body

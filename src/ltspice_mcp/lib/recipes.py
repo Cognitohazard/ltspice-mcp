@@ -19,6 +19,7 @@ from pydantic import (
 )
 
 from ltspice_mcp.errors import compact_validation_error
+from ltspice_mcp.lib.models import KEEP_DESCRIPTION
 
 ReduceStat = Literal["min", "max", "mean", "stddev", "p50", "p90", "count"]
 
@@ -91,10 +92,15 @@ class StrictModel(BaseModel):
     )
 
 
-# Appended to every dormant-branch summary so each stub names both discovery
-# channels; the helper owning it makes the pointer structural, not a
-# per-call-site convention.
-_DORMANT_POINTER = " Full arguments: api.reference('analyze_results') or spice://guide."
+# Appended to every dormant-branch summary so each stub names all three
+# discovery channels, nearest first: the MCP lookup, which every client on this
+# surface can call and which reads these same models; the Python API's
+# catalogue; and the guide. The helper owning it makes the pointer structural,
+# not a per-call-site convention.
+_DORMANT_POINTER = (
+    " Full arguments: inspect(kind='reference', query='{metric}'), "
+    "api.reference('analyze_results'), or spice://guide."
+)
 
 
 def _dormant_wire_stub(summary: str) -> ConfigDict:
@@ -107,8 +113,12 @@ def _dormant_wire_stub(summary: str) -> ConfigDict:
     which walks model fields rather than this schema — keeps every field. The
     stub deliberately drops ``additionalProperties: false`` so a client
     pre-validating a full call against the wire shape still sends it.
+
+    The stub also carries ``KEEP_DESCRIPTION``, so the compact tool listing
+    keeps that one sentence. Compact strips prose on the bet that the published
+    structure still tells a client how to build a call; here there is no
+    structure left to read, so the sentence is all the branch has.
     """
-    description = summary + _DORMANT_POINTER
 
     def _stub(schema: dict[str, Any]) -> None:
         metric = schema["properties"]["metric"]
@@ -116,7 +126,8 @@ def _dormant_wire_stub(summary: str) -> ConfigDict:
         schema.update(
             {
                 "type": "object",
-                "description": description,
+                "description": summary + _DORMANT_POINTER.format(metric=metric["const"]),
+                KEEP_DESCRIPTION: True,
                 "properties": {"metric": metric},
                 "required": ["metric"],
             }
