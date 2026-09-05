@@ -19,7 +19,14 @@ from ltspice_mcp.errors import (
     ResultError,
     compact_validation_error,
 )
-from ltspice_mcp.lib import atomic_write, cursor_codec, experiment_store, now, result_store
+from ltspice_mcp.lib import (
+    atomic_write,
+    cursor_codec,
+    experiment_store,
+    metrics,
+    now,
+    result_store,
+)
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
     ExperimentCase,
@@ -27,6 +34,7 @@ from ltspice_mcp.lib.experiment_types import (
     ManifestEntry,
     SourceRecord,
 )
+from ltspice_mcp.lib.recipes import RECIPE_MODELS
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments
@@ -102,6 +110,27 @@ EXECUTION_CASES = [
     ),
     ("plot", "ltspice_tran_rc", {"signals": ["V(out)"]}),
 ]
+
+
+def test_every_recipe_class_has_a_metric_function():
+    """The evaluator dispatches on recipe class, so a class with no entry in
+    the table would raise a KeyError at the one call that needed it — after the
+    sources were resolved and hashed. Naming the gap here instead means a new
+    recipe cannot ship with no way to compute it."""
+    missing = [
+        model.__name__
+        for model in RECIPE_MODELS
+        if model not in metrics.METRICS and model not in metrics.ARTIFACT_RECIPES
+    ]
+    assert not missing, (
+        f"These recipe classes have no metric function: {sorted(missing)}. "
+        "Register one in lib.metrics.METRICS, or list the class in "
+        "ARTIFACT_RECIPES if the evaluator produces its value itself."
+    )
+    # The reverse direction: a metric registered for a class the union dropped
+    # is dead dispatch nothing can reach.
+    unreachable = sorted(model.__name__ for model in metrics.METRICS if model not in RECIPE_MODELS)
+    assert not unreachable, f"These metric functions answer no recipe: {unreachable}"
 
 
 @pytest.mark.asyncio
