@@ -1,4 +1,5 @@
-"""A searchable index of every branch the seven tools take.
+"""A searchable index of what the seven tools take: their branches and their
+own arguments.
 
 Each tool hides a vocabulary behind a discriminator: ``analyze_results`` has
 twenty-one recipe metrics, ``edit_schematic`` eleven ops, ``run_experiments``
@@ -17,6 +18,12 @@ searches it; the entries themselves are built by walking the same Pydantic
 models the wire validates against, so a recipe or an op added to a union
 appears here without anything else being edited — and
 ``tests/test_reference_index.py`` fails if one arrives without a summary.
+
+The tools' own top-level arguments are one more family here, one entry per
+tool, named after it. A branch family covers what a caller writes *inside* a
+discriminated item, which left arguments like ``all_steps``, ``budget`` and
+``expected_sha256`` on neither channel a ``compact`` session has — stripped
+from the listing and declared by no branch.
 
 Two things are hand-written, and only two: the one-line summary for a branch
 whose model carries no docstring, and the plain-English synonyms a person
@@ -407,6 +414,10 @@ class _Source:
     #: ``(branch name, model or None, dotted prefix for that model's fields)``.
     branches: tuple[tuple[str, type[BaseModel] | None, str], ...]
     discriminator: str | None
+    #: ``(branch name, one line)`` where the line is derived from something
+    #: other than the model — the tool argument tables read the tool's own
+    #: registered description. A hand-written summary still wins.
+    summaries: tuple[tuple[str, str], ...] = ()
 
 
 def _members(union: Any) -> tuple[type[BaseModel], ...]:
@@ -516,6 +527,38 @@ def _sources() -> tuple[_Source, ...]:
             branches=_union_branches(jobs.JobsInput.VARIANTS, "action"),
             discriminator="action",
         ),
+        *_argument_sources(),
+    )
+
+
+def _argument_sources() -> tuple[_Source, ...]:
+    """One entry per registered tool: the arguments the tool itself takes.
+
+    The branch families cover what a caller writes *inside* a discriminated
+    item, which left a tool's own arguments — ``all_steps``, ``budget``,
+    ``expected_sha256`` — described nowhere a ``compact`` session can reach.
+    The entry is named after its tool, so asking for the tool by name returns
+    its argument table.
+    """
+    # The registry rather than the package's ``get_tools``: importing a name
+    # out of ``ltspice_mcp.tools`` here reads, to the module-closure scan in
+    # tests/test_consolidated_contracts.py, as importing a module of that name.
+    from ltspice_mcp.tools._base import registry
+
+    _, dispatch = registry.get_tools()
+    return tuple(
+        _Source(
+            tool=name,
+            family="argument",
+            call="{name}(...)",
+            branches=((name, registered.input_model, ""),),
+            discriminator=None,
+            summaries=(
+                (name, first_sentence(registered.definition.description or "", limit=240)),
+            ),
+        )
+        for name, registered in dispatch.items()
+        if registered.input_model is not None
     )
 
 
@@ -585,14 +628,15 @@ def _field_entries(
     return entries[:_MAX_FIELDS]
 
 
-def _summary_for(tool: str, name: str, model: type[BaseModel] | None) -> str:
-    """The branch's one line: the hand-written one, else the model's docstring."""
+def _summary_for(tool: str, name: str, model: type[BaseModel] | None, fallback: str = "") -> str:
+    """The branch's one line: hand-written, else the model's docstring, else
+    whatever its source derived for it."""
     written = _SUMMARIES.get((tool, name))
     if written:
         return written
     if model is not None and model.__doc__:
         return first_sentence(" ".join(model.__doc__.split()), limit=240)
-    return ""
+    return fallback
 
 
 @functools.cache
@@ -600,6 +644,7 @@ def build_index() -> tuple[BranchEntry, ...]:
     """Every branch of every tool, in advertised order."""
     entries: list[BranchEntry] = []
     for source in _sources():
+        derived = dict(source.summaries)
         for name, model, prefix in source.branches:
             fields = (
                 _field_entries(model, discriminator=source.discriminator, prefix=prefix)
@@ -611,7 +656,7 @@ def build_index() -> tuple[BranchEntry, ...]:
                     tool=source.tool,
                     family=source.family,
                     name=name,
-                    summary=_summary_for(source.tool, name, model),
+                    summary=_summary_for(source.tool, name, model, derived.get(name, "")),
                     call=source.call.format(name=name),
                     synonyms=_SYNONYMS.get((source.tool, name), ()),
                     fields=tuple(fields),

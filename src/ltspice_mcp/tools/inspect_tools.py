@@ -515,9 +515,9 @@ class ModelQuery(StrictModel):
 
 
 class ReferenceQuery(StrictModel):
-    """Look up the branch vocabulary of this server's tools — analysis recipes,
-    schematic ops, variation kinds, query kinds, checks and job actions — and
-    get each branch's fields with their types, defaults and units."""
+    """Look up this server's tool vocabulary — each tool's own arguments, plus
+    analysis recipes, schematic ops, variation kinds, query kinds, checks and
+    job actions — with every field's type, default and units."""
 
     kind: Literal["reference"]
     query: str | None = Field(

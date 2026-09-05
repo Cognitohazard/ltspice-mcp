@@ -200,14 +200,18 @@ so a client on an older revision is served exactly what it was before.
 
 `compact` and `inspect(kind: "reference")` are one design, not two: together
 they let a session pay for depth only where it needs it. The compact listing
-drops the prose for every argument of every branch — twenty-one recipes, eleven
-ops, five actions — on the bet that a session uses a handful of them; the
-reference lookup is what buys that prose back, one branch at a time, for the
-handful actually used. Neither half stands alone. Compact without the lookup
-strands a caller with structure and no meaning; the lookup without compact is a
-convenience rather than the route. The tool descriptions are the seam between
-them: they survive compaction untouched, which is why the recipe roster lives
-in `analyze_results`' description and the lookup is named in `inspect`'s.
+drops the prose for every argument — every branch's and every tool's own — on
+the bet that a session uses a handful of them; the reference lookup is what
+buys that prose back, one entry at a time, for the handful actually used. It
+covers both halves: the branch vocabulary (twenty-one recipes, eleven ops, five
+actions, and the rest) and each tool's own top-level arguments, indexed as one
+entry per tool under the family `argument`, so `all_steps` or `expected_sha256`
+is found the same way `stability` is. Neither half of the pair stands alone.
+Compact without the lookup strands a caller with structure and no meaning; the
+lookup without compact is a convenience rather than the route. The tool
+descriptions are the seam between them: they survive compaction untouched,
+which is why the recipe roster lives in `analyze_results`' description and the
+lookup is named in `inspect`'s.
 
 ---
 
@@ -746,10 +750,10 @@ rules and to `dropped_wire`; `dropped_wire` carries no truncation observation.
 {kind: "model", mode: "search"|"enumerate", query?, libs?, cursor?}
     search requires query; enumerate requires libs
 {kind: "reference", query?, limit? (default 5, cap 20)}
-    the tools' own branch vocabulary: recipes, ops, variation kinds, query
-    kinds, checks and job actions. A plain-words `query` returns the closest
-    branches with their full field tables; no `query` returns the table of
-    contents, one line per branch
+    the tools' own vocabulary: each tool's top-level arguments, plus the
+    branches — recipes, ops, variation kinds, query kinds, checks and job
+    actions. A plain-words `query` returns the closest entries with their full
+    field tables; no `query` returns the table of contents, one line per entry
 ```
 
 `path` is required except on `capabilities`, `symbols`, `symbol` and
@@ -760,10 +764,11 @@ capabilities behind a discriminator, and a host choosing a tool sees only tool
 names and descriptions — nothing there can lead it from "phase margin" to the
 `stability` recipe. `analyze_results`' description carries the recipe roster
 with plain synonyms for exactly that reason, but a roster cannot also carry
-each branch's fields; `reference` is where those live, and it is the only route
-to them at all on the `compact` listing. The index is built by walking the same
-input models the wire validates against (`tools/reference_index.py`), so a branch
-cannot be missing from it; only the one-line summary for a model with no
+each branch's fields — nor a tool's own arguments, which no branch declares at
+all. `reference` is where both live, and it is the only route to them on the
+`compact` listing. The index is built by walking the same input models the wire
+validates against (`tools/reference_index.py`), so neither a branch nor a tool
+argument can be missing from it; only the one-line summary for a model with no
 docstring and the plain words a person types instead of a discriminant are
 written by hand, and both are checked for completeness against the live unions.
 The lookup reads no file and touches no session state, which is why it is an
