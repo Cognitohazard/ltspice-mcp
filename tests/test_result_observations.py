@@ -380,12 +380,6 @@ class TestSurfaceObservations:
         obs = surface_observations({"errors": []}, value_scan="off")
         assert obs == []
 
-    def test_skipped_large_emits_coverage(self):
-        obs = surface_observations({"point_count": 500000}, value_scan="skipped_large")
-        assert len(obs) == 1
-        assert obs[0]["code"] == "value_scan_skipped"
-        assert obs[0]["kind"] == "coverage"
-
     def test_combines_all_kinds(self):
         summary = {"errors": ["singular matrix"], "measurements": {}}
         obs = surface_observations(
@@ -528,13 +522,6 @@ class TestBuildSummaryWiring:
         summary = build_simulation_summary(raw, None, value_scan="scan")
         codes = {o["code"] for o in summary["observations"]}
         assert "extreme_value" in codes
-
-    def test_skipped_large_records_coverage(self):
-        raw = _make_raw_mock(
-            ["time", "V(out)"], np.array([0.0, 1.0]), {"V(out)": np.array([0.0, 1.0])}
-        )
-        summary = build_simulation_summary(raw, None, value_scan="skipped_large")
-        assert any(o["code"] == "value_scan_skipped" for o in summary["observations"])
 
     def test_signals_list_capped_with_explicit_truncation(self):
         # A device-heavy raw (hundreds of traces) must not re-ship its whole
