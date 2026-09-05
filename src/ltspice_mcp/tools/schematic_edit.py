@@ -1319,6 +1319,7 @@ def complete_edit_schematic_data(
 
 @registry.tool(
     name="edit_schematic",
+    title="Edit Schematic",
     description=(
         "Apply a typed op batch to an LTspice .asc schematic in one revision-"
         "guarded, transactional call. base='blank' builds a whole circuit from an "

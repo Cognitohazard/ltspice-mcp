@@ -842,6 +842,7 @@ class ToolRegistry:
         self,
         *,
         name: str,
+        title: str,
         description: str,
         input_model: type[ToolInput] | None,
         annotations: types.ToolAnnotations,
@@ -850,6 +851,11 @@ class ToolRegistry:
         meta: dict[str, Any] | None = None,
     ) -> Callable[[Callable], Callable]:
         """Register a tool and derive its schema from the input model.
+
+        ``title`` is the short human-readable label a client shows in place of
+        the wire name — a few words, no punctuation, readable by someone who
+        does not know the tool. The description stays the contract; this is
+        only what a person sees in a list.
 
         ``output_model`` (a TypedDict) is preferred over ``output_schema``
         (a hand-written dict): the schema is generated once at registration
@@ -876,6 +882,7 @@ class ToolRegistry:
 
             definition_kwargs: dict[str, Any] = {
                 "name": name,
+                "title": title,
                 "description": description,
                 "input_schema": (
                     build_input_schema(input_model)

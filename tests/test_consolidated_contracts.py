@@ -579,40 +579,42 @@ class TestOutputSchemaCoverage:
 # The bounds below were re-pinned when the prose filter was removed. About half
 # of what a client now loads is structure the discriminated unions cannot say
 # in fewer characters; the rest is the 210 descriptions inside those schemas
-# plus the seven tool descriptions.
+# plus the seven tool descriptions. Each bound also covers the tool's display
+# title, which the 2026-07-28 revision puts on the wire: 24 to 26 characters
+# apiece, added to every number below when titles were introduced.
 _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Variations, attached analysis, and the receipt row shape. The attached
     # recipes advertise their metric names and a pointer, not a second copy of
     # the recipe branches: a client cannot resolve a $ref into another tool's
     # document, so carrying the grammar twice measured 13 KB more on every
     # session, to restate what analyze_results publishes on the same wire.
-    "run_experiments": 12937,
+    "run_experiments": 12963,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
-    "jobs": 5227,
+    "jobs": 5253,
     # Twenty-odd recipe branches; the largest schema on the surface. The
     # description carries the recipe roster with plain synonyms, because a host
     # that matches a request against tool descriptions cannot otherwise route
     # "phase margin" or "distortion" to this tool at all.
-    "analyze_results": 20080,
+    "analyze_results": 20106,
     # Seven query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
-    "inspect": 7326,
+    "inspect": 7352,
     # The typed op union — eleven ops, each its own branch — plus the render
     # and compare views. It advertises BOTH spellings of those two: the
     # objects, and the flat fields retained as aliases for 0.6. That
     # compatibility window is a measurable part of this number, and it comes
     # back when the aliases go.
-    "edit_schematic": 14046,
+    "edit_schematic": 14071,
     # Checks, the shared render policy and compare spec (each with the
     # verify-only fields on a subclass), and the flat compare fields retained
     # as aliases. The checks are named in the tool's own description because a
     # caller cannot ask for what the description does not say it looks at.
-    "verify_circuit": 5476,
+    "verify_circuit": 5500,
     # Job/case addressing, windowing, and delivery flags.
-    "plot_waveform": 3283,
+    "plot_waveform": 3308,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477
