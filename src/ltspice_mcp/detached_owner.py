@@ -65,7 +65,10 @@ class _Handshake:
             logger.exception("could not write the detached owner's receipt file")
 
     def receipt(self, receipt: dict[str, Any]) -> None:
-        self._write(ok=True, owner_pid=os.getpid(), receipt=receipt)
+        # This process, which is the job's owner on a fresh submission and is
+        # not on a replay. The caller reads the owner from the record itself;
+        # this is only the fallback for a receipt naming no job.
+        self._write(ok=True, supervisor_pid=os.getpid(), receipt=receipt)
 
     def failure(self, code: str, message: str) -> int:
         logger.error("%s: %s", code, message)
