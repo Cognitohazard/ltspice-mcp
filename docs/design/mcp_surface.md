@@ -423,7 +423,9 @@ base                "existing" (default) | "blank"
                     blank = treat the sheet as empty before applying ops;
                     existing = deltas preserving untouched content
 expected_sha256     REQUIRED whenever target exists, under either base;
-                    a mismatch is revision_conflict and nothing is written
+                    a mismatch is revision_conflict and nothing is written.
+                    Both refusals — missing and mismatched — report the
+                    target's current sha256, so a retry needs no extra read
 ops                 list[Op] — Appendix A.4
 reference           post-commit netlist compare, inside the transaction
 dry_run             resolve, validate and return geometry; no write
@@ -549,7 +551,8 @@ rules and to `dropped_wire`; `dropped_wire` carries no truncation observation.
 ```
 {kind: "capabilities"}
     simulators and versions, exporter presence, dialects, persistence,
-    allowed roots, profile, limits, linter_version
+    allowed roots, profile, limits, linter_version, and the startup
+    diagnostics that say whether this server started degraded
 {kind: "symbols", path?, filter?, cursor?}
     legal symbol names and resolution order; `path` adds schematic-local
     directories to the reported precedence
