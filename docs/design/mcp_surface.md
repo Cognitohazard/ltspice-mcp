@@ -82,6 +82,7 @@ From the error hierarchy:
 | `no_axis` | the result is an operating point: no sweep axis to query at |
 | `job_not_found` | no job with that `job_id` or `request_id` |
 | `idempotency_conflict` | a `request_id` was reused for a different payload |
+| `request_gate_busy` | another submission holds that `request_id`; ask again with the same id |
 | `cancel_not_authorized` | neither the owning process nor a matching `control_token` |
 | `cancel_failed` | cancellation was authorized but could not be carried out |
 | `library_error` | a component library failed to load, parse, or resolve |

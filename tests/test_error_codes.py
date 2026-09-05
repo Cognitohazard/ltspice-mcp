@@ -427,6 +427,7 @@ FROZEN_ERROR_CODES = (
     "receipt_failed",
     "recipe_failed",
     "recipe_invalid",
+    "request_gate_busy",
     "result_unreadable",
     "revision_conflict",
     "run_not_found",

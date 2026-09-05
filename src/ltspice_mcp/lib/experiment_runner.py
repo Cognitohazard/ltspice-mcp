@@ -9,7 +9,7 @@ import json
 import logging
 import secrets
 import threading
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -74,10 +74,45 @@ class IdempotencyConflictError(SimulationError):
     code = "idempotency_conflict"
 
 
+class RequestGateBusy(SimulationError):
+    """Another submission held this request id's gate for the whole wait.
+
+    Distinct from a plain lock timeout because of what it says about the
+    durable state: the holder is the submission that claims this id, so
+    whether a job now exists under it is exactly what this process could not
+    find out.
+    """
+
+    code = "request_gate_busy"
+
+
 class ExperimentCancellationError(SimulationError):
     """An experiment could not be cancelled by this coordinator."""
 
     code = "cancel_failed"
+
+
+@contextlib.asynccontextmanager
+async def _request_gate(gate: Path, request_id: str) -> AsyncIterator[None]:
+    """Hold one request id's gate, naming a wait that ran out for what it means.
+
+    Only the acquisition is translated. A timeout raised by the work inside
+    the gate is that work's own, and answering it with "another submission
+    holds this id" would be a guess.
+    """
+    stack = contextlib.AsyncExitStack()
+    try:
+        await stack.enter_async_context(
+            async_file_lock(gate, acquire_timeout=REQUEST_GATE_TIMEOUT_S)
+        )
+    except TimeoutError as exc:
+        raise RequestGateBusy(
+            f"request_id {request_id!r} is held by another submission that did not "
+            f"finish within {REQUEST_GATE_TIMEOUT_S:.0f}s. Whatever it committed is "
+            "recorded under that id: ask again with the same request_id to replay it."
+        ) from exc
+    async with stack:
+        yield
 
 
 class CancelNotAuthorized(ExperimentCancellationError):
@@ -440,7 +475,7 @@ class ExperimentRunner(RunnerBase):
         """
         working_dir = request.state.working_dir
         gate = Store(working_dir).request_lock(request.request_id)
-        async with async_file_lock(gate, acquire_timeout=REQUEST_GATE_TIMEOUT_S):
+        async with _request_gate(gate, request.request_id):
             lookup = await asyncio.to_thread(self._read_request_index, request)
             if lookup.existing is not None:
                 return _BarrierResult(lookup.existing, replayed=True)
