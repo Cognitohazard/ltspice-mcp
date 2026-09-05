@@ -127,17 +127,21 @@ stop. So:
    `ApiClosedError` (or a `CancelledError` mapped to one). The session lease is
    released last.
 
-**Live jobs do not survive `close()` or process exit.** Durability covers
-persisted identity and results, not detached execution. Work that must outlive
-the interpreter goes to a long-lived server process.
+**Live jobs this process owns do not survive `close()` or process exit.**
+Durability covers persisted identity and results; execution belongs to the
+owning process. Work that must outlive the interpreter goes to a long-lived
+server process, or to a per-job detached owner —
+`run_experiments(wait=False, detach=True)`, §11 — which is a separate process
+and therefore a separate owner.
 
 That rule is stated where it applies, not only here:
 
 - `reference()` and `reference('run_experiments')` say that `wait=False`
-  returns a receipt *and* that the submitting process must outlive the run,
-  because a job is cancelled when its owning process exits. The receipt itself
-  carries a `process_owned_job` observation, but the catalogue is where a
-  caller looks *before* submitting.
+  returns a receipt *and* that the submitting process must outlive the run
+  unless `detach=True` hands the job to its own owner, because a job is
+  cancelled when its owning process exits. The receipt itself carries a
+  `process_owned_job` observation, but the catalogue is where a caller looks
+  *before* submitting.
 - During interpreter teardown the registry's async persist would raise
   `RuntimeError: cannot schedule new futures after shutdown`; that path falls
   back to a synchronous persist (blocking is fine during teardown), so the
@@ -195,6 +199,9 @@ Ctrl-C; it settles either to a pre-submit failure or to a durable receipt.
   running.
 - `wait=False` returns the submission receipt immediately, annotated with the
   process-owned-job observation.
+- `wait=False, detach=True` submits from a spawned per-job owner instead, so
+  the job survives this process (§11). It is the one combination that does not
+  submit in-process.
 - Exiting the `Api` context still cancels owned live jobs (§4).
 
 **`Api.reference(op=None) -> str`** is the argument catalogue.
@@ -395,6 +402,13 @@ module so that `__all__` stays the pinned stability boundary and does not move.
   running.
 - **Parallel processes.** API and MCP server sharing a working directory, each
   shutdown cancelling only its own jobs.
+- **Detached owners**, driven through a real spawned process: a job that
+  survives the submitting `Api`'s `close()` and is read back complete by a
+  fresh one; an idempotent replay of the same `request_id` returning the same
+  job without a second submission; a cancel from another process ending the
+  job and the owner; the owner killed mid-run leaving a job that classifies as
+  interrupted rather than running; `detach=True, wait=True` refused; and parent
+  and child holding their own engine leases at the same time.
 - **`RawResult`.** Step slicing, experiment-case resolution, log fallback,
   array-mutation isolation (mutate a returned array, cached result unchanged),
   parse-deadline propagation, and AC complex-dtype pins on recorded fixtures.
@@ -407,22 +421,106 @@ module so that `__all__` stays the pinned stability boundary and does not move.
 - The archetype battery once through the Python API (build, run, analyze, verify)
   as an integration smoke test.
 
-## 11. Roadmap
+## 11. Detached owners, and the roadmap past them
 
-**A per-job detached owner.** On `wait=False` from a process that will not stay
-alive, spawn a minimal supervisor process for that one job: it submits,
-supervises to terminality, updates the record, and exits. It fits the existing
-model with almost no change — ownership is already an owner-pid with liveness
-checks, cancellation is already token-scoped, and other sessions already treat
-a live owner correctly — needs no rendezvous or daemon lifecycle, and cannot
-skew versions because it is spawned from the same install at call time. Known
-cost: the parallelism cap is per process, so each detached owner carries its
-own, widening the existing multi-session residual.
+### The per-job detached owner (`detach=True`)
+
+`run_experiments(wait=False, detach=True)` submits an experiment that outlives
+the calling process. The keyword defaults to `False`, so nothing about an
+existing call changes.
+
+**Only with `wait=False`.** `detach=True, wait=True` is an `ApiValidationError`
+naming the two ways forward (drop `detach`, or pass `wait=False` and wait later
+with `api.wait(job_id)`) — waiting in this process for a job this process does
+not own is the shape the keyword exists to avoid. `detach=True` with
+`raw_page=True` is likewise refused: `raw_page` returns exactly one handler page
+of a submission this process performed, and a detached submission is performed
+somewhere else.
+
+**Who does what.** The calling process validates the arguments against
+`RunExperimentsInput` (so a malformed request still raises in the caller's own
+traceback, before any process is spawned), writes a request file, and spawns
+
+```
+sys.executable -m ltspice_mcp.detached_owner <request-file>
+```
+
+with `start_new_session=True`, its stdin closed, and stdout and stderr appended
+to a log file. Same interpreter, same install, so there is no version skew. The
+child opens an ordinary `Api` on the same working directory, config file and
+constructor overrides, calls `run_experiments(wait=False)`, writes the receipt
+to a handshake file, then blocks in `api.wait(job_id)` until the job is
+terminal and exits. The parent polls for the handshake, annotates the receipt
+and returns it.
+
+**The record is written by the process that owns it.** This is the ordering
+choice, and it is the reason the API prepares nothing on disk beyond the
+request file: staging and submission both happen in the child, so the job
+record and its `request_id` index entry are first written by the existing
+submission pipeline with `owner_pid` already set to the child's live pid.
+
+What a reader sees in each interval:
+
+| Interval | On disk | What any process reads |
+|-|-|-|
+| Parent has spawned the child; the child is booting and staging | request file only | Nothing. `jobs(status, request_id=...)` reports no job is indexed, which is true. |
+| Child's submission pipeline has taken the request lock and written the index and the record | index + record, `owner_pid` = child, alive | A live foreign job, exactly like another session's — the existing owner-pid liveness path. |
+| Child is supervising | record, updated by the child | Same, refreshed from disk by `refresh_foreign_job`. |
+| Child reached terminality and exited | terminal record | A terminal job. |
+
+There is no interval in which the record names a dead or unrelated owner. The
+rejected alternative — parent writes the record, spawns, child rewrites
+`owner_pid` — has exactly that interval: between the write and the rewrite the
+record names the *parent*, a live process that will never advance the job, and
+the parent's own `close()` would cancel it, because `cancel_running` matches on
+`owner_pid == os.getpid()`.
+
+**A child that dies.** Before it writes the record there is nothing to
+misread; the parent's handshake wait ends when the child's exit is seen and
+raises `ApiCallError` naming the log file. After the record exists — a kill
+mid-run included — the record names a pid that is gone, and the existing
+restart reconciliation classifies the job `interrupted`, promoting any case
+whose artifacts are on disk. That is the same path a crashed server takes.
+
+**Ownership.** The calling process never owns a detached job. `close()`,
+leaving a `with` block and interpreter exit cancel jobs whose `owner_pid` is
+this process, so they leave a detached job alone. Reading it back is the
+ordinary foreign-job route (`jobs(action="status"|"wait"|"runs")` by `job_id`
+or `request_id`), from this process, a later one, or a running MCP server.
+Cancelling it is the ordinary foreign-owner route: `jobs(action="cancel")` with
+the `control_token` from the receipt writes the durable cancellation marker,
+the owner's coordinator sees it and stops its cases with a token-scoped kill.
+
+**Replay.** A detached call with a `request_id` that already submitted spawns an
+owner that takes the ordinary idempotent-replay path: it returns the existing
+job's receipt and submits nothing. The receipt's owner pid is read from the
+record, so it names whichever process actually owns the job, not the owner
+just spawned.
+
+**The receipt.** The returned receipt is the child's, with the
+`process_owned_job` observation (true in the child, misleading in the caller)
+replaced by:
+
+```
+code:     "detached_owner"
+kind:     "lifecycle"
+detail:   names the owning pid, says this process does not own the job and
+          that closing the Api will not cancel it, and gives the log path
+evidence: {"owner_pid": <int>, "log_file": "<path>"}
+```
+
+**Known cost, stated not fixed:** `max_parallel_sims` is a per-process cap held
+by a runner instance, so every detached owner carries its own. N detached jobs
+run at up to N x the cap between them, which widens the multi-session residual
+already recorded in `CLAUDE.md`.
+
+### Still ahead
 
 A full broker daemon — a socket-addressed detached server mode — remains the
-possible end state behind that step. It inverts the shutdown-cancels-jobs
-invariant and adds the usual daemon costs (version skew, stale sockets,
-config drift), so it gets built only if the middle rung proves insufficient.
+possible end state behind the detached owner. It inverts the
+shutdown-cancels-jobs invariant and adds the usual daemon costs (version skew,
+stale sockets, config drift), so it gets built only if the per-job owner proves
+insufficient.
 
 `api.log_diagnostics` is deferred unless callers are seen re-parsing logs by
 hand.
@@ -437,9 +535,9 @@ waveform widget — while scripts use the API for loops and complete results.
 A job either interface starts is readable by the other by `job_id`.
 
 What is implemented: shared records, shared store, one engine lease per
-process. What is not yet: hand-off. A job submitted through the API is owned
-by the submitting process; `close()` or exit cancels it, and another process
-that loads the record sees it as interrupted. The planned closing change is
-a per-job detached owner (or a hand-off to a running server) so that
-`run_experiments(wait=False)` from a short-lived script leaves a job the
-server owns. Until then a script must stay alive for its runs.
+process, and hand-off through a per-job detached owner. A job submitted
+through the API with `run_experiments(wait=False)` is owned by the submitting
+process and is cancelled when that process exits; adding `detach=True` hands it
+to a supervisor process spawned for that one job, which outlives the script
+(§11). Either way the record is the same record, and the other interface reads
+it by `job_id`.
