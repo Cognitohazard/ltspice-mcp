@@ -427,6 +427,16 @@ key is deleted in 0.7.0. Serving zero tools is still a hard error.
 
 ### Fixed
 
+- `edit_schematic` reports `outcome: "partial"` when a dry run's ops fail,
+  when the post-commit comparison against `reference` does not match or
+  cannot export, or when a requested render fails. It reported `complete`
+  in all three cases while `verify_circuit` reported `partial` for the same
+  conditions; every tool now decides its outcome by one rule, and a test
+  scans every handler module for a hand-written outcome.
+- `max_parallel_sims` is enforced per simulator runner, not per
+  `run_experiments` call. Three concurrent calls in one server used to get
+  three times the cap, and a request could raise its own share above it.
+
 - An analysis failure is classified as a deadline by its exception type, not
   by whether its message contained "deadline" or "exceeded". A source path, a
   signal name, or a filesystem error carrying those words (a full disk
