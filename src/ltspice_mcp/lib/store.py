@@ -349,8 +349,12 @@ class Store:
     def ensure_root(self) -> None:
         """Create the store root and stamp its version if it has none yet.
 
-        Called from the durable write paths rather than at startup, so merely
-        booting a server in a directory does not litter it with a store.
+        Called from the write paths rather than at startup, so merely booting a
+        server in a directory does not litter it with a store. Every durable
+        submission reaches one of them before its job record lands — the
+        request index is written under the idempotency gate first — so a store
+        holding records always carries the stamp that says which build's layout
+        it is.
         """
         self.root.mkdir(parents=True, exist_ok=True)
         manifest = self.manifest
