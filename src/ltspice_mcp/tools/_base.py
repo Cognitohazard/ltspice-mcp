@@ -484,7 +484,16 @@ class StrictModel(BaseModel):
 class ToolInput(StrictModel):
     """Base for top-level tool input models registered via @registry.tool(input_model=...)."""
 
-    pass
+    @classmethod
+    def wire_input_schema(cls) -> dict[str, Any]:
+        """The JSON Schema this tool advertises, before the shrinking passes.
+
+        The model's own schema, except for a tool whose arguments are a
+        top-level union: pydantic emits a bare ``oneOf`` for one of those, and
+        MCP requires an object schema at the top level. Such a model overrides
+        this to wrap its branches; ``_build_input_schema`` calls it either way.
+        """
+        return cls.model_json_schema()
 
 
 @dataclass(frozen=True)
@@ -740,6 +749,46 @@ def _hoist_shared_fragments(schema: dict[str, Any]) -> dict[str, Any]:
     return rewritten
 
 
+def _referenced_defs(node: Any) -> set[str]:
+    """Every ``#/$defs/<name>`` this node names, at any depth."""
+    if isinstance(node, list):
+        return {name for item in node for name in _referenced_defs(item)}
+    if not isinstance(node, dict):
+        return set()
+    found: set[str] = set()
+    ref = node.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        found.add(ref.split("/")[-1])
+    for value in node.values():
+        found |= _referenced_defs(value)
+    return found
+
+
+def prune_unreferenced_defs(schema: dict[str, Any]) -> dict[str, Any]:
+    """Drop the ``$defs`` entries nothing in the schema body reaches.
+
+    A tool that advertises a compact stand-in for one sub-schema orphans
+    whatever only the replaced shape referenced. An orphan is pure weight on
+    the wire — every client downloads it and no ``$ref`` leads to it — so it
+    goes. Reachability is transitive: a definition kept alive only by another
+    orphan is an orphan too.
+    """
+    defs = schema.get("$defs")
+    if not isinstance(defs, dict):
+        return schema
+    body = {key: value for key, value in schema.items() if key != "$defs"}
+    reachable: set[str] = set()
+    frontier = _referenced_defs(body)
+    while frontier:
+        name = frontier.pop()
+        if name in reachable or name not in defs:
+            continue
+        reachable.add(name)
+        frontier |= _referenced_defs(defs[name])
+    kept = {name: body_ for name, body_ in defs.items() if name in reachable}
+    return {**body, "$defs": kept} if kept else body
+
+
 def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
     """Generate a cleaned MCP-ready JSON schema from a Pydantic model.
 
@@ -759,7 +808,7 @@ def _build_input_schema(input_model: type[ToolInput]) -> dict[str, Any]:
     seven shared fields. ``tests/test_consolidated_contracts.py`` pins the
     resulting size per tool.
     """
-    schema = _strip_titles(input_model.model_json_schema())
+    schema = _strip_titles(input_model.wire_input_schema())
     return _hoist_shared_fragments(_compact_type_keywords(schema))
 
 

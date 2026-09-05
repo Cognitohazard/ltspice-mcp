@@ -24,13 +24,20 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import jsonschema
 import pytest
 
-from ltspice_mcp.errors import NetlistError, ResultError
+from ltspice_mcp.errors import NetlistError, ResultError, SimulationError
 from ltspice_mcp.lib import result_store
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_view
+from ltspice_mcp.lib.recipes import DISCRIMINANTS
 from ltspice_mcp.tools import get_tools_for_profile
-from ltspice_mcp.tools.experiments import _decode_jobs_cursor
+from ltspice_mcp.tools.experiments import (
+    AttachedAnalysis,
+    RunExperimentsInput,
+    _decode_jobs_cursor,
+    _validate_attached_analysis,
+)
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.schematic_edit import _validate_view_cursors, _ViewCursors
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
@@ -74,6 +81,99 @@ def _output_schemas() -> dict[str, dict[str, Any]]:
 
 def _input_schemas() -> dict[str, dict[str, Any]]:
     return {name: tool_def.inputSchema for name, tool_def in _registered().items()}
+
+
+class TestAttachedRecipeGrammar:
+    """``run_experiments.analyze.recipes`` IS an ``analyze_results`` request.
+
+    Advertised as a bare object, the grammar was discoverable only from the
+    other tool, and a typo in it surfaced at the analysis stage — after the
+    whole simulation had run. Advertised as a second copy of the recipe union,
+    it cost 13 KB on every session to restate what that tool already publishes
+    on the same wire. What ships is what a caller cannot derive: the metric
+    names, the key every recipe carries, and a pointer to the field trees. The
+    model behind it is the union either way.
+    """
+
+    @staticmethod
+    def _attached_recipe_items(schema: dict[str, Any]) -> dict[str, Any]:
+        """The advertised shape of one attached recipe."""
+        # 'analyze' is optional, so the block sits in a nullable branch.
+        ref = next(
+            item["$ref"] for item in schema["properties"]["analyze"]["anyOf"] if "$ref" in item
+        )
+        attached = schema["$defs"][ref.split("/")[-1]]
+        return attached["properties"]["recipes"]["items"]
+
+    def test_the_advertised_metrics_are_exactly_the_recipe_union(self):
+        """Derived from the union on both sides, so a new recipe metric that
+        never reaches this enum fails here instead of being unmentionable in
+        an attached block."""
+        items = self._attached_recipe_items(_registered()["run_experiments"].inputSchema)
+        assert set(items["properties"]["metric"]["enum"]) == set(DISCRIMINANTS)
+
+        analyze = _registered()["analyze_results"].inputSchema
+        standalone = analyze["properties"]["recipes"]["items"]
+        assert set(standalone["discriminator"]["mapping"]) == set(DISCRIMINANTS)
+
+    def test_the_stub_points_at_the_channels_that_carry_the_fields(self):
+        items = self._attached_recipe_items(_registered()["run_experiments"].inputSchema)
+        description = items.get("description") or ""
+        assert "analyze_results.recipes" in description
+        assert "api.reference('analyze_results')" in description
+        assert "spice://guide" in description
+        # Permissive on purpose, like the dormant recipe stubs: a client
+        # pre-validating a full recipe against this shape must still send it.
+        assert "additionalProperties" not in items
+        assert set(items["required"]) == {"key", "metric"}
+
+    def test_a_full_recipe_is_still_what_the_tool_takes(self):
+        """The stub narrows the advertisement, never the accepted call.
+
+        All three gates a full recipe passes through: the published schema
+        (which the server SDK checks before dispatch), the input model, and the
+        submission gate.
+        """
+        payload = {
+            "request_id": "attached-full-recipe",
+            "circuits": [{"path": "dut.cir"}],
+            "analyze": {
+                "recipes": [
+                    {
+                        "key": "pm",
+                        "metric": "stability",
+                        "signal": "V(out)",
+                        "reduce": ["min"],
+                        "reduce_field": "phase_margin_deg",
+                        "spec": {"field": "phase_margin_deg", "min": 45.0},
+                    }
+                ]
+            },
+        }
+        jsonschema.validate(
+            instance=payload,
+            schema=_registered()["run_experiments"].inputSchema,
+        )
+        args = RunExperimentsInput.model_validate(payload)
+        assert args.analyze is not None
+        _validate_attached_analysis(args.analyze)
+
+    @pytest.mark.parametrize(
+        "recipe",
+        [
+            {"key": "x", "metric": "no_such_metric"},
+            {"key": "x", "metric": "stability", "signal": "V(out)", "not_a_field": 1},
+            {"metric": "summary"},
+        ],
+        ids=["unknown-metric", "unknown-field", "no-key"],
+    )
+    def test_a_malformed_recipe_is_refused_before_anything_is_staged(self, recipe: dict):
+        """The submission gate, which runs before a deck is staged or a case
+        submitted (the no-simulation half is pinned in test_run_experiments.py).
+        """
+        block = AttachedAnalysis.model_validate({"recipes": [recipe]})
+        with pytest.raises(SimulationError, match="attached analyze block"):
+            _validate_attached_analysis(block)
 
 
 def _schema_variants(schema: dict[str, Any]) -> Iterator[dict[str, Any]]:
@@ -288,10 +388,16 @@ class TestOutputSchemaCoverage:
 # (_WIRE_PROSE_KEEP in tools/_base.py), and no outputSchema. The full prose
 # stays on the registered definition, api.reference(), and spice://guide.
 _SURFACE_BUDGET_CHARS: dict[str, int] = {
-    # Variations, attached analysis, and the receipt row shape.
-    "run_experiments": 7516,
-    # Five actions and the receipt/page shapes.
-    "jobs": 1724,
+    # Variations, attached analysis, and the receipt row shape. The attached
+    # recipes advertise their metric names and a pointer, not a second copy of
+    # the recipe branches: a client cannot resolve a $ref into another tool's
+    # document, so carrying the grammar twice measured 13 KB more on every
+    # session, to restate what analyze_results publishes on the same wire.
+    "run_experiments": 8103,
+    # Five actions, each advertised as its own branch: one flat property list
+    # could not say which action takes which field, so it said nothing and the
+    # server decided after the fact. Stating it costs roughly 2.3 KB more.
+    "jobs": 4001,
     # Twenty-odd recipe branches; the largest schema on the surface.
     "analyze_results": 16897,
     # Five query kinds, each with its own argument shape.
