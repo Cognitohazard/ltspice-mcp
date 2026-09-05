@@ -1,4 +1,4 @@
-"""Structured lifecycle events for simulation, batch, and experiment jobs.
+"""Structured lifecycle events for experiment jobs.
 
 Emits machine-parseable log records on job state transitions — submit,
 start, completion, failure, cancellation, interrupted recovery. Logs go
@@ -10,13 +10,13 @@ Each event carries:
     event         lifecycle state: submitted | started | analyzing
                   | completed | completed_with_failures | failed
                   | cancelled | interrupted_recovered
-    kind          'sim' | 'sweep' | 'montecarlo' | 'experiment'
+    kind          'experiment' — the one job kind that runs here
     job_id        job identifier
-    netlist       circuit file path for legacy jobs
-    sources       circuit paths for experiment jobs
+    sources       circuit paths the job runs over
     duration_s    wall-clock seconds from started_at to now (or None
                   when the event precedes ``started_at``)
-    extra keys    anything passed via kwargs (e.g. error, run_index)
+    extra keys    anything passed via kwargs (e.g. error, total_cases,
+                  recovered_as)
 
 Payloads are attached to log records via the ``extra`` dict so a
 structured-log shipper (python-json-logger etc.) can pick them up
