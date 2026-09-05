@@ -111,6 +111,20 @@ def _job(
     )
 
 
+class _BarrierSim:
+    """Stand-in simulator class: the barrier never launches anything."""
+
+
+async def _run_barrier(request: ExperimentRunRequest) -> Any:
+    """Await one durable barrier on a coordinator built for this call."""
+    runner = ExperimentRunner(
+        asyncio.get_running_loop(),
+        _BarrierSim,
+        Store(request.state.working_dir).runs_root(),
+    )
+    return await runner._durable_barrier(request)
+
+
 def _barrier_process(
     working_dir: str,
     circuit_path: str,
@@ -124,23 +138,18 @@ def _barrier_process(
     working = Path(working_dir)
     circuit = Path(circuit_path)
     state = SimpleNamespace(working_dir=working)
-    request = SimpleNamespace(
-        state=state,
+    request = ExperimentRunRequest(
+        state=cast("SessionState", state),
         request_id=request_id,
         fingerprint=fingerprint,
-        canonicalizer_version=CANONICALIZER_VERSION,
-    )
-    candidate = _job(
-        working,
-        circuit,
+        cases=[_case(circuit)],
+        sources=[_source(circuit)],
+        simulator="FakeSim",
         job_id=job_id,
-        request_id=request_id,
     )
     start.wait(10)
     try:
-        barrier = ExperimentRunner._durable_barrier(
-            cast("ExperimentRunRequest", request), candidate
-        )
+        barrier = asyncio.run(_run_barrier(request))
         result.put((barrier.job.job_id, barrier.replayed, None))
     except Exception as exc:
         result.put((None, None, f"{type(exc).__name__}: {exc}"))
@@ -902,7 +911,7 @@ class TestRequestBarrier:
         assert len({job_id for job_id, _replayed, _error in outcomes}) == 1
         assert sorted(replayed for _job_id, replayed, _error in outcomes) == [False, True]
 
-    def test_canonicalizer_version_mismatch_is_an_honest_conflict(
+    async def test_canonicalizer_version_mismatch_is_an_honest_conflict(
         self,
         state_no_sim: SessionState,
         work_dir: Path,
@@ -923,17 +932,12 @@ class TestRequestBarrier:
             cases=[_case(circuit)],
             sources=[_source(circuit)],
             simulator="FakeSim",
-        )
-        candidate = _job(
-            work_dir,
-            circuit,
             job_id="exp_new_version",
-            request_id=request.request_id,
         )
         with pytest.raises(IdempotencyConflictError, match="canonicalizer version"):
-            ExperimentRunner._durable_barrier(request, candidate)
+            await _run_barrier(request)
 
-    def test_dangling_request_index_is_replaced_and_observed(
+    async def test_dangling_request_index_is_replaced_and_observed(
         self,
         state_no_sim: SessionState,
         work_dir: Path,
@@ -955,20 +959,15 @@ class TestRequestBarrier:
             cases=[_case(circuit)],
             sources=[_source(circuit)],
             simulator="FakeSim",
-        )
-        candidate = _job(
-            work_dir,
-            circuit,
             job_id="exp_recreated",
-            request_id=request_id,
         )
-        result = ExperimentRunner._durable_barrier(request, candidate)
+        result = await _run_barrier(request)
         assert not result.replayed
         assert any(
             item["code"] == "dangling_request_index_replaced" for item in result.job.observations
         )
 
-    def test_request_index_rejects_an_inconsistent_coordinator(
+    async def test_request_index_rejects_an_inconsistent_coordinator(
         self,
         state_no_sim: SessionState,
         work_dir: Path,
@@ -996,16 +995,11 @@ class TestRequestBarrier:
             cases=[_case(circuit)],
             sources=[_source(circuit)],
             simulator="FakeSim",
-        )
-        candidate = _job(
-            work_dir,
-            circuit,
             job_id="exp_candidate",
-            request_id=request.request_id,
         )
 
         with pytest.raises(IdempotencyConflictError, match="inconsistent coordinator"):
-            ExperimentRunner._durable_barrier(request, candidate)
+            await _run_barrier(request)
 
     def test_unknown_drift_code_still_refuses_the_replay(
         self,

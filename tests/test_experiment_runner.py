@@ -539,11 +539,13 @@ class TestExperimentSubmission:
         release = threading.Event()
         original = runner._durable_barrier
 
-        def blocked_barrier(run_request, candidate):
+        async def blocked_barrier(run_request):
             entered.set()
-            if not release.wait(5):
+            # Wait off the loop: the barrier now runs as part of the pipeline
+            # coroutine, so blocking here would stall the whole test.
+            if not await asyncio.to_thread(release.wait, 5):
                 raise TimeoutError("test barrier was not released")
-            return original(run_request, candidate)
+            return await original(run_request)
 
         monkeypatch.setattr(runner, "_durable_barrier", blocked_barrier)
 

@@ -230,6 +230,18 @@ an observation); same id with a different fingerprint is an
 retention matches job retention. Transport cancellation ends only the dwell,
 never the durable job.
 
+**Claim the id, then stage.** A submission takes that `request_id`'s gate (a
+file lock, so it holds across processes sharing the working directory), looks
+the id up, and stages its decks only if nothing is recorded under it — then
+writes the index and the job record, and releases. A second submission with the
+same id waits on the gate and replays what it finds, or is refused as a
+conflict, without staging a deck set of its own. So one submission stages once
+and no run directory is ever created for a job that does not exist. A crash
+while the gate is held releases the lock with the process and writes no index
+entry: the next submission with that id stages afresh, and whatever the dead
+process had copied under `runs/{job_id}/` is a crash residual that no record
+names.
+
 The fingerprint's canonicalizer version bumps only when the canonical
 representation of a *previously valid* request changes. A presentation field
 excluded from canonicalization from its first valid day changes no old
