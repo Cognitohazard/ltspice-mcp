@@ -4,7 +4,7 @@
 
 > **0.6.0 (upcoming) is a breaking release:** the tool surface consolidates to
 > six operations plus a plot widget, and the same engine becomes importable as
-> a Python library. The 0.5 series keeps the old 49-tool surface
+> a Python API. The 0.5 series keeps the old 49-tool surface
 > (`ltspice-mcp==0.5.*`).
 
 ltspice-mcp lets LLM assistants and Python code run LTspice and ngspice simulations and edit LTspice `.asc` schematics. It returns structured measurements such as cutoff frequency, overshoot, phase margin, rise time, and per-device small-signal operating-point parameters (`gm`, `gds`, `vth`, …). Callers access these values by name without parsing raw files. It works on the same files you open in LTspice. Built on [spicelib](https://github.com/nunobrum/spicelib).
@@ -12,10 +12,10 @@ ltspice-mcp lets LLM assistants and Python code run LTspice and ngspice simulati
 ## Two ways to use it
 
 You can use the same six operations as an **MCP server** or as a **Python
-library**. Both run the same engine: the same code handles each operation,
+API**. Both run the same engine: the same code handles each operation,
 reads the same files, and writes the same job records to disk.
 
-| | MCP server | Python library |
+| | MCP server | Python API |
 |-|-|-|
 | Who calls it | an assistant in Claude Code, Claude Desktop, Cursor, or another MCP client | a script, notebook, or CI job |
 | What a call looks like | a tool call in the conversation; large results are split into pages and continued with a cursor | a method call; results are returned in full, with waveforms as numpy arrays |
@@ -32,7 +32,7 @@ run a batch for an assistant to analyze later.
 
 One measurement, taken on 3 August 2026 against an earlier build: eleven
 op-amp design tasks, run once through each interface by the same assistant.
-Both sessions answered all eleven correctly. The Python-library session cost
+Both sessions answered all eleven correctly. The Python-API session cost
 $5.37 in tokens against the MCP session's $9.31, because one script replaces a
 series of tool calls and the results they return. The MCP session took fewer
 turns (52 against 74) and less time (14 against 21 minutes). The MCP side has
@@ -52,7 +52,7 @@ exiting cancels it — unless it asks for a detached owner
 process spawned to supervise it. The script can then exit, and the job, the
 server and any later script all still see the same record.
 
-## Quick start — Python library
+## Quick start — Python API
 
 ```bash
 pip install ltspice-mcp        # or: uv tool install / pipx install
