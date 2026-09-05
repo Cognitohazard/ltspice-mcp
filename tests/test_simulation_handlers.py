@@ -177,8 +177,8 @@ class TestCheckJob:
         data = result.structuredContent
         assert data is not None
         for blob in (text, data["error"]):
-            assert "find_model" in blob
-            assert "include_builtin=true" in blob
+            assert 'inspect(kind="model"' in blob
+            assert 'mode="search"' in blob
             assert "2n2222" in blob
         assert text.count("Log excerpt:") == 1
 

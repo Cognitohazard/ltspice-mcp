@@ -53,6 +53,7 @@ class TestToolCountInDocs:
 
 DOC_PATHS = (
     "README.md",
+    "src/ltspice_mcp/assets/spice_guide.md",
     "docs/DESIGN.md",
     "skills/ltspice/SKILL.md",
     "skills/ngspice/SKILL.md",
@@ -210,6 +211,38 @@ def _ltspice_refs_in_strings(py_path: Path) -> set[str]:
     return found
 
 
+def _non_docstring_strings(py_path: Path) -> list[str]:
+    """Every string literal in the file except module/class/function docstrings.
+
+    Docstrings are developer text — they legitimately name a helper after the
+    tool it once backed (":func:`handle_find_crossing`") and no client ever
+    reads them. Error messages, ``Field`` descriptions, warnings and
+    observation details are what a caller sees, and those are exactly the
+    string constants that are NOT a docstring.
+    """
+    tree = ast.parse(py_path.read_text())
+    docstrings: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(
+            node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+        ):
+            continue
+        first = node.body[0] if node.body else None
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            docstrings.add(id(first.value))
+    return [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstrings
+    ]
+
+
 class TestRemovedToolNamesInClientReachingStrings:
     """Strings the CLIENT reads must not point at removed tools.
 
@@ -221,24 +254,72 @@ class TestRemovedToolNamesInClientReachingStrings:
     own docstrings and ordinary English ("parameter", "recent"). Call-shaped
     references only (``name(``): that is how guidance names a tool, while
     prose reuse of a word like "recent" is legitimate.
+
+    The sibling scan below covers the OTHER live source of client-visible
+    prose: the error messages, warnings and observations raised in ``lib/``
+    and in the analysis adapters. Those never look like a call — they say
+    "use check_job (status + completion summary)" — so they need the wider,
+    word-shaped match, restricted to non-docstring strings.
     """
 
-    _CLIENT_MODULES = ("resources.py", "server.py", "prompts.py")
+    # Retained 0.5 adapters whose strings are rewritten or deleted with the
+    # legacy layer; until then their prose is not client-reaching guidance.
+    _RETAINED_ADAPTERS: ClassVar[frozenset[str]] = frozenset(
+        {"tools/circuit.py", "tools/simulation.py"}
+    )
 
-    def test_no_removed_tool_calls_in_client_strings(self) -> None:
-        pat = re.compile(r"\b(" + "|".join(map(re.escape, TOOLS_REMOVED_IN_0_6)) + r")\(")
+    # Every module whose strings a caller can read back: ``lib/`` raises the
+    # errors and builds the warnings/observations the tools relay verbatim,
+    # ``tools/`` holds the tools' own prose and the analysis adapters every
+    # ``analyze_results`` recipe reaches, and the client modules carry the
+    # handshake instructions, prompts and resources.
+    _PROSE_MODULES: ClassVar[tuple[str, ...]] = tuple(
+        sorted(
+            {
+                *(f"lib/{p.name}" for p in (ROOT / "src" / "ltspice_mcp" / "lib").glob("*.py")),
+                *(
+                    f"tools/{p.name}"
+                    for p in (ROOT / "src" / "ltspice_mcp" / "tools").glob("*.py")
+                ),
+                "resources.py",
+                "server.py",
+                "prompts.py",
+            }
+            - _RETAINED_ADAPTERS
+        )
+    )
+
+    # Removed tool names that are also ordinary English, so a word-shaped
+    # match over prose cannot tell a tool reference from a sentence. Both are
+    # single common words with no call syntax anywhere in the scanned tree;
+    # keeping them in would make the gate unusable rather than strict. Dead
+    # names that survive as live surface vocabulary (the ``signal_stats``
+    # recipe, the ``wire_pins`` op) are already subtracted upstream by
+    # REMOVED_TOOL_NAMES — those are exempt by derivation, not by this list.
+    _ENGLISH_HOMONYMS: ClassVar[frozenset[str]] = frozenset({"parameter", "recent"})
+
+    def test_exemptions_are_subsets_of_what_they_exempt(self) -> None:
+        assert set(REMOVED_TOOL_NAMES) >= self._ENGLISH_HOMONYMS
+        assert {
+            f"tools/{p.name}" for p in (ROOT / "src" / "ltspice_mcp" / "tools").glob("*.py")
+        } >= self._RETAINED_ADAPTERS
+
+    def test_no_removed_tool_names_in_prose_strings(self) -> None:
+        names = sorted(set(REMOVED_TOOL_NAMES) - self._ENGLISH_HOMONYMS)
+        pat = re.compile(r"\b(" + "|".join(map(re.escape, names)) + r")\b")
         failures: list[str] = []
-        for rel in self._CLIENT_MODULES:
+        for rel in self._PROSE_MODULES:
             py_file = ROOT / "src" / "ltspice_mcp" / rel
-            tree = ast.parse(py_file.read_text())
             hits: set[str] = set()
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                    hits.update(m.group(1) for m in pat.finditer(node.value))
+            for text in _non_docstring_strings(py_file):
+                hits.update(m.group(1) for m in pat.finditer(text))
             if hits:
                 failures.append(f"  src/ltspice_mcp/{rel}: {sorted(hits)}")
-        assert not failures, "Client-reaching strings recommend removed tools:\n" + "\n".join(
-            failures
+        assert not failures, (
+            "Error messages, warnings or observations name removed tools:\n"
+            + "\n".join(failures)
+            + "\nName the live surface instead (an analyze_results recipe, "
+            "an inspect kind, a jobs action, run_experiments, verify_circuit)."
         )
 
     def test_no_removed_tool_names_in_advertised_descriptions(self) -> None:

@@ -114,9 +114,9 @@ def attach_suggestions_to_failure(
 
     Two complementary layers, both keyed off the unresolved model/subcircuit
     refs in the log: fuzzy matches against loaded user libraries (when any),
-    and a library-independent recovery hint pointing at find_model's built-in
-    search — which fires even with no library loaded, the common case stock
-    parts fail in. Returns the (possibly-unchanged) error message. Called on
+    and a recovery hint pointing at ``inspect``'s model search — which fires
+    even with no library loaded, the common case stock parts fail in.
+    Returns the (possibly-unchanged) error message. Called on
     simulation failure paths where the log already has the error context
     inline, so callers don't re-implement read-log / extract / format / attach.
     """
@@ -134,8 +134,10 @@ def attach_suggestions_to_failure(
     block += (
         f"\n\nUnresolved model/subcircuit(s): {ref_list}. Stock parts are not "
         "auto-included in the run. For each, call "
-        'find_model(name="<ref>", include_builtin=true), add the returned '
-        ".include directive to the netlist, and rerun."
+        'inspect(kind="model", mode="search", query="<ref>") to locate its '
+        'definition in the loaded libraries — or mode="enumerate" with "libs" '
+        "to read a specific stock library file — then add the returned .include "
+        "directive to the netlist and rerun."
     )
     return f"{error_msg}{block}"
 
@@ -281,13 +283,13 @@ async def resolve_batch_job_async(job_id: str, state: SessionState) -> BatchJob:
     if isinstance(job, SimulationJob):
         raise BatchJobError(
             f"Job '{job_id}' is a single simulation job — read its results with "
-            "check_job (status + completion summary) or query_value (job_id + "
-            "run_index) for a signal value."
+            "jobs(action='status') or an analyze_results recipe (a source with "
+            "its job_id)."
         )
     if isinstance(job, ExperimentJob):
         raise BatchJobError(
             f"Job '{job_id}' is an experiment job (status={job.status!r}); "
-            "legacy batch_results accepts only sweep and Monte Carlo jobs."
+            "this batch reader accepts only sweep and Monte Carlo jobs."
         )
     return job
 
@@ -302,8 +304,8 @@ def resolve_simulation_job(job_id: str, state: SessionState) -> SimulationJob:
     job = resolve_job(job_id, state)
     if isinstance(job, BatchJob):
         raise SimulationError(
-            f"Job '{job_id}' is a {job.job_type} batch job — "
-            "use batch_results for its per-run results."
+            f"Job '{job_id}' is a {job.job_type} batch job — read its per-run "
+            "results through analyze_results (a source with its job_id and runs)."
         )
     if isinstance(job, ExperimentJob):
         raise SimulationError(
@@ -335,13 +337,13 @@ def resolve_batch_job(job_id: str, state: SessionState) -> BatchJob:
         # is reached only after check_job hands back that path.
         raise BatchJobError(
             f"Job '{job_id}' is a single simulation job — read its results with "
-            "check_job (status + completion summary) or query_value (job_id + "
-            "run_index) for a signal value."
+            "jobs(action='status') or an analyze_results recipe (a source with "
+            "its job_id)."
         )
     if isinstance(job, ExperimentJob):
         raise BatchJobError(
             f"Job '{job_id}' is an experiment job (status={job.status!r}); "
-            "legacy batch_results accepts only sweep and Monte Carlo jobs."
+            "this batch reader accepts only sweep and Monte Carlo jobs."
         )
     return job
 
@@ -642,7 +644,7 @@ def resolve_analysis_source(
     if hasattr(args, "raw_file") and bool(raw_file) == bool(job_id):
         raise ResultError(
             "Pass exactly one of 'raw_file' or 'job_id'. Analysis tools read "
-            "an existing result — if you only have a netlist, run_simulation "
+            "an existing result — if you only have a netlist, run_experiments "
             "produces the job_id/raw to analyze.",
             show_hint=False,
         )
@@ -705,13 +707,13 @@ def legacy_job_netlist(job: Job, *, operation: str) -> Path:
 
 def reject_experiment_job(
     job: ExperimentJob,
-    tool_name: Literal["check_job", "cancel_job"],
+    action: Literal["status", "cancel"],
     state: SessionState,
 ) -> NoReturn:
     """Raise a profile-aware legacy-tool redirect for an experiment job."""
     redirect = ""
     if "jobs" in state.tool_dispatch:
-        if tool_name == "check_job":
+        if action == "status":
             redirect = (
                 f" Use jobs(action='status', job_id='{job.job_id}') for its experiment receipt."
             )
@@ -721,7 +723,7 @@ def reject_experiment_job(
             )
     raise SimulationError(
         f"Job {job.job_id} is an experiment job (status: {job.status}); "
-        f"{tool_name} only accepts legacy simulation and batch jobs.{redirect}",
+        f"this path only accepts legacy simulation and batch jobs.{redirect}",
         show_hint=False,
     )
 
@@ -752,7 +754,7 @@ def ngspice_preflight_warnings(netlist_path: Path, simulator_class: type) -> lis
         if stripped.startswith(".step"):
             raise SimulationError(
                 "ngspice batch mode does not support .step directives. "
-                "Use configure_sweep + run_sweep for parametric sweeps, "
+                "Use run_experiments variations for parametric sweeps, "
                 "or remove the .step line and set the parameter to a fixed value."
             )
         if stripped.startswith(".meas"):
@@ -773,7 +775,7 @@ def ngspice_preflight_warnings(netlist_path: Path, simulator_class: type) -> lis
             "ngspice does not evaluate .meas in batch mode when a rawfile is set "
             "(-b -r, this server's invocation). "
             f"The following measurements will be skipped: {names}. "
-            "Compute them from the raw with signal_stats / query_value, or move the "
+            "Compute them from the raw with the signal_stats or value recipes, or move the "
             "measurement into a '.control ... run ... .endc' block written as the "
             "dot-less 'meas' command (a dotted '.meas' inside .control is not valid "
             "ngspice and computes nothing)."
@@ -1359,7 +1361,7 @@ async def get_batch_signal_data(
         if page_stats["run_count"] == 0 and paginated_indices:
             raise ResultError(
                 f"Signal '{signal}' could not be read from any run of job "
-                f"{batch_job.job_id}. If it is a .MEAS name use measurement_stats; "
+                f"{batch_job.job_id}. If it is a .MEAS name use the measurements recipe; "
                 f"otherwise check the trace name against a run's raw signals.",
                 show_hint=False,
             )
