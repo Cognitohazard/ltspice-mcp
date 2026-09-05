@@ -31,7 +31,7 @@ from ltspice_mcp.tools.analyze import (
     evaluate_analysis_results,
     handle_analyze_results,
 )
-from tests.conftest import FIXTURES_DIR, make_sim_job, stage_recorded_fixture
+from tests.conftest import FIXTURES_DIR, make_experiment_job, stage_recorded_fixture
 
 
 def _source(raw: Path, label: str = "dut") -> dict[str, Any]:
@@ -1092,24 +1092,20 @@ async def test_raw_path_run_selection_reports_nonzero_outer_runs_missing(
 
 
 @pytest.mark.asyncio
-async def test_noncompleted_legacy_job_keeps_completed_only_gate(
+async def test_noncompleted_experiment_keeps_the_terminal_only_gate(
     state_no_sim: SessionState,
     work_dir: Path,
 ):
+    """A job still running is not readable, even when a raw is already on disk.
+
+    Half a sweep's artifacts exist long before the job is done; analyzing them
+    as if they were the whole answer is the failure this gate exists for.
+    """
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    deck = work_dir / "legacy.cir"
-    deck.write_text(".tran 1m\n.end\n")
-    job = make_sim_job(
-        "legacy_running",
-        status="running",
-        netlist=deck,
-        raw_file=raw,
-        log_file=raw.with_suffix(".log"),
-    )
-    state_no_sim.add_job(job)
+    job = make_experiment_job(state_no_sim, job_id="exp_running", status="running", raw=raw)
     args = AnalyzeResultsInput.model_validate(
         {
-            "sources": [{"job_id": job.job_id, "label": "legacy"}],
+            "sources": [{"job_id": job.job_id, "label": "live"}],
             "recipes": [{"key": "summary", "metric": "summary"}],
         }
     )
@@ -1117,7 +1113,9 @@ async def test_noncompleted_legacy_job_keeps_completed_only_gate(
     data = result.structuredContent
     assert data is not None
     assert data["coverage"]["runs_analyzed"] == 0
-    assert "not completed" in data["coverage"]["missing_cases"]["items"][0]["detail"]
+    (missing,) = data["coverage"]["missing_cases"]["items"]
+    assert missing["code"] == "job_not_terminal"
+    assert "no readable runs yet" in missing["detail"]
 
 
 @pytest.mark.asyncio

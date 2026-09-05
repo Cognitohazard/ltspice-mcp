@@ -22,12 +22,9 @@ from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.job_types import (
     NON_TERMINAL_LIVE_STATUSES,
     TERMINAL_STATUSES,
-    BatchJob,
-    MonteCarloConfig,
-    RunRef,
-    SimulationJob,
-    SweepConfig,
-    SweepDimension,
+    LegacyJobRecord,
+    legacy_record_message,
+    legacy_record_observation,
 )
 from ltspice_mcp.lib.library_manager import LibraryManager
 from ltspice_mcp.lib.runner_manager import RunnerManager
@@ -46,18 +43,15 @@ logger = logging.getLogger(__name__)
 RESULT_CACHE_MAXSIZE = 32
 
 # Re-export the job-type surface so existing
-# ``from ltspice_mcp.state import SimulationJob`` imports keep working.
+# ``from ltspice_mcp.state import LegacyJobRecord`` imports keep working.
 __all__ = [
     "NON_TERMINAL_LIVE_STATUSES",
     "TERMINAL_STATUSES",
-    "BatchJob",
     "ExperimentJob",
-    "MonteCarloConfig",
-    "RunRef",
+    "LegacyJobRecord",
     "SessionState",
-    "SimulationJob",
-    "SweepConfig",
-    "SweepDimension",
+    "legacy_record_message",
+    "legacy_record_observation",
 ]
 
 
@@ -94,8 +88,6 @@ class SessionState:
     runners: RunnerManager
     working_dir: Path
     job_registry: JobRegistry = field(default_factory=lambda: JobRegistry(persist_enabled=False))
-    sweep_configs: dict[str, SweepConfig] = field(default_factory=dict)
-    mc_configs: dict[str, MonteCarloConfig] = field(default_factory=dict)
     diagnostics: list[str] = field(default_factory=list)
     """Startup diagnostics (bad simulator path, requested≠active fallback, WSL
     auto-detection). Surfaced via ``server_status`` so silent degradation is
@@ -204,14 +196,9 @@ class SessionState:
     # ------------------------------------------------------------------
 
     @property
-    def jobs(self) -> MutableMapping[str, SimulationJob]:
-        """Type-filtered view of the single-simulation jobs."""
-        return self.job_registry.sim_jobs
-
-    @property
-    def batch_jobs(self) -> MutableMapping[str, BatchJob]:
-        """Type-filtered view of the batch (sweep/MC) jobs."""
-        return self.job_registry.batch_jobs
+    def legacy_records(self) -> MutableMapping[str, LegacyJobRecord]:
+        """Type-filtered view of the job records earlier releases wrote."""
+        return self.job_registry.legacy_records
 
     @property
     def experiment_jobs(self) -> MutableMapping[str, ExperimentJob]:
@@ -219,15 +206,9 @@ class SessionState:
         return self.job_registry.experiment_jobs
 
     @property
-    def all_jobs(self) -> dict[str, "SimulationJob | BatchJob | ExperimentJob"]:
+    def all_jobs(self) -> dict[str, "LegacyJobRecord | ExperimentJob"]:
         """The union job store — every job regardless of run type."""
         return self.job_registry.jobs
-
-    def add_job(self, job: SimulationJob) -> None:
-        self.job_registry.add_sim_job(job)
-
-    def add_batch_job(self, batch_job: BatchJob) -> None:
-        self.job_registry.add_batch_job(batch_job)
 
     def add_experiment_job(
         self,
@@ -240,11 +221,8 @@ class SessionState:
             already_persisted=already_persisted,
         )
 
-    def persist_job(self, job: "SimulationJob | BatchJob | ExperimentJob") -> None:
+    def persist_job(self, job: "LegacyJobRecord | ExperimentJob") -> None:
         self.job_registry.persist_job(job)
-
-    def persist_batch_progress(self, batch_job: BatchJob) -> None:
-        self.job_registry.persist_batch_progress(batch_job)
 
     def ensure_jobs_loaded_for(self, circuit_path: Path) -> None:
         self.job_registry.ensure_loaded_for(circuit_path)

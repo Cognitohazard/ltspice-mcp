@@ -31,7 +31,6 @@ from typing import Any, Literal
 
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.experiment_types import ExperimentJob
-from ltspice_mcp.lib.job_types import BatchJob, SimulationJob
 
 logger = logging.getLogger("ltspice_mcp.events")
 
@@ -46,7 +45,7 @@ JobEvent = Literal[
     "interrupted_recovered",
 ]
 
-JobKind = Literal["sim", "sweep", "montecarlo", "experiment"]
+JobKind = Literal["experiment"]
 
 
 def _duration_seconds(started_at: datetime | None) -> float | None:
@@ -63,16 +62,15 @@ def _duration_seconds(started_at: datetime | None) -> float | None:
 
 def emit_job_event(
     event: JobEvent,
-    job: SimulationJob | BatchJob | ExperimentJob,
+    job: ExperimentJob,
     *,
     kind: JobKind | None = None,
     **extra: Any,
 ) -> None:
     """Emit a structured lifecycle event for ``job``.
 
-    ``kind`` is inferred from the job class when omitted: SimulationJob
-    → 'sim'; BatchJob → 'sweep' or 'montecarlo' depending on job_type.
-    Any additional keyword args are merged into the event payload.
+    ``kind`` is inferred from the job class when omitted. Any additional
+    keyword args are merged into the event payload.
     """
     inferred_kind = kind or _infer_kind(job)
 
@@ -83,10 +81,7 @@ def emit_job_event(
         "job_id": job.job_id,
         "duration_s": _duration_seconds(getattr(job, "started_at", None)),
     }
-    if isinstance(job, ExperimentJob):
-        payload["sources"] = [str(source.path) for source in job.sources]
-    else:
-        payload["netlist"] = str(job.netlist)
+    payload["sources"] = [str(source.path) for source in job.sources]
     payload.update(extra)
 
     # Human-readable summary in the message, structured dict in extra.
@@ -108,15 +103,8 @@ def emit_job_event(
     )
 
 
-def _infer_kind(job: SimulationJob | BatchJob | ExperimentJob) -> JobKind:
+def _infer_kind(job: ExperimentJob) -> JobKind:
     """Map a job instance to its lifecycle ``kind`` string."""
-    if isinstance(job, SimulationJob):
-        return "sim"
-    if isinstance(job, BatchJob):
-        if job.job_type == "sweep":
-            return "sweep"
-        if job.job_type == "montecarlo":
-            return "montecarlo"
     if isinstance(job, ExperimentJob):
         return "experiment"
     raise TypeError(f"Cannot infer lifecycle kind for {type(job).__name__}")

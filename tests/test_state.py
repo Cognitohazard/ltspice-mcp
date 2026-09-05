@@ -1,44 +1,73 @@
-"""Tests for SessionState lifecycle, the union job store, and dataclass defaults."""
+"""Tests for SessionState lifecycle and the union job store."""
 
 import asyncio
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.lib import job_store, now
+from ltspice_mcp.lib import experiment_store, now
 from ltspice_mcp.lib.cache import FileCache
-from ltspice_mcp.lib.job_lifecycle import transition
+from ltspice_mcp.lib.experiment_types import (
+    Completeness,
+    ExperimentCase,
+    ExperimentJob,
+    SourceRecord,
+)
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.runner_manager import RunnerManager
-from ltspice_mcp.state import BatchJob, MonteCarloConfig, SessionState, SimulationJob
+from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import get_tools_for_profile
-from tests.conftest import make_batch_job, make_sim_job
+from tests.conftest import make_legacy_record
 
 
-class _RecordingRunner:
-    """Stub for a cached sim/sweep/MC runner.
+def _experiment(
+    working_dir: Path,
+    circuit: Path,
+    *,
+    job_id: str,
+    status: str = "completed",
+) -> ExperimentJob:
+    """A minimal ExperimentJob — one produced case over one deck."""
+    case = ExperimentCase(
+        case_id="case_0000",
+        run_index=0,
+        circuit="dut",
+        circuit_path=circuit,
+        staged_deck=circuit,
+        deck_sha256="a" * 64,
+        assignments={},
+        status="produced" if status == "completed" else "queued",
+    )
+    return ExperimentJob(
+        job_id=job_id,
+        request_id=f"request-{job_id}",
+        fingerprint="f" * 64,
+        canonicalizer_version=1,
+        control_token="control-secret",
+        store_path=experiment_store.record_path(job_id, working_dir),
+        cases=[case],
+        sources=[
+            SourceRecord(
+                circuit="dut",
+                path=circuit,
+                sha256="b" * 64,
+                staged_deck=circuit,
+                manifest=[],
+                simulator="FakeSim",
+                dialect="ltspice",
+            )
+        ],
+        simulator="FakeSim",
+        completeness=Completeness(declared=1, expanded=1),
+        status=status,  # type: ignore[arg-type]
+    )
 
-    Records each ``cancel()`` call and honours the runner cancel contract:
-    a still-live job is transitioned to terminal ``cancelled``.
-    """
 
-    def __init__(self) -> None:
-        self.cancel_calls: list[tuple[SimulationJob | BatchJob, SessionState | None]] = []
-
-    def owns_batch_job(self, job_id: str) -> bool:
-        # No recorded ownership: batch-cancel routing falls back to
-        # most-recent-of-kind, which is what these tests pin.
-        return False
-
-    async def cancel(
-        self, job: SimulationJob | BatchJob, state: SessionState | None = None
-    ) -> None:
-        self.cancel_calls.append((job, state))
-        if job.status in ("queued", "running"):
-            transition(job, "cancelled", state=state)
+@pytest.fixture
+def config(tmp_path: Path) -> ServerConfig:
+    return ServerConfig(working_dir=tmp_path, allowed_paths=[tmp_path])
 
 
 class TestSessionStateCreate:
@@ -69,6 +98,7 @@ class TestSessionStateCreate:
         assert def_names == {tool_def.name for tool_def in consolidated_defs}
 
 
+@pytest.mark.asyncio
 class TestSessionStateShutdown:
     async def test_shutdown_clears_caches(self, config: ServerConfig, tmp_path: Path):
         state = SessionState.create(config, {})
@@ -81,164 +111,44 @@ class TestSessionStateShutdown:
         assert len(state.editors) == 0
         assert len(state.results) == 0
 
-    async def test_shutdown_cancels_running_sim_jobs(self, config: ServerConfig):
+    async def test_shutdown_leaves_a_legacy_record_alone(self, config: ServerConfig):
+        # Nothing in this process launched it, so there is no simulator to kill
+        # and no status of ours to write over the one its release persisted.
         state = SessionState.create(config, {})
-        job = SimulationJob(
-            job_id="sim1",
-            netlist=Path("/tmp/test.cir"),
-            simulator="ltspice",
-            status="running",
-            started_at=now(),
-        )
-        state.jobs["sim1"] = job
+        record = make_legacy_record("sim_old", status="interrupted")
+        state.job_registry.jobs["sim_old"] = record
 
         await state.shutdown()
-        assert job.status == "cancelled"
-        assert job.done_event.is_set()
-
-    async def test_shutdown_cancels_running_batch_jobs(self, config: ServerConfig):
-        state = SessionState.create(config, {})
-        batch = BatchJob(
-            job_id="batch1",
-            job_type="sweep",
-            netlist=Path("/tmp/test.cir"),
-            total_runs=10,
-            status="running",
-        )
-        state.batch_jobs["batch1"] = batch
-
-        await state.shutdown()
-        assert batch.status == "cancelled"
-        assert batch.done_event.is_set()
-
-    async def test_shutdown_routes_sim_cancel_through_cached_runner(
-        self, config: ServerConfig, tmp_path: Path
-    ):
-        """With a cached SimulationRunner, shutdown must delegate to its
-        cancel() (the path that kills live simulator processes) rather than
-        only flipping the job status."""
-        state = SessionState.create(config, {})
-        sim_runner = _RecordingRunner()
-        state.runners._runners[("sim", _RecordingRunner, tmp_path)] = sim_runner
-
-        job = SimulationJob(
-            job_id="sim-live",
-            netlist=tmp_path / "test.cir",
-            simulator="ltspice",
-            status="running",
-            started_at=now(),
-        )
-        state.add_job(job)
-
-        await state.shutdown()
-
-        assert len(sim_runner.cancel_calls) == 1
-        called_job, called_state = sim_runner.cancel_calls[0]
-        assert called_job is job
-        assert called_state is state
-        assert job.status == "cancelled"
-        assert job.done_event.is_set()
-
-    @pytest.mark.parametrize(
-        ("job_type", "active_runner_key", "idle_runner_key"),
-        [
-            pytest.param("sweep", "sweep", "mc", id="sweep-batch-routes-to-sweep-runner"),
-            pytest.param("montecarlo", "mc", "sweep", id="mc-batch-routes-to-mc-runner"),
-        ],
-    )
-    async def test_shutdown_routes_batch_cancel_through_matching_runner(
-        self,
-        config: ServerConfig,
-        tmp_path: Path,
-        job_type: str,
-        active_runner_key: str,
-        idle_runner_key: str,
-    ):
-        state = SessionState.create(config, {})
-        active_runner = _RecordingRunner()
-        idle_runner = _RecordingRunner()
-        state.runners._runners[(active_runner_key, _RecordingRunner, tmp_path)] = active_runner
-        state.runners._runners[(idle_runner_key, _RecordingRunner, tmp_path)] = idle_runner
-
-        batch = make_batch_job(
-            f"{job_type}-live",
-            status="running",
-            job_type=job_type,
-            netlist=tmp_path / "test.cir",
-            total_runs=3,
-        )
-        state.add_batch_job(batch)
-
-        await state.shutdown()
-
-        assert len(active_runner.cancel_calls) == 1
-        called_job, called_state = active_runner.cancel_calls[0]
-        assert called_job is batch
-        assert called_state is state
-        assert idle_runner.cancel_calls == []
-        assert batch.status == "cancelled"
-        assert batch.done_event.is_set()
-
-    async def test_shutdown_ignores_completed_jobs(self, config: ServerConfig):
-        state = SessionState.create(config, {})
-        job = SimulationJob(
-            job_id="done1",
-            netlist=Path("/tmp/test.cir"),
-            simulator="ltspice",
-            status="completed",
-            started_at=now(),
-            completed_at=now(),
-        )
-        state.jobs["done1"] = job
-
-        await state.shutdown()
-        assert job.status == "completed"
+        assert state.all_jobs["sim_old"].status == "interrupted"
 
 
 class TestUnionJobStoreViews:
-    """``state.jobs`` / ``state.batch_jobs`` are type-filtered writable views
-    over the single union store (``state.all_jobs``): lookups surface only the
-    view's job type, writes go straight through to the union dict."""
+    """``state.legacy_records`` / ``state.experiment_jobs`` are type-filtered
+    writable views over the single union store (``state.all_jobs``): lookups
+    surface only the view's job type, writes go through to the union dict."""
 
-    @pytest.mark.parametrize(
-        ("job_id", "make_job", "own_view_name", "other_view_name"),
-        [
-            pytest.param(
-                "b1", make_batch_job, "batch_jobs", "jobs", id="batch-job-invisible-in-sim-view"
-            ),
-            pytest.param(
-                "j1", make_sim_job, "jobs", "batch_jobs", id="sim-job-invisible-in-batch-view"
-            ),
-        ],
-    )
-    def test_job_invisible_through_other_type_view(
-        self, config: ServerConfig, job_id: str, make_job, own_view_name: str, other_view_name: str
-    ):
+    def test_record_invisible_through_the_experiment_view(self, config: ServerConfig):
         state = SessionState.create(config, {})
-        job = make_job(job_id)
-        getattr(state, own_view_name)[job_id] = job
+        record = make_legacy_record("j1")
+        state.legacy_records["j1"] = record
 
-        other_view = getattr(state, other_view_name)
-        assert other_view.get(job_id) is None
-        assert job_id not in other_view
+        other_view = state.experiment_jobs
+        assert other_view.get("j1") is None
+        assert "j1" not in other_view
         assert len(other_view) == 0
         assert list(other_view.values()) == []
         # ...but it exists in the union store and its own view.
-        assert state.all_jobs[job_id] is job
-        assert getattr(state, own_view_name)[job_id] is job
+        assert state.all_jobs["j1"] is record
+        assert state.legacy_records["j1"] is record
 
     def test_views_write_through_to_union_store(self, config: ServerConfig):
         state = SessionState.create(config, {})
-        sim = make_sim_job("j1")
-        batch = make_batch_job("b1")
-        state.jobs["j1"] = sim
-        state.batch_jobs["b1"] = batch
+        record = make_legacy_record("j1")
+        state.legacy_records["j1"] = record
 
-        assert state.all_jobs == {"j1": sim, "b1": batch}
-        assert len(state.jobs) == 1
-        assert len(state.batch_jobs) == 1
-        assert set(state.jobs) == {"j1"}
-        assert set(state.batch_jobs) == {"b1"}
+        assert state.all_jobs == {"j1": record}
+        assert set(state.legacy_records) == {"j1"}
+        assert len(state.experiment_jobs) == 0
 
     def test_view_write_rejects_wrong_job_type(self, config: ServerConfig):
         """Writing a job of the wrong type through a typed view must fail
@@ -246,109 +156,9 @@ class TestUnionJobStoreViews:
         through the view that wrote it."""
         state = SessionState.create(config, {})
 
-        with pytest.raises(
-            TypeError, match=r"SimulationJob view cannot store BatchJob \(key 'b1'\)"
-        ):
-            state.jobs["b1"] = make_batch_job("b1")  # type: ignore[assignment]
-        with pytest.raises(
-            TypeError, match=r"BatchJob view cannot store SimulationJob \(key 'j1'\)"
-        ):
-            state.batch_jobs["j1"] = make_sim_job("j1")  # type: ignore[assignment]
-        # Nothing leaked into the union store.
+        with pytest.raises(TypeError, match=r"ExperimentJob view cannot store LegacyJobRecord"):
+            state.experiment_jobs["j1"] = make_legacy_record("j1")  # type: ignore[assignment]
         assert state.all_jobs == {}
-
-
-class TestCancelRunningSnapshotsViews:
-    """``cancel_running`` awaits runner ``cancel()`` mid-loop; jobs registered
-    during that suspension must not invalidate the iteration over the live
-    union store (lazy view iteration would raise ``RuntimeError: dictionary
-    changed size during iteration``)."""
-
-    @pytest.mark.parametrize(
-        ("runner_key", "make_job", "register_attr"),
-        [
-            pytest.param("sim", make_sim_job, "add_sim_job", id="sim-job-registered-mid-cancel"),
-            pytest.param(
-                "sweep", make_batch_job, "add_batch_job", id="batch-job-registered-mid-cancel"
-            ),
-        ],
-    )
-    async def test_job_registered_during_cancel_does_not_break_iteration(
-        self, config: ServerConfig, runner_key: str, make_job, register_attr: str
-    ):
-        state = SessionState.create(config, {})
-        registry = state.job_registry
-        register_late = getattr(registry, register_attr)
-
-        class _RegisteringRunner(_RecordingRunner):
-            async def cancel(
-                self, job: SimulationJob | BatchJob, state: SessionState | None = None
-            ) -> None:
-                register_late(make_job(f"late-{job.job_id}"))
-                await super().cancel(job, state)
-
-        state.runners._runners[(runner_key, _RegisteringRunner, Path("."))] = _RegisteringRunner()
-        for i in range(3):
-            registry.jobs[f"run{i}"] = make_job(f"run{i}", status="running")
-
-        await registry.cancel_running(state.runners, state)
-
-        for i in range(3):
-            assert registry.jobs[f"run{i}"].status == "cancelled"
-            # Jobs registered mid-cancel land in the store untouched.
-            assert registry.jobs[f"late-run{i}"].status == "completed"
-
-
-class TestShutdownCancelIsolation:
-    """One job's cancel failing must cost only that job.
-
-    ``cancel_running`` is the last thing that can write a terminal status
-    before the process exits, and the caller flushes job persistence
-    immediately after it returns. A cancel that raised straight out of the
-    loop therefore skipped every job it had not reached yet AND the flush
-    that would have persisted them — one wedged simulator losing the record
-    of all the others.
-    """
-
-    async def test_a_raising_sim_cancel_leaves_later_jobs_and_the_flush_intact(
-        self, work_dir: Path
-    ):
-        netlist = work_dir / "deck.cir"
-        netlist.write_text(".op\n.end\n")
-        registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
-        refused = make_sim_job("sim_refused", status="running", netlist=netlist)
-        following = make_sim_job("sim_following", status="running", netlist=netlist)
-        batch = make_batch_job("batch_following", status="running", netlist=netlist)
-        registry.add_sim_job(refused)
-        registry.add_sim_job(following)
-        registry.add_batch_job(batch)
-
-        class _PartlyRefusingRunner(_RecordingRunner):
-            async def cancel(
-                self, job: SimulationJob | BatchJob, state: SessionState | None = None
-            ) -> None:
-                if job.job_id == "sim_refused":
-                    raise RuntimeError("simulator kill failed")
-                await super().cancel(job, state)
-
-        sim_runner = _PartlyRefusingRunner()
-        runners = SimpleNamespace(
-            get_existing_sim_runner=lambda _simulator: sim_runner,
-            # No batch runner: shutdown's own bookkeeping cancels and persists it,
-            # which is the half a raise upstream used to skip entirely.
-            get_batch_runner_for=lambda _job: None,
-        )
-
-        # The real shutdown sequence: cancel the live work, then flush.
-        await registry.cancel_running(runners, None)
-        await registry.drain_pending()
-
-        assert following.status == "cancelled", "a sibling sim job was skipped by the raise"
-        assert batch.status == "cancelled", "the batch collection was skipped by the raise"
-        _, reloaded_batches = job_store.load_jobs_for_circuit(netlist)
-        assert [(bj.job_id, bj.status) for bj in reloaded_batches] == [
-            ("batch_following", "cancelled")
-        ], "the persistence flush never ran"
 
 
 class TestPersistDuringInterpreterTeardown:
@@ -356,16 +166,18 @@ class TestPersistDuringInterpreterTeardown:
     raises ``RuntimeError: cannot schedule new futures after shutdown`` — and
     the async persist's task exception was never retrieved, so the caller saw
     an irrelevant traceback while the status change it carried was LOST.
-    Observed live three times: a ``wait=False`` script exiting while its job
-    settled. The persist must fall back to the synchronous write (blocking is
-    fine during teardown) so the record lands instead of the noise.
+    Observed live three times: a script exiting while its job settled. The
+    persist must fall back to the synchronous write (blocking is fine during
+    teardown) so the record lands instead of the noise.
     """
 
     def test_persist_completes_synchronously_when_the_executor_is_gone(
         self, work_dir: Path, monkeypatch: pytest.MonkeyPatch
     ):
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
         registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
-        job = make_sim_job("sim_teardown", status="running", netlist=work_dir / "deck.cir")
+        job = _experiment(work_dir, circuit, job_id="exp_teardown", status="running")
 
         async def executor_gone(fn, *args, **kwargs):
             raise RuntimeError("cannot schedule new futures after shutdown")
@@ -377,60 +189,25 @@ class TestPersistDuringInterpreterTeardown:
             await registry.drain_pending()
 
         asyncio.run(go())
-        assert (work_dir / ".ltspice-mcp" / "jobs" / "sim_teardown.json").exists()
+        assert experiment_store.load_job("exp_teardown", work_dir) is not None
 
 
 class TestPerTypeEvictionCap:
-    def test_each_job_type_capped_at_200_finished(self):
+    def test_finished_jobs_capped_per_type(self, work_dir: Path):
         """The registry keeps at most 200 finished jobs PER TYPE in the union
-        store: 205 finished sims plus 205 finished batches leave 200 of each
-        (the oldest five of each type evicted), 400 jobs total."""
-        registry = JobRegistry(persist_enabled=False)
+        store: 205 finished experiments leave 200 (the oldest five evicted)."""
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        registry = JobRegistry(persist_enabled=False, working_dir=work_dir)
         base = now()
         for i in range(205):
-            registry.add_sim_job(
-                make_sim_job(f"sim{i:03d}", started_at=base + timedelta(seconds=i))
-            )
-        for i in range(205):
-            registry.add_batch_job(
-                make_batch_job(f"bat{i:03d}", started_at=base + timedelta(seconds=i))
-            )
+            job = _experiment(work_dir, circuit, job_id=f"exp{i:03d}", status="completed")
+            job.started_at = base + timedelta(seconds=i)
+            registry.add_experiment_job(job, already_persisted=True)
 
-        assert len(registry.sim_jobs) == 200
-        assert len(registry.batch_jobs) == 200
-        assert len(registry.jobs) == 400
+        assert len(registry.experiment_jobs) == 200
+        assert len(registry.jobs) == 200
         for i in range(5):
-            assert f"sim{i:03d}" not in registry.jobs
-            assert f"bat{i:03d}" not in registry.jobs
-        assert "sim005" in registry.sim_jobs
-        assert "sim204" in registry.sim_jobs
-        assert "bat005" in registry.batch_jobs
-        assert "bat204" in registry.batch_jobs
-
-
-class TestDataclassDefaults:
-    def test_montecarlo_config_defaults(self):
-        mc = MonteCarloConfig(netlist=Path("/tmp/test.cir"))
-        assert mc.num_runs == 100
-
-    def test_batchjob_defaults(self):
-        bj = BatchJob(
-            job_id="j1",
-            job_type="sweep",
-            netlist=Path("/tmp/test.cir"),
-            total_runs=5,
-        )
-        assert bj.status == "running"
-        assert bj.completed_runs == 0
-        assert bj.failed_runs == 0
-
-    def test_simulation_job_done_event(self):
-        job = SimulationJob(
-            job_id="s1",
-            netlist=Path("/tmp/test.cir"),
-            simulator="ltspice",
-            status="queued",
-            started_at=now(),
-        )
-        assert isinstance(job.done_event, asyncio.Event)
-        assert not job.done_event.is_set()
+            assert f"exp{i:03d}" not in registry.jobs
+        assert "exp005" in registry.experiment_jobs
+        assert "exp204" in registry.experiment_jobs

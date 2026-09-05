@@ -16,7 +16,8 @@ import ltspice_mcp.engine as engine
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import now, recent, result_store
 from ltspice_mcp.server import server, server_lifespan
-from ltspice_mcp.state import SessionState, SimulationJob
+from ltspice_mcp.state import SessionState
+from tests.conftest import write_legacy_sidecar
 
 
 def _detect_without_simulators(config: ServerConfig, diagnostics: list[str]) -> dict[str, type]:
@@ -50,16 +51,7 @@ async def _stage_persisted_job(working_dir: Path, circuit: Path) -> None:
         ),
         available={},
     )
-    seed.add_job(
-        SimulationJob(
-            job_id="sim_bootstrap_preload",
-            netlist=circuit,
-            simulator="ltspice",
-            status="completed",
-            started_at=now(),
-            completed_at=now(),
-        )
-    )
+    write_legacy_sidecar(circuit, "sim_bootstrap_preload")
     await seed.job_registry.drain_pending()
     await seed.shutdown()
 
@@ -69,7 +61,7 @@ def _startup_snapshot(state: SessionState, expired_path: Path) -> dict[str, obje
         "symbol_paths": list(AscEditor.custom_lib_paths),
         "allowed_paths": state.config.allowed_paths,
         "expired_result_removed": not expired_path.exists(),
-        "jobs": sorted(state.jobs),
+        "jobs": sorted(state.all_jobs),
         "diagnostics": state.diagnostics,
     }
 

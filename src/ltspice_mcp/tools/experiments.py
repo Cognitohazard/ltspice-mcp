@@ -58,8 +58,9 @@ from ltspice_mcp.lib.job_lifecycle import runs_terminal
 from ltspice_mcp.lib.job_types import (
     NON_TERMINAL_LIVE_STATUSES,
     TERMINAL_STATUSES,
-    BatchJob,
-    SimulationJob,
+    LegacyJobRecord,
+    legacy_record_message,
+    legacy_record_observation,
 )
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
@@ -1564,26 +1565,14 @@ def render_receipt_snapshot(
         data["control_token"] = emitted_control_token
     if snapshot.analysis_status != "not_requested":
         rendered_result: dict[str, Any] | None = None
-        legacy_result = False
         if snapshot.analysis_result is not None:
-            rendered_result, legacy_result = analyze.render_attached_analysis(
+            rendered_result = analyze.render_attached_analysis(
                 snapshot.analysis_result,
                 fields=analysis_fields,
                 answer_channel=analysis_answer_channel,
                 row_limit=analysis_rows_cap,
             )
         analysis_observations = list(snapshot.analysis_observations)
-        if legacy_result:
-            analysis_observations.append(
-                {
-                    "code": "legacy_analysis_result",
-                    "kind": "provenance",
-                    "detail": (
-                        "This job predates neutral attached-analysis snapshots; its "
-                        "stored public result was served without reinterpreting it."
-                    ),
-                }
-            )
         data["analysis"] = {
             "status": snapshot.analysis_status,
             "result": rendered_result,
@@ -2128,7 +2117,7 @@ _JOBS_PAGE_LIMIT = 50
 _FOREIGN_WAIT_POLL_S = 2.0
 _ADDRESSED_JOB_ACTIONS = frozenset({"status", "wait", "cancel", "runs"})
 
-Job = SimulationJob | BatchJob | ExperimentJob
+Job = LegacyJobRecord | ExperimentJob
 
 
 class JobsInput(ToolInput):
@@ -2607,11 +2596,7 @@ async def _resolve_jobs_target(args: JobsInput, state: SessionState) -> Job:
 
 
 def _job_type_name(job: Job) -> str:
-    if isinstance(job, ExperimentJob):
-        return "experiment"
-    if isinstance(job, BatchJob):
-        return job.job_type
-    return "single"
+    return "experiment" if isinstance(job, ExperimentJob) else "legacy"
 
 
 def _jobs_outcome(
@@ -2634,109 +2619,6 @@ def _jobs_outcome(
     if snapshot.status == "cancelled":
         return "partial"
     return "complete"
-
-
-def _legacy_run_status(job: SimulationJob, raw_file: Path | None) -> str:
-    if job.status == "completed":
-        return "produced"
-    if raw_file is not None and job.status in {"failed", "timeout", "interrupted"}:
-        return "produced"
-    return job.status
-
-
-def _run_records(
-    job: SimulationJob | BatchJob,
-    state: SessionState,
-    *,
-    dialect: str | None,
-) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    for run in services.runs_of(job):
-        if run.raw_file is not None:
-            state.raw_dialect_hints[run.raw_file] = dialect
-        if isinstance(job, BatchJob):
-            status = "produced" if run.raw_file is not None else "failed"
-        else:
-            status = _legacy_run_status(job, run.raw_file)
-        records.append(
-            {
-                "case_id": f"{job.job_id}-case-{run.index:04d}",
-                "run_index": run.index,
-                "circuit": str(job.netlist),
-                "assignments": dict(run.params),
-                "status": status,
-                "raw": str(run.raw_file) if run.raw_file is not None else None,
-                "log": str(run.log_file) if run.log_file is not None else None,
-            }
-        )
-    return records
-
-
-def _legacy_completeness(
-    job: SimulationJob | BatchJob,
-    records: list[dict[str, Any]],
-) -> Completeness:
-    expanded = job.total_runs if isinstance(job, BatchJob) else 1
-    produced = sum(item["status"] == "produced" for item in records)
-    if isinstance(job, BatchJob):
-        failed = min(job.failed_runs, expanded - produced)
-        submitted = min(job.completed_runs, expanded)
-    else:
-        failed = int(job.status in {"failed", "timeout", "interrupted"} and not produced)
-        submitted = int(job.status != "queued")
-    remaining = max(0, expanded - produced - failed)
-    cancelled = remaining if job.status == "cancelled" else 0
-    if job.status in {"failed", "interrupted"}:
-        failed += remaining
-    return Completeness(
-        declared=expanded,
-        expanded=expanded,
-        submitted=submitted,
-        produced=produced,
-        failed=failed,
-        cancelled=cancelled,
-    )
-
-
-def _legacy_failures(
-    job: SimulationJob | BatchJob,
-    records: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    failures = [
-        {
-            "case_id": item["case_id"],
-            "code": "run_failed",
-            "message": "The legacy run did not produce a raw result",
-        }
-        for item in records
-        if item["status"] == "failed"
-    ]
-    if job.error and not failures:
-        failures.append(
-            {
-                "case_id": f"{job.job_id}-case-0000",
-                "code": job.status,
-                "message": job.error,
-            }
-        )
-    return failures
-
-
-def _legacy_source(
-    job: SimulationJob | BatchJob,
-    *,
-    dialect: str | None,
-) -> dict[str, Any]:
-    # A legacy job never staged anything, so it has no digest, no staged deck
-    # and no manifest — it used to say so with empty strings and an empty list.
-    # Omitting them says the same thing without spending the bytes, and matches
-    # the experiment receipt, where those keys mean "provenance was requested".
-    return {
-        "circuit": job.netlist.stem,
-        "path": str(job.netlist),
-        "simulator": job.simulator,
-        "dialect": dialect,
-    }
 
 
 def snapshot_receipt(
@@ -2806,28 +2688,31 @@ def snapshot_receipt(
             analysis_request=copy.deepcopy(analysis.request),
         )
 
-    if state is None:
-        raise ValueError("A session state is required to snapshot a legacy job")
-    dialect = services.dialect_for_job(job, state)
-    records = _run_records(job, state, dialect=dialect)
-    completeness = _legacy_completeness(job, records)
-    observations = copy.deepcopy(job.observations or []) if isinstance(job, SimulationJob) else []
+    # A record an earlier release wrote. Its runs are not readable here, so the
+    # receipt carries what it is and why, and claims no results: reporting an
+    # empty run list as a completed job would be the silent-skip this exists to
+    # avoid.
+    assert isinstance(job, LegacyJobRecord)
     return ReceiptSnapshot(
         job_id=job.job_id,
         request_id=None,
         job_type=_job_type_name(job),
         status=job.status,
-        dialect=dialect,
+        dialect=None,
         control_token=control_token,
-        sources=(copy.deepcopy(_legacy_source(job, dialect=dialect)),),
+        sources=(
+            {
+                "circuit": job.netlist.stem,
+                "path": str(job.netlist),
+                "simulator": "",
+                "dialect": None,
+            },
+        ),
         lint=(),
-        runs_by_key={
-            (str(record["case_id"]), int(record["run_index"])): copy.deepcopy(record)
-            for record in records
-        },
-        completeness=completeness,
-        failures=tuple(copy.deepcopy(_legacy_failures(job, records))),
-        observations=tuple(observations),
+        runs_by_key={},
+        completeness=Completeness(),
+        failures=(),
+        observations=(legacy_record_observation(job.job_id),),
         artifacts=(),
         analysis_status="not_requested",
         analysis_result=None,
@@ -2853,29 +2738,8 @@ def render_jobs_receipt_snapshot(
         analysis_answer_channel=analysis_answer_channel,
         analysis_rows_cap=analysis_rows_cap,
     )
-    if snapshot.job_type == "experiment":
-        data["job_type"] = snapshot.job_type
-        data["dialect"] = snapshot.dialect
-    else:
-        # Preserve the legacy receipt's established key order as well as its
-        # values; structured payloads are serialized in insertion order.
-        data = {
-            "job_id": data["job_id"],
-            "request_id": data["request_id"],
-            "job_type": snapshot.job_type,
-            "status": data["status"],
-            "outcome": data["outcome"],
-            "source": data["source"],
-            "completeness": data["completeness"],
-            "lint": data["lint"],
-            "runs": data["runs"],
-            "failures": data["failures"],
-            "observations": data["observations"],
-            "warnings": data["warnings"],
-            "artifacts": data["artifacts"],
-            "hint": data["hint"],
-            "dialect": snapshot.dialect,
-        }
+    data["job_type"] = snapshot.job_type
+    data["dialect"] = snapshot.dialect
     data["action"] = action
     data["analysis_status"] = snapshot.analysis_status
     if timed_out is not None:
@@ -2933,7 +2797,11 @@ def render_runs_envelope(
 
 
 def _runs_finished(job: Job, wait_for: Literal["all", "runs"]) -> bool:
-    if isinstance(job, ExperimentJob) and wait_for == "runs":
+    if not isinstance(job, ExperimentJob):
+        # A record an earlier release wrote is finished by definition: nothing
+        # in this version could still be running it.
+        return True
+    if wait_for == "runs":
         # Three ways to know, in cost order: the event this session set, the
         # status the lifecycle guarantees it for, then the cases themselves —
         # a job loaded from a peer's sidecar has no event of ours to read.
@@ -2955,18 +2823,11 @@ async def _wait_for_jobs_target(
     if _runs_finished(job, wait_for):
         return job, False
 
-    if job.owner_pid == os.getpid():
-        if isinstance(job, ExperimentJob):
-            runner = state.runners.get_experiment_runner_for(job)
-            if runner is None:
-                return job, True
-            await runner.wait(job, timeout_s, wait_for=wait_for)
-            current = state.all_jobs.get(job.job_id, job)
-            return current, not _runs_finished(current, wait_for)
-        try:
-            await asyncio.wait_for(job.done_event.wait(), timeout_s)
-        except TimeoutError:
+    if isinstance(job, ExperimentJob) and job.owner_pid == os.getpid():
+        runner = state.runners.get_experiment_runner_for(job)
+        if runner is None:
             return job, True
+        await runner.wait(job, timeout_s, wait_for=wait_for)
         current = state.all_jobs.get(job.job_id, job)
         return current, not _runs_finished(current, wait_for)
 
@@ -3107,32 +2968,6 @@ def _merge_registry_observations(
     return [dict(item) for item in state.job_registry.observations if isinstance(item, dict)]
 
 
-def _cancel_receipts_for_legacy(
-    job: SimulationJob | BatchJob,
-    prior_status: str,
-    prior_run_indices: set[int],
-) -> list[dict[str, Any]]:
-    if isinstance(job, SimulationJob):
-        return [
-            {
-                "case_id": f"{job.job_id}-case-0000",
-                "run_index": 0,
-                "prior_status": prior_status,
-                "status": job.status,
-            }
-        ]
-    return [
-        {
-            "case_id": f"{job.job_id}-case-{run_index:04d}",
-            "run_index": run_index,
-            "prior_status": "queued",
-            "status": job.status,
-        }
-        for run_index in range(job.total_runs)
-        if run_index not in prior_run_indices
-    ]
-
-
 _FOREIGN_CANCEL_ACK_WAIT_S = 10.0
 
 
@@ -3236,24 +3071,15 @@ async def _cancel_jobs_target(
             for receipt in receipts
         ]
 
-    if job.owner_pid != os.getpid():
-        raise _JobsActionError(
-            "cancel_not_authorized",
-            (
-                f"Legacy job {job.job_id} is owned by another process and legacy jobs "
-                "have no transferable control token; cancellation was not attempted"
-            ),
-            stage="authorization",
-        )
-
-    prior_status = job.status
-    prior_run_indices = (
-        {run.index for run in services.runs_of(job)} if isinstance(job, BatchJob) else set()
+    # Unreachable in practice: a record an earlier release wrote always loads
+    # terminal (job_store._effective_status), so the already-terminal branch
+    # above answers it. Kept as a loud failure rather than a silent success in
+    # case a future record shape reaches here still claiming to be live.
+    raise _JobsActionError(
+        "legacy_job_record",
+        legacy_record_message(job.job_id),
+        stage="cancellation",
     )
-    from ltspice_mcp.tools.simulation import CancelJobInput, handle_cancel_job
-
-    await handle_cancel_job(CancelJobInput(job_id=job.job_id), state)
-    return _cancel_receipts_for_legacy(job, prior_status, prior_run_indices)
 
 
 def _jobs_error_payload(

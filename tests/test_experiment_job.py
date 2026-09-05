@@ -14,7 +14,7 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel
 
-from ltspice_mcp.errors import BatchJobError, ResultError, SimulationError
+from ltspice_mcp.errors import ResultError, SimulationError
 from ltspice_mcp.lib import (
     analysis_snapshot,
     experiment_store,
@@ -45,11 +45,6 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.job_lifecycle import InvalidTransitionError, transition
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.simulation import (
-    CancelJobInput,
-    handle_cancel_job,
-)
-from tests.conftest import make_batch_job
 
 
 def _source(circuit: Path, staged: Path | None = None) -> SourceRecord:
@@ -709,9 +704,8 @@ class TestExperimentLifecycle:
 
         A task that catches ``CancelledError`` — or sits inside a shielded
         section — keeps its await open for as long as it likes, and shutdown
-        awaited it unbounded. Both task passes (batch, then experiment) sit
-        ahead of the persistence flush, so either one stalling loses every
-        sidecar the flush had left to write.
+        awaited it unbounded. The task pass sits ahead of the persistence
+        flush, so one stalling loses every sidecar the flush had left to write.
         """
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
@@ -726,19 +720,16 @@ class TestExperimentLifecycle:
                 except asyncio.CancelledError:
                     swallowed.append(name)
 
-        batch = make_batch_job("batch_stubborn", status="running", netlist=circuit)
-        experiment = _job(work_dir, circuit, job_id="exp_stubborn", status="running")
-        batch.task = asyncio.create_task(_refuses_to_stop("batch"))
-        experiment.task = asyncio.create_task(_refuses_to_stop("experiment"))
+        first = _job(work_dir, circuit, job_id="exp_stubborn", status="running")
+        second = _job(work_dir, circuit, job_id="exp_stubborn_2", status="running")
+        first.task = asyncio.create_task(_refuses_to_stop("first"))
+        second.task = asyncio.create_task(_refuses_to_stop("second"))
         await asyncio.sleep(0)  # let both reach their first await
 
         registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
-        registry.add_batch_job(batch)
-        registry.add_experiment_job(experiment)
-        runners = SimpleNamespace(
-            get_batch_runner_for=lambda _job: None,
-            get_experiment_runner_for=lambda _job: None,
-        )
+        registry.add_experiment_job(first)
+        registry.add_experiment_job(second)
+        runners = SimpleNamespace(get_experiment_runner_for=lambda _job: None)
         monkeypatch.setattr(job_registry, "_SHUTDOWN_CANCEL_TIMEOUT_S", 0.05)
 
         # The real shutdown sequence: cancel the live work, then flush.
@@ -746,49 +737,13 @@ class TestExperimentLifecycle:
         await registry.drain_pending()
 
         # Both tasks really did refuse — otherwise this passes for the wrong reason.
-        assert set(swallowed) == {"batch", "experiment"}
-        reloaded = experiment_store.load_job(experiment.job_id, work_dir)
-        assert reloaded is not None and reloaded.status == "cancelled", "the flush never ran"
-        _, batches = job_store.load_jobs_for_circuit(circuit)
-        assert [(bj.job_id, bj.status) for bj in batches] == [("batch_stubborn", "cancelled")]
+        assert set(swallowed) == {"first", "second"}
+        for job in (first, second):
+            reloaded = experiment_store.load_job(job.job_id, work_dir)
+            assert reloaded is not None and reloaded.status == "cancelled", "the flush never ran"
 
         release.set()
-        await asyncio.gather(batch.task, experiment.task)
-
-    @pytest.mark.asyncio
-    async def test_shutdown_survives_a_batch_cancel_that_raises(self, work_dir: Path):
-        """Experiments are reconciled LAST, so every earlier collection's cancel
-        stands between them and a terminal status.
-
-        A raise from a batch runner used to propagate straight out of
-        ``cancel_running``, leaving the experiment loop below it unrun and the
-        persistence flush after it unreached — the experiment records lost to a
-        failure in an unrelated job type.
-        """
-        circuit = work_dir / "deck.cir"
-        circuit.write_text(".op\n.end\n")
-        batch = make_batch_job("batch_refused", status="running", netlist=circuit)
-        experiment = _job(work_dir, circuit, job_id="exp_after_batch", status="running")
-        registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
-        registry.add_batch_job(batch)
-        registry.add_experiment_job(experiment)
-
-        class RefusingBatchRunner:
-            async def cancel(self, job: Any, state: Any = None) -> None:
-                raise BatchJobError(f"batch {job.job_id} could not be stopped")
-
-        runners = SimpleNamespace(
-            get_batch_runner_for=lambda _job: RefusingBatchRunner(),
-            get_experiment_runner_for=lambda _job: None,
-        )
-
-        # The real shutdown sequence: cancel the live work, then flush.
-        await registry.cancel_running(runners, None)
-        await registry.drain_pending()
-
-        assert experiment.status == "cancelled", "the experiment loop never ran"
-        reloaded = experiment_store.load_job(experiment.job_id, work_dir)
-        assert reloaded is not None and reloaded.status == "cancelled", "the flush never ran"
+        await asyncio.gather(first.task, second.task)
 
     @pytest.mark.asyncio
     async def test_shutdown_survives_a_runner_cancel_that_raises(self, work_dir: Path):
@@ -1113,31 +1068,6 @@ class TestRequestBarrier:
 
 @pytest.mark.asyncio
 class TestLegacyCompatibility:
-    async def test_batch_resolver_rejects_persisted_experiment(
-        self,
-        state_no_sim: SessionState,
-        work_dir: Path,
-    ):
-        circuit = work_dir / "deck.cir"
-        circuit.write_text(".op\n.end\n")
-        job = _job(work_dir, circuit, status="completed")
-        experiment_store.save_job(job)
-        with pytest.raises(BatchJobError, match="experiment job"):
-            await services.resolve_batch_job_async(job.job_id, state_no_sim)
-
-    async def test_cancel_job_rejects_experiment_without_netlist_deref(
-        self,
-        state_no_sim: SessionState,
-        work_dir: Path,
-    ):
-        circuit = work_dir / "deck.cir"
-        circuit.write_text(".op\n.end\n")
-        job = _job(work_dir, circuit, status="completed")
-        experiment_store.save_job(job)
-
-        with pytest.raises(SimulationError, match=r"experiment job.*completed"):
-            await handle_cancel_job(CancelJobInput(job_id=job.job_id), state_no_sim)
-
     async def test_cancelled_experiment_produced_case_remains_analyzable(
         self,
         state_no_sim: SessionState,
@@ -1224,3 +1154,91 @@ def test_persist_jobs_false_submission_fails_clearly(
             await asyncio.shield(runner.submit(request))
 
     asyncio.run(exercise())
+
+
+@pytest.mark.asyncio
+class TestLegacyJobRecords:
+    """A job sidecar an earlier release wrote is recognised, not run.
+
+    The three things it must do: load without breaking the registry, report on
+    ``jobs`` with the one fact this version can offer, and be refused plainly by
+    ``analyze_results`` instead of returning an empty result that reads like a
+    circuit with nothing in it.
+    """
+
+    @staticmethod
+    def _write_sidecar(circuit: Path, job_id: str = "sim_legacy_1") -> None:
+        from tests.conftest import write_legacy_sidecar
+
+        write_legacy_sidecar(circuit, job_id)
+
+    async def test_status_reports_the_record_and_its_one_observation(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        from ltspice_mcp.tools.experiments import JobsInput, handle_jobs
+
+        circuit = work_dir / "old.cir"
+        circuit.write_text(".op\n.end\n")
+        self._write_sidecar(circuit)
+        state_no_sim.job_registry.persist_enabled = True
+        state_no_sim.ensure_jobs_loaded_for(circuit)
+
+        result = await handle_jobs(
+            JobsInput.model_validate({"action": "status", "job_id": "sim_legacy_1"}),
+            state_no_sim,
+        )
+        data = result.structuredContent
+        assert data is not None
+        assert data["job_id"] == "sim_legacy_1"
+        assert data["job_type"] == "legacy"
+        codes = [item["code"] for item in data["observations"]]
+        assert codes == ["legacy_job_record"]
+        detail = data["observations"][0]["detail"]
+        assert "earlier release" in detail
+        assert "run_experiments" in detail
+        # It claims no results: an empty run list reported as a completed job
+        # is exactly the silent skip the observation exists to prevent.
+        assert data["runs"]["items"] == []
+        assert data["completeness"]["produced"] == 0
+
+    async def test_analyze_results_refuses_it_plainly(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
+
+        circuit = work_dir / "old.cir"
+        circuit.write_text(".op\n.end\n")
+        self._write_sidecar(circuit, "sim_legacy_2")
+        state_no_sim.job_registry.persist_enabled = True
+        state_no_sim.ensure_jobs_loaded_for(circuit)
+
+        result = await handle_analyze_results(
+            AnalyzeResultsInput.model_validate(
+                {
+                    "sources": [{"job_id": "sim_legacy_2", "label": "old"}],
+                    "recipes": [{"key": "sum", "metric": "summary"}],
+                }
+            ),
+            state_no_sim,
+        )
+        data = result.structuredContent
+        assert data is not None
+        assert data["coverage"]["runs_analyzed"] == 0
+        details = [
+            str(item.get("detail", "")) for item in data["coverage"]["missing_cases"]["items"]
+        ]
+        assert any("earlier release" in detail for detail in details), details
+
+    async def test_a_directory_of_them_preloads_without_raising(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        circuit = work_dir / "old.cir"
+        circuit.write_text(".op\n.end\n")
+        for index in range(4):
+            self._write_sidecar(circuit, f"sim_legacy_bulk_{index}")
+        state_no_sim.job_registry.persist_enabled = True
+
+        state_no_sim.ensure_jobs_loaded_for(circuit)
+
+        loaded = {job_id for job_id in state_no_sim.all_jobs if job_id.startswith("sim_legacy")}
+        assert loaded == {f"sim_legacy_bulk_{i}" for i in range(4)}

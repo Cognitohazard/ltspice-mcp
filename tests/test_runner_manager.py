@@ -1,7 +1,9 @@
 """Tests for RunnerManager caching and invalidation logic."""
 
 import asyncio
+import types as _types
 from pathlib import Path
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -10,7 +12,7 @@ from ltspice_mcp.lib.runner_manager import _RUNNER_IMPORTS, RunnerManager
 
 
 class _StubRunner:
-    """Minimal stub to replace real runner classes."""
+    """Minimal stub to replace the real runner class."""
 
     def __init__(self, loop, simulator_class, output_folder, max_parallel):
         self.loop = loop
@@ -23,7 +25,7 @@ class _StubRunner:
     def has_active_work(self) -> bool:
         return self.busy
 
-    def owns_batch_job(self, job_id: str) -> bool:
+    def owns_experiment_job(self, job_id: str) -> bool:
         return job_id in self.owned_jobs
 
 
@@ -31,14 +33,12 @@ class _StubRunner:
 def _patch_runner_imports(monkeypatch):
     """Patch importlib.import_module so RunnerManager creates _StubRunner instances."""
     stub_module = MagicMock()
-    stub_module.SimulationRunner = _StubRunner
-    stub_module.SweepRunner = _StubRunner
-    stub_module.MonteCarloRunner = _StubRunner
+    stub_module.ExperimentRunner = _StubRunner
 
     import importlib
 
     original = importlib.import_module
-    runner_modules = {v[0] for v in _RUNNER_IMPORTS.values()}
+    runner_modules = {value[0] for value in _RUNNER_IMPORTS.values()}
 
     def patched(name):
         if name in runner_modules:
@@ -62,8 +62,8 @@ class TestRunnerManager:
         sim_cls = type("FakeSim", (), {})
         out = Path("/tmp/out")
 
-        r1 = mgr.get_sim_runner(loop, sim_cls, out)
-        r2 = mgr.get_sim_runner(loop, sim_cls, out)
+        r1 = mgr.get_experiment_runner(loop, sim_cls, out)
+        r2 = mgr.get_experiment_runner(loop, sim_cls, out)
         assert r1 is r2
 
     def test_loop_change_invalidates(self, loop):
@@ -71,11 +71,11 @@ class TestRunnerManager:
         sim_cls = type("FakeSim", (), {})
         out = Path("/tmp/out")
 
-        r1 = mgr.get_sim_runner(loop, sim_cls, out)
+        r1 = mgr.get_experiment_runner(loop, sim_cls, out)
 
         loop2 = asyncio.new_event_loop()
         try:
-            r2 = mgr.get_sim_runner(loop2, sim_cls, out)
+            r2 = mgr.get_experiment_runner(loop2, sim_cls, out)
             assert r1 is not r2
         finally:
             loop2.close()
@@ -87,22 +87,22 @@ class TestRunnerManager:
         cls_a = type("SimA", (), {})
         cls_b = type("SimB", (), {})
 
-        r1 = mgr.get_sim_runner(loop, cls_a, out)
-        r2 = mgr.get_sim_runner(loop, cls_b, out)
+        r1 = mgr.get_experiment_runner(loop, cls_a, out)
+        r2 = mgr.get_experiment_runner(loop, cls_b, out)
         assert r1 is not r2
 
     def test_output_folder_change_invalidates(self, loop):
         mgr = RunnerManager()
         sim_cls = type("FakeSim", (), {})
 
-        r1 = mgr.get_sim_runner(loop, sim_cls, Path("/tmp/a"))
-        r2 = mgr.get_sim_runner(loop, sim_cls, Path("/tmp/b"))
+        r1 = mgr.get_experiment_runner(loop, sim_cls, Path("/tmp/a"))
+        r2 = mgr.get_experiment_runner(loop, sim_cls, Path("/tmp/b"))
         assert r1 is not r2
 
     def test_reset_clears_everything(self, loop):
         mgr = RunnerManager()
         sim_cls = type("FakeSim", (), {})
-        mgr.get_sim_runner(loop, sim_cls, Path("/tmp/out"))
+        mgr.get_experiment_runner(loop, sim_cls, Path("/tmp/out"))
         assert len(mgr._runners) > 0
 
         mgr.reset()
@@ -110,29 +110,19 @@ class TestRunnerManager:
         assert mgr._loop is None
 
     def test_max_parallel_change_updates_cached_runner(self, loop):
-        # A later run_sweep/run_montecarlo with a different max_parallel must
-        # re-cap the cached runner IN PLACE (same instance, so an in-flight
-        # batch's cancel-event / live-process tracking survives). Regression:
-        # the cap was honored only at creation, so a second sweep silently ran
-        # at the first sweep's cap (observed: 4 processes under a requested 2).
+        # A later submission with a different max_parallel must re-cap the
+        # cached runner IN PLACE (same instance, so an in-flight batch's
+        # cancel-event and live-process tracking survive). Regression: the cap
+        # was honored only at creation, so a second run silently used the
+        # first's cap (observed: 4 processes under a requested 2).
         mgr = RunnerManager()
         sim_cls = type("FakeSim", (), {})
         out = Path("/tmp/out")
 
-        r1 = mgr.get_sweep_runner(loop, sim_cls, out, max_parallel=4)
-        r2 = mgr.get_sweep_runner(loop, sim_cls, out, max_parallel=2)
+        r1 = mgr.get_experiment_runner(loop, sim_cls, out, max_parallel=4)
+        r2 = mgr.get_experiment_runner(loop, sim_cls, out, max_parallel=2)
         assert r1 is r2
         assert r2.max_parallel == 2
-
-    def test_different_runner_types_coexist(self, loop):
-        mgr = RunnerManager()
-        sim_cls = type("FakeSim", (), {})
-        out = Path("/tmp/out")
-
-        sim = mgr.get_sim_runner(loop, sim_cls, out)
-        sweep = mgr.get_sweep_runner(loop, sim_cls, out)
-        assert sim is not sweep
-        assert len(mgr._runners) == 2
 
 
 class TestCapEviction:
@@ -143,7 +133,7 @@ class TestCapEviction:
         from ltspice_mcp.lib.runner_manager import _RUNNER_CACHE_CAP
 
         return [
-            mgr.get_sim_runner(loop, sim_cls, Path(f"/tmp/out{i}"))
+            mgr.get_experiment_runner(loop, sim_cls, Path(f"/tmp/out{i}"))
             for i in range(_RUNNER_CACHE_CAP)
         ]
 
@@ -154,7 +144,7 @@ class TestCapEviction:
         runners[0].busy = True
         runners[1].busy = True
 
-        mgr.get_sim_runner(loop, sim_cls, Path("/tmp/overflow"))
+        mgr.get_experiment_runner(loop, sim_cls, Path("/tmp/overflow"))
 
         cached = set(mgr._runners.values())
         assert runners[0] in cached and runners[1] in cached
@@ -166,51 +156,35 @@ class TestCapEviction:
         mgr = RunnerManager()
         sim_cls = type("FakeSim", (), {})
         runners = self._fill_to_cap(mgr, loop, sim_cls)
-        for r in runners:
-            r.busy = True
+        for runner in runners:
+            runner.busy = True
 
-        mgr.get_sim_runner(loop, sim_cls, Path("/tmp/overflow"))
+        mgr.get_experiment_runner(loop, sim_cls, Path("/tmp/overflow"))
 
         cached = set(mgr._runners.values())
-        assert all(r in cached for r in runners)  # cache exceeds cap instead
+        assert all(runner in cached for runner in runners)  # cache exceeds cap instead
         assert len(mgr._runners) == _RUNNER_CACHE_CAP + 1
 
 
-class TestBatchRunnerRouting:
-    """Batch cancel state lives on the instance that launched the batch; with
-    several runners of one kind cached, most-recent is not the owner."""
+class TestExperimentRunnerRouting:
+    """A job's cancel state lives on the coordinator that launched it; with
+    several runners cached, most-recent is not necessarily the owner."""
 
-    def test_owner_preferred_over_most_recent(self, loop):
-        import types as _types
-        from typing import cast
-
+    def test_owner_is_found_among_several(self, loop):
         mgr = RunnerManager()
         sim_cls = type("FakeSim", (), {})
-        older = cast(_StubRunner, mgr.get_sweep_runner(loop, sim_cls, Path("/tmp/a")))
-        newer = mgr.get_sweep_runner(loop, sim_cls, Path("/tmp/b"))
-        older.owned_jobs.add("sweep_1")
+        older = cast(_StubRunner, mgr.get_experiment_runner(loop, sim_cls, Path("/tmp/a")))
+        newer = mgr.get_experiment_runner(loop, sim_cls, Path("/tmp/b"))
+        older.owned_jobs.add("exp_1")
 
-        job = _types.SimpleNamespace(job_id="sweep_1", job_type="sweep")
-        assert mgr.get_batch_runner_for(job) is older
-        assert mgr.get_batch_runner_for(job) is not newer
+        job = _types.SimpleNamespace(job_id="exp_1")
+        assert mgr.get_experiment_runner_for(job) is older
+        assert mgr.get_experiment_runner_for(job) is not newer
 
-    def test_falls_back_to_most_recent_of_kind(self, loop):
-        import types as _types
-
+    def test_none_when_no_runner_owns_it(self, loop):
         mgr = RunnerManager()
         sim_cls = type("FakeSim", (), {})
-        mgr.get_sweep_runner(loop, sim_cls, Path("/tmp/a"))
-        newest_mc = mgr.get_mc_runner(loop, sim_cls, Path("/tmp/b"))
+        mgr.get_experiment_runner(loop, sim_cls, Path("/tmp/a"))
 
-        job = _types.SimpleNamespace(job_id="mc_unknown", job_type="montecarlo")
-        assert mgr.get_batch_runner_for(job) is newest_mc
-
-    def test_none_when_no_runner_of_kind(self, loop):
-        import types as _types
-
-        mgr = RunnerManager()
-        sim_cls = type("FakeSim", (), {})
-        mgr.get_sim_runner(loop, sim_cls, Path("/tmp/a"))  # wrong kind only
-
-        job = _types.SimpleNamespace(job_id="sweep_1", job_type="sweep")
-        assert mgr.get_batch_runner_for(job) is None
+        job = _types.SimpleNamespace(job_id="exp_unknown")
+        assert mgr.get_experiment_runner_for(job) is None
